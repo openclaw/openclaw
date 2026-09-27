@@ -1712,7 +1712,7 @@ describe("truncateOversizedToolResultsInSession", () => {
 
     const listener = vi.fn();
     const cleanup = onInternalSessionTranscriptUpdate(listener);
-    const result = truncateOversizedToolResultsInSessionManager({
+    const result = await truncateOversizedToolResultsInSessionManager({
       sessionManager: SessionManager.open(scope),
       ...scope,
       contextWindowTokens: 100,
@@ -1803,7 +1803,7 @@ describe("truncateOversizedToolResultsInSession", () => {
     ).messages[0];
     const staleProjectionState = cloneToolResultPromptProjectionState(projectionState);
 
-    const result = truncateOversizedToolResultsInSessionManager({
+    const result = await truncateOversizedToolResultsInSessionManager({
       sessionManager: SessionManager.open(scope),
       ...scope,
       contextWindowTokens: 128_000,
@@ -1873,7 +1873,7 @@ describe("truncateOversizedToolResultsInSession", () => {
 
     // A provider context failure then demands recovery under a tighter budget:
     // frozen history is the only reducible mass and must still shrink.
-    const result = truncateOversizedToolResultsInSessionManager({
+    const result = await truncateOversizedToolResultsInSessionManager({
       sessionManager: SessionManager.open(scope),
       ...scope,
       contextWindowTokens: 128_000,
@@ -1950,7 +1950,7 @@ describe("truncateOversizedToolResultsInSession", () => {
       },
     ]);
 
-    const result = truncateOversizedToolResultsInSessionManager({
+    const result = await truncateOversizedToolResultsInSessionManager({
       sessionManager: SessionManager.open(scope),
       ...scope,
       contextWindowTokens: 100,

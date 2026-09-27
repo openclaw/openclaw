@@ -203,20 +203,6 @@ export function scheduleForcedAgentConsult(
   });
 }
 
-export function submitForcedConsultProviderResult(
-  session: RelaySession,
-  callId: string,
-  result: unknown,
-  options: RealtimeVoiceToolResultOptions | undefined,
-): void | Promise<void> {
-  return submitFinalProviderToolResult({
-    session,
-    callId,
-    result,
-    options,
-  });
-}
-
 function drainForcedTerminalProviderResults(
   session: RelaySession,
   handle: RealtimeVoiceForcedConsultHandle,
@@ -235,7 +221,12 @@ function drainForcedTerminalProviderResults(
     callIds()
       .filter((callId) => !session.toolCalls.isProviderCompleted(callId))
       .map((callId) =>
-        submitForcedConsultProviderResult(session, callId, terminal.result, terminal.options),
+        submitFinalProviderToolResult({
+          session,
+          callId,
+          result: terminal.result,
+          options: terminal.options,
+        }),
       )
       .filter((submission): submission is Promise<void> => submission !== undefined);
   if (terminal.nativeCallIds) {

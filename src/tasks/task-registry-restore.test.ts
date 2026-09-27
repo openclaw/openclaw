@@ -27,6 +27,7 @@ it.each(
     environment: { OPENCLAW_STATE_DIR: "/synthetic/restore" },
     coordinatorRuntime: { directory: "/synthetic/restore/coordinator", keepAlive: false },
     admission: {
+      coordinationKey: "fixture",
       databasePath: "/synthetic/restore/state.sqlite",
       identity: { key: "fixture", canonicalPath: "/synthetic/restore/state.sqlite" },
       assertCurrent() {
@@ -113,6 +114,7 @@ it.each(
     if (result.status !== "rejected") {
       throw new Error("Superseded failed restoration unexpectedly succeeded");
     }
+    expect(result.reason.message).toContain(operationError.message);
     if (retires) {
       expect(result.reason).toBeInstanceOf(AggregateError);
       expect(result.reason.cause).toBe(operationError);
@@ -146,6 +148,7 @@ it.each(["retirement", "database replacement", "failed state"] as const)(
       environment: { OPENCLAW_STATE_DIR: "/synthetic/receipt-exit" },
       coordinatorRuntime: { directory: "/synthetic/receipt-exit", keepAlive: false },
       admission: {
+        coordinationKey: "fixture",
         databasePath: "/synthetic/receipt-exit/state.sqlite",
         identity: { key: "fixture", canonicalPath: "/synthetic/receipt-exit/state.sqlite" },
         assertCurrent() {

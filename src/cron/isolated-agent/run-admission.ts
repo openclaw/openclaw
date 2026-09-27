@@ -1,4 +1,5 @@
 import {
+  type AdmittedRunContext,
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
@@ -16,7 +17,10 @@ import {
   bindGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
-import { captureCronJobMessageActionAuthority } from "../active-jobs.js";
+import {
+  captureCronJobMessageActionAuthority,
+  captureCronJobMessageSourceAuthority,
+} from "../active-jobs.js";
 import type { CronRuntimeAuthority } from "../runtime-authority.js";
 import type { CronExecutionIdentityAdmission } from "../service/state.js";
 
@@ -38,9 +42,11 @@ export function assertCronRuntimeAuthorityCandidate(params: {
 
 /** Owns one prompt admission and its private message grant through settlement. */
 export function prepareCronPromptRunAdmission(params: {
+  admissionSource?: AdmittedRunContext["admissionSource"];
   cfg: OpenClawConfig;
   agentId: string;
   runId: string;
+  sessionId: string;
   sessionKey: string;
   jobId: string;
   channelRequester?: CronAuthenticatedChannelRequester;
@@ -53,6 +59,7 @@ export function prepareCronPromptRunAdmission(params: {
   const resolveGatewayContext = getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
   const basePreparedRunAdmission = prepareAgentRunAdmission({
     operationalRunInstance,
+    admissionSource: params.admissionSource,
     cfg: params.cfg,
     facts: {
       runId,
@@ -76,6 +83,9 @@ export function prepareCronPromptRunAdmission(params: {
     scheduledToolPolicy && isRuntimeToolAllowed("message", params.toolsAllow)
       ? captureCronJobMessageActionAuthority({ jobId: params.jobId, operationalRunInstance })
       : undefined;
+  const scheduledMessageSourceAuthority = scheduledMessageAuthority
+    ? captureCronJobMessageSourceAuthority({ jobId: params.jobId, operationalRunInstance })
+    : undefined;
   // This opaque token remains unusable until this exact operational instance
   // is admitted by the live occurrence. Both runners redeem the same host grant.
   const messageActionTurnCapability =
@@ -84,12 +94,15 @@ export function prepareCronPromptRunAdmission(params: {
           agentId: params.agentId,
           runId,
           sessionKey: params.sessionKey,
-          sessionId: params.runId,
+          sessionId: params.sessionId,
           requesterAccountId:
             scheduledToolPolicy.mode === "account" ? scheduledToolPolicy.ownerAccountId : undefined,
           scheduled: {
             policy: scheduledToolPolicy,
             assertCurrent: scheduledMessageAuthority,
+            ...(scheduledMessageSourceAuthority
+              ? { assertSourceCurrent: scheduledMessageSourceAuthority }
+              : {}),
             ...(params.channelRequester ? { channelRequester: params.channelRequester } : {}),
           },
           expiresWithRun: true,

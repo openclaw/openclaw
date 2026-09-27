@@ -1,4 +1,3 @@
-// Codex plugin module implements plan behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -13,16 +12,18 @@ import {
   readMigrationConfigPath,
   summarizeMigrationItems,
 } from "openclaw/plugin-sdk/migration";
+import { resolvePlannedMigrationTargets } from "openclaw/plugin-sdk/migration-runtime";
 import type {
   MigrationItem,
   MigrationPlan,
   MigrationProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { extractErrorCode } from "openclaw/plugin-sdk/security-runtime";
+import { extractErrorCode, pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { asBoolean, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
 import { buildCodexAuthItems } from "./auth.js";
-import { exists, sanitizeName } from "./helpers.js";
+import { sanitizeName } from "./helpers.js";
+import { isOnlyMigrationKind } from "./scope.js";
 import type { CodexMemorySource, CodexSkillSource } from "./source-files.js";
 import {
   codexPluginMigrationSubscriptionWarning,
@@ -30,7 +31,6 @@ import {
   hasCodexSource,
   type CodexPluginSource,
 } from "./source.js";
-import { resolveCodexMigrationTargets } from "./targets.js";
 
 export const CODEX_PLUGIN_CONFIG_ITEM_ID = "config:codex-plugins";
 export const CODEX_PLUGIN_CONFIG_PATH = ["plugins", "entries", "codex"] as const;
@@ -154,7 +154,7 @@ async function buildCodexSkillItems(params: {
   return await Promise.all(
     planned.map(async (item) => {
       const collision = (resolvedCounts.get(item.name) ?? 0) > 1;
-      const targetExists = await exists(item.target);
+      const targetExists = await pathExists(item.target);
       const conflict = collision || (targetExists && !params.overwrite);
       return createMigrationItem({
         id: `skill:${item.name}`,
@@ -250,19 +250,15 @@ function buildPluginItems(
       plugin.pluginName
     ) {
       const configKey = plugin.pluginName;
+      const allowDestructiveActions = readExistingPluginAllowDestructiveActions(
+        existingPluginEntries[configKey],
+        plugin.pluginName,
+      );
       const plannedEntry = {
         enabled: true,
         marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
         pluginName: plugin.pluginName,
-        ...(() => {
-          const allowDestructiveActions = readExistingPluginAllowDestructiveActions(
-            existingPluginEntries[configKey],
-            plugin.pluginName,
-          );
-          return allowDestructiveActions
-            ? { allow_destructive_actions: allowDestructiveActions }
-            : {};
-        })(),
+        ...(allowDestructiveActions ? { allow_destructive_actions: allowDestructiveActions } : {}),
       };
       const conflict =
         !ctx.overwrite &&
@@ -289,11 +285,10 @@ function buildPluginItems(
             pluginName: plugin.pluginName,
             sourceInstalled: plugin.installed === true,
             sourceEnabled: plugin.enabled === true,
-            ...(plannedEntry.allow_destructive_actions === "auto" ||
-            plannedEntry.allow_destructive_actions === "ask"
-              ? { allowDestructiveActions: plannedEntry.allow_destructive_actions }
-              : {}),
-            ...(plugin.apps && plugin.apps.length > 0 && !shouldVerifyPluginApps(ctx)
+            ...(allowDestructiveActions ? { allowDestructiveActions } : {}),
+            ...(plugin.apps &&
+            plugin.apps.length > 0 &&
+            ctx.providerOptions?.verifyPluginApps !== true
               ? { sourceAppVerification: CODEX_PLUGIN_SOURCE_APP_VERIFICATION_UNVERIFIED }
               : {}),
           },
@@ -338,10 +333,6 @@ function buildPluginItems(
     );
   }
   return items;
-}
-
-function shouldVerifyPluginApps(ctx: MigrationProviderContext): boolean {
-  return ctx.providerOptions?.verifyPluginApps === true;
 }
 
 export function readCodexPluginMigrationConfigEntry(
@@ -530,21 +521,15 @@ function buildPluginConfigItem(
 export async function buildCodexMigrationPlan(
   ctx: MigrationProviderContext,
 ): Promise<MigrationPlan> {
-  const targets = resolveCodexMigrationTargets(ctx);
-  const memoryOnly =
-    ctx.itemKinds !== undefined &&
-    ctx.itemKinds.length > 0 &&
-    ctx.itemKinds.every((kind) => kind === "memory");
-  const authOnly =
-    ctx.itemKinds !== undefined &&
-    ctx.itemKinds.length > 0 &&
-    ctx.itemKinds.every((kind) => kind === "auth");
+  const targets = resolvePlannedMigrationTargets(ctx);
+  const memoryOnly = isOnlyMigrationKind(ctx, "memory");
+  const authOnly = isOnlyMigrationKind(ctx, "auth");
   const source = await discoverCodexSource({
     input: ctx.source,
     memoryOnly,
     authOnly,
     evaluatePluginMigrationEligibility: !memoryOnly && !authOnly,
-    verifyPluginApps: shouldVerifyPluginApps(ctx),
+    verifyPluginApps: ctx.providerOptions?.verifyPluginApps === true,
   });
   if (!hasCodexSource(source) && !authOnly) {
     throw new Error(
@@ -594,11 +579,6 @@ export async function buildCodexMigrationPlan(
     }
   }
   const warnings = [
-    ...(!ctx.includeSecrets && items.some((item) => item.kind === "auth")
-      ? [
-          "Auth credentials were detected but skipped. Re-run interactively or pass --include-secrets to import supported credentials.",
-        ]
-      : []),
     ...(items.some((item) => item.status === "conflict")
       ? [
           "Conflicts were found. Re-run with --overwrite to replace conflicting migration targets after item-level backups.",

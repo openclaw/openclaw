@@ -22,6 +22,7 @@ import {
   LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
   PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH,
 } from "./lib/package-lifecycle-marker.mjs";
+import { cleanPackedOpenClawTarballs } from "./lib/packed-openclaw-tarballs.mts";
 import { isRecord } from "./lib/record-shared.mjs";
 import { resolveNpmRunner } from "./npm-runner.mts";
 import { preparePackageChangelog, restorePackageChangelog } from "./package-changelog.mjs";
@@ -540,30 +541,6 @@ async function writePackJson(
   const target = path.resolve(sourceDir, packJsonPath);
   await fs.mkdir(path.dirname(target), { recursive: true });
   await fs.writeFile(target, `${JSON.stringify(entries, null, 2)}\n`);
-}
-
-async function cleanPackedOpenClawTarballs(outputDir: string) {
-  let entries: string[];
-  try {
-    entries = await fs.readdir(outputDir);
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-      entries = [];
-    } else {
-      throw error;
-    }
-  }
-  await Promise.all(
-    entries
-      .filter((entry) => {
-        try {
-          return resolvePackedOpenClawFileName(entry) === entry;
-        } catch {
-          return false;
-        }
-      })
-      .map((entry) => fs.rm(path.join(outputDir, entry), { force: true })),
-  );
 }
 
 function isPackedAiRuntimeTarball(filename: string) {

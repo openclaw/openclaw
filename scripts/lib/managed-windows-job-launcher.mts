@@ -4,20 +4,25 @@ import { createWindowsJobBindings } from "../../src/process/supervisor/service-c
 import { isDirectRunUrl } from "./direct-run.mjs";
 import type { WindowsJobLaunch } from "./managed-windows-job.mts";
 
-const fail = (error: unknown) => {
+const name = process.argv[2];
+const send = (message: object) => process.send?.({ job: name, ...message });
+const fail = (error: unknown, type = "error") => {
   process.exitCode = 1;
-  const message = {
-    error: error instanceof Error ? error.message : String(error),
-    ...(error && typeof error === "object" && "code" in error ? { code: error.code } : {}),
-  };
   if (process.connected) {
-    process.send?.(message, () => process.disconnect?.());
+    process.send?.(
+      {
+        job: name,
+        type,
+        error: error instanceof Error ? error.message : String(error),
+        ...(error && typeof error === "object" && "code" in error ? { code: error.code } : {}),
+      },
+      () => process.disconnect?.(),
+    );
   }
 };
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   try {
-    const name = process.argv[2];
     if (!name || !process.connected) {
       throw new Error("Windows command Job handoff is missing");
     }
@@ -37,24 +42,46 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
     if (!closed) {
       throw api.lastError("CloseHandle(launcher Job copy)");
     }
-    // User code cannot execute until containment is established and the host admits it.
     process.once("message", (launch: WindowsJobLaunch) => {
       try {
+        // The target inherits membership at creation, before any of its code can fork.
         const child = spawn(launch.command, launch.args, {
           ...launch.options,
-          stdio: Array.from({ length: launch.inheritedFds }, (_, fd) => fd),
+          stdio: launch.stdio,
         });
         child.once("error", fail);
-        child.once("spawn", () => process.disconnect?.());
+        child.once("spawn", () => {
+          process.send?.({ job: name, type: "spawned", pid: child.pid }, (error) => {
+            if (error) {
+              fail(error);
+            } else if (!launch.stdio.includes("ipc")) {
+              process.disconnect?.();
+            }
+          });
+        });
         child.once("exit", (code) => {
           process.exitCode = code ?? 1;
         });
+        if (launch.stdio.includes("ipc")) {
+          process.on("message", (message) => {
+            if (message !== null && child.connected) {
+              child.send(message, (error) => error && fail(error));
+            }
+          });
+          child.on("message", (message) => {
+            if (process.connected) {
+              process.send?.(message, (error) => error && fail(error));
+            }
+          });
+          process.once("disconnect", () => child.connected && child.disconnect());
+          child.once("disconnect", () => process.connected && process.disconnect?.());
+        }
       } catch (error) {
         fail(error);
       }
     });
-    process.send?.("job-ready");
+    send({ type: "ready" });
   } catch (error) {
-    fail(error);
+    fail(error, "job-error");
   }
 }

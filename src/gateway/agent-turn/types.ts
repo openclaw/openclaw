@@ -1,3 +1,7 @@
+import type { AgentRunTerminalDeliverySnapshot } from "../../agents/agent-run-terminal-delivery.js";
+import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
+import type { AgentRunTerminalReceipt } from "../../agents/agent-run-terminal-receipt.js";
+import type { AgentRunTerminalReplySnapshot } from "../../agents/agent-run-terminal-reply.types.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import type {
   GatewayClient,
@@ -54,5 +58,33 @@ export type AgentTurnContext = Pick<
   | "removeChatRun"
   | "requestEntryLifetime"
   | "resolveGatewayContext"
+  | "trackExecution"
   | "validateAgentRuntimeApprovalAuthority"
 >;
+
+export type AgentJobTerminalSnapshot = {
+  status: "ok" | "error" | "timeout";
+  startedAt?: number;
+  endedAt?: number;
+  error?: string;
+  stopReason?: string;
+  livenessState?: string;
+  yielded?: boolean;
+  pendingError?: boolean;
+  timeoutPhase?: AgentRunTerminalOutcome["timeoutPhase"];
+  providerStarted?: boolean;
+  terminalDelivery?: AgentRunTerminalDeliverySnapshot;
+  terminalReceipt?: AgentRunTerminalReceipt;
+  terminalReply?: AgentRunTerminalReplySnapshot;
+};
+
+export type AgentJobSession = {
+  sessionKey: string;
+  sessionId: string;
+  agentId?: string;
+  lifecycleGeneration: string;
+};
+
+export type AgentJobObservation = AgentJobTerminalSnapshot & {
+  readonly session?: Readonly<AgentJobSession>;
+};

@@ -176,6 +176,7 @@ restart the Slack monitor. The Gateway remains running.
     Per-channel controls (`channels.slack.channels.<id>`; names only via startup resolution or `dangerouslyAllowNameMatching`):
 
     - `requireMention`
+    - `requireMentionInBotThreads`
     - `ignoreOtherMentions`
     - `replyToMode` (`off|first|all|batched`; overrides account/chat-type reply mode for this channel)
     - `users` (allowlist)
@@ -186,9 +187,38 @@ restart the Slack monitor. The Gateway remains running.
     - `toolsBySender` key format: `channel:`, `id:`, `e164:`, `username:`, `name:`, or `"*"` wildcard
       (legacy unprefixed keys still map to `id:` only)
 
+    <a id="bot-created-threads" />
+    `requireMentionInBotThreads` overrides mention gating only in threads whose root message was sent by this bot. Set it to `false` to allow unmentioned replies there while keeping `requireMention: true` for the rest of the channel. Set it to `true` to require a mention in those threads even when implicit reply or thread-participation mentions are enabled. Authorized text commands keep their existing bypass.
+
+    Add the setting to an existing allowed channel entry:
+
+    ```json5
+    {
+      channels: {
+        slack: {
+          channels: {
+            C12345678: {
+              enabled: true,
+              requireMention: true,
+              requireMentionInBotThreads: false,
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    The setting resolves from the channel entry, then the `"*"` entry, then the account, then `channels.slack.requireMentionInBotThreads`. Omit it to preserve existing behavior, including `implicitMentions.replyToBot` and `implicitMentions.threadParticipation`. Slack's native parent author identifies the root; when that field is absent, OpenClaw uses accessible thread history. Unknown ownership retains the normal mention policy. Channel and sender access, bot-message restrictions, and `ignoreOtherMentions` still apply.
+
+    Invite the app to the channel and subscribe to `message.channels` for public channels or `message.groups` for private channels, with the matching history scope. Subscribing only to `app_mention` cannot deliver unmentioned follow-ups. Both setup manifests include these subscriptions; see [Manifest and scope checklist](/channels/slack/manifest-and-scopes#manifest-and-scope-checklist). To verify, have the bot post a new top-level message, then reply in that message's thread without mentioning it. Replies to a human-created root keep their existing implicit-mention policy even if the bot participates later.
+
     `ignoreOtherMentions` (default `false`) drops channel messages that mention another user or user group but not this bot. DMs and group DMs (MPIMs) are unaffected. The filter requires a resolved bot user ID from `auth.test`; if that identity is unavailable (for example a user-token-only identity), the gate fails open and messages pass through unchanged.
 
-    `allowBots` is conservative for channels and private channels: bot-authored room messages are accepted only when the sending bot is explicitly listed in that room's `users` allowlist, or when at least one explicit Slack owner ID from `channels.slack.allowFrom` is currently a room member. Wildcards and display-name owner entries do not satisfy owner presence. Owner presence uses Slack `conversations.members`; make sure the app has the matching read scope for the room type (`channels:read` for public channels, `groups:read` for private channels). If the member lookup fails, OpenClaw drops the bot-authored room message.
+    `allowBots` defaults to `true`. Bot-authored messages follow the same channel access and mention rules as other messages; messages from this bot are always ignored. Set `allowBots: false` to prevent other bots from triggering turns, or `allowBots: "mentions"` to require a mention even in rooms with `requireMention: false`. Room settings override account settings, which override `channels.slack.allowBots`. Existing explicit `false` values remain disabled after an update.
+
+    Bot-authored room messages also require either the sending bot to be explicitly listed in that room's `users` allowlist, or at least one explicit Slack owner ID from `channels.slack.allowFrom` to be a current room member. Wildcards and display-name owner entries do not satisfy owner presence. Owner presence uses Slack `conversations.members`; make sure the app has the matching read scope for the room type (`channels:read` for public channels, `groups:read` for private channels). If the member lookup fails, OpenClaw drops the bot-authored room message.
+
+    `allowBots` controls incoming turns, not context visibility. A human request can still include accessible bot-authored room history and thread context when `allowBots: false`; the configured `contextVisibility` and sender allowlist rules still apply.
 
     Accepted bot-authored Slack messages use shared [bot loop protection](/channels/bot-loop-protection). Configure `channels.defaults.botLoopProtection` for the default budget, then override with `channels.slack.botLoopProtection` or `channels.slack.channels.<id>.botLoopProtection` when a workspace or channel needs a different limit.
 

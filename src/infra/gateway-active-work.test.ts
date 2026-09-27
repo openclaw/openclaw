@@ -15,6 +15,7 @@ import {
   createGatewayActiveWorkSnapshot,
   waitForGatewayActiveWork,
 } from "./gateway-active-work.js";
+import { beginLifecycleWriteCustody } from "./lifecycle-write-custody.js";
 
 const activeRuns = new Map<string, EmbeddedAgentQueueHandle>();
 
@@ -151,6 +152,38 @@ describe("waitForGatewayActiveWork", () => {
       second?.release();
       third?.release();
     }
+  });
+
+  it("publishes a separate recorded custody category through the suspension wire shape", () => {
+    const release = beginLifecycleWriteCustody("migration");
+    try {
+      const snapshot = createGatewayActiveWorkSnapshot({
+        getRootRequests: () => 2,
+        getCronRuns: () => 3,
+        getSessionMutations: () => 1,
+        getTerminalPersistence: () => 1,
+      });
+      expect(snapshot.writeCustody).toEqual([
+        { phase: "migration", count: 1 },
+        { phase: "session-mutation", count: 1 },
+        { phase: "terminal-persistence", count: 1 },
+      ]);
+      expect(snapshot.counts).toMatchObject({ rootRequests: 2, cronRuns: 3, lifecycleWrites: 1 });
+      expect(
+        Value.Check(GatewaySuspendPrepareResultSchema, {
+          status: "draining",
+          suspensionId: "owned",
+          expiresAtMs: 120_000,
+          retryAfterMs: 20_000,
+          activeCount: snapshot.counts.totalActive,
+          blockers: snapshot.blockers,
+          writeCustody: snapshot.writeCustody,
+        }),
+      ).toBe(true);
+    } finally {
+      release();
+    }
+    expect(createGatewayActiveWorkSnapshot().writeCustody).toEqual([]);
   });
 
   it("does not mix default holders into an overridden root count", () => {

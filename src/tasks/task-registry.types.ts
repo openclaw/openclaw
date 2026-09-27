@@ -150,6 +150,15 @@ export type TaskExecutionOwner = {
   startIdentity: number;
 };
 
+/** A persisted identity narrows a retained owner's operation; it never grants authority. */
+export type TaskPersistenceReceipt = Readonly<
+  Pick<TaskRecord, "taskId" | "runtime" | "ownerKey" | "scopeKind" | "createdAt"> & {
+    runId: string;
+    childSessionKey?: string;
+    taskKind?: string;
+  }
+>;
+
 export type TaskRecord = {
   taskId: string;
   runtime: TaskRuntime;
@@ -187,3 +196,37 @@ export type TaskRecord = {
   terminalOutcome?: TaskTerminalOutcome;
   detail?: JsonValue;
 };
+
+/** Shared run inputs keep runtime contracts independent of transition execution. */
+export type TaskRunStateTransitionParams = {
+  runId: string;
+  taskId?: string;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
+  childSessionKey?: string | null;
+  status?: TaskStatus;
+  startedAt?: number;
+  endedAt?: number;
+  lastEventAt?: number;
+  error?: string;
+  clearError?: boolean;
+  progressSummary?: string | null;
+  terminalSummary?: string | null;
+  preserveTerminalSummary?: boolean;
+  terminalOutcome?: TaskTerminalOutcome | null;
+  detail?: JsonValue;
+  eventSummary?: string | null;
+  suppressDelivery?: boolean;
+};
+
+type TaskRunDeliveryTransitionParams = {
+  runId: string;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
+  deliveryStatus: TaskDeliveryStatus;
+  error?: string;
+};
+
+export type TaskRunTransition =
+  | { kind: "state"; params: TaskRunStateTransitionParams }
+  | { kind: "delivery"; params: TaskRunDeliveryTransitionParams };

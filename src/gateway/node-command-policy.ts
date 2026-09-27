@@ -27,7 +27,8 @@ const MAC_CAMERA_COMMANDS = ["camera.ptz.status"];
 const CAMERA_DANGEROUS_COMMANDS = ["camera.snap", "camera.clip", "camera.ptz.control"];
 
 const SCREEN_COMMANDS = ["screen.snapshot"];
-const SCREEN_DANGEROUS_COMMANDS = ["screen.record", NODE_DESKTOP_STREAM_COMMAND];
+const SCREEN_DANGEROUS_COMMANDS = ["screen.record"];
+const DESKTOP_SCREEN_COMMANDS = [...SCREEN_COMMANDS, NODE_DESKTOP_STREAM_COMMAND];
 
 // Desktop computer use is advertised only while the node-local control is
 // enabled. Pairing approval of that advertised surface is the durable grant.
@@ -153,16 +154,16 @@ export const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...PHOTOS_COMMANDS,
     ...MOTION_COMMANDS,
     ...SYSTEM_COMMANDS,
-    ...SCREEN_COMMANDS,
+    ...DESKTOP_SCREEN_COMMANDS,
     ...COMPUTER_COMMANDS,
   ],
-  linux: [...SYSTEM_COMMANDS, ...SCREEN_COMMANDS, ...COMPUTER_COMMANDS],
+  linux: [...SYSTEM_COMMANDS, ...DESKTOP_SCREEN_COMMANDS, ...COMPUTER_COMMANDS],
   windows: [
     ...CAMERA_COMMANDS,
     ...MOBILE_NODE_COMMANDS.location,
     ...MOBILE_NODE_COMMANDS.device,
     ...SYSTEM_COMMANDS,
-    ...SCREEN_COMMANDS,
+    ...DESKTOP_SCREEN_COMMANDS,
     ...COMPUTER_COMMANDS,
   ],
   // Fail-safe: unknown metadata should not receive host exec defaults.
@@ -514,7 +515,7 @@ const CAPABILITY_COMMAND_FAMILIES: ReadonlyMap<string, ReadonlySet<string>> = ne
   ["camera", new Set([...CAMERA_COMMANDS, ...MAC_CAMERA_COMMANDS, ...CAMERA_DANGEROUS_COMMANDS])],
   ["computer", new Set(COMPUTER_COMMANDS)],
   ["location", new Set(MOBILE_NODE_COMMANDS.location)],
-  ["screen", new Set([...SCREEN_COMMANDS, ...SCREEN_DANGEROUS_COMMANDS])],
+  ["screen", new Set([...DESKTOP_SCREEN_COMMANDS, ...SCREEN_DANGEROUS_COMMANDS])],
 ]);
 
 /** Drops capabilities whose commands policy withheld without admitting a sibling. */

@@ -1,7 +1,11 @@
+import { Cron } from "croner";
 import { describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "./service.test-harness.js";
+import * as scheduleMaintenance from "./service/schedule-maintenance.js";
 import { createCronServiceState } from "./service/state.js";
 import { onTimer } from "./service/timer.test-support.js";
+import { getCronJobsStoreRevision, loadCronJobsStoreWithConfigJobsReadOnly } from "./store.js";
 import type { CronJob } from "./types.js";
 
 const sqliteTransactionLabels = vi.hoisted(() => [] as string[]);
@@ -48,6 +52,7 @@ async function runTimer(jobs: CronJob[], nowMs: number) {
   const store = await makeStorePath();
   await writeCronStoreSnapshot({ storePath: store.storePath, jobs });
   const state = createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
     storePath: store.storePath,
     cronEnabled: true,
     log: logger,
@@ -58,16 +63,23 @@ async function runTimer(jobs: CronJob[], nowMs: number) {
   });
   state.schedulerStarted = true;
   sqliteTransactionLabels.length = 0;
-  await onTimer(state);
-  if (state.timer) {
-    clearTimeout(state.timer);
-    state.timer = null;
+  const maintenance = vi.spyOn(scheduleMaintenance, "recomputeUnownedCronSchedules");
+  try {
+    await onTimer(state);
+    expect(sqliteTransactionLabels.filter((label) => label === "cron.schedule-unowned")).toEqual(
+      [],
+    );
+    return {
+      jobs: state.store?.jobs ?? [],
+      maintenanceCount: maintenance.mock.calls.length,
+    };
+  } finally {
+    maintenance.mockRestore();
+    if (state.timer) {
+      state.timer.cancel();
+      state.timer = null;
+    }
   }
-  return {
-    jobs: state.store?.jobs ?? [],
-    maintenanceCount: sqliteTransactionLabels.filter((label) => label === "cron.schedule-unowned")
-      .length,
-  };
 }
 
 describe("cron timer maintenance admission", () => {
@@ -118,6 +130,62 @@ describe("cron timer maintenance admission", () => {
     const nowMs = Date.now();
     const result = await runTimer([create(nowMs)], nowMs);
     expect(result.maintenanceCount).toBe(0);
+  });
+
+  it("does not recheck natural-next slots during a 1000-job timer tick", async () => {
+    const nowMs = Date.now();
+    const nextRunAtMs = nowMs + 60_000;
+    const jobs = Array.from({ length: 1_000 }, (_, index) =>
+      job(
+        `natural-next-${index}`,
+        nowMs,
+        { kind: "cron", expr: "0 * * * * *", tz: "UTC", staggerMs: 0 },
+        { nextRunAtMs },
+      ),
+    );
+    const { storePath } = await makeStorePath();
+    await writeCronStoreSnapshot({ storePath, jobs });
+    const before = await loadCronJobsStoreWithConfigJobsReadOnly(storePath);
+    expect(before.store.jobs).toHaveLength(1_000);
+    const revision = getCronJobsStoreRevision(storePath);
+    const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => nowMs,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+    state.schedulerStarted = true;
+    const previousRuns = vi.spyOn(Cron.prototype, "previousRuns");
+    const maintenance = vi.spyOn(scheduleMaintenance, "recomputeUnownedCronSchedules");
+    sqliteTransactionLabels.length = 0;
+    try {
+      await onTimer(state);
+      expect(state.store?.jobs).toEqual(before.store.jobs);
+      expect((await loadCronJobsStoreWithConfigJobsReadOnly(storePath)).store).toEqual(
+        before.store,
+      );
+      expect(getCronJobsStoreRevision(storePath)).toBe(revision);
+      expect(sqliteTransactionLabels).toEqual([]);
+      expect(maintenance).not.toHaveBeenCalled();
+      expect(state.deps.runIsolatedAgentJob).not.toHaveBeenCalled();
+      expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
+      expect(state.queuedRunReservationsByJobId.size).toBe(0);
+      expect(state.running).toBe(false);
+      expect(state.deps.scheduler.nextWakeAtMs).toBe(nowMs + 60_000);
+      expect(previousRuns).toHaveBeenCalledTimes(0);
+    } finally {
+      previousRuns.mockRestore();
+      maintenance.mockRestore();
+      if (state.timer) {
+        state.timer.cancel();
+        state.timer = null;
+      }
+    }
   });
 
   it("runs one sweep for a stale backoff slot", async () => {

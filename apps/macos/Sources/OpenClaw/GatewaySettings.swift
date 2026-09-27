@@ -8,6 +8,7 @@ struct GatewaySettings: View {
         let id = UUID()
         var name = ""
         var address = ""
+        var isReconnecting = false
     }
 
     @State private var profiles: [MacGatewayProfile]
@@ -61,7 +62,8 @@ struct GatewaySettings: View {
         .sheet(item: self.$editorPresentation) { presentation in
             GatewayProfileEditor(
                 name: presentation.name,
-                address: presentation.address)
+                address: presentation.address,
+                isReconnecting: presentation.isReconnecting)
             { profile in
                 self.profiles.removeAll { $0.id == profile.id }
                 self.profiles.append(profile)
@@ -143,7 +145,8 @@ struct GatewaySettings: View {
                         Button("Reconnect") {
                             self.editorPresentation = EditorPresentation(
                                 name: profile.name,
-                                address: profile.url.absoluteString)
+                                address: profile.url.absoluteString,
+                                isReconnecting: true)
                         }
                         .disabled(self.isRemoving)
                         Button(role: .destructive) {
@@ -198,6 +201,7 @@ struct GatewayProfileEditor: View {
     @State private var errorMessage: String?
     @State private var connectionTask: Task<Void, Never>?
     @State private var signInProgress = GatewayBrowserSignInProgress()
+    private let isReconnecting: Bool
 
     let onSaved: (MacGatewayProfile) -> Void
     let onCancel: (() -> Void)?
@@ -205,11 +209,13 @@ struct GatewayProfileEditor: View {
     init(
         name: String = "",
         address: String = "",
+        isReconnecting: Bool = false,
         onCancel: (() -> Void)? = nil,
         onSaved: @escaping (MacGatewayProfile) -> Void)
     {
         _name = State(initialValue: name)
         _url = State(initialValue: address)
+        self.isReconnecting = isReconnecting
         self.onCancel = onCancel
         self.onSaved = onSaved
     }
@@ -217,7 +223,7 @@ struct GatewayProfileEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 5) {
-                Text("Add Gateway")
+                Text(self.isReconnecting ? String(localized: "Reconnect") : String(localized: "Add Gateway"))
                     .font(.title3.weight(.semibold))
                 Text("Enter your Gateway address. Sign in through your browser when requested.")
                     .font(.callout)
@@ -282,7 +288,7 @@ struct GatewayProfileEditor: View {
                     self.dismiss()
                 }
                 .keyboardShortcut(.cancelAction)
-                Button("Connect") {
+                Button(self.isReconnecting ? String(localized: "Reconnect") : String(localized: "Connect")) {
                     self.connectionTask = Task { await self.save() }
                 }
                 .keyboardShortcut(.defaultAction)

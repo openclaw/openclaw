@@ -4,9 +4,12 @@ import type { UpdateCheckResult } from "../infra/update-check.js";
 import {
   createUpdateRun,
   finishUpdateRun,
+  getLatestUpdateFetchFailure,
+  getUpdateRun,
   recordUpdateRunStep,
 } from "../infra/update-run-ledger.js";
 import type { UpdateRunRecord, UpdateRunStep } from "../infra/update-run-record.js";
+import { updateRunStepsFromResultStep } from "../infra/update-run-step.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { formatUpdateOneLiner, getUpdateCheckResult } from "./status.update.js";
 
@@ -74,6 +77,59 @@ describe("status update ledger evidence", () => {
     expect(update.git).not.toHaveProperty("stale");
     expect(formatUpdateOneLiner(update)).toContain("up to date");
   });
+
+  it.each([
+    ["git-fetch", "git fetch", "network unavailable", "network error"],
+    ["git-fetch-tags", "git fetch tags", "would clobber existing tag", "tag conflict"],
+    ["git-fetch-target-tag", "git fetch target tag", "permission denied", "authentication failed"],
+    [
+      "git-target-inspection-fetch",
+      "git target inspection fetch",
+      "could not resolve host",
+      "network error",
+    ],
+    ["git-import-admitted-target", "git import admitted target", "invalid pack", "fetch-failed"],
+  ])(
+    "preserves released fetch readers and clears stale status for %s receipts",
+    async (name, persistedKey, stderrTail, detail) => {
+      for (const exitCode of [1, 0]) {
+        now += 1_000;
+        const run = createUpdateRun({ trigger: "cli", target: { kind: "git" } });
+        const startedAtMs = now;
+        const start: UpdateRunStep = { step: name, status: "in_progress", startedAtMs };
+        recordUpdateRunStep(run.runId, start);
+        now += 100;
+        const result = { name, exitCode, ...(exitCode ? { stderrTail } : {}) };
+        for (const receipt of updateRunStepsFromResultStep(result)) {
+          const completed = { ...receipt, endedAtMs: now };
+          recordUpdateRunStep(run.runId, completed);
+          expect(completed.step).toBe(name);
+        }
+        expect(start.step).toBe(name);
+        const persisted = getUpdateRun(run.runId);
+        expect(persisted?.steps.map((step) => step.step)).toEqual(["requested", persistedKey]);
+        expect(persisted?.steps[1]).toMatchObject({
+          status: exitCode ? "failed" : "completed",
+          exitCode,
+          startedAtMs,
+          endedAtMs: now,
+        });
+        finishUpdateRun(run.runId, { status: exitCode ? "failed" : "succeeded" });
+        if (exitCode) {
+          expect(getLatestUpdateFetchFailure()).toEqual({
+            reason: "fetch-failed",
+            failedAtMs: now,
+            runId: run.runId,
+            detail,
+          });
+          expect((await readStatus()).git?.stale?.detail).toBe(detail);
+        } else {
+          expect(getLatestUpdateFetchFailure()).toBeUndefined();
+          expect((await readStatus()).git).not.toHaveProperty("stale");
+        }
+      }
+    },
+  );
 
   it.each([
     "fetch-failed",

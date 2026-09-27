@@ -1,10 +1,11 @@
-import { clearTaskActivity, flushTaskActivity } from "./task-registry-activity.js";
+import { flushTaskActivity } from "./task-registry-activity.js";
 import {
   cloneTaskRecord,
   cloneTaskRecordForObserver,
   normalizeTaskTimestamps,
 } from "./task-registry-records.js";
 import {
+  clearTaskActivity,
   bumpTaskRegistryRevision,
   emitTaskRegistryObserverEvent,
   tasks,
@@ -16,7 +17,8 @@ import {
   deleteParentFlowIdIndex,
   addRelatedSessionKeyIndex,
   deleteRelatedSessionKeyIndex,
-  rebuildRunIdIndex,
+  updateRunIdIndex,
+  recordTaskRegistryProjectionWrite,
 } from "./task-registry.process-state.js";
 import { isTerminalTaskStatus, type TaskRecord } from "./task-registry.types.js";
 
@@ -39,7 +41,9 @@ export function publishTaskRecordAfterAtomicStore(
     deleteParentFlowIdIndex(next.taskId, current);
     deleteRelatedSessionKeyIndex(next.taskId, current);
   }
+  const indexedCurrent = tasks.get(next.taskId);
   tasks.set(next.taskId, next);
+  recordTaskRegistryProjectionWrite("task", next.taskId);
   bumpTaskRegistryRevision();
   if (becomesTerminal) {
     clearTaskActivity(next.taskId);
@@ -47,7 +51,7 @@ export function publishTaskRecordAfterAtomicStore(
   addOwnerKeyIndex(next.taskId, next);
   addParentFlowIdIndex(next.taskId, next);
   addRelatedSessionKeyIndex(next.taskId, next);
-  rebuildRunIdIndex();
+  updateRunIdIndex(indexedCurrent, next);
   const emit = () =>
     emitTaskRegistryObserverEvent(() => ({
       kind: "upserted",

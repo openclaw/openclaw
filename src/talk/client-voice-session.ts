@@ -43,10 +43,12 @@ import {
   writeVoiceSessionRecordInTransaction as writeRecordInTransaction,
 } from "./client-voice-session-store.js";
 import {
+  buildPersistedVoiceMessage,
   createVoiceTranscriptOperationRegistry,
   normalizeVoiceTranscriptText,
   VOICE_TRANSCRIPT_MAX_UNRESOLVED,
   VOICE_TRANSCRIPT_QUEUE_POLICY,
+  voiceTranscriptEventId,
 } from "./voice-transcript.js";
 
 const voiceSessionByRunId = new Map<string, ClientVoiceRunBinding>();
@@ -225,7 +227,6 @@ export function createOrResumeClientVoiceSession(params: {
   );
   return voiceSessionId;
 }
-
 /** Read the canonical agent-session id without creating state during provider startup. */
 export function resolveClientVoiceAgentSessionId(params: {
   agentId: string;
@@ -420,33 +421,6 @@ export function resolveOpenClientVoiceSessionId(params: {
   return match;
 }
 
-function buildPersistedVoiceMessage(params: {
-  role: "user" | "assistant";
-  text: string;
-  timestamp: number;
-  provider: string;
-}): Record<string, unknown> {
-  const provenance = { kind: "realtime_voice", sourceChannel: "talk" };
-  if (params.role === "user") {
-    return {
-      role: "user",
-      content: [{ type: "text", text: params.text }],
-      timestamp: params.timestamp,
-      provenance,
-    };
-  }
-  return {
-    role: "assistant",
-    content: [{ type: "text", text: params.text }],
-    api: "realtime",
-    provider: params.provider,
-    model: "realtime-voice",
-    stopReason: "stop",
-    timestamp: params.timestamp,
-    provenance,
-  };
-}
-
 function transcriptFailureKey(entryId: string): string {
   return createHash("sha256").update(entryId, "utf8").digest("hex");
 }
@@ -529,7 +503,7 @@ function appendVoiceTranscript(params: {
         { ...sessionTarget, sessionId: sessionEntry.sessionId },
         {
           ...(normalized.config ? { config: normalized.config } : {}),
-          eventId: `voice:${normalized.voiceSessionId}:${normalized.entryId}`,
+          eventId: voiceTranscriptEventId(normalized.voiceSessionId, normalized.entryId),
           message: buildPersistedVoiceMessage({
             role: normalized.role,
             text: normalized.text,

@@ -1,5 +1,6 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { publishSystemEventStoreResolver } from "../../../infra/system-event-ownership.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 
@@ -89,6 +90,76 @@ beforeEach(() => {
   registryRuntimeMock.listSubagentRunsForRequester.mockReset().mockReturnValue([]);
   deliverSpy.mockReset().mockResolvedValue({ delivered: true, path: "direct" });
 });
+afterEach(() => publishSystemEventStoreResolver(undefined));
+
+it.each(["same", "before admission", "during admission"] as const)(
+  "keeps yielded requester wakes in their captured store: %s",
+  async (replacement) => {
+    const child = makeSettledChild({
+      runId: "run-b",
+      requesterStorePath: "original-store",
+      completion: { required: true, resultText: "retained child result" },
+      delivery: { status: "suspended", suspendedReason: "permanent_failure" },
+      requesterSettleWake: {
+        status: "pending",
+        attemptCount: 0,
+        requesterYieldBatch: true,
+        rearmGeneration: 1,
+      },
+    });
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
+    publishSystemEventStoreResolver(() =>
+      replacement === "before admission" ? "replacement-store" : "original-store",
+    );
+    const admitted = createDeferred();
+    const execute = createDeferred();
+    const startedTurns: string[] = [];
+    deliverSpy.mockImplementationOnce(async (params) => {
+      admitted.resolve();
+      await execute.promise;
+      const allowed = params.isSourceSessionEffectsAllowed;
+      if (typeof allowed === "function" && !allowed()) {
+        return { delivered: false, path: "none", disposition: "intentional_non_delivery" };
+      }
+      startedTurns.push(REQUESTER);
+      return { delivered: true, path: "direct" };
+    });
+    const complete = vi.fn((batch: readonly SubagentRunRecord[], generation?: number) =>
+      completeBatch(batch, generation),
+    );
+    const pending = maybeWakeRequesterAfterAllChildrenSettled({
+      ...wakeParams(),
+      completeBatch: complete,
+    });
+    try {
+      if (replacement !== "before admission") {
+        await admitted.promise;
+        publishSystemEventStoreResolver(() =>
+          replacement === "same" ? "original-store" : "replacement-store",
+        );
+      }
+      execute.resolve();
+      expect(await pending).toBe(replacement === "same");
+      expect(startedTurns).toEqual(replacement === "same" ? [REQUESTER] : []);
+      expect(child.requesterSettleWake).toBeUndefined();
+      expect(child.completion?.resultText).toBe("retained child result");
+      if (replacement !== "same") {
+        expect(complete).toHaveBeenCalledWith(
+          [child],
+          1,
+          expect.objectContaining({
+            error: "store replaced",
+            disposition: "intentional_non_delivery",
+          }),
+          expect.any(Function),
+        );
+      }
+    } finally {
+      execute.resolve();
+      await pending;
+    }
+  },
+);
 
 it("closes the frozen requester obligation when reset suppresses an unfinished member", async () => {
   const batchRunIds = ["run-a", "run-b"];

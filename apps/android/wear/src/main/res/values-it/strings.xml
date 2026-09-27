@@ -126,4 +126,14 @@
     <string name="pulse_phase_counts" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"In coda %1$d, In esecuzione %2$d, Completati %3$d, Non riusciti %4$d, Nascosti %5$d"</string>
     <string name="pulse_more_phases" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Altre fasi non mostrate"</string>
     <string name="pulse_unknown" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Sconosciuto"</string>
+    <string name="read_full_reply" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Leggi la risposta completa"</string>
+    <string name="reply_stream_preview" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Anteprima in tempo reale. Leggi la risposta completa quando sarà terminata."</string>
+    <string name="reply_previous_page" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Parte precedente"</string>
+    <string name="reply_next_page" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Parte successiva"</string>
+    <string name="reply_loading" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Caricamento della risposta completa…"</string>
+    <string name="reply_unsupported" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Aggiorna l\'app sul telefono e Gateway per leggere le risposte complete."</string>
+    <string name="reply_too_large" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Questa risposta è troppo lunga per essere letta qui. Aprila sul telefono."</string>
+    <string name="reply_changed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"La risposta o la connessione è cambiata. Riprova dall\'inizio."</string>
+    <string name="reply_unavailable" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Il testo completo non è più disponibile."</string>
+    <string name="reply_failed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Impossibile caricare la risposta completa. Riprova."</string>
 </resources>

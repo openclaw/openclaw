@@ -1,7 +1,8 @@
 // Probe device-auth scope tests exercise the real probe -> client -> connect-frame path.
 import { Buffer } from "node:buffer";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   seedDeviceAuthToken,
   seedOriginDeviceToken,
@@ -12,7 +13,7 @@ import { withTempDir } from "../test-utils/temp-dir.js";
 
 type WebSocketEvent = "open" | "message" | "close" | "error" | "unexpected-response";
 
-const webSockets = vi.hoisted((): ProbeWebSocket[] => []);
+let onSocketCreated: ((socket: ProbeWebSocket) => void) | undefined;
 
 class ProbeWebSocket {
   static readonly CONNECTING = 0;
@@ -20,7 +21,7 @@ class ProbeWebSocket {
   static readonly CLOSING = 2;
   static readonly CLOSED = 3;
 
-  readonly sent: string[] = [];
+  readonly firstSent = createDeferred<string>();
   readyState = ProbeWebSocket.CONNECTING;
   binaryType = "nodebuffer";
   private readonly handlers: Record<WebSocketEvent, Array<(...args: unknown[]) => void>> = {
@@ -32,7 +33,7 @@ class ProbeWebSocket {
   };
 
   constructor(_url: string, _options?: unknown) {
-    webSockets.push(this);
+    onSocketCreated?.(this);
   }
 
   on(event: WebSocketEvent, handler: (...args: unknown[]) => void): void {
@@ -40,7 +41,7 @@ class ProbeWebSocket {
   }
 
   send(data: string): void {
-    this.sent.push(data);
+    this.firstSent.resolve(data);
   }
 
   close(code = 1000, reason = ""): void {
@@ -97,6 +98,8 @@ async function captureProbeConnectFrame(params: {
   auth?: { token?: string; password?: string };
   suppressStoredDeviceAuth?: boolean;
 }): Promise<ConnectFrame> {
+  const created = createDeferred<ProbeWebSocket>();
+  onSocketCreated = created.resolve;
   const probePromise = probeGateway({
     url: params.url,
     auth: params.auth,
@@ -105,47 +108,44 @@ async function captureProbeConnectFrame(params: {
     timeoutMs: 2_000,
     includeDetails: false,
   });
-  await vi.waitFor(() => expect(webSockets).toHaveLength(1));
-  const socket = webSockets[0];
-  if (!socket) {
-    throw new Error("missing probe websocket");
-  }
-  socket.emitOpen();
-  socket.emitMessage(
-    JSON.stringify({
-      type: "event",
-      event: "connect.challenge",
-      payload: { nonce: "probe-scope-nonce", ts: Date.now() },
-    }),
-  );
-  await vi.waitFor(() => {
-    expect(socket.sent.some((frame) => frame.includes('"method":"connect"'))).toBe(true);
+  const endedWithoutConnect = probePromise.then(() => {
+    throw new Error("probe ended before its connect frame");
   });
-  const rawConnect = socket.sent.find((frame) => frame.includes('"method":"connect"'));
-  if (!rawConnect) {
-    throw new Error("missing probe connect frame");
+  let socket: ProbeWebSocket | undefined;
+  try {
+    socket = await Promise.race([created.promise, endedWithoutConnect]);
+    socket.emitOpen();
+    socket.emitMessage(
+      JSON.stringify({
+        type: "event",
+        event: "connect.challenge",
+        payload: { nonce: "probe-scope-nonce", ts: Date.now() },
+      }),
+    );
+    const rawConnect = await Promise.race([socket.firstSent.promise, endedWithoutConnect]);
+    expect(rawConnect).toContain('"method":"connect"');
+    const connect = JSON.parse(rawConnect) as ConnectFrame;
+    socket.emitMessage(
+      JSON.stringify({
+        type: "res",
+        id: connect.id,
+        ok: true,
+        payload: {
+          type: "hello-ok",
+          auth: { role: "operator", scopes: ["operator.read"] },
+          server: { connId: "probe-scope-test", version: "test" },
+        },
+      }),
+    );
+    await probePromise;
+    expect(socket.readyState).toBe(ProbeWebSocket.CLOSED);
+    return connect;
+  } finally {
+    onSocketCreated = undefined;
+    socket?.close();
+    await probePromise;
   }
-  const connect = JSON.parse(rawConnect) as ConnectFrame;
-  socket.emitMessage(
-    JSON.stringify({
-      type: "res",
-      id: connect.id,
-      ok: true,
-      payload: {
-        type: "hello-ok",
-        auth: { role: "operator", scopes: ["operator.read"] },
-        server: { connId: "probe-scope-test", version: "test" },
-      },
-    }),
-  );
-  await probePromise;
-  expect(socket.readyState).toBe(ProbeWebSocket.CLOSED);
-  return connect;
 }
-
-beforeEach(() => {
-  webSockets.length = 0;
-});
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();

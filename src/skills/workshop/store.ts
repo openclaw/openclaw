@@ -2,13 +2,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { FsSafeError, root, type Root } from "../../infra/fs-safe.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../../infra/kysely-sync.js";
 import { logWarn } from "../../logger.js";
-import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { normalizeSkillIndexName } from "../discovery/skill-index.js";
 import {
   assertInsideSkillsRoot,
@@ -28,31 +22,27 @@ import { reconcileInterruptedSkillProposalApply } from "./reconcile-transition.j
 import { hashSkillProposalRevision } from "./revision-hash.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 import {
+  captureSkillWorkshopStoreOptions,
+  ensureSkillWorkshopStore,
+  executeSkillWorkshopOperation,
+  readStoredProposal,
+} from "./store-client.js";
+import {
   assertProposalId,
   MAX_PROPOSAL_SUPPORT_FILES,
   PROPOSAL_DRAFT_FILE,
 } from "./store-record.js";
-import { appendSkillProposalEvent, type NewSkillProposalEvent } from "./store-sqlite-event.js";
-import {
-  insertProposal,
-  parseSkillProposalRow,
-  readStoredProposal,
-  updateProposal,
-} from "./store-sqlite-record.js";
-import { readSkillProposalRollback } from "./store-sqlite-rollback.js";
-import {
-  databaseOptions,
-  ensureSkillWorkshopSchema,
-  openSkillWorkshopStore,
-  type SkillProposalRow,
-  type SkillWorkshopDirectoryStoreOptions,
-  type SkillWorkshopDatabase,
-  type SkillWorkshopStoreOptions,
+import { readSkillProposalRollback } from "./store-rollback.js";
+import type { NewSkillProposalEvent } from "./store-sqlite-event.js";
+import type {
+  SkillProposalRow,
+  SkillWorkshopDirectoryStoreOptions,
+  SkillWorkshopStoreOptions,
 } from "./store-sqlite-schema.js";
 import {
   commitPendingSkillProposalTransition,
   readCommittedSkillProposalTransition,
-} from "./store-sqlite-transition.js";
+} from "./store-transition.js";
 import { withSkillProposalTargetLock } from "./target-lock.js";
 import {
   SKILL_WORKSHOP_MANIFEST_SCHEMA,
@@ -93,12 +83,8 @@ export function createSkillProposalId(name: string, now = new Date()): string {
   return `${normalized.slice(0, 60)}-${date}-${suffix}`;
 }
 
-function contentSizeBytes(content: string): number {
-  return Buffer.byteLength(content, "utf8");
-}
-
 function assertSkillProposalContentSize(content: string): void {
-  if (contentSizeBytes(content) > MAX_PROPOSAL_BYTES) {
+  if (Buffer.byteLength(content, "utf8") > MAX_PROPOSAL_BYTES) {
     throw new Error("Skill proposal is too large.");
   }
 }
@@ -121,7 +107,7 @@ export function prepareSkillProposalSupportFiles(
       throw new Error(`Duplicate support file path: ${filePath}`);
     }
     seen.add(filePath);
-    const sizeBytes = contentSizeBytes(file.content);
+    const sizeBytes = Buffer.byteLength(file.content, "utf8");
     if (sizeBytes > MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES) {
       throw new Error(`Support file is too large: ${filePath}`);
     }
@@ -183,11 +169,14 @@ export class SkillProposalDraftMissingError extends Error {
 
 export async function readSkillProposal(
   proposalId: string,
-  options: SkillWorkshopDirectoryStoreOptions,
-  scope: SkillProposalLookupScope,
-  readOptions: SkillProposalReadOptions,
+  sourceOptions: SkillWorkshopDirectoryStoreOptions,
+  lookupScope: SkillProposalLookupScope,
+  readRequest: SkillProposalReadOptions,
 ): Promise<SkillProposalReadResult | null> {
-  let stored = readStoredProposal(proposalId, options);
+  const options = captureSkillWorkshopStoreOptions(sourceOptions);
+  const scope = { agentId: lookupScope.agentId };
+  const readOptions = { config: readRequest.config, reconcile: readRequest.reconcile };
+  let stored = await readStoredProposal(proposalId, options);
   if (!stored || !isStoredProposalVisible(stored.row, scope)) {
     return null;
   }
@@ -200,21 +189,23 @@ export async function readSkillProposal(
         ? { agentId: stored.row.owner_agent_id }
         : {}),
   };
-  if (readOptions.reconcile === false) {
+  // Terminal generations cannot be revised or retired by proposal writers.
+  // Keep filesystem integrity checks, but do not acquire a write lease to read them.
+  if (readOptions.reconcile === false || stored.record.status !== "pending") {
     return await readSkillProposalBundle(stored.record, options);
   }
   if (await reconcileInterruptedApply(proposalId, scopedOptions)) {
-    stored = readStoredProposal(proposalId, options);
+    stored = await readStoredProposal(proposalId, options);
     if (!stored || !isStoredProposalVisible(stored.row, scope)) {
       return null;
     }
   }
   return await withSkillProposalTargetLock(
     stored.record,
-    async () => {
-      const current = readStoredProposal(proposalId, options);
+    async (store) => {
+      const current = await readStoredProposal(proposalId, store);
       return current && isStoredProposalVisible(current.row, scope)
-        ? await readSkillProposalBundle(current.record, options)
+        ? await readSkillProposalBundle(current.record, store)
         : null;
     },
     scopedOptions,
@@ -223,13 +214,19 @@ export async function readSkillProposal(
 
 export async function readSkillProposalRecord(
   proposalId: string,
-  options: SkillWorkshopDirectoryStoreOptions,
-  scope: SkillProposalLookupScope,
-  readOptions: SkillProposalReadOptions,
+  sourceOptions: SkillWorkshopDirectoryStoreOptions,
+  lookupScope: SkillProposalLookupScope,
+  readRequest: SkillProposalReadOptions,
 ): Promise<SkillProposalRecord | null> {
-  let stored = readStoredProposal(proposalId, options);
+  const options = captureSkillWorkshopStoreOptions(sourceOptions);
+  const scope = { agentId: lookupScope.agentId };
+  const readOptions = { config: readRequest.config, reconcile: readRequest.reconcile };
+  let stored = await readStoredProposal(proposalId, options);
   if (!stored || !isStoredProposalVisible(stored.row, scope)) {
     return null;
+  }
+  if (stored.record.status !== "pending") {
+    return stored.record;
   }
   const scopedOptions = {
     ...options,
@@ -243,11 +240,11 @@ export async function readSkillProposalRecord(
   if (readOptions.reconcile !== false) {
     await reconcileInterruptedApply(proposalId, scopedOptions);
   }
-  stored = readStoredProposal(proposalId, options);
+  stored = await readStoredProposal(proposalId, options);
   return stored && isStoredProposalVisible(stored.row, scope) ? stored.record : null;
 }
 
-export async function writeSkillProposal(params: {
+export async function writeSkillProposal(request: {
   record: SkillProposalRecord;
   content: string;
   supportFiles?: readonly PreparedSkillProposalSupportFile[];
@@ -256,47 +253,35 @@ export async function writeSkillProposal(params: {
   event: NewSkillProposalEvent;
   store?: SkillWorkshopStoreOptions;
 }): Promise<SkillProposalEvent> {
-  assertProposalId(params.record.id);
-  assertSkillProposalContentSize(params.content);
-  ensureSkillWorkshopSchema(params.store);
+  assertProposalId(request.record.id);
+  assertSkillProposalContentSize(request.content);
+  const params = {
+    ...structuredClone({
+      record: request.record,
+      content: request.content,
+      supportFiles: request.supportFiles,
+      ownerAgentId: request.ownerAgentId,
+      maxPending: request.maxPending,
+      event: request.event,
+    }),
+    store: captureSkillWorkshopStoreOptions(request.store ?? {}),
+  };
+  await ensureSkillWorkshopStore(params.store);
   await stageSkillProposalGeneration(params);
 
   try {
-    return runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(db);
-        const existing = executeSqliteQueryTakeFirstSync(
-          db,
-          kysely
-            .selectFrom("skill_workshop_proposals")
-            .select("proposal_id")
-            .where("proposal_id", "=", params.record.id),
-        );
-        if (existing) {
-          throw new Error(`Skill proposal already exists: ${params.record.id}`);
-        }
-        const count = executeSqliteQueryTakeFirstSync(
-          db,
-          kysely
-            .selectFrom("skill_workshop_proposals")
-            .select((eb) => eb.fn.countAll<number>().as("count"))
-            .where("owner_agent_id", "=", params.ownerAgentId)
-            .where("status", "in", ["pending", "quarantined"]),
-        );
-        if ((count?.count ?? 0) >= params.maxPending) {
-          throw new Error(`Skill Workshop pending proposal limit reached (${params.maxPending}).`);
-        }
-        insertProposal(db, {
-          record: params.record,
-          ownerAgentId: params.ownerAgentId,
-        });
-        return appendSkillProposalEvent(db, params.event);
+    return await executeSkillWorkshopOperation(
+      "workshop.proposal.create",
+      {
+        record: params.record,
+        ownerAgentId: params.ownerAgentId,
+        maxPending: params.maxPending,
+        event: params.event,
       },
-      databaseOptions(params.store),
-      { operationLabel: "skill-workshop.proposal.create" },
+      params.store,
     );
   } catch (error) {
-    const committed = readCommittedSkillProposalTransition({
+    const committed = await readCommittedSkillProposalTransition({
       record: params.record,
       event: params.event,
       store: params.store,
@@ -304,7 +289,7 @@ export async function writeSkillProposal(params: {
     if (committed) {
       return committed.event;
     }
-    const authoritative = readStoredProposal(params.record.id, params.store);
+    const authoritative = await readStoredProposal(params.record.id, params.store);
     if (authoritative?.row.record_json === JSON.stringify(params.record)) {
       throw new Error("Created Skill Workshop proposal is missing its committed event.", {
         cause: error,
@@ -315,7 +300,7 @@ export async function writeSkillProposal(params: {
   }
 }
 
-export async function replaceSkillProposalDraft(params: {
+export async function replaceSkillProposalDraft(request: {
   expected: SkillProposalRecord;
   record: SkillProposalRecord;
   content: string;
@@ -323,8 +308,18 @@ export async function replaceSkillProposalDraft(params: {
   event: NewSkillProposalEvent;
   store?: SkillWorkshopStoreOptions;
 }): Promise<SkillProposalEvent> {
-  assertProposalId(params.record.id);
-  assertSkillProposalContentSize(params.content);
+  assertProposalId(request.record.id);
+  assertSkillProposalContentSize(request.content);
+  const params = {
+    ...structuredClone({
+      expected: request.expected,
+      record: request.record,
+      content: request.content,
+      supportFiles: request.supportFiles,
+      event: request.event,
+    }),
+    store: captureSkillWorkshopStoreOptions(request.store ?? {}),
+  };
   await cleanupSkillProposalGenerations(params.expected, params.store).catch((error: unknown) => {
     logWarn(`skill-workshop: failed to clean unowned proposal generations: ${String(error)}`);
   });
@@ -332,7 +327,7 @@ export async function replaceSkillProposalDraft(params: {
 
   let commit;
   try {
-    commit = commitPendingSkillProposalTransition({
+    commit = await commitPendingSkillProposalTransition({
       expected: params.expected,
       record: params.record,
       event: params.event,
@@ -341,13 +336,13 @@ export async function replaceSkillProposalDraft(params: {
       invalidateRollback: true,
     });
   } catch (error) {
-    const committed = readCommittedSkillProposalTransition({
+    const committed = await readCommittedSkillProposalTransition({
       record: params.record,
       event: params.event,
       store: params.store,
     });
     if (!committed) {
-      const authoritative = readStoredProposal(params.record.id, params.store);
+      const authoritative = await readStoredProposal(params.record.id, params.store);
       if (authoritative?.row.record_json === JSON.stringify(params.record)) {
         throw new Error("Revised Skill Workshop proposal is missing its committed event.", {
           cause: error,
@@ -376,95 +371,44 @@ export async function updateSkillProposalRecord(params: {
   event?: NewSkillProposalEvent;
 }): Promise<SkillProposalEvent | undefined> {
   assertProposalId(params.record.id);
-  ensureSkillWorkshopSchema(params.store);
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(db);
-      const current = executeSqliteQueryTakeFirstSync(
-        db,
-        kysely
-          .selectFrom("skill_workshop_proposals")
-          .selectAll()
-          .where("proposal_id", "=", params.record.id),
-      );
-      if (!current || !parseSkillProposalRow(current)) {
-        throw new Error(`Skill proposal not found: ${params.record.id}`);
-      }
-      // Recovery only visits pending proposals. A dismissal must not strand
-      // a partial install, including when its rollback metadata is damaged.
-      if (
-        current.status === "pending" &&
-        (params.record.status === "rejected" || params.record.status === "quarantined") &&
-        executeSqliteQueryTakeFirstSync(
-          db,
-          kysely
-            .selectFrom("skill_workshop_proposal_rollbacks")
-            .select("proposal_id")
-            .where("proposal_id", "=", params.record.id),
-        )
-      ) {
-        throw new Error(
-          "Skill proposal has unfinished apply recovery. Run openclaw doctor --fix and restore the files it identifies before retrying.",
-        );
-      }
-      if (params.invalidateRollback) {
-        executeSqliteQuerySync(
-          db,
-          kysely
-            .deleteFrom("skill_workshop_proposal_rollbacks")
-            .where("proposal_id", "=", params.record.id),
-        );
-      }
-      updateProposal(db, current, params.record, params.ownerAgentId);
-      return params.event ? appendSkillProposalEvent(db, params.event) : undefined;
+  return executeSkillWorkshopOperation(
+    "workshop.proposal.update",
+    {
+      record: params.record,
+      ownerAgentId: params.ownerAgentId,
+      invalidateRollback: params.invalidateRollback,
+      event: params.event,
     },
-    databaseOptions(params.store),
-    { operationLabel: "skill-workshop.proposal.update" },
+    params.store,
   );
-}
-
-function listStoredProposals(
-  options: SkillWorkshopStoreOptions,
-  scope: SkillProposalLookupScope,
-): Array<{ record: SkillProposalRecord; row: SkillProposalRow }> {
-  const { database, kysely } = openSkillWorkshopStore(options);
-  let query = kysely.selectFrom("skill_workshop_proposals").selectAll();
-  if (scope.agentId) {
-    query = query.where("owner_agent_id", "=", scope.agentId);
-  } else {
-    query = query.where("owner_agent_id", "is not", null);
-  }
-  return executeSqliteQuerySync(
-    database.db,
-    query.orderBy("updated_at", "desc").orderBy("proposal_id", "asc"),
-  ).rows.flatMap((row) => {
-    const record = parseSkillProposalRow(row);
-    return record ? [{ record, row }] : [];
-  });
 }
 
 export async function readSkillProposalManifest(
-  options: SkillWorkshopDirectoryStoreOptions,
-  scope: SkillProposalLookupScope = {},
+  sourceOptions: SkillWorkshopDirectoryStoreOptions,
+  lookupScope: SkillProposalLookupScope & { status?: SkillProposalRecord["status"] } = {},
 ): Promise<SkillProposalManifest> {
-  const before = listStoredProposals(options, scope);
+  const options = captureSkillWorkshopStoreOptions(sourceOptions);
+  const scope = { agentId: lookupScope.agentId, status: lookupScope.status };
+  const before = await executeSkillWorkshopOperation(
+    "workshop.proposals.list",
+    { agentId: scope.agentId, status: "pending" },
+    options,
+  );
   await Promise.all(
-    before
-      .filter(({ record }) => record.status === "pending")
-      .map(({ record, row }) =>
-        reconcileInterruptedApply(record.id, {
-          ...options,
-          ...(scope.agentId
-            ? { agentId: scope.agentId }
-            : row.owner_agent_id
-              ? { agentId: row.owner_agent_id }
-              : {}),
-        }),
-      ),
+    before.map(({ record, row }) =>
+      reconcileInterruptedApply(record.id, {
+        ...options,
+        ...(scope.agentId
+          ? { agentId: scope.agentId }
+          : row.owner_agent_id
+            ? { agentId: row.owner_agent_id }
+            : {}),
+      }),
+    ),
   );
-  const proposals = listStoredProposals(options, scope).map(({ record }) =>
-    manifestEntryFromRecord(record),
-  );
+  const proposals = (
+    await executeSkillWorkshopOperation("workshop.proposals.list", scope, options)
+  ).map(({ record }) => manifestEntryFromRecord(record));
   return {
     schema: SKILL_WORKSHOP_MANIFEST_SCHEMA,
     updatedAt: proposals[0]?.updatedAt ?? new Date(0).toISOString(),
@@ -476,7 +420,7 @@ async function reconcileInterruptedApply(
   proposalId: string,
   options: SkillWorkshopDirectoryStoreOptions,
 ): Promise<boolean> {
-  const stored = readStoredProposal(proposalId, options);
+  const stored = await readStoredProposal(proposalId, options);
   if (!stored || stored.record.status !== "pending" || !options.agentId) {
     return false;
   }
@@ -513,7 +457,7 @@ async function readProposalSupportFiles(
       symlinks: "reject",
     });
     const content = read.buffer.toString("utf8");
-    const sizeBytes = contentSizeBytes(content);
+    const sizeBytes = Buffer.byteLength(content, "utf8");
     const hash = hashSkillProposalContent(content);
     if (file.sizeBytes !== sizeBytes || file.hash !== hash) {
       throw new Error(`Proposal support file changed without updating metadata: ${filePath}`);
@@ -561,62 +505,17 @@ export async function readSkillProposalBundle(
   };
 }
 
-export function importLegacySkillProposal(params: {
+export async function importLegacySkillProposal(params: {
   record: SkillProposalRecord;
   rollback?: SkillProposalRollback;
   ownerAgentId: string;
   store?: SkillWorkshopStoreOptions;
-}): "imported" | "already-imported" {
+}): Promise<"imported" | "already-imported"> {
   assertProposalId(params.record.id);
-  ensureSkillWorkshopSchema(params.store);
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(db);
-      const current = executeSqliteQueryTakeFirstSync(
-        db,
-        kysely
-          .selectFrom("skill_workshop_proposals")
-          .selectAll()
-          .where("proposal_id", "=", params.record.id),
-      );
-      if (current) {
-        const existing = parseSkillProposalRow(current);
-        if (
-          !existing ||
-          existing.draftHash !== params.record.draftHash ||
-          existing.target.skillFile !== params.record.target.skillFile
-        ) {
-          throw new Error(`Legacy skill proposal conflicts with SQLite: ${params.record.id}`);
-        }
-      } else {
-        insertProposal(db, {
-          record: params.record,
-          ownerAgentId: params.ownerAgentId,
-        });
-      }
-      if (params.rollback) {
-        executeSqliteQuerySync(
-          db,
-          kysely
-            .insertInto("skill_workshop_proposal_rollbacks")
-            .values({
-              proposal_id: params.record.id,
-              written_at: params.rollback.writtenAt,
-              target_skill_file: params.rollback.targetSkillFile,
-              action: params.rollback.action,
-              previous_content_hash: params.rollback.previousContentHash ?? null,
-              previous_content: params.rollback.previousContent ?? null,
-              support_files_json: params.rollback.supportFiles
-                ? JSON.stringify(params.rollback.supportFiles)
-                : null,
-            })
-            .onConflict((conflict) => conflict.column("proposal_id").doNothing()),
-        );
-      }
-      return current ? "already-imported" : "imported";
-    },
-    databaseOptions(params.store),
-    { operationLabel: "doctor.skill-workshop.import" },
+  return executeSkillWorkshopOperation(
+    "workshop.proposal.import",
+    { record: params.record, rollback: params.rollback, ownerAgentId: params.ownerAgentId },
+    params.store,
   );
 }
 

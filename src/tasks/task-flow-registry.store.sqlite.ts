@@ -1,30 +1,32 @@
 // Persists task-flow records through the global shared-state database owner.
-import type { DatabaseSync } from "node:sqlite";
 import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
 import {
   executionOwnerBindingFromAdmission,
   type ExecutionOwnerBindingResult,
 } from "../audit/execution-owner-binding.js";
-import {
-  deferSqlitePostCommitPublication,
-  stageSqliteTransactionState,
-} from "../infra/sqlite-post-commit.js";
+import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import type { TaskFlowSyncInput } from "./task-flow-registry.records.js";
 import {
-  bindTaskFlowExecutionInDatabase,
   bindTaskFlowRecord,
   deleteTaskFlowRowInDatabase,
   readTaskFlowRegistrySnapshot,
+  syncTaskMirroredFlowRecordInDatabase,
   updateTaskFlowRecordInDatabase,
   upsertTaskFlowRowInDatabase,
 } from "./task-flow-registry.store.kernel.js";
 import type {
+  TaskFlowRegistryMirroredSync,
   TaskFlowRegistryObservedUpdate,
   TaskFlowRegistryStoreSnapshot,
   TaskFlowRegistryUpdate,
@@ -33,38 +35,19 @@ import type {
 } from "./task-flow-registry.store.types.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 
-type FlowRegistryDatabase = {
-  db: DatabaseSync;
-  path: string;
-};
+const log = createSubsystemLogger("tasks/task-flow-registry");
 
-let cachedDatabase: FlowRegistryDatabase | null = null;
-
-function openFlowRegistryDatabase(): FlowRegistryDatabase {
+function withWriteTransaction(write: (database: OpenClawStateDatabase) => void) {
   const database = openOpenClawStateDatabase();
-  const pathname = database.path;
-  if (cachedDatabase && cachedDatabase.path === pathname && cachedDatabase.db.isOpen) {
-    return cachedDatabase;
-  }
-  if (cachedDatabase && !cachedDatabase.db.isOpen) {
-    cachedDatabase = null;
-  }
-  cachedDatabase = {
-    db: database.db,
-    path: pathname,
-  };
-  return cachedDatabase;
-}
-
-function withWriteTransaction(write: (database: FlowRegistryDatabase) => void) {
-  const database = openFlowRegistryDatabase();
   runOpenClawStateWriteTransaction(() => {
     write(database);
   });
 }
 
-export function loadTaskFlowRegistryStateFromSqlite(): TaskFlowRegistryStoreSnapshot {
-  return readTaskFlowRegistrySnapshot(openFlowRegistryDatabase().db);
+export function loadTaskFlowRegistryStateFromSqlite(
+  flowIds?: readonly string[],
+): TaskFlowRegistryStoreSnapshot {
+  return readTaskFlowRegistrySnapshot(openOpenClawStateDatabase().db, flowIds);
 }
 
 /** Loads task flows without creating or migrating shared state. */
@@ -82,6 +65,38 @@ export function upsertTaskFlowRegistryRecordToSqlite(flow: TaskFlowRecord) {
   });
 }
 
+export function syncTaskMirroredFlowInSqlite(
+  task: TaskFlowSyncInput,
+  preparePublication: (result: TaskFlowRegistryMirroredSync) => TaskFlowRegistryUpdatePublication,
+): TaskFlowRegistryMirroredSync {
+  let committed: TaskFlowRegistryMirroredSync | undefined;
+  try {
+    return runOpenClawStateWriteTransaction(({ db }) => {
+      const result = syncTaskMirroredFlowRecordInDatabase(db, task);
+      const publication = preparePublication(result);
+      stageSqliteTransactionState(db, {
+        stage: publication.stage,
+        rollback: publication.rollback,
+        commit: () => {
+          committed = result;
+          publication.commit();
+        },
+      });
+      return result;
+    });
+  } catch (error) {
+    if (!committed) {
+      throw error;
+    }
+    log.warn("Task-mirrored flow committed before cleanup failed", {
+      taskId: task.taskId,
+      flowId: task.parentFlowId,
+      error,
+    });
+    return committed;
+  }
+}
+
 export function updateTaskFlowRegistryRecordInSqlite(
   params: TaskFlowRegistryUpdate,
   preparePublication: (update: TaskFlowRegistryObservedUpdate) => TaskFlowRegistryUpdatePublication,
@@ -95,26 +110,44 @@ export function updateTaskFlowRegistryRecordInSqlite(
         rollback: publication.rollback,
         commit: publication.commit,
       });
-      deferSqlitePostCommitPublication(db, publication.publish);
     }
     return result;
   });
 }
 
 /** Binds only the exact flow selected before admission; lifecycle settlement stays owner-native. */
-export function bindTaskFlowExecution(params: {
+export async function bindTaskFlowExecution(params: {
   admitted: AdmittedRunContext;
   flowId: string;
-  options?: OpenClawStateDatabaseOptions;
-}): ExecutionOwnerBindingResult {
+  options?: Pick<OpenClawStateDatabaseOptions, "path" | "env">;
+  context?: OpenClawStateWorkerContext;
+  assertCurrent?: () => void;
+}): Promise<ExecutionOwnerBindingResult> {
   const binding = executionOwnerBindingFromAdmission(params.admitted);
   if (!binding) {
     return "disabled";
   }
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => bindTaskFlowExecutionInDatabase(db, params.flowId, binding),
-    params.options,
-    { operationLabel: "task.flow.execution-binding" },
+  const context = params.context ?? captureOpenClawStateWorkerContext(params.options);
+  const input = { flowId: params.flowId, binding };
+  const assertOwnerCurrent = params.assertCurrent;
+  const assertCurrent = () => {
+    context.admission.assertCurrent();
+    assertOwnerCurrent?.();
+  };
+  const [{ runOpenClawStateWorkerOperation }, { createSqliteWorkerWriteAdmission }] =
+    await Promise.all([
+      import("../state/openclaw-state-worker-store.js"),
+      import("../infra/sqlite-worker-store.js"),
+    ]);
+  return runOpenClawStateWorkerOperation(
+    context,
+    (scope) => scope.execute({ type: "flows.bindExecution", input }),
+    {
+      assertCurrent,
+      createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
+        context.admission.databasePath,
+      ]),
+    },
   );
 }
 
@@ -123,6 +156,5 @@ export function deleteTaskFlowRegistryRecordFromSqlite(flowId: string) {
 }
 
 export function closeTaskFlowRegistryDatabase() {
-  cachedDatabase = null;
   closeOpenClawStateDatabase();
 }

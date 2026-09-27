@@ -43,13 +43,13 @@ describeBrowserLayout("chat swarm progress browser layout", () => {
       .map((file) => readStyleSheet(file))
       .join("\n");
     await page.setContent(`<!doctype html><html><head><style>${styles}</style></head><body>
-      <section class="card chat">
+      <section class="chat">
         <div class="chat-workbench">
           <div class="chat-workbench__main">
             <div class="chat-split-container">
               <div class="chat-main">
                 <div class="chat-main__conversation-column">
-                  <div class="chat-main__conversation">
+                  <div class="chat-main__conversation-frame"><div class="chat-main__conversation">
                     <div class="chat-thread" role="log">Conversation</div>
                     <aside class="chat-swarm">
                       <div class="chat-swarm__group">
@@ -62,7 +62,7 @@ describeBrowserLayout("chat swarm progress browser layout", () => {
                     <div class="agent-chat__composer-shell">
                       <div class="agent-chat__input agent-chat__input--chat"></div>
                     </div>
-                  </div>
+                  </div></div>
                 </div>
               </div>
             </div>

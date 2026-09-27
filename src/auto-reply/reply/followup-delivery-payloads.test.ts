@@ -27,7 +27,7 @@ describe("resolveFollowupDeliveryPayloads", () => {
         cfg: baseConfig,
         payloads: [{ text: " ", mediaUrl: "file:///tmp/reply.png" }],
       }),
-    ).toMatchObject([{ text: " ", mediaUrl: "file:///tmp/reply.png" }]);
+    ).toMatchObject([{ mediaUrl: "file:///tmp/reply.png" }]);
   });
 
   it("drops a durable reasoning payload when reasoningPayloadsEnabled is not set", () => {

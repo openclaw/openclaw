@@ -7,6 +7,10 @@ export class CodexCatalogObservations {
   private readonly mutations = new Map<string, number>();
   private readonly observations = new Map<symbol, number>();
 
+  hasActiveWork(): boolean {
+    return this.observations.size > 0;
+  }
+
   mark(threadId: string): void {
     this.revision++;
     if (this.observations.size) {

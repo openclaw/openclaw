@@ -14,20 +14,25 @@ const suite = createSessionManagementE2eSuite(true);
 
 suite.define(() => {
   it.each(["fresh", "stale"] as const)(
-    "keeps expanded child rows still through cached replay (initial primary: %s)",
+    "keeps expanded spawned-session rows still through cached replay (initial primary: %s)",
     async (initialPrimary) => {
       const baseTime = Date.parse("2026-09-16T00:00:00Z");
       const parentKey = "agent:main:jitter-parent";
       const selectedKey = "agent:main:jitter-selected";
       const children = Array.from({ length: 12 }, (_, index) =>
-        sessionRow(`agent:main:subagent:jitter-${index}`, `Research task ${index + 1}`, baseTime, {
-          spawnedBy: parentKey,
-          snapshotAt: baseTime + 200,
-          createdAt: baseTime - index,
-          hasActiveRun: index >= 4 && index <= 8,
-          activeRunIds: index >= 4 && index <= 8 ? [`run-${index}`] : [],
-          status: index >= 4 && index <= 8 ? "running" : "done",
-        }),
+        sessionRow(
+          `agent:main:dashboard:jitter-${index}`,
+          `Research session ${index + 1}`,
+          baseTime,
+          {
+            spawnedBy: parentKey,
+            snapshotAt: baseTime + 200,
+            createdAt: baseTime - index,
+            hasActiveRun: index >= 4 && index <= 8,
+            activeRunIds: index >= 4 && index <= 8 ? [`run-${index}`] : [],
+            status: index >= 4 && index <= 8 ? "running" : "done",
+          },
+        ),
       );
       const parent = sessionRow(parentKey, "Research home", baseTime + 10, {
         childSessions: children.map((child) => child.key),
@@ -162,7 +167,7 @@ suite.define(() => {
               document.querySelector<AppSidebarSessionNavigationElement>("openclaw-app-sidebar");
             const data = sidebar?.sessionData;
             const root = data?.context?.sessions.state.result;
-            const target = "agent:main:subagent:jitter-8";
+            const target = "agent:main:dashboard:jitter-8";
             return {
               rootTs: root?.ts,
               rootRow: root?.sessions.find((row) => row.key === target),

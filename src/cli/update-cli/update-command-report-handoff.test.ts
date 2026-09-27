@@ -7,7 +7,7 @@ import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { UpdatePreMutationError } from "./shared.js";
 import { handoffUpdateFromGateway } from "./update-command-handoff.js";
-import { createUpdateCommandFailureResult, UpdateCommandFailure } from "./update-command-result.js";
+import { resolveMutableUpdateFailure, UpdateCommandFailure } from "./update-command-result.js";
 import { reportPreMutationUpdateResult } from "./update-command-terminal.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 
@@ -89,12 +89,15 @@ it.each(["runtime", "missing updater"] as const)(
                 throw cause;
               }
               throw new UpdateCommandFailure(
-                createUpdateCommandFailureResult({
-                  root,
-                  mode: "npm",
-                  durationMs: 0,
-                  failure: { cause, detail: cause.message },
-                }),
+                (
+                  await resolveMutableUpdateFailure({
+                    root,
+                    mode: "npm",
+                    durationMs: 0,
+                    cause,
+                    originalRecovery: async () => undefined,
+                  })
+                ).result,
                 1,
                 cause.message,
               );

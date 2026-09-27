@@ -51,6 +51,15 @@ describe("memory index", () => {
     const results = await manager.search("Alpha");
     expect(results.length).toBeGreaterThan(0);
     expect(results[0]?.snippet).toMatch(/Alpha/i);
+    expect(Object.keys(results[0] ?? {}).slice(0, 7)).toEqual([
+      "path",
+      "startLine",
+      "endLine",
+      "score",
+      "textScore",
+      "snippet",
+      "source",
+    ]);
 
     const noResults = await manager.search("nonexistent_xyz_keyword");
     expect(noResults.length).toBe(0);
@@ -671,6 +680,30 @@ describe("memory index", () => {
       expect(results.every((entry) => !("hasBodyMatch" in entry))).toBe(true);
     },
   );
+
+  it("recalls an ASCII term embedded in an unspaced Chinese query", async () => {
+    providerFixture.forceNoProvider = true;
+    const manager = await getPersistentManager(
+      createCfg({
+        provider: "none",
+        ftsTokenizer: "trigram",
+        minScore: 0,
+      }),
+    );
+    if (!manager.status().fts?.available) {
+      return;
+    }
+    await fs.writeFile(
+      path.join(fixture.paths.memory, "deploy.md"),
+      "上周我们决定用React部署前端服务",
+    );
+    await fs.writeFile(path.join(fixture.paths.memory, "other.md"), "午饭吃了面条");
+    await manager.sync({ reason: "test" });
+
+    const results = await manager.search("用react部署方案", { maxResults: 5, minScore: 0 });
+
+    expect(results.map((entry) => entry.path)).toEqual(["memory/deploy.md"]);
+  });
 
   it("keeps substring-only body ranking within an exact hybrid tier", async () => {
     const manager = await getPersistentManager(

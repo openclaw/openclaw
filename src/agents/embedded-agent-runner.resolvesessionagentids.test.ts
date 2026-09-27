@@ -52,6 +52,18 @@ describe.each([
     );
   });
 
+  it.each(["", "   ", "!!!"])("rejects invalid explicit agent id %j", (agentId) => {
+    expect(() =>
+      resolveSessionAgentIds({ config: cfg, agentId, sessionKey: "agent:main:main" }),
+    ).toThrow("Invalid explicit agent id");
+  });
+
+  it("rejects malformed agent session keys before selecting a fallback", () => {
+    expect(() =>
+      resolveSessionAgentIds({ config: cfg, sessionKey: "agent::broken", fallbackAgentId: "main" }),
+    ).toThrow("Malformed agent session key");
+  });
+
   it("requires an owner when sessionKey is missing", () => {
     expect(() => resolveSessionAgentIds({ config: cfg })).toThrow(AgentSelectionRequiredError);
   });

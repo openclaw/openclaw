@@ -10,7 +10,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../state/openclaw-state-worker-context.js", () => ({
   captureOpenClawStateWorkerContext: () => ({ admission: { assertCurrent() {} } }),
 }));
-vi.mock("../../tasks/task-flow-runtime-internal.js", () => ({
+vi.mock("../../tasks/task-flow-runtime-internal.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../tasks/task-flow-runtime-internal.js")>()),
   ensureTaskFlowRegistryReadyAsync: mocks.ensureReady,
 }));
 

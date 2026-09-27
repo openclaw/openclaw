@@ -5,11 +5,13 @@ import {
   formatTaskBlockedFollowupMessage,
   formatTaskStateChangeMessage,
   formatTaskTerminalMessage,
+  shouldUseParentReviewTaskTerminalMessage,
+} from "./task-executor-policy.js";
+import {
   shouldAutoDeliverTaskStateChange,
   shouldAutoDeliverTaskTerminalUpdate,
   shouldSuppressDuplicateTerminalDelivery,
-  shouldUseParentReviewTaskTerminalMessage,
-} from "./task-executor-policy.js";
+} from "./task-notification-policy.js";
 import {
   isTerminalTaskStatus,
   type TaskEventRecord,

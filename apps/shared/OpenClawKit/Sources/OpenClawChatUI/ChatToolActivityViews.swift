@@ -7,6 +7,7 @@ struct ChatToolActivityItem: Identifiable, Equatable {
         case running
         case finished
         case failed
+        case blocked
         case unavailable
 
         var title: LocalizedStringResource {
@@ -14,6 +15,7 @@ struct ChatToolActivityItem: Identifiable, Equatable {
             case .running: "Working"
             case .finished: "Finished"
             case .failed: "Failed"
+            case .blocked: "Blocked"
             case .unavailable: "No result"
             }
         }
@@ -26,13 +28,46 @@ struct ChatToolActivityItem: Identifiable, Equatable {
     let resultText: String?
     let state: State
     let liveDiffStat: ChatToolDiffStat?
+    var activity: OpenClawAgentActivityItem?
+    var activityPrepared = false
+
+    var isVisible: Bool {
+        self.activity?.isVisible ?? !self.activityPrepared
+    }
+
+    var displayState: State {
+        guard let activity = self.activity else { return self.state }
+        switch activity.status {
+        case "running": return .running
+        case "completed": return .finished
+        case "failed": return .failed
+        case "blocked": return .blocked
+        default: return .unavailable
+        }
+    }
 
     var isError: Bool {
-        self.state == .failed
+        self.displayState == .failed
     }
 
     var isPending: Bool {
-        self.state == .running
+        self.displayState == .running
+    }
+}
+
+extension ChatToolActivityItem {
+    init(live call: OpenClawChatPendingToolCall) {
+        self.init(
+            id: call.id,
+            name: call.name,
+            arguments: call.args,
+            details: nil,
+            resultText: nil,
+            state: call.activity == nil && !call.isComplete || call.activity?.status == "running" ? .running :
+                call.activity?.status == "completed" ? .finished :
+                call.activity?.status == "failed" || call.activity?.status == "blocked" ? .failed : .unavailable,
+            liveDiffStat: call.diffStat,
+            activity: call.activity)
     }
 }
 
@@ -58,35 +93,48 @@ enum ChatToolActivity {
 
     static func items(
         calls: [OpenClawChatMessageContent],
-        results: [OpenClawChatMessageContent]) -> [ChatToolActivityItem]
+        results: [OpenClawChatMessageContent],
+        activity: [OpenClawAgentActivityItem]? = nil,
+        liveTools: [OpenClawChatPendingToolCall] = []) -> [ChatToolActivityItem]
     {
         var remainingResults = Array(results.enumerated())
         var items = calls.enumerated().map { index, call in
+            let id = call.id ?? "call-\(index)"
             let resultIndex = call.id.flatMap { callID in
                 remainingResults.firstIndex { _, result in result.id == callID }
             }
             let result = resultIndex.map { remainingResults.remove(at: $0).element }
+            // History owns recorded inputs; live activity supplies status until
+            // the result arrives, never replacing already-recorded arguments.
+            let live = result == nil
+                ? liveTools.first(where: { $0.id == call.id }).map(ChatToolActivityItem.init(live:)) : nil
 
             return ChatToolActivityItem(
-                id: call.id ?? "call-\(index)",
-                name: call.name,
-                arguments: call.arguments,
+                id: id,
+                name: call.name ?? live?.name,
+                arguments: call.arguments ?? live?.arguments,
                 details: result?.details,
                 resultText: result?.text,
                 state: result
-                    .map { Self.resultIsError($0.isError, text: $0.text) ? .failed : .finished } ?? .unavailable,
-                liveDiffStat: nil)
+                    .map { Self.resultIsError($0.isError, text: $0.text) ? .failed : .finished } ??
+                    live?.state ?? .unavailable,
+                liveDiffStat: live?.liveDiffStat,
+                activity: live?.activity ?? activity?.first { $0.toolCallId == id },
+                activityPrepared: live == nil && activity != nil)
         }
 
         items.append(contentsOf: remainingResults.map { index, result in
-            ChatToolActivityItem(
-                id: result.id ?? "result-\(index)",
+            let id = result.id ?? "result-\(index)"
+            return ChatToolActivityItem(
+                id: id,
                 name: result.name,
                 arguments: nil,
                 details: result.details,
                 resultText: result.text,
                 state: Self.resultIsError(result.isError, text: result.text) ? .failed : .finished,
-                liveDiffStat: nil)
+                liveDiffStat: nil,
+                activity: activity?.first { $0.toolCallId == id },
+                activityPrepared: activity != nil)
         })
         return items
     }
@@ -134,7 +182,7 @@ private struct ChatToolActivityRowContent: View {
     }
 
     private var accessibilityValue: String {
-        let status = String(localized: self.item.state.title)
+        let status = String(localized: self.item.displayState.title)
         return self.detailLine.map { "\(status), \($0)" } ?? status
     }
 
@@ -289,7 +337,7 @@ private struct ChatToolActivityRowContent: View {
             Spacer(minLength: 0)
 
             if self.isDesktopLayout {
-                Text(self.item.state.title)
+                Text(self.item.displayState.title)
                     .font(OpenClawChatTypography.caption)
                     .foregroundStyle(self.item.isError ? OpenClawChatTheme.danger : .secondary)
                     .fixedSize()
@@ -299,7 +347,7 @@ private struct ChatToolActivityRowContent: View {
     }
 
     private var toolTitle: some View {
-        Text(self.display.title)
+        Text(self.item.activity?.title ?? self.display.title)
             .font(OpenClawChatTypography.footnoteSemiBold)
             .foregroundStyle(self.item.isError ? OpenClawChatTheme.danger : self.textColor)
             .lineLimit(1)
@@ -525,10 +573,17 @@ struct ChatToolActivityList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: self.isDesktopLayout ? 6 : 2) {
-            // Protocol IDs can collide with specified fallback IDs; encounter order is unique here.
-            ForEach(self.items.indices, id: \.self) { index in
+            ForEach(self.items.indices.filter { self.items[$0].isVisible }, id: \.self) { index in
                 ChatToolActivityRow(item: self.items[index])
                     .equatable()
+            }
+            let quiet = self.items.indices.filter { !self.items[$0].isVisible }
+            if !quiet.isEmpty {
+                DisclosureGroup("Tool details") {
+                    ForEach(quiet, id: \.self) { index in
+                        ChatToolActivityRow(item: self.items[index]).equatable()
+                    }
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

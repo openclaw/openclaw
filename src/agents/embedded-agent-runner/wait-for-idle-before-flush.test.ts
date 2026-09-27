@@ -28,7 +28,14 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-it.each(["idle", "aborted", "retargeted", "empty"] as const)(
+it.each([
+  "idle",
+  "aborted",
+  "retargeted",
+  "empty",
+  "cancel-during-idle",
+  "cancel-during-write",
+] as const)(
   "admits only pending tool-result cleanup behind the current database writer (%s)",
   async (scenario) => {
     const dir = tempDirs.make("openclaw-tool-flush-admission-");
@@ -60,6 +67,7 @@ it.each(["idle", "aborted", "retargeted", "empty"] as const)(
     const entered = createDeferredCore();
     const release = createDeferredCore();
     const idle = createDeferredCore();
+    const cancellation = new AbortController();
     const heldWriter = runOpenClawAgentWorkerWrite(
       toDatabaseOptions(resolveSqliteReadScope(target)),
       async () => {
@@ -74,7 +82,8 @@ it.each(["idle", "aborted", "retargeted", "empty"] as const)(
       flush = flushPendingToolResultsAfterIdle({
         agent: { waitForIdle: () => idle.promise },
         sessionManager: manager,
-        ...(scenario === "idle" || scenario === "empty" ? {} : { timeoutMs: 0 }),
+        abortSignal: cancellation.signal,
+        ...(scenario === "aborted" || scenario === "retargeted" ? { timeoutMs: 0 } : {}),
       });
       void flush.then(
         () => {
@@ -88,8 +97,16 @@ it.each(["idle", "aborted", "retargeted", "empty"] as const)(
         await yieldToEventLoop();
         expect(settled).toBe(false);
       }
-      idle.resolve();
+      if (scenario === "cancel-during-idle") {
+        cancellation.abort();
+      } else {
+        idle.resolve();
+      }
       await yieldToEventLoop();
+      if (scenario === "cancel-during-write") {
+        cancellation.abort();
+        await yieldToEventLoop();
+      }
       expect(loadTranscriptEventsSync(target)).toEqual(before);
       expect(settled).toBe(scenario === "empty");
       if (scenario === "retargeted") {

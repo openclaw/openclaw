@@ -84,6 +84,7 @@ async function runCodeModeBridgeRequest(
       }
       const optionsLocal = isRecord(values[1]) ? values[1] : undefined;
       return await runtime.search(query, {
+        parentToolCallId: options?.parentToolCallId,
         limit: typeof optionsLocal?.limit === "number" ? optionsLocal.limit : undefined,
       });
     }
@@ -92,7 +93,10 @@ async function runCodeModeBridgeRequest(
       if (typeof id !== "string") {
         throw new ToolInputError("describe id must be a string.");
       }
-      return await runtime.describe(id, { recoverySurface: "code-mode" });
+      return await runtime.describe(id, {
+        recoverySurface: "code-mode",
+        parentToolCallId: options?.parentToolCallId,
+      });
     }
     case "call": {
       const id = values[0];

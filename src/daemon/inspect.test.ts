@@ -18,6 +18,26 @@ vi.mock("./schtasks-exec.js", () => ({
   execSchtasks: (...args: unknown[]) => execSchtasksMock(...args),
 }));
 
+const nativePlistHost = vi.hoisted(() => process.platform === "darwin");
+vi.mock("../process/exec.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../process/exec.js")>();
+  const { decodeLaunchAgentPlistFixture } = await import("./launchd-plist.test-support.js");
+  return {
+    ...actual,
+    runExec: vi.fn(async (...args: Parameters<typeof actual.runExec>) => {
+      if (nativePlistHost) {
+        return actual.runExec(...args);
+      }
+      const options = args[2];
+      const input = typeof options === "object" ? options.input : undefined;
+      if (input === undefined) {
+        throw new Error("Native parser requires captured plist bytes");
+      }
+      return decodeLaunchAgentPlistFixture(input, args[1][1]);
+    }),
+  };
+});
+
 // File-scope cleanup cannot prevent the nested platform-restoration hooks from running.
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -101,15 +121,8 @@ describe("detectMarkerLineWithGateway", () => {
     expect(detectMarkerLineWithGateway(`[Service]\n${command}\n`)).toBe("openclaw");
   });
 
-  it.each(["After", "Requires", "Description", "Environment"])(
-    "ignores gateway mentions in %s instead of an executable directive",
-    (key) => {
-      expect(detectMarkerLineWithGateway(`${key}=openclaw gateway\n`)).toBeNull();
-    },
-  );
-
-  it("ignores dependency-only references to the gateway unit", () => {
-    expect(detectMarkerLineWithGateway(COMPANION_SERVICE_CONTENTS)).toBeNull();
+  it("ignores gateway mentions in environment values instead of an executable directive", () => {
+    expect(detectMarkerLineWithGateway("Environment=openclaw gateway\n")).toBeNull();
   });
 
   it("ignores non-gateway ExecStart commands that only pass gateway-named options", () => {

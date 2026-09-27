@@ -407,7 +407,7 @@ describe("browser panel route handoff", () => {
       const annotation = vi.fn((event: Event) => event.preventDefault());
       window.addEventListener(BROWSER_ANNOTATION_EVENT, annotation);
       try {
-        await controller.sendAnnotation({ element: controller.inspected });
+        await controller.input.sendAnnotation({ element: controller.inspected });
       } finally {
         window.removeEventListener(BROWSER_ANNOTATION_EVENT, annotation);
       }

@@ -1,36 +1,30 @@
 /** Bounded receipt projection across admission, owner-native, and generic decision facts. */
+import type { DatabaseSync } from "node:sqlite";
 import type {
-  AuditRunInspectResult,
   DecisionReceiptDisplayV1,
   DecisionReceiptV1,
   ExecutionIdentityContextV1,
 } from "../../packages/gateway-protocol/src/index.js";
 import {
-  pageOperatorApprovalReceiptsForRun,
-  summarizeOperatorApprovalReceiptsForRun,
+  pageOperatorApprovalReceiptsForRunInDatabase,
+  summarizeOperatorApprovalReceiptsForRunInDatabase,
 } from "../gateway/operator-approval-store.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { parsePositiveAuditCursor } from "./audit-cursor.js";
 import {
-  pageExecutionDecisionFactsForContext,
-  summarizeExecutionDecisionFactsForContext,
+  pageExecutionDecisionFactsForContextInDatabase,
+  summarizeExecutionDecisionFactsForContextInDatabase,
 } from "./execution-decision-facts.js";
+import type { InternalAuditRunInspectResult } from "./execution-identity-inspection.types.js";
 import {
-  pageOwnerLifecycleReceipts,
-  summarizeOwnerLifecycleReceipts,
+  pageOwnerLifecycleReceiptsInDatabase,
+  summarizeOwnerLifecycleReceiptsInDatabase,
   type OwnerLifecycleCursor,
   type OwnerLifecycleStage,
 } from "./execution-owner-lifecycle-receipts.js";
 import {
-  pageMessageDeliveryReceiptsForRun,
-  summarizeMessageDeliveryReceiptsForRun,
+  pageMessageDeliveryReceiptsForRunInDatabase,
+  summarizeMessageDeliveryReceiptsForRunInDatabase,
 } from "./message-delivery-receipts.js";
-
-type ExecutionDecisionReadOptions = OpenClawStateDatabaseOptions & { now?: number };
-
-export type InternalAuditRunInspectResult = AuditRunInspectResult & {
-  decisions: DecisionReceiptV1[];
-};
 
 type ProvenancedDecisionReceipt = {
   receipt: DecisionReceiptV1;
@@ -216,53 +210,51 @@ function projectDecisionDisplay({
   };
 }
 
-export function presentExecutionDecisionReceipts(params: {
-  context: ExecutionIdentityContextV1;
-  decisionCursor?: string;
-  decisionLimit?: number;
-  options: ExecutionDecisionReadOptions;
-}): InternalAuditRunInspectResult {
+export function presentExecutionDecisionReceiptsInDatabase(
+  db: DatabaseSync,
+  params: {
+    context: ExecutionIdentityContextV1;
+    decisionCursor?: string;
+    decisionLimit?: number;
+    now: number;
+  },
+): InternalAuditRunInspectResult {
   const cursor = parseDecisionCursor(params.decisionCursor);
   if (cursor === null) {
     throw new ExecutionDecisionCursorError();
   }
   const decisionLimit = params.decisionLimit ?? 50;
-  const now = params.options.now ?? Date.now();
+  const now = params.now;
   const opaqueCursor = cursor && "stage" in cursor ? cursor : undefined;
   const legacyOffset = cursor && "offset" in cursor ? cursor.offset - 1 : undefined;
-  const approvalSummary = summarizeOperatorApprovalReceiptsForRun({
+  const approvalSummary = summarizeOperatorApprovalReceiptsForRunInDatabase(db, {
     context: {
       contextId: params.context.contextId,
       executionId: params.context.executionId,
       runId: params.context.runId,
     },
     nowMs: now,
-    databaseOptions: params.options,
     exactCount: legacyOffset !== undefined,
   });
-  const genericSummary = summarizeExecutionDecisionFactsForContext({
+  const genericSummary = summarizeExecutionDecisionFactsForContextInDatabase(db, {
     context: params.context,
     now,
-    database: params.options,
   });
-  const messageSummary = summarizeMessageDeliveryReceiptsForRun({
+  const messageSummary = summarizeMessageDeliveryReceiptsForRunInDatabase(db, {
     context: params.context,
-    options: { ...params.options, now },
+    now,
   });
-  const cronSummary = summarizeOwnerLifecycleReceipts({
+  const cronSummary = summarizeOwnerLifecycleReceiptsInDatabase(db, {
     stage: "cron",
     context: params.context,
-    options: params.options,
   });
-  const taskSummary = summarizeOwnerLifecycleReceipts({
+  const taskSummary = summarizeOwnerLifecycleReceiptsInDatabase(db, {
     stage: "task",
     context: params.context,
-    options: params.options,
   });
-  const flowSummary = summarizeOwnerLifecycleReceipts({
+  const flowSummary = summarizeOwnerLifecycleReceiptsInDatabase(db, {
     stage: "flow",
     context: params.context,
-    options: params.options,
   });
   const stages: Array<{
     stage: DecisionStage;
@@ -276,7 +268,7 @@ export function presentExecutionDecisionReceipts(params: {
       stage: "approval",
       count: approvalSummary.count,
       page: ({ after, offset, limit }) => {
-        const page = pageOperatorApprovalReceiptsForRun({
+        const page = pageOperatorApprovalReceiptsForRunInDatabase(db, {
           context: {
             contextId: params.context.contextId,
             executionId: params.context.executionId,
@@ -286,7 +278,6 @@ export function presentExecutionDecisionReceipts(params: {
           offset,
           limit,
           nowMs: now,
-          databaseOptions: params.options,
         });
         return {
           entries: page.entries.map((entry) => ({
@@ -302,12 +293,12 @@ export function presentExecutionDecisionReceipts(params: {
       stage: "message",
       count: messageSummary.count,
       page: ({ after, offset, limit }) => {
-        const page = pageMessageDeliveryReceiptsForRun({
+        const page = pageMessageDeliveryReceiptsForRunInDatabase(db, {
           context: params.context,
           after,
           offset,
           limit,
-          options: { ...params.options, now },
+          now,
         });
         return {
           entries: page.entries.map((entry) => ({
@@ -323,13 +314,12 @@ export function presentExecutionDecisionReceipts(params: {
       stage: "generic",
       count: genericSummary.count,
       page: ({ after, offset, limit }) => {
-        const page = pageExecutionDecisionFactsForContext({
+        const page = pageExecutionDecisionFactsForContextInDatabase(db, {
           context: params.context,
           after,
           offset,
           limit,
           now,
-          database: params.options,
         });
         return {
           entries: page.entries.map((entry) => ({
@@ -353,13 +343,12 @@ export function presentExecutionDecisionReceipts(params: {
         offset?: number;
         limit: number;
       }) => {
-        const page = pageOwnerLifecycleReceipts({
+        const page = pageOwnerLifecycleReceiptsInDatabase(db, {
           stage,
           context: params.context,
           after,
           offset,
           limit,
-          options: params.options,
         });
         return {
           entries: page.entries.map((entry) => ({

@@ -1,7 +1,5 @@
 package ai.openclaw.app.chat
 
-import ai.openclaw.app.ui.chat.formatContextUsageTokens
-import ai.openclaw.app.ui.chat.latestChatMessageUsage
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -124,11 +122,6 @@ class ChatControllerMessageIdentityTest {
       advanceUntilIdle()
 
       assertEquals(cases.map { it.second }, controller.messages.value.map { it.usage })
-      controller.messages.value.forEachIndexed { index, message ->
-        val expected = cases[index].second
-        assertEquals(expected, latestChatMessageUsage(listOf(message)))
-        if (expected.input == null) assertEquals("\u2014", formatContextUsageTokens(expected.input))
-      }
     }
 
   @Test
@@ -204,10 +197,14 @@ class ChatControllerMessageIdentityTest {
                   { "role": "user", "content": "boolean sender", "senderLabel": true, "runId": 42, "__openclaw": { "steerTargetRunId": true } },
                   { "role": "user", "content": "blank sender", "senderLabel": "  " },
                   { "role": "user", "content": "null sender", "senderLabel": null },
-                  { "role": "toolResult", "tool_use_id": "call-1", "toolName": "read", "content": "bounded tool output" },
+                  { "role": "toolResult", "__openclaw": { "id": "tool-result" }, "tool_use_id": "call-1", "toolName": "read", "content": "bounded tool output" },
                   { "role": "internal", "text": "private reasoning" },
                   { "role": "custom", "content": "visible plugin notice" },
-                  { "role": "Assistant", "content": "reply", "senderLabel": "Spoofed sender" }
+                  { "role": "Assistant", "__openclaw": { "id": "answer" }, "content": "reply", "senderLabel": "Spoofed sender" }
+                ],
+                "activity": [
+                  { "messageId": "tool-result", "items": [] },
+                  { "messageId": "answer", "items": [{ "itemId": "tool:read", "kind": "tool", "phase": "end", "title": "Read", "status": "blocked" }] }
                 ]
               }
               """.trimIndent()
@@ -227,6 +224,16 @@ class ChatControllerMessageIdentityTest {
       assertEquals(
         listOf("hello", "numeric sender", "boolean sender", "blank sender", "null sender", null, "visible plugin notice", "reply"),
         controller.messages.value.map { it.content.single().text },
+      )
+      assertEquals(null, controller.messages.value[0].activity)
+      assertEquals(emptyList<Any>(), controller.messages.value[5].activity)
+      assertEquals(
+        "blocked",
+        controller.messages.value
+          .last()
+          .activity
+          ?.single()
+          ?.status,
       )
       assertEquals("canonical", controller.messages.value[0].runId)
       assertEquals("active-run", controller.messages.value[0].steerTargetRunId)
@@ -327,7 +334,7 @@ class ChatControllerMessageIdentityTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
-  fun markerOnlyDeliveryMirrorDoesNotReplaceLatestRunUsage() =
+  fun liveHistoryKeepsDeliveryMirrorAndUsageMetadataSeparate() =
     runTest {
       val controller =
         ChatController(
@@ -369,7 +376,10 @@ class ChatControllerMessageIdentityTest {
           .last()
           .deliveryMirror,
       )
-      assertEquals(ChatMessageUsage(input = 12_000, output = 300), latestChatMessageUsage(controller.messages.value))
+      assertEquals(
+        listOf(ChatMessageUsage(input = 12_000, output = 300), ChatMessageUsage(input = 0, output = 0)),
+        controller.messages.value.map { it.usage },
+      )
     }
 
   @Test

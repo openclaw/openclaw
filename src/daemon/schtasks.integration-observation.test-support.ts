@@ -1,9 +1,15 @@
 // Native task/process inspection and sanitized proof rendering.
 import { spawnSync } from "node:child_process";
 import os from "node:os";
+import { setTimeout as sleep } from "node:timers/promises";
 import { expect } from "vitest";
 import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
 import { execSchtasks } from "./schtasks-exec.js";
+import type { GatewayServiceRuntime } from "./service-runtime.js";
+
+const WAIT_INTERVAL_MS = 200;
+const WAIT_TIMEOUT_MS = 30_000;
+const TASK_STATE_READY = 3;
 
 export const DIAGNOSTIC_TEXT_LIMIT = 16_384;
 const DIAGNOSTIC_PROCESS_LIMIT = 32;
@@ -272,4 +278,64 @@ export function assertInteractiveLeastPrivilegeTask(params: {
   // Task Scheduler may omit the default LeastPrivilege node when exporting XML.
   // If present, it must agree with the effective COM principal checked above.
   expect(exportedRunLevel === undefined || exportedRunLevel === "LeastPrivilege").toBe(true);
+}
+
+/** Wait for the service owner to report the expected native runtime and identity. */
+export async function waitForRuntimeStatus(
+  readRuntime: () => Promise<GatewayServiceRuntime>,
+  expected: "running" | "stopped",
+  expectedPid?: number,
+): Promise<void> {
+  const deadline = Date.now() + WAIT_TIMEOUT_MS;
+  let lastStatus = "unknown";
+  let lastDetail = "";
+  let lastPid: number | undefined;
+  while (Date.now() < deadline) {
+    const runtime = await readRuntime();
+    lastStatus = runtime.status ?? "unknown";
+    lastDetail = runtime.detail ?? "";
+    lastPid = runtime.pid;
+    if (runtime.status === expected && (expectedPid === undefined || runtime.pid === expectedPid)) {
+      return;
+    }
+    await sleep(WAIT_INTERVAL_MS);
+  }
+  throw new Error(
+    `Timed out waiting for Scheduled Task status=${expected}${
+      expectedPid === undefined ? "" : ` pid=${expectedPid}`
+    }; observed ${lastStatus}${lastPid === undefined ? "" : ` pid=${lastPid}`}: ${lastDetail}`,
+  );
+}
+
+/** Wait for Scheduler to record the completed native invocation and exit code. */
+export async function waitForCompletedScheduledTaskRun(
+  taskName: string,
+  exitCode: number,
+): Promise<ScheduledTaskPrincipal> {
+  const deadline = Date.now() + WAIT_TIMEOUT_MS;
+  let lastPrincipal: ScheduledTaskPrincipal | null = null;
+  let lastError: unknown;
+  while (Date.now() < deadline) {
+    try {
+      lastPrincipal = readTaskPrincipal(taskName);
+      if (
+        lastPrincipal.taskState === TASK_STATE_READY &&
+        lastPrincipal.lastTaskResult === exitCode &&
+        !Number.isNaN(Date.parse(lastPrincipal.lastRunTime)) &&
+        Date.parse(lastPrincipal.lastRunTime) > 0
+      ) {
+        return lastPrincipal;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+    await sleep(WAIT_INTERVAL_MS);
+  }
+  throw new Error(
+    `Timed out waiting for Scheduled Task ${taskName} to finish with exit ${exitCode}; ${
+      lastPrincipal
+        ? `observed state=${lastPrincipal.taskState} result=${lastPrincipal.lastTaskResult}`
+        : `last inspection failed: ${lastError instanceof Error ? lastError.message : String(lastError)}`
+    }`,
+  );
 }

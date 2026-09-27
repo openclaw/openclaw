@@ -1,12 +1,10 @@
-/**
- * Shared helpers for CLI runner prompts, args, queueing, sessions, and image
- * payload preparation.
- */
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
+import { fileStore } from "@openclaw/fs-safe/store";
+import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { extensionForMime } from "@openclaw/media-core/mime";
 import {
@@ -17,10 +15,9 @@ import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { hasErrnoCode } from "../../infra/errno.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
 import { privateFileStore } from "../../infra/private-file-store.js";
-import { tempWorkspace } from "../../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { ImageContent } from "../../llm/types.js";
 import type { MediaFact } from "../../media/media-facts.js";
@@ -64,7 +61,6 @@ export function enqueueCliRun<T>(key: string, task: () => Promise<T>): Promise<T
   return CLI_RUN_QUEUE.enqueue(key, task);
 }
 
-/** Resolves the serialization key for a CLI backend run. */
 export function resolveCliRunQueueKey(params: {
   backendId: string;
   liveSession?: CliBackendConfig["liveSession"];
@@ -98,7 +94,6 @@ export function resolveCliRunQueueKey(params: {
   return params.backendId;
 }
 
-/** Builds the system prompt sent to a CLI-backed agent runtime. */
 export function buildCliAgentSystemPrompt(params: {
   workspaceDir: string;
   cwd?: string;
@@ -106,6 +101,7 @@ export function buildCliAgentSystemPrompt(params: {
   preparedModelRuntime?: Parameters<
     typeof buildConfiguredAgentSystemPrompt
   >[0]["preparedModelRuntime"];
+  preparedGitCoauthorPrompt?: string;
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   requireExplicitMessageTarget?: boolean;
@@ -137,6 +133,7 @@ export function buildCliAgentSystemPrompt(params: {
     agentId: params.agentId,
     workspaceDir: runtimeCwd,
     cwd: runtimeCwd,
+    preparedGitCoauthorPrompt: params.preparedGitCoauthorPrompt,
     runtime: {
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
@@ -183,25 +180,18 @@ export function buildCliAgentSystemPrompt(params: {
   });
 }
 
-/** Applies backend model aliases to a requested CLI model id. */
 export function normalizeCliModel(modelId: string, backend: CliBackendConfig): string {
   const trimmed = modelId.trim();
   if (!trimmed) {
     return trimmed;
   }
-  const direct = backend.modelAliases?.[trimmed];
-  if (direct) {
-    return direct;
-  }
-  const lower = normalizeLowercaseStringOrEmpty(trimmed);
-  const mapped = backend.modelAliases?.[lower];
-  if (mapped) {
-    return mapped;
-  }
-  return trimmed;
+  return (
+    backend.modelAliases?.[trimmed] ||
+    backend.modelAliases?.[normalizeLowercaseStringOrEmpty(trimmed)] ||
+    trimmed
+  );
 }
 
-/** Decides whether a system prompt should be sent for this CLI turn. */
 export function resolveSystemPromptUsage(params: {
   backend: CliBackendConfig;
   isNewSession: boolean;
@@ -228,7 +218,6 @@ export function resolveSystemPromptUsage(params: {
   return systemPrompt;
 }
 
-/** Resolves the CLI session id to send and whether the turn starts a new session. */
 export function resolveSessionIdToSend(params: {
   backend: CliBackendConfig;
   cliSessionId?: string;
@@ -262,15 +251,9 @@ export function resolvePromptInput(params: { backend: CliBackendConfig; prompt: 
   return { argsPrompt: params.prompt };
 }
 
-function resolveCliImagePath(image: ImageContent): string {
+function resolveCliImageFileName(image: ImageContent): string {
   const ext = extensionForMime(image.mimeType) ?? ".bin";
-  const digest = crypto
-    .createHash("sha256")
-    .update(image.mimeType)
-    .update("\0")
-    .update(image.data)
-    .digest("hex");
-  return path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-images", `${digest}${ext}`);
+  return `${sha256Hex(`${image.mimeType}\0${image.data}`)}${ext}`;
 }
 
 function resolveCliImageRoot(params: { backend: CliBackendConfig; workspaceDir: string }): string {
@@ -286,33 +269,7 @@ async function sweepCliImageRoot(imageRoot: string): Promise<void> {
   }
   sweptCliImageRoots.add(imageRoot);
   try {
-    const cutoffMs = Date.now() - CLI_IMAGE_SWEEP_TTL_MS;
-    const entries = await fs.readdir(imageRoot, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isFile()) {
-        continue;
-      }
-      const entryPath = path.join(imageRoot, entry.name);
-      const stat = await fs.stat(entryPath).catch((error: unknown) => {
-        if (hasErrnoCode(error, "ENOENT")) {
-          return undefined;
-        }
-        throw error;
-      });
-      if (!stat) {
-        continue;
-      }
-      if (stat.mtimeMs >= cutoffMs) {
-        continue;
-      }
-      try {
-        await fs.rm(entryPath, { force: true });
-      } catch (error) {
-        if (!hasErrnoCode(error, "ENOENT")) {
-          throw error;
-        }
-      }
-    }
+    await fileStore({ rootDir: imageRoot }).pruneExpired({ ttlMs: CLI_IMAGE_SWEEP_TTL_MS });
   } catch (error) {
     cliBackendLog.debug(`cli image cache sweep failed: ${String(error)}`);
   }
@@ -327,7 +284,6 @@ function appendImagePathsToPrompt(prompt: string, paths: string[], prefix = ""):
   return `${trimmed}${separator}${paths.map((entry) => `${prefix}${entry}`).join("\n")}`;
 }
 
-/** Writes CLI image payloads to private paths and returns their file paths. */
 async function writeCliImages(params: {
   backend: CliBackendConfig;
   workspaceDir: string;
@@ -342,7 +298,7 @@ async function writeCliImages(params: {
   const store = privateFileStore(imageRoot);
   const paths: string[] = [];
   for (const image of params.images) {
-    const fileName = path.basename(resolveCliImagePath(image));
+    const fileName = resolveCliImageFileName(image);
     const buffer = Buffer.from(image.data, "base64");
     await store.writeText(fileName, buffer);
     paths.push(store.path(fileName));
@@ -378,7 +334,6 @@ export async function writeCliSystemPromptFile(params: {
   };
 }
 
-/** Prepares prompt text and image paths for a CLI backend run. */
 export async function prepareCliPromptImagePayload(params: {
   backend: CliBackendConfig;
   prompt: string;
@@ -451,7 +406,6 @@ export async function prepareCliPromptImagePayload(params: {
   };
 }
 
-/** Builds final CLI argv from backend config and prepared prompt/session inputs. */
 export function buildCliArgs(params: {
   backend: CliBackendConfig;
   baseArgs: string[];

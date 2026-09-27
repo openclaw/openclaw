@@ -4,8 +4,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
 import { isCodeFile, isTestRelatedFile, listRepoFilesSync } from "./check-file-utils.js";
+import { renderFindingGroups } from "./lib/grouped-findings.js";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { parseInventoryReportCliArgs } from "./lib/report-cli-helpers.mts";
 
 type SkipInventoryKind = "alias" | "call";
@@ -59,10 +61,6 @@ function listCandidateFiles(repoRoot: string): string[] {
   return listRepoFilesSync(repoRoot, {
     includeFile: (file) => isCodeFile(file) && isTestRelatedFile(file),
   });
-}
-
-function expressionText(sourceFile: ts.SourceFile, node: ts.Node): string {
-  return node.getText(sourceFile);
 }
 
 function targetFromExpression(expression: ts.Expression): SkipInventoryTarget {
@@ -138,7 +136,7 @@ function methodReason(params: {
     return "focused-only";
   }
 
-  const sourceText = expressionText(params.sourceFile, params.textNode).toLowerCase();
+  const sourceText = params.textNode.getText(params.sourceFile).toLowerCase();
   const text = `${params.file}\n${sourceText}`.toLowerCase();
   if (
     sourceText.includes("process.platform") ||
@@ -181,7 +179,7 @@ function containsConditionalExpression(node: ts.Node): boolean {
   if (ts.isConditionalExpression(node)) {
     return true;
   }
-  return node.getChildren().some((child) => containsConditionalExpression(child));
+  return node.forEachChild((child) => containsConditionalExpression(child) || undefined) ?? false;
 }
 
 function createFinding(params: {
@@ -211,20 +209,9 @@ function createFinding(params: {
   };
 }
 
-function skipAliasInitializer(
-  initializer: ts.Expression | undefined,
-): { method: TestSkipInventoryFinding["method"]; target: SkipInventoryTarget } | null {
-  if (!initializer) {
-    return null;
-  }
-  return skipMethodFromExpression(initializer);
-}
-
-function scanFile(params: { file: string; repoRoot: string }): TestSkipInventoryFinding[] {
-  const absolutePath = path.join(params.repoRoot, params.file);
-  const source = fs.readFileSync(absolutePath, "utf8");
-  const sourceFile = ts.createSourceFile(params.file, source, ts.ScriptTarget.Latest, true);
-  const lines = source.split(/\r?\n/u);
+function scanFile(params: { file: string; sourceFile: ts.SourceFile }): TestSkipInventoryFinding[] {
+  const { sourceFile } = params;
+  const lines = sourceFile.text.split(/\r?\n/u);
   const findings: TestSkipInventoryFinding[] = [];
 
   function addFinding(details: {
@@ -237,20 +224,16 @@ function scanFile(params: { file: string; repoRoot: string }): TestSkipInventory
     findings.push(
       createFinding({
         file: params.file,
-        kind: details.kind,
         lines,
-        method: details.method,
-        node: details.node,
-        reasonNode: details.reasonNode,
         sourceFile,
-        target: details.target,
+        ...details,
       }),
     );
   }
 
   function visit(node: ts.Node): void {
     if (ts.isVariableDeclaration(node)) {
-      const alias = skipAliasInitializer(node.initializer);
+      const alias = node.initializer && skipMethodFromExpression(node.initializer);
       if (alias) {
         addFinding({
           kind: "alias",
@@ -274,7 +257,7 @@ function scanFile(params: { file: string; repoRoot: string }): TestSkipInventory
         });
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   }
 
   visit(sourceFile);
@@ -294,7 +277,20 @@ export function collectTestSkipInventoryReport(
 ): TestSkipInventoryReport {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
   const files = listCandidateFiles(repoRoot);
-  const findings = files.flatMap((file) => scanFile({ file, repoRoot }));
+  const findings: TestSkipInventoryFinding[] = [];
+  const parser = createNativeTypeScriptParser({ cwd: repoRoot });
+  try {
+    const sources = files.map((fileName) => ({
+      fileName,
+      text: fs.readFileSync(path.join(repoRoot, fileName), "utf8"),
+    }));
+    for (const sourceFile of parser.parseSourceFiles(sources)) {
+      const file = path.relative(repoRoot, sourceFile.fileName).split(path.sep).join("/");
+      findings.push(...scanFile({ file, sourceFile }));
+    }
+  } finally {
+    parser.close();
+  }
   const reasonCounts = { ...EMPTY_REASON_COUNTS };
   for (const finding of findings) {
     reasonCounts[finding.reason] += 1;
@@ -312,52 +308,11 @@ export function collectTestSkipInventoryReport(
   };
 }
 
-function groupFindingsByFile(
-  findings: TestSkipInventoryFinding[],
-): Map<string, TestSkipInventoryFinding[]> {
-  const grouped = new Map<string, TestSkipInventoryFinding[]>();
-  for (const finding of findings) {
-    const fileFindings = grouped.get(finding.file);
-    if (fileFindings) {
-      fileFindings.push(finding);
-    } else {
-      grouped.set(finding.file, [finding]);
-    }
-  }
-  return grouped;
-}
-
 function renderReasonCounts(reasonCounts: Record<SkipInventoryReason, number>): string {
   return Object.entries(reasonCounts)
     .filter(([, count]) => count > 0)
     .map(([reason, count]) => `${reason}: ${count}`)
     .join(", ");
-}
-
-function renderFindingGroups(findings: TestSkipInventoryFinding[], limit: number): string[] {
-  const lines: string[] = [];
-  let shown = 0;
-  for (const [file, fileFindings] of groupFindingsByFile(findings)) {
-    if (shown >= limit) {
-      break;
-    }
-    lines.push(`- ${file} (${fileFindings.length})`);
-    for (const finding of fileFindings) {
-      if (shown >= limit) {
-        break;
-      }
-      lines.push(
-        `  L${finding.line} ${finding.target}.${finding.method} ${finding.reason}: ${finding.excerpt}`,
-      );
-      shown += 1;
-    }
-  }
-  if (findings.length > shown) {
-    lines.push(
-      `... ${findings.length - shown} more finding(s) not shown; pass --limit 0 to show all.`,
-    );
-  }
-  return lines;
 }
 
 export function renderTestSkipInventoryReport(
@@ -378,7 +333,14 @@ export function renderTestSkipInventoryReport(
     lines.push("Findings: none");
   } else {
     lines.push("Findings:");
-    lines.push(...renderFindingGroups(report.findings, limit));
+    lines.push(
+      ...renderFindingGroups(
+        report.findings,
+        limit,
+        (finding) =>
+          `  L${finding.line} ${finding.target}.${finding.method} ${finding.reason}: ${finding.excerpt}`,
+      ),
+    );
   }
 
   return `${lines.join("\n")}\n`;

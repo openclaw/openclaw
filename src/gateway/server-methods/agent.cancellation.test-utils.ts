@@ -57,6 +57,7 @@ describe("gateway run-owned cancellation", () => {
     const cleanupAbortController = vi.fn();
     const runId = "run-owned-cancellation";
     await dispatchAgentRunFromGateway({
+      admittedRunEntry: undefined,
       ingressOpts: {
         message: "finish private continuation",
         sessionKey: "agent:main:main",

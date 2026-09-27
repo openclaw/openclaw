@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { collectConfiguredNpmPluginTargets } from "../../commands/doctor/shared/missing-configured-plugin-install.targets.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveNpmSpecMetadata } from "../../infra/install-source-utils.js";
 import { readInstalledPackageManifest } from "../../infra/package-update-utils.js";
@@ -15,6 +16,8 @@ import {
   resolvePackagePluginApiRange,
   satisfiesPluginApiRange,
 } from "../../plugins/package-compat.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
+import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import type { PluginUpdateWarning } from "./update-command-plugins-internals.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 
@@ -43,72 +46,81 @@ export async function preflightConfiguredNpmPluginTargets(params: {
   targetVersion: string | null;
   channel: UpdateChannel;
   timeoutMs: number;
+  /** Read-only admission carries already-inspected records without opening a mutable actor. */
+  installRecords?: Record<string, PluginInstallRecord>;
 }): Promise<PluginUpdateWarning[]> {
-  const targetVersion = params.targetVersion;
-  if (!targetVersion) {
-    return [];
-  }
-  return await withOwnedManagedUpdateEnv(params.env, async () => {
-    const warnings: PluginUpdateWarning[] = [];
-    const installRecords = await loadInstalledPluginIndexInstallRecords({ env: params.env });
-    const targets = await collectConfiguredNpmPluginTargets({
-      ...params,
-      targetVersion,
-      installRecords,
-      channel: resolveRegistryUpdateChannel({
-        configChannel: params.channel,
-        currentVersion: targetVersion,
-      }),
-    });
-    for (const target of targets) {
-      const record = installRecords[target.pluginId];
-      const manifest = record?.installPath
-        ? readInstalledPackageManifest(record.installPath)
-        : undefined;
-      const requirement = incompatibleRequirement(manifest?.openclaw, targetVersion, true);
-      // Availability and retention belong to post-core sync; a healthy plugin needs no network gate.
-      if (!requirement || typeof manifest?.version !== "string") {
-        continue;
-      }
-      let requiredSpec = target.spec;
-      let failure: string;
-      try {
-        const selected = await resolveNpmInstallSpecsForUpdateChannel({
-          ...target,
-          timeoutMs: params.timeoutMs,
-        });
-        requiredSpec = selected.installSpec;
-        const resolution = selected.npmResolution
-          ? { ok: true as const, metadata: selected.npmResolution }
-          : await resolveNpmSpecMetadata({ spec: requiredSpec, timeoutMs: params.timeoutMs });
-        if (!resolution.ok) {
-          failure =
-            resolution.category === "metadata-env"
-              ? `registry could not be reached: ${resolution.error}`
-              : resolution.error;
-        } else {
-          const candidateRequirement = incompatibleRequirement(
-            resolution.metadata.packageOpenClaw,
-            targetVersion,
-          );
-          if (!candidateRequirement) {
-            continue;
-          }
-          failure = `resolved plugin requires ${candidateRequirement}`;
-        }
-      } catch (error) {
-        if (!(error instanceof NpmChannelResolutionError)) {
-          throw error;
-        }
-        failure = `registry could not be reached: ${formatErrorMessage(error)}`;
-      }
-      warnings.push({
-        pluginId: target.pluginId,
-        reason: `Installed ${manifest.version} requires ${requirement}; ${requiredSpec}: ${failure}`,
-        message: `Plugin "${target.pluginId}" update availability could not be confirmed; the core update can continue.`,
-        guidance: [],
-      });
+  return await withCommandProcessScope(async () => {
+    const targetVersion = params.targetVersion;
+    if (!targetVersion) {
+      return [];
     }
-    return warnings;
+    return await withOwnedManagedUpdateEnv(params.env, async () => {
+      const warnings: PluginUpdateWarning[] = [];
+      const installRecords =
+        params.installRecords ??
+        (await loadInstalledPluginIndexInstallRecords({ env: params.env }));
+      const targets = await collectConfiguredNpmPluginTargets({
+        ...params,
+        targetVersion,
+        installRecords,
+        channel: resolveRegistryUpdateChannel({
+          configChannel: params.channel,
+          currentVersion: targetVersion,
+        }),
+      });
+      for (const target of targets) {
+        const record = installRecords[target.pluginId];
+        const manifest = record?.installPath
+          ? readInstalledPackageManifest(record.installPath)
+          : undefined;
+        const requirement = incompatibleRequirement(manifest?.openclaw, targetVersion, true);
+        // Availability and retention belong to post-core sync; a healthy plugin needs no network gate.
+        if (!requirement || typeof manifest?.version !== "string") {
+          continue;
+        }
+        let requiredSpec = target.spec;
+        let failure: string;
+        try {
+          const selected = await resolveNpmInstallSpecsForUpdateChannel({
+            ...target,
+            timeoutMs: params.timeoutMs,
+          });
+          requiredSpec = selected.installSpec;
+          const resolution = selected.npmResolution
+            ? { ok: true as const, metadata: selected.npmResolution }
+            : await resolveNpmSpecMetadata({ spec: requiredSpec, timeoutMs: params.timeoutMs });
+          if (!resolution.ok) {
+            failure =
+              resolution.category === "metadata-env"
+                ? `registry could not be reached: ${resolution.error}`
+                : resolution.error;
+          } else {
+            const candidateRequirement = incompatibleRequirement(
+              resolution.metadata.packageOpenClaw,
+              targetVersion,
+            );
+            if (!candidateRequirement) {
+              continue;
+            }
+            failure = `resolved plugin requires ${candidateRequirement}`;
+          }
+        } catch (error) {
+          if (hasCommandProcessCleanupError(error)) {
+            throw error;
+          }
+          if (!(error instanceof NpmChannelResolutionError)) {
+            throw error;
+          }
+          failure = `registry could not be reached: ${formatErrorMessage(error)}`;
+        }
+        warnings.push({
+          pluginId: target.pluginId,
+          reason: `Installed ${manifest.version} requires ${requirement}; ${requiredSpec}: ${failure}`,
+          message: `Plugin "${target.pluginId}" update availability could not be confirmed; the core update can continue.`,
+          guidance: [],
+        });
+      }
+      return warnings;
+    });
   });
 }

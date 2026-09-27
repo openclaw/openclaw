@@ -7,7 +7,7 @@ import type {
   ChannelOutboundTargetMode,
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
-import { listRouteBindings } from "../../config/bindings.js";
+import { isRouteBinding, listConfiguredBindings } from "../../config/bindings.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
@@ -100,14 +100,7 @@ function resolveAgentDeliveryPlan(params: {
     if (requestedChannel === INTERNAL_MESSAGE_CHANNEL) {
       return INTERNAL_MESSAGE_CHANNEL;
     }
-    if (requestedChannel === "last") {
-      if (baseDelivery.channel && baseDelivery.channel !== INTERNAL_MESSAGE_CHANNEL) {
-        return baseDelivery.channel;
-      }
-      return INTERNAL_MESSAGE_CHANNEL;
-    }
-
-    if (isGatewayMessageChannel(requestedChannel)) {
+    if (requestedChannel !== "last" && isGatewayMessageChannel(requestedChannel)) {
       return requestedChannel;
     }
 
@@ -275,8 +268,9 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
     route.sessionKey === route.baseSessionKey &&
     route.sessionKey === canonicalMainSessionKey &&
     globalDmScope === "main" &&
-    !listRouteBindings(params.cfg).some(
+    !listConfiguredBindings(params.cfg).some(
       (binding) =>
+        isRouteBinding(binding) &&
         binding.session?.dmScope !== undefined &&
         binding.session.dmScope !== "main" &&
         normalizeRouteBindingChannelId(binding.match.channel) === resolvedChannel,
@@ -389,14 +383,10 @@ export function resolveAgentOutboundTarget(params: {
       targetMode,
     };
   }
-  if (!isDeliverableMessageChannel(params.plan.resolvedChannel)) {
-    return {
-      resolvedTarget: null,
-      resolvedTo: params.plan.resolvedTo,
-      targetMode,
-    };
-  }
-  if (params.validateExplicitTarget !== true && params.plan.resolvedTo) {
+  if (
+    !isDeliverableMessageChannel(params.plan.resolvedChannel) ||
+    (params.validateExplicitTarget !== true && params.plan.resolvedTo)
+  ) {
     return {
       resolvedTarget: null,
       resolvedTo: params.plan.resolvedTo,

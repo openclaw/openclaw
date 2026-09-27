@@ -1,8 +1,4 @@
-import {
-  embeddedAgentLog,
-  formatErrorMessage,
-  runAgentCleanupStep,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { createCodexAttemptServerRequestController } from "./run-attempt-server-requests.js";
@@ -23,10 +19,6 @@ export async function prepareCodexAttemptRoute(
     trajectoryRecorder,
     releaseCurrentRoute,
     registerNativeSubagentMonitor,
-    activateNativePreToolUseFailureFallback,
-    releaseSandboxExecEnvironment,
-    releaseSharedClientLeaseOnce,
-    runCleanupStep,
   } = resources;
   const { connection } = prompt.context.runtime;
   const { runAbortController } = connection;
@@ -98,25 +90,6 @@ export async function prepareCodexAttemptRoute(
     }
     return resourceState.turnRoute;
   };
-  try {
-    await ensureCurrentThreadRoute();
-  } catch (error) {
-    activateNativePreToolUseFailureFallback();
-    await runCleanupStep("codex-route-failure-route-release", releaseCurrentRoute);
-    const relay = resourceState.nativeHookRelay;
-    relay?.unregister();
-    await runAgentCleanupStep({
-      runId: connection.params.runId,
-      sessionId: connection.params.sessionId,
-      step: "codex-route-failure-native-hook-relay",
-      log: embeddedAgentLog,
-      cleanup: async () => {
-        await relay?.drain();
-      },
-    });
-    await releaseSandboxExecEnvironment();
-    releaseSharedClientLeaseOnce();
-    throw error;
-  }
+  await ensureCurrentThreadRoute();
   return { ensureCurrentThreadRoute };
 }

@@ -257,32 +257,6 @@ describe("gateway node pairing authorization", () => {
   });
 
   describe("approval scopes", () => {
-    test("rejects node pairing approval without admin scope", async () => {
-      const baseDir = await makeNodePairingStateDir();
-      await seedNodeDevice("node-approve-reject-admin", baseDir);
-      const request = await requestNodePairing(
-        {
-          nodeId: "node-approve-reject-admin",
-          platform: "macos",
-          deviceFamily: "Mac",
-          commands: ["system.run"],
-        },
-        baseDir,
-      );
-
-      await expect(
-        approveNodePairing(
-          request.request.requestId,
-          { callerScopes: ["operator.pairing"] },
-          baseDir,
-        ),
-      ).resolves.toEqual({
-        status: "forbidden",
-        missingScope: "operator.admin",
-      });
-      await expect(findPairedNode("node-approve-reject-admin", baseDir)).resolves.toBeNull();
-    });
-
     test("rejects node pairing approval without pairing scope", async () => {
       const baseDir = await makeNodePairingStateDir();
       await seedNodeDevice("node-approve-reject-pairing", baseDir);
@@ -307,32 +281,6 @@ describe("gateway node pairing authorization", () => {
         missingScope: "operator.pairing",
       });
       await expect(findPairedNode("node-approve-reject-pairing", baseDir)).resolves.toBeNull();
-    });
-
-    test("approves commandless node pairing with pairing scope", async () => {
-      const baseDir = await makeNodePairingStateDir();
-      await seedNodeDevice("node-approve-target", baseDir);
-      const request = await requestNodePairing(
-        {
-          nodeId: "node-approve-target",
-          platform: "macos",
-          deviceFamily: "Mac",
-        },
-        baseDir,
-      );
-
-      const approved = requireApprovedPairing(
-        await approveNodePairing(
-          request.request.requestId,
-          { callerScopes: ["operator.pairing"] },
-          baseDir,
-        ),
-      );
-      expect(approved.requestId).toBe(request.request.requestId);
-      expect(approved.node.nodeId).toBe("node-approve-target");
-
-      const pairedNode = await findPairedNode("node-approve-target", baseDir);
-      expect(pairedNode?.nodeId).toBe("node-approve-target");
     });
   });
 

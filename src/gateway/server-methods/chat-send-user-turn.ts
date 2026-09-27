@@ -1,7 +1,7 @@
-import path from "node:path";
 import type { RuntimeMsgContext as MsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readPersistedMediaFacts, type MediaFact } from "../../media/media-facts.js";
+import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
@@ -18,18 +18,13 @@ import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js"
 import { captureGatewayUiCommandTarget } from "../ui-command-target.js";
 import { isAcpBridgeClient } from "./chat-origin-routing.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
-import type { prepareChatSendAttachments } from "./chat-send-attachments.js";
+import type { PreparedChatSendAttachments } from "./chat-send-attachments.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { normalizeOptionalChatText } from "./chat-text-normalization.js";
 import { resolveChatSendCallerContext } from "./gateway-client-identity.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
-
-type PreparedChatSendAttachments = Extract<
-  Awaited<ReturnType<typeof prepareChatSendAttachments>>,
-  { ok: true }
->["value"];
 
 type ChatSendUserTurnInputController = {
   baseInput: UserTurnInput;
@@ -67,6 +62,7 @@ function resolveChatSendManagedMedia(
   return entries.map((entry) => ({
     path: entry.path,
     contentType: entry.fact.contentType ?? "application/octet-stream",
+    ...(entry.fact.fileName ? { fileName: entry.fact.fileName } : {}),
     ...(suppressInlineHydration && entry.imageKind === "inline"
       ? { hydrationSuppressed: true }
       : {}),
@@ -212,6 +208,9 @@ export function prepareChatSendUserTurn(params: {
   const ctx: MsgContext = {
     ...buildTextContext(commandBody),
     InputProvenance: request.systemInputProvenance,
+    ...(isProgressCardRefreshInputProvenance(request.systemInputProvenance)
+      ? { InternalTurnSource: "progress-card-refresh" as const }
+      : {}),
     SessionKey: session.sessionKey,
     AgentId: session.agentId,
     OriginatingTo: originatingTo,
@@ -240,17 +239,13 @@ export function prepareChatSendUserTurn(params: {
     GatewayRunToolBindings: request.toolBindings,
     GatewayUiCommandTarget: gatewayUiCommandTarget,
   };
-  if (attachments.mediaPathOffloadPaths.length > 0) {
+  if (attachments.mediaPathOffloads.length > 0) {
     // Pre-staged offloads must use structured facts and marker text so the
     // dispatch path renders their prompt note without staging them a second time.
-    ctx.media = attachments.mediaPathOffloadPaths.map((pathValue, index) => ({
-      path: pathValue,
-      contentType: attachments.mediaPathOffloadTypes[index],
-      workspaceDir: attachments.mediaPathOffloadWorkspaceDir ?? path.dirname(pathValue),
-    }));
+    ctx.media = attachments.mediaPathOffloads;
   }
-  const mediaPathOffloadsIncludeImages = attachments.mediaPathOffloadTypes.some((type) =>
-    type.startsWith("image/"),
+  const mediaPathOffloadsIncludeImages = attachments.mediaPathOffloads.some((fact) =>
+    fact.contentType?.startsWith("image/"),
   );
   const participant = resolveGatewayInputParticipant(client, request.systemInputProvenance);
   if (participant) {

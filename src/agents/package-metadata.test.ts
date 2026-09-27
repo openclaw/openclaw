@@ -8,7 +8,6 @@ import { runNodeScript } from "../../test/helpers/run-node-script.js";
 
 const fixtures = createFixtureLifetime();
 const metadataUrl = new URL("./package-metadata.ts", import.meta.url);
-const tsxUrl = new URL("../../scripts/tsx.mjs", import.meta.url);
 
 afterEach(() => fixtures.cleanup());
 
@@ -89,11 +88,11 @@ describe("package metadata", () => {
           "~": "~",
           "~/": "~/package",
         };
+        const entry = join(root, "package-metadata.mjs");
+        await compileMetadata(entry);
         const result = await fixtures.track(
           runNodeScript(
             [
-              "--import",
-              tsxUrl.href,
               "--input-type=module",
               "--eval",
               `${snapshotScript}
@@ -101,7 +100,7 @@ describe("package metadata", () => {
                 process.env.OPENCLAW_PACKAGE_DIR = process.argv[2];
                 console.log(JSON.stringify({ before, after: snapshot() }));
               `,
-              metadataUrl.href,
+              pathToFileURL(entry).href,
               nextPackageDir,
             ],
             {
@@ -178,11 +177,11 @@ describe("package metadata", () => {
         if (state === "invalid") {
           writeFileSync(manifest, "{");
         }
+        const entry = join(root, "package-metadata.mjs");
+        await compileMetadata(entry);
         const result = await fixtures.track(
           runNodeScript(
             [
-              "--import",
-              tsxUrl.href,
               "--input-type=module",
               "--eval",
               String.raw`
@@ -193,7 +192,7 @@ describe("package metadata", () => {
                   console.log(JSON.stringify({ name: error.name, code: error.code, path: error.path }));
                 }
               `,
-              metadataUrl.href,
+              pathToFileURL(entry).href,
             ],
             { ...process.env, OPENCLAW_PACKAGE_DIR: packageDir },
             10_000,

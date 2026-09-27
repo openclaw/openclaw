@@ -3,6 +3,12 @@ import type {
   ChannelMessageSendTextContext,
   MessageReceipt,
 } from "openclaw/plugin-sdk/channel-outbound";
+import type { z } from "zod";
+import type {
+  ZalouserAccountSchema,
+  ZalouserConfigSchema,
+  ZalouserGroupConfigSchema,
+} from "./config-schema.js";
 import type { Style } from "./zca-constants.js";
 
 export type ZcaFriend = {
@@ -100,37 +106,9 @@ export type ZaloAuthStatus = {
   message: string;
 };
 
-type ZalouserToolConfig = { allow?: string[]; deny?: string[] };
-
-export type ZalouserGroupConfig = {
-  enabled?: boolean;
-  requireMention?: boolean;
-  tools?: ZalouserToolConfig;
-};
-
-type ZalouserSharedConfig = {
-  /** Megabyte cap for media this channel accepts and delivers. */
-  mediaMaxMb?: number;
-  enabled?: boolean;
-  name?: string;
-  profile?: string;
-  dangerouslyAllowNameMatching?: boolean;
-  dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
-  allowFrom?: Array<string | number>;
-  historyLimit?: number;
-  groupAllowFrom?: Array<string | number>;
-  groupPolicy?: "open" | "allowlist" | "disabled";
-  groups?: Record<string, ZalouserGroupConfig>;
-  messagePrefix?: string;
-  responsePrefix?: string;
-};
-
-export type ZalouserAccountConfig = ZalouserSharedConfig;
-
-export type ZalouserConfig = ZalouserSharedConfig & {
-  defaultAccount?: string;
-  accounts?: Record<string, ZalouserAccountConfig>;
-};
+export type ZalouserGroupConfig = z.input<typeof ZalouserGroupConfigSchema>;
+export type ZalouserAccountConfig = z.input<typeof ZalouserAccountSchema>;
+export type ZalouserConfig = z.input<typeof ZalouserConfigSchema>;
 
 export type ResolvedZalouserAccount = {
   mediaMaxBytes?: number;

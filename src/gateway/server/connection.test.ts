@@ -7,13 +7,13 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { HealthSummary } from "../health/types.js";
 import { GatewayConnectionWork } from "../server-connection-work.js";
+import { GatewayClientRegistry } from "./client-registry.js";
 import type { GatewayConnectionTransport } from "./connection-transport.js";
 import { attachGatewayConnection } from "./connection.js";
 import {
   createGatewayWsTestLogger,
   createGatewayWsTestRequestContext,
 } from "./ws-connection.test-helpers.js";
-import type { GatewayWsClient } from "./ws-types.js";
 
 describe("Gateway connection transport", () => {
   it.each(["written", "failed"] as const)(
@@ -28,7 +28,7 @@ describe("Gateway connection transport", () => {
             ok?: boolean;
             payload?: { type?: string; capabilities?: string[] };
           }> = [];
-          const clients = new Set<GatewayWsClient>();
+          const clients = new GatewayClientRegistry();
           const connectionWork = new GatewayConnectionWork();
           const helloSent = createDeferred();
           const healthRefreshStarted = createDeferred();

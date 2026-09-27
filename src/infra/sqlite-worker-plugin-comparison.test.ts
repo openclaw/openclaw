@@ -1,5 +1,5 @@
-import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   createPluginStateKeyedStore,
@@ -58,14 +58,9 @@ function fixture(
 
 describe("plugin state data-only comparison", () => {
   it("observes and applies through the real worker without parent SQL", async () => {
-    const { store } = fixture("cold");
-    const calls = [
-      vi.spyOn(DatabaseSync.prototype, "prepare"),
-      vi.spyOn(DatabaseSync.prototype, "exec"),
-      ...(["get", "all", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(StatementSync.prototype, method),
-      ),
-    ];
+    const { store, env } = fixture("cold");
+    const observation = observeHostDataSql(env);
+    const calls = observation.calls;
     try {
       const observed = await store.observe("counter");
       expect(observed.value).toBeUndefined();
@@ -81,9 +76,7 @@ describe("plugin state data-only comparison", () => {
         expect(call).not.toHaveBeenCalled();
       }
     } finally {
-      for (const call of calls) {
-        call.mockRestore();
-      }
+      observation.restore();
     }
   });
 

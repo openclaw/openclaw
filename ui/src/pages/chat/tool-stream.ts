@@ -1,5 +1,7 @@
 import { asNullableObjectRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString as toTrimmedString } from "@openclaw/normalization-core/string-coerce";
+import { Value } from "typebox/value";
+import { AgentActivityItemSchema } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ChatGuardianNotice, ToolApprovalReview } from "../../lib/chat/chat-types.ts";
 import {
   MAX_TOOL_APPROVAL_REVIEWS,
@@ -19,7 +21,7 @@ import type { AgentEventPayload, ToolStreamEntry, ToolStreamHost } from "./tool-
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 import { handlePreambleProgress } from "./tool-stream-preamble.ts";
 import { cancelToolStreamSync, syncToolStreamMessages } from "./tool-stream-state.ts";
-import { handleStreamStatus, resolveAcceptedSession } from "./tool-stream-status.ts";
+import { handleStreamStatus, acceptsToolStreamSession } from "./tool-stream-status.ts";
 
 // How far a cyber notice has settled. A lower value never replaces a higher one
 // for the same run, which keeps reroutes and blocks safe from a late review
@@ -138,6 +140,7 @@ function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown>
     role: "assistant",
     toolCallId: entry.toolCallId,
     runId: entry.runId,
+    ...(entry.activity ? { activity: entry.activity } : {}),
     content,
     timestamp: entry.startedAt,
     // Running-state markers: only live tool-stream cards may show a spinner,
@@ -185,7 +188,7 @@ function scheduleToolStreamSync(host: ToolStreamHost, force = false) {
 }
 
 function toolActivityIdentity(runId: string, toolCallId: string): string {
-  return `tool:${JSON.stringify([runId, toolCallId])}`;
+  return `tool:${buildToolStreamIdentity(runId, toolCallId)}`;
 }
 
 function toolReviewSequenceIdentity(ownerIdentity: string, reviewId: string): string {
@@ -237,10 +240,10 @@ function acceptActivityEvent(host: ToolStreamHost, payload: AgentEventPayload): 
     // One visible compaction per run: older items and retry completions must
     // not replace a newer operation restored or received on the live stream.
     identity = `compaction:${payload.runId}`;
-  } else if (payload.stream === "item" && payload.data?.kind === "preamble") {
+  } else if (payload.stream === "item") {
     const itemId =
       toTrimmedString(payload.data.itemId) ?? toTrimmedString(payload.data.id) ?? "latest";
-    identity = `preamble:${payload.runId}:${itemId}`;
+    identity = `item:${payload.runId}:${itemId}`;
   } else {
     return true;
   }
@@ -294,7 +297,7 @@ function handleNoticeEvent(host: ToolStreamHost, payload: AgentEventPayload): bo
   if (!systemNotice && payload.stream !== "codex_app_server.guardian") {
     return false;
   }
-  if (!resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true }).accepted) {
+  if (!acceptsToolStreamSession(host, payload)) {
     return true;
   }
   const data = payload.data ?? {};
@@ -512,6 +515,41 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     return true;
   }
 
+  const activityItem =
+    payload.stream === "item"
+      ? Value.Clean(AgentActivityItemSchema, { ...payload.data })
+      : undefined;
+  if (Value.Check(AgentActivityItemSchema, activityItem)) {
+    if (!acceptsToolStreamSession(host, payload)) {
+      return true;
+    }
+    const item = activityItem;
+    const toolCallId = item.toolCallId ?? item.itemId;
+    const identity = buildToolStreamIdentity(payload.runId, toolCallId);
+    let entry = host.toolStreamById.get(identity);
+    if (!entry) {
+      entry = {
+        toolCallId,
+        runId: payload.runId,
+        sessionKey,
+        name: item.name ?? item.title,
+        startedAt: item.startedAt ?? payload.ts,
+        receivedAt: Date.now(),
+        message: {},
+      };
+      host.toolStreamById.set(identity, entry);
+      host.toolStreamOrder.push(identity);
+    }
+    entry.activity = [
+      ...(entry.activity ?? []).filter((previous) => previous.itemId !== item.itemId),
+      item,
+    ];
+    entry.message = buildToolStreamMessage(entry);
+    trimToolStream(host);
+    scheduleToolStreamSync(host, item.phase === "end");
+    return true;
+  }
+
   if (payload.stream !== "tool") {
     return false;
   }
@@ -545,7 +583,8 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       : phase === "result"
         ? formatToolOutput(data.result)
         : undefined;
-  const resultDetails = phase === "result" ? readRecord(data.result)?.details : undefined;
+  const resultRecord = phase === "result" ? readRecord(data.result) : undefined;
+  const resultDetails = resultRecord?.details;
   const resultApprovalReviewOutcome =
     readToolApprovalReviewOutcome(data) ?? readToolApprovalReviewOutcome(resultDetails);
   const initialResultDetails = resultApprovalReviewOutcome
@@ -553,7 +592,6 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     : resultDetails;
   const resultIsError =
     phase === "result" && typeof data.isError === "boolean" ? data.isError : undefined;
-  const resultRecord = phase === "result" ? readRecord(data.result) : undefined;
   const resultExitCode = resultRecord?.exitCode;
   const exitCode =
     typeof resultExitCode === "number" && Number.isInteger(resultExitCode)

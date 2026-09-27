@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { admitUpdateCommandRun } from "../cli/update-cli/update-command-run.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import * as containerEnvironment from "../infra/container-environment.js";
 import { getUpdateRun } from "../infra/update-run-ledger.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
@@ -92,6 +93,7 @@ describe("resolveGatewayService", () => {
     const service = resolveGatewayService();
     expect(service.label).toBe(label);
     expect(service.loadedText).toBe(loadedText);
+    expect(service.unsupportedReason).toBeUndefined();
   });
 
   it.each([
@@ -119,9 +121,11 @@ describe("resolveGatewayService", () => {
 
   it("keeps FreeBSD service ownership external and explains the package and foreground paths", async () => {
     mockProcessPlatform("freebsd");
+    vi.spyOn(containerEnvironment, "isContainerEnvironment").mockReturnValue(false);
     const service = resolveGatewayService();
     const runtime = await service.readRuntime(process.env);
     expect(runtime.status).toBe("unknown");
+    expect(service.unsupportedReason).toBe(runtime.detail);
     expect(runtime.detail).toContain("not supported by this CLI on FreeBSD");
     expect(runtime.detail).toContain("openclaw_user to your onboarding account");
     expect(runtime.detail).toContain('openclaw_enable="YES" in /etc/rc.conf');
@@ -145,6 +149,16 @@ describe("resolveGatewayService", () => {
       command: null,
       runtime,
     });
+    const { collectGatewayDaemonFindings } = await import("../flows/doctor-core-checks.runtime.js");
+    await expect(
+      collectGatewayDaemonFindings({ cfg: { gateway: { mode: "local" } } }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/gateway-daemon",
+        severity: "warning",
+        fixHint: runtime.detail,
+      }),
+    ]);
   });
 
   it("gives FreeBSD node hosts their own foreground recovery command", async () => {
@@ -152,6 +166,7 @@ describe("resolveGatewayService", () => {
     const service = resolveNodeService();
     const runtime = await service.readRuntime(process.env);
     expect(runtime.status).toBe("unknown");
+    expect(service.unsupportedReason).toBe(runtime.detail);
     expect(runtime.detail).toContain("Node service management is not supported");
     expect(runtime.detail).toContain("`openclaw node run`");
     expect(runtime.detail).not.toContain("service openclaw");
@@ -248,6 +263,10 @@ describe("resolveGatewayService", () => {
 });
 
 describe("readGatewayServiceState", () => {
+  beforeEach(() => {
+    vi.spyOn(performance, "now").mockReturnValue(0);
+  });
+
   it("passes update loaded-only admission to every native inspection adapter", async () => {
     const readCommand = vi.fn(async () => null);
     const readRuntime = vi.fn(async () => ({ status: "stopped" }));
@@ -266,6 +285,7 @@ describe("readGatewayServiceState", () => {
       timeoutMs: 100,
     });
     expect(readRuntime).toHaveBeenCalledWith(expect.anything(), {
+      requireEffective: true,
       requireLoaded: true,
       timeoutMs: 100,
     });
@@ -762,20 +782,6 @@ describe("startGatewayService", () => {
     );
   });
 
-  it("allows asynchronously starting services without terminal failure evidence", async () => {
-    const service = createService({
-      readCommand: vi.fn(async () => ({
-        programArguments: ["openclaw", "gateway", "run"],
-      })),
-      isLoaded: vi.fn(async () => true),
-      readRuntime: vi.fn(async () => ({ status: "stopped" })),
-    });
-
-    await expect(
-      startGatewayService(service, { env: {}, stdout: process.stdout }),
-    ).resolves.toMatchObject({ outcome: "started" });
-  });
-
   it("does not mistake a previous exit code for a new asynchronous start failure", async () => {
     const service = createService({
       readCommand: vi.fn(async () => ({
@@ -788,27 +794,6 @@ describe("startGatewayService", () => {
     await expect(
       startGatewayService(service, { env: {}, stdout: process.stdout }),
     ).resolves.toMatchObject({ outcome: "started" });
-  });
-
-  it("returns already-running without starting a loaded running service", async () => {
-    const service = createService({
-      readCommand: vi.fn(async () => ({
-        programArguments: ["openclaw", "gateway", "run"],
-      })),
-      isLoaded: vi.fn(async () => true),
-      readRuntime: vi.fn(async () => ({ status: "running", pid: 4242 })),
-    });
-
-    const result = await startGatewayService(service, {
-      env: {},
-      stdout: process.stdout,
-    });
-
-    expect(result.outcome).toBe("already-running");
-    if (result.outcome === "already-running") {
-      expect(result.state.runtime?.pid).toBe(4242);
-    }
-    expect(service.start).not.toHaveBeenCalled();
   });
 
   it("ignores legacy version metadata on an already-running service", async () => {
@@ -829,6 +814,7 @@ describe("startGatewayService", () => {
     expect(result.outcome).toBe("already-running");
     if (result.outcome === "already-running") {
       expect(result.issues).toEqual([]);
+      expect(result.state.runtime?.pid).toBe(4242);
     }
     expect(service.start).not.toHaveBeenCalled();
   });

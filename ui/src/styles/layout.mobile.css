@@ -64,13 +64,20 @@
 html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
   .shell--mobile-nav.shell--merged-chat-chrome {
   --shell-topbar-height: 0px;
-  grid-template-rows: 0px minmax(0, 1fr);
 }
 
 html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
   .shell--mobile-nav.shell--merged-chat-chrome
   .topbar {
   display: none;
+}
+
+.shell--mobile-nav:has(> .shell-connection-status) {
+  grid-template-rows: var(--shell-topbar-height) auto minmax(0, 1fr);
+  grid-template-areas:
+    "topbar"
+    "connection"
+    "content";
 }
 
 .shell--mobile-nav .shell-nav,
@@ -223,8 +230,13 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   border-radius: 0;
 }
 
-/* Drawer navigation keeps toggle and search in the mobile topbar. */
-.shell--mobile-nav .sidebar-brand__desktop-control {
+/* The drawer has nothing to collapse into, so the desktop controls go. Search is
+   the exception, and only where nothing else is left to carry it: merged chat
+   chrome hides the topbar above, so the drawer is the last surface standing.
+   Everywhere else the topbar keeps its own search - including every native host,
+   which never merges the chat chrome - and a drawer copy would show two. */
+.shell--mobile-nav .sidebar-brand__desktop-control:not(.sidebar-brand__search),
+.shell--mobile-nav:not(.shell--merged-chat-chrome) .sidebar-brand__search {
   display: none;
 }
 
@@ -429,10 +441,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     /* Horizontal inset lives on .chat-thread-inner (see layout.css): padding
        on the scroll container floats macOS overlay scrollbars off the edge. */
     padding: 0 0 12px;
-  }
-
-  .chat-msg {
-    max-width: 90%;
   }
 
   .chat-bubble {

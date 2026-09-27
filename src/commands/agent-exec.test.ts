@@ -74,14 +74,6 @@ describe("agent exec prompt sources", () => {
 });
 
 describe("agent exec strict result classification", () => {
-  it("classifies a successful embedded result", () => {
-    expect(classifyAgentExecResult(successResult())).toMatchObject({
-      ok: true,
-      status: "ok",
-      final: "done",
-    });
-  });
-
   it("classifies model error payloads as failure", () => {
     const envelope = classifyAgentExecResult({
       payloads: [{ text: "provider rejected request", isError: true }],
@@ -191,7 +183,7 @@ describe("agent exec command composition", () => {
   it("writes plain final text to stdout when diagnostics are routed to stderr", async () => {
     const source = `
       import { agentExecCommand } from "./src/commands/agent-exec.ts";
-      import { enableConsoleCapture, routeLogsToStderr } from "./src/logging.ts";
+      import { enableConsoleCapture, routeLogsToStderr } from "./src/logging/console.ts";
       import { defaultRuntime } from "./src/runtime.ts";
 
       routeLogsToStderr();

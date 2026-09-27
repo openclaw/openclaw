@@ -9,6 +9,7 @@ import {
   buildWorkboardStateSessions,
   MATRIX_STATES,
 } from "./control-ui-workboard-states.ts";
+import { cronListResponseFixture } from "./cron.ts";
 
 export function buildWorkboardMocks(
   baseTime: number,
@@ -596,7 +597,7 @@ export function buildWorkboardMocks(
           },
         ],
       },
-      "cron.list": {
+      "cron.list": cronListResponseFixture({
         jobs: [automationJob],
         snapshotRevision: "workboard-mock-cron",
         total: 1,
@@ -604,7 +605,7 @@ export function buildWorkboardMocks(
         limit: 50,
         hasMore: false,
         nextOffset: null,
-      },
+      }),
 
       "board.get": {
         sessionKey,

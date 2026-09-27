@@ -1462,6 +1462,20 @@ openclaw-lobster-pet[data-dex-complete]::after {
   animation: lobster-pet-duck-bob 1.6s ease-in-out infinite;
 }
 
+.lobster-pet--fedora .lobster-pet__body {
+  animation: lobster-pet-fedora-tumble 1.4s ease-in-out infinite;
+}
+
+@keyframes lobster-pet-fedora-tumble {
+  0%,
+  100% {
+    transform: rotate(-6deg);
+  }
+  50% {
+    transform: rotate(6deg);
+  }
+}
+
 /* The jellyfish drifts above the ledge, pulsing softly. */
 .lobster-pet--jellyfish {
   margin-top: -8px;

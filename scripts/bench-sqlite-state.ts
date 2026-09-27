@@ -5,6 +5,12 @@ import path from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { getSessionKysely } from "../src/config/sessions/session-accessor.sqlite-scope.js";
+import { transcriptEventReadBytesSql } from "../src/config/sessions/session-transcript-read-bytes.js";
+import {
+  prepareTranscriptPayload,
+  transcriptEventJsonSql,
+} from "../src/config/sessions/transcript-payload.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../src/state/openclaw-agent-db-contract.js";
 import {
   openOpenClawAgentDatabase,
@@ -474,8 +480,9 @@ function seedTranscriptHistory(db: DatabaseSync): void {
   ).run(SQLITE_PERF_TRANSCRIPT_SESSION_ID, sessionKey, 1_700_000_000_000, 1_700_000_000_000);
 
   const insertEvent = db.prepare(
-    `INSERT INTO transcript_events (session_id, seq, event_json, created_at)
-     VALUES (?, ?, ?, ?)`,
+    `INSERT INTO transcript_events
+       (session_id, seq, event_json, event_zstd, event_utf8_bytes, navigation_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
   );
   const insertIdentity = db.prepare(
     `INSERT INTO transcript_event_identities
@@ -495,7 +502,16 @@ function seedTranscriptHistory(db: DatabaseSync): void {
       id: eventId,
       message: { role: "user", content: messageContent },
     };
-    insertEvent.run(SQLITE_PERF_TRANSCRIPT_SESSION_ID, seq, JSON.stringify(message), seq);
+    const payload = prepareTranscriptPayload(db, JSON.stringify(message));
+    insertEvent.run(
+      SQLITE_PERF_TRANSCRIPT_SESSION_ID,
+      seq,
+      payload.event_json,
+      payload.event_zstd,
+      payload.event_utf8_bytes,
+      payload.navigation_json,
+      seq,
+    );
     insertIdentity.run(SQLITE_PERF_TRANSCRIPT_SESSION_ID, eventId, seq, seq);
     insertActive.run(SQLITE_PERF_TRANSCRIPT_SESSION_ID, seq - 1, seq, seq - 1);
   }
@@ -601,6 +617,9 @@ function runHotQueries(params: {
     (_, index) => SQLITE_PERF_TRANSCRIPT_EVENTS - SQLITE_PERF_TRANSCRIPT_PAGE_MESSAGES + index,
   );
   const transcriptPlaceholders = transcriptPositions.map(() => "?").join(", ");
+  const db = getSessionKysely(params.agentDb);
+  const transcriptBytes = transcriptEventReadBytesSql("event").compile(db).sql;
+  const transcriptPayload = transcriptEventJsonSql(params.agentDb, "event").compile(db).sql;
   return [
     runTimedQuery({
       database: "state",
@@ -731,7 +750,7 @@ function runHotQueries(params: {
       queryParams: [SQLITE_PERF_TRANSCRIPT_SESSION_ID, ...transcriptPositions],
       requestedRuns: params.config.queryRuns,
       sql: `SELECT active.message_position,
-                   LENGTH(CAST(event.event_json AS BLOB)) + 1 AS serialized_bytes
+                   ${transcriptBytes} + 1 AS serialized_bytes
               FROM session_transcript_active_events AS active
               JOIN transcript_events AS event
                 ON event.session_id = active.session_id AND event.seq = active.event_seq
@@ -745,7 +764,7 @@ function runHotQueries(params: {
       id: "transcript.tail.payload",
       queryParams: [SQLITE_PERF_TRANSCRIPT_SESSION_ID, ...transcriptPositions],
       requestedRuns: params.config.queryRuns,
-      sql: `SELECT active.message_position, event.event_json
+      sql: `SELECT active.message_position, ${transcriptPayload} AS event_json
               FROM session_transcript_active_events AS active
               JOIN transcript_events AS event
                 ON event.session_id = active.session_id AND event.seq = active.event_seq

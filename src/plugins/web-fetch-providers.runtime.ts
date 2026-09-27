@@ -26,7 +26,7 @@ const providerResolution = {
       configKey: "webFetch",
     }),
   mapRegistryProviders: ({ registry, onlyPluginIds }) =>
-    mapRegistryProviders({ entries: registry.webFetchProviders, onlyPluginIds }),
+    mapRegistryProviders({ registry, entries: registry.webFetchProviders, onlyPluginIds }),
 } satisfies WebProviderRuntimeResolution<PluginWebFetchProviderEntry>;
 
 /** Resolves web fetch providers, activating plugin runtimes when requested. */

@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  initializeAndroidStoreRelease,
   mobileReleaseRefFor,
   parseArgs,
   preflightMobileReleaseRef,
@@ -187,6 +188,11 @@ describe("mobile-release-ref", () => {
     mkdirSync(scriptDir, { recursive: true });
     writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n', "utf8");
     copyFileSync(SCRIPT_PATH, scriptPath);
+    symlinkSync(
+      path.join(path.dirname(SCRIPT_PATH), "lib"),
+      path.join(scriptDir, "lib"),
+      "junction",
+    );
 
     const stdout = run(
       process.execPath,
@@ -195,5 +201,102 @@ describe("mobile-release-ref", () => {
     );
 
     expect(stdout).toContain("scripts/mobile-release-ref.ts preflight");
+  });
+
+  it("records Android v2 plans and preserves the immutable cutover maximum across source commits", () => {
+    const fixture = createFixtureRepo();
+    const planPath = path.join(fixture.root, "android-plan.json");
+    const plan = {
+      schemaVersion: 2,
+      gatewayVersion: "2026.9.6",
+      revision: 0,
+      buildNumber: 1,
+      version: "2026.9.60",
+      versionCode: 2026090454,
+      wearVersionCode: 2026090455,
+      legacyMaxVersionCode: 2026090453,
+      sourceSha: fixture.sha,
+      releaseNotesBaselines: [
+        { audience: "phone", version: null, build: null },
+        { audience: "wear", version: null, build: null },
+      ],
+    };
+    const writePlan = (value = plan) => writeFileSync(planPath, JSON.stringify(value), "utf8");
+    writePlan();
+    const cliArgs = ["--plan", planPath, "--root", fixture.root];
+    const options = parseArgs(["record", ...cliArgs]);
+    const ref = "refs/openclaw/mobile-releases/android/v2/2026.9.6/0/1/2026090454-2026090455";
+    const marker = "refs/openclaw/mobile-releases/android/cutover-v2/2026090453";
+    expect(options).toMatchObject({ platform: "android", sha: fixture.sha, version: "2026.9.60" });
+    expect(() => parseArgs(["record", ...cliArgs, "--sha", "HEAD"])).toThrow("does not match");
+    expect(() => parseArgs(["record", ...cliArgs, "--platform", "ios"])).toThrow("does not match");
+    expect(() => parseArgs(["initialize-android", "--platform", "android"])).toThrow(
+      "requires --plan",
+    );
+    expect(preflightMobileReleaseRef(options).status).toBe("available");
+
+    const initializeOutput = run(
+      process.execPath,
+      ["--import", "tsx", SCRIPT_PATH, "initialize-android", ...cliArgs],
+      process.cwd(),
+    );
+    expect(initializeOutput).toContain(`${marker} recorded ${fixture.sha}`);
+    expect(initializeAndroidStoreRelease(options)).toEqual({
+      ref: marker,
+      sha: fixture.sha,
+      status: "already-recorded",
+    });
+
+    // Git accepted this push, but the caller lost the response. The owner must read it back.
+    let pushes = 0;
+    expect(
+      recordMobileReleaseRef(options, {
+        execFileSync(command, args, execOptions) {
+          const result = execFileSync(command, args, execOptions);
+          if (args[0] === "push") {
+            pushes += 1;
+            throw new Error("response lost after accepted push");
+          }
+          return result;
+        },
+      }),
+    ).toEqual({ ref, sha: fixture.sha, status: "already-recorded" });
+    expect(pushes).toBe(1);
+    expect(recordMobileReleaseRef(options).status).toBe("already-recorded");
+    const resolved = run(
+      process.execPath,
+      ["--import", "tsx", SCRIPT_PATH, "resolve", ...cliArgs],
+      process.cwd(),
+    );
+    expect(resolved).toBe(`${fixture.sha}\t${ref}\n`);
+
+    writeFileSync(path.join(fixture.root, "README.md"), "next\n", "utf8");
+    git(fixture.root, ["add", "README.md"]);
+    git(fixture.root, ["commit", "-m", "next"]);
+    const nextSha = git(fixture.root, ["rev-parse", "HEAD"]).trim();
+    expect(() => preflightMobileReleaseRef({ ...options, sha: nextSha })).toThrow(
+      "source SHA does not match",
+    );
+    writePlan({ ...plan, sourceSha: nextSha });
+    const nextOptions = parseArgs(["record", ...cliArgs]);
+    expect(initializeAndroidStoreRelease(nextOptions)).toEqual({
+      ref: marker,
+      sha: fixture.sha,
+      status: "already-recorded",
+    });
+    expect(() => recordMobileReleaseRef(nextOptions)).toThrow("already points at");
+    expect(() => resolveMobileReleaseRef(nextOptions)).toThrow(
+      "does not record Android plan source",
+    );
+
+    writePlan({ ...plan, sourceSha: nextSha, legacyMaxVersionCode: 2026090452 });
+    expect(() =>
+      initializeAndroidStoreRelease(parseArgs(["initialize-android", ...cliArgs])),
+    ).toThrow("does not match planned");
+    const conflictingMarker = "refs/openclaw/mobile-releases/android/cutover-v2/2026090452";
+    git(fixture.root, ["push", "origin", `${nextSha}:${conflictingMarker}`]);
+    expect(() => initializeAndroidStoreRelease(options)).toThrow(
+      "Multiple Android store version cutover markers",
+    );
   });
 });

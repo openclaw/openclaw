@@ -16,6 +16,7 @@ import {
 } from "../transcripts/store-artifacts.js";
 import { sessionFromRow } from "../transcripts/store-sqlite.js";
 import { TranscriptsStore } from "../transcripts/store.js";
+import { formatErrorMessage } from "./errors.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "./kysely-sync.js";
 import { migrationDb } from "./state-migrations.meeting-transcripts-database.js";
@@ -27,6 +28,7 @@ import {
   archiveLegacyMeetingTranscriptSnapshots,
   archiveDivergentMeetingTranscriptExport,
   archivePartialMeetingTranscriptArtifacts,
+  disposeLegacyMeetingTranscriptStage,
   isRecordedCanonicalTranscriptExport,
   LegacyMeetingTranscriptArchiveMovedError,
   listLegacyMeetingTranscriptArtifactDirs,
@@ -411,8 +413,9 @@ export async function migrateLegacyMeetingTranscripts(params: {
   let stageDatabase: DatabaseSync | undefined;
   let stagePath: string | undefined;
   const recoveryChanges: string[] = [];
+  let result: MigrationMessages;
   try {
-    return await lock.run(async () => {
+    result = await lock.run(async () => {
       fsSync.mkdirSync(params.stateDir, { recursive: true });
       stagePath = path.join(
         params.stateDir,
@@ -665,20 +668,36 @@ export async function migrateLegacyMeetingTranscripts(params: {
       };
     });
   } catch (error) {
-    return {
+    result = {
       changes: recoveryChanges,
       warnings: [`Failed migrating meeting transcripts: ${String(error)}`],
     };
-  } finally {
-    try {
-      stageDatabase?.close();
-      if (stagePath) {
-        fsSync.rmSync(stagePath, { force: true });
-        fsSync.rmSync(`${stagePath}-shm`, { force: true });
-        fsSync.rmSync(`${stagePath}-wal`, { force: true });
-      }
-    } finally {
-      await lock.release();
-    }
   }
+  const warnings = [
+    ...result.warnings,
+    ...disposeLegacyMeetingTranscriptStage({ database: stageDatabase, databasePath: stagePath }),
+  ];
+  let releaseError: unknown;
+  try {
+    await lock.release();
+  } catch (error) {
+    releaseError = error;
+  }
+  if (releaseError) {
+    warnings.push(
+      `Meeting transcript migration lock release failed: ${formatErrorMessage(releaseError)}`,
+    );
+  }
+  return {
+    changes: result.changes,
+    warnings,
+    // Disposing this migration's own rebuildable stage bytes is advisory: when it is
+    // the only thing that went wrong, the import and the archive above are already
+    // durable, so Doctor reports them and keeps going instead of refusing over
+    // scratch it can drop. A lock the migration could not hand back still refuses,
+    // as state-migrations.lock.ts does for the same event.
+    ...(result.warnings.length === 0 && !releaseError && warnings.length > 0
+      ? { warningDisposition: "recoverable" as const }
+      : {}),
+  };
 }

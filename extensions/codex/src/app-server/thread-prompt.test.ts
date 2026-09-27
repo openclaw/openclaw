@@ -1,4 +1,5 @@
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import { describe, expect, it } from "vitest";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
@@ -157,8 +158,14 @@ describe("buildDeveloperInstructions delegation guidance", () => {
 
     expect(instructions).toContain("## Delegation");
     expect(instructions).toContain("delegate via native `spawn_agent`");
+    expect(instructions).toContain(
+      "For follow-up work on an existing native child, use the native collaboration tool that starts or queues a new turn.",
+    );
     expect(instructions).toContain("spawn `sessions_spawn` with `visible=true`");
     expect(instructions).toContain("Announcing spawns notify when the run ends");
+    expect(instructions).toContain(
+      "When a kept OpenClaw session stops before the requested outcome, continue it with `sessions_send`",
+    );
     expect(instructions).toContain("Collectors require explicit result collection instead.");
     expect(instructions.indexOf("## Delegation")).toBeGreaterThan(
       instructions.indexOf("When a native child's result belongs in a later turn"),
@@ -241,8 +248,11 @@ describe("buildDeveloperInstructions UI presentation guidance", () => {
       expect(instructions).toContain(
         `\`${prefix}message(action="send", clawhub={query:"capability"})\``,
       );
-      expect(instructions).toContain("including when it is already installed");
-      expect(instructions).toContain("desktop app does not establish");
+      expect(instructions).toContain("Tools/skills first");
+      expect(instructions).toContain(
+        "For explicit plugin/skill search/install or missing capability, use ClawHub",
+      );
+      expect(instructions).toContain("Skip routine tasks, tool errors, permissions");
     },
   );
 
@@ -315,4 +325,35 @@ describe("buildDeveloperInstructions delivery-mode stability", () => {
       expect(instructions[0]).not.toContain("message(action=send)");
     }
   });
+});
+
+it("includes Codex app-server scoped plugin command guidance in developer instructions", () => {
+  try {
+    registerPluginCommand("demo-plugin", {
+      name: "codex_demo",
+      description: "Codex demo command",
+      agentPromptGuidance: [
+        "Legacy global command guidance.",
+        {
+          text: "Codex app-server command guidance.",
+          surfaces: ["codex_app_server"],
+        },
+        {
+          text: "Unscoped structured command guidance.",
+        },
+        {
+          text: "OpenClaw main command guidance.",
+          surfaces: ["openclaw_main"],
+        },
+      ],
+      handler: async () => ({ text: "ok" }),
+    });
+    const instructions = buildDeveloperInstructions(createParams());
+    expect(instructions).toContain("Codex app-server command guidance.");
+    expect(instructions).not.toContain("Legacy global command guidance.");
+    expect(instructions).not.toContain("Unscoped structured command guidance.");
+    expect(instructions).not.toContain("OpenClaw main command guidance.");
+  } finally {
+    clearPluginCommands();
+  }
 });

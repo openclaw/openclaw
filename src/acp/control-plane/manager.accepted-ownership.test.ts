@@ -7,6 +7,7 @@ import {
 } from "../../../test/helpers/acp-manager-task-state.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
+import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
 import { withTaskCancellationControl } from "../../tasks/task-cancellation-context.js";
 import {
   AcpSessionManager,
@@ -78,6 +79,12 @@ describe("ACP accepted cancellation ownership", () => {
         );
         expect(requireTaskByRunId("snapshot-0").status).toBe("cancelled");
         expect(requireTaskByRunId("snapshot-1").status).toBe("cancelled");
+        expect(
+          listSessionStateEventsSince(state.target.sessionKey, "codex", 0, 200).events,
+        ).toMatchObject([
+          { kind: "run_failed", runId: "snapshot-0", payload: { outcome: "cancelled" } },
+          { kind: "run_failed", runId: "snapshot-1", payload: { outcome: "cancelled" } },
+        ]);
       } finally {
         release.resolve();
         await Promise.allSettled([actor, ...cancelled, cancellation, later]);

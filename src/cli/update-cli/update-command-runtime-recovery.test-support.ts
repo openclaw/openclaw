@@ -1,17 +1,45 @@
 import path from "node:path";
 import { expect } from "vitest";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunRecord } from "../../infra/update-run-record.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
 
-export const expectedNpmProbes = [
-  ["npm", "--version"],
-  expect.toBeOneOf([
-    ["npm", "prefix", "-g"],
-    [process.execPath, expect.stringMatching(/[/\\]npm-cli\.js$/u), "prefix", "-g"],
-  ]),
+export const alreadyCurrentConvergenceCases = [
+  { restart: true, running: true, failure: undefined },
+  { restart: false, running: true, failure: undefined },
+  { restart: true, running: false, failure: undefined },
+  { restart: true, running: true, failure: "doctor" },
+  { restart: true, running: true, failure: "stop" },
+  { restart: true, running: true, failure: undefined, platform: "linux" as const },
+  { restart: true, running: true, failure: "changed owner" },
 ];
+
+export function alreadyCurrentHandoffCases(version: string) {
+  return [
+    {
+      packageInstallSpec: "file:/owned/candidate.tgz",
+      channel: "stable" as const,
+      expectedTag: "file:/owned/candidate.tgz",
+    },
+    {
+      packageInstallSpec: "https://example.invalid/candidate.tgz",
+      channel: "stable" as const,
+      expectedTag: "https://example.invalid/candidate.tgz",
+    },
+    {
+      packageInstallSpec: `openclaw@${version}`,
+      channel: "stable" as const,
+      expectedTag: version,
+    },
+    {
+      packageInstallSpec: `openclaw@${version}`,
+      channel: "extended-stable" as const,
+      expectedTag: undefined,
+    },
+  ];
+}
 
 export function expectedRuntimeSelectionCommand(manager: "nvm" | "fnm", version: string): string {
   return process.platform === "win32"
@@ -137,4 +165,36 @@ export function currentGitCoreFixture(root: string, version: string) {
       failedStep: { recoverySteps },
     },
   };
+}
+
+export function expectInterruptedDoctorPackageRollback(runs: UpdateRunRecord[]): void {
+  expect(runs).toMatchObject([
+    {
+      phase: "finished",
+      status: "failed",
+      reason: "doctor-failed",
+      verification: {
+        recovery: {
+          serviceRestartSafe: false,
+          packageRollbackVerified: true,
+          reason: "runtime-verification-failed",
+        },
+        rollbackOutcome: { status: "succeeded" },
+      },
+      steps: expect.arrayContaining([
+        expect.objectContaining({
+          step: "openclaw doctor",
+          status: "failed",
+          detail: expect.stringContaining("interrupted lifecycle"),
+          failureFacts: expect.arrayContaining([
+            expect.objectContaining({
+              check: "openclaw doctor",
+              code: "Error",
+              message: "interrupted lifecycle",
+            }),
+          ]),
+        }),
+      ]),
+    },
+  ]);
 }

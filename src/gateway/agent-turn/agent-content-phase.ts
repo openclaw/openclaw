@@ -50,22 +50,6 @@ type ExplicitRecipientSession = Awaited<
   >
 >;
 
-type AgentContentPhaseResult = {
-  agentId?: string;
-  requestedSessionKey?: string;
-  effectiveTranscriptInputText: string;
-  message: string;
-  images: ChatImageContent[];
-  imageOrder: PromptImageOrderEntry[];
-  media: MediaFact[];
-  offloadedRefs: OffloadedRef[];
-  replyTo: string;
-  recipientChannel?: string;
-  recipientAccountId?: string;
-  recipientThreadId?: string | number;
-  to: string;
-};
-
 export async function prepareAgentContentPhase(params: {
   request: AgentRunRequest;
   cfg: OpenClawConfig;
@@ -84,12 +68,12 @@ export async function prepareAgentContentPhase(params: {
   modelOverride?: string;
   explicitRecipientSession?: ExplicitRecipientSession;
   knownAgents: string[];
-}): Promise<AgentContentPhaseResult | undefined> {
+}) {
   const transcriptInputText = (params.request.message ?? "").trim();
   let message = params.isRawModelRun
     ? transcriptInputText
     : annotateInterSessionPromptText(transcriptInputText, params.inputProvenance);
-  let images: AgentContentPhaseResult["images"] = [];
+  let images: ChatImageContent[] = [];
   let imageOrder: PromptImageOrderEntry[] = [];
   let media: MediaFact[] = [];
   let offloadedRefs: OffloadedRef[] = [];

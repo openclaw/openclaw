@@ -7,6 +7,7 @@ import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import { isReleaseChangelogPath } from "./lib/release-changelog.mjs";
+import { isChangedTsgoCoreTestInput } from "./lib/tsgo-core-test-shards.mts";
 
 const GIT_OUTPUT_MAX_BUFFER = 64 * 1024 * 1024;
 const IMPLAUSIBLE_NO_MERGE_BASE_DIFF_PATHS = 200;
@@ -107,7 +108,6 @@ export const RELEASE_METADATA_PATHS = new Set([
   "apps/android/version.json",
   "apps/ios/CHANGELOG.md",
   "apps/macos/Sources/OpenClaw/Resources/Info.plist",
-  "apps/mobile/version.json",
   ...CONFIG_DOC_BASELINE_PATHS,
   "docs/install/updating.md",
   "docs/install/updating/automatic-updates.md",
@@ -126,17 +126,17 @@ export type ChangedLaneResult = {
   reasons: string[];
 };
 
-/** Eligible leaf inputs; compiler inventories still decide all consuming graphs. */
+/** Eligible source inputs; compiler inventories still decide all consuming graphs. */
 export function getChangedCoreTestPaths(result: ChangedLaneResult): string[] | undefined {
   const { lanes } = result;
-  if (lanes.all || lanes.core || lanes.ui || lanes.tooling || lanes.liveDockerTooling) {
+  if (lanes.all || lanes.liveDockerTooling) {
     return undefined;
   }
-  const paths = result.paths.filter((file) => getChangedPathFacts(file).surface !== "docs");
-  return paths.length > 0 &&
-    paths.every((file) => /^(?:src|ui|packages)\/.+\.test\.tsx?$/u.test(file))
-    ? paths
-    : undefined;
+  // Styles keep their UI and lint gates but do not change compiler input types.
+  const paths = result.paths.filter(
+    (file) => getChangedPathFacts(file).surface !== "docs" && !/^ui\/.+\.css$/u.test(file),
+  );
+  return paths.length > 0 && paths.every(isChangedTsgoCoreTestInput) ? paths : undefined;
 }
 
 type DetectChangedLanesOptions = {
@@ -460,7 +460,8 @@ export function listChangedPathsFromGit(params: {
 }
 
 function runGitNameOnlyDiff(extraArgs: string[], cwd = process.cwd()): string[] {
-  const output = execFileSync("git", ["diff", "--name-only", "-z", ...extraArgs], {
+  // Keep rename sources so checks still cover the removed path's consumers.
+  const output = execFileSync("git", ["diff", "--no-renames", "--name-only", "-z", ...extraArgs], {
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",

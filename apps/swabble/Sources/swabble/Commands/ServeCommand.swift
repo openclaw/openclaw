@@ -5,7 +5,7 @@ import SwabbleKit
 
 @available(macOS 26.0, *)
 @MainActor
-struct ServeCommand: ParsableCommand {
+struct ServeCommand: CLICommand {
     @Option(name: .long("config"), help: "Path to config JSON") var configPath: String?
     @Flag(name: .long("no-wake"), help: "Disable wake word") var noWake: Bool = false
 
@@ -38,15 +38,16 @@ struct ServeCommand: ParsableCommand {
         let logger = Logger(level: LogLevel(configValue: cfg.logging.level) ?? .info)
         logger.info("swabble serve starting (wake: \(cfg.wake.enabled ? cfg.wake.word : "disabled"))")
         let pipeline = SpeechPipeline()
+        let triggers = [cfg.wake.word] + cfg.wake.aliases
         do {
             let stream = try await pipeline.start(
                 localeIdentifier: cfg.speech.localeIdentifier,
                 etiquette: cfg.speech.etiquetteReplacements)
             for await seg in stream {
                 if cfg.wake.enabled {
-                    guard Self.matchesWake(text: seg.text, cfg: cfg) else { continue }
+                    guard WakeWordGate.matchesTextOnly(text: seg.text, triggers: triggers) else { continue }
                 }
-                let stripped = Self.stripWake(text: seg.text, cfg: cfg)
+                let stripped = WakeWordGate.stripWake(text: seg.text, triggers: triggers)
                 let job = HookJob(text: stripped, timestamp: Date())
                 let executor = HookExecutor(config: cfg)
                 try await executor.run(job: job)
@@ -67,15 +68,5 @@ struct ServeCommand: ParsableCommand {
 
     private var configURL: URL? {
         self.configPath.map { URL(fileURLWithPath: $0) }
-    }
-
-    private static func matchesWake(text: String, cfg: SwabbleConfig) -> Bool {
-        let triggers = [cfg.wake.word] + cfg.wake.aliases
-        return WakeWordGate.matchesTextOnly(text: text, triggers: triggers)
-    }
-
-    private static func stripWake(text: String, cfg: SwabbleConfig) -> String {
-        let triggers = [cfg.wake.word] + cfg.wake.aliases
-        return WakeWordGate.stripWake(text: text, triggers: triggers)
     }
 }

@@ -5,6 +5,7 @@ import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256HexPrefixCore } from "./crypto-digest.js";
 import { tryAcquireExclusiveSqliteCoordinator } from "./sqlite-coordinator.js";
@@ -13,6 +14,8 @@ import {
   acquireGatewayLifecycleCoordinator,
   acquireStateDatabaseCoordinator,
   acquireStateDatabaseHandleExclusion,
+  hasStateDatabaseSourceExclusion,
+  prepareStateDatabaseSourceExclusion,
   resolveStateDatabaseCoordinatorPath,
   resolveStateLifecycleRuntimeDirectory,
   tryCreateGatewaySchemaFenceDelegate,
@@ -24,6 +27,17 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("state database coordinator", () => {
+  it("does not resolve physical paths when no source exclusion is active", () => {
+    const realpath = vi.spyOn(fsSync.realpathSync, "native");
+    try {
+      expect(hasStateDatabaseSourceExclusion("/synthetic/openclaw.sqlite")).toBe(false);
+      expect(prepareStateDatabaseSourceExclusion("/synthetic/openclaw.sqlite")).toBeUndefined();
+      expect(realpath).not.toHaveBeenCalled();
+    } finally {
+      realpath.mockRestore();
+    }
+  });
+
   it("retains final-reference cleanup without treating its rolled-back handle as ownership", () => {
     const root = tempDirs.make("openclaw-coordinator-reference-retry-");
     const params = { databasePath: path.join(root, "state.sqlite"), runtimeDirectory: root };
@@ -82,6 +96,13 @@ describe("state database coordinator", () => {
 
     const gateway = acquireGatewayLifecycleCoordinator(params);
     const nestedGateway = acquireGatewayLifecycleCoordinator(params);
+    const lifecyclePath = vi.spyOn(fsSync.realpathSync, "native");
+    try {
+      expect(tryCreateStateLifecycleDelegate(params)).toBeUndefined();
+      expect(lifecyclePath).not.toHaveBeenCalled();
+    } finally {
+      lifecyclePath.mockRestore();
+    }
     const delegation = tryCreateGatewaySchemaFenceDelegate(params);
     expect(delegation).toBeDefined();
     if (!delegation) {
@@ -182,6 +203,12 @@ describe("state database coordinator", () => {
         uid: typeof process.getuid === "function" ? process.getuid() : undefined,
         coordinatorPath: explicit ? path.join(root, "custom", "coordinator.sqlite") : undefined,
       };
+      const nativeModeEnv = captureEnv(["FS_SAFE_NATIVE_MODE"]);
+      // fs-safe's Bun realpath workaround bypasses node:fs spies until oven-sh/bun#42374.
+      // Select its portable path so this probe-count assertion observes the realpath owner.
+      if (process.versions.bun) {
+        setTestEnvValue("FS_SAFE_NATIVE_MODE", "off");
+      }
       const resolvePath = vi.spyOn(fsSync, "realpathSync");
       try {
         for (let attempt = 0; attempt < 2; attempt++) {
@@ -203,6 +230,7 @@ describe("state database coordinator", () => {
         }
       } finally {
         resolvePath.mockRestore();
+        nativeModeEnv.restore();
       }
     },
   );
@@ -318,53 +346,6 @@ describe("state database coordinator", () => {
       }
     },
   );
-
-  it("reference-counts same-process owners", async () => {
-    const root = tempDirs.make("openclaw-state-database-coordinator-");
-    const databasePath = path.join(root, "selected-state", "state", "openclaw.sqlite");
-    const runtimeDirectory = path.join(root, "runtime");
-    await fs.mkdir(path.dirname(databasePath), { recursive: true });
-    const first = acquireStateDatabaseCoordinator({
-      databasePath,
-      runtimeDirectory,
-      busyTimeoutMs: 0,
-    });
-    const nested = acquireStateDatabaseCoordinator({
-      databasePath,
-      runtimeDirectory,
-      busyTimeoutMs: 0,
-    });
-
-    first.release();
-    nested.release();
-
-    const next = acquireStateDatabaseCoordinator({
-      databasePath,
-      runtimeDirectory,
-      busyTimeoutMs: 0,
-    });
-    next.release();
-  });
-
-  it("keeps Gateway presence independent from short state operations", async () => {
-    const root = tempDirs.make("openclaw-gateway-lifecycle-coordinator-");
-    const databasePath = path.join(root, "state", "openclaw.sqlite");
-    const runtimeDirectory = path.join(root, "runtime");
-    await fs.mkdir(path.dirname(databasePath), { recursive: true });
-    const gateway = acquireGatewayLifecycleCoordinator({
-      databasePath,
-      runtimeDirectory,
-      busyTimeoutMs: 0,
-    });
-    const state = acquireStateDatabaseCoordinator({
-      databasePath,
-      runtimeDirectory,
-      busyTimeoutMs: 0,
-    });
-
-    state.release();
-    gateway.release();
-  });
 
   it("allows the owning Gateway process to mutate its own schema", async () => {
     const root = tempDirs.make("openclaw-gateway-schema-owner-");

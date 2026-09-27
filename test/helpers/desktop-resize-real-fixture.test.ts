@@ -8,9 +8,12 @@ import * as desktopFilter from "../../src/gateway/desktop/rfb-view-only-filter.j
 import { createWorkerEnvironmentStore } from "../../src/gateway/worker-environments/store.js";
 import type { WorkerProvider } from "../../src/plugins/types.js";
 import * as processExec from "../../src/process/exec.js";
-import { closeOpenClawStateDatabaseByPath } from "../../src/state/openclaw-state-db-cache.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPath,
+} from "../../src/state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../src/state/openclaw-state-db.js";
-import { withEnv } from "../../src/test-utils/env.js";
+import { withEnvAsync } from "../../src/test-utils/env.js";
 import {
   createDesktopResizeGuest,
   observeDesktopEndpointPackets,
@@ -27,6 +30,11 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 function fixture(carrier: DesktopResizeFixture["carrier"] = "ssh"): DesktopResizeFixture {
   return {
     carrier,
+    bootstrapReceipt: {
+      bundleHash: "b".repeat(64),
+      openclawVersion: "2026.9.21",
+      protocolFeatures: ["fixture-runtime"],
+    },
     ssh: {
       host: "127.0.0.1",
       port: 2222,
@@ -116,21 +124,22 @@ describe("desktop resize fixture provenance and carrier", () => {
 
   it.each(["ssh", "node"] as const)(
     "persists a ready %s worker and synthetic receipt across reopen",
-    (carrier) => {
+    async (carrier) => {
       const root = tempDirs.make("desktop-resize-store-");
-      withEnv({ OPENCLAW_STATE_DIR: root }, () => {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
         const database = openOpenClawStateDatabase();
         try {
           expect(database.path).toBe(path.join(root, "state", "openclaw.sqlite"));
           const value = fixture(carrier);
           if (carrier === "node") {
-            expect(() => seedDesktopResizeSources(value)).toThrow("actually admitted");
-            expect(createWorkerEnvironmentStore().list()).toEqual([]);
+            await expect(seedDesktopResizeSources(value)).rejects.toThrow("prepared node device");
+            expect((await createWorkerEnvironmentStore()).list()).toEqual([]);
           }
-          seedDesktopResizeSources(value, carrier === "node" ? "admitted-device" : undefined);
+          await seedDesktopResizeSources(value, carrier === "node" ? "admitted-device" : undefined);
+          await closeOpenClawStateDatabaseAsync();
           closeOpenClawStateDatabaseByPath(database.path);
           expect(database.db.isOpen).toBe(false);
-          const reopened = createWorkerEnvironmentStore();
+          const reopened = await createWorkerEnvironmentStore();
           expect(reopened.list()).toHaveLength(Object.keys(resizeSources).length);
           for (const [kind, environmentId] of Object.entries(resizeSources)) {
             expect(reopened.get(environmentId)).toMatchObject({
@@ -140,15 +149,12 @@ describe("desktop resize fixture provenance and carrier", () => {
               sshEndpoint: carrier === "node" ? null : value.ssh,
               sharedHost: false,
               desktop: kind === "fixed" ? value.fixedDesktop : value.desktop,
-              bootstrapReceipt: {
-                bundleHash: "a".repeat(64),
-                openclawVersion: "2026.9.1",
-                protocolFeatures: [],
-              },
+              bootstrapReceipt: value.bootstrapReceipt,
             });
           }
         } finally {
           // Close the exact store before restoring selectors or removing its root.
+          await closeOpenClawStateDatabaseAsync();
           closeOpenClawStateDatabaseByPath(database.path);
         }
       });
@@ -305,15 +311,29 @@ describe("desktop endpoint packet attribution", () => {
   );
 
   it("joins its listener and rejects late or concurrent observations", async () => {
-    const owner = await openEndpointTap();
-    const probe = owner.tap.expectPacket(key);
-    expect(() => owner.tap.expectPacket(key)).toThrow("busy");
-    const rejection = expect(probe.result).rejects.toThrow("aborted");
-    owner.abort.abort();
-    await rejection;
-    await owner.tap.close();
-    expect(() => owner.tap.expectPacket(key)).toThrow();
-    const socket = net.connect({ host: "127.0.0.1", port: owner.tap.port });
-    await expect(once(socket, "connect")).rejects.toMatchObject({ code: "ECONNREFUSED" });
+    const createServer = vi.spyOn(net, "createServer");
+    try {
+      const owner = await openEndpointTap();
+      const created = createServer.mock.results.at(-1);
+      if (created?.type !== "return") {
+        throw new Error("Desktop endpoint tap did not create its native listener");
+      }
+      const server = created.value;
+      expect(server.address()).toMatchObject({ port: owner.tap.port });
+      const closed = vi.fn();
+      server.on("close", closed);
+      const probe = owner.tap.expectPacket(key);
+      expect(() => owner.tap.expectPacket(key)).toThrow("busy");
+      const rejection = expect(probe.result).rejects.toThrow("aborted");
+      owner.abort.abort();
+      await rejection;
+      await owner.tap.close();
+      expect(closed).toHaveBeenCalledOnce();
+      expect(server.listening).toBe(false);
+      expect(server.address()).toBeNull();
+      expect(() => owner.tap.expectPacket(key)).toThrow();
+    } finally {
+      createServer.mockRestore();
+    }
   });
 });

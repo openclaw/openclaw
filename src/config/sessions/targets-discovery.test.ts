@@ -247,15 +247,6 @@ describe("resolveAllAgentSessionStoreTargetsSync", () => {
     });
   });
 
-  it("discovers retired agent stores under a configured custom session root", async () => {
-    await withTempHome(async (home) => {
-      const { storePaths, targets } = await resolveTargetsForCustomRoot(home, ["ops", "retired"]);
-
-      expectTargetsToContainStores(targets, storePaths);
-      expect(countMatching(targets, (target) => target.storePath === storePaths.ops)).toBe(1);
-    });
-  });
-
   it("keeps the actual on-disk store path for discovered retired agents", async () => {
     await withTempHome(async (home) => {
       const { storePaths, targets } = await resolveTargetsForCustomRoot(home, [
@@ -269,6 +260,10 @@ describe("resolveAllAgentSessionStoreTargetsSync", () => {
             target.agentId === "retired-agent" && target.storePath === storePaths["Retired Agent"],
         ),
       ).toBe(true);
+      expect(targets).toContainEqual(
+        expect.objectContaining({ agentId: "ops", storePath: storePaths.ops }),
+      );
+      expect(countMatching(targets, (target) => target.storePath === storePaths.ops)).toBe(1);
     });
   });
 

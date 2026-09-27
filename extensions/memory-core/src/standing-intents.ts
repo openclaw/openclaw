@@ -276,6 +276,7 @@ function maintainStandingIntentLifecycle(db: DatabaseSync, nowMs: number): void 
 
 export async function createStandingIntent(params: {
   agentId: string;
+  assertCurrent?: () => void;
   description: string;
   triggerKeywords: string[];
   channelScope?: string | null;
@@ -316,6 +317,7 @@ export async function createStandingIntent(params: {
 
 export async function listStandingIntents(params: {
   agentId: string;
+  assertCurrent?: () => void;
   status?: StandingIntentStatus;
   nowMs?: number;
 }): Promise<StandingIntent[]> {
@@ -349,6 +351,7 @@ export async function sweepStandingIntents(params: {
 
 export async function cancelStandingIntent(params: {
   agentId: string;
+  assertCurrent?: () => void;
   id: string;
 }): Promise<StandingIntent | null> {
   return await withStandingIntentDatabase(params, (db) =>

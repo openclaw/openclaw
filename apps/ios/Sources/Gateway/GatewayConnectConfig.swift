@@ -66,26 +66,12 @@ struct GatewayConnectConfig: Sendable {
 
     func hasSameConnectionInputs(as other: GatewayConnectConfig) -> Bool {
         self.url == other.url &&
-            Self.sameStableID(self.effectiveStableID, other.effectiveStableID) &&
-            Self.sameTLS(self.tls, other.tls) &&
+            ExactOpaqueIdentifierKey(self.effectiveStableID) == ExactOpaqueIdentifierKey(other.effectiveStableID) &&
+            self.tls == other.tls &&
             self.token == other.token &&
             self.bootstrapToken == other.bootstrapToken &&
             self.password == other.password &&
             Self.sameOptions(self.nodeOptions, other.nodeOptions)
-    }
-
-    private static func sameTLS(_ lhs: GatewayTLSParams?, _ rhs: GatewayTLSParams?) -> Bool {
-        switch (lhs, rhs) {
-        case (nil, nil):
-            true
-        case let (lhs?, rhs?):
-            lhs.required == rhs.required &&
-                lhs.expectedFingerprint == rhs.expectedFingerprint &&
-                lhs.allowTOFU == rhs.allowTOFU &&
-                lhs.storeKey == rhs.storeKey
-        default:
-            false
-        }
     }
 
     private static func sameOptions(_ lhs: GatewayConnectOptions, _ rhs: GatewayConnectOptions) -> Bool {
@@ -103,7 +89,8 @@ struct GatewayConnectConfig: Sendable {
             lhs.deviceIdentityProfile == rhs.deviceIdentityProfile &&
             lhs.includeDeviceIdentity == rhs.includeDeviceIdentity &&
             lhs.allowStoredDeviceAuth == rhs.allowStoredDeviceAuth &&
-            Self.sameOptionalStableID(lhs.deviceAuthGatewayID, rhs.deviceAuthGatewayID) &&
+            lhs.deviceAuthGatewayID.map(ExactOpaqueIdentifierKey.init) ==
+            rhs.deviceAuthGatewayID.map(ExactOpaqueIdentifierKey.init) &&
             lhsScopes == rhsScopes &&
             lhsCaps == rhsCaps &&
             lhsCommands == rhsCommands &&
@@ -114,20 +101,5 @@ struct GatewayConnectConfig: Sendable {
         values.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
             .sorted()
-    }
-
-    private static func sameStableID(_ lhs: String, _ rhs: String) -> Bool {
-        ExactOpaqueIdentifierKey(lhs) == ExactOpaqueIdentifierKey(rhs)
-    }
-
-    private static func sameOptionalStableID(_ lhs: String?, _ rhs: String?) -> Bool {
-        switch (lhs, rhs) {
-        case (nil, nil):
-            true
-        case let (lhs?, rhs?):
-            self.sameStableID(lhs, rhs)
-        default:
-            false
-        }
     }
 }

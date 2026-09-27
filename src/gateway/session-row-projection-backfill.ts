@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { runWithGatewayDetachedWorkAdmission } from "../process/gateway-work-admission.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import {
   canRunSessionListBackgroundWork,
@@ -19,7 +18,6 @@ export function createSessionRowProjectionBackfill(params: {
   ) => void;
 }) {
   const inOwnerContext = AsyncLocalStorage.snapshot();
-  const cancellation = new AbortController();
   const queued = new Set<string>();
   let pending: Promise<void> | undefined;
   let activeId: string | undefined;
@@ -49,7 +47,8 @@ export function createSessionRowProjectionBackfill(params: {
         continue;
       }
       activeId = id;
-      const current = () => !disposed && params.current(row);
+      // Same-lifecycle publications retain the generation but supersede these transcript facts.
+      const current = () => !disposed && !queued.has(id) && params.current(row);
       let interrupted = false;
       const shouldCommit = () => {
         if (!canRunSessionListBackgroundWork()) {
@@ -59,26 +58,20 @@ export function createSessionRowProjectionBackfill(params: {
         return current();
       };
       try {
-        const fields = await runWithGatewayDetachedWorkAdmission(
-          () =>
-            backfillSessionRowTranscriptFields({
-              ...row.storeTarget,
-              agentId: row.agentId,
-              storeAgentId: row.storeTarget.agentId,
-              sessionKey: row.key,
-              sessionId: entry.sessionId,
-              sessionEntry: entry,
-              lifecycleRevision: entry.lifecycleRevision,
-              shouldCommit,
-              model: row.materialized && {
-                selectedProvider: row.materialized.source.selectedModel.provider,
-                selectedModel: row.materialized.source.selectedModel.model,
-                config: row.materialized.source.cfg,
-              },
-            }),
-          "runtime:session-row-backfill",
-          cancellation.signal,
-        );
+        const fields = await backfillSessionRowTranscriptFields({
+          ...row.storeTarget,
+          agentId: row.agentId,
+          storeAgentId: row.storeTarget.agentId,
+          sessionKey: row.key,
+          sessionId: entry.sessionId,
+          sessionEntry: entry,
+          shouldCommit,
+          model: row.materialized && {
+            selectedProvider: row.materialized.source.selectedModel.provider,
+            selectedModel: row.materialized.source.selectedModel.model,
+            config: row.materialized.source.cfg,
+          },
+        });
         if (shouldCommit()) {
           params.publish(row, fields);
         }
@@ -131,7 +124,6 @@ export function createSessionRowProjectionBackfill(params: {
     remove: (id: string) => queued.delete(id),
     dispose() {
       disposed = true;
-      cancellation.abort();
       queued.clear();
     },
   };

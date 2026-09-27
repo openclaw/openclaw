@@ -12,7 +12,6 @@ export {
   listEnabledTelegramAccounts,
   listTelegramAccountIds,
   mergeTelegramAccountConfig,
-  resetMissingDefaultWarnFlag,
   resolveDefaultTelegramAccountId,
   type ResolvedTelegramAccount,
   resolveTelegramAccount,

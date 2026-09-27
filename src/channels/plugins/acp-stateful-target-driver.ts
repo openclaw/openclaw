@@ -1,9 +1,4 @@
 import { resolveAcpSessionTarget } from "../../acp/control-plane/manager.utils.js";
-/**
- * ACP stateful target driver for configured bindings.
- *
- * Ensures ACP-backed bound sessions exist, are ready, and can be reset by Gateway.
- */
 import {
   ensureConfiguredAcpBindingReadyCore,
   ensureConfiguredAcpBindingSession,
@@ -72,6 +67,7 @@ function toAcpStatefulBindingTargetDescriptor(params: {
 }
 
 async function ensureAcpTargetReady(params: {
+  assertActive?: () => void;
   cfg: OpenClawConfig;
   bindingResolution: ConfiguredBindingResolution;
 }): Promise<StatefulBindingTargetReadyResult> {
@@ -85,6 +81,7 @@ async function ensureAcpTargetReady(params: {
     };
   }
   return await ensureConfiguredAcpBindingReadyCore({
+    ...(params.assertActive ? { assertActive: params.assertActive } : {}),
     cfg: params.cfg,
     configuredBinding: {
       spec: configuredBinding,

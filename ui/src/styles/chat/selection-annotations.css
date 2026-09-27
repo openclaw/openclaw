@@ -3,20 +3,30 @@
   flex: 0 0 auto;
   align-self: flex-start;
   width: fit-content;
+  max-width: 100%;
+  min-width: 0;
   height: auto;
   min-height: 30px;
   white-space: nowrap;
 }
 
 .chat-selection-annotations__chip .chat-attachment-file {
+  min-width: 0;
+  max-width: 100%;
   gap: 6px;
   padding: 6px 10px;
 }
 
 .chat-selection-annotations__chip:focus-visible,
+.chat-selection-annotations__chip:has(> .chat-selection-annotations__trigger:focus-visible),
 .chat-comment-preview__scroll:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
+}
+
+.chat-selection-annotations__trigger {
+  border: none;
+  outline: none;
 }
 
 .chat-selection-annotations__chip svg,
@@ -189,4 +199,104 @@ openclaw-chat-comment-pins {
   inset-block-start: 0;
   inset-inline-end: 0;
   display: flex;
+}
+
+.chat-attachment-preview-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-comment-preview--editable .chat-selection-annotations__label {
+  min-width: 0;
+}
+
+.chat-selection-annotations__remove {
+  position: absolute;
+  inset-block: 2px;
+  inset-inline-end: 2px;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.chat-selection-annotations__remove:hover {
+  background: var(--bg-hover);
+}
+
+.chat-selection-annotations__remove:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.chat-comment-preview--editable .chat-selection-annotations__chip:is(:hover, :focus-within) {
+  .chat-selection-annotations__label {
+    mask-image: linear-gradient(to right, black calc(100% - 28px), transparent calc(100% - 20px));
+  }
+
+  .chat-selection-annotations__remove {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+[dir="rtl"]
+  .chat-comment-preview--editable
+  .chat-selection-annotations__chip:is(:hover, :focus-within)
+  .chat-selection-annotations__label {
+  mask-image: linear-gradient(to left, black calc(100% - 28px), transparent calc(100% - 20px));
+}
+
+.chat-comment-preview--editable .chat-comment-preview__item {
+  padding: 8px 10px;
+  padding-inline-start: 38px;
+  border-radius: var(--radius-md);
+}
+
+.chat-comment-preview--editable .chat-comment-preview__item::before {
+  inset-block-start: 8px;
+  inset-inline-start: 10px;
+}
+
+.chat-comment-preview--editable .chat-comment-preview__item:is(:hover, :focus-within) {
+  background: var(--bg-hover);
+}
+
+.chat-comment-preview--editable .chat-comment-preview__actions {
+  inset-block-start: 8px;
+  inset-inline-end: 10px;
+  opacity: 0.65;
+}
+
+.chat-comment-preview--editable
+  .chat-comment-preview__item:is(:hover, :focus-within)
+  .chat-comment-preview__actions {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .chat-comment-preview--editable .chat-selection-annotations__label {
+    mask-image: linear-gradient(to right, black calc(100% - 28px), transparent calc(100% - 20px));
+  }
+
+  [dir="rtl"] .chat-comment-preview--editable .chat-selection-annotations__label {
+    mask-image: linear-gradient(to left, black calc(100% - 28px), transparent calc(100% - 20px));
+  }
+
+  .chat-selection-annotations__remove {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .chat-comment-preview--editable .chat-comment-preview__actions {
+    opacity: 1;
+  }
 }

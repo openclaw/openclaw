@@ -1,10 +1,14 @@
-// Workboard plugin module implements persistence types behavior.
 import type {
   WorkboardAttachment,
   WorkboardBoardMetadata,
   WorkboardCard,
   WorkboardNotificationSubscription,
 } from "@openclaw/workboard-contract";
+
+export type WorkboardWriteAuthority = <T>(
+  assertCurrent: () => void,
+  run: () => Promise<T>,
+) => Promise<T>;
 
 export type PersistedWorkboardCard = {
   version: 1;
@@ -63,8 +67,21 @@ export type WorkboardCardStatsAggregate = {
 
 export type WorkboardOwnerClaimResult = "updated" | "conflict" | "owner_busy";
 
+export type WorkboardCardReadScope =
+  | { kind: "board"; boardId: string }
+  | { kind: "session"; sessionKey: string }
+  | {
+      kind: "worker-context";
+      cardId: string;
+      boardId: string;
+      agentId?: string;
+      parentIds: readonly string[];
+    };
+
 export type WorkboardCardStore = Omit<WorkboardKeyedStore, "entries"> & {
-  entries(boardId?: string): Promise<Array<{ key: string; value: PersistedWorkboardCard }>>;
+  entries(
+    scope?: WorkboardCardReadScope,
+  ): Promise<Array<{ key: string; value: PersistedWorkboardCard }>>;
   registerIfAbsent(key: string, value: PersistedWorkboardCard): Promise<boolean>;
   registerIfUpdatedAt(
     key: string,

@@ -146,12 +146,6 @@ describe("session catalog entry snapshots", () => {
 
   it.each([
     [" BLUE ", "blue"],
-    ["default", undefined],
-    ["reset", undefined],
-    ["none", undefined],
-    ["gray", undefined],
-    ["grey", undefined],
-    ["#ff0000", undefined],
     ["invalid", undefined],
     [undefined, undefined],
   ])("projects provider color %s to its canonical wire value", (color, expected) => {

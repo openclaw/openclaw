@@ -7,13 +7,15 @@ import { isAcpEnabledByPolicy, resolveAcpAgentPolicyError } from "../../../acp/p
 import { isExecutionIdentityCollectionEnabled } from "../../../audit/audit-config.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
+import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import {
-  loadSessionEntryReadOnly,
-  upsertSessionEntryCore,
-} from "../../../config/sessions/session-accessor.js";
-import { buildSessionCreationStamp } from "../../../config/sessions/session-entry-provenance.js";
+  buildSessionCreationStamp,
+  inheritSessionGitContributorProfileIds,
+} from "../../../config/sessions/session-entry-provenance.js";
+import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../../../gateway/session-utils-store-worker.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveEventSessionRoutingPolicy } from "../../../infra/event-session-routing.js";
 import {
@@ -22,15 +24,10 @@ import {
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
-import {
-  normalizeOptionalAgentId,
-  resolveAgentIdFromSessionKey,
-} from "../../../routing/session-key.js";
-import {
-  recordSessionCreated,
-  recordSubagentSpawned,
-} from "../../../sessions/session-state-events.js";
-import { deliveryContextFromSession } from "../../../utils/delivery-context.shared.js";
+import { isIncognitoSessionKey, normalizeOptionalAgentId } from "../../../routing/session-key.js";
+import { recordSessionCreated } from "../../../sessions/session-created.js";
+import { waitForSessionParticipantRecording } from "../../../sessions/session-participant-recording.js";
+import { recordSubagentSpawned } from "../../../sessions/session-state-events.js";
 import { resolveSessionAgentId } from "../../agent-scope.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
 import {
@@ -69,6 +66,7 @@ import {
 } from "./acp-spawn-parent-stream.js";
 import {
   resolveAcpSpawnRequesterState,
+  readAcpSpawnParentDeliveryContext,
   shouldStreamAcpSpawnToParent,
   resolveRequesterInternalSessionKey,
   validateAcpResumeSessionOwnership,
@@ -289,6 +287,20 @@ export async function spawnAcpDirect(
     targetAgentId,
     ctx,
   });
+  const ownership = resolveSubagentSpawnOwnership({
+    cfg,
+    agentSessionKey: ctx.agentSessionKey,
+    completionOwnerKey: ctx.completionOwnerKey,
+  });
+  const requesterTarget = await resolveGatewaySessionStoreTargetInWorker({
+    cfg,
+    key: ownership.completionRequesterSessionKey,
+    agentId: ctx.requesterAgentIdOverride,
+    assertActive: ctx.assertActive,
+  });
+  ctx.assertActive?.();
+  const completionRequesterSessionId =
+    requesterTarget.store[requesterTarget.canonicalKey]?.sessionId;
   const hasSubagentEnvelope = isSubagentEnvelopeSession(requesterInternalKey, {
     cfg,
     store: subagentStore,
@@ -397,32 +409,23 @@ export async function spawnAcpDirect(
   let childCreationEntry: SessionEntry | undefined;
   let closeRuntimeOnFailure: (() => Promise<void>) | undefined;
   const childIdem = crypto.randomUUID();
-  const parentAgentId = parentSessionKey
-    ? resolveAgentIdFromSessionKey(parentSessionKey, requesterAgentId)
-    : undefined;
   // Resolve parent session delivery context so system events route to the
   // correct thread/topic instead of falling back to the main DM.
   const parentDeliveryCtx =
     effectiveStreamToParent && parentSessionKey
-      ? deliveryContextFromSession(
-          loadSessionEntryReadOnly({
-            sessionKey: parentSessionKey,
-            ...(parentAgentId ? { agentId: parentAgentId } : {}),
-            clone: false,
-          }),
-        )
+      ? await readAcpSpawnParentDeliveryContext({
+          parentSessionKey,
+          requesterAgentId,
+          assertActive: ctx.assertActive,
+        })
       : undefined;
+  ctx.assertActive?.();
 
   const parentRelayStateEnv = { ...process.env };
   const parentEventRouting = parentSessionKey
     ? resolveEventSessionRoutingPolicy({ cfg, sessionKey: parentSessionKey })
     : undefined;
   const gatewayAttachments = toGatewayImageAttachments(params.attachments);
-  const ownership = resolveSubagentSpawnOwnership({
-    cfg,
-    agentSessionKey: ctx.agentSessionKey,
-    completionOwnerKey: ctx.completionOwnerKey,
-  });
   const requesterOrigin = requesterState.origin;
   const progressOrigin = {
     channel: requesterOrigin?.channel,
@@ -440,9 +443,39 @@ export async function spawnAcpDirect(
   };
   const adapter: SpawnBackendAdapter<AcpBackendState> = {
     async initialize() {
+      const parentTarget = await resolveGatewaySessionStoreTargetInWorker({
+        cfg,
+        key: requesterInternalKey,
+        agentId: requesterAgentId,
+        assertActive: ctx.assertActive,
+      });
+      const parentStorePath = parentTarget.readSource?.path ?? parentTarget.storePath;
+      await waitForSessionParticipantRecording({
+        agentId: requesterAgentId,
+        sessionKey: parentTarget.canonicalKey,
+        storePath: parentStorePath,
+      });
+      ctx.assertActive?.();
+      const inheritedGitContributorProfileIds = isIncognitoSessionKey(requesterInternalKey)
+        ? undefined
+        : await withSessionEntryReadOnlyInWorker(
+            {
+              agentId: requesterAgentId,
+              sessionKey: parentTarget.canonicalKey,
+              storePath: parentStorePath,
+            },
+            () => ctx.assertActive?.(),
+            async (read) => {
+              if (!read.ok) {
+                throw read.error;
+              }
+              return inheritSessionGitContributorProfileIds(read.value);
+            },
+          );
       const creationStamp = buildSessionCreationStamp({
         via: "spawn",
         actor: { type: "agent", id: requesterAgentId },
+        inheritedGitContributorProfileIds,
       });
       const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId });
       const childSessionPatch = admission.childSessionPatch
@@ -512,7 +545,7 @@ export async function spawnAcpDirect(
       });
       // ACP bypasses the native adapter, so seed the same child lineage before dispatch.
       if (childCreationEntry) {
-        recordSessionCreated({
+        recordSessionCreated(cfg, {
           sessionKey,
           agentId: targetAgentId,
           entry: childCreationEntry,
@@ -529,6 +562,7 @@ export async function spawnAcpDirect(
           ? startAcpSpawnParentStreamRelay({
               runId,
               parentSessionKey,
+              requesterAgentId,
               childSessionKey: sessionKey,
               childSessionId: state.initializedSession.sessionId,
               agentId: targetAgentId,
@@ -590,6 +624,7 @@ export async function spawnAcpDirect(
     },
   };
   const { controllerSessionKey } = ownership;
+  ctx.assertActive?.();
   const admissionReservation = hasSubagentEnvelope
     ? reserveChildAdmissionSlot({
         controllerSessionKey,
@@ -619,6 +654,7 @@ export async function spawnAcpDirect(
         childSessionKey: sessionKey,
         controllerSessionKey,
         requesterSessionKey: ownership.completionRequesterSessionKey,
+        completionRequesterSessionId,
         requesterOrigin,
         progressOrigin,
         requesterDisplayKey: ownership.completionRequesterDisplayKey,
@@ -631,6 +667,8 @@ export async function spawnAcpDirect(
         runTimeoutSeconds,
         expectsCompletionMessage,
         spawnMode,
+        // ACP's Gateway manager publishes the task; avoid a second registry projection.
+        taskRowOwnership: "gateway_best_effort",
       };
     },
   });

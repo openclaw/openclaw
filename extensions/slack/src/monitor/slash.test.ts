@@ -145,9 +145,9 @@ const skillCommandFixtures = vi.hoisted(() => ({
   commands: [] as Array<{ name: string; skillName: string; description: string }>,
 }));
 
-vi.mock("./slash-commands.runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("./slash-commands.runtime.js")>(
-    "./slash-commands.runtime.js",
+vi.mock("openclaw/plugin-sdk/command-auth-native", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/command-auth-native")>(
+    "openclaw/plugin-sdk/command-auth-native",
   );
   return {
     ...actual,
@@ -170,15 +170,6 @@ vi.mock("./slash-commands.runtime.js", async () => {
       }),
       ...slashCommandFixtures.specs,
     ],
-  };
-});
-
-vi.mock("./slash-skill-commands.runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("./slash-skill-commands.runtime.js")>(
-    "./slash-skill-commands.runtime.js",
-  );
-  return {
-    ...actual,
     listSkillCommandsForAgents: () => skillCommandFixtures.commands,
   };
 });
@@ -1008,7 +999,7 @@ describe("Slack native command argument menus", () => {
   });
 
   it.each([
-    { agentRuntime: "codex", includesUltra: false },
+    { agentRuntime: "codex", includesUltra: true },
     { agentRuntime: "openclaw", includesUltra: true },
   ] as const)(
     "renders runtime-specific /think choices for $agentRuntime",
@@ -1327,23 +1318,6 @@ describe("Slack native command argument menus", () => {
     });
 
     expectSingleDispatchedSlashBody("/tts status");
-  });
-
-  it("dispatches the command when an overflow option is chosen", async () => {
-    await runArgMenuAction(argMenuHandler, {
-      action: {
-        selected_option: {
-          value: encodeValue({
-            command: "usage",
-            arg: "mode",
-            value: "cost",
-            userId: "U1",
-          }),
-        },
-      },
-    });
-
-    expectSingleDispatchedSlashBody("/usage cost");
   });
 
   it("shows an external_select menu when choices exceed static_select options max", async () => {

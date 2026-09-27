@@ -1,7 +1,5 @@
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { withEnvAsync } from "../../test-utils/env.js";
-import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
 import type { CronJobCreate, CronJobPatch, CronPacing } from "../types.js";
 import { add, update } from "./ops-mutations.js";
@@ -23,26 +21,19 @@ function makeInput(pacing: CronPacing): CronJobCreate {
 }
 
 async function withState(run: (state: ReturnType<typeof createCronServiceState>) => Promise<void>) {
-  const store = await makeStorePath();
-  const stateDir = path.dirname(path.dirname(store.storePath));
-  await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-    try {
-      await run(
-        createCronServiceState({
-          storePath: store.storePath,
-          cronEnabled: true,
-          log: logger,
-          nowMs: () => NOW,
-          enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
-          runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-        }),
-      );
-    } finally {
-      await store.cleanup();
-      await cleanupSessionStateForTest({ stateDir });
-    }
-  });
+  const { storePath } = await makeStorePath();
+  await run(
+    createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => NOW,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    }),
+  );
 }
 
 describe("cron pacing validation", () => {

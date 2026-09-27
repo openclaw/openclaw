@@ -1,5 +1,6 @@
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
+import type { ApplicationContext } from "../app/context.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { fetchChildSessionRows } from "../lib/sessions/child-session-data.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
@@ -200,6 +201,52 @@ function mergeRefreshedChildSessionRows(
     ...rowsByParent,
     ...mergeChildSessionRows({ [parentKey]: rows }, { [parentKey]: lineage }),
   };
+}
+
+export function scheduleSidebarChildSessions(
+  owner: {
+    readonly context: ApplicationContext | undefined;
+    readonly childSessionScope: object;
+    readonly isSessionDataHostConnected: boolean;
+    retireStaleChildSessions(revalidating: ReadonlySet<string>): void;
+    needsChildSessionLoad(parentKey: string): boolean;
+    loadChildSessions(parentKey: string): Promise<void>;
+    requestSessionDataUpdate(): void;
+  },
+  readParents: () => Set<string>,
+): void {
+  const revalidating = readParents();
+  owner.retireStaleChildSessions(revalidating);
+  const context = owner.context;
+  const client = context?.gateway.snapshot.client;
+  const scope = owner.childSessionScope;
+  if (context && client && [...revalidating].some((key) => owner.needsChildSessionLoad(key))) {
+    const isCurrent = () =>
+      owner.context === context &&
+      owner.childSessionScope === scope &&
+      context.gateway.snapshot.client === client &&
+      owner.isSessionDataHostConnected;
+    let admittedParents: Set<string> | undefined;
+    void context.connectionBootstrap
+      .run(
+        scope,
+        async () => {
+          if (isCurrent()) {
+            // Expansion can change while queued; only the current presentation owns these reads.
+            admittedParents = readParents();
+            await Promise.all([...admittedParents].map((key) => owner.loadChildSessions(key)));
+          }
+        },
+        { background: true },
+      )
+      .then(() => {
+        // Completion-driven renders can run before the scheduler releases the batch key.
+        const completed = admittedParents;
+        if (completed && isCurrent() && [...readParents()].some((key) => !completed.has(key))) {
+          owner.requestSessionDataUpdate();
+        }
+      });
+  }
 }
 
 /** Publish an observed child window through the sidebar's existing lineage admission. */

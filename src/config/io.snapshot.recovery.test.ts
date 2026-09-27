@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { acquireStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
+import { acquireStartupMigrationLeaseWithWait } from "../infra/startup-migration-checkpoint.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import {
@@ -146,6 +146,45 @@ describe("prepared config recovery", () => {
     },
   );
 
+  it.each(["async", "sync"] as const)(
+    "%s recovery tolerates an unreadable backup stat",
+    async (mode) => {
+      const { root, configPath, backup, env } = fixture();
+      const backupPath = `${configPath}.bak`;
+      const statError = Object.assign(new Error("EACCES: stat denied"), { code: "EACCES" });
+      const io = createConfigIO({
+        env,
+        configPath,
+        homedir: () => root,
+        logger: { warn: vi.fn(), error: vi.fn() },
+        fs: {
+          ...fs,
+          promises: {
+            ...fs.promises,
+            stat: ((target: fs.PathLike) =>
+              target === backupPath
+                ? Promise.reject(statError)
+                : fs.promises.stat(target)) as typeof fs.promises.stat,
+          },
+          statSync: ((target: fs.PathLike, options?: { throwIfNoEntry?: boolean }) => {
+            if (target === backupPath) {
+              throw statError;
+            }
+            return fs.statSync(target, options);
+          }) as typeof fs.statSync,
+        },
+      });
+
+      const recovered =
+        mode === "async"
+          ? (await io.readConfigFileSnapshot({ recoverSuspicious: true })).config
+          : io.loadConfig();
+
+      expect(recovered.gateway?.mode).toBe("local");
+      expect(fs.readFileSync(configPath, "utf8")).toBe(backup);
+    },
+  );
+
   it("keeps backup-based prepared recovery available when health reads are unavailable", async () => {
     const capture = healthOwner.captureConfigHealthStateStore;
     const unavailable = (store: ReturnType<typeof capture>): ReturnType<typeof capture> => ({
@@ -281,7 +320,10 @@ describe("prepared config recovery", () => {
     "refuses %s changes while archiving the clobbered config",
     async (changedSource) => {
       const { root, configPath, original, env } = fixture();
-      const lease = changedSource === "lease" ? acquireStartupMigrationLease({ env }) : undefined;
+      const lease =
+        changedSource === "lease"
+          ? await acquireStartupMigrationLeaseWithWait({ env, timeoutMs: 0 })
+          : undefined;
       const changedPath = changedSource === "config" ? configPath : `${configPath}.bak`;
       const concurrentRaw = '{ "gateway": { "mode": "local", "port": 18721 } }\n';
       const io = createConfigIO({

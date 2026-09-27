@@ -81,13 +81,14 @@ const featureMethods = [
 
 suite.define(() => {
   it.each([
-    { width: 390, readOnly: false, literal: false },
-    { width: 1174, readOnly: false, literal: false },
-    { width: 1174, readOnly: true, literal: false },
-    { width: 1174, readOnly: false, literal: true },
+    { width: 390, readOnly: false, literal: false, missing: false },
+    { width: 1174, readOnly: false, literal: false, missing: false },
+    { width: 1174, readOnly: true, literal: false, missing: false },
+    { width: 1174, readOnly: false, literal: true, missing: false },
+    { width: 390, readOnly: false, literal: false, missing: true },
   ])(
-    "edits the advertised nested reference through the acknowledged writer at $width (readOnly=$readOnly, literal=$literal)",
-    async ({ width, readOnly, literal }) => {
+    "edits the advertised nested reference through the acknowledged writer at $width (readOnly=$readOnly, literal=$literal, missing=$missing)",
+    async ({ width, readOnly, literal, missing }) => {
       await suite.withPage(
         { colorScheme: "dark", viewport: { width, height: 900 } },
         async ({ page }) => {
@@ -100,6 +101,9 @@ suite.define(() => {
             Object.assign(initial.plugins.entries.workboard.config.search, {
               apiKey: REDACTED_SENTINEL,
             });
+          }
+          if (missing) {
+            Reflect.deleteProperty(initial.plugins.entries.workboard.config.search, "apiKey");
           }
           const gateway = await installMockGateway(page, {
             featureMethods,
@@ -121,9 +125,11 @@ suite.define(() => {
               },
               "plugins.credentials.inspect": {
                 baseHash: configMocks["config.get"].hash,
-                credential: literal
-                  ? { kind: "literal" }
-                  : { kind: "reference", ref: originalRef, unresolved: false },
+                credential: missing
+                  ? { kind: "missing" }
+                  : literal
+                    ? { kind: "literal" }
+                    : { kind: "reference", ref: originalRef, unresolved: false },
               },
               "config.get": {
                 ...configMocks["config.get"],
@@ -142,8 +148,8 @@ suite.define(() => {
             },
           });
           await page.goto(`${suite.server.baseUrl}settings/plugins/workboard?view=settings`);
-          await page.getByRole("heading", { name: "Workboard settings", exact: true }).waitFor();
-          if (literal) {
+          await page.locator("openclaw-plugin-settings-editor").waitFor();
+          if (literal || missing) {
             const input = page.getByLabel("Search API key", { exact: true });
             await input.waitFor();
             expect(await input.inputValue()).toBe("");
@@ -154,12 +160,53 @@ suite.define(() => {
                 .getAttribute("href"),
             ).toBe("https://provider.example/signup");
             await input.focus();
-            await page.getByRole("heading", { name: "Workboard settings", exact: true }).click();
+            await page
+              .locator("openclaw-plugin-settings-editor")
+              .getByLabel("Search settings", { exact: true })
+              .click();
             expect(await gateway.getRequests("config.set")).toHaveLength(0);
+            const reveal = page.getByRole("button", {
+              name: "Show API key: Search API key",
+              exact: true,
+            });
+            await expect
+              .poll(async () => (await gateway.getRequests("plugins.credentials.inspect")).length)
+              .toBe(1);
+            expect(
+              (await gateway.getRequests("plugins.credentials.inspect"))[0]?.params,
+            ).not.toHaveProperty("reveal");
+            if (literal) {
+              await gateway.setMethodResponse("plugins.credentials.inspect", {
+                baseHash: configMocks["config.get"].hash,
+                credential: { kind: "literal", value: "synthetic-stored-key" },
+              });
+              await reveal.click();
+              await expect.poll(() => input.inputValue()).toBe("synthetic-stored-key");
+              expect(
+                (await gateway.getRequests("plugins.credentials.inspect")).at(-1)?.params,
+              ).toMatchObject({
+                pluginId: "workboard",
+                path: credentialPath,
+                baseHash: configMocks["config.get"].hash,
+                reveal: true,
+              });
+              await page
+                .getByRole("button", { name: "Hide API key: Search API key", exact: true })
+                .click();
+              expect(await input.inputValue()).toBe("");
+              expect(await gateway.getRequests("config.set")).toHaveLength(0);
+            } else {
+              expect(await reveal.isDisabled()).toBe(true);
+              expect(await input.getAttribute("placeholder")).toBe("demo-key");
+            }
             await input.fill("synthetic-new-key");
-            await page.getByRole("button", { name: "Show entered key", exact: true }).click();
+            await page
+              .getByRole("button", { name: "Show API key: Search API key", exact: true })
+              .click();
             expect(await input.getAttribute("type")).toBe("text");
-            await page.getByRole("button", { name: "Hide entered key", exact: true }).click();
+            await page
+              .getByRole("button", { name: "Hide API key: Search API key", exact: true })
+              .click();
             await gateway.deferNext("config.set");
             await input.press("Enter");
             const request = await gateway.waitForRequest("config.set");
@@ -192,14 +239,19 @@ suite.define(() => {
             expect(await input.getAttribute("type")).toBe("password");
             return;
           }
-          const reference = page.getByRole("button", { name: "Edit reference", exact: true });
+          const reference = page.getByRole("button", {
+            name: "Edit reference: Search API key",
+            exact: true,
+          });
           await reference.waitFor();
           const other = page.locator('input[aria-label$="Other secret"]');
           expect(await other.getAttribute("type")).toBe("password");
           expect(await other.inputValue()).toBe("");
           expect(await page.locator('input[aria-label$="Search mode"]').inputValue()).toBe("web");
           expect(
-            await page.getByRole("button", { name: "Edit reference", exact: true }).count(),
+            await page
+              .getByRole("button", { name: "Edit reference: Search API key", exact: true })
+              .count(),
           ).toBe(1);
           expect(await page.locator("body").textContent()).not.toContain(REDACTED_SENTINEL);
           if (readOnly) {
@@ -216,7 +268,9 @@ suite.define(() => {
             });
           }
           await reference.click();
-          await page.getByRole("dialog", { name: "Secret reference", exact: true }).waitFor();
+          await page
+            .getByRole("dialog", { name: "Secret reference: Search API key", exact: true })
+            .waitFor();
           const dialog = page.locator("openclaw-modal-dialog");
           expect(await dialog.getByLabel("Source", { exact: true }).inputValue()).toBe("file");
           expect(await dialog.getByLabel("Provider", { exact: true }).inputValue()).toBe("team");
@@ -275,9 +329,12 @@ suite.define(() => {
           await reference.click();
           expect(await identifier.inputValue()).toBe("/search/updated");
           await identifier.fill("/search/failed");
+          const writesBeforeFailure = (await gateway.getRequests("config.set")).length;
           await gateway.deferNext("config.set");
           await dialog.getByRole("button", { name: "Save", exact: true }).click();
-          await gateway.waitForRequest("config.set");
+          const uncertainWrite = await gateway.waitForRequest("config.set", {
+            after: writesBeforeFailure,
+          });
           await gateway.rejectDeferred("config.set", {
             code: width === 390 ? "INVALID_REQUEST" : "UNAVAILABLE",
             message: "Fixture write rejected",
@@ -315,6 +372,30 @@ suite.define(() => {
               .toContain("Fixture config read unavailable");
             expect(await dialog.isVisible()).toBe(true);
             expect(await identifier.inputValue()).toBe("/search/failed");
+            await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+            await expect
+              .poll(() => dialog.getByRole("alert").textContent())
+              .toContain("The last save could not be confirmed");
+            expect(await dialog.isVisible()).toBe(true);
+            expect(await identifier.inputValue()).toBe("/search/failed");
+            expect(await gateway.getRequests("config.set")).toHaveLength(writesBeforeFailure + 1);
+            // A successful old snapshot cannot fence the unknown write. Its later
+            // persisted bytes let Cancel reconcile without restoring the older reference.
+            const confirmedRaw = String(asRecord(uncertainWrite.params).raw);
+            await gateway.setMethodResponse("config.get", {
+              ...configMocks["config.get"],
+              config: JSON.parse(confirmedRaw),
+              raw: confirmedRaw,
+              hash: "confirmed-credential-write",
+            });
+            await gateway.setMethodResponse("plugins.credentials.inspect", {
+              baseHash: "confirmed-credential-write",
+              credential: {
+                kind: "reference",
+                ref: { ...originalRef, id: "/search/failed" },
+                unresolved: false,
+              },
+            });
           }
           await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
           await dialog.waitFor({ state: "hidden" });
@@ -333,7 +414,8 @@ suite.define(() => {
                   config: {
                     search: {
                       ...sourceConfig.plugins.entries.workboard.config.search,
-                      apiKey: changedRef,
+                      apiKey:
+                        width === 1174 ? { ...originalRef, id: "/search/failed" } : changedRef,
                       mode: "llm-context",
                     },
                   },

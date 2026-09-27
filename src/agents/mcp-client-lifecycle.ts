@@ -3,7 +3,11 @@ import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamable
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { settlesWithin } from "../shared/settle-within.js";
 import { isMcpRequestTimeoutError } from "./mcp-error.js";
-import { OpenClawStreamableHTTPClientTransport } from "./mcp-http-transport.js";
+import {
+  McpSseSessionExpiredError,
+  OpenClawSSEClientTransport,
+  OpenClawStreamableHTTPClientTransport,
+} from "./mcp-http-transport.js";
 import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 
@@ -17,11 +21,17 @@ type LifecycleSession = {
 
 export class McpClientConnectTimeoutError extends Error {}
 
-/** Matches the SDK's terminal signal for an expired stateful Streamable HTTP session. */
-export function isStatefulMcpHttpSessionExpired(
+/** Matches an expired HTTP session without treating stateless HTTP 404s as expiration. */
+export function isMcpHttpSessionExpired(
   session: Pick<LifecycleSession, "transport" | "transportType">,
   error: unknown,
 ): boolean {
+  if (session.transportType === "sse") {
+    return (
+      session.transport instanceof OpenClawSSEClientTransport &&
+      error instanceof McpSseSessionExpiredError
+    );
+  }
   return (
     session.transportType === "streamable-http" &&
     session.transport instanceof OpenClawStreamableHTTPClientTransport &&

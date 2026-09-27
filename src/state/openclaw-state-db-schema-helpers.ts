@@ -1,6 +1,7 @@
 // Provides shared SQLite schema probes and additive column migration helpers.
 import type { DatabaseSync } from "node:sqlite";
 import { executeWithCachedStatement } from "../infra/kysely-sync-cache-state.js";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 
 export function tableHasColumn(db: DatabaseSync, tableName: string, columnName: string): boolean {
   return tableHasColumns(db, tableName, [columnName]);
@@ -28,6 +29,10 @@ export function tablePrimaryKeyColumns(db: DatabaseSync, tableName: string): str
 }
 
 export function tableExists(db: DatabaseSync, tableName: string): boolean {
+  const schema = getAdmittedSqliteSchemaFacts(db);
+  if (schema) {
+    return schema.tables.has(tableName);
+  }
   const row = executeWithCachedStatement(
     db,
     "SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?",
@@ -45,4 +50,15 @@ export function ensureColumn(db: DatabaseSync, tableName: string, columnSql: str
   // State migrations are additive here; destructive or shape-changing repairs belong in doctor.
   db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnSql};`);
   return true;
+}
+
+/** Missing runtime tables are empty only before state grows beyond checkpoint bootstrap. */
+export function hasOpenClawStateTablesBeyondStartupCheckpoint(db: DatabaseSync): boolean {
+  return (
+    /* sqlite-allow-raw -- Read-only startup-checkpoint schema discriminator. */ db
+      .prepare(
+        "SELECT 1 FROM main.sqlite_schema WHERE type = 'table' AND name NOT IN ('schema_meta', 'state_leases') LIMIT 1",
+      )
+      .get() !== undefined
+  );
 }

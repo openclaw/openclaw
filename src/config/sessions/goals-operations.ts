@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { lazyCompile } from "../../../packages/gateway-protocol/src/protocol-validator.js";
 import { SessionsGoalMutationResultSchema } from "../../../packages/gateway-protocol/src/schema/sessions-goal.js";
 import {
@@ -52,6 +52,7 @@ type OperationErrorCode =
   | "session-rebound"
   | "goal-rebound"
   | "capacity"
+  | "receipt-invalid"
   | "invalid";
 
 export class SessionGoalOperationError extends Error {
@@ -85,19 +86,17 @@ function assertOperationTime(operation: SessionGoalOperation, now: number): void
 }
 
 function operationFingerprint(operation: SessionGoalOperation): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify([
-        operation.issuedAtMs,
-        operation.requestFingerprint,
-        operation.action,
-        "goalId" in operation ? operation.goalId : null,
-        "objective" in operation ? operation.objective : null,
-        "tokenBudget" in operation ? operation.tokenBudget : null,
-        "note" in operation ? operation.note : null,
-      ]),
-    )
-    .digest("hex");
+  return sha256Hex(
+    JSON.stringify([
+      operation.issuedAtMs,
+      operation.requestFingerprint,
+      operation.action,
+      "goalId" in operation ? operation.goalId : null,
+      "objective" in operation ? operation.objective : null,
+      "tokenBudget" in operation ? operation.tokenBudget : null,
+      "note" in operation ? operation.note : null,
+    ]),
+  );
 }
 
 /** Read a durable receipt before transient chat dedupe or busy checks, without creating tables. */
@@ -181,7 +180,7 @@ export function readSessionGoalOperationReceipt(
     (result.goal !== undefined && result.goal.id !== result.goalId)
   ) {
     throw new SessionGoalOperationError(
-      "invalid",
+      "receipt-invalid",
       "Stored Goal operation receipt is invalid; inspect the session before retrying.",
     );
   }

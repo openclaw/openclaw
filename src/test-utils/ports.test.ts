@@ -85,28 +85,23 @@ afterEach(async () => {
 });
 
 describe("deterministic test port blocks", () => {
-  it.each([
-    [32768, 60999],
-    [20000, 65000],
-  ])(
-    "excludes the kernel client range %i–%i from every worker's listener block",
-    async (low, high) => {
-      host.range = `${low}\t${high}\n`;
-      const { getDeterministicFreePortBlock } = await import("./ports.js");
-      const offsets = [0, 1, 2, 3, 4];
-      for (let worker = 0; worker < 64; worker += 1) {
-        const port = await withEnvAsync({ VITEST_WORKER_ID: String(worker) }, () =>
-          getDeterministicFreePortBlock({ offsets }),
-        );
-        for (const offset of offsets) {
-          expect(port + offset).toBeGreaterThanOrEqual(1024);
-          expect(port + offset).toBeLessThanOrEqual(65535);
-          expect(port + offset < low || port + offset > high).toBe(true);
-        }
+  it("excludes the configured kernel client range from every worker's listener block", async () => {
+    const [low, high] = [20000, 65000];
+    host.range = `${low}\t${high}\n`;
+    const { getDeterministicFreePortBlock } = await import("./ports.js");
+    const offsets = [0, 1, 2, 3, 4];
+    for (let worker = 0; worker < 64; worker += 1) {
+      const port = await withEnvAsync({ VITEST_WORKER_ID: String(worker) }, () =>
+        getDeterministicFreePortBlock({ offsets }),
+      );
+      for (const offset of offsets) {
+        expect(port + offset).toBeGreaterThanOrEqual(1024);
+        expect(port + offset).toBeLessThanOrEqual(65535);
+        expect(port + offset < low || port + offset > high).toBe(true);
       }
-      expect(host.reads).toHaveBeenCalledTimes(1);
-    },
-  );
+    }
+    expect(host.reads).toHaveBeenCalledTimes(1);
+  });
 
   it("keeps returned adjacent blocks bindable and separate from live listeners", async () => {
     host.range = "32768\t60999\n";
@@ -155,17 +150,73 @@ describe("deterministic test port blocks", () => {
     },
   );
 
-  it.each(["darwin", "win32"])(
-    "preserves the existing %s pool without Linux host reads",
-    async (os) => {
-      host.platform.mockReturnValue(os);
-      const { getDeterministicFreePortBlock } = await import("./ports.js");
-      const port = await getDeterministicFreePortBlock();
-      expect(port).toBeGreaterThanOrEqual(30000);
-      expect(port + 4).toBeLessThanOrEqual(64999);
+  it("preserves the non-Linux pool without Linux host reads", async () => {
+    host.platform.mockReturnValue("darwin");
+    const { getDeterministicFreePortBlock } = await import("./ports.js");
+    const port = await getDeterministicFreePortBlock();
+    expect(port).toBeGreaterThanOrEqual(30000);
+    expect(port + 4).toBeLessThanOrEqual(64999);
+    expect(host.reads).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { deniedOffset: 0, permissionFallback: false },
+    { deniedOffset: 1, permissionFallback: true },
+  ])(
+    "finds a bindable Windows block after EACCES at offset $deniedOffset (permissionFallback=$permissionFallback)",
+    async ({ deniedOffset, permissionFallback }) => {
+      host.platform.mockReturnValue("win32");
+      let firstCandidate: number | undefined;
+      host.rejectPort.mockImplementation((port) => {
+        firstCandidate ??= port;
+        return port === firstCandidate + deniedOffset ? "EACCES" : undefined;
+      });
+      const { getDeterministicFreePortBlock, getFreePortBlockWithPermissionFallback } =
+        await import("./ports.js");
+      const offsets = [0, 1];
+      const port = permissionFallback
+        ? await getFreePortBlockWithPermissionFallback({ offsets, fallbackBase: 44000 })
+        : await getDeterministicFreePortBlock({ offsets });
+      expect(firstCandidate).toBeDefined();
+      expect(port).not.toBe(firstCandidate);
+      for (const offset of offsets) {
+        const candidate = port + offset;
+        expect(candidate).not.toBe(firstCandidate! + deniedOffset);
+        expect(host.rejectPort).toHaveBeenCalledWith(candidate);
+        const server = createRealServer();
+        listeners.push(server);
+        await new Promise<void>((resolve, reject) => {
+          server.once("error", reject);
+          server.listen(candidate, "127.0.0.1", resolve);
+        });
+      }
       expect(host.reads).not.toHaveBeenCalled();
     },
   );
+
+  it.each([
+    { os: "linux", code: "EACCES" },
+    { os: "win32", code: "EPERM" },
+    { os: "win32", code: "EACCES" },
+  ])("propagates global $os $code bind failures", async ({ os, code }) => {
+    host.platform.mockReturnValue(os);
+    host.range = "32768\t60999\n";
+    host.rejectPort.mockReturnValue(code);
+    const { getDeterministicFreePortBlock } = await import("./ports.js");
+    await expect(getDeterministicFreePortBlock({ offsets: [0, 1] })).rejects.toMatchObject({
+      code,
+    });
+  });
+
+  it("rejects exhausted Windows blocks when only ephemeral allocation can bind", async () => {
+    host.platform.mockReturnValue("win32");
+    host.rejectPort.mockImplementation((port) => (port === 0 ? undefined : "EACCES"));
+    const { getDeterministicFreePortBlock } = await import("./ports.js");
+    await expect(getDeterministicFreePortBlock({ offsets: [0, 1] })).rejects.toThrow(
+      "failed to acquire a free port block",
+    );
+    expect(host.rejectPort).toHaveBeenCalledWith(0);
+  });
 
   it("falls back outside both an occupied worker shard and the kernel client range", async () => {
     host.range = "32768\t60999\n";

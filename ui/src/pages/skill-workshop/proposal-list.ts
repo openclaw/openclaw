@@ -30,7 +30,7 @@ export function renderSkillWorkshopProposalList(params: {
       <div class="sw-queue__body">
         ${
           total === 0
-            ? html`<div class="sw-queue__empty">${params.emptyText}</div>`
+            ? html`<div class="sw-queue__empty" role="status">${params.emptyText}</div>`
             : groups.map(
                 (group) => html`
                   <div class="sw-queue__group">
@@ -54,7 +54,9 @@ function renderProposalRow(
   const isSelected = selected?.key === proposal.key;
   return html`
     <button
+      type="button"
       class="sw-row ${isSelected ? "is-selected" : ""}"
+      aria-current=${isSelected ? "true" : nothing}
       @click=${() => props.onSelect(proposal.key)}
     >
       <span class="sw-row__dot"></span>

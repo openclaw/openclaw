@@ -2,10 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { types } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import {
-  normalizeStringEntries,
-  normalizeUniqueStringEntries,
-} from "@openclaw/normalization-core/string-normalization";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -21,7 +18,6 @@ import {
 } from "./manifest-registry-installed.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import { resolvePluginModuleExport } from "./module-export.js";
-import { createPluginCacheKey } from "./plugin-cache-primitives.js";
 import {
   getPluginCache,
   getPluginCacheRoot,
@@ -239,9 +235,6 @@ function resolveSetupRegistration(
   register: (api: Parameters<typeof runPluginRegistration>[1]) => boolean;
   initialize: ReturnType<typeof getPluginSetupModuleLoader>["initialize"];
 } | null {
-  if (record.setup?.requiresRuntime === false) {
-    return null;
-  }
   const setupArtifact = resolveLoadableSetupRuntimeSource(record);
   if (!setupArtifact) {
     return null;
@@ -321,7 +314,7 @@ function resolveSetupRegistryCacheKey(params?: {
   if (env !== process.env) {
     return null;
   }
-  return createPluginCacheKey([
+  return JSON.stringify([
     "setup-registry",
     resolvePluginControlPlaneFingerprint({
       config: params?.config,
@@ -396,10 +389,6 @@ function cloneSetupRegistryValue<T>(value: T, seen = new WeakMap<object, unknown
   return clone as T;
 }
 
-function cloneSetupRegistry(registry: PluginSetupRegistry): PluginSetupRegistry {
-  return cloneSetupRegistryValue(registry);
-}
-
 function loadSetupManifestRecords(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -440,9 +429,6 @@ function findUniqueSetupManifestOwner(params: {
   const matches = params.plugins.filter((entry) =>
     params.listIds(entry).some((id) => normalizeProviderId(id) === params.normalizedId),
   );
-  if (matches.length === 0) {
-    return undefined;
-  }
   // Setup lookup can execute plugin code. Refuse ambiguous ownership instead of
   // depending on manifest ordering across bundled/workspace/global sources.
   return matches.length === 1 ? matches[0] : undefined;
@@ -550,7 +536,7 @@ export const resolvePluginSetupRegistry = withPluginSetupCache(function (params?
 }): PluginSetupRegistry {
   const env = params?.env ?? process.env;
   const scopedPluginIds = params?.pluginIds
-    ? new Set(normalizeUniqueStringEntries(params.pluginIds))
+    ? new Set(normalizeStringEntries(params.pluginIds))
     : null;
   if (scopedPluginIds && scopedPluginIds.size === 0) {
     const empty = {
@@ -569,7 +555,7 @@ export const resolvePluginSetupRegistry = withPluginSetupCache(function (params?
   if (resultCacheKey !== null) {
     const cached = resultCache.get(resultCacheKey);
     if (cached) {
-      return cloneSetupRegistry(cached);
+      return cloneSetupRegistryValue(cached);
     }
   }
 
@@ -704,7 +690,7 @@ export const resolvePluginSetupRegistry = withPluginSetupCache(function (params?
   if (resultCacheKey === null) {
     return registry;
   }
-  resultCache.set(resultCacheKey, cloneSetupRegistry(registry));
+  resultCache.set(resultCacheKey, cloneSetupRegistryValue(registry));
   return registry;
 });
 

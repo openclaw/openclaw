@@ -40,6 +40,8 @@ When the bound conversation has no external channel route — WebChat/Control UI
 
 For current agent-turn jobs, configuring unrelated external channels does not change this behavior. An explicit delivery channel, recipient, account, or thread still uses normal channel resolution. If that resolution fails, the report remains in the conversation and the run records the delivery error, even when no external channel could be selected.
 
+From WebChat, create a current-session agent-turn job with `delivery: { mode: "announce" }` (or omit `delivery`). The tool does not copy internal WebChat conversation coordinates into an external announce route. Do not set `delivery.channel: "webchat"`; explicit channels still must pass normal configured-channel validation. Condition triggers use the same delivery rules.
+
 <Warning>
   Every outbound automation webhook uses the strict SSRF guard. Loopback,
   private/internal, link-local, and other special-use targets are refused by
@@ -65,6 +67,8 @@ services. Leaving the policy unset keeps strict behavior.
 
 Use `--announce --channel telegram --to "-1001234567890"` for channel delivery. For Telegram forum topics, use `-1001234567890:topic:123`; OpenClaw also accepts the Telegram-owned `-1001234567890:123` shorthand. Direct RPC/config callers may pass `delivery.threadId` as a string or number. Slack/Discord/Mattermost targets use explicit prefixes (`channel:<id>`, `user:<id>`). Matrix room IDs are case-sensitive; use the exact room ID or `room:!room:server` form from Matrix.
 
+For announce delivery in the Control UI Automations editor, choose a channel and an explicit **Account ID** under **Advanced** to see configured conversation targets in the **To** field. Selecting a target preserves your chosen account and does not infer a topic. These configured suggestions apply only to the primary announce destination; failure-alert routing remains separate. You can still enter a target that is not in the suggestions.
+
 On hosts with multiple configured channels, isolated announce jobs created with `automations add|create` or changed with `automations edit` must set `--channel <channel-plugin-id>` unless a provider-prefixed `--to` or a preserved session route selects the channel. Use `--best-effort-deliver` only when unresolved fallback delivery is acceptable; it does not choose a channel, and a delivery failure does not fail the job.
 
 Channel announcements retry transient failures only when no payload may have reached the recipient. A successful retry records delivery without retaining the earlier attempt's error, including with best-effort delivery. Partial or ambiguous sends are not replayed by the announcement retry loop.
@@ -72,6 +76,19 @@ Channel announcements retry transient failures only when no payload may have rea
 When announce delivery uses `channel: "last"` or omits `channel`, a provider-prefixed target such as `telegram:123` can select the channel before the scheduler falls back to session history or a single configured channel. Only prefixes advertised by the loaded plugin are provider selectors. If `delivery.channel` is explicit, the target prefix must name the same provider; `channel: "whatsapp"` with `to: "telegram:123"` is rejected instead of letting WhatsApp interpret the Telegram ID as a phone number. Target-kind and service prefixes (`channel:<id>`, `user:<id>`, `imessage:<handle>`, `sms:<number>`) stay channel-owned target syntax, not provider selectors.
 
 For isolated jobs, chat delivery is shared: if a chat route is available, the agent can use the `message` tool even with `--no-deliver`. If the agent sends to the configured/current target, OpenClaw skips the fallback announce. Otherwise `announce`, `webhook`, and `none` only control what the runner does with the final reply after the agent turn.
+
+Scheduled `message` actions use the Gateway that owns the live run. Keep the
+job's account, channel, target, and configured delivery route, but do not supply
+per-call `gatewayUrl` or `gatewayToken` fields. Ordinary and standalone message
+calls can still use those fields. To recover an existing trusted job whose
+prompt or template supplies them, edit only that prompt or template to remove
+the two fields, then run the same job again. A Gateway action reports
+`Scheduled message actions require the active bound Gateway. Remove per-call
+gatewayUrl and gatewayToken fields and retry.` until those fields are removed;
+without a scheduler-host binding it reports `Scheduled message actions require
+an active bound Gateway.` Run the job on its owning Gateway instead of copying
+connection fields into the prompt. The next send then uses the live binding,
+including current cancellation and tool-policy withdrawal.
 
 When an agent creates an isolated reminder from an active chat, OpenClaw stores the preserved live delivery target for the fallback announce route. Internal session keys may be lowercase; provider delivery targets are not reconstructed from those keys when current chat context is available.
 

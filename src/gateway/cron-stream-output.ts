@@ -66,8 +66,6 @@ type CronStreamOutputParams = {
   logger: CronStreamLogger;
 };
 
-const clearTimer = (timer: NodeJS.Timeout | undefined): void => clearTimeout(timer);
-
 function appendBatch(left: string | undefined, right: string, maxBytes: number): string {
   return left === undefined ? right : truncateCronStreamBatch(`${left}\n${right}`, maxBytes);
 }
@@ -89,7 +87,7 @@ async function waitForInFlightBatch(
       }),
     ]);
   } finally {
-    clearTimer(timeout);
+    clearTimeout(timeout);
   }
 }
 
@@ -178,8 +176,7 @@ export class CronStreamOutput {
     }
     const accepted = truncateUtf8Prefix(chunk, remaining);
     const truncatedTail = accepted !== chunk;
-    const truncatedTailContinuesLine =
-      truncatedTail && !chunk.slice(accepted.length).endsWith("\n");
+    const truncatedTailContinuesLine = truncatedTail && !chunk.endsWith("\n");
     const acceptedBytes = Buffer.byteLength(accepted, "utf8");
     if (acceptedBytes === 0 && chunk.length > 0) {
       this.droppedChunkTail[channel] = chunk.endsWith("\n") ? "clean" : "midline";
@@ -213,16 +210,13 @@ export class CronStreamOutput {
   }
 
   async drainBufferedOutput(generation: number): Promise<void> {
-    const buffered = this.bufferedOutput.filter((entry) => entry.generation === generation);
-    this.bufferedOutput = this.bufferedOutput.filter((entry) => entry.generation !== generation);
-    this.bufferedOutputBytes = this.bufferedOutput.reduce(
-      (total, entry) => total + Buffer.byteLength(entry.chunk, "utf8"),
-      0,
-    );
-    const overflowed = this.outputOverflowGenerations.delete(generation);
     if (generation !== this.params.getGeneration()) {
       return;
     }
+    const buffered = this.bufferedOutput;
+    this.bufferedOutput = [];
+    this.bufferedOutputBytes = 0;
+    const overflowed = this.outputOverflowGenerations.delete(generation);
     for (const entry of buffered) {
       if (!this.params.isDesiredRunning()) {
         this.interruptedOutput.push(entry);
@@ -260,16 +254,11 @@ export class CronStreamOutput {
       this.discardUntilNewline[channel] = false;
       this.droppedChunkTail[channel] = false;
     }
-    clearTimer(this.quietTimer);
-    this.quietTimer = undefined;
-    const batch = this.takeOpenBatch();
-    if (batch !== undefined) {
-      await this.handleClosedBatch(batch, generation);
-    }
+    await this.flushBatch(generation);
   }
 
   async beginStop(): Promise<CronStreamOutputStopState> {
-    clearTimer(this.rateTimer);
+    clearTimeout(this.rateTimer);
     this.rateTimer = undefined;
     ++this.rateEpoch;
     const state = {
@@ -313,7 +302,7 @@ export class CronStreamOutput {
   }
 
   async dropPendingForTerminalStop(): Promise<void> {
-    clearTimer(this.rateTimer);
+    clearTimeout(this.rateTimer);
     this.rateTimer = undefined;
     ++this.rateEpoch;
     if (this.pendingBatch === undefined) {
@@ -330,7 +319,7 @@ export class CronStreamOutput {
   }
 
   private resetSourceBuffers(): void {
-    clearTimer(this.quietTimer);
+    clearTimeout(this.quietTimer);
     this.quietTimer = undefined;
     ++this.quietEpoch;
     this.partialLines = { stdout: "", stderr: "" };
@@ -477,20 +466,19 @@ export class CronStreamOutput {
     const capped = truncateCronStreamBatch(candidate, maxBatchBytes);
     this.batch = capped;
     this.batchHasLines = true;
-    clearTimer(this.quietTimer);
-    this.quietTimer = undefined;
-    const epoch = ++this.quietEpoch;
+    ++this.quietEpoch;
     if (capped !== candidate || Buffer.byteLength(capped, "utf8") >= maxBatchBytes) {
-      const batch = this.takeOpenBatch();
-      if (batch !== undefined) {
-        await this.handleClosedBatch(batch, generation);
-      }
+      await this.flushBatch(generation);
       return true;
     }
-    this.quietTimer = setTimeout(() => {
-      void this.closeQuietBatch(generation, epoch);
-    }, batchMs);
-    this.quietTimer.unref?.();
+    if (this.quietTimer) {
+      this.quietTimer.refresh();
+    } else {
+      this.quietTimer = setTimeout(() => {
+        void this.closeQuietBatch(generation, this.quietEpoch);
+      }, batchMs);
+      this.quietTimer.unref?.();
+    }
     return true;
   }
 
@@ -510,13 +498,17 @@ export class CronStreamOutput {
         }
         return;
       }
-      clearTimer(this.quietTimer);
-      this.quietTimer = undefined;
-      const batch = this.takeOpenBatch();
-      if (batch !== undefined) {
-        await this.handleClosedBatch(batch, generation);
-      }
+      await this.flushBatch(generation);
     });
+  }
+
+  private async flushBatch(generation: number): Promise<void> {
+    clearTimeout(this.quietTimer);
+    this.quietTimer = undefined;
+    const batch = this.takeOpenBatch();
+    if (batch !== undefined) {
+      await this.handleClosedBatch(batch, generation);
+    }
   }
 
   private takeOpenBatch(): string | undefined {
@@ -662,7 +654,7 @@ export class CronStreamOutput {
   }
 
   private schedulePendingFire(delayMs: number, generation: number): void {
-    clearTimer(this.rateTimer);
+    clearTimeout(this.rateTimer);
     const rateEpoch = ++this.rateEpoch;
     this.rateTimer = setTimeout(() => {
       void this.attemptPendingFire(generation, rateEpoch);

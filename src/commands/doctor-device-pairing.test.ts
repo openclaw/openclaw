@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 // Doctor device pairing tests cover device-pairing checks, repair prompts, and diagnostics.
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import { seedDeviceAuthToken } from "../infra/device-auth-store.test-support.js";
@@ -17,7 +16,10 @@ import {
   detectLegacyDeviceAuth,
   migrateLegacyDeviceAuth,
 } from "../infra/state-migrations.device-auth.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
@@ -58,7 +60,6 @@ function requireNoteTitle(callIndex = 0): unknown {
   return title;
 }
 
-const requireRecord = createRequireRecord("object", "expected-label-record-short");
 const legacyDeviceAuthContents = JSON.stringify({
   version: 1,
   deviceId: "synthetic-device",
@@ -106,7 +107,13 @@ describe("noteDevicePairingHealth", () => {
             callerScopes: ["operator.read"],
           });
 
-          await run({ stateDir, identity, publicKey, initial });
+          try {
+            await run({ stateDir, identity, publicKey, initial });
+          } finally {
+            await closeOpenClawStateDatabaseByPathAsync(
+              path.join(stateDir, "state", "openclaw.sqlite"),
+            );
+          }
         },
       );
     });
@@ -310,9 +317,9 @@ describe("noteDevicePairingHealth", () => {
           }
           expect(readTokenRow()).toEqual({ token: expectedToken });
           // Existing rows do not release the legacy-file access guard.
-          expect(() =>
+          await expect(
             loadDeviceAuthToken({ deviceId: "synthetic-device", role: "operator", env: state.env }),
-          ).toThrow("Legacy device auth requires migration");
+          ).rejects.toThrow("Legacy device auth requires migration");
           const params = { cfg: { gateway: { mode: "remote" as const } }, healthOk: false };
           const findings = await collectDevicePairingHealthFindings(params);
           expect(findings).toEqual([
@@ -361,6 +368,22 @@ describe("noteDevicePairingHealth", () => {
       const message = requireNoteMessage();
       expect(message).toContain("stale device-token pattern");
       expect(message).toContain("openclaw devices rotate");
+    });
+  });
+
+  it("preserves pairing diagnostics when the token inventory read rejects", async () => {
+    await withApprovedOperatorPairing(async () => {
+      const inventory = vi
+        .spyOn(await import("../infra/device-auth-store.js"), "loadDeviceAuthTokens")
+        .mockRejectedValueOnce(new Error("synthetic inventory failure"));
+      try {
+        await expect(
+          collectDevicePairingHealthFindings({ cfg: { gateway: { mode: "local" } } }),
+        ).resolves.toEqual([]);
+        expect(inventory).toHaveBeenCalledOnce();
+      } finally {
+        inventory.mockRestore();
+      }
     });
   });
 
@@ -422,39 +445,6 @@ describe("noteDevicePairingHealth", () => {
     });
   });
 
-  it("uses gateway device pairing state when the gateway is healthy", async () => {
-    callGatewayMock.mockResolvedValue({
-      pending: [
-        {
-          requestId: "req-gateway-1",
-          deviceId: "device-gateway-1",
-          publicKey: "pubkey",
-          role: "operator",
-          roles: ["operator"],
-          scopes: ["operator.admin"],
-          clientId: "control-ui",
-          clientMode: "webchat",
-          displayName: "Dashboard",
-          ts: 1,
-          isRepair: false,
-        },
-      ],
-      paired: [],
-    });
-
-    await noteDevicePairingHealth({
-      cfg: { gateway: { mode: "remote" } },
-      healthOk: true,
-    });
-
-    expect(callGatewayMock).toHaveBeenCalledOnce();
-    const [rawGatewayRequest] = requireMockCall(callGatewayMock, 0, "gateway call");
-    const gatewayRequest = requireRecord(rawGatewayRequest, "gateway request");
-    expect(gatewayRequest?.method).toBe("device.pair.list");
-    expect(noteMock).toHaveBeenCalledTimes(1);
-    expect(requireNoteMessage()).toContain("req-gateway-1");
-  });
-
   it("sanitizes device labels before printing doctor notes", async () => {
     callGatewayMock.mockResolvedValue({
       pending: [
@@ -481,6 +471,13 @@ describe("noteDevicePairingHealth", () => {
     });
 
     const message = requireNoteMessage();
+    expect(callGatewayMock).toHaveBeenCalledExactlyOnceWith({
+      method: "device.pair.list",
+      timeoutMs: 5_000,
+      config: { gateway: { mode: "remote" } },
+    });
+    expect(noteMock).toHaveBeenCalledTimes(1);
+    expect(message).toContain("req-gateway-1");
     expect(message).toContain("bad\\nname");
     expect(message).not.toContain("\u001b");
     expect(message).not.toContain("control-ui\tclient");

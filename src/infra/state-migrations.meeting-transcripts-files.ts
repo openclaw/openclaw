@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import type { DatabaseSync } from "node:sqlite";
+import { assertNoSymlinkParents } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   TranscriptSessionDescriptor,
@@ -13,7 +14,6 @@ import { TRANSCRIPT_EXPORT_FILE_NAMES } from "../transcripts/store-artifacts.js"
 import type { TranscriptsSummary } from "../transcripts/summary.js";
 import { renderTranscriptsMarkdown } from "../transcripts/summary.js";
 import { sha256File, sha256FileSync, sha256Hex } from "./crypto-digest.js";
-import { assertNoSymlinkParents } from "./fs-safe-advanced.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 
 export const LEGACY_UTTERANCE_INSERT_CHUNK_SIZE = 64;
@@ -190,6 +190,43 @@ export function openLegacyMeetingTranscriptStage(databasePath: string): Database
     ) STRICT;
   `);
   return database;
+}
+
+/**
+ * Disposes the stage this module opened. The stage holds only rebuildable
+ * scratch bytes, so its disposal is advisory: every failure is returned as a
+ * warning for the caller to report next to the migration's real outcome instead
+ * of replacing it.
+ */
+export function disposeLegacyMeetingTranscriptStage(params: {
+  database?: DatabaseSync;
+  databasePath?: string;
+}): string[] {
+  const warnings: string[] = [];
+  try {
+    params.database?.close();
+  } catch (error) {
+    warnings.push(
+      `Could not close the meeting transcript migration stage database: ${String(error)}`,
+    );
+  }
+  if (!params.databasePath) {
+    return warnings;
+  }
+  for (const file of [
+    params.databasePath,
+    `${params.databasePath}-shm`,
+    `${params.databasePath}-wal`,
+  ]) {
+    try {
+      fsSync.rmSync(file, { force: true });
+    } catch (error) {
+      warnings.push(
+        `Could not remove the disposable meeting transcript migration file ${file}: ${String(error)}`,
+      );
+    }
+  }
+  return warnings;
 }
 
 async function stageUtterances(params: {

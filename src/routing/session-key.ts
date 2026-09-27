@@ -20,8 +20,9 @@ import {
   normalizeSessionKeyPreservingOpaquePeerIds,
   parseAgentSessionKey,
 } from "../sessions/session-key-utils.js";
-import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
+import "../shared/incognito-session-key.js";
 import { normalizeAccountId } from "./account-id.js";
+export { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 
 export {
   isCronSessionKey,
@@ -32,7 +33,6 @@ export {
   parseThreadSessionSuffix,
   type ParsedAgentSessionKey,
 } from "../sessions/session-key-utils.js";
-export { isIncognitoSessionKey };
 export {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
@@ -46,10 +46,6 @@ export const LEGACY_IMPLICIT_AGENT_ID = "main";
 export const DEFAULT_AGENT_ID = LEGACY_IMPLICIT_AGENT_ID;
 export { buildAgentMainSessionKey, DEFAULT_MAIN_KEY, normalizeMainKey };
 type SessionKeyShape = "missing" | "agent" | "legacy_or_alias" | "malformed_agent";
-
-function normalizeToken(value: string | undefined | null): string {
-  return normalizeLowercaseStringOrEmpty(value);
-}
 
 export function scopedHeartbeatWakeOptions<T extends object>(
   sessionKey: string,
@@ -111,8 +107,11 @@ export function agentSessionKeysMatchByRequestKey(
   if (!leftRaw || !rightRaw) {
     return false;
   }
+  const leftKey = parseAgentSessionKey(leftRaw);
+  const rightKey = parseAgentSessionKey(rightRaw);
   return (
-    leftRaw === rightRaw || toAgentRequestSessionKey(leftRaw) === toAgentRequestSessionKey(rightRaw)
+    (!leftKey || !rightKey || leftKey.agentId === rightKey.agentId) &&
+    (leftKey?.rest ?? leftRaw) === (rightKey?.rest ?? rightRaw)
   );
 }
 
@@ -276,20 +275,10 @@ export function resolveLinkedDirectPeerId(params: {
   if (!peerId) {
     return null;
   }
-  const candidates = new Set<string>();
-  const rawCandidate = normalizeToken(peerId);
-  if (rawCandidate) {
-    candidates.add(rawCandidate);
-  }
-  const channel = normalizeToken(params.channel);
+  const candidates = new Set([normalizeLowercaseStringOrEmpty(peerId)]);
+  const channel = normalizeLowercaseStringOrEmpty(params.channel);
   if (channel) {
-    const scopedCandidate = normalizeToken(`${channel}:${peerId}`);
-    if (scopedCandidate) {
-      candidates.add(scopedCandidate);
-    }
-  }
-  if (candidates.size === 0) {
-    return null;
+    candidates.add(normalizeLowercaseStringOrEmpty(`${channel}:${peerId}`));
   }
   for (const [canonical, ids] of Object.entries(identityLinks)) {
     const canonicalName = canonical.trim();
@@ -300,7 +289,7 @@ export function resolveLinkedDirectPeerId(params: {
       continue;
     }
     for (const id of ids) {
-      const normalized = normalizeToken(id);
+      const normalized = normalizeLowercaseStringOrEmpty(id);
       if (normalized && candidates.has(normalized)) {
         return canonicalName;
       }
@@ -315,7 +304,7 @@ export function buildGroupHistoryKey(params: {
   peerKind: "group" | "channel";
   peerId: string;
 }): string {
-  const channel = normalizeToken(params.channel) || "unknown";
+  const channel = normalizeLowercaseStringOrEmpty(params.channel) || "unknown";
   const accountId = normalizeAccountId(params.accountId);
   const peerId =
     normalizeSessionPeerId({

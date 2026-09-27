@@ -18,10 +18,10 @@ import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   createCallerModeSnapshot,
   expectBlockedTailInPlanOrder,
-  expectPlanReceiptDescriptorsToMatch,
   snapshotFiles,
   writeLegacyStateSchemaV1,
 } from "./state-migrations.caller-mode.test-helpers.js";
+import * as deviceIdentityMigrations from "./state-migrations.device-identity.js";
 import {
   autoMigrateLegacyState,
   planLegacyStateMigrationsReadOnly,
@@ -374,7 +374,7 @@ describe("legacy state migration read-only refusals", () => {
     }
   });
 
-  it("defers configured-channel discovery only in copied-state planning", async () => {
+  it("leaves Doctor-only discovery out of automatic plans and execution", async () => {
     const fixture = await makeFixture();
     const pairingPath = path.join(fixture.stateDir, "credentials", "telegram-allowFrom.json");
     fs.mkdirSync(path.dirname(pairingPath), { recursive: true });
@@ -390,20 +390,8 @@ describe("legacy state migration read-only refusals", () => {
       snapshot: createCallerModeSnapshot(fixture),
       env: fixture.env,
     });
-    const plannedWorkshopIndex = plan.steps.findIndex((step) => step.refusal !== undefined);
-    expect(plan.steps[plannedWorkshopIndex]).toMatchObject({
-      id: "skill-workshop",
-      outcome: "deferred",
-      refusal: { code: "skill-workshop-planning-deferred" },
-    });
-    const plannedPluginIndex = plan.steps.findIndex((step) => step.id === "plugin-doctor-state");
-    expect(plannedPluginIndex).toBeGreaterThan(plannedWorkshopIndex);
-    for (const step of plan.steps.slice(plannedWorkshopIndex + 1)) {
-      expect(step).toMatchObject({
-        outcome: "deferred",
-        refusal: { code: "blocked-by-prior-refusal" },
-      });
-    }
+    expect(plan.steps.map((step) => step.id)).not.toContain("skill-workshop");
+    expect(plan.steps.map((step) => step.id)).not.toContain("channel-pairing");
     expect(fs.readFileSync(pairingPath, "utf8")).toBe(pairingBytes);
 
     const params = {
@@ -413,9 +401,8 @@ describe("legacy state migration read-only refusals", () => {
       legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
     };
     const automatic = await autoMigrateLegacyState(params);
-    expect(automatic.stepReceipts.find((step) => step.id === "skill-workshop")).toMatchObject({
-      outcome: "skipped",
-    });
+    expect(automatic.stepReceipts.map((step) => step.id)).not.toContain("skill-workshop");
+    expect(automatic.stepReceipts.map((step) => step.id)).not.toContain("channel-pairing");
     expect(readChannelPairingState("telegram", fixture.env)).toEqual(pairingBefore);
     expect(fs.readFileSync(pairingPath, "utf8")).toBe(pairingBytes);
 
@@ -742,54 +729,6 @@ module.exports = { stateMigrations: [{
     expect(fs.readFileSync(externalDatabasePath, "utf8")).toBe("external\n");
   });
 
-  it("returns an explicit refusal receipt when a required Doctor step cannot run", async () => {
-    const fixture = await makeCallerModeFixture();
-    const { execPath, tuiPath } = writeLegacyDoctorSources(fixture.stateDir, {});
-    fs.writeFileSync(tuiPath, "not json\n");
-    fs.writeFileSync(fixture.configPath, "{}\n");
-    const emittedReceipts: LegacyStateMigrationStepReceipt[] = [];
-    const plan = await planLegacyStateMigrationsReadOnly({
-      mode: "doctor",
-      candidate: candidateAt(fixture.root),
-      snapshot: createCallerModeSnapshot(fixture),
-      env: fixture.env,
-    });
-
-    const result = await autoMigrateLegacyState({
-      cfg: {},
-      doctorOnlyStateMigrations: true,
-      env: fixture.env,
-      homedir: () => fixture.homeDir,
-      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-      onStepReceipt: (receipt) => emittedReceipts.push(receipt),
-    });
-
-    const tuiReceipt = result.stepReceipts.find((receipt) => receipt.id === "tui-last-session");
-    expect(tuiReceipt).toMatchObject({
-      outcome: "refused",
-      refusal: { code: "step-refused" },
-    });
-    expect(emittedReceipts.find((receipt) => receipt.id === "tui-last-session")).toEqual(
-      tuiReceipt,
-    );
-    expect(result.stepReceipts.map((receipt) => receipt.id)).toEqual(
-      plan.steps.map((step) => step.id),
-    );
-    expectPlanReceiptDescriptorsToMatch({ plan, receipts: result.stepReceipts });
-    expect(result.warnings.join("\n")).toContain("Failed reading legacy TUI last-session state");
-    expect(fs.readFileSync(tuiPath, "utf8")).toBe("not json\n");
-    expect(result.stepReceipts.find((receipt) => receipt.id === "exec-approvals")).toMatchObject({
-      outcome: "refused",
-      changes: [],
-      refusal: {
-        code: "blocked-by-prior-refusal",
-        message: expect.stringContaining('prior step "tui-last-session"'),
-      },
-    });
-    expect(emittedReceipts).toEqual(result.stepReceipts);
-    expect(fs.existsSync(execPath)).toBe(true);
-  });
-
   it("returns thrown-step receipts and stops later Doctor mutations", async () => {
     const fixture = await makeCallerModeFixture();
     const { execPath } = writeLegacyDoctorSources(fixture.stateDir, {});
@@ -959,23 +898,17 @@ module.exports = { stateMigrations: [{
       snapshot: createCallerModeSnapshot(fixture),
       env: fixture.env,
     });
-    const params = Object.defineProperty(
-      {
-        cfg: {},
-        doctorOnlyStateMigrations: true,
-        env: fixture.env,
-        homedir: () => fixture.homeDir,
-        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-      } as Parameters<typeof autoMigrateLegacyState>[0],
-      "allowLegacyDeviceIdentityImport",
-      {
-        get() {
-          throw new Error("synthetic execution detection failure");
-        },
-      },
-    );
+    vi.spyOn(deviceIdentityMigrations, "detectLegacyDeviceIdentity").mockImplementationOnce(() => {
+      throw new Error("synthetic execution detection failure");
+    });
 
-    const result = await autoMigrateLegacyState(params);
+    const result = await autoMigrateLegacyState({
+      cfg: {},
+      doctorOnlyStateMigrations: true,
+      env: fixture.env,
+      homedir: () => fixture.homeDir,
+      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+    });
 
     expectBlockedTailInPlanOrder({
       plan,

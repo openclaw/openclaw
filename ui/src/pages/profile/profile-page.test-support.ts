@@ -1,7 +1,6 @@
 import { vi } from "vitest";
 import type { UserProfile } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { RouteId } from "../../app-route-paths.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
@@ -30,6 +29,7 @@ export function createConnectedContext(
   const baseContext = {
     runtimeConfig: { subscribe, state: {}, ensureLoaded: async () => undefined },
     gateway: {
+      connect: vi.fn(),
       get snapshot() {
         return snapshot;
       },
@@ -43,6 +43,7 @@ export function createConnectedContext(
         listeners.add(listener);
         return () => listeners.delete(listener);
       },
+      subscribeEvents: subscribe,
       updateSelfUser(patch: Partial<Omit<AuthenticatedUser, "id">>) {
         if (!snapshot.selfUser) {
           return;
@@ -77,8 +78,8 @@ export function createConnectedContext(
     },
     basePath: "",
     navigate: vi.fn(),
-  } as unknown as Omit<ApplicationContext<RouteId>, "settingsAgentSelection">;
-  const context: ApplicationContext<RouteId> = {
+  } as unknown as Omit<ApplicationContext, "settingsAgentSelection">;
+  const context: ApplicationContext = {
     ...baseContext,
     settingsAgentSelection: createAgentSelectionCapability(
       baseContext.gateway,
@@ -90,6 +91,12 @@ export function createConnectedContext(
   };
   return {
     context,
+    emitHello(hello: ApplicationGatewaySnapshot["hello"]) {
+      snapshot = { ...snapshot, hello };
+      for (const listener of listeners) {
+        listener(snapshot);
+      }
+    },
     emitConnected(connected: boolean) {
       snapshot = { ...snapshot, phase: connected ? "connected" : "reconnecting" };
       for (const listener of listeners) {
@@ -120,7 +127,7 @@ export type ProfilePageElement = HTMLElement & {
   updateComplete: Promise<boolean>;
 };
 
-export function mountProfilePage(context: ApplicationContext<RouteId>) {
+export function mountProfilePage(context: ApplicationContext) {
   const provider = createApplicationContextProvider(context);
   const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
   provider.append(page);

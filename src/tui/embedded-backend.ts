@@ -1,4 +1,3 @@
-// Implements the embedded backend used by local TUI sessions.
 import { randomUUID } from "node:crypto";
 import type {
   ErrorShape,
@@ -12,7 +11,6 @@ import { findAgentRunTerminalOutcome } from "../agents/agent-run-terminal-error.
 import {
   AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
-  classifyAgentRunTerminalOutcome,
   isDefinitiveRunLifecycle,
   type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
@@ -38,6 +36,10 @@ import {
 } from "../agents/prepared-model-catalog.js";
 import { getPreparedModelRuntimeAuthMaterializations } from "../agents/prepared-model-runtime-auth.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
+import {
+  getSubagentSessionListReadSnapshotIdentity,
+  prepareOptionalSubagentSessionListReadCache,
+} from "../agents/subagents/registry/subagent-registry-state.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { bindEmbeddedSessionRowProjection } from "../agents/tools/embedded-gateway-stub.js";
 import { resolveTextCommand } from "../auto-reply/commands-registry.js";
@@ -67,6 +69,10 @@ import {
   shouldSuppressAssistantEventForLiveChat,
 } from "../gateway/live-chat-projector.js";
 import { getMaxChatHistoryMessagesBytes } from "../gateway/server-constants.js";
+import {
+  createChatHistoryActivityProjection,
+  createChatHistoryByteCounter,
+} from "../gateway/server-methods/chat-history-budget.js";
 import { enrichChatHistoryCompactionMarkers } from "../gateway/server-methods/chat-history-page-kernel.js";
 import { readChatHistoryPage } from "../gateway/server-methods/chat-history-pages.js";
 import {
@@ -81,7 +87,6 @@ import {
   type SessionRowProjection,
 } from "../gateway/session-row-projection.js";
 import { capArrayByJsonBytes } from "../gateway/session-transcript-readers.js";
-import { listProjectedSessions } from "../gateway/session-utils-list.js";
 import { projectSessionPatchResult } from "../gateway/session-utils-model.js";
 import { buildGatewaySessionRow } from "../gateway/session-utils-row.js";
 import { createGatewaySessionEntryReader } from "../gateway/session-utils-store-lookup.js";
@@ -115,17 +120,28 @@ import {
   normalizeAgentId,
 } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { applyQueueDropPolicy, waitForQueueDebounce } from "../utils/queue-helpers.js";
 import {
+  assistantChatMessage,
+  payloadText,
+  resolveDeltaPayload,
+  resolveTerminalChatState,
+} from "./embedded-chat-projection.js";
+import {
   buildLocalQueuedPrompt,
-  createQueuedRunReadiness,
+  timeoutSecondsFromMs,
   waitForLocalRunShutdown,
   waitForQueuedLocalRun,
   type LocalRunState,
   type QueuedSessionRun,
 } from "./embedded-local-run.js";
 import { EmbeddedPreparedModelRuntimeHost } from "./embedded-prepared-runtime.js";
+import {
+  createEmbeddedSessionReader,
+  readEmbeddedHistorySessionInfo,
+} from "./embedded-session-reader.js";
 import type {
   ChatSendOptions,
   TuiAgentsList,
@@ -134,19 +150,11 @@ import type {
   TuiChatSendResult,
   TuiEvent,
   TuiModelChoice,
-  TuiSessionList,
   TuiSessionCreateOptions,
   TuiImageRequest,
   TuiImageData,
 } from "./tui-backend.js";
 import { formatTuiErrorMessage } from "./tui-formatters.js";
-
-const TUI_STATE_BY_TERMINAL_CLASSIFICATION = {
-  success: undefined,
-  timeout: "error",
-  cancellation: "aborted",
-  failure: "error",
-} as const;
 
 type LocalPendingMessage = {
   run: LocalRunState;
@@ -189,44 +197,6 @@ function resolveBtwQuestion(message: string): string | undefined {
   return question ? question : undefined;
 }
 
-function payloadText(parts: unknown): string {
-  if (!Array.isArray(parts)) {
-    return "";
-  }
-  return parts
-    .map((part) => {
-      if (!part || typeof part !== "object") {
-        return "";
-      }
-      const payload = part as { text?: unknown };
-      return typeof payload.text === "string" ? payload.text.trim() : "";
-    })
-    .filter(Boolean)
-    .join("\n\n")
-    .trim();
-}
-
-function assistantChatMessage(text: string) {
-  return { role: "assistant", content: [{ type: "text", text }], timestamp: Date.now() };
-}
-
-function timeoutSecondsFromMs(timeoutMs?: number): string | undefined {
-  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs < 0) {
-    return undefined;
-  }
-  return String(Math.max(0, Math.ceil(timeoutMs / 1000)));
-}
-
-function resolveDeltaPayload(text: string, previousText: string | undefined) {
-  if (previousText === undefined) {
-    return { deltaText: text };
-  }
-  if (!text.startsWith(previousText)) {
-    return { deltaText: text, replace: true as const };
-  }
-  return { deltaText: text.slice(previousText.length) };
-}
-
 export class EmbeddedTuiBackend implements TuiBackend {
   readonly connection = { url: "local embedded" };
 
@@ -253,6 +223,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
   private unbindSessionProjection?: () => void;
   // Store methods await migration and the shared resident session rows.
   private ready: Promise<void> = Promise.resolve();
+  private readonly sessionReader = createEmbeddedSessionReader({
+    ready: () => this.ready,
+    projection: () => this.sessionProjection,
+  });
 
   start() {
     if (this.unsubscribe) {
@@ -333,10 +307,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.unbindSessionProjection = undefined;
     const projection = this.sessionProjection;
     this.sessionProjection = undefined;
-    await projection?.then(
-      (value) => value.dispose(),
-      () => {},
-    );
+    await projection?.catch(() => undefined).then((value) => value?.dispose());
     this.unsubscribe?.();
     this.unsubscribe = undefined;
     this.pendingLifecycleErrors.forEach(clearTimeout);
@@ -351,6 +322,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.previousRuntimeLog = undefined;
     this.previousRuntimeError = undefined;
     setEmbeddedMode(false);
+    await this.preparedModelRuntime.waitUntilReady();
   }
 
   async sendChat(opts: ChatSendOptions): Promise<TuiChatSendResult> {
@@ -435,14 +407,13 @@ export class EmbeddedTuiBackend implements TuiBackend {
       }
     }
     const controller = new AbortController();
-    const queuedRunReadiness = createQueuedRunReadiness();
+    const queuedRunReadiness = createDeferredCore();
     this.runs.set(runId, {
       sessionKey: opts.sessionKey,
       agentId,
       controller,
       buffer: "",
       managedMediaUrls: new Set(),
-      isBtw: Boolean(question),
       question,
       finishing: false,
       lifecycleEnded: false,
@@ -450,7 +421,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       ...(pendingQueue ? { pendingQueue } : {}),
       ...(queuedAfter ? { queuedAfter } : {}),
       queuedRunReady: queuedRunReadiness.promise,
-      markQueuedRunReady: queuedRunReadiness.markReady,
+      markQueuedRunReady: queuedRunReadiness.resolve,
     });
 
     const runPromise = this.runTurn({
@@ -479,51 +450,27 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   async abortChat(opts: { sessionKey: string; agentId?: string; runId?: string }) {
-    if (!opts.runId) {
-      // Session-scoped abort for local embedded: abort all matching runs.
-      let aborted = false;
-      const runIds: string[] = [];
-      for (const [runId, run] of this.runs) {
-        if (run.isBtw) {
-          continue;
-        }
-        if (run.sessionKey !== opts.sessionKey) {
-          continue;
-        }
-        if (opts.sessionKey === "global") {
-          const defaultAgentId = resolveDefaultAgentId(getRuntimeConfig());
-          const requestedAgentId = opts.agentId ? normalizeAgentId(opts.agentId) : defaultAgentId;
-          const runAgentId = run.agentId ? normalizeAgentId(run.agentId) : defaultAgentId;
-          if (runAgentId !== requestedAgentId) {
-            continue;
-          }
-        }
-        if (!this.isAbortableRun(runId, run)) {
-          continue;
-        }
-        run.controller.abort();
-        aborted = true;
-        runIds.push(runId);
+    const runIds: string[] = [];
+    const candidates = opts.runId ? [[opts.runId, this.runs.get(opts.runId)] as const] : this.runs;
+    for (const [runId, run] of candidates) {
+      if (!run || (!opts.runId && run.question) || run.sessionKey !== opts.sessionKey) {
+        continue;
       }
-      return { ok: true, aborted, runIds };
-    }
-    const run = this.runs.get(opts.runId);
-    if (!run || run.sessionKey !== opts.sessionKey) {
-      return { ok: true, aborted: false, runIds: [] };
-    }
-    if (opts.sessionKey === "global") {
-      const defaultAgentId = resolveDefaultAgentId(getRuntimeConfig());
-      const requestedAgentId = opts.agentId ? normalizeAgentId(opts.agentId) : defaultAgentId;
-      const runAgentId = run.agentId ? normalizeAgentId(run.agentId) : defaultAgentId;
-      if (runAgentId !== requestedAgentId) {
-        return { ok: true, aborted: false, runIds: [] };
+      if (opts.sessionKey === "global") {
+        const defaultAgentId = resolveDefaultAgentId(getRuntimeConfig());
+        const requestedAgentId = opts.agentId ? normalizeAgentId(opts.agentId) : defaultAgentId;
+        const runAgentId = run.agentId ? normalizeAgentId(run.agentId) : defaultAgentId;
+        if (runAgentId !== requestedAgentId) {
+          continue;
+        }
       }
+      if (!this.isAbortableRun(runId, run)) {
+        continue;
+      }
+      run.controller.abort();
+      runIds.push(runId);
     }
-    if (!this.isAbortableRun(opts.runId, run)) {
-      return { ok: true, aborted: false, runIds: [] };
-    }
-    run.controller.abort();
-    return { ok: true, aborted: true, runIds: [opts.runId] };
+    return { ok: true, aborted: runIds.length > 0, runIds };
   }
 
   async loadImage(opts: TuiImageRequest): Promise<TuiImageData> {
@@ -534,6 +481,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async loadHistory(opts: { sessionKey: string; agentId?: string; limit?: number }) {
     await this.ready;
     await this.preparedModelRuntime.waitUntilReady();
+    if (!getSubagentSessionListReadSnapshotIdentity()) {
+      await prepareOptionalSubagentSessionListReadCache();
+    }
     const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
     const selected = loadGatewaySessionEntryReadOnly(opts.sessionKey, {
       ...loadOptions,
@@ -574,15 +524,22 @@ export class EmbeddedTuiBackend implements TuiBackend {
       messageId: undefined,
     });
     const normalized = enrichChatHistoryCompactionMarkers(historyPage.messages, entry);
+    const activity = createChatHistoryActivityProjection(normalized, historyPage.activity);
+    const byteCounter = createChatHistoryByteCounter(activity);
     const perMessageHardCap = Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
     const replaced = replaceOversizedChatHistoryMessages({
       messages: normalized,
+      byteCounter,
       maxSingleMessageBytes: perMessageHardCap,
     });
-    const messages = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
+    const messages = capArrayByJsonBytes(
+      replaced.messages,
+      maxHistoryBytes - byteCounter.framingBytes(replaced.messages),
+      byteCounter.messageBytes,
+    ).items;
     const newestInFlightRun = [...this.runs.entries()].findLast(
       ([, run]) =>
-        !run.isBtw &&
+        !run.question &&
         run.terminalState !== "final" &&
         agentSessionKeysMatchByRequestKey(run.sessionKey, opts.sessionKey) &&
         normalizeAgentId(run.agentId) === normalizeAgentId(sessionAgentId),
@@ -617,17 +574,11 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
     const defaults = getSessionDefaults(cfg, undefined, { allowPluginNormalization: false });
     const projection = await this.sessionProjection;
-    if (projection) {
-      do {
-        await projection.ensureMaterialized();
-      } while (projection.needsMaterialization);
-    }
     const target = {
       key: canonicalKey,
       agentId: sessionAgentId,
       storePath: readSource?.path ?? storePath,
     };
-    const current = projection?.describe(target);
     const sessionInfo =
       entry && (entry.incognito || isIncognitoSessionKey(canonicalKey))
         ? buildGatewaySessionRow({
@@ -641,11 +592,11 @@ export class EmbeddedTuiBackend implements TuiBackend {
             lightweightListRow: true,
             skipTranscriptUsageFallback: true,
           })
-        : entry &&
-            current &&
-            current.entry.sessionId === sessionId &&
-            current.entry.lifecycleRevision === entry.lifecycleRevision
-          ? (projection?.snapshot(target).row ?? undefined)
+        : entry && projection
+          ? await readEmbeddedHistorySessionInfo(projection, target, {
+              sessionId,
+              lifecycleRevision: entry.lifecycleRevision,
+            })
           : undefined;
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
     if (sessionInfo) {
@@ -658,6 +609,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       sessionId,
       messages,
       defaults,
+      activity: messages.flatMap((message) => activity.get(message) ?? []),
       ...(sessionInfo ? { sessionInfo } : {}),
       thinkingLevel,
       fastMode: entry?.fastMode,
@@ -667,21 +619,11 @@ export class EmbeddedTuiBackend implements TuiBackend {
     };
   }
 
-  async listSessions(opts?: Parameters<TuiBackend["listSessions"]>[0]): Promise<TuiSessionList> {
-    await this.ready;
-    const publication = this.sessionProjection;
-    const projection = await publication;
-    if (!projection || publication !== this.sessionProjection) {
-      throw new Error("Embedded session projection is unavailable");
-    }
-    return (await listProjectedSessions({
-      projection,
-      opts: opts ?? {},
-    })) as TuiSessionList;
-  }
+  listSessions = this.sessionReader.listSessions;
+  describeSession = this.sessionReader.describeSession;
 
   async listAgents(): Promise<TuiAgentsList> {
-    return (await listAgentsForGateway(getRuntimeConfig())) as TuiAgentsList;
+    return await listAgentsForGateway(getRuntimeConfig());
   }
 
   async patchSession(
@@ -1052,7 +994,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }): QueuedSessionRun | undefined {
     let queuedAfter: QueuedSessionRun | undefined;
     for (const [runId, run] of this.runs) {
-      if (this.isSameRunScope(run, params) && !run.isBtw) {
+      if (this.isSameRunScope(run, params) && !run.question) {
         const promise = this.runPromises.get(runId);
         if (promise) {
           queuedAfter = { runId, run, promise };
@@ -1064,7 +1006,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   private abortSessionRuns(params: { sessionKey: string; agentId?: string }) {
     for (const [runId, run] of this.runs) {
-      if (this.isSameRunScope(run, params) && !run.isBtw && this.isAbortableRun(runId, run)) {
+      if (this.isSameRunScope(run, params) && !run.question && this.isAbortableRun(runId, run)) {
         run.controller.abort();
       }
     }
@@ -1072,7 +1014,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   private hasAbortableSessionRun(params: { sessionKey: string; agentId?: string }): boolean {
     for (const [runId, run] of this.runs) {
-      if (this.isSameRunScope(run, params) && !run.isBtw && this.isAbortableRun(runId, run)) {
+      if (this.isSameRunScope(run, params) && !run.question && this.isAbortableRun(runId, run)) {
         return true;
       }
     }
@@ -1210,7 +1152,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
         },
         abortSignal: run.controller.signal,
       });
-    const state = TUI_STATE_BY_TERMINAL_CLASSIFICATION[classifyAgentRunTerminalOutcome(outcome)];
+    const state = resolveTerminalChatState(outcome);
     if (!state) {
       return false;
     }
@@ -1234,7 +1176,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   private ensureRunRegistered(runId: string, run: LocalRunState) {
-    if (run.registered || run.isBtw) {
+    if (run.registered || run.question) {
       return;
     }
     run.registered = true;
@@ -1283,7 +1225,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       evt.stream === "assistant" ? resolveAssistantTextInput(evt.data) : undefined;
     if (
       assistantLiveChatInput &&
-      !run.isBtw &&
+      !run.question &&
       !shouldSuppressAssistantEventForLiveChat(evt.data)
     ) {
       for (const url of assistantLiveChatInput.managedMediaUrls ?? []) {
@@ -1393,7 +1335,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
           return;
         }
       }
-      if (activeRun?.isBtw && activeRun.question) {
+      if (activeRun?.question) {
         const result = await this.runBtwTurn({
           runId: params.runId,
           sessionKey: params.sessionKey,
@@ -1460,22 +1402,6 @@ export class EmbeddedTuiBackend implements TuiBackend {
         return;
       }
       run.lifecycleYielded ||= isAgentLifecycleYieldedWaiting({ phase: "end", ...result?.meta });
-
-      if (run.isBtw) {
-        const text = payloadText(result?.payloads);
-        if (run.question && text) {
-          this.emit("chat.side_result", {
-            kind: "btw",
-            runId: params.runId,
-            sessionKey: run.sessionKey,
-            agentId: run.agentId,
-            question: run.question,
-            text,
-          });
-        }
-        this.emitChatTerminal(params.runId, run, "final");
-        return;
-      }
 
       if (run.terminalState !== "final") {
         const finalText = payloadText(result?.payloads);

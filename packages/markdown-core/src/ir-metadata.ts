@@ -1,4 +1,5 @@
 import type { HtmlTagToken } from "./html-tags.js";
+import type { MarkdownIR } from "./ir.js";
 
 export const RAW_HTML_TOKEN_TYPE = "markdown_core_html";
 
@@ -63,4 +64,92 @@ export function appendHtmlTags(target: object, source: object | undefined, offse
     tags.push({ ...tag, start: offset + tag.start, end: offset + tag.end });
   }
   defineMetadata(target, "htmlTags", tags);
+}
+
+export type MarkdownListItemMarker = {
+  kind: "bullet" | "ordered";
+  listMarker?: { start: number; end: number };
+  task?: true;
+  taskMarker?: { start: number; end: number };
+  /** Parser-owned identity and rendered span for block-native list emitters. */
+  listId?: number;
+  parentListId?: number;
+  depth?: number;
+  start?: number;
+  end?: number;
+};
+
+export type MarkdownListItemMetadata = {
+  /** Rendered content owned by this item after its native marker. */
+  contentStart?: number;
+  contentEnd?: number;
+  /** True when the source marker line itself contains no item content. */
+  markerOnly?: true;
+  /** Original Markdown source ownership, attached without changing legacy serialization. */
+  sourceMarker?: { start: number; end: number };
+  sourceContent?: { start: number; end: number };
+  sourceIndent?: number;
+  sourceStartLine?: number;
+  sourceEndLine?: number;
+};
+
+export type MarkdownListItemWithMetadata = MarkdownListItemMarker & MarkdownListItemMetadata;
+
+export type MarkdownBlockSpan = {
+  kind: "blockquote" | "code_block" | "heading" | "thematic_break";
+  start: number;
+  end: number;
+  /** Parser-owned container nesting depth, starting at one. */
+  depth: number;
+  blockquoteDepth?: number;
+  codeOrigin?: "fenced" | "indented";
+  codeClosed?: boolean;
+  headingLevel?: number;
+  headingOrigin?: "atx" | "setext";
+  language?: string;
+  sourceStartLine?: number;
+  sourceEndLine?: number;
+};
+
+export type MarkdownIRWithMetadata = MarkdownIR & {
+  /** Parser-owned block metadata, attached without changing legacy serialization. */
+  blocks?: MarkdownBlockSpan[];
+};
+
+export function attachListItemMetadata(
+  item: MarkdownListItemMarker,
+  metadata: MarkdownListItemMetadata,
+): MarkdownListItemWithMetadata {
+  const itemWithMetadata: MarkdownListItemWithMetadata = item;
+  for (const key of [
+    "contentStart",
+    "contentEnd",
+    "markerOnly",
+    "sourceMarker",
+    "sourceContent",
+    "sourceIndent",
+    "sourceStartLine",
+    "sourceEndLine",
+  ] as const) {
+    defineMetadata(itemWithMetadata, key, metadata[key]);
+  }
+  return itemWithMetadata;
+}
+
+export function attachBlockMetadata(ir: MarkdownIR, blocks: MarkdownBlockSpan[]): MarkdownIR {
+  if (blocks.length > 0) {
+    const metadataIR: MarkdownIRWithMetadata = ir;
+    defineMetadata(metadataIR, "blocks", blocks);
+  }
+  return ir;
+}
+
+export function sliceListMarker(
+  marker: { start: number; end: number },
+  start: number,
+  end: number,
+): { start: number; end: number } | undefined {
+  const sliceStart = Math.max(marker.start, start);
+  const sliceEnd = Math.min(marker.end, end);
+  return sliceEnd > sliceStart ? { start: sliceStart - start, end: sliceEnd - start } : undefined;
 }

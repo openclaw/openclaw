@@ -1,9 +1,6 @@
 import { expect, it } from "vitest";
-import {
-  clickBoardWidgetControl,
-  controlUiSessionUrl,
-  installMockGateway,
-} from "../test-helpers/control-ui-e2e.ts";
+import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { focusChatSidePanel } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -74,7 +71,6 @@ suite.define(() => {
           methodResponses: {
             "sessions.list": { count: 1, sessions: [sessionRow], defaults: {}, path: "", ts: 1 },
             "sessions.patch": {},
-            "sessions.describe": { session: sessionRow },
             "sessions.resolve": {
               ok: true,
               key: sessionKey,

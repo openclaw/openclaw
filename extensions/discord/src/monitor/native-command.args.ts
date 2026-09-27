@@ -1,17 +1,16 @@
-// Discord plugin module implements native command.args behavior.
 import type {
   ChatCommandDefinition,
   CommandArgDefinition,
   CommandArgValues,
+  CommandArgs,
   NativeCommandSpec,
 } from "openclaw/plugin-sdk/native-command-registry";
 import type { CommandInteraction } from "../internal/discord.js";
-import type { DiscordCommandArgs } from "./native-command.types.js";
 
 export function readDiscordCommandArgs(
   interaction: CommandInteraction,
   definitions?: CommandArgDefinition[],
-): DiscordCommandArgs | undefined {
+): CommandArgs | undefined {
   if (!definitions || definitions.length === 0) {
     return undefined;
   }

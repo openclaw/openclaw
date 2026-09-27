@@ -90,12 +90,3 @@ function isMissingGitForNpmDependencyError(error: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(error);
   return /\bspawn\s+git\b/u.test(normalized) && /\benoent\b/u.test(normalized);
 }
-
-export function logSlotWarnings(warnings: string[], runtime: RuntimeEnv = defaultRuntime) {
-  if (warnings.length === 0) {
-    return;
-  }
-  for (const warning of warnings) {
-    runtime.log(theme.warn(warning));
-  }
-}

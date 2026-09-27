@@ -23,6 +23,7 @@ export type KnownApi =
   | "anthropic-messages"
   | "bedrock-converse-stream"
   | "google-generative-ai"
+  | "google-interactions"
   | "google-vertex";
 
 /** Provider API id; custom providers can use ids outside the built-in set. */
@@ -372,6 +373,8 @@ export interface UserMessage {
    * carriers are stable prompt-cache anchors.
    */
   runtimeContextCarrier?: boolean;
+  /** Explicit replay-policy retention decision; absent preserves model-derived behavior. */
+  runtimeContextCarrierRetained?: boolean;
 }
 
 /** Assistant turn, including provider identity and final stop state. */
@@ -567,6 +570,8 @@ export interface OpenAICompletionsCompat {
 
 /** Compatibility settings for OpenAI Responses APIs. */
 export interface OpenAIResponsesCompat {
+  /** Whether a compatible provider accepts the `strict` tool field. Default: auto-detected from the endpoint. */
+  supportsStrictMode?: boolean;
   /** Whether the provider supports the `developer` role (vs `system`). Default: true. */
   supportsDeveloperRole?: boolean;
   /** Whether to send reasoning effort settings. Defaults to the model's known capabilities. */

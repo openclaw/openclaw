@@ -211,6 +211,7 @@ function openEditor(expanded = false) {
   const onCancel = vi.fn();
   const onDelete = vi.fn();
   showChatAnnotationEditor({
+    paneId: "pane-a",
     anchorRect: new DOMRect(120, 120, 100, 20),
     comment: "",
     expanded,

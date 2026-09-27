@@ -72,6 +72,11 @@ remove it from **Connection… → Gateways** and confirm **Remove**. This remov
 saved credentials and dashboard browser data. Use your identity provider's
 session controls to revoke account access more broadly.
 
+If you deny or cancel a Keychain access request, automatic Gateway refreshes
+stop asking for access for the rest of that app session. Saved credentials stay
+in Keychain. Choose **Connect** or **Reconnect** to try again; restarting the app
+also allows a new request.
+
 ### Open the Mac app from a website
 
 In the browser dashboard, open **Get the apps** from the account menu, then
@@ -376,6 +381,8 @@ produce a missing-local-port warning.
 ## Troubleshooting
 
 The Dashboard error page shows the attempted address without embedded credentials. Check the host, port, and path when troubleshooting an unavailable Gateway. Choose **Connection Settings…** there, or **Connection…** from the menu bar, to repair the connection without loading the Dashboard.
+
+On sign-in, loading, startup-recovery, signed-out, and connection-error screens, drag the empty background to move the window. Double-click that background to zoom the window. Status text and card content stay selectable, and buttons keep their normal actions.
 
 | Symptom                                          | Cause / fix                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

@@ -30,7 +30,6 @@ import { getTaskById } from "./task-registry.js";
 import type { TaskRecord } from "./task-registry.types.js";
 import {
   resetTaskFlowRegistryForTests,
-  resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "./task-runtime.test-helpers.js";
 
@@ -79,7 +78,6 @@ function requireApplied(result: TaskFlowUpdateResult): TaskFlowRecord {
 }
 
 function resetFlowTestState(): void {
-  resetTaskRegistryDeliveryRuntimeForTests();
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
   resetConfigRuntimeState();

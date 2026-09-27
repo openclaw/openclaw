@@ -3,6 +3,7 @@ import { AsyncResource } from "node:async_hooks";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
+import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import {
   interruptSessionWorkAdmissions,
@@ -32,6 +33,7 @@ import {
   setNoAbort,
 } from "./dispatch-from-config.test-harness.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
+import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 let getActiveReplyRunCount: typeof import("./reply-run-registry.registry.js").getActiveReplyRunCount;
@@ -401,7 +403,14 @@ describe("dispatchReplyFromConfig owner settlement", () => {
             retained = opts;
             await opts?.onBlockReply?.({ text: "initial reply" });
             if (phase === "cancelled block and tool-only reply") {
-              opts?.onDeliberateSilentTerminalReply?.();
+              const runState = resolveReplyOperationRunState(opts);
+              if (!runState) {
+                throw new Error("expected reply operation run state");
+              }
+              runState.replyCompletion = resolveReplyCompletion(
+                runState.replyCompletion?.expectation ?? "required",
+                "blocked",
+              );
             }
             resolverEntered.resolve();
             if (phase === "aborted progress") {
@@ -529,7 +538,14 @@ describe("dispatchReplyFromConfig owner settlement", () => {
             replyOptions: { onQueuedFollowupSettled },
             replyResolver: async (_ctx, opts) => {
               retained = opts;
-              opts?.onDeliberateSilentTerminalReply?.();
+              const runState = resolveReplyOperationRunState(opts);
+              if (!runState) {
+                throw new Error("expected reply operation run state");
+              }
+              runState.replyCompletion = resolveReplyCompletion(
+                runState.replyCompletion?.expectation ?? "required",
+                "blocked",
+              );
               return undefined;
             },
           });

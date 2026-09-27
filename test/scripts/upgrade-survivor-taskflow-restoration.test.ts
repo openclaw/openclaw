@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  assertTaskflowIdentifiers,
   assertTaskflowSnapshot,
   createTaskflowFixture,
   normalizeTaskflowSnapshot,
@@ -95,8 +96,28 @@ describe("taskflow survivor evidence", () => {
       expect(task.endedAt).toBeLessThan(now);
       expect(task.cleanupAfter).toBeGreaterThan(now);
       expect(task).not.toHaveProperty("executionOwner");
-      expect(task).not.toHaveProperty("childSessionKey");
       expect(fixture.flows.some((flow) => flow.flowId === task.parentFlowId)).toBe(true);
+    }
+  });
+
+  it("rejects padded or blank persisted lookup fields before Gateway startup", () => {
+    const fixture = createTaskflowFixture(1_800_000_000_000);
+    const rows = fixture.tasks.map((task) => ({
+      task_id: task.taskId,
+      run_id: task.runId,
+      child_session_key: task.childSessionKey ?? null,
+    }));
+    expect(() => assertTaskflowIdentifiers(rows, fixture)).not.toThrow();
+    for (const [index, field, value] of [
+      [0, "run_id", ` ${rows[0]!.run_id} `],
+      [1, "child_session_key", `\t${rows[1]!.child_session_key}\n`],
+      [2, "child_session_key", " "],
+    ] as const) {
+      const retained = structuredClone(rows);
+      retained[index]![field] = value;
+      expect(() => assertTaskflowIdentifiers(retained, fixture)).toThrow(
+        "Task identifiers must be canonical",
+      );
     }
   });
 

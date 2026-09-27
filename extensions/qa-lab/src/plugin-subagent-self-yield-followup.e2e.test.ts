@@ -116,7 +116,7 @@ describe("plugin subagent sessions_yield follow-up", () => {
   });
 
   async function startFixtureGateway(
-    options: Pick<QaGatewayChildParams, "forcedRuntime" | "mutateConfig" | "useRepoCli"> = {},
+    options: Pick<QaGatewayChildParams, "forcedRuntime" | "mutateConfig" | "command"> = {},
     interceptProvider?: (baseUrl: string) => Promise<string>,
   ) {
     const state = createQaBusState();
@@ -134,8 +134,8 @@ describe("plugin subagent sessions_yield follow-up", () => {
       : mock.baseUrl;
     const gateway = await owner.start({
       repoRoot: REPO_ROOT,
-      useRepoCli: true,
       providerBaseUrl: `${providerBaseUrl}/v1`,
+      mockSessionObserverUrl: mock.sessionObserverUrl,
       providerMode: "mock-openai",
       transport,
       transportBaseUrl: bus.baseUrl,
@@ -158,7 +158,6 @@ describe("plugin subagent sessions_yield follow-up", () => {
       const { state, transport, mock, gateway } = await startFixtureGateway(
         {
           forcedRuntime: "openclaw",
-          useRepoCli: false,
           mutateConfig: (config) => ({
             ...withFixturePlugin(config),
             agents: {
@@ -206,7 +205,15 @@ describe("plugin subagent sessions_yield follow-up", () => {
               }
               const upstream = await fetch(`${baseUrl}${request.url}`, {
                 method: request.method,
-                headers: { "Content-Type": "application/json" },
+                headers: {
+                  "Content-Type": "application/json",
+                  ...(typeof request.headers.session_id === "string"
+                    ? { session_id: request.headers.session_id }
+                    : {}),
+                  ...(typeof request.headers["x-session-affinity"] === "string"
+                    ? { "x-session-affinity": request.headers["x-session-affinity"] }
+                    : {}),
+                },
                 body: payload,
               });
               response.writeHead(upstream.status, {
@@ -572,7 +579,6 @@ describe("plugin subagent sessions_yield follow-up", () => {
       const heartbeatProbe = "QA-CANCEL-HEARTBEAT-MUST-NOT-RUN";
       const { state, transport, mock, gateway } = await startFixtureGateway({
         forcedRuntime: "openclaw",
-        useRepoCli: false,
         mutateConfig: (config) => ({
           ...withFixturePlugin(config),
           agents: {
@@ -840,7 +846,16 @@ describe("plugin subagent sessions_yield follow-up", () => {
   );
 
   it("announces to the original requester only after the follow-up run ends", async () => {
-    const { state, transport, mock, gateway } = await startFixtureGateway();
+    // E2E prerequisites own the build; a dev runner would rebuild dirty fixtures
+    // inside the timed lifecycle proof. Keep the packaged plugin/auth path.
+    const { state, transport, mock, gateway } = await startFixtureGateway({
+      command: {
+        executablePath: process.execPath,
+        argsPrefix: [path.join(REPO_ROOT, "dist/index.js")],
+        cwd: REPO_ROOT,
+        usePackagedPlugins: true,
+      },
+    });
     await transport.waitReady({ gateway });
 
     const outboundStartIndex = state

@@ -52,17 +52,7 @@ export function scanPolicyToolPosture(
 
 function pushToolPostureEvidence(
   entries: PolicyToolPostureEvidence[],
-  params: {
-    readonly id: string;
-    readonly scope: "global" | "agent";
-    readonly agentId?: string;
-    readonly tools: Record<string, unknown>;
-    readonly inheritedTools: Record<string, unknown>;
-    readonly sandbox: Record<string, unknown>;
-    readonly inheritedSandbox: Record<string, unknown>;
-    readonly sourceBase: string;
-    readonly inheritedSourceBase: string;
-  },
+  params: ToolPostureParams,
 ): void {
   const localProfile = readString(params.tools.profile);
   const inheritedProfile = readString(params.inheritedTools.profile);

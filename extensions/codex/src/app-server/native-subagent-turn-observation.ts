@@ -1,30 +1,24 @@
 import { randomUUID } from "node:crypto";
 import { emitAgentEvent } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  normalizeOptionalString,
-  readStringField as readString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { projectNormalizedToolItem } from "./event-projector-events.js";
 import { readItem } from "./event-projector-values.js";
-import {
-  normalizeIdentifier,
-  readNativeTurnEnd,
-  readTurnErrorMessage,
-} from "./native-subagent-history-recovery.js";
-import type {
-  ChildAssistantMessages,
-  ChildState,
-  NativeExecutionWait,
-} from "./native-subagent-monitor-types.js";
-import type { CodexNativeSubagentCompletion } from "./native-subagent-notification.js";
+import { readNativeTurnEnd } from "./native-subagent-history-recovery.js";
+import type { ChildState, NativeExecutionWait } from "./native-subagent-monitor-types.js";
 import {
   codexNativeSubagentRunId,
+  normalizeIdentifier,
   readCodexNativeSubagentRunId,
+  readNativeSubagentThreadIds,
 } from "./native-subagent-task-ids.js";
-import type { CodexServerNotification, JsonObject } from "./protocol.js";
+import type { CodexServerNotification } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 
 type NativeSubagentTurnObservationCallbacks = {
+  emitTaskEvent: (
+    child: ChildState,
+    event: Pick<Parameters<typeof emitAgentEvent>[0], "stream" | "data">,
+  ) => void;
   currentChild: (threadId: string) => ChildState | undefined;
   dependencyRunId: (parentThreadId: string, childThreadId: string) => string | undefined;
   onTurnEnded: (childState: ChildState) => ChildState | undefined;
@@ -39,9 +33,7 @@ export class CodexNativeSubagentTurnObservation {
   invalidate(childState: ChildState): void {
     this.projectedActivityWaits.delete(childState);
     if (!childState.terminal && childState.activityObserved) {
-      emitAgentEvent({
-        runId: childState.runId,
-        ...(childState.agentId ? { agentId: childState.agentId } : {}),
+      this.callbacks.emitTaskEvent(childState, {
         stream: "execution",
         data: { state: "unknown", sourceId: this.observationSourceId, invalidate: true },
       });
@@ -51,9 +43,7 @@ export class CodexNativeSubagentTurnObservation {
   markActivityUnknown(childState: ChildState): void {
     this.projectedActivityWaits.delete(childState);
     childState.activityObserved = true;
-    emitAgentEvent({
-      runId: childState.runId,
-      ...(childState.agentId ? { agentId: childState.agentId } : {}),
+    this.callbacks.emitTaskEvent(childState, {
       stream: "execution",
       data: {
         state: "unknown",
@@ -110,9 +100,7 @@ export class CodexNativeSubagentTurnObservation {
       this.projectedActivityWaits.delete(childState);
     }
     childState.activityObserved = true;
-    emitAgentEvent({
-      runId: childState.runId,
-      ...(childState.agentId ? { agentId: childState.agentId } : {}),
+    this.callbacks.emitTaskEvent(childState, {
       stream: "execution",
       data: {
         state,
@@ -123,15 +111,21 @@ export class CodexNativeSubagentTurnObservation {
     });
   }
 
+  private emitActivityEvent(
+    child: ChildState,
+    event: Parameters<NativeSubagentTurnObservationCallbacks["emitTaskEvent"]>[1],
+  ): void {
+    if (!child.activityObserved) {
+      this.observeActivity(child, "running");
+    }
+    this.callbacks.emitTaskEvent(child, event);
+  }
+
   emitChildTaskActivity(notification: CodexServerNotification, childState: ChildState): void {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
     if (!params) {
       return;
     }
-    const owner = {
-      runId: childState.runId,
-      ...(childState.agentId ? { agentId: childState.agentId } : {}),
-    };
     const turn = isJsonObject(params.turn) ? params.turn : undefined;
     const turnId = readString(params, "turnId") ?? readString(turn, "id");
     if (notification.method === "turn/started") {
@@ -189,23 +183,16 @@ export class CodexNativeSubagentTurnObservation {
       }
       return;
     }
-    if (notification.method === "item/agentMessage/delta") {
+    if (
+      notification.method === "item/agentMessage/delta" ||
+      notification.method === "item/reasoning/summaryTextDelta"
+    ) {
       const delta = readString(params, "delta");
       if (delta) {
-        if (!childState.activityObserved) {
-          observe("running");
-        }
-        emitAgentEvent({ ...owner, stream: "assistant", data: { delta } });
-      }
-      return;
-    }
-    if (notification.method === "item/reasoning/summaryTextDelta") {
-      const delta = readString(params, "delta");
-      if (delta) {
-        if (!childState.activityObserved) {
-          observe("running");
-        }
-        emitAgentEvent({ ...owner, stream: "thinking", data: { delta } });
+        this.emitActivityEvent(childState, {
+          stream: notification.method === "item/agentMessage/delta" ? "assistant" : "thinking",
+          data: { delta },
+        });
       }
       return;
     }
@@ -220,11 +207,7 @@ export class CodexNativeSubagentTurnObservation {
     ) {
       if (notification.method === "item/started") {
         const receivers = [
-          ...new Set(
-            item.receiverThreadIds.flatMap((id) =>
-              typeof id === "string" && id.trim() ? [id.trim()] : [],
-            ),
-          ),
+          ...new Set(readNativeSubagentThreadIds(item.receiverThreadIds).map((id) => id.trim())),
         ];
         // V2 has no target IDs; V1 exposes its selected children explicitly.
         const wait: NativeExecutionWait =
@@ -248,159 +231,14 @@ export class CodexNativeSubagentTurnObservation {
       return;
     }
     if (item?.type === "agentMessage" && notification.method === "item/completed" && item.text) {
-      if (!childState.activityObserved) {
-        observe("running");
-      }
-      emitAgentEvent({ ...owner, stream: "assistant", data: { text: item.text } });
+      this.emitActivityEvent(childState, { stream: "assistant", data: { text: item.text } });
     }
     const projection = projectNormalizedToolItem({
       phase: notification.method === "item/started" ? "start" : "result",
       item,
     });
     if (projection?.event) {
-      if (!childState.activityObserved) {
-        observe("running");
-      }
-      emitAgentEvent({ ...owner, ...projection.event });
+      this.emitActivityEvent(childState, projection.event);
     }
   }
-
-  captureChildAssistantMessage(notification: CodexServerNotification): void {
-    const params = isJsonObject(notification.params) ? notification.params : undefined;
-    const childThreadId = readString(params, "threadId")?.trim();
-    const childState = childThreadId ? this.callbacks.currentChild(childThreadId) : undefined;
-    if (!childState || childState.terminal) {
-      return;
-    }
-    if (notification.method === "item/agentMessage/delta") {
-      const turnId = readString(params, "turnId");
-      const itemId = readString(params, "itemId");
-      const delta = readString(params, "delta");
-      if (turnId && itemId && delta) {
-        this.recordChildAssistantMessage(childState, turnId, itemId, delta);
-      }
-      return;
-    }
-    if (notification.method !== "item/started" && notification.method !== "item/completed") {
-      return;
-    }
-    this.captureChildAssistantMessageItem(
-      childState,
-      readString(params, "turnId"),
-      isJsonObject(params?.item) ? params.item : undefined,
-    );
-  }
-
-  captureChildTurnAssistantMessages(childState: ChildState, turn: JsonObject): void {
-    const turnId = readString(turn, "id");
-    if (!turnId || !Array.isArray(turn.items)) {
-      return;
-    }
-    for (const item of turn.items) {
-      this.captureChildAssistantMessageItem(
-        childState,
-        turnId,
-        isJsonObject(item) ? item : undefined,
-      );
-    }
-  }
-
-  toChildTurnCompletion(
-    childState: ChildState,
-    turn: JsonObject,
-  ): CodexNativeSubagentCompletion | undefined {
-    const status = normalizeIdentifier(readString(turn, "status"));
-    if (status === "completed") {
-      const turnId = readString(turn, "id");
-      const result = turnId ? lastChildAssistantMessage(childState, turnId) : undefined;
-      return {
-        childThreadId: childState.childThreadId,
-        status: "succeeded",
-        statusLabel: result ? "turn_completed" : "completed_without_final_message",
-        result: result ?? "Subagent completed without a final assistant message.",
-      };
-    }
-    if (status === "failed") {
-      return {
-        childThreadId: childState.childThreadId,
-        status: "failed",
-        statusLabel: "turn_failed",
-        result: readTurnErrorMessage(turn) ?? "Subagent failed.",
-      };
-    }
-    return undefined;
-  }
-
-  private captureChildAssistantMessageItem(
-    childState: ChildState,
-    turnId: string | undefined,
-    item: JsonObject | undefined,
-  ): void {
-    if (readString(item, "type") !== "agentMessage" || !turnId) {
-      return;
-    }
-    const itemId = readString(item, "id");
-    if (!itemId) {
-      return;
-    }
-    const messages = this.getChildAssistantMessages(childState, turnId);
-    const phase = readString(item, "phase");
-    if (phase === "commentary") {
-      messages.commentaryIds.add(itemId);
-    } else {
-      messages.finalMessageIds.add(itemId);
-    }
-    const text = readString(item, "text");
-    if (text) {
-      this.recordChildAssistantMessage(childState, turnId, itemId, text, { replace: true });
-    }
-  }
-
-  private recordChildAssistantMessage(
-    childState: ChildState,
-    turnId: string,
-    itemId: string,
-    text: string,
-    options: { replace?: boolean } = {},
-  ): void {
-    const messages = this.getChildAssistantMessages(childState, turnId);
-    if (!messages.texts.has(itemId)) {
-      messages.order.push(itemId);
-    }
-    const existing = messages.texts.get(itemId) ?? "";
-    messages.texts.set(itemId, options.replace ? text : `${existing}${text}`);
-  }
-
-  private getChildAssistantMessages(
-    childState: ChildState,
-    turnId: string,
-  ): ChildAssistantMessages {
-    let messages = childState.assistantMessagesByTurn.get(turnId);
-    if (!messages) {
-      messages = {
-        texts: new Map<string, string>(),
-        order: [],
-        commentaryIds: new Set<string>(),
-        finalMessageIds: new Set<string>(),
-      };
-      childState.assistantMessagesByTurn.set(turnId, messages);
-    }
-    return messages;
-  }
-}
-
-function lastChildAssistantMessage(childState: ChildState, turnId: string): string | undefined {
-  const messages = childState.assistantMessagesByTurn.get(turnId);
-  if (!messages) {
-    return undefined;
-  }
-  for (const itemId of messages.order.toReversed()) {
-    if (messages.finalMessageIds.has(itemId) && !messages.commentaryIds.has(itemId)) {
-      const text = normalizeOptionalString(messages.texts.get(itemId));
-      if (text) {
-        return text;
-      }
-    }
-  }
-  return undefined;
 }

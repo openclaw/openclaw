@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import { SQLITE_WORKER_PREPARE_COMMAND } from "../infra/sqlite-worker-contract.js";
 import { buildFlowRecord } from "../tasks/task-flow-registry.records.js";
 import { openExistingSqliteWorkerBackend } from "./openclaw-state.worker.js";
 
@@ -49,7 +50,7 @@ vi.mock("../infra/sqlite-post-commit.js", async (importOriginal) => ({
 vi.mock("../tasks/task-flow-registry.store.kernel.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../tasks/task-flow-registry.store.kernel.js")>()),
   readTaskFlowRecord: mocks.readFlow,
-  updateTaskFlowRecordInDatabase: mocks.updateFlow,
+  updateSelectedTaskFlowRecordInDatabase: mocks.updateFlow,
   upsertTaskFlowRowInDatabase: mocks.insertFlow,
 }));
 vi.mock("../tasks/task-flow-managed-run-task.kernel.js", () => ({
@@ -69,7 +70,7 @@ const updateInput = {
   patch: { status: "succeeded" as const, updatedAt: 200, endedAt: 200 },
 };
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
   mocks.open.mockImplementation(() => mocks.database);
   mocks.write.mockImplementation((operation) => operation(mocks.database));
@@ -77,6 +78,9 @@ beforeEach(() => {
   mocks.existingRead.mockReturnValue(undefined);
   mocks.readFlow.mockReturnValue(flow);
   mocks.updateFlow.mockReturnValue({ applied: true, flow });
+  const prepared = backend();
+  await prepared[SQLITE_WORKER_PREPARE_COMMAND]?.("tasks.statusSummary");
+  await prepared.close();
 });
 
 function backend() {

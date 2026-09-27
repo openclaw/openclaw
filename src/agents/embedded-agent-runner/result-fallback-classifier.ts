@@ -73,17 +73,13 @@ export function mergeEmbeddedAgentRunResultForModelFallbackExhaustion(params: {
   };
 }
 
-export function hasDeliberateSilentTerminalReply(result: EmbeddedAgentRunResult): boolean {
+function hasDeliberateSilentTerminalReply(result: EmbeddedAgentRunResult): boolean {
   if (result.meta.error?.kind === "hook_block") {
     return true;
   }
   return [result.meta.finalAssistantRawText, result.meta.finalAssistantVisibleText].some(
     (text) => typeof text === "string" && isSilentReplyPayloadText(text),
   );
-}
-
-export function hasIntentionalTerminalCompletion(result: EmbeddedAgentRunResult): boolean {
-  return result.meta.intentionalTerminalCompletion === "tool-batch";
 }
 
 function hasDeliverableAssistantPayload(result: {
@@ -201,8 +197,11 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   if (!isEmbeddedAgentRunResult(params.result)) {
     return null;
   }
+  if (params.result.meta.agentMeta?.providerRefusal?.category === "misalignment") {
+    return null;
+  }
   if (
-    hasIntentionalTerminalCompletion(params.result) ||
+    params.result.meta.intentionalTerminalCompletion === "tool-batch" ||
     params.result.meta.aborted ||
     params.hasDirectlySentBlockReply === true ||
     params.hasBlockReplyPipelineOutput === true

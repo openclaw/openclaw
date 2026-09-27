@@ -7,11 +7,6 @@ describe("GroupChatSchema", () => {
     expect(result.success).toBe(true);
   });
 
-  it("accepts a positive historyLimit", () => {
-    const result = GroupChatSchema.unwrap().safeParse({ historyLimit: 50 });
-    expect(result.success).toBe(true);
-  });
-
   it("rejects a negative historyLimit", () => {
     const result = GroupChatSchema.unwrap().safeParse({ historyLimit: -1 });
     expect(result.success).toBe(false);

@@ -119,6 +119,8 @@ export async function submitEmbeddedAttemptPrompt(input: {
     const baseStreamFn = activeSession.agent.streamFn;
     const persistThenStream: StreamFn = async (model, context, options) => {
       await input.persistToolResultProjections();
+      // Runtime admission queues behind the user append; join it outside that write lane.
+      await userTurnRecorder?.waitForRuntimePersistence();
       options?.signal?.throwIfAborted();
       assertSteeringCurrent();
       const stream = await baseStreamFn(model, context, options);
@@ -230,7 +232,6 @@ export function resolvePromptSubmissionSkipReason(params: {
   prompt: string;
   messages: readonly unknown[];
   imageCount: number;
-  runtimeOnly?: boolean;
 }): PromptSubmissionSkipReason | null {
   if (params.prompt.trim().length > 0 || params.imageCount > 0) {
     return null;
@@ -280,7 +281,7 @@ export async function handleEmbeddedAttemptPromptError(input: {
   activeSession: AgentSession;
   attempt: PromptErrorAttempt;
   error: unknown;
-  handleMidTurnPrecheckRequest: (request: MidTurnPrecheckRequest) => void;
+  handleMidTurnPrecheckRequest: (request: MidTurnPrecheckRequest) => Promise<void>;
   markYieldAborted: () => void;
   releaseLeasedSteering: (error?: unknown) => void;
   withOwnedTranscriptWrite: WithOwnedTranscriptWrite;

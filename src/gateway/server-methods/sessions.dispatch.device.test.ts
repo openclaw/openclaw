@@ -37,7 +37,6 @@ import type { WorkerPlacementDispatchService } from "../worker-environments/plac
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { deriveEnvironmentIntent } from "../worker-environments/service-contract.js";
-import * as environmentMethods from "./environments.js";
 import {
   dispatchTestSessionId,
   dispatchTestSessionKey,
@@ -49,6 +48,8 @@ import {
   makeSessionTarget,
 } from "./sessions-dispatch.test-support.js";
 
+// Install session-store fixtures before environment handlers load their session accessors.
+const environmentMethods = await import("./environments.js");
 const dispatchTestMocks = getDispatchTestMocks();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -103,7 +104,11 @@ function connectedNode(deviceId: string, available: number) {
     clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
     clientMode: GATEWAY_CLIENT_MODES.NODE,
     protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-    workerHost: { enabled: true, capacity: { total: Math.max(2, available), available } },
+    workerHost: {
+      enabled: true,
+      capacity: { total: Math.max(2, available), available },
+      capturedExecPolicy: true,
+    },
     commands: ["system.run"],
   } satisfies NodeWorkerSupervisorNodeProof;
 }
@@ -173,6 +178,7 @@ describe("sessions.dispatch device targets", () => {
       }),
       expect.any(Function),
       undefined,
+      undefined,
     );
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -236,6 +242,7 @@ describe("sessions.dispatch device targets", () => {
       expect(dispatch).toHaveBeenCalledWith(
         expect.objectContaining({ profileId: "device:largest", deviceId: "largest" }),
         expect.any(Function),
+        undefined,
         undefined,
       );
       expect(respond).toHaveBeenCalledWith(
@@ -419,6 +426,7 @@ describe("sessions.dispatch device targets", () => {
           expect.objectContaining({ profileId: "device:second", deviceId: "second" }),
           expect.any(Function),
           undefined,
+          undefined,
         );
         expect(respond).toHaveBeenCalledWith(
           true,
@@ -452,7 +460,7 @@ describe("sessions.dispatch device targets", () => {
           }
           return { available: true, node: nodes.find((node) => node.nodeId === deviceId) };
         });
-        vi.mocked(harness.environments.createFromProfileSnapshot).mockResolvedValue({
+        vi.mocked(harness.environments.createWithRequest).mockResolvedValue({
           ...harness.ready,
           providerId: "device",
           profileId: "device:second",
@@ -495,11 +503,10 @@ describe("sessions.dispatch device targets", () => {
           { autoDevice: true },
         );
 
-        const provisionCall = vi.mocked(harness.environments.createFromProfileSnapshot).mock
-          .calls[0];
-        expect(provisionCall?.[1]).toBe("session-dispatch:session-1:3");
+        const provisionCall = vi.mocked(harness.environments.createWithRequest).mock.calls[0]?.[0];
+        expect(provisionCall?.idempotencyKey).toBe("session-dispatch:session-1:3");
         expect(harness.ready.environmentId).toBe(
-          deriveEnvironmentIntent(provisionCall?.[1] ?? "missing").environmentId,
+          deriveEnvironmentIntent(provisionCall?.idempotencyKey ?? "missing").environmentId,
         );
         expect(respond).toHaveBeenCalledWith(
           true,
@@ -513,7 +520,7 @@ describe("sessions.dispatch device targets", () => {
         expect(harness.log).toEqual(
           expect.arrayContaining(["placement:requested", "placement:failed", "placement:active"]),
         );
-        expect(harness.environments.createFromProfileSnapshot).toHaveBeenCalledOnce();
+        expect(harness.environments.createWithRequest).toHaveBeenCalledOnce();
         expect(placements.get("session-1")).toMatchObject({ state: "active" });
       } finally {
         closeOpenClawStateDatabaseForTest();
@@ -550,20 +557,18 @@ describe("sessions.dispatch device targets", () => {
             [second, "second"],
           ] as const) {
             bindDeviceWorkerAvailability(harness.environments, availability);
-            vi.mocked(harness.environments.createFromProfileSnapshot).mockImplementation(
-              async () => {
-                if (deviceId === "first") {
-                  firstAllocated = true;
-                }
-                return {
-                  ...harness.ready,
-                  providerId: "device",
-                  nodeDeviceId: deviceId,
-                  sshEndpoint: null,
-                  sharedHost: true,
-                };
-              },
-            );
+            vi.mocked(harness.environments.createWithRequest).mockImplementation(async () => {
+              if (deviceId === "first") {
+                firstAllocated = true;
+              }
+              return {
+                ...harness.ready,
+                providerId: "device",
+                nodeDeviceId: deviceId,
+                sshEndpoint: null,
+                sharedHost: true,
+              };
+            });
             const attach = vi.mocked(harness.environments.attachSession).getMockImplementation()!;
             vi.mocked(harness.environments.attachSession).mockImplementation(async (...args) => {
               const credential = await attach(...args);
@@ -603,12 +608,10 @@ describe("sessions.dispatch device targets", () => {
             { autoDevice: true },
           );
 
-          expect(first.environments.createFromProfileSnapshot).toHaveBeenCalledOnce();
+          expect(first.environments.createWithRequest).toHaveBeenCalledOnce();
           expect(first.environments.attachSession).not.toHaveBeenCalled();
           expect(first.environments.destroy).toHaveBeenCalledOnce();
-          expect(second.environments.createFromProfileSnapshot).toHaveBeenCalledTimes(
-            destroyFails ? 0 : 1,
-          );
+          expect(second.environments.createWithRequest).toHaveBeenCalledTimes(destroyFails ? 0 : 1);
           expect(respond).toHaveBeenCalledWith(
             !destroyFails,
             destroyFails
@@ -891,6 +894,7 @@ describe("sessions.dispatch device targets", () => {
           }),
           expect.any(Function),
           undefined,
+          undefined,
         );
       } else {
         expect(dispatch).not.toHaveBeenCalled();
@@ -932,6 +936,7 @@ describe("sessions.dispatch device targets", () => {
           },
         }),
         expect.any(Function),
+        undefined,
         undefined,
       );
       expect(respond).toHaveBeenCalledWith(
@@ -992,7 +997,7 @@ describe("sessions.dispatch device targets", () => {
 
         const placement = placements.get(dispatchTestSessionId);
         expect(placement).toBeUndefined();
-        expect(harness.environments.createFromProfileSnapshot).not.toHaveBeenCalled();
+        expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
         expect(harness.environments.startTunnel).not.toHaveBeenCalled();
         expect(respond).toHaveBeenCalledWith(
           false,

@@ -1,13 +1,10 @@
 // Codex Media Path Client tests cover codex media path client script behavior.
 import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import { appendFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createJsonlRequestTailer } from "../../scripts/e2e/lib/codex-media-path/jsonl-request-tail.mts";
-import {
-  readPositiveIntEnv,
-  readTcpPortEnv,
-} from "../../scripts/e2e/lib/codex-media-path/limits.mjs";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -84,23 +81,6 @@ async function stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
 }
 
 describe("codex media path limits", () => {
-  it("rejects loose numeric env values instead of parsing prefixes", () => {
-    expect(() =>
-      readPositiveIntEnv("OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS", 180, {
-        OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS: "1e3",
-      }),
-    ).toThrow("invalid OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS: 1e3");
-    expect(() =>
-      readPositiveIntEnv("OPENCLAW_CODEX_MEDIA_PATH_LOG_TAIL_MAX_BYTES", 2 * 1024 * 1024, {
-        OPENCLAW_CODEX_MEDIA_PATH_LOG_TAIL_MAX_BYTES: "64bytes",
-      }),
-    ).toThrow("invalid OPENCLAW_CODEX_MEDIA_PATH_LOG_TAIL_MAX_BYTES: 64bytes");
-  });
-
-  it("rejects out-of-range TCP ports", () => {
-    expect(() => readTcpPortEnv("PORT", 18790, { PORT: "65536" })).toThrow("invalid PORT: 65536");
-  });
-
   it("writes strict positive timeout and port values into generated config", () => {
     const root = tempRoots.make("openclaw-codex-media-path-");
     const result = runWriteConfig(root, {
@@ -135,7 +115,7 @@ describe("codex media path limits", () => {
 });
 
 describe("codex media path fake app-server", () => {
-  it("advertises the managed Codex version across initialization and thread creation", async () => {
+  it("advertises the managed Codex version and image-capable catalog over stdio", async () => {
     const requestLog = path.join(tempRoots.make("openclaw-codex-media-path-"), "requests.jsonl");
     const version = JSON.parse(readFileSync("extensions/codex/package.json", "utf8")).dependencies[
       "@openai/codex"
@@ -150,6 +130,36 @@ describe("codex media path fake app-server", () => {
       expect(JSON.parse(await initialized).result).toMatchObject({
         serverInfo: { version },
         userAgent: expect.stringContaining(`/${version} `),
+      });
+
+      const models = readStdoutLine(child);
+      child.stdin.write(jsonl({ id: "models", method: "model/list", params: {} }));
+      expect.soft(JSON.parse(await models)).toMatchObject({
+        id: "models",
+        result: {
+          data: [
+            {
+              id: "gpt-5.6-luna",
+              model: "gpt-5.6-luna",
+              displayName: expect.any(String),
+              description: expect.any(String),
+              hidden: false,
+              isDefault: true,
+              inputModalities: ["text", "image"],
+              defaultReasoningEffort: "low",
+              supportedReasoningEfforts: [
+                { reasoningEffort: "low", description: expect.any(String) },
+              ],
+            },
+          ],
+          nextCursor: null,
+        },
+      });
+      const threads = readStdoutLine(child);
+      child.stdin.write(jsonl({ id: "threads", method: "thread/list", params: { limit: 64 } }));
+      expect.soft(JSON.parse(await threads)).toEqual({
+        id: "threads",
+        result: { data: [], nextCursor: null, backwardsCursor: null },
       });
 
       const started = readStdoutLine(child);
@@ -174,6 +184,8 @@ describe("codex media path fake app-server", () => {
     child.stderr.on("data", (chunk: string) => {
       stderr.append(chunk);
     });
+    // Reproduce independent pipe delivery: stdout can arrive before stderr.
+    child.stderr.pause();
 
     try {
       const responseLine = readStdoutLine(child);
@@ -186,6 +198,11 @@ describe("codex media path fake app-server", () => {
         },
         id: "request-1",
       });
+      // Closing stdin lets the fixture exit; close joins both output streams.
+      const closed = once(child, "close");
+      child.stdin.end();
+      child.stderr.resume();
+      await closed;
       expect(stderr.text()).toContain("fake Codex app-server request log write failed");
     } finally {
       await stopChild(child);

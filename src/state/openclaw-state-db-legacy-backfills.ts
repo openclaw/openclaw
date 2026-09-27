@@ -14,6 +14,10 @@ import * as operatorApprovalMigration from "./openclaw-state-db-operator-approva
 import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 
+// SQLite's default trim removes only spaces; task records use ECMAScript String.trim.
+const taskIdentifierWhitespace =
+  "\u0009\u000a\u000b\u000c\u000d \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff";
+
 export function ensureOperatorApprovalResolutionRefs(db: DatabaseSync): void {
   if (!tableExists(db, "operator_approvals")) {
     return;
@@ -144,9 +148,9 @@ export function repairLegacySubagentTaskBindings(db: DatabaseSync): void {
   // v2026.6.34 replaced runId/createdAt but retained sessionStartedAt. A reused
   // child session is not an owner: require one task/run, matching requester and
   // timing, and no competing binding. Running replacements need repair too.
-  db.exec(`
+  db.prepare(`
     WITH runs AS MATERIALIZED (
-      SELECT run_id, child_session_key, requester_session_key, created_at,
+      SELECT run_id, trim(child_session_key, ?) AS child_session_key, requester_session_key, created_at,
         CASE WHEN json_valid(payload_json) THEN payload_json ELSE 'null' END AS payload
       FROM subagent_runs
     ), bindings AS MATERIALIZED (
@@ -172,14 +176,14 @@ export function repairLegacySubagentTaskBindings(db: DatabaseSync): void {
         AND NOT EXISTS (SELECT 1 FROM runs AS sibling
           WHERE json_type(sibling.payload) <> 'object' OR coalesce(
             CASE WHEN json_type(sibling.payload, '$.taskRunId') = 'text'
-              THEN nullif(trim(json_extract(sibling.payload, '$.taskRunId')), '') END,
+              THEN nullif(trim(json_extract(sibling.payload, '$.taskRunId'), ?), '') END,
             sibling.run_id
           ) = task.run_id)
     )
     UPDATE subagent_runs SET payload_json = json_set(payload_json, '$.taskRunId',
       (SELECT task_run_id FROM bindings WHERE bindings.run_id = subagent_runs.run_id))
     WHERE run_id IN (SELECT run_id FROM bindings);
-  `);
+  `).run(taskIdentifierWhitespace, taskIdentifierWhitespace);
 }
 
 function nullableTextValue(record: Record<string, unknown> | null, key: string) {
@@ -240,15 +244,15 @@ export function repairLegacySubagentRetainedResults(db: DatabaseSync): void {
       : undefined;
 
     for (const row of rows) {
-      const payload = parseJsonRecord(row.payload_json);
-      const completion = payload ? recordField(payload, "completion") : null;
+      const payload = safeParseJsonRecord(row.payload_json) ?? null;
+      const completion = payload ? asNullableRecord(payload.completion) : null;
       if (!payload || !completion) {
         continue;
       }
-      const delivery = recordField(payload, "delivery");
-      const deliveryPayload = delivery ? recordField(delivery, "payload") : null;
+      const delivery = asNullableRecord(payload.delivery);
+      const deliveryPayload = delivery ? asNullableRecord(delivery.payload) : null;
       const pendingPayload = row.pending_final_delivery_payload_json
-        ? parseJsonRecord(row.pending_final_delivery_payload_json)
+        ? (safeParseJsonRecord(row.pending_final_delivery_payload_json) ?? null)
         : null;
       const hasLegacyResult = Boolean(
         (deliveryPayload &&
@@ -281,7 +285,7 @@ export function repairLegacySubagentRetainedResults(db: DatabaseSync): void {
       const primary = nullableTextValue(completion, "resultText");
       const fallback = nullableTextValue(completion, "fallbackResultText");
       updateRun.run(JSON.stringify(payload), row.run_id);
-      const taskRunId = textField(payload, "taskRunId") ?? row.run_id;
+      const taskRunId = textField(payload, "taskRunId")?.trim() ?? row.run_id;
       const terminalReply = normalizeAgentRunTerminalReplySnapshot(completion.terminalReply);
       const taskResult = selectLegacyRetainedTaskResult(completion, primary, fallback);
       if (updateTask && (taskResult || terminalReply)) {
@@ -448,21 +452,9 @@ export function backfillCronRunLogEntryJson(db: DatabaseSync): void {
   }
 }
 
-function parseJsonRecord(value: string): Record<string, unknown> | null {
-  return safeParseJsonRecord(value) ?? null;
-}
-
 function textField(record: Record<string, unknown>, key: string): string | null {
   const value = record[key];
   return typeof value === "string" && value.trim() ? value : null;
-}
-
-function numberField(record: Record<string, unknown>, key: string): number | null {
-  return asFiniteNumber(record[key]) ?? null;
-}
-
-function recordField(record: Record<string, unknown>, key: string): Record<string, unknown> | null {
-  return asNullableRecord(record[key]);
 }
 
 export function backfillCronJobsFromJobJson(db: DatabaseSync): void {
@@ -500,17 +492,17 @@ export function backfillCronJobsFromJobJson(db: DatabaseSync): void {
         AND job_id = ?`,
   );
   for (const row of rows) {
-    const job = parseJsonRecord(row.job_json);
+    const job = safeParseJsonRecord(row.job_json) ?? null;
     if (!job) {
       continue;
     }
     // Legacy defaults are repaired only in the query-bearing projection; job_json owns config.
-    const schedule = recordField(job, "schedule");
-    const payload = recordField(job, "payload");
+    const schedule = asNullableRecord(job.schedule);
+    const payload = asNullableRecord(job.payload);
     const scheduleKind = textField(schedule ?? {}, "kind");
     const payloadKind = textField(payload ?? {}, "kind");
     const isAt = scheduleKind === "at" && textField(schedule ?? {}, "at");
-    const isEvery = scheduleKind === "every" && numberField(schedule ?? {}, "everyMs") != null;
+    const isEvery = scheduleKind === "every" && asFiniteNumber((schedule ?? {}).everyMs) != null;
     const isCron = scheduleKind === "cron" && textField(schedule ?? {}, "expr");
     const isSystemEvent = payloadKind === "systemEvent" && textField(payload ?? {}, "text");
     const isAgentTurn = payloadKind === "agentTurn" && textField(payload ?? {}, "message");
@@ -527,15 +519,11 @@ export function backfillCronJobsFromJobJson(db: DatabaseSync): void {
       job.enabled === false ? 0 : 1,
       textField(job, "agentId"),
       payloadKind,
-      numberField(job, "updatedAtMs") ?? (sqliteNumber(row.updated_at) || 0),
+      asFiniteNumber(job.updatedAtMs) ?? (sqliteNumber(row.updated_at) || 0),
       row.store_key,
       row.job_id,
     );
   }
-}
-
-function metadataStringField(record: Record<string, unknown>, key: string): string | null {
-  return textField(record, key);
 }
 
 export function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): void {
@@ -583,31 +571,30 @@ export function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): voi
         AND id = ?`,
   );
   for (const row of rows) {
-    const entry = parseJsonRecord(row.entry_json);
+    const entry = safeParseJsonRecord(row.entry_json) ?? null;
     if (!entry) {
       continue;
     }
     // Queue metadata is denormalized for recovery queries but entry_json remains source of truth.
-    const session = recordField(entry, "session");
-    const route = recordField(entry, "route");
-    const deliveryContext = recordField(entry, "deliveryContext");
+    const session = asNullableRecord(entry.session);
+    const route = asNullableRecord(entry.route);
+    const deliveryContext = asNullableRecord(entry.deliveryContext);
     update.run(
-      metadataStringField(entry, "kind"),
-      metadataStringField(entry, "sessionKey") ??
-        (session ? metadataStringField(session, "key") : null),
-      metadataStringField(entry, "channel") ??
-        (route ? metadataStringField(route, "channel") : null) ??
-        (deliveryContext ? metadataStringField(deliveryContext, "channel") : null),
-      metadataStringField(entry, "to") ??
-        (route ? metadataStringField(route, "to") : null) ??
-        (deliveryContext ? metadataStringField(deliveryContext, "to") : null),
-      metadataStringField(entry, "accountId") ??
-        (route ? metadataStringField(route, "accountId") : null) ??
-        (deliveryContext ? metadataStringField(deliveryContext, "accountId") : null),
+      textField(entry, "kind"),
+      textField(entry, "sessionKey") ?? (session ? textField(session, "key") : null),
+      textField(entry, "channel") ??
+        (route ? textField(route, "channel") : null) ??
+        (deliveryContext ? textField(deliveryContext, "channel") : null),
+      textField(entry, "to") ??
+        (route ? textField(route, "to") : null) ??
+        (deliveryContext ? textField(deliveryContext, "to") : null),
+      textField(entry, "accountId") ??
+        (route ? textField(route, "accountId") : null) ??
+        (deliveryContext ? textField(deliveryContext, "accountId") : null),
       asSafeIntegerInRange(entry.retryCount, { min: 0 }) ?? 0,
       asSafeIntegerInRange(entry.lastAttemptAt, { min: 0 }) ?? null,
-      metadataStringField(entry, "lastError"),
-      metadataStringField(entry, "recoveryState"),
+      textField(entry, "lastError"),
+      textField(entry, "recoveryState"),
       asSafeIntegerInRange(entry.platformSendStartedAt, { min: 0 }) ?? null,
       row.queue_name,
       row.id,

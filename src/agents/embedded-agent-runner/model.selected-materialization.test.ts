@@ -5,6 +5,7 @@ import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.typ
 import { materializePreparedRuntimeModel } from "../runtime-plan/materialize-model.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { createEmptyAgentDiscoveryStores, resolveModelAsync } from "./model.js";
+import { createPreparedConfiguredRuntimeModelLookup } from "./model.static-id.js";
 
 const provider = "selected-model-test";
 const metadataSnapshot = createPluginMetadataSnapshotFixture({
@@ -132,6 +133,11 @@ describe("selected model materialization", () => {
         },
       });
       const config = {};
+      const configuredRuntimeModels = [
+        row("other-provider", "middle", "middle", 4400),
+        row(provider, "final", "final", 2200),
+        ...(rowProvider ? [row(rowProvider, "middle", wireId, 1100)] : []),
+      ];
       const preparedModelRuntime = {
         catalogOwner: undefined,
         agentDir: "/tmp/selected-model-test",
@@ -143,11 +149,11 @@ describe("selected model materialization", () => {
         authModes: {},
         metadataSnapshot,
         modelCatalog: { entries: [], routeVariants: [] },
-        configuredRuntimeModels: [
-          row("other-provider", "middle", "middle", 4400),
-          row(provider, "final", "final", 2200),
-          ...(rowProvider ? [row(rowProvider, "middle", wireId, 1100)] : []),
-        ],
+        configuredRuntimeModels,
+        findConfiguredRuntimeModel: createPreparedConfiguredRuntimeModelLookup(
+          configuredRuntimeModels,
+          metadataSnapshot,
+        ),
         inlineProviderModels: [],
         createStores: () => options,
       } satisfies PreparedModelRuntimeSnapshot;

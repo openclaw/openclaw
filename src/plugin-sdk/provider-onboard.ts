@@ -83,29 +83,11 @@ function completeProviderPreset(
     : next;
 }
 
-function normalizeAgentModelAliasEntry(entry: AgentModelAliasEntry): {
-  modelRef: string;
-  alias?: string;
-} {
-  if (typeof entry === "string") {
-    return { modelRef: entry };
-  }
-  return entry;
-}
-
 type ProviderModelMergeState = {
   providers: Record<string, ModelProviderConfig>;
   existingProvider?: ModelProviderConfig;
   existingModels: ModelDefinitionConfig[];
 };
-
-function normalizeProviderModelForConfig(
-  providerId: string,
-  model: ModelDefinitionConfig,
-): ModelDefinitionConfig {
-  const id = normalizeConfiguredProviderCatalogModelId(providerId, model.id);
-  return id === model.id ? model : { ...model, id };
-}
 
 function normalizeProviderModelsForConfig(
   providerId: string,
@@ -116,7 +98,8 @@ function normalizeProviderModelsForConfig(
   const seenById = new Map<string, number>();
 
   for (const model of models) {
-    const normalized = normalizeProviderModelForConfig(providerId, model);
+    const id = normalizeConfiguredProviderCatalogModelId(providerId, model.id);
+    const normalized = id === model.id ? model : { ...model, id };
     if (normalized !== model) {
       mutated = true;
     }
@@ -256,7 +239,7 @@ export function withAgentModelAliases(
 ): Record<string, AgentModelEntryConfig> {
   const next = normalizeAgentModelMapForConfig({ ...existing });
   for (const entry of aliases) {
-    const normalized = normalizeAgentModelAliasEntry(entry);
+    const normalized = typeof entry === "string" ? { modelRef: entry } : entry;
     const modelRef = normalizeAgentModelRefForConfig(normalized.modelRef);
     next[modelRef] = {
       ...next[modelRef],
@@ -289,12 +272,6 @@ export function createAliasOnlyPresetAppliers(params: {
     applyProviderConfig,
     applyConfig: (cfg) => applyAgentDefaultModelPrimary(applyProviderConfig(cfg), params.modelRef),
   };
-}
-
-function isMergeableProviderConfig(
-  value: ModelProviderConfig | undefined,
-): value is ModelProviderConfig {
-  return isRecord(value);
 }
 
 function mergeOnboardProviderRequest(
@@ -340,10 +317,7 @@ function mergeOnboardProviderConfigs(
         delete merged[key];
       }
     }
-    if (
-      !isMergeableProviderConfig(existingProvider) ||
-      !isMergeableProviderConfig(providerConfig)
-    ) {
+    if (!isRecord(existingProvider) || !isRecord(providerConfig)) {
       merged[providerId] = providerConfig;
       continue;
     }

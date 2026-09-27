@@ -134,23 +134,7 @@ export function mergeSsrFPolicies(
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
-export function ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl: string): SsrFPolicy | undefined {
-  const trimmed = baseUrl.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  try {
-    const parsed = new URL(trimmed);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    return { allowedHostnames: [parsed.hostname] };
-  } catch {
-    return undefined;
-  }
-}
-
-function normalizeSsrFPolicyOrigin(value: string): string | undefined {
+function parseHttpBaseUrl(value: string): URL | undefined {
   const trimmed = value.trim();
   if (!trimmed) {
     return undefined;
@@ -160,11 +144,24 @@ function normalizeSsrFPolicyOrigin(value: string): string | undefined {
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return undefined;
     }
-    parsed.hostname = parsed.hostname.replace(/\.+$/, "");
-    return parsed.origin.toLowerCase();
+    return parsed;
   } catch {
     return undefined;
   }
+}
+
+export function ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl: string): SsrFPolicy | undefined {
+  const parsed = parseHttpBaseUrl(baseUrl);
+  return parsed ? { allowedHostnames: [parsed.hostname] } : undefined;
+}
+
+function normalizeSsrFPolicyOrigin(value: string): string | undefined {
+  const parsed = parseHttpBaseUrl(value);
+  if (!parsed) {
+    return undefined;
+  }
+  parsed.hostname = parsed.hostname.replace(/\.+$/, "");
+  return parsed.origin.toLowerCase();
 }
 
 function normalizeSsrFPolicyOrigins(values?: string[]): string[] {
@@ -188,23 +185,14 @@ export function ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl: string): SsrFPol
 export function ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(
   baseUrl: string,
 ): SsrFPolicy | undefined {
-  const trimmed = baseUrl.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  try {
-    const parsed = new URL(trimmed);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    return {
-      allowRfc2544BenchmarkRange: true,
-      allowIpv6UniqueLocalRange: true,
-      hostnameAllowlist: [parsed.hostname],
-    };
-  } catch {
-    return undefined;
-  }
+  const parsed = parseHttpBaseUrl(baseUrl);
+  return parsed
+    ? {
+        allowRfc2544BenchmarkRange: true,
+        allowIpv6UniqueLocalRange: true,
+        hostnameAllowlist: [parsed.hostname],
+      }
+    : undefined;
 }
 
 const BLOCKED_HOSTNAMES = new Set([
@@ -735,9 +723,6 @@ export function createPinnedDispatcher(
 
   const proxyUrl = policy.proxyUrl.trim();
   const requestTls = withPinnedLookup(lookup, policy.proxyTls);
-  if (!requestTls) {
-    return createHttp1ProxyAgent({ uri: proxyUrl }, timeoutMs);
-  }
   return createHttp1ProxyAgent(
     {
       uri: proxyUrl,

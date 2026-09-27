@@ -9,6 +9,7 @@ import { createOpenClawStateDatabaseAsyncLifecycle } from "./openclaw-state-db-a
 import {
   captureOpenClawStateDatabaseReadAdmission,
   closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPath,
   publishOpenClawStateDatabaseWorkerAdmission,
 } from "./openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
@@ -21,13 +22,15 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
 });
 
-it.each([false, true])(
-  "admits worker creation after a read-only file's inode is reused (refused=%s)",
-  async (refused) => {
+it.each(["read", "refused-read", "closed-writer"] as const)(
+  "admits worker creation after a %s file's inode is reused",
+  async (kind) => {
     await withOpenClawTestState({ label: "state-read-admission" }, async (state) => {
       const inspectedPath = path.join(state.stateDir, "inspected.sqlite");
       const inspected = new DatabaseSync(inspectedPath);
-      inspected.exec(`PRAGMA user_version = ${refused ? OPENCLAW_STATE_SCHEMA_VERSION + 1 : 0}`);
+      inspected.exec(
+        `PRAGMA user_version = ${kind === "refused-read" ? OPENCLAW_STATE_SCHEMA_VERSION + 1 : 0}`,
+      );
       inspected.close();
       const retiredIdentity = databaseIdentity.readDatabasePathIdentitySync(inspectedPath);
       const read = () =>
@@ -35,7 +38,13 @@ it.each([false, true])(
           path: inspectedPath,
           env: state.env,
         });
-      if (refused) {
+      let assertRetiredAdmission: (() => void) | undefined;
+      if (kind === "closed-writer") {
+        openOpenClawStateDatabase({ path: inspectedPath, env: state.env });
+        assertRetiredAdmission =
+          captureOpenClawStateDatabaseReadAdmission(inspectedPath).assertCurrent;
+        closeOpenClawStateDatabaseByPath(inspectedPath);
+      } else if (kind === "refused-read") {
         expect(read).toThrow(/newer schema/);
       } else {
         expect(read()).toBe("inspected");
@@ -59,6 +68,9 @@ it.each([false, true])(
       });
       await store.register("retained", "original");
       await expect(store.lookup("retained")).resolves.toBe("original");
+      if (assertRetiredAdmission) {
+        expect(assertRetiredAdmission).toThrow(/admission changed/);
+      }
     });
   },
 );
@@ -76,6 +88,28 @@ it("binds an in-flight first creation when a native alias publishes first", asyn
     openOpenClawStateDatabase({ path: alias, env: state.env });
     publishOpenClawStateDatabaseWorkerAdmission(admission);
     admission.assertCurrent();
+  });
+});
+
+it("keeps live aliases when an earlier recorded path becomes a directory", async () => {
+  await withOpenClawTestState({ label: "state-stale-alias-admission" }, async (state) => {
+    const lifecycle = createOpenClawStateDatabaseAsyncLifecycle();
+    const originalPath = state.statePath("original.sqlite");
+    const retainedAlias = state.statePath("retained.sqlite");
+    const newAlias = state.statePath("new-alias.sqlite");
+    writeFileSync(originalPath, "original");
+    const original = lifecycle.capture(originalPath);
+    linkSync(originalPath, retainedAlias);
+    const retained = lifecycle.capture(retainedAlias);
+    linkSync(originalPath, newAlias);
+    unlinkSync(originalPath);
+    mkdirSync(originalPath);
+
+    const observed = lifecycle.capture(newAlias);
+    expect(observed.identity.key).toBe(original.identity.key);
+    original.assertCurrent();
+    retained.assertCurrent();
+    observed.assertCurrent();
   });
 });
 

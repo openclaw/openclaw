@@ -14,6 +14,8 @@ type PluginRuntimeChannel = import("./types-channel.js").PluginRuntimeChannel;
 // ── Subagent runtime types ──────────────────────────────────────────
 
 type SubagentRunParams = {
+  /** Revalidate command authority at the host's run admission boundary. */
+  assertCurrent?: () => void;
   sessionKey: string;
   message: string;
   /** Run with an exact empty tool surface. */
@@ -201,6 +203,7 @@ export type PluginRuntime = PluginRuntimeCore & {
       baseRef?: string;
       ownerKind: "workboard";
       ownerId: string;
+      commitGuard?: () => void;
     }) => Promise<PluginManagedWorktree>;
     release: (params: { path: string }) => Promise<void>;
     removeIfLossless: (params: {

@@ -2,6 +2,10 @@ import { html, nothing, type TemplateResult } from "lit";
 import { property } from "lit/decorators.js";
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { t } from "../i18n/index.ts";
+import {
+  formatKeyboardShortcutCombo,
+  KEYBOARD_SHORTCUT_COMBOS,
+} from "../lib/keyboard-shortcut-contract.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
 import "./tooltip.ts";
@@ -61,7 +65,9 @@ class MacosTitlebarControls extends OpenClawLightDomContentsElement {
                         // While the sidebar rail is collapsed, this mirrors the native
                         // new-session item and its current Gateway authorization.
                         label: t("chat.runControls.newSession"),
-                        tooltip: this.newSessionDisabledReason,
+                        tooltip:
+                          this.newSessionDisabledReason ??
+                          `${t("chat.runControls.newSession")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.newSession)})`,
                         icon: icons.plus,
                         disabled: Boolean(this.newSessionDisabledReason),
                         onClick: this.onOpenNewSession,

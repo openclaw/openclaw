@@ -158,14 +158,6 @@ function wrapPlainTextToolCallStream(
   const output = createAssistantMessageEventStream();
 
   void (async () => {
-    let ended = false;
-    const endStream = () => {
-      if (!ended) {
-        ended = true;
-        output.end();
-      }
-    };
-
     try {
       const normalizedEvents = normalizePlainTextToolCallStreamEvents(source, {
         createPromotedToolCallEvents: createPromotedPlainTextToolCallEvents,
@@ -206,7 +198,7 @@ function wrapPlainTextToolCallStream(
         },
       });
     } finally {
-      endStream();
+      output.end();
     }
   })();
 

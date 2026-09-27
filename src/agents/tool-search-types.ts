@@ -43,7 +43,7 @@ export type CatalogVisibilityOptions = {
   includeMcp?: boolean;
   allowedIds?: { has(id: string): boolean };
 };
-export type UnknownToolRecoverySurface = "raw-tools" | "code-mode" | "catalog";
+type UnknownToolRecoverySurface = "raw-tools" | "code-mode" | "catalog";
 export type UnknownToolErrorOptions = {
   exactIdOnly?: boolean;
   recoverySurface?: UnknownToolRecoverySurface;
@@ -53,6 +53,11 @@ export type ToolSearchCallOptions = CatalogVisibilityOptions &
     parentToolCallId?: string;
     signal?: AbortSignal;
     onUpdate?: AgentToolUpdateCallback;
+    /**
+     * Code Mode's MCP namespace guest expects a thrown denial for resource and
+     * prompt operations. Ordinary `tool_call` keeps the blocked result envelope.
+     */
+    mcpNamespaceGuest?: boolean;
   };
 
 export type ToolSearchCatalogToolExecutor = (params: {

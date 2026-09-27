@@ -269,6 +269,7 @@ it.each(["global", "unknown"] as const)(
           sessionId,
           boardFace,
           updatedAt: 100 - index,
+          displayName: `${agentId.charAt(0).toUpperCase()}${agentId.slice(1)} task`,
           visibility: agentId === "private" ? "draft" : "shared",
           createdActor: { type: "human", source: "profile", id: "owner@example.test" },
         });
@@ -402,8 +403,10 @@ it.each(["global", "unknown"] as const)(
       ]);
       expect(JSON.stringify(active)).not.toContain(`${sentinel}-private`);
       for (const row of active.sessions.filter((candidate) => candidate.key === sentinel)) {
-        expect(row).not.toHaveProperty("childSessions");
-        expect(row).not.toHaveProperty("hasActiveSubagentRun");
+        const wireJson = JSON.stringify(row);
+        const wireRow: unknown = JSON.parse(wireJson);
+        expect(wireRow).not.toHaveProperty("childSessions");
+        expect(wireRow).not.toHaveProperty("hasActiveSubagentRun");
       }
       expect(active.sessions[0]?.swarm?.groups).toMatchObject([
         { groupId: "ops-group", running: 1 },
@@ -616,7 +619,7 @@ it.each(
       if (selection === "inherited") {
         config.session = { ...config.session, scope: "global" };
         await upsertSessionEntryCore(
-          { agentId: "work", sessionKey: "global" },
+          { agentId: "work", sessionKey: "agent:work:main" },
           {
             sessionId: "work-parent",
             providerOverride: "selected-provider",

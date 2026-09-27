@@ -2,7 +2,7 @@ import { execFile, type ExecException } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import type { JsonTestResults } from "vitest/node";
 import packageJson from "../../package.json" with { type: "json" };
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
@@ -13,13 +13,22 @@ import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { proveNestedRetention } from "./nested-retention.test-support.js";
+import { createPreparedWorkerCompiler } from "./vitest-worker-artifacts.prepared.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const cacheDirs = useAutoCleanupTempDirTracker(afterAll);
+let compileCache: string;
+beforeAll(() => {
+  compileCache = cacheDirs.make("oc-state-cleanup-compile-");
+});
 const nestedLifetime = createFixtureLifetime();
 afterEach(() => nestedLifetime.cleanup());
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const posixIt = process.platform === "win32" ? it.skip : it;
 const testNodeExecPath = resolveTestNodeExecPath();
+const preparedCompiler = process.platform === "win32" ? undefined : createPreparedWorkerCompiler();
+beforeAll(() => preparedCompiler?.prepare());
+afterAll(() => preparedCompiler?.cleanup());
 
 function prepareVitestFixture(root: string, homeName = "home") {
   const tmp = path.join(root, "tmp");
@@ -374,6 +383,7 @@ export default {
       OPENCLAW_LIVE_TEST: "0",
       OPENCLAW_LIVE_GATEWAY: "0",
       CI: "1",
+      NODE_COMPILE_CACHE: compileCache,
       PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
       pnpm_config_verify_deps_before_run: "false",
     };
@@ -530,12 +540,22 @@ process.exitCode = (await completion).code ?? 1;`,
                     "--",
                     ...vitestArgs,
                   ];
+    // Keep each real runner's generation and cleanup independent; reuse only compiled bytes.
+    const childEnv =
+      preparedCompiler && (route === "main" || route === "batch")
+        ? preparedCompiler.env(env, "node")
+        : env;
     try {
       const result = await new Promise<{ code: ExecException["code"]; output: string }>(
         (resolve) => {
-          execFile(testNodeExecPath, args, { cwd: root, env }, (error, stdout, stderr) => {
-            resolve({ code: error ? error.code : 0, output: stdout + stderr });
-          });
+          execFile(
+            testNodeExecPath,
+            args,
+            { cwd: root, env: childEnv },
+            (error, stdout, stderr) => {
+              resolve({ code: error ? error.code : 0, output: stdout + stderr });
+            },
+          );
         },
       );
       expect(result.code, result.output).toBe(failRun ? 1 : 0);

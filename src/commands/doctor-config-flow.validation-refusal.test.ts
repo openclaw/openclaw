@@ -29,6 +29,7 @@ describe("doctor --fix with a validation-blocked candidate", () => {
         const configPath = await writeOpenClawConfig(home, {
           gatway: { port: 12345 },
           agents: { defaults: { heartbeat: { every: 5 } } },
+          plugins: { enabled: false },
         });
         const rawBefore = await fs.readFile(configPath, "utf-8");
         const ctx = await prepareDoctorContext(configPath);
@@ -42,7 +43,7 @@ describe("doctor --fix with a validation-blocked candidate", () => {
         expect(noteMock.mock.calls.some(([, title]) => title === "Doctor changes")).toBe(false);
 
         // The write must refuse gracefully — no throw, no change panel, no file write.
-        await expect(runWriteConfigHealth(ctx)).resolves.toBeUndefined();
+        await expect(runWriteConfigHealth(ctx)).resolves.toBe(false);
 
         expect(ctx.configWriteRefusal).toBe("validation");
         expect(ctx.configResultWriteCommitted).not.toBe(true);

@@ -11,7 +11,6 @@ export type LocalRunState = {
   assistantScope?: AssistantTextSnapshot["scope"];
   managedMediaUrls: Set<string>;
   lastBroadcastText?: string;
-  isBtw: boolean;
   question?: string;
   finishing: boolean;
   lifecycleEnded: boolean;
@@ -40,6 +39,13 @@ export type QueuedSessionRun = {
   promise: Promise<void>;
 };
 
+export function timeoutSecondsFromMs(timeoutMs?: number): string | undefined {
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs < 0) {
+    return undefined;
+  }
+  return String(Math.max(0, Math.ceil(timeoutMs / 1000)));
+}
+
 export function buildLocalQueuedPrompt(queue: NonNullable<LocalRunState["pendingQueue"]>): string {
   const summary = previewQueueSummaryPrompt({
     state: queue,
@@ -54,14 +60,6 @@ export function buildLocalQueuedPrompt(queue: NonNullable<LocalRunState["pending
         })
       : (queue.messages[0] ?? "");
   return [summary, prompt].filter(Boolean).join("\n\n");
-}
-
-export function createQueuedRunReadiness() {
-  let markReady!: () => void;
-  const promise = new Promise<void>((ready) => {
-    markReady = ready;
-  });
-  return { promise, markReady };
 }
 
 export async function waitForLocalRunShutdown(promises: Promise<void>[]): Promise<boolean> {

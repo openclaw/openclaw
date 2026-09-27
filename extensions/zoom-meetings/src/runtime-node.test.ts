@@ -1,8 +1,13 @@
-import { createMeetingNodeBrowserFixture } from "openclaw/plugin-sdk/test-fixtures";
+import {
+  createMeetingNodeBrowserFixture,
+  useMeetingTestState,
+} from "openclaw/plugin-sdk/test-fixtures";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
 import { zoomMeetingsConfig } from "./config.js";
 
 const resolveZoomMeetingsConfig = zoomMeetingsConfig.resolveConfig;
+const testState = useMeetingTestState(createOpenClawTestState);
 
 const realtimeMocks = vi.hoisted(() => ({
   healths: [] as Array<{ bridgeClosed: boolean }>,
@@ -73,6 +78,7 @@ describe("Zoom meetings node realtime recovery", () => {
             },
     });
     harness.state.inCall = false;
+    const logger = { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() };
     const runtime = new ZoomMeetingsRuntime({
       config: resolveZoomMeetingsConfig({
         chrome: { waitForInCallMs: 1 },
@@ -80,9 +86,10 @@ describe("Zoom meetings node realtime recovery", () => {
         realtime: { agentId: "consult" },
       }),
       fullConfig: {},
-      logger: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+      logger,
       runtime: harness.runtime,
     });
+    testState.track(runtime, { readWarnings: () => logger.warn.mock.calls });
 
     const joined = await runtime.join({
       agentId: "support",

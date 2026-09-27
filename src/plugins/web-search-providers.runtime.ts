@@ -26,7 +26,7 @@ const providerResolution = {
       configKey: "webSearch",
     }),
   mapRegistryProviders: ({ registry, onlyPluginIds }) =>
-    mapRegistryProviders({ entries: registry.webSearchProviders, onlyPluginIds }),
+    mapRegistryProviders({ registry, entries: registry.webSearchProviders, onlyPluginIds }),
 } satisfies WebProviderRuntimeResolution<PluginWebSearchProviderEntry>;
 
 function resolveLazyBundledWebSearchProviders(

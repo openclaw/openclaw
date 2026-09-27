@@ -17,7 +17,7 @@ export function emitCronOutcomeForJob(
   emitCronOutcomeEventForJob(state, job, result);
 }
 
-function cronOutcomeEvent(job: CronJob, result: TimedCronRunOutcome, runAtMs: number) {
+export function createCronOutcomeEvent(job: CronJob, result: TimedCronRunOutcome) {
   return {
     jobId: job.id,
     action: "finished",
@@ -35,7 +35,7 @@ function cronOutcomeEvent(job: CronJob, result: TimedCronRunOutcome, runAtMs: nu
     delivery: result.delivery,
     sessionId: result.sessionId,
     sessionKey: result.sessionKey,
-    runAtMs,
+    runAtMs: result.startedAt,
     durationMs: job.state.lastDurationMs,
     nextRunAtMs: job.state.nextRunAtMs,
     ...(result.triggerEval?.fired ? { triggerFired: true } : {}),
@@ -50,7 +50,7 @@ export function recordCronOutcomeForJob(
   job: CronJob,
   result: TimedCronRunOutcome,
 ): void {
-  const event = cronOutcomeEvent(job, result, result.startedAt);
+  const event = createCronOutcomeEvent(job, result);
   tryFinishCronTaskRun(state, {
     taskRunId: result.taskRunId,
     job,
@@ -71,7 +71,7 @@ export function emitCronOutcomeEventForJob(
 ): void {
   emit(
     state,
-    cronOutcomeEvent(job, result, result.startedAt),
+    createCronOutcomeEvent(job, result),
     cronFailureNotificationEventContext(result.failureNotificationDetail),
   );
 }

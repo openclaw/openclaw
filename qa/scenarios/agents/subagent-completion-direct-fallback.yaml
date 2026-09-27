@@ -86,7 +86,7 @@ flow:
                     return json === undefined ? null : json.length > limit ? { omitted: true, serializedCharacters: json.length } : value;
                   };
                   return {
-                    cursor: request.cursor, body: bounded(request.body, 262144),
+                    cursor: request.cursor, sessionId: request.sessionId, body: bounded(request.body, 262144),
                     prompt: bounded(request.prompt, 32768), toolOutput: bounded(request.toolOutput, 32768),
                     requestKind: request.requestKind, outcome: request.outcome, errorCode: request.errorCode,
                     plannedToolName: request.plannedToolName, plannedWireToolName: request.plannedWireToolName,
@@ -177,12 +177,23 @@ flow:
                         senderName: QA Terminal Reply Operator
                         text:
                           expr: "`Subagent terminal reply QA check: ${terminalCase.name}. Spawn one native worker, then finish the parent turn without waiting. Do not use ACP.`"
+                    # Child delivery can finish while the parent's acknowledgment is still queued.
                     - call: waitForCondition
                       saveAs: terminalTask
                       args:
                         - lambda:
                             async: true
-                            expr: "(async () => { const task = await readSettledTerminalTask(terminalCase.name); if (!task) return undefined; if (terminalCase.name !== 'silent' && (await readDirectFallbackReceipts(task)).length === 0) return undefined; const matchingCount = state.getSnapshot().messages.slice(startIndex).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === conversationId && String(candidate.text ?? '').trim() === terminalCase.marker).length; return terminalCase.expectedSendCount === 0 || matchingCount >= terminalCase.expectedSendCount ? task : undefined; })().catch(() => undefined)"
+                            expr: |
+                              (async () => {
+                                await env.mock?.terminalRequesters?.settle(env.gateway);
+                                const task = await readSettledTerminalTask(terminalCase.name);
+                                if (!task) return undefined;
+                                if (terminalCase.name !== 'silent' && (await readDirectFallbackReceipts(task)).length === 0) return undefined;
+                                const outbound = state.getSnapshot().messages.slice(startIndex).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === conversationId);
+                                if (!outbound.some((candidate) => !candidate.deleted && String(candidate.text ?? '').trim() === config.parentAcknowledgment)) return undefined;
+                                const matchingCount = outbound.filter((candidate) => String(candidate.text ?? '').trim() === terminalCase.marker).length;
+                                return terminalCase.expectedSendCount === 0 || matchingCount >= terminalCase.expectedSendCount ? task : undefined;
+                              })().catch(() => undefined)
                         - 60000
                         - 250
                     - set: caseOutbound
@@ -322,7 +333,7 @@ flow:
                 args:
                   - lambda:
                       async: true
-                      expr: "(async () => { const tasks = (await env.gateway.call('tasks.list', { agentId: 'qa', limit: 100 }, { timeoutMs: 10000 })).tasks ?? []; const selected = ['qa-terminal-private-first', 'qa-terminal-private-second'].map((title) => tasks.find((task) => task.title === title)); return selected.every((task) => task?.status === 'completed' && task?.deliveryStatus === 'delivered') ? selected : undefined; })()"
+                      expr: "(async () => { await env.mock?.terminalRequesters?.settle(env.gateway); const tasks = (await env.gateway.call('tasks.list', { agentId: 'qa', limit: 100 }, { timeoutMs: 10000 })).tasks ?? []; const selected = ['qa-terminal-private-first', 'qa-terminal-private-second'].map((title) => tasks.find((task) => task.title === title)); return selected.every((task) => task?.status === 'completed' && task?.deliveryStatus === 'delivered') ? selected : undefined; })()"
                   - 90000
                   - 250
               - set: privateRequests
@@ -354,7 +365,7 @@ flow:
                     expr: "`The actual private completion carrier lost the child's media reference: ${JSON.stringify({ carrier: privateCompletionCarrier.slice(0, 8192), childSessionKeys: privateTasks.map((task) => task.childSessionKey) })}`"
               - set: privateParentIds
                 value:
-                  expr: 'privateSpawns.map((request) => /Runtime:[^\n]*sessionId=([^\s|]+)/.exec(request.allInputText)?.[1])'
+                  expr: "privateSpawns.map((request) => request.sessionId)"
               - assert:
                   expr: "privateParentIds[0] && privateParentIds[0] === privateParentIds[1] && privateTasks[0].sessionKey === privateTasks[1].sessionKey && privateTasks[0].sessionKey === privateParentSessionKey"
                   message: Private continuation changed its parent session.
@@ -376,7 +387,7 @@ flow:
                 value:
                   expr: "privateSpawns.map((request) => privateTranscript.successfulToolCallEvents?.find((event) => event.name === (request.plannedWireToolName ?? request.plannedToolName) && event.toolCallId === (env.runtimeId !== 'codex' && request.plannedToolItemId ? `${request.plannedToolCallId}|${request.plannedToolItemId}` : request.plannedToolCallId)))"
               - assert:
-                  expr: "privateTranscript.successfulToolCallCounts.sessions_spawn === 2 && privateSpawnReceipts.every(Boolean) && privateSpawnReceipts[1].timestamp >= privateTasks[0].endedAt && !(privateTranscript.successfulToolCallCounts.message > 0) && privateRequests.every((request) => request.plannedToolName !== 'message')"
+                  expr: "privateSpawnReceipts.length === 2 && privateSpawnReceipts.every(Boolean) && new Set(privateSpawnReceipts.map((event) => event.toolCallId)).size === 2 && [...new Set(privateSpawns.map((request) => request.plannedWireToolName ?? request.plannedToolName))].every((wire) => privateTranscript.successfulToolCallCounts[wire] === privateSpawnReceipts.filter((event) => event.name === wire).length) && privateSpawnReceipts[1].timestamp >= privateTasks[0].endedAt && !(privateTranscript.successfulToolCallCounts.message > 0) && privateRequests.every((request) => request.plannedToolName !== 'message')"
                   message:
                     expr: "`private continuation lacks committed tool chronology or tried external messaging: tasks=${JSON.stringify(privateTasks)} transcript=${JSON.stringify(privateTranscript)}`"
               - set: activePhase
@@ -496,7 +507,7 @@ flow:
                 args:
                   - lambda:
                       async: true
-                      expr: "(async () => { const task = await readSettledTerminalTask('restart'); if (!task || (await readDirectFallbackReceipts(task)).length === 0) return undefined; const delivered = state.getSnapshot().messages.slice(restartStartIndex).some((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === restartConversationId && String(candidate.text ?? '').trim() === config.restartMarker); return delivered ? task : undefined; })().catch(() => undefined)"
+                      expr: "(async () => { await env.mock?.terminalRequesters?.settle(env.gateway); const task = await readSettledTerminalTask('restart'); if (!task || (await readDirectFallbackReceipts(task)).length === 0) return undefined; const delivered = state.getSnapshot().messages.slice(restartStartIndex).some((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === restartConversationId && String(candidate.text ?? '').trim() === config.restartMarker); return delivered ? task : undefined; })().catch(() => undefined)"
                   - 60000
                   - 250
               - set: restartMatches

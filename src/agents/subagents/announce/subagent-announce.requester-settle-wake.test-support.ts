@@ -55,6 +55,7 @@ export function completeBatch(
   batch: readonly SubagentRunRecord[],
   rearmGeneration?: number,
   outcome?: Result,
+  onCommitted?: () => void,
 ): void {
   const runIds = batch.map((entry) => entry.runId).toSorted();
   if (outcome) {
@@ -69,6 +70,7 @@ export function completeBatch(
       entry.requesterSettleWake = undefined;
     }
   }
+  onCommitted?.();
 }
 
 export const deliverSpy = vi.fn(async (_params: Record<string, unknown>): Promise<Result> => ({

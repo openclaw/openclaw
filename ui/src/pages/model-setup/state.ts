@@ -19,6 +19,20 @@ export type ModelSetupPageState =
   | { phase: "ready"; result: SystemAgentSetupDetectResult }
   | { phase: "detect-error"; message: string };
 
+export function preparedModelPageState(
+  result: SystemAgentSetupDetectResult,
+  modelTarget?: "utility",
+): ModelSetupPageState {
+  // Preparation may persist an unverified model; hide only the prepared role.
+  return {
+    phase: "ready",
+    result:
+      modelTarget === "utility"
+        ? { ...result, utilityModel: undefined, setupModel: undefined }
+        : { ...result, configuredModel: undefined, setupComplete: false },
+  };
+}
+
 export type ModelSetupActivationState =
   | { phase: "idle" }
   | { phase: "testing"; targetId: string }
@@ -64,6 +78,20 @@ type ModelSetupWizardPhase =
   | { phase: "error"; message: string };
 
 export type ModelSetupWizardState = ModelSetupWizardPhase & { authLabel?: string };
+export type ModelSetupWizardDraft = { stepId: string | null; value: unknown };
+
+export function updateModelSetupWizardDraft(
+  draft: ModelSetupWizardDraft,
+  state: ModelSetupWizardState,
+): ModelSetupWizardDraft {
+  if (state.phase === "idle") {
+    return { stepId: null, value: undefined };
+  }
+  if (state.phase === "step" && state.step.id !== draft.stepId) {
+    return { stepId: state.step.id, value: initialWizardValue(state.step) };
+  }
+  return draft;
+}
 
 export function activationTimeoutForKind(kind: string): number {
   // Match the Gateway-owned provider-auth wizard lifetime, including user sign-in.

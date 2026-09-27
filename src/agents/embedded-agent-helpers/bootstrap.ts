@@ -443,6 +443,11 @@ export function buildBootstrapContextFiles(
       ? Math.min(maxChars, USER_BOOTSTRAP_MAX_CHARS)
       : maxChars;
     const fileMaxChars = Math.max(1, Math.min(fileBudget, remainingTotalChars));
+    // Personal instructions are indivisible: never turn a cut-off directive into new policy.
+    if (file.personalUser && (file.content ?? "").trimEnd().length > fileMaxChars) {
+      opts?.warn?.("Personal USER.md exceeds the bootstrap budget; using shared defaults.");
+      continue;
+    }
     const trimmed = trimBootstrapContent(file.content ?? "", file.name, fileMaxChars);
     const contentWithinBudget = clampToBudget(trimmed.content, remainingTotalChars);
     if (!contentWithinBudget) {
@@ -457,6 +462,7 @@ export function buildBootstrapContextFiles(
     result.push({
       path: pathValue,
       content: contentWithinBudget,
+      ...(file.personalUser ? { personalUser: file.personalUser } : {}),
     });
   }
   return result;

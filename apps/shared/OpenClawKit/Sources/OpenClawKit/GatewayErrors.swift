@@ -1,6 +1,25 @@
 import Foundation
 import OpenClawProtocol
 
+func gatewayErrorDetails(_ error: ErrorShape?) -> [String: OpenClawProtocol.AnyCodable] {
+    var details = error?.details?.value as? [String: OpenClawProtocol.AnyCodable] ?? [:]
+    if let error {
+        if details["code"] == nil {
+            details["code"] = OpenClawProtocol.AnyCodable(error.code)
+        } else {
+            details["errorCode"] = OpenClawProtocol.AnyCodable(error.code)
+        }
+        details["message"] = OpenClawProtocol.AnyCodable(error.message)
+        if let retryable = error.retryable {
+            details["retryable"] = OpenClawProtocol.AnyCodable(retryable)
+        }
+        if let retryAfterMs = error.retryafterms {
+            details["retryAfterMs"] = OpenClawProtocol.AnyCodable(retryAfterMs)
+        }
+    }
+    return details
+}
+
 /// A route lease became stale before its request touched the channel. Unlike
 /// a socket cancellation, this proves the payload was never dispatched.
 public enum GatewayNodeSessionRequestError: Error, Sendable {
@@ -88,14 +107,10 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
         minimumProbeProtocol: Int? = nil)
     {
         let trimmedMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedDetailCode = detailCodeRaw?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedRecommendedNextStep =
-            recommendedNextStepRaw?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.message = trimmedMessage.isEmpty ? "gateway connect failed" : trimmedMessage
-        self.detailCodeRaw = trimmedDetailCode?.isEmpty == false ? trimmedDetailCode : nil
+        self.detailCodeRaw = Self.trimmedOrNil(detailCodeRaw)
         self.canRetryWithDeviceToken = canRetryWithDeviceToken
-        self.recommendedNextStepRaw =
-            trimmedRecommendedNextStep?.isEmpty == false ? trimmedRecommendedNextStep : nil
+        self.recommendedNextStepRaw = Self.trimmedOrNil(recommendedNextStepRaw)
         self.requestId = Self.trimmedOrNil(requestId)
         self.detailsReason = Self.trimmedOrNil(detailsReason)
         self.ownerRaw = Self.trimmedOrNil(ownerRaw)

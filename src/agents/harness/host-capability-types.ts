@@ -1,19 +1,12 @@
+import type {
+  ApprovalDecision,
+  ApprovalTerminalReason,
+} from "../../../packages/gateway-protocol/src/schema/approvals.js";
 import type { AnyAgentTool } from "../tools/common.js";
 
-type AgentHarnessHostApprovalDecision = "allow-once" | "allow-always" | "deny";
-
-type AgentHarnessHostApprovalTerminalReason =
-  | "user"
-  | "timeout"
-  | "malformed-verdict"
-  | "no-route"
-  | "run-aborted"
-  | "gateway-restart"
-  | "storage-corrupt";
-
 type AgentHarnessHostApprovalResult = Readonly<{
-  decision: AgentHarnessHostApprovalDecision | null | undefined;
-  terminalReason: AgentHarnessHostApprovalTerminalReason | null | undefined;
+  decision: ApprovalDecision | null | undefined;
+  terminalReason: ApprovalTerminalReason | null | undefined;
 }>;
 
 type AgentHarnessPreparedEnvironment = Readonly<{
@@ -21,6 +14,10 @@ type AgentHarnessPreparedEnvironment = Readonly<{
   localIdentityEnv: Readonly<Record<string, string>>;
   /** Local child destination facts; must not be projected into a remote or sandbox process. */
   localProcessEnv?: Readonly<Record<string, string>>;
+  /** Tool lookup on an owned local process; omit for remote, socket, or sandbox placement. */
+  localToolEnv?: Readonly<Record<string, string>>;
+  /** Prefix intent for runtimes with an explicitly authored native shell PATH. */
+  localToolPathPrepend?: readonly string[];
   /** Non-secret fact used to select the local GitHub identity overlay. */
   managedLocalIdentity: boolean;
 }>;
@@ -30,22 +27,89 @@ type AgentHarnessToolSurfaceOptions = Omit<
   "operationalRunInstance"
 >;
 
+type AgentHarnessModelExecutionBinder = (
+  model: import("@openclaw/model-catalog-core/model-catalog-refs").ProviderModelRef | undefined,
+) => Readonly<{ signal: AbortSignal; assertCurrent: () => void; release: () => void }> | undefined;
+
 export type AgentHarnessHostCapabilities = Readonly<{
   kind: "agent-harness-host-capability";
   version: 1;
   /** Fails closed unless this exact admitted run capability remains active. */
   assertActive: () => void;
+  /** Binds the actual native model; returns undefined only for runs without an operator source. */
+  bindModelExecution?: AgentHarnessModelExecutionBinder;
+  /** Retains the original source for already-admitted work beyond foreground completion. */
+  retainSourceAuthority?: () =>
+    | Readonly<{
+        assertCurrent: () => void;
+        signal?: AbortSignal;
+        /** Live preflight fact; absence means unknown, not an unrestricted source. */
+        modelPolicyRequired?: boolean;
+        /** Opaque equality for compatible active input; never authority by itself. */
+        sourceIdentity?: object;
+        /** Binds later dispatches while this retained work remains active. */
+        bindModelExecution?: AgentHarnessModelExecutionBinder;
+        release: () => void;
+      }>
+    | undefined;
   /** Reports one completed model call's output tokens to this admitted run's live total. */
   reportOutputTokens?: (outputTokens: number) => void;
   /** Adds native provenance only to this host's exact current admitted prompt. */
   annotateCurrentUserTurn?: (
     annotation: import("../../sessions/user-turn-transcript.types.js").UserTurnTranscriptAnnotation,
   ) => Promise<void>;
+  /** Execution-only document paths after the harness confirms unsandboxed local placement. */
+  prepareInputAttachments?: (request: {
+    placement: "local-host";
+    maxChars: number;
+    /** Omit for the admitted input; supply the current input for steering. */
+    turn?: Pick<
+      import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptParams,
+      "media" | "userTurnTranscriptRecorder"
+    >;
+    assertCurrent: () => void;
+    signal?: AbortSignal;
+  }) => Promise<string | undefined>;
   /** Rebuilds retained attachments under this host's captured media policy and run authority. */
   prepareContextMedia?: (request: {
     message: import("../runtime/index.js").AgentMessage;
     maxChars: number;
   }) => Promise<{ text?: string; images: import("../../llm/types.js").ImageContent[] }>;
+  /** Stages reply attachments under captured policy and live run authority. */
+  prepareReplyMedia?: (
+    request: {
+      /** Additional native session or transport authority, retained through publication. */
+      assertCurrent?: () => void;
+      signal?: AbortSignal;
+    } & (
+      | ({
+          workspaceRoot?: string;
+          readWorkspaceFile: (
+            relativePath: string,
+            options: { maxBytes: number; signal: AbortSignal },
+          ) => Promise<Buffer>;
+        } & (
+          | {
+              kind: "attempt";
+              attempt: import("../embedded-agent-runner/run/attempt-result.js").EmbeddedRunAttemptWithReceiptEvidence;
+            }
+          | { kind: "payload"; payload: import("../../auto-reply/reply-payload.js").ReplyPayload }
+        ))
+      | {
+          /** Already-admitted provider bytes, not permission to read a host path. */
+          kind: "artifact";
+          buffer: Buffer;
+          fileName: string;
+          assertCurrent: () => void;
+        }
+    ),
+  ) => Promise<
+    | {
+        kind: "attempt";
+        preparedMedia: import("../../auto-reply/reply/reply-media-paths.js").PreparedReplyMedia;
+      }
+    | { kind: "payload"; payload: import("../../auto-reply/reply-payload.js").ReplyPayload }
+  >;
   /** Closure-bound event sink backed by the host-owned trajectory recorder. */
   trajectory?: Readonly<{
     recordEvent: (type: string, data?: Record<string, unknown>) => void;
@@ -53,6 +117,8 @@ export type AgentHarnessHostCapabilities = Readonly<{
   }>;
   /** Closure-bound non-secret maps prepared before harness placement. */
   preparedEnvironment?: () => AgentHarnessPreparedEnvironment;
+  /** Current bounded presence hint; physical activity does not identify the message source. */
+  activeComputerContext?: () => string;
   /** Applies the exact host caller binding to a plugin-built tool surface. */
   bindToolSurface: (tools: AnyAgentTool[], options?: Readonly<{ cwd?: string }>) => AnyAgentTool[];
   /** Creates and binds core tools without exposing admitted-run correlation to the plugin. */
@@ -85,16 +151,18 @@ export type AgentHarnessHostCapabilities = Readonly<{
     signal?: AbortSignal;
     title: string;
     description: string;
+    /** Full action evidence for authenticated reviewer surfaces, not channel messages. */
+    detail?: string;
     severity: "info" | "warning";
     toolName: string;
     toolCallId?: string;
     mcpTool?: { server: string; tool: string };
     /** Persistence-only proof; loss of correlation does not cancel a one-shot approval. */
     isMcpToolApprovalActive?: () => boolean;
-    allowedDecisions?: AgentHarnessHostApprovalDecision[];
+    allowedDecisions?: ApprovalDecision[];
     timeoutMs: number;
     transportTimeoutMs?: number;
-  }) => Promise<{ id?: string; decision?: AgentHarnessHostApprovalDecision | null } | undefined>;
+  }) => Promise<{ id?: string; decision?: ApprovalDecision | null } | undefined>;
   waitForApproval: (request: {
     approvalId: string;
     timeoutMs: number;

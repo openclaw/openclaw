@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -13,8 +14,8 @@ import {
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
-it.each(["malformed", "nonregular-wal"])(
-  "refuses an indeterminate agent family: %s",
+it.each(["malformed", "nonregular-wal", "empty-worker"])(
+  "reports an actionable schema inspection failure: %s",
   async (kind) => {
     const stateDir = fs.realpathSync(dirs.make("update-schema-invalid-"));
     const file = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
@@ -25,12 +26,43 @@ it.each(["malformed", "nonregular-wal"])(
       const db = openNodeSqliteDatabase(file);
       db.exec("PRAGMA journal_mode=WAL; PRAGMA user_version=3;");
       db.close();
-      fs.mkdirSync(`${file}-wal`);
+      if (kind === "nonregular-wal") {
+        fs.mkdirSync(`${file}-wal`);
+      }
+    }
+    const candidateRoot = path.join(stateDir, "candidate-package");
+    if (kind === "empty-worker") {
+      const worker = path.join(
+        candidateRoot,
+        "dist",
+        runtimeProcessEntrypoints.updateCandidateState.distWorkerPath,
+      );
+      fs.mkdirSync(path.dirname(worker), { recursive: true });
+      fs.writeFileSync(worker, "process.exitCode = 1;\n");
     }
     const before = fs.readFileSync(file);
-    await expect(readUpdateStateSchemaVersions({ stateDir, config: {} })).rejects.toThrow(
-      /State schema inspection failed/,
+    const failure = await readUpdateStateSchemaVersions({
+      stateDir,
+      config: {},
+      ...(kind === "empty-worker" ? { root: candidateRoot } : {}),
+    }).catch((error: unknown) => error);
+    assert(failure instanceof Error);
+    expect(failure).toHaveProperty(
+      "message",
+      expect.stringContaining("State schema inspection failed"),
     );
+    const message = failure.message;
+    expect
+      .soft(message)
+      .toContain(kind === "empty-worker" ? path.join(stateDir, "state", "openclaw.sqlite") : file);
+    expect
+      .soft(message)
+      .toContain(kind === "empty-worker" ? "shared database discovery" : "agent schema inspection");
+    expect.soft(message).toMatch(/after \d+(?:\.\d+)? seconds/);
+    expect.soft(message).toContain("then retry the update");
+    if (kind === "empty-worker") {
+      expect.soft(message).toContain("Worker exited without diagnostic output");
+    }
     expect(fs.readFileSync(file)).toEqual(before);
     if (kind === "nonregular-wal") {
       expect(fs.statSync(`${file}-wal`).isDirectory()).toBe(true);
@@ -163,12 +195,11 @@ it("fences WAL schema migration without copying a large registered agent payload
     PRAGMA user_version=3; PRAGMA wal_checkpoint(TRUNCATE);
   `);
   expect(fs.statSync(agentPath).size).toBeGreaterThan(64 * 1024 * 1024);
-  // Constrain the actual child's filesystem copy path, which differs from
-  // SQLite backup. Metadata reads remain real, including native WAL handling.
+  // Shared discovery gets one native snapshot; agent metadata must not copy its payload.
   fs.writeFileSync(
     preload,
     `
-    const fs = require('node:fs');
+    const fs = require('node:fs'), sqlite = require('node:sqlite');
     const source = ${JSON.stringify(agentPath)}, shared = ${JSON.stringify(sharedPath)};
     const marker = ${JSON.stringify(copiedShared)};
     const open = fs.openSync, read = fs.readSync, close = fs.closeSync;
@@ -180,11 +211,16 @@ it("fences WAL schema migration without copying a large registered agent payload
     };
     fs.readSync = function(fd, buffer, offset, length, position) {
       if (sources.get(fd) === source && length > 4096) throw new Error('agent payload copy forbidden');
-      if (sources.get(fd) === shared && length > 4096) fs.writeFileSync(marker, 'copied');
       return read.call(this, fd, buffer, offset, length, position);
     };
     fs.closeSync = function(fd) { sources.delete(fd); return close.call(this, fd); };
-    require('node:sqlite').backup = async () => { throw new Error('agent backup forbidden'); };
+    const backup = sqlite.backup;
+    sqlite.backup = async function(database, ...args) {
+      if (database.location() !== shared) throw new Error('agent backup forbidden');
+      const pages = await backup(database, ...args);
+      fs.writeFileSync(marker, 'copied');
+      return pages;
+    };
   `,
   );
   const env = { ...process.env, ...sqliteWorkerPreloadEnv(preload), XDG_CACHE_HOME: cache };

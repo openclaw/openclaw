@@ -4,6 +4,7 @@ import {
   executionOwnerBindingFromAdmission,
   type ExecutionOwnerBindingResult,
 } from "../audit/execution-owner-binding.js";
+import { readSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { withSharedStateWriteCoordinator } from "../state/openclaw-state-db-write-coordination.js";
 import {
@@ -13,17 +14,15 @@ import {
   type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import {
-  bindTaskRunExecutionInDatabase,
-  deleteTaskRowsWithDeliveryState,
-  listTaskRecordsByOwnerKeyInDatabase,
   listTaskRecordsByRuntimeSourceIdInDatabase,
   readTaskRegistrySnapshot,
   readTaskRegistryMutationSnapshotInDatabase,
   readTaskRegistrySnapshotIfReady,
   upsertTaskDeliveryStateInDatabase,
   upsertTaskWithDeliveryStateInDatabase,
-  type TaskRegistryDatabase,
   type TaskRegistryReadOnlyLoadResult,
 } from "./task-registry.store.kernel.js";
 import type {
@@ -32,46 +31,35 @@ import type {
 } from "./task-registry.store.types.js";
 import type { TaskDeliveryState, TaskRecord, TaskRuntime } from "./task-registry.types.js";
 
-let cachedDatabase: TaskRegistryDatabase | null = null;
-
-function openTaskRegistryDatabase(): TaskRegistryDatabase {
-  const database = openOpenClawStateDatabase();
-  const pathname = database.path;
-  if (cachedDatabase && cachedDatabase.path === pathname && cachedDatabase.db.isOpen) {
-    return cachedDatabase;
-  }
-  if (cachedDatabase && !cachedDatabase.db.isOpen) {
-    cachedDatabase = null;
-  }
-  cachedDatabase = {
-    db: database.db,
-    path: pathname,
-  };
-  return cachedDatabase;
-}
-
 function withWriteTransaction(write: (database: OpenClawStateDatabase) => void) {
   // Open once before BEGIN; the callback receives that exact shared-state owner.
-  openTaskRegistryDatabase();
+  openOpenClawStateDatabase();
   runOpenClawStateWriteTransaction((database) => write(database));
 }
 
 export function loadTaskRegistryStateFromSqlite(): TaskRegistryStoreSnapshot {
-  return readTaskRegistrySnapshot(openTaskRegistryDatabase());
+  return readTaskRegistrySnapshot(openOpenClawStateDatabase());
 }
 
 export function withTaskRegistrySqliteMutation<T>(operation: () => T): T {
-  const database = openTaskRegistryDatabase();
+  const database = openOpenClawStateDatabase();
   return withSharedStateWriteCoordinator(
     { databasePath: database.path, existing: database.db, operationLabel: "task.mutation" },
     operation,
   );
 }
 
+/** A native compatibility caller joins already-granted worker writes before selecting rows. */
+export function settleTaskRegistrySqliteWrites(join: (deadlineMs: number) => void): void {
+  const deadlineMs = performance.now() + readSqliteBusyTimeout(openOpenClawStateDatabase().db);
+  runOpenClawStateWriteTransaction(() => {}, undefined, { operationLabel: "task.event.settle" });
+  join(deadlineMs);
+}
+
 export function loadTaskRegistryMutationStateFromSqlite(
-  scope: TaskRegistryMutationScope,
+  scopes: readonly TaskRegistryMutationScope[],
 ): TaskRegistryStoreSnapshot {
-  return readTaskRegistryMutationSnapshotInDatabase(openTaskRegistryDatabase().db, scope);
+  return readTaskRegistryMutationSnapshotInDatabase(openOpenClawStateDatabase().db, scopes);
 }
 
 /** Loads task records without creating or migrating shared state. */
@@ -87,17 +75,6 @@ export function loadTaskRegistryStateFromSqliteReadOnlyResult(): TaskRegistryRea
       snapshot: { tasks: new Map(), deliveryStates: new Map() },
     }
   );
-}
-
-export async function listTaskRegistryRecordsByOwnerKeyFromSqlite(
-  ownerKey: string,
-): Promise<TaskRecord[]> {
-  const key = ownerKey.trim();
-  if (!key) {
-    return [];
-  }
-  const { db } = openTaskRegistryDatabase();
-  return listTaskRecordsByOwnerKeyInDatabase(db, key);
 }
 
 /** Reads task rows for one runtime/source without restoring the process registry snapshot. */
@@ -117,19 +94,38 @@ export function listTaskRegistryRecordsByRuntimeSourceIdFromSqlite(params: {
 }
 
 /** Binds only the exact task row selected before admission; runId is never a join key. */
-export function bindTaskRunExecution(params: {
+export async function bindTaskRunExecution(params: {
   admitted: AdmittedRunContext;
   taskId: string;
-  options?: OpenClawStateDatabaseOptions;
-}): ExecutionOwnerBindingResult {
+  options?: Pick<OpenClawStateDatabaseOptions, "path" | "env">;
+  context?: OpenClawStateWorkerContext;
+  assertCurrent?: () => void;
+}): Promise<ExecutionOwnerBindingResult> {
   const binding = executionOwnerBindingFromAdmission(params.admitted);
   if (!binding) {
     return "disabled";
   }
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => bindTaskRunExecutionInDatabase(db, params.taskId, binding),
-    params.options,
-    { operationLabel: "task.run.execution-binding" },
+  const context = params.context ?? captureOpenClawStateWorkerContext(params.options);
+  const input = { taskId: params.taskId, binding };
+  const assertOwnerCurrent = params.assertCurrent;
+  const assertCurrent = () => {
+    context.admission.assertCurrent();
+    assertOwnerCurrent?.();
+  };
+  const [{ runOpenClawStateWorkerOperation }, { createSqliteWorkerWriteAdmission }] =
+    await Promise.all([
+      import("../state/openclaw-state-worker-store.js"),
+      import("../infra/sqlite-worker-store.js"),
+    ]);
+  return runOpenClawStateWorkerOperation(
+    context,
+    (scope) => scope.execute({ type: "tasks.bindExecution", input }),
+    {
+      assertCurrent,
+      createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
+        context.admission.databasePath,
+      ]),
+    },
   );
 }
 
@@ -140,17 +136,10 @@ export function upsertTaskWithDeliveryStateToSqlite(params: {
   withWriteTransaction((database) => upsertTaskWithDeliveryStateInDatabase(database, params));
 }
 
-export function deleteTaskAndDeliveryStateFromSqlite(taskId: string) {
-  withWriteTransaction(({ db }) => {
-    deleteTaskRowsWithDeliveryState(db, taskId);
-  });
-}
-
 export function upsertTaskDeliveryStateToSqlite(state: TaskDeliveryState) {
   withWriteTransaction(({ db }) => upsertTaskDeliveryStateInDatabase(db, state));
 }
 
 export function closeTaskRegistryDatabase() {
-  cachedDatabase = null;
   closeOpenClawStateDatabase();
 }

@@ -1,0 +1,34 @@
+title: Gateway repeated-request timeout recovery
+
+scenario:
+  id: gateway-repeated-request-recovery
+  surface: gateway
+  category: gateway.health-diagnostics-and-repair
+  coverage:
+    primary:
+      - gateway.stability-diagnostics
+      - session-memory.session-maintenance-warnings
+    secondary:
+      - agent-runtime.failure-recovery-retry-policy
+      - session-memory.session-diagnostic-reports
+  objective: Verify a real Gateway reports a repeatedly stalled provider run without aborting it before the provider deadline, then settles the failed run before draining one queued follow-up.
+  successCriteria:
+    - A real child Gateway records repeated model-call starts and bounded session-stalled diagnostics while the mock provider deliberately stops making progress.
+    - The liveness heartbeat does not request or complete competing recovery while the provider still owns its deadline.
+    - The provider timeout settles the original run as an error with diagnostic failure evidence.
+    - Exactly one queued follow-up drains after terminal settlement and persists its expected assistant reply in chat history.
+    - Retries stay on the selected model and the final stability snapshot contains no invented recovery completion.
+  docsRefs:
+    - docs/gateway/diagnostics.md
+    - docs/concepts/messages.md
+    - docs/help/testing.md
+  codeRefs:
+    - src/gateway/server-methods/diagnostics.ts
+    - src/logging/diagnostic-stability.ts
+    - src/gateway/server-lifecycle.ts
+    - src/auto-reply/reply/queue/drain.ts
+    - test/e2e/qa-lab/runtime/gateway-repeated-request-recovery.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/gateway-repeated-request-recovery.e2e.test.ts
+    summary: Run a real child Gateway through repeated provider requests, bounded stalled-session diagnostics, provider timeout settlement, and one queued follow-up drain.

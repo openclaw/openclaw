@@ -10,16 +10,14 @@ import {
 import { SessionManager } from "../../agents/sessions/index.js";
 import { onAgentRuntimeEvent } from "../../infra/agent-events.js";
 import type { Message } from "../../llm/types.js";
-import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import {
-  readSkillReviewOutcomes,
-  recordSkillExperienceReviewOutcome,
-} from "./collection-review-state.js";
+import { recordSkillExperienceReviewOutcome } from "./collection-review-state.js";
+import { readSkillCuratorReviewStatus } from "./collection-review-state.test-support.js";
 import { assertExperienceReviewDecision } from "./experience-review-decision.test-support.js";
 import { observeExperienceReview } from "./experience-review-observation.test-support.js";
 import type { ExperienceReviewCandidate } from "./experience-review-scheduler.js";
@@ -78,7 +76,7 @@ beforeAll(async () => {
 });
 
 function logReviewOutcomes(
-  reviews: ReturnType<typeof readSkillReviewOutcomes>["experienceReviews"],
+  reviews: ReturnType<typeof readSkillCuratorReviewStatus>["experienceReviews"],
 ) {
   // Persisted failures contain raw provider errors; keep only structured
   // outcome metadata in CI logs, regardless of secret spelling or format.
@@ -100,7 +98,7 @@ afterAll(async () => {
   unsubscribeDiagnostics();
   if (LIVE) {
     console.log("WORKSHOP_RUNTIME_DIAGNOSTICS", JSON.stringify([...reviewDiagnostics.values()]));
-    logReviewOutcomes(readSkillReviewOutcomes().experienceReviews);
+    logReviewOutcomes(readSkillCuratorReviewStatus().experienceReviews);
   }
   await testState.cleanup();
   await tempDirs.cleanup();
@@ -116,14 +114,14 @@ async function candidate(
 
 describe("skill experience review diagnostics", () => {
   it("logs persisted failure outcomes without raw provider error text", async () => {
-    const liveOutcomesBefore = readSkillReviewOutcomes();
+    const liveOutcomesBefore = readSkillCuratorReviewStatus();
     const diagnosticWorkspace = await tempDirs.make("openclaw-live-skill-review-diagnostic-");
     // Workspace keys share one database. Isolate synthetic failures so the
     // live afterAll output contains only outcomes from actual review runs.
     const diagnosticStore = { path: path.join(diagnosticWorkspace, "openclaw.sqlite") };
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     try {
-      recordSkillExperienceReviewOutcome(
+      await recordSkillExperienceReviewOutcome(
         "main",
         diagnosticWorkspace,
         {
@@ -134,7 +132,7 @@ describe("skill experience review diagnostics", () => {
         },
         diagnosticStore,
       );
-      logReviewOutcomes(readSkillReviewOutcomes(diagnosticStore).experienceReviews);
+      logReviewOutcomes(readSkillCuratorReviewStatus(diagnosticStore).experienceReviews);
       expect(log).toHaveBeenCalledOnce();
       const [label, json] = log.mock.calls[0]!;
       expect(label).toBe("WORKSHOP_REVIEW_OUTCOMES");
@@ -144,10 +142,10 @@ describe("skill experience review diagnostics", () => {
         usage: { inputTokens: 3, cachedInputTokens: 1, outputTokens: 2 },
       });
       expect(json).not.toContain("synthetic-workshop-credential");
-      expect(readSkillReviewOutcomes()).toEqual(liveOutcomesBefore);
+      expect(readSkillCuratorReviewStatus()).toEqual(liveOutcomesBefore);
     } finally {
       log.mockRestore();
-      closeOpenClawStateDatabaseByPath(diagnosticStore.path);
+      await closeOpenClawStateDatabaseByPathAsync(diagnosticStore.path);
     }
   });
 });
@@ -223,7 +221,7 @@ describeLive("skill experience draft-only review live OpenAI eval", () => {
         agentId: "main",
         runId,
       });
-      const outcomes = Object.values(readSkillReviewOutcomes().experienceReviews);
+      const outcomes = Object.values(readSkillCuratorReviewStatus().experienceReviews);
       expect(outcomes).toHaveLength(1);
       const decision = assertExperienceReviewDecision({
         observation,

@@ -224,6 +224,7 @@ async function resolveOfficialManagedInstallSpec(params: {
 type ManagedPluginSourceInstallParams = {
   request: ManagedPluginSourceInstallRequest;
   snapshot: ConfigSnapshotForInstallPersist;
+  enable?: boolean;
   env?: NodeJS.ProcessEnv;
   logger?: PluginInstallLogger & { terminalLinks?: boolean };
   safetyOverrides?: InstallSafetyOverrides;
@@ -240,7 +241,7 @@ type ManagedPluginSourceInstallParams = {
 
 export type ManagedPluginInstallOptions = Omit<
   ManagedPluginSourceInstallParams,
-  "request" | "snapshot" | "acknowledgeCapabilities"
+  "request" | "snapshot" | "acknowledgeCapabilities" | "enable"
 > & {
   /** The enclosing Claw coordinator owns its package lease and adoption record. */
   clawManaged?: boolean;

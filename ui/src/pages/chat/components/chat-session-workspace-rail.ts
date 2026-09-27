@@ -4,6 +4,7 @@ import { keyed } from "lit/directives/keyed.js";
 import { renderCopyButton } from "../../../components/copy-button.ts";
 import { shortestFileLabels } from "../../../components/file-kind.ts";
 import { icons } from "../../../components/icons.ts";
+import { currentThemeBranding } from "../../../components/neutral-mark.ts";
 import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
@@ -358,7 +359,7 @@ export function renderSessionWorkspaceRail(
                 ${renderRailHeaderAction({ icon: icons.diff, label: t("chat.sessionDiff.show"), onClick: sessionWorkspace.onOpenDiff, className: "chat-session-diff-toggle" })}
                 ${renderRailHeaderAction({ icon: icons.terminal, label: t("terminal.toggle"), onClick: sessionWorkspace.onToggleTerminal })}
                 ${renderRailHeaderAction({ icon: icons.globe, label: t("browser.toggle"), onClick: sessionWorkspace.onToggleBrowser })}
-                ${renderRailHeaderAction({ icon: icons.lobster, label: t("custodian.panel.toggle"), onClick: sessionWorkspace.onToggleCustodian })}
+                ${renderRailHeaderAction({ icon: currentThemeBranding().mascot === "none" ? icons.shieldCheck : icons.lobster, label: t("custodian.panel.toggle"), onClick: sessionWorkspace.onToggleCustodian })}
                 ${
                   sessionWorkspace.narrowLayout
                     ? nothing

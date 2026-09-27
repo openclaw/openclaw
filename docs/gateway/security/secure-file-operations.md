@@ -42,6 +42,18 @@ fs-safe still maps the retired `FS_SAFE_PYTHON_MODE` and `OPENCLAW_FS_SAFE_PYTHO
 
 Use `require` when all native-capable operations must fail if the platform binding is unavailable. `auto` allows documented JavaScript fallbacks; no-clobber Root moves and Windows secure credential reads always require their native primitives.
 
+The Linux GNU addons in fs-safe 0.20.0 target glibc 2.28 and load on Ubuntu
+20.04's glibc 2.31. Older addons can fail with a missing `GLIBC_2.33` or
+`GLIBC_2.34` requirement. When a loader error reaches update diagnostics,
+support reports retain the missing numeric GLIBC version while redacting paths.
+
+Candidate update snapshots copy plugin files through fs-safe's portable
+create-only publication path. They do not require a no-clobber move: copying
+preserves the serving files, rejects an existing destination, and checks the
+source against the admitted inventory. SQLite snapshots keep their separate
+integrity, content, and publication checks. An unavailable addon alone does not
+justify skipping those checks or abandoning a snapshot that can be made safely.
+
 ## What stays protected without native acceleration
 
 With the helper off, OpenClaw still gets fs-safe's Node-only guardrails:
@@ -55,6 +67,11 @@ With the helper off, OpenClaw still gets fs-safe's Node-only guardrails:
 - applies private file modes for secrets and state files where the API requires them.
 
 This covers OpenClaw's normal threat model: trusted gateway code handling untrusted model/plugin/channel path input inside a single trusted operator boundary.
+
+Ordinary reads return bytes from an admitted file handle without freezing the file
+against in-place writes. Writers should use atomic replacement when readers need
+complete old-or-new contents. Migration and publication owners separately verify
+their recorded content and ownership before removing or replacing files.
 
 ## What native acceleration adds
 
@@ -72,8 +89,8 @@ In `require` mode, an unavailable or unloadable helper normally causes `helper-u
 
 ## Plugin and core guidance
 
-- Plugin-facing file access should go through `openclaw/plugin-sdk/*` helpers, not raw `fs`. This applies when a path comes from a message, model output, config, or plugin input.
-- Core code should use the fs-safe wrappers under `src/infra/*` so OpenClaw's process policy applies consistently.
+- Plugin-facing file access should use `openclaw/plugin-sdk/*` helpers when a path comes from a message, model output, config, or plugin input. Plugins can use reviewed fs-safe primitives directly when they declare their own fs-safe dependency and retain the applicable path policy.
+- Core code should import fs-safe primitives from their focused package entry points. Keep OpenClaw adapters where they own behavior, including secret-directory mode repair, archive durability, producer isolation, and public SDK compatibility. Pure re-exports are unnecessary: fs-safe owns its process defaults.
 - Archive extraction should use the fs-safe archive helpers with explicit size, entry-count, link, and destination limits.
 - Secrets should use OpenClaw secret helpers or fs-safe secret/private-state helpers. Do not hand-roll mode checks around `fs.writeFile`.
 - For hostile local-user isolation, do not rely on fs-safe alone. Run separate gateways under separate OS users/hosts, or use sandboxing.

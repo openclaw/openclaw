@@ -3,13 +3,13 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
+import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
 import type { ChatItem, ChatQueueItem, ToolCard } from "../../lib/chat/chat-types.ts";
 import { extractTextCached, readTranscriptMediaEntries } from "../../lib/chat/message-extract.ts";
 import {
   canvasPreviewsMatch,
   readCanvasContentPreview,
-  stripMessageDisplayMetadataText,
   normalizeRoleForGrouping,
   normalizeMessage,
 } from "../../lib/chat/message-normalizer.ts";
@@ -260,13 +260,7 @@ export function findCanvasInsertionIndex(
 }
 
 function resolveMessageToolUseId(message: Record<string, unknown>): string | undefined {
-  for (const field of ["tool_call_id", "toolCallId", "tool_use_id", "toolUseId"] as const) {
-    const value = message[field];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return undefined;
+  return resolveToolUseId({ ...message, id: undefined });
 }
 
 export function resolveToolBlockId(
@@ -283,14 +277,17 @@ export function isPendingSendMessage(message: unknown): boolean {
 export function readPendingSendStatus(message: unknown): {
   error?: string;
   id: string;
-  state: "failed" | "unconfirmed" | "waiting-reconnect";
+  state: "failed" | "unconfirmed" | "held" | "waiting-reconnect";
 } | null {
   const metadata = asRecord(asRecord(message)?.["__openclaw"]);
   const state = metadata?.state;
   const id = metadata?.id;
   if (
     metadata?.kind !== "pending-send" ||
-    (state !== "failed" && state !== "unconfirmed" && state !== "waiting-reconnect") ||
+    (state !== "failed" &&
+      state !== "unconfirmed" &&
+      state !== "held" &&
+      state !== "waiting-reconnect") ||
     typeof id !== "string"
   ) {
     return null;
@@ -417,13 +414,15 @@ export function hasRenderableNormalizedMessage(
 }
 
 export function sanitizeStreamText(text: string): string {
-  const stripped = stripMessageDisplayMetadataText(text);
+  const stripped = stripInboundMetadata(text);
   return stripped.trim().length > 0 ? stripped : "";
 }
 
 export function queuedSendThreadMessage(item: ChatQueueItem): Record<string, unknown> | null {
   return buildLocalUserMessage({
     text: item.text,
+    workContext: item.workContext,
+    mentions: item.mentions,
     attachments: item.attachments,
     createdAt: item.createdAt,
     runId: item.sendRunId ?? item.pendingRunId,

@@ -1,5 +1,6 @@
 import { nothing, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
+import { focusWithoutTooltip } from "../../../components/tooltip.ts";
 import type { ChatAttachment, ChatSelectionAnnotation } from "../../../lib/chat/chat-types.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
@@ -25,6 +26,7 @@ export function currentChatComments(props: ChatAttachmentControlsProps, sessionK
 class ChatCommentController extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) props!: ChatAttachmentControlsProps;
   @property() sessionKey = "";
+  @property() paneId = "";
   @property({ type: Boolean }) presented = true;
   private root: HTMLElement | null = null;
   private editorOwner?: AbortController;
@@ -78,7 +80,7 @@ class ChatCommentController extends OpenClawLightDomContentsElement {
 
   protected override updated() {
     if (!this.root) {
-      this.root = this.closest(".card.chat");
+      this.root = this.closest(".chat");
       this.root?.addEventListener("openclaw-comment-action", this.handleCommentAction);
     }
   }
@@ -133,6 +135,11 @@ class ChatCommentController extends OpenClawLightDomContentsElement {
     if (!(event instanceof CustomEvent) || !this.canChange(this.props.readSignal)) {
       return;
     }
+    if (event.detail?.action === "delete-all") {
+      event.stopPropagation();
+      this.clearComments();
+      return;
+    }
     const attachment = currentChatComments(this.props, this.sessionKey).find(
       (item) => item.id === event.detail?.id,
     );
@@ -141,12 +148,16 @@ class ChatCommentController extends OpenClawLightDomContentsElement {
     }
     event.stopPropagation();
     if (event.detail.action === "delete") {
-      this.deleteComment(attachment.id);
+      const preview =
+        event.target instanceof HTMLElement
+          ? event.target.closest<HTMLElement>(".chat-comment-preview--editable")
+          : null;
+      this.deleteComment(attachment.id, preview);
     } else if (event.detail.action === "edit" && event.target instanceof HTMLElement) {
       // Opening must not queue a transcript scroll that would dismiss the editor.
       const trigger = event.target
         .closest("openclaw-tooltip")
-        ?.querySelector<HTMLElement>(".chat-selection-annotations__chip");
+        ?.querySelector<HTMLElement>(".chat-selection-annotations__trigger");
       this.editComment(attachment, this.visiblePin(attachment.id) ?? trigger ?? event.target);
     }
   };
@@ -159,14 +170,52 @@ class ChatCommentController extends OpenClawLightDomContentsElement {
       ?.focus({ preventScroll: true });
   }
 
-  private deleteComment(id: string) {
+  private clearComments() {
     this.retireEditor();
+    const removed = currentChatComments(this.props, this.sessionKey);
+    if (removed.length === 0) {
+      return;
+    }
+    const ids = new Set(removed.map((item) => item.id));
+    const current = this.currentAttachments();
+    this.changeAttachments(
+      current,
+      current.filter((item) => !ids.has(item.id)),
+    );
+    this.focusComposer();
+  }
+
+  private deleteComment(id: string, preview: HTMLElement | null = null) {
+    this.retireEditor();
+    const signal = this.props.readSignal;
+    const sessionKey = this.sessionKey;
+    const comments = currentChatComments(this.props, sessionKey);
+    const index = comments.findIndex((item) => item.id === id);
+    const next = comments[index + 1] ?? comments[index - 1];
     const current = this.currentAttachments();
     this.changeAttachments(
       current,
       current.filter((item) => item.id !== id),
     );
-    this.focusComposer();
+    if (!preview || !next) {
+      this.focusComposer();
+      return;
+    }
+    // Wait for the attachment owner to render the renumbered list before moving focus.
+    this.focusFrame = requestAnimationFrame(() => {
+      this.focusFrame = undefined;
+      if (
+        !this.canChange(signal) ||
+        this.sessionKey !== sessionKey ||
+        !preview.isConnected ||
+        !preview.hasAttribute("open")
+      ) {
+        return;
+      }
+      preview
+        .querySelector<HTMLElement>(`[data-comment-delete="${CSS.escape(next.id)}"]`)
+        ?.focus({ preventScroll: true });
+    });
   }
 
   private readonly syncEditorAnchor = () => {
@@ -187,6 +236,7 @@ class ChatCommentController extends OpenClawLightDomContentsElement {
     this.editingId = attachment.id;
     this.editorAnchor = anchor;
     this.positionEditor = showChatAnnotationEditor({
+      paneId: this.paneId,
       anchorRect: anchor.getBoundingClientRect(),
       anchorElement: anchor,
       sourceRange: this.root
@@ -221,7 +271,7 @@ class ChatCommentController extends OpenClawLightDomContentsElement {
           if (this.canChange(signal)) {
             const target = this.visiblePin(replacement.id) ?? (anchor.isConnected ? anchor : null);
             if (target) {
-              target.focus({ preventScroll: true });
+              focusWithoutTooltip(target);
             } else {
               this.focusComposer();
             }
@@ -236,7 +286,7 @@ class ChatCommentController extends OpenClawLightDomContentsElement {
       },
       onCancel: () => {
         this.retireEditor();
-        anchor.focus({ preventScroll: true });
+        focusWithoutTooltip(anchor);
       },
     });
     if (this.root) {

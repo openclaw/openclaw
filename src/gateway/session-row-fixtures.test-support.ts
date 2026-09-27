@@ -54,7 +54,7 @@ export async function seedCompletedSessionTranscript<T extends CompletedReply>(p
   return params.message;
 }
 
-/** Legacy rows intentionally lack display metadata until their real background backfill. */
+/** Legacy rows retain missing titles until Doctor repairs them; previews remain transient. */
 export async function seedSessionListBackfillFixture(storePath: string, count: number) {
   const now = Date.now();
   const rows = Array.from({ length: count }, (_, index) => ({

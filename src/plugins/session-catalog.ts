@@ -29,6 +29,8 @@ export type SessionCatalogListProviderParams = {
   listNodes?: () => ReturnType<PluginRuntime["nodes"]["list"]>;
   /** Publishes completed hosts without waiting for slower machines in the same list. */
   onHost?: (host: SessionCatalogHost) => void;
+  /** True when the caller accepts retained/pending hosts and later authoritative onHost updates. */
+  allowPartialResults?: boolean;
   /** Register host publication before the logical list settles; includes the onHost callback. */
   waitUntil?: (completion: Promise<void>) => void;
   /** Catalog owner retirement, independent of the requesting connection's lifetime. */
@@ -224,6 +226,7 @@ export type SessionCatalogProvider = {
     agentId?: string;
     hostId: string;
     threadId: string;
+    sourceHomeId?: string;
   }) => Promise<SessionCatalogTerminalPlan>;
   startTerminalSession?: (
     request: SessionCatalogStartTerminalProviderParams,

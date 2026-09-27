@@ -38,10 +38,6 @@ function linkedImageIndices(tokens: readonly { type: string }[]): ReadonlySet<nu
   return linked;
 }
 
-function isImageWithinLink(tokens: readonly { type: string }[], index: number): boolean {
-  return linkedImageIndices(tokens).has(index);
-}
-
 function renderAssistantTranscriptRoleImageLabel(
   text: string,
   spans: ReadonlyArray<{ start: number; end: number }>,
@@ -66,7 +62,7 @@ export function installAssistantTranscriptRoleMarkdown(
   escapeHtml: (value: string) => string,
 ): void {
   md.use(markdownItAssistantTranscriptRoles, {
-    // The task-list plugin injects a trusted checkbox HTML token. It is visible
+    // The task-list rule injects a trusted checkbox HTML token. It is visible
     // UI structure, not text before the list item's semantic first character.
     isStructuralHtmlInline: (token) => token.meta?.taskListPlugin === true,
   });
@@ -103,7 +99,7 @@ export function installAssistantTranscriptRoleImageRenderer(
     const alt = options.normalizeLabel(token.content);
     const roleMeta = (token.meta as AssistantTranscriptRoleImageMeta | undefined)
       ?.assistantTranscriptRoleImage;
-    const linkedImage = isImageWithinLink(tokens, index);
+    const linkedImage = linkedImageIndices(tokens).has(index);
     if (!options.isInlineDataImage(src) && !options.allowRemoteImages(env)) {
       const renderedLabel = roleMeta
         ? renderAssistantTranscriptRoleImageLabel(roleMeta.text, roleMeta.spans, options.escapeHtml)

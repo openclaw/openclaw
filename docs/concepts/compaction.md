@@ -42,7 +42,7 @@ If the provider rejects a request after tool calls have completed, the built-in 
 
 Overflow recovery trims tool results within the current model-context window. Older messages and reset boundaries remain in retained history without being copied into new transcript entries.
 
-Stopping a run also stops its overflow or timeout recovery. The built-in OpenClaw runtime does not start further recovery hooks, maintenance, transcript truncation, or retries after cancellation. Cancellation is not rollback: a compaction that already completed remains in the transcript and is still counted, without sending a late reply. The context estimate follows the latest model or compaction observation; billing totals remain separate.
+Stopping or timing out a run also stops its overflow or timeout recovery. The built-in OpenClaw runtime does not start further recovery hooks, maintenance, transcript truncation, or retries after cancellation. Cancellation is not rollback: a compaction that already completed remains in the transcript and is still counted, without sending a late reply. The context estimate follows the latest model or compaction observation; billing totals remain separate.
 
 The built-in OpenClaw runtime performs required checkpointing and compaction before inference. In persistent Gateway sessions, optional memory flushing and compaction wait until reply delivery has settled and its foreground owner has closed. That work uses a separate session owner and the turn's remaining time. A new message cancels and settles optional work before reading the session for its own inference.
 
@@ -216,13 +216,11 @@ If an older version or transcript redaction removes the complete window needed f
 
 A context engine may return an explicit compacted successor session identity within the same agent, session key, and store. OpenClaw publishes the accepted successor before maintenance, hooks, or retries use it, while retaining the current writer's ownership. Cancelling afterward does not roll that completed transition back. The built-in SQLite compactor keeps the current session identity and does not create a second runtime transcript.
 
-Compaction checkpoint metadata stays with the selected transcript, including when a run uses an explicit store that differs from the Gateway's configured default.
-
 A [worker placement](/gateway/cloud-workers) cannot transfer ownership to a different session identity during compaction. Custom engines must keep the current identity while the placement owns the session, or the operator must move the session back to the Gateway before retrying. A rejected transition leaves the original session and worker claim intact.
 
-OpenClaw no longer writes separate `.checkpoint.*.jsonl` copies for new
-compactions. Existing legacy checkpoint files can still be used while referenced
-and are pruned by normal session cleanup.
+OpenClaw does not create compaction checkpoint records or snapshot copies.
+Existing historical transcript references remain protected by normal session
+cleanup; removing checkpoint controls does not delete stored conversation history.
 
 ## Pluggable compaction providers
 

@@ -1,4 +1,3 @@
-// Telegram plugin module implements bot behavior.
 import { createTelegramBotCore } from "./bot-core.js";
 import { defaultTelegramBotDeps } from "./bot-deps.js";
 import type { TelegramBotOptions } from "./bot.types.js";

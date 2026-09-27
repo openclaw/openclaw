@@ -6,7 +6,6 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, type TestFunction } from "vitest";
 import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 import {
@@ -24,8 +23,8 @@ import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { connectGatewayClient } from "../gateway/test-helpers.e2e.js";
 import {
-  acquireSessionCostUsageRefreshLock,
   isSessionCostUsageRefreshRunning,
+  prepareSessionCostUsageRefreshLock,
 } from "../infra/session-cost-usage-cache.sqlite.js";
 import { listUsageCountedTranscriptStats } from "../infra/session-cost-usage-collection.js";
 import { runExec } from "../process/exec.js";
@@ -51,6 +50,7 @@ import {
   registerIdempotentCleanup,
   waitForOutputAfter,
 } from "./tui-pty-local-test-support.js";
+import { buildTuiProcessArgs } from "./tui-pty-process-test-support.js";
 import { startRuntimePty, waitFor, type PtyRun } from "./tui-pty-test-support.js";
 
 type MockModelServer = {
@@ -448,28 +448,6 @@ async function startMockModelServer(
   return await startRoutedMockModelServer({
     "gpt-5.5": { replyText, ...opts },
   });
-}
-
-function buildTuiCliScript(args: string[]) {
-  const tuiCliModuleUrl = pathToFileURL(path.join(process.cwd(), "src/cli/tui-cli.ts")).href;
-  return [
-    `import { Command } from "commander";`,
-    `import { registerTuiCli } from ${JSON.stringify(tuiCliModuleUrl)};`,
-    `const program = new Command();`,
-    `program.exitOverride();`,
-    `registerTuiCli(program);`,
-    `program.parseAsync([process.execPath, "openclaw", ...${JSON.stringify(args)}], { from: "node" }).catch((error) => {`,
-    `  console.error(error);`,
-    `  process.exit(1);`,
-    `});`,
-  ].join("\n");
-}
-
-function buildTuiProcessArgs(args: string[]) {
-  if (process.env.OPENCLAW_TUI_PTY_USE_BUILT_CLI === "1") {
-    return [path.join(process.cwd(), "openclaw.mjs"), ...args];
-  }
-  return ["--import", "tsx", "--eval", buildTuiCliScript(args)];
 }
 
 function buildMockModelProvider(baseUrl: string, modelIds: string[]): ModelProviderConfig {
@@ -1248,9 +1226,7 @@ describe("TUI PTY real backends", () => {
         );
         const databasePath = resolveOpenClawAgentSqlitePath({ agentId, env: fixture.env });
         const selectedSession = { agentId, sessionKey, storePath: databasePath };
-        let refreshOwner:
-          | Awaited<ReturnType<typeof acquireSessionCostUsageRefreshLock>>
-          | undefined;
+        let refreshOwner: ReturnType<typeof prepareSessionCostUsageRefreshLock> | undefined;
         // Repeated teardown must not reopen the removed root through release().
         cleanupState.run = createIdempotentCleanup(() =>
           runQaGatewayFixture(
@@ -1270,8 +1246,8 @@ describe("TUI PTY real backends", () => {
               // An empty existing row still makes the direct Session reader wait.
               expect(loadSessionEntry(selectedSession)).toBeUndefined();
               if (cacheState === "refreshing") {
-                refreshOwner = await acquireSessionCostUsageRefreshLock(agentId, databasePath);
-                expect(refreshOwner.acquired).toBe(true);
+                refreshOwner = prepareSessionCostUsageRefreshLock(agentId, databasePath);
+                expect(await refreshOwner.acquire()).toBe(true);
               }
               expect(await isSessionCostUsageRefreshRunning(agentId, databasePath)).toBe(
                 cacheState === "refreshing",

@@ -88,7 +88,7 @@ class TaskActivityFixture extends LitElement {
     error: null,
     tasks: [this.task],
     activeCount: 1,
-    subagentActivity: { rows: [], overflowCount: 0, taskIds: new Set(), nextExpiryAt: null },
+    subagentActivity: { rows: [], overflowCount: 0, taskIds: new Set() },
     taskDetails: new Map([[this.task.id, { ...this.task, prompt: "Inspect the renderer." }]]),
     taskDetailErrors: new Map(),
     taskDetailLoadingIds: new Set(),

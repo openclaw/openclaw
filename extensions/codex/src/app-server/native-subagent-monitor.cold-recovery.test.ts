@@ -32,14 +32,13 @@ describe("cold native task identity across history reads", () => {
         });
         const replacement = { ...task, taskId: "replacement-task" };
         let rows = [task];
-        let listCalls = 0;
         const runtime = createRuntime();
-        runtime.listTaskRecords.mockImplementation(() => {
-          listCalls += 1;
-          if (kind === "before-read" && listCalls === 2) {
+        runtime.listTaskRecords.mockImplementation(() => rows);
+        runtime.prepareTaskRunRead.mockImplementation(async (runId) => {
+          if (kind === "before-read") {
             rows = [replacement];
           }
-          return rows;
+          return () => runtime.listTaskRecords().filter((record) => record.runId === runId);
         });
         runtime.finalizeTaskRunByRunId.mockImplementation(() => rows);
         runtime.setDetachedTaskDeliveryStatusByRunId.mockImplementation((params) => {
@@ -59,7 +58,12 @@ describe("cold native task identity across history reads", () => {
           recoveryPollDelaysMs: [],
           completionDeliveryRetryDelaysMs: [10],
         });
-        const parent = registerParent(monitor, "parent-thread", requesterSessionKey, historyOwner);
+        const parent = await registerParent(
+          monitor,
+          "parent-thread",
+          requesterSessionKey,
+          historyOwner,
+        );
         await vi.advanceTimersByTimeAsync(0);
         if (kind === "replaced") {
           rows = [replacement];
@@ -177,14 +181,15 @@ describe("native completion custody and recovery", () => {
       const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
       const requesterSessionKey = `agent:main:discord:channel:review8-settled-${outcome}`;
       const historyOwner = nativeHistoryOwner();
-      const owner = registerParent(monitor, "parent-thread", requesterSessionKey, historyOwner);
+      const owner = await registerParent(
+        monitor,
+        "parent-thread",
+        requesterSessionKey,
+        historyOwner,
+      );
       await notifyChildStarted(client);
       await owner.unregister();
-      const task = {
-        ...taskRecord({ childThreadId: "child-thread", historyOwner }),
-        requesterSessionKey,
-        ownerKey: requesterSessionKey,
-      };
+      const task = runtime.listTaskRecords()[0]!;
       runtime.listTaskRecords.mockImplementation(() => [task]);
       runtime.setDetachedTaskDeliveryStatusByRunId.mockImplementation((params) => {
         task.deliveryStatus = params.deliveryStatus;
@@ -226,7 +231,7 @@ describe("native completion custody and recovery", () => {
         lifecycleRevision: "revision-1",
         connectionFingerprint: "a".repeat(64),
       };
-      const owner = monitor.registerParent({
+      const owner = await monitor.registerParent({
         parentThreadId: "parent-thread",
         requesterSessionKey,
         taskRuntimeScope: createTaskScope(requesterSessionKey),
@@ -235,11 +240,7 @@ describe("native completion custody and recovery", () => {
       });
       await notifyChildStarted(client);
       await owner.unregister();
-      const task = {
-        ...taskRecord({ childThreadId: "child-thread" }),
-        requesterSessionKey,
-        ownerKey: requesterSessionKey,
-      };
+      const task = runtime.listTaskRecords()[0]!;
       const saved = { ...historyOwner };
       if (kind === "connection") {
         saved.connectionFingerprint = "b".repeat(64);
@@ -283,14 +284,15 @@ describe("native completion custody and recovery", () => {
       });
       const requesterSessionKey = `agent:main:discord:channel:review7-${phase}`;
       const historyOwner = nativeHistoryOwner();
-      const owner = registerParent(monitor, "parent-thread", requesterSessionKey, historyOwner);
+      const owner = await registerParent(
+        monitor,
+        "parent-thread",
+        requesterSessionKey,
+        historyOwner,
+      );
       await notifyChildStarted(client);
       await owner.unregister();
-      const task = {
-        ...taskRecord({ childThreadId: "child-thread", historyOwner }),
-        requesterSessionKey,
-        ownerKey: requesterSessionKey,
-      };
+      const task = runtime.listTaskRecords()[0]!;
       const peer = { ...task, taskId: "distinct-peer-task", task: "different requested work" };
       const rows = phase === "before-finalize" ? [task, peer] : [task];
       runtime.listTaskRecords.mockImplementation(() => rows);
@@ -330,7 +332,7 @@ describe("native completion custody and recovery", () => {
       recoveryPollDelaysMs: [],
     });
     const requesterSessionKey = "agent:main:discord:channel:live-unrecorded";
-    const parent = monitor.registerParent({
+    const parent = await monitor.registerParent({
       parentThreadId: "parent-thread",
       requesterSessionKey,
       taskRuntimeScope: createTaskScope(requesterSessionKey),
@@ -338,10 +340,8 @@ describe("native completion custody and recovery", () => {
     });
     await notifyChildStarted(client);
     await parent.unregister();
-    const task = {
-      ...taskRecord({ childThreadId: "child-thread", requesterSessionKey }),
-      detail: undefined,
-    };
+    const task = runtime.listTaskRecords()[0]!;
+    task.detail = undefined;
     runtime.listTaskRecords.mockReturnValue([task]);
     runtime.finalizeTaskRunByRunId.mockReturnValue([task]);
     runtime.setDetachedTaskDeliveryStatusByRunId.mockImplementation((params) => {
@@ -392,7 +392,7 @@ describe("native completion custody and recovery", () => {
           recoveryPollDelaysMs: [],
           completionDeliveryRetryDelaysMs: [10],
         });
-        const parent = monitor.registerParent({
+        const parent = await monitor.registerParent({
           parentThreadId: "parent-thread",
           requesterSessionKey: task.requesterSessionKey,
           taskRuntimeScope: createTaskScope(task.requesterSessionKey),
@@ -433,7 +433,7 @@ describe("native completion custody and recovery", () => {
           const replacementMonitor = new CodexNativeSubagentMonitor(replacement as never, runtime, {
             recoveryPollDelaysMs: [],
           });
-          const replacementParent = replacementMonitor.registerParent({
+          const replacementParent = await replacementMonitor.registerParent({
             parentThreadId: "parent-thread",
             requesterSessionKey: task.requesterSessionKey,
             taskRuntimeScope: createTaskScope(task.requesterSessionKey),

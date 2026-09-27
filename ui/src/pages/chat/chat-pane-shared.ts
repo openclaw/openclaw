@@ -1,18 +1,22 @@
 import { asNullableRecord as catalogRawRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
-import type { ChatAttachment, ChatGoalDraftMode, HumanMention } from "../../lib/chat/chat-types.ts";
+import type {
+  ChatAttachment,
+  ChatGoalDraftMode,
+  ChatReplyTarget,
+  HumanMention,
+} from "../../lib/chat/chat-types.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
-export type ChatPageContext = ApplicationContext;
 export type PaneSessionChangeOptions = { replace?: boolean };
 export type PaneSessionHandoff = {
   goalMode?: ChatGoalDraftMode;
+  replyTarget?: ChatReplyTarget;
   attachments: ChatAttachment[];
   composerFallbacks?: ChatPageHost["chatComposerFallbackByScope"];
   draft: string;
@@ -25,7 +29,7 @@ type PendingPaneSessionHandoff = PaneSessionHandoff & { expiresAt: number; sessi
 const PANE_SESSION_HANDOFF_TTL_MS = 30_000;
 const PANE_SESSION_HANDOFF_LIMIT = 4;
 const paneSessionHandoffs = new WeakMap<
-  ApplicationContext<RouteId>,
+  ApplicationContext,
   Map<string, PendingPaneSessionHandoff[]>
 >();
 
@@ -114,7 +118,7 @@ export function clearPaneSessionHandoff(
 }
 
 export function retireSessionPaneHandoffs(
-  context: ApplicationContext<RouteId>,
+  context: ApplicationContext,
   targets: readonly { key: string; retireBeforeRevision: number }[],
 ): void {
   for (const pending of paneSessionHandoffs.get(context)?.values() ?? []) {
@@ -189,14 +193,14 @@ export function catalogRawResult(raw: unknown): string | null {
 }
 
 export type ChatPaneConnectionScope = {
-  context: ChatPageContext;
+  context: ApplicationContext;
   state: ChatPageHost;
   client: GatewayBrowserClient;
   generation: number;
   headerOutcomeOwner: string;
-  sessions: ChatPageContext["sessions"];
+  sessions: ApplicationContext["sessions"];
 };
-export const CHAT_OPEN_DETAILS_SELECTOR =
+const CHAT_OPEN_DETAILS_SELECTOR =
   ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__attach-menu[open], .chat-pr__checks[open]";
 export const CHAT_COMPOSER_TEXTAREA_SELECTOR = ".agent-chat__composer-combobox > textarea";
 // Menus without typeahead own activation/navigation, not printable input.
@@ -252,6 +256,21 @@ function openDropdownOwnsKey(root: ParentNode, key: string): boolean {
       !dropdown.closest("[inert]") &&
       (CHAT_DROPDOWN_KEYS.has(key) || keyboardShortcutTargetOwnsKey(dropdown, key)),
   );
+}
+
+/** Close this pane's disclosures, except those containing the current pointer event. */
+export function closeChatPaneDetails(
+  root: ParentNode,
+  retainedPath: readonly EventTarget[] = [],
+): boolean {
+  let changed = false;
+  root.querySelectorAll<HTMLDetailsElement>(CHAT_OPEN_DETAILS_SELECTOR).forEach((details) => {
+    if (!retainedPath.includes(details)) {
+      details.open = false;
+      changed = true;
+    }
+  });
+  return changed;
 }
 
 export function focusChatComposerFromPrintableKeydown(

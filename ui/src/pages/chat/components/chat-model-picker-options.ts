@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
 import { icons } from "../../../components/icons.ts";
 import {
   formatRawProviderLabel,
@@ -10,6 +11,7 @@ import { t } from "../../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import { formatContextTokenCapacity } from "../../../lib/format.ts";
 import type { ModelRuntimeEntry } from "../../../lib/model-runtime-choice.ts";
+import { handleModelOptionMouseEnter } from "./chat-model-picker-search.ts";
 
 registerModelControlsEnglish();
 
@@ -114,7 +116,6 @@ export function renderChatModelPickerOption(params: {
   selectedModelValue: string;
   selectedAgentRuntime?: string;
   sessionModelPinned: boolean;
-  onHighlight: (row: HTMLButtonElement) => void;
   onSelect: (entry: ChatModelPickerOption, event: MouseEvent) => void;
   onModelSetup?: () => void;
 }) {
@@ -124,6 +125,16 @@ export function renderChatModelPickerOption(params: {
     params.selectedAgentRuntime,
   );
   const modelLabel = formatModelLabel(params.entry);
+  const route = resolveModelRuntimeRoute(params.entry.provider, params.entry.agentRuntimeId);
+  const runtimeLabel = route
+    ? t(`chat.modelControls.routes.${route}.label`)
+    : params.entry.agentRuntimeId
+      ? formatAgentRuntimeLabel(params.entry.agentRuntimeId)
+      : "";
+  const routeDetail = route ? t(`chat.modelControls.routes.${route}.detail`) : "";
+  const chatOnlyHelp =
+    params.entry.supportsTools === false ? t("chat.modelControls.chatOnlyHelp") : "";
+  const detail = [routeDetail, chatOnlyHelp].filter(Boolean).join(" ");
   // A session with a recorded pin (even one pinned to the default's own value)
   // can always return to Default when the default model is unavailable: the row
   // commits the reset, not that model. Otherwise an unavailable default routes
@@ -135,13 +146,10 @@ export function renderChatModelPickerOption(params: {
       params.entry.unavailableReason === "auth-failed");
   const onModelSetup = needsAuth ? params.onModelSetup : undefined;
   const modelMeta = needsAuth
-    ? ""
-    : [
-        formatModelContextMeta(params.entry),
-        params.entry.agentRuntimeId ? formatAgentRuntimeLabel(params.entry.agentRuntimeId) : "",
-      ]
-        .filter(Boolean)
-        .join(" · ");
+    ? route
+      ? runtimeLabel
+      : ""
+    : [formatModelContextMeta(params.entry), runtimeLabel].filter(Boolean).join(" · ");
   const accessibleStatus = needsAuth
     ? t("modelSetup.candidates.signInNeeded")
     : params.entry.unavailableReason === "unsupported-runtime"
@@ -155,29 +163,28 @@ export function renderChatModelPickerOption(params: {
     data-chat-model-runtime=${params.entry.agentRuntime ?? nothing}
     data-chat-model-default=${params.entry.isDefault ? "true" : nothing}
     data-chat-model-index=${params.index}
-    data-chat-model-keywords=${
-      params.entry.isDefault ? t("chat.modelControls.default").toLocaleLowerCase() : nothing
-    }
+    data-chat-model-keywords=${[
+      params.entry.isDefault ? t("chat.modelControls.default") : "",
+      runtimeLabel,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLocaleLowerCase()}
     data-chat-model-name=${modelLabel.toLocaleLowerCase()}
     data-chat-model-provider-label=${providerDisplayLabel(
       params.entry.provider,
     ).toLocaleLowerCase()}
     role="option"
+    hidden
     aria-selected=${selected ? "true" : "false"}
     title=${accessibleStatus || nothing}
-    aria-label=${[
-      modelLabel,
-      params.entry.agentRuntimeId ? formatAgentRuntimeLabel(params.entry.agentRuntimeId) : "",
-      accessibleStatus,
-      params.entry.supportsTools === false ? t("chat.modelControls.chatOnlyHelp") : "",
-    ]
+    aria-label=${[modelLabel, runtimeLabel, accessibleStatus, chatOnlyHelp]
       .filter(Boolean)
       .join(". ")}
     type="button"
     ?disabled=${params.disabled || (params.entry.disabled && !onModelSetup && !resetsPin)}
     data-chat-model-setup=${onModelSetup ? "true" : nothing}
-    @mouseenter=${(event: MouseEvent) =>
-      params.onHighlight(event.currentTarget as HTMLButtonElement)}
+    @mouseenter=${handleModelOptionMouseEnter}
     @click=${(event: MouseEvent) => {
       // A sign-in-gated model must not dead-end: the row routes to Model
       // Setup instead of silently ignoring the click on a disabled button.
@@ -237,10 +244,8 @@ export function renderChatModelPickerOption(params: {
       }
     </span>
   </button>`;
-  return params.entry.supportsTools === false
-    ? html`<openclaw-tooltip .content=${t("chat.modelControls.chatOnlyHelp")}>
-        ${option}
-      </openclaw-tooltip>`
+  return detail
+    ? html`<openclaw-tooltip .content=${detail}> ${option} </openclaw-tooltip>`
     : option;
 }
 
@@ -250,7 +255,6 @@ export function renderChatModelPickerTargetOption(params: {
   groupId: string;
   groupLabel: string;
   index: number;
-  onHighlight: (row: HTMLButtonElement) => void;
   onSelect: (groupId: string, value: string, event: MouseEvent) => void;
 }) {
   return html`
@@ -265,8 +269,7 @@ export function renderChatModelPickerTargetOption(params: {
       aria-selected="false"
       type="button"
       ?disabled=${params.disabled}
-      @mouseenter=${(event: MouseEvent) =>
-        params.onHighlight(event.currentTarget as HTMLButtonElement)}
+      @mouseenter=${handleModelOptionMouseEnter}
       @click=${(event: MouseEvent) => params.onSelect(params.groupId, params.entry.value, event)}
     >
       <span

@@ -182,8 +182,11 @@ function resolveMcpLoopbackTools(
   mode: LoopbackToolsAllowMode,
 ): CachedScopedTools {
   params.signal?.throwIfAborted();
-  const { toolsAllow, ...context } = params.context;
+  const { toolsAllow, webSearchDisabled, ...context } = params.context;
   const excludeToolNames = new Set(NATIVE_TOOL_EXCLUDE);
+  if (webSearchDisabled) {
+    excludeToolNames.add("web_search");
+  }
   // Restricted CLI grants use OpenClaw's implementations for coding tools;
   // native CLI tools bypass path, approval, sandbox, and exec policy.
   const mediatedNativeTools = params.rootedExecution

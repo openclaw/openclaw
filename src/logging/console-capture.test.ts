@@ -7,24 +7,24 @@ import {
   registerActiveProgressLine,
   unregisterActiveProgressLine,
 } from "../../packages/terminal-core/src/progress-line.js";
+import { registerSignalExitGate, waitForSignalExitBarriers } from "../cli/signal-exit-barrier.js";
 import { setVerbose } from "../global-state.js";
 import { logError, logInfo, logWarn } from "../logger.js";
-import {
-  createSubsystemLogger,
-  enableConsoleCapture,
-  resetLogger,
-  routeLogsToStderr,
-  setConsoleTimestampPrefix,
-  setLoggerOverride,
-} from "../logging.js";
 import { defaultRuntime } from "../runtime.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { withEnv } from "../test-utils/env.js";
 import { mockCall } from "../test-utils/mock-call-assertions.js";
-import { writeRootConsoleLine } from "./console.js";
+import {
+  enableConsoleCapture,
+  routeLogsToStderr,
+  setConsoleTimestampPrefix,
+  writeRootConsoleLine,
+} from "./console.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
-import { applyLoggingConfig } from "./logger.js";
+import { applyLoggingConfig, resetLogger, setLoggerOverride } from "./logger.js";
 import { testApi } from "./logger.test-support.js";
 import { loggingState } from "./state.js";
+import { createSubsystemLogger } from "./subsystem.js";
 import {
   captureConsoleSnapshot,
   type ConsoleSnapshot,
@@ -527,6 +527,41 @@ describe("enableConsoleCapture", () => {
       stream.emit("error", epipe);
       expect(exitSpy).toHaveBeenCalledWith(0);
     } finally {
+      exitSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    { outcome: "recovered", code: 0 },
+    { outcome: "command failed", code: 2 },
+    { outcome: "recovery failed", code: 1 },
+  ])("waits for maintenance recovery on EPIPE ($outcome)", async ({ outcome, code }) => {
+    const originalExitCode = process.exitCode;
+    const exited = createDeferredCore<number>();
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((exitCode) => {
+      exited.resolve(Number(exitCode));
+    }) as typeof process.exit);
+    const recovery = createDeferredCore();
+    const unregister = registerSignalExitGate(recovery.promise);
+    try {
+      setLoggerOverride({ level: "info", file: tempLogPath() });
+      enableConsoleCapture();
+      process.stdout.emit("error", Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
+      expect(exitSpy).not.toHaveBeenCalled();
+      if (outcome === "command failed") {
+        process.exitCode = code;
+      }
+      if (outcome === "recovery failed") {
+        recovery.reject(new Error("Restoration failed"));
+      } else {
+        recovery.resolve();
+      }
+      await expect(exited.promise).resolves.toBe(code);
+    } finally {
+      recovery.resolve();
+      unregister();
+      await waitForSignalExitBarriers();
+      process.exitCode = originalExitCode;
       exitSpy.mockRestore();
     }
   });

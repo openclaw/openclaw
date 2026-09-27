@@ -102,7 +102,17 @@ combined with a legacy `default: true` marker.
 For root-file writes, changing `session.store` clears a copied
 `agents.defaults.sessionStore.agentId` because that owner belongs to the previous
 store. To assign the destination store's owner, set that owner path explicitly in
-the same batch.
+the same batch. Unrelated writes preserve the owner, including when `session.store`
+is unset and per-agent default stores apply. A committed write that clears the
+owner prints a warning naming the key and the store change.
+
+If an older version already removed the owner, Doctor checks the retained config
+backups and offers to restore the most recent owner with the same authored
+`session.store` value. Restoration
+requires interactive confirmation because the removal might have been intentional;
+unattended Doctor runs show the recovery command instead. If no usable backup
+remains, the legacy-session finding names `agents.defaults.sessionStore.agentId`
+so you can assign the owner explicitly.
 
 ### `config get`
 
@@ -158,6 +168,8 @@ The schema is JSON in both modes. `--json` is accepted as the explicit
 machine-output spelling and keeps stdout reserved for the schema document.
 
 ### `config validate`
+
+Schema refusals from `config set`, `config patch`, and `config unset` explain the affected setting and confirm that no settings were saved. Correct the reported value or use `openclaw config schema` to inspect supported settings, then retry. These refusals still exit with status 1. Explicit validation reports settings that need correction without changing the file; `config validate --json` retains its `valid: false`, `error`, and `issues` fields for scripts.
 
 Human validation diagnostics quote literal record keys, such as `agents.defaults.models["provider/model.v1"].alias`, instead of displaying the dot inside a key as nested traversal. Numeric array positions use brackets, such as `agents.entries.main.skills[0]`. The `issues[].path` field in `config validate --json` keeps its existing dot-joined representation.
 
@@ -453,7 +465,7 @@ openclaw config set channels.discord.token \
 <AccordionGroup>
   <Accordion title="Dry-run behavior">
     - Value mode (a plain `<value>` without `--strict-json`): skips the full schema pass and ordinary SecretRef resolvability scan. Policy, provider, and model-reference checks can still run. When no checks apply, the CLI prints `Dry run note: value mode does not run schema/resolvability checks` and can succeed even when the real write would fail schema validation.
-    - Builder mode: runs SecretRef resolvability checks for changed refs/providers.
+    - Builder mode: runs SecretRef resolvability checks for changed refs/providers. A SecretRef builder target outside the registered config secret paths also runs full schema validation, so an unsupported path fails instead of reporting a successful preview.
     - JSON mode (`--strict-json`, `--json`, or batch mode): runs schema validation plus SecretRef resolvability checks.
     - Policy validation runs against the full post-change config, so parent-object writes (for example setting `hooks` as an object) cannot bypass unsupported-surface validation.
     - Exec command-path trust checks run without executing providers. Exec SecretRef resolvability checks are skipped by default to avoid command side effects; pass `--allow-exec` to opt in (this may execute provider commands). `--allow-exec` is dry-run only and errors without `--dry-run`.
@@ -608,9 +620,9 @@ ls -lt "$CONFIG".rejected.* 2>/dev/null | head
 openclaw config validate
 ```
 
-Direct editor writes are still allowed, but the running Gateway treats them as untrusted until they validate. At startup, eligible single-file configs can receive deterministic legacy-key migrations if the complete result validates, with the previous config kept in the `.bak` ring. Other invalid direct edits fail startup; hot reload skips invalid edits without rewriting `openclaw.json`. Run `openclaw doctor --fix` to repair prefixed/clobbered config or restore the last-known-good copy. See [Gateway troubleshooting](/gateway/troubleshooting#gateway-rejected-invalid-config).
+Direct editor writes are still allowed, but the running Gateway treats them as untrusted until they validate. Startup validates config without rewriting legacy keys. Invalid direct edits stop startup; hot reload skips invalid edits without rewriting `openclaw.json`. Run `openclaw doctor --fix` for legacy-key repair, prefixed/clobbered config, or last-known-good recovery. See [Gateway troubleshooting](/gateway/troubleshooting#gateway-rejected-invalid-config).
 
-Whole-file recovery is reserved for doctor repair. Plugin schema changes or `minHostVersion` skew stay loud instead of rolling back unrelated user settings such as models, providers, auth profiles, channels, gateway exposure, tools, memory, browser, or cron config.
+Ordinary recovery can restore an eligible, valid current backup verbatim. Backups that need legacy transformations must be recovered through Doctor. Plugin schema changes or `minHostVersion` skew stay loud instead of rolling back unrelated user settings such as models, providers, auth profiles, channels, gateway exposure, tools, memory, browser, or cron config.
 
 ## Repair loop
 

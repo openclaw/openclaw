@@ -3,7 +3,6 @@ import "../../../components/elapsed-time.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerBackgroundTasksEnglish } from "../../../i18n/locales/en-background-tasks.ts";
-import { formatRelativeTimestamp } from "../../../lib/format.ts";
 import {
   isActiveTask,
   partitionTasks,
@@ -45,11 +44,8 @@ function activeBackgroundTasksStatus(tasks: readonly TaskSummary[]): BackgroundT
 const STATUS_PREVIEW_LIMIT = 5;
 
 function renderStatusPreviewRow(task: TaskSummary): TemplateResult {
-  const active = isActiveTask(task);
   const tone = STATUS_TONES[task.status];
-  const timeMs = active
-    ? taskTimestampMs(task.startedAt ?? task.createdAt)
-    : taskTimestampMs(task.updatedAt ?? task.createdAt);
+  const timeMs = taskTimestampMs(task.startedAt ?? task.createdAt);
   return html`
     <div class="chat-tasks-preview__row">
       ${
@@ -66,11 +62,7 @@ function renderStatusPreviewRow(task: TaskSummary): TemplateResult {
           timeMs > 0
             ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
                 <span>
-                  ${
-                    active
-                      ? html`<openclaw-elapsed-time .startMs=${timeMs}></openclaw-elapsed-time>`
-                      : formatRelativeTimestamp(timeMs)
-                  }
+                  <openclaw-elapsed-time .startMs=${timeMs}></openclaw-elapsed-time>
                 </span>`
             : nothing
         }
@@ -79,14 +71,13 @@ function renderStatusPreviewRow(task: TaskSummary): TemplateResult {
   `;
 }
 
-/** Hover/focus preview on the status row: the latest tasks at a glance
+/** Hover/focus preview on the status row: active tasks at a glance
  * without opening the rail. Content is read-only — a tooltip is a transient
  * surface, so actions stay in the rail the click opens. */
 function renderStatusPreview(remainingTasks: readonly TaskSummary[]): TemplateResult {
-  const { active, recent } = partitionTasks(remainingTasks);
-  const tasks = [...active, ...recent];
-  const preview = tasks.slice(0, STATUS_PREVIEW_LIMIT);
-  const overflow = tasks.length - preview.length;
+  const { active } = partitionTasks(remainingTasks);
+  const preview = active.slice(0, STATUS_PREVIEW_LIMIT);
+  const overflow = active.length - preview.length;
   return html`
     <div slot="content" class="chat-tasks-preview">
       <div class="chat-tasks-preview__heading">
@@ -107,8 +98,8 @@ function renderStatusPreview(remainingTasks: readonly TaskSummary[]): TemplateRe
 
 /** Post-turn status row in the chat thread: once the agent turn settles while
  * background tasks keep running, the running work stays visible next to a
- * free composer. Hover previews the latest tasks; the link opens the tasks
- * rail (noop when already open). */
+ * free composer. Hover previews active tasks; the link opens the tasks
+ * list, including when that panel already shows a task detail. */
 export function renderBackgroundTasksStatusRow(
   backgroundTasks: BackgroundTasksProps | undefined,
 ): TemplateResult | typeof nothing {
@@ -125,9 +116,6 @@ export function renderBackgroundTasksStatusRow(
     (task) => !backgroundTasks.subagentActivity.taskIds.has(task.id),
   );
   const status = activeBackgroundTasksStatus(remainingTasks);
-  if (subagentActivity === nothing && !status) {
-    return nothing;
-  }
   if (!status) {
     return subagentActivity;
   }
@@ -135,11 +123,6 @@ export function renderBackgroundTasksStatusRow(
     status.count === 1
       ? t("chat.backgroundTasks.statusRunningOne")
       : t("chat.backgroundTasks.statusRunningMany", { count: String(status.count) });
-  const openRail = () => {
-    if (backgroundTasks.collapsed) {
-      backgroundTasks.onToggleCollapsed();
-    }
-  };
   // Keep the live announcement separate from the tooltip: rich preview
   // content must not enter the polite region, while the popup must anchor to
   // the link itself or its center drifts with the indicator and elapsed time.
@@ -148,7 +131,13 @@ export function renderBackgroundTasksStatusRow(
       <span class="chat-tasks-status__dot" aria-hidden="true"></span>
       <span class="sr-only" role="status">${label}</span>
       <openclaw-tooltip class="chat-tasks-status__preview">
-        <button class="chat-tasks-status__link" type="button" @click=${openRail}>${label}</button>
+        <button
+          class="chat-tasks-status__link"
+          type="button"
+          @click=${backgroundTasks.onOpenTaskList}
+        >
+          ${label}
+        </button>
         ${renderStatusPreview(remainingTasks)}
       </openclaw-tooltip>
       ${

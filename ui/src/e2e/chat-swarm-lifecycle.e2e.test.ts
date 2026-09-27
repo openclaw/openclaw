@@ -3,6 +3,11 @@ import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
+import {
+  logSwarmDiagnostic,
+  type SwarmDiagnosticPane,
+  type SwarmDiagnosticWindow,
+} from "./chat-swarm-lifecycle-diagnostic.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -15,6 +20,7 @@ const groupId = `swarm:${sessionKey}:11111111-2222-4333-8444-666666666666`;
 suite.define(() => {
   it.each([
     { name: "desktop", width: 1440, height: 900, count: 1 },
+    { name: "desktop-many", width: 1440, height: 900, count: 30 },
     { name: "mobile", width: 390, height: 844, count: 1 },
     { name: "mobile-many", width: 390, height: 844, count: 30 },
   ])("collapses successful child runs without hiding their details on $name", async (viewport) => {
@@ -125,6 +131,37 @@ suite.define(() => {
               .isVisible(),
           )
           .toBe(true);
+        const outcomeClearance = await summary.evaluate((element) => {
+          const pane = element.closest<SwarmDiagnosticPane>("openclaw-chat-pane");
+          (window as SwarmDiagnosticWindow).openclawSwarmDiagnostic = {
+            expandedDetails: element.parentElement,
+            expandedEpoch: pane?.state?.connectionEpoch,
+          };
+          const outcome = element.parentElement?.querySelector(".chat-swarm__outcome");
+          if (!outcome) {
+            throw new Error("Expanded Swarm outcome is missing");
+          }
+          const range = document.createRange();
+          range.selectNodeContents(outcome);
+          const firstLine = range.getClientRects()[0];
+          if (!firstLine) {
+            throw new Error("Expanded Swarm outcome has no rendered text");
+          }
+          const style = getComputedStyle(element);
+          const outlineWidth = Number.parseFloat(style.outlineWidth);
+          const outlineBottom =
+            element.getBoundingClientRect().bottom +
+            Number.parseFloat(style.outlineOffset) +
+            outlineWidth;
+          return {
+            focused: element.matches(":focus-visible"),
+            outlineWidth,
+            clearance: firstLine.top - outlineBottom,
+          };
+        });
+        expect(outcomeClearance.focused).toBe(true);
+        expect(outcomeClearance.outlineWidth).toBeGreaterThan(0);
+        expect(outcomeClearance.clearance).toBeGreaterThanOrEqual(0);
         await page.screenshot({
           path: path.join(proofDir, "completed-details.png"),
           animations: "disabled",
@@ -147,13 +184,19 @@ suite.define(() => {
           agentId: "main",
           reason: "swarm",
         });
-        await expect
-          .poll(() =>
-            widget
-              .getByText("Child runs finished. Check the conversation for the final response.")
-              .isVisible(),
-          )
-          .toBe(true);
+        try {
+          await expect
+            .poll(() =>
+              widget
+                .getByText("Child runs finished. Check the conversation for the final response.")
+                .isVisible(),
+            )
+            .toBe(true);
+        } finally {
+          await logSwarmDiagnostic(page, gateway, sessionKey).catch(() => {
+            console.info("[swarm-final-diagnostic] unavailable");
+          });
+        }
         await page.screenshot({
           path: path.join(proofDir, "settled-details.png"),
           animations: "disabled",
@@ -259,6 +302,10 @@ suite.define(() => {
         await group.locator("summary").click();
       }
       await expect.poll(() => widget.locator(".chat-swarm__tasks").isVisible()).toBe(true);
+      const finalChild = widget.getByRole("listitem").filter({ hasText: "Research lane 30" });
+      await expect
+        .poll(() => finalChild.getByRole("img", { name: "Queued", exact: true }).isVisible())
+        .toBe(true);
       await page.screenshot({
         path: path.join(proofDir, "active-details.png"),
         animations: "disabled",
@@ -321,6 +368,11 @@ suite.define(() => {
         .toContain("30 of 30");
       expect(await widget.locator(".chat-swarm__marker--failed").count()).toBe(5);
       expect(await widget.locator(".chat-swarm__marker--done").count()).toBe(25);
+      await expect
+        .poll(() =>
+          finalChild.getByRole("img", { name: "Failed or stopped", exact: true }).isVisible(),
+        )
+        .toBe(true);
       await page.screenshot({ path: path.join(proofDir, "terminal.png"), animations: "disabled" });
       await page.reload();
       await widget.waitFor();

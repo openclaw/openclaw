@@ -1,8 +1,8 @@
 /* @vitest-environment jsdom */
 
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
+import { createRequireRecord } from "../../../test/helpers/record.js";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import {
   createAgentSelectionCapability,
@@ -330,6 +330,7 @@ describe("sidebar global row observation", () => {
           slowResponse = client.request<{ session: GatewaySessionRow }>("sessions.describe", {
             key: route.sessionKey,
           });
+          await import("./session-organizer-operations.runtime.ts");
           action = sidebar.sessionOrganizer.patchSession(visibleRow(), { pinned: true });
           await waitForFast(() =>
             expect(request).toHaveBeenCalledWith(

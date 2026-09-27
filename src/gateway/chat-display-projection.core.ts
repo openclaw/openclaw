@@ -2,23 +2,28 @@ import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT } from "@openclaw/gateway-protocol/gateway-error-details";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
-  normalizeLowercaseStringOrEmpty as normalizeErrorSignal,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
-import {
-  renderAssistantFormatFailureCopy,
   renderAssistantRequestFailureCopy,
+  renderRecordedAssistantFailureCopy,
 } from "../agents/failover/assistant-request-failure-copy.js";
-import { isContextOverflowErrorFromTables } from "../agents/failover/context-overflow-tables.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
+import {
+  projectAgentHistoryActivity,
+  type AgentHistoryActivity,
+} from "../infra/agent-activity-events.js";
 import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics.js";
 import {
   readNestedToolActivity,
   nestedToolActivityContent,
 } from "../sessions/nested-tool-activity.js";
-import { readSessionTranscriptRunId } from "../sessions/transcript-events.js";
+import {
+  readSessionTranscriptFailureRunId,
+  readSessionTranscriptRunId,
+} from "../sessions/transcript-events.js";
 import { formatProviderRefusalText } from "../shared/assistant-error-format.js";
-import { isTranscriptOnlyOpenClawAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
+import {
+  isOpenClawMessageToolMirrorAssistantMessage,
+  isTranscriptOnlyOpenClawAssistantMessage,
+} from "../shared/transcript-only-openclaw-assistant.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   extractAssistantTextForSilentCheck,
@@ -36,7 +41,6 @@ import {
   toProjectedMessages,
   type SubagentCoordinationDisplayResolver,
 } from "./chat-display-projection.history.js";
-import { createMessageToolVisibleReplyProjection } from "./chat-display-projection.message-tool.js";
 import {
   sanitizeChatHistoryContentBlock,
   sanitizeChatHistoryMessage,
@@ -49,11 +53,13 @@ import type {
   CurrentUserProfileDisplay,
   CurrentUserProfileDisplayResolver,
 } from "./current-user-profile-display.js";
+import { projectTranscriptImageArtifacts } from "./transcript-image-artifacts.js";
 
 export type ChatDisplayProjectionOptions = {
   resolveCronJobName?: (jobId: string) => string | undefined;
   includeCommentaryFallbacks?: boolean;
   maxChars?: number;
+  activity?: false;
   resolveCurrentUserProfileDisplay?: CurrentUserProfileDisplayResolver;
   stripEnvelope?: boolean;
   turnBoundaryPending?: boolean;
@@ -123,31 +129,12 @@ function projectCurrentUserProfileAvatars(
 
 type ChatDisplayProjectionResult = {
   messages: Array<Record<string, unknown>>;
+  activity: AgentHistoryActivity[];
   turnBoundaryPending: boolean;
   assistantErrorPending: boolean;
   assistantErrorRecoveryObserved: boolean;
   commentaryFallbacksObserved?: true;
 };
-
-const GATEWAY_ASSISTANT_CONTEXT_OVERFLOW_FALLBACK_TEXT =
-  "Context overflow: this conversation is too large for the model. Try /compact, use /new to start a fresh session, or retry the command with a tighter output limit.";
-
-function isContextOverflowErrorSignal(value: unknown): boolean {
-  if (typeof value !== "string") {
-    return false;
-  }
-  return (
-    normalizeErrorSignal(value) === "context_overflow" || isContextOverflowErrorFromTables(value)
-  );
-}
-
-function isContextOverflowAssistantError(message: Record<string, unknown>): boolean {
-  return (
-    isContextOverflowErrorSignal(message.errorCode) ||
-    isContextOverflowErrorSignal(message.errorType) ||
-    isContextOverflowErrorSignal(message.errorMessage)
-  );
-}
 
 function getAssistantErrorFallbackText(message: Record<string, unknown>): string {
   return (
@@ -156,10 +143,8 @@ function getAssistantErrorFallbackText(message: Record<string, unknown>): string
       storageFailure: classifyGatewayStorageFailure(message),
       code: typeof message.errorCode === "string" ? message.errorCode : undefined,
     }) ??
-    renderAssistantFormatFailureCopy(message) ??
-    (isContextOverflowAssistantError(message)
-      ? GATEWAY_ASSISTANT_CONTEXT_OVERFLOW_FALLBACK_TEXT
-      : GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT)
+    renderRecordedAssistantFailureCopy(message) ??
+    GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT
   );
 }
 
@@ -206,7 +191,7 @@ function sanitizeAssistantErrorDisplayMessage(
   const terminalCopy =
     renderAssistantRequestFailureCopy({
       code: typeof message.errorCode === "string" ? message.errorCode : undefined,
-    }) ?? renderAssistantFormatFailureCopy(message);
+    }) ?? renderRecordedAssistantFailureCopy(message);
   if (terminalCopy) {
     // Apply the normal visibility rules before adding host-owned failure copy.
     // Put it first in surviving text so phase filtering and display caps retain it.
@@ -438,18 +423,20 @@ type ChatHistoryRecoveryOptions = Pick<
   "maxChars" | "stripEnvelope" | "assistantErrorPending" | "subagentCoordination"
 >;
 
-function prepareChatHistoryRecoveryMessages(
+export function prepareChatHistoryRecoveryMessages(
   messages: unknown[],
   options?: ChatHistoryRecoveryOptions,
 ) {
-  const projectedMessages = messages.map((message) => {
+  const projectedMessages = messages.map((original) => {
+    const message = projectTranscriptImageArtifacts(original);
     const entry = asOptionalRecord(message);
-    if (entry?.role === "custom" && entry.customType === "run-failed-before-reply") {
-      const runId = normalizeOptionalString(asOptionalRecord(entry.details)?.runId);
-      if (runId) {
-        // Retain failure correlation before sanitation removes private report details.
-        return { ...entry, __openclaw: { ...asOptionalRecord(entry["__openclaw"]), runId } };
-      }
+    const failureRunId = readSessionTranscriptFailureRunId(entry);
+    if (failureRunId) {
+      // Retain failure correlation before sanitation removes private report details.
+      return {
+        ...entry,
+        __openclaw: { ...asOptionalRecord(entry?.["__openclaw"]), runId: failureRunId },
+      };
     }
     const activity = readNestedToolActivity(message);
     if (!activity) {
@@ -480,27 +467,18 @@ function prepareChatHistoryRecoveryMessages(
 }
 
 export function createChatHistoryRecoveryProjection(options?: ChatHistoryRecoveryOptions) {
-  const mirror = createMessageToolVisibleReplyProjection();
   const projectCoordination = createSubagentCoordinationHistoryProjection(
     options?.subagentCoordination,
   );
-  let recovery = createRecoveredAssistantErrorProjection(options?.assistantErrorPending);
-  let processedMessages = 0;
+  const recovery = createRecoveredAssistantErrorProjection(options?.assistantErrorPending);
   return {
     append(messages: unknown[]) {
-      const mirrored = mirror.append(
-        projectCoordination(prepareChatHistoryRecoveryMessages(messages, options)),
-      );
-      if (mirrored.replacedFrom !== undefined && mirrored.replacedFrom < processedMessages) {
-        // A late tool result can hide an earlier delivery mirror and undo a repair.
-        // Replay the same recovery owner over retained derived rows in that case.
-        recovery = createRecoveredAssistantErrorProjection(options?.assistantErrorPending);
-        processedMessages = 0;
+      const projected = projectCoordination(prepareChatHistoryRecoveryMessages(messages, options));
+      for (const message of toProjectedMessages(projected)) {
+        if (!isOpenClawMessageToolMirrorAssistantMessage(message)) {
+          recovery.append(message);
+        }
       }
-      for (const message of toProjectedMessages(mirrored.messages.slice(processedMessages))) {
-        recovery.append(message);
-      }
-      processedMessages = mirrored.messages.length;
     },
     get pending() {
       return recovery.pending;
@@ -524,6 +502,15 @@ export function projectChatDisplayMessagesWithState(
   options?.subagentCoordination?.assertCurrent?.();
   const recoveredErrors = projectChatHistoryRecovery(messages, options);
   const projectedErrors = projectEmptyAssistantErrorMessages(recoveredErrors.messages);
+  const activity =
+    options?.activity === false
+      ? []
+      : projectAgentHistoryActivity(
+          messages.flatMap((message) => {
+            const messageId = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.id;
+            return typeof messageId === "string" ? [{ messageId, message }] : [];
+          }),
+        );
   const sanitizedMessages = toProjectedMessages(
     sanitizeChatHistoryMessages(projectedErrors, Number.MAX_SAFE_INTEGER, {
       includeCommentaryFallbacks: options?.includeCommentaryFallbacks,
@@ -543,6 +530,7 @@ export function projectChatDisplayMessagesWithState(
     options?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   ) as Array<Record<string, unknown>>;
   const result: ChatDisplayProjectionResult = {
+    activity,
     messages: projectCurrentUserProfileAvatars(
       displayMessages,
       options?.resolveCurrentUserProfileDisplay,
@@ -562,7 +550,7 @@ export function projectChatDisplayMessages(
   messages: unknown[],
   options?: ChatDisplayProjectionOptions,
 ): Array<Record<string, unknown>> {
-  return projectChatDisplayMessagesWithState(messages, options).messages;
+  return projectChatDisplayMessagesWithState(messages, { ...options, activity: false }).messages;
 }
 
 export function projectChatDisplayMessage(

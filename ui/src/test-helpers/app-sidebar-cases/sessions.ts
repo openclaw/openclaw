@@ -174,13 +174,11 @@ describe("AppSidebar session source lifecycle", () => {
     sidebar.connected = true;
     await sidebar.updateComplete;
 
-    const menuButton = sidebar.querySelector<HTMLButtonElement>(
-      '[data-session-key="agent:main:locked"] [data-session-menu="true"]',
-    );
-    if (!menuButton) {
-      throw new Error("Expected sidebar session menu button");
+    const sessionRow = sidebar.querySelector<HTMLElement>('[data-session-key="agent:main:locked"]');
+    if (!sessionRow) {
+      throw new Error("Expected sidebar session row");
     }
-    menuButton.click();
+    sessionRow.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     await sidebar.updateComplete;
 
     const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
@@ -208,10 +206,8 @@ describe("AppSidebar session source lifecycle", () => {
     await sidebar.updateComplete;
 
     sidebar
-      .querySelector<HTMLButtonElement>(
-        '[data-session-key="agent:main:active"] [data-session-menu="true"]',
-      )
-      ?.click();
+      .querySelector<HTMLElement>('[data-session-key="agent:main:active"]')
+      ?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     await sidebar.updateComplete;
 
     const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
@@ -221,15 +217,14 @@ describe("AppSidebar session source lifecycle", () => {
     await menu.updateComplete;
     expect(menu.forkFromLastCompleted).toBe(true);
     menu.onAction({ kind: "fork" });
+    await vi.dynamicImportSettled();
 
-    await vi.waitFor(() =>
-      expect(sessions.create).toHaveBeenCalledWith({
-        parentSessionKey: "agent:main:active",
-        fork: true,
-        forkFrom: "last-completed",
-        agentId: "main",
-      }),
-    );
+    expect(sessions.create).toHaveBeenCalledWith({
+      parentSessionKey: "agent:main:active",
+      fork: true,
+      forkFrom: "last-completed",
+      agentId: "main",
+    });
   });
 
   it("resets per-agent cached results when the sessions source changes", async () => {

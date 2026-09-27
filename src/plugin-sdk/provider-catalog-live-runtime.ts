@@ -155,7 +155,8 @@ async function projectCachedLiveModelRows<T extends ModelDefinitionConfig>(
           ? params.cacheKeyParts
           : undefined,
       shouldCacheRows: (candidateRows) =>
-        params.projectRows(candidateRows, params.fallback).length > 0,
+        params.projectRows(candidateRows, params.fallback).length > 0 ||
+        params.discoveryMode === "strict",
     });
     return params.projectRows(rows, params.fallback);
   };
@@ -180,10 +181,22 @@ export async function buildLiveModelProviderConfig<T extends ModelDefinitionConf
   params: BuildLiveModelProviderConfigParams<T>,
 ): Promise<ModelProviderConfig> {
   const fallback = buildProviderConfig(params, params.models);
+  const cacheKeyParts =
+    params.discoveryMode === "strict"
+      ? [
+          params.providerId,
+          params.projectRows ? "model-rows" : "models",
+          params.endpoint,
+          liveModelCatalogAuthCacheKey(params),
+          "strict",
+          params.cacheKeyParts,
+        ]
+      : params.cacheKeyParts;
   try {
     if (params.projectRows) {
       const models = await projectCachedLiveModelRows({
         ...params,
+        cacheKeyParts,
         fallback,
         projectRows: params.projectRows,
       });
@@ -193,7 +206,7 @@ export async function buildLiveModelProviderConfig<T extends ModelDefinitionConf
       return fallback;
     }
     const liveModelIds = await getCachedLiveCatalogValue({
-      keyParts: params.cacheKeyParts ?? [
+      keyParts: cacheKeyParts ?? [
         params.providerId,
         "models",
         params.endpoint,
@@ -201,7 +214,7 @@ export async function buildLiveModelProviderConfig<T extends ModelDefinitionConf
       ],
       ttlMs: params.ttlMs,
       load: async () => await fetchLiveProviderModelIds(params),
-      shouldCache: (modelIds) => modelIds.length > 0,
+      shouldCache: (modelIds) => modelIds.length > 0 || params.discoveryMode === "strict",
     });
     const liveModelIdSet = new Set(liveModelIds);
     const models = params.models.filter((model) => liveModelIdSet.has(model.id));

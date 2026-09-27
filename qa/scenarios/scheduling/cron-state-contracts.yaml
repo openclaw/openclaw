@@ -29,7 +29,7 @@ scenario:
     - src/cron/service/ops-lifecycle.ts
     - src/cron/service/ops-mutations.ts
     - src/cron/service/timer.ts
-    - src/cron/task-run-history.ts
+    - src/cron/run-history.ts
     - src/cron/cron-state-contracts.e2e.test.ts
   execution:
     kind: vitest

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import {
@@ -9,14 +9,24 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import {
+  getAgentEventLifecycleGeneration,
+  rotateAgentEventLifecycleGeneration,
+} from "../../../infra/agent-events.js";
+import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
+import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { reconcileDurableSubagentKillIntent } from "./subagent-registry-sweep-kill.js";
 import { retireSupersededSubagentRun } from "./subagent-registry-sweeper-retire.js";
-import { createSubagentRegistrySweeper } from "./subagent-registry-sweeper.js";
+import {
+  createSubagentSweeperRun as run,
+  createSubagentSweeperChildLookup as childRuns,
+  createArchivedSubagentSweeperRun as archivedRun,
+  createSubagentSweeperHarness as createHarness,
+} from "./subagent-registry-sweeper.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { loadSubagentSessionEntry } from "./subagent-session-reconciliation.js";
 
@@ -25,7 +35,8 @@ const getAgentRunContext = vi.hoisted(() => vi.fn<(_runId: string) => unknown>((
 const removeInternalSessionEffectsSession = vi.hoisted(() => vi.fn(async () => {}));
 const detachedTaskRuntime = vi.hoisted(() => ({
   finalizeTaskRunByRunId: vi.fn(() => [] as unknown[]),
-  findDetachedTaskRun: vi.fn(() => undefined as unknown),
+  findDetachedTaskRunAsync:
+    vi.fn<typeof import("../../../tasks/detached-task-runtime.js").findDetachedTaskRunAsync>(),
 }));
 const killRuntime = vi.hoisted(() => ({
   abortEmbeddedAgentRun: vi.fn(() => false),
@@ -44,10 +55,6 @@ vi.mock("./subagent-registry-restart-recovery.js", async (importOriginal) => {
     recoverInterruptedSubagentRow: recoverRow,
   };
 });
-vi.mock("../../../infra/agent-events.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../infra/agent-events.js")>()),
-  isAgentEventLifecycleGenerationCurrent: () => true,
-}));
 vi.mock("../../../infra/agent-run-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../infra/agent-run-registry.js")>()),
   getAgentRunContext,
@@ -56,6 +63,9 @@ vi.mock("../../internal-session-effects.js", () => ({
   removeInternalSessionEffectsSession,
 }));
 vi.mock("../../../tasks/detached-task-runtime.js", () => detachedTaskRuntime);
+vi.mock("../../../tasks/detached-task-runtime.async.js", () => ({
+  finalizeTaskRunByRunIdAsync: detachedTaskRuntime.finalizeTaskRunByRunId,
+}));
 vi.mock("./subagent-control.runtime.js", () => killRuntime);
 vi.mock("./subagent-session-reconciliation.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./subagent-session-reconciliation.js")>();
@@ -64,125 +74,6 @@ vi.mock("./subagent-session-reconciliation.js", async (importOriginal) => {
     loadSubagentSessionEntry: vi.fn(() => killSessionEntry.current),
   };
 });
-
-function run(): SubagentRunRecord {
-  return createSubagentRunRecord({
-    runId: "interrupted-run",
-    childSessionKey: "agent:main:subagent:interrupted",
-    requesterSessionKey: "agent:main:main",
-    requesterDisplayKey: "main",
-    task: "recover after restart",
-    cleanup: "keep",
-    createdAt: Date.now() - 60_000,
-    startedAt: Date.now() - 55_000,
-  });
-}
-
-const childRuns = (runs: Map<string, SubagentRunRecord>) => (childSessionKey: string) =>
-  [...runs.values()].filter((entry) => entry.childSessionKey === childSessionKey);
-
-function archivedRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
-  return {
-    ...run(),
-    cleanup: "delete",
-    archiveAtMs: Date.now() - 1,
-    execution: { status: "terminal", endedAt: Date.now() - 10_000, outcome: { status: "ok" } },
-    ...overrides,
-  };
-}
-
-function createHarness(runtime: { current?: GatewayRecoveryRuntime }, entry = run()) {
-  const runs = new Map([[entry.runId, entry]]);
-  const finalizeInterruptedSubagentRun = vi.fn(
-    async (_params: {
-      runId: string;
-      expectedEntry?: SubagentRunRecord;
-      error: string;
-      endedAt?: number;
-    }) => 0,
-  );
-  const completeSubagentRunWithRecovery = vi.fn();
-  const completeCleanupBookkeeping = vi.fn();
-  const emitSubagentEndedHookForRun = vi.fn();
-  const notifyContextEngineSubagentEnded = vi.fn();
-  const callGateway = vi.fn();
-  const resumeRequesterSettleWake = vi.fn();
-  const warn = vi.fn();
-  const sweeper = createSubagentRegistrySweeper({
-    runs,
-    resumedRuns: new Set(),
-    persist: vi.fn(),
-    clearPendingLifecycleError: vi.fn(),
-    clearPendingLifecycleTimeout: vi.fn(),
-    sweepPendingLifecycle: vi.fn(),
-    completeSubagentRunWithRecovery,
-    getGatewayRecoveryRuntime: () => runtime.current,
-    abandonSubagentRestartRecoveryLaunch: vi.fn(() => true),
-    clearAcceptedSubagentRestartRecovery: vi.fn(() => true),
-    clearPendingSubagentRecoveryNotice: vi.fn(() => true),
-    resumeSettledSubagentRestartRecovery: vi.fn(() => true),
-    replaceSubagentRunAfterSteer: vi.fn(() => true),
-    markSubagentRestartRecoveryLaunchAttempted: vi.fn((params) => ({
-      sessionId: "session-id",
-      sessionMarker: params.sessionMarker,
-      idempotencyKey: params.idempotencyKey,
-      lifecycleGeneration: params.lifecycleGeneration,
-      phase: "attempted" as const,
-    })),
-    markSubagentRestartRecoveryLaunchAccepted: vi.fn((params) => ({
-      sessionId: "session-id",
-      sessionMarker: params.sessionMarker,
-      idempotencyKey: params.idempotencyKey,
-      phase: "accepted" as const,
-    })),
-    markSubagentRestartRecoveryLaunchConsumed: vi.fn((params) => ({
-      sessionId: "session-id",
-      sessionMarker: params.sessionMarker,
-      idempotencyKey: params.idempotencyKey,
-      phase: "consumed" as const,
-    })),
-    reserveSubagentRestartRecoveryLaunch: vi.fn(
-      (params: { idempotencyKey: string }) => params.idempotencyKey,
-    ),
-    resetSubagentRestartRecoveryLaunchAttempt: vi.fn(() => true),
-    finalizeInterruptedSubagentRun,
-    resumeRequesterSettleWake,
-    startSubagentAnnounceCleanupFlow: vi.fn(() => true),
-    completeCleanupBookkeeping,
-    discardTerminalDelivery: vi.fn(),
-    shouldEmitEndedHookForRun: vi.fn(() => false),
-    emitSubagentEndedHookForRun,
-    callGateway,
-    cleanupCollectorLaunchResources: vi.fn(async () => true),
-    runContextEngineSubagentEnded: vi.fn(),
-    notifyContextEngineSubagentEnded,
-    retireSupersededRun: vi.fn(),
-    getRunsForChildSession: childRuns(runs),
-    getRunsForCollectorGroup: (requesterSessionKey, groupId) =>
-      [...runs].filter(
-        ([, candidate]) =>
-          candidate.collect &&
-          candidate.groupId === groupId &&
-          (candidate.swarmRequesterSessionKey ?? candidate.requesterSessionKey) ===
-            requesterSessionKey,
-      ),
-    warn,
-  });
-  onTestFinished(() => sweeper.reset());
-  return {
-    entry,
-    runs,
-    callGateway,
-    completeCleanupBookkeeping,
-    completeSubagentRunWithRecovery,
-    emitSubagentEndedHookForRun,
-    finalizeInterruptedSubagentRun,
-    notifyContextEngineSubagentEnded,
-    resumeRequesterSettleWake,
-    sweeper,
-    warn,
-  };
-}
 
 describe("subagent registry recovery scheduling", () => {
   beforeEach(() => {
@@ -206,7 +97,9 @@ describe("subagent registry recovery scheduling", () => {
       updatedAt: Date.now(),
     };
     detachedTaskRuntime.finalizeTaskRunByRunId.mockReset().mockReturnValue([]);
-    detachedTaskRuntime.findDetachedTaskRun.mockReset().mockReturnValue(undefined);
+    detachedTaskRuntime.findDetachedTaskRunAsync
+      .mockReset()
+      .mockResolvedValue({ lookup: "available" });
     removeInternalSessionEffectsSession.mockReset();
   });
 
@@ -303,26 +196,41 @@ describe("subagent registry recovery scheduling", () => {
       });
   });
 
-  it("makes four dispatch attempts and three separate terminal attempts", async () => {
-    const runtime = { current: {} as GatewayRecoveryRuntime };
-    recoverRow.mockResolvedValue({ status: "retry", error: "gateway unavailable" });
-    const { entry, finalizeInterruptedSubagentRun, sweeper, warn } = createHarness(runtime);
+  it.each(["lifecycle", "runtime"] as const)(
+    "does not finalize interrupted work after its Gateway %s changes during classification",
+    async (change) => {
+      const runtime = { current: {} as GatewayRecoveryRuntime };
+      const classification = createDeferred<{ status: "terminal"; error: string }>();
+      recoverRow.mockReturnValue(classification.promise);
+      const { finalizeInterruptedSubagentRun, completeSubagentRunWithRecovery, sweeper } =
+        createHarness(runtime);
+      const pending = sweeper.sweepOnce();
+      try {
+        await vi.waitFor(() => expect(recoverRow).toHaveBeenCalledOnce());
+        if (change === "lifecycle") {
+          rotateAgentEventLifecycleGeneration();
+        } else {
+          runtime.current = {} as GatewayRecoveryRuntime;
+        }
+      } finally {
+        classification.resolve({ status: "terminal", error: "Gateway restart" });
+        await pending;
+      }
+      expect(finalizeInterruptedSubagentRun).not.toHaveBeenCalled();
+      expect(completeSubagentRunWithRecovery).not.toHaveBeenCalled();
+    },
+  );
 
+  it("retries terminal settlement without dispatching a child", async () => {
+    recoverRow.mockResolvedValue({ status: "terminal", error: "Gateway restart" });
+    const { entry, finalizeInterruptedSubagentRun, sweeper } = createHarness({});
+    finalizeInterruptedSubagentRun.mockResolvedValueOnce(0).mockResolvedValueOnce(1);
     await sweeper.sweepOnce();
-    await vi.advanceTimersByTimeAsync(10_000);
-
-    expect(recoverRow).toHaveBeenCalledTimes(4);
-    expect(finalizeInterruptedSubagentRun).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(finalizeInterruptedSubagentRun).toHaveBeenCalledTimes(2);
     expect(
       finalizeInterruptedSubagentRun.mock.calls.every(([params]) => params.expectedEntry === entry),
     ).toBe(true);
-    expect(warn).toHaveBeenCalledWith(
-      "subagent interrupted terminal projection remains incomplete",
-      { runId: "interrupted-run" },
-    );
-    recoverRow.mockResolvedValue({ status: "handled" });
-    await sweeper.runTick();
-    expect(recoverRow).toHaveBeenCalledTimes(5);
   });
 
   it.each(["ordinary", "collector group", "collector launch"])(
@@ -459,13 +367,16 @@ describe("subagent registry recovery scheduling", () => {
     finalizeInterruptedSubagentRun.mockReturnValueOnce(finalization.promise);
 
     const pending = sweeper.sweepOnce();
-    await vi.waitFor(() => expect(finalizeInterruptedSubagentRun).toHaveBeenCalledOnce());
-    const newer = run();
-    newer.runId = "newer-recovery-run";
-    newer.generation = (entry.generation ?? 0) + 1;
-    runs.set(newer.runId, newer);
-    finalization.resolve(0);
-    await pending;
+    try {
+      await vi.waitFor(() => expect(finalizeInterruptedSubagentRun).toHaveBeenCalledOnce());
+      const newer = run();
+      newer.runId = "newer-recovery-run";
+      newer.generation = (entry.generation ?? 0) + 1;
+      runs.set(newer.runId, newer);
+    } finally {
+      finalization.resolve(0);
+      await pending;
+    }
     await vi.advanceTimersByTimeAsync(5_000);
 
     expect(finalizeInterruptedSubagentRun).toHaveBeenCalledOnce();
@@ -473,7 +384,7 @@ describe("subagent registry recovery scheduling", () => {
 
   it("coalesces duplicate schedules before the owner pass starts", async () => {
     const runtime = { current: {} as GatewayRecoveryRuntime };
-    recoverRow.mockResolvedValue({ status: "handled" });
+    recoverRow.mockResolvedValue({ status: "ignored" });
     const { sweeper } = createHarness(runtime);
 
     sweeper.schedule({ delayMs: 1 });
@@ -483,33 +394,72 @@ describe("subagent registry recovery scheduling", () => {
     expect(recoverRow).toHaveBeenCalledOnce();
   });
 
-  it("re-resolves a missing runtime without consuming the dispatch budget", async () => {
+  it("rechecks deferred ownership when the runtime becomes available", async () => {
     const runtime: { current?: GatewayRecoveryRuntime } = {};
     recoverRow.mockImplementation(async ({ gatewayRuntime }) =>
-      gatewayRuntime ? { status: "handled" } : { status: "deferred" },
+      gatewayRuntime ? { status: "ignored" } : { status: "deferred" },
     );
     const { finalizeInterruptedSubagentRun, sweeper } = createHarness(runtime);
 
     await sweeper.sweepOnce();
     await vi.advanceTimersByTimeAsync(1_000);
     runtime.current = {} as GatewayRecoveryRuntime;
-    await vi.advanceTimersByTimeAsync(1_000);
+    await sweeper.sweepOnce();
 
     expect(recoverRow).toHaveBeenCalledTimes(3);
     expect(finalizeInterruptedSubagentRun).not.toHaveBeenCalled();
   });
 
-  it("never terminalizes deferred accepted-run reconciliation", async () => {
-    const runtime = { current: {} as GatewayRecoveryRuntime };
+  it("backs off each unresolved row without a sibling sweep resetting its deadline", async () => {
     recoverRow.mockResolvedValue({ status: "deferred" });
-    const { finalizeInterruptedSubagentRun, sweeper } = createHarness(runtime);
-
+    const { entry, runs, finalizeInterruptedSubagentRun, sweeper } = createHarness({});
+    const calls = () =>
+      recoverRow.mock.calls.filter(([params]) => params.runId === entry.runId).length;
     await sweeper.sweepOnce();
-    await vi.advanceTimersByTimeAsync(10_000);
-
-    expect(recoverRow.mock.calls.length).toBeGreaterThan(4);
+    for (const { delay, expected } of [
+      { delay: 1_000, expected: 2 },
+      { delay: 2_000, expected: 3 },
+      { delay: 4_000, expected: 4 },
+      { delay: 8_000, expected: 5 },
+      { delay: 16_000, expected: 6 },
+      { delay: 32_000, expected: 7 },
+      { delay: 60_000, expected: 8 },
+      { delay: 60_000, expected: 9 },
+    ]) {
+      await vi.advanceTimersByTimeAsync(delay);
+      expect(calls()).toBe(expected);
+    }
+    const sibling = { ...run(), runId: "new-sibling", childSessionKey: "agent:main:subagent:new" };
+    runs.set(sibling.runId, sibling);
+    await sweeper.sweepOnce();
+    await vi.advanceTimersByTimeAsync(7_000);
+    expect(calls()).toBe(9);
     expect(finalizeInterruptedSubagentRun).not.toHaveBeenCalled();
   });
+
+  it.each(["session", "registry", "generation"] as const)(
+    "rechecks a changed %s without waiting for the row's backoff",
+    async (change) => {
+      recoverRow.mockResolvedValue({ status: "deferred" });
+      const { entry, sweeper } = createHarness({});
+      await sweeper.sweepOnce();
+      await vi.advanceTimersByTimeAsync(7_000);
+      expect(recoverRow).toHaveBeenCalledTimes(4);
+      recoverRow.mockResolvedValue({ status: "handled" });
+      if (change === "session") {
+        sessionChanges.emit({ sessionKey: entry.childSessionKey, scope: "session-entry" });
+        await vi.advanceTimersByTimeAsync(1_000);
+      } else {
+        if (change === "registry") {
+          entry.execution.status = "interrupted";
+        } else {
+          rotateAgentEventLifecycleGeneration();
+        }
+        await sweeper.sweepOnce();
+      }
+      expect(recoverRow).toHaveBeenCalledTimes(5);
+    },
+  );
 
   it("does not terminalize a durable kill intent while runtime abort is rejected", async () => {
     const runtime = { current: {} as GatewayRecoveryRuntime };
@@ -518,7 +468,7 @@ describe("subagent registry recovery scheduling", () => {
       requestedAt: Date.now(),
       reason: "killed",
       sessionId: "session-id",
-      lifecycleGeneration: "test-generation",
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
       sessionLifecycleRevision: "session-revision",
     };
     getAgentRunContext.mockReturnValue({});
@@ -592,7 +542,7 @@ describe("subagent registry recovery scheduling", () => {
       requestedAt: Date.now(),
       reason: "killed",
       sessionId: "session-id",
-      lifecycleGeneration: "test-generation",
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
       sessionLifecycleRevision: "session-revision",
     };
     const runs = new Map([[entry.runId, entry]]);
@@ -611,9 +561,13 @@ describe("subagent registry recovery scheduling", () => {
       warn: vi.fn(),
     });
 
-    await vi.waitFor(() => expect(loadKillRuntime).toHaveBeenCalledOnce());
-    win(runs, entry);
-    runtime.resolve(killRuntime as never);
+    try {
+      await vi.waitFor(() => expect(loadKillRuntime).toHaveBeenCalledOnce());
+      win(runs, entry);
+    } finally {
+      runtime.resolve(killRuntime as never);
+      await pending;
+    }
 
     await expect(pending).resolves.toBe(false);
     expect(killRuntime.abortEmbeddedAgentRun).not.toHaveBeenCalled();
@@ -628,18 +582,12 @@ describe("subagent registry recovery scheduling", () => {
       requestedAt: Date.now(),
       reason: "killed",
       sessionId: "session-id",
-      lifecycleGeneration: "test-generation",
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
       sessionLifecycleRevision: "session-revision",
     };
     const runs = new Map([[entry.runId, entry]]);
-    let releaseRuntime!: () => void;
-    const loadKillRuntime = vi.fn(
-      () =>
-        new Promise<typeof import("./subagent-control.runtime.js")>((resolve) => {
-          releaseRuntime = () =>
-            resolve(killRuntime as unknown as typeof import("./subagent-control.runtime.js"));
-        }),
-    );
+    const runtime = createDeferred<typeof import("./subagent-control.runtime.js")>();
+    const loadKillRuntime = vi.fn(() => runtime.promise);
     const completeSubagentRunWithRecovery = vi.fn();
 
     const pending = reconcileDurableSubagentKillIntent({
@@ -652,13 +600,17 @@ describe("subagent registry recovery scheduling", () => {
       retireSupersededRun: vi.fn(),
       warn: vi.fn(),
     });
-    await vi.waitFor(() => expect(loadKillRuntime).toHaveBeenCalledOnce());
-    killSessionEntry.current = {
-      sessionId: "session-id",
-      lifecycleRevision: "replacement-revision",
-      updatedAt: Date.now(),
-    };
-    releaseRuntime();
+    try {
+      await vi.waitFor(() => expect(loadKillRuntime).toHaveBeenCalledOnce());
+      killSessionEntry.current = {
+        sessionId: "session-id",
+        lifecycleRevision: "replacement-revision",
+        updatedAt: Date.now(),
+      };
+    } finally {
+      runtime.resolve(killRuntime as never);
+      await pending;
+    }
 
     await expect(pending).resolves.toBe(true);
     expect(killRuntime.isEmbeddedAgentRunActive).not.toHaveBeenCalled();
@@ -674,7 +626,13 @@ describe("subagent registry recovery scheduling", () => {
     );
   });
 
-  it("does not apply an older durable kill when a newer child generation exists", async () => {
+  it.each([
+    {
+      name: "does not apply an older durable kill when a newer child generation exists",
+      opaque: false,
+    },
+    { name: "retires a superseded kill when its detached task runtime is opaque", opaque: true },
+  ])("$name", async ({ opaque }) => {
     const entry = run();
     entry.generation = 1;
     entry.killIntent = {
@@ -699,26 +657,37 @@ describe("subagent registry recovery scheduling", () => {
     ]);
     const completeSubagentRunWithRecovery = vi.fn();
     const retireSupersededRun = vi.fn(async () => {});
-    detachedTaskRuntime.findDetachedTaskRun.mockReturnValue({
-      lookup: "available",
-      task: {
-        runId: entry.runId,
-        runtime: "subagent",
-        childSessionKey: entry.childSessionKey,
-        status: "running",
-        createdAt: entry.createdAt,
-      },
-    });
-    detachedTaskRuntime.finalizeTaskRunByRunId.mockReturnValue([
-      {
-        runId: entry.runId,
-        runtime: "subagent",
-        childSessionKey: entry.childSessionKey,
-        status: "cancelled",
-        createdAt: entry.createdAt,
-        endedAt: entry.killIntent.requestedAt,
-      },
-    ]);
+    if (opaque) {
+      detachedTaskRuntime.findDetachedTaskRunAsync.mockResolvedValue({ lookup: "unavailable" });
+    } else {
+      detachedTaskRuntime.findDetachedTaskRunAsync.mockResolvedValue({
+        lookup: "available",
+        task: {
+          taskId: "older-task",
+          runId: entry.runId,
+          runtime: "subagent",
+          requesterSessionKey: entry.requesterSessionKey,
+          ownerKey: entry.requesterSessionKey,
+          scopeKind: "session",
+          childSessionKey: entry.childSessionKey,
+          task: entry.task,
+          status: "running",
+          deliveryStatus: "pending",
+          notifyPolicy: "done_only",
+          createdAt: entry.createdAt,
+        },
+      });
+      detachedTaskRuntime.finalizeTaskRunByRunId.mockReturnValue([
+        {
+          runId: entry.runId,
+          runtime: "subagent",
+          childSessionKey: entry.childSessionKey,
+          status: "cancelled",
+          createdAt: entry.createdAt,
+          endedAt: entry.killIntent.requestedAt,
+        },
+      ]);
+    }
 
     await expect(
       reconcileDurableSubagentKillIntent({
@@ -744,56 +713,7 @@ describe("subagent registry recovery scheduling", () => {
         status: "cancelled",
         suppressDelivery: true,
       }),
-    );
-    expect(retireSupersededRun).toHaveBeenCalledWith(entry.runId, entry);
-  });
-
-  it("retires a superseded kill when its detached task runtime is opaque", async () => {
-    const entry = run();
-    entry.generation = 1;
-    entry.killIntent = {
-      requestedAt: Date.now(),
-      reason: "killed",
-      sessionId: "session-id",
-    };
-    const newer = createSubagentRunRecord({
-      runId: "newer-opaque-run",
-      childSessionKey: entry.childSessionKey,
-      requesterSessionKey: entry.requesterSessionKey,
-      requesterDisplayKey: entry.requesterDisplayKey,
-      task: "newer generation",
-      cleanup: "keep",
-      generation: 2,
-      createdAt: entry.createdAt + 1,
-      startedAt: entry.execution.startedAt ? entry.execution.startedAt + 1 : Date.now(),
-    });
-    const runs = new Map([
-      [entry.runId, entry],
-      [newer.runId, newer],
-    ]);
-    const retireSupersededRun = vi.fn(async () => {});
-    detachedTaskRuntime.findDetachedTaskRun.mockReturnValue({ lookup: "unavailable" });
-
-    await expect(
-      reconcileDurableSubagentKillIntent({
-        runId: entry.runId,
-        entry,
-        runs,
-        getRunsForChildSession: childRuns(runs),
-        loadKillRuntime: async () =>
-          killRuntime as unknown as typeof import("./subagent-control.runtime.js"),
-        completeSubagentRunWithRecovery: vi.fn(),
-        retireSupersededRun,
-        warn: vi.fn(),
-      }),
-    ).resolves.toBe(true);
-
-    expect(detachedTaskRuntime.finalizeTaskRunByRunId).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: entry.runId,
-        status: "cancelled",
-        suppressDelivery: true,
-      }),
+      expect.any(Function),
     );
     expect(retireSupersededRun).toHaveBeenCalledWith(entry.runId, entry);
   });
@@ -937,7 +857,7 @@ describe("subagent registry recovery scheduling", () => {
     const runtime = { current: {} as GatewayRecoveryRuntime };
     recoverRow
       .mockRejectedValueOnce(new Error("unexpected recovery failure"))
-      .mockResolvedValue({ status: "handled" });
+      .mockResolvedValue({ status: "ignored" });
     const { sweeper, warn } = createHarness(runtime);
 
     await sweeper.runTick();

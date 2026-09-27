@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements deliver reply behavior.
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createMessageReceiptFromOutboundResults,
@@ -35,7 +34,7 @@ import { sendWhatsAppOutboundWithRetry } from "../outbound-retry.js";
 import { buildQuotedMessageOptions, lookupInboundMessageMeta } from "../quoted-message.js";
 import { newConnectionId } from "../reconnect.js";
 import { formatError } from "../session.js";
-import { markdownToWhatsAppChunks } from "../text-runtime.js";
+import { markdownToWhatsAppChunks } from "../targets-runtime.js";
 import { whatsappOutboundLog } from "./loggers.js";
 import { elide } from "./util.js";
 
@@ -277,7 +276,6 @@ async function deliverWebReplyInActivityScope(
     }
   };
 
-  // Text-only replies
   if (mediaList.length === 0 && textChunks.length) {
     const totalChunks = textChunks.length;
     for (const [index, chunk] of textChunks.entries()) {
@@ -313,7 +311,6 @@ async function deliverWebReplyInActivityScope(
 
   const remainingText = [...textChunks];
 
-  // Media (with optional caption on first item)
   const leadingCaption = remainingText.shift() || "";
   await sendMediaWithLeadingCaption({
     mediaUrls: mediaList,
@@ -412,7 +409,6 @@ async function deliverWebReplyInActivityScope(
     },
   });
 
-  // Remaining text chunks after media
   for (const chunk of remainingText) {
     rememberSendResult(
       await sendWithRetry(() => transport.reply(chunk, getQuote()), "media:text", "text"),

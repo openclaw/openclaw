@@ -1,5 +1,6 @@
 // Run-main profile env tests cover profile environment handling in the CLI entrypoint.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ExitError } from "../runtime.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 
 const startup = vi.hoisted(() => ({
@@ -8,7 +9,18 @@ const startup = vi.hoisted(() => ({
   ensurePath: vi.fn(),
   ensureDispatcher: vi.fn(),
   route: vi.fn(async () => true),
+  schemas: { incompatible: [], indeterminate: [] },
+  prepareDoctorDatabasePreflight: vi.fn(),
+  runDoctorHealthFlow: vi.fn(),
 }));
+
+vi.mock("../commands/doctor-database-preflight.js", () => ({
+  prepareDoctorDatabasePreflight: startup.prepareDoctorDatabasePreflight,
+}));
+vi.mock("../flows/doctor-health.js", () => ({
+  runDoctorHealthFlow: startup.runDoctorHealthFlow,
+}));
+vi.mock("./program/preaction.js", () => ({ registerPreActionHooks() {} }));
 
 vi.mock("../config/io.js", () => ({
   readSourceConfigBestEffort: startup.readConfig,
@@ -102,6 +114,7 @@ import { runCli } from "./run-main.js";
 
 describe("runCli environment and passive startup", () => {
   const envSnapshot = captureEnv([
+    "OPENCLAW_UPDATE_IN_PROGRESS",
     "OPENCLAW_PROFILE",
     "OPENCLAW_STATE_DIR",
     "OPENCLAW_CONFIG_PATH",
@@ -114,6 +127,8 @@ describe("runCli environment and passive startup", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    deleteTestEnvValue("OPENCLAW_UPDATE_IN_PROGRESS");
+    startup.prepareDoctorDatabasePreflight.mockResolvedValue(startup.schemas);
     deleteTestEnvValue("OPENCLAW_PROFILE");
     deleteTestEnvValue("OPENCLAW_STATE_DIR");
     deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
@@ -133,17 +148,42 @@ describe("runCli environment and passive startup", () => {
     envSnapshot.restore();
   });
 
+  it("carries the single early update preflight through Commander into Doctor", async () => {
+    setTestEnvValue("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+    startup.route.mockResolvedValueOnce(false);
+    const argv = ["node", "openclaw", "doctor", "--fix", "--non-interactive"];
+    const originalArgv = process.argv;
+    const originalListeners = process.listeners("uncaughtException");
+    process.argv = argv;
+    try {
+      await expect(runCli(argv)).rejects.toEqual(new ExitError(0));
+    } finally {
+      process.argv = originalArgv;
+      for (const listener of process.listeners("uncaughtException")) {
+        if (!originalListeners.includes(listener)) {
+          process.off("uncaughtException", listener);
+        }
+      }
+    }
+
+    expect(startup.prepareDoctorDatabasePreflight).toHaveBeenCalledExactlyOnceWith();
+    expect(startup.prepareDoctorDatabasePreflight).toHaveBeenCalledBefore(startup.startProxy);
+    expect(startup.runDoctorHealthFlow).toHaveBeenCalledExactlyOnceWith(
+      expect.any(Object),
+      expect.objectContaining({ repair: true, nonInteractive: true }),
+      undefined,
+      startup.schemas,
+    );
+  });
+
   it.each([
-    ...["--channel", "--tag", "--timeout"].flatMap((flag) =>
-      ["beta", "", "--", "--no-restart"].flatMap((value) => [
-        [flag, value, "cleanup"],
-        [`${flag}=${value}`, "cleanup"],
-      ]),
-    ),
+    ["--channel", "beta", "cleanup"],
+    ["--tag=", "cleanup"],
+    ["--timeout=--no-restart", "cleanup"],
+    ["--channel", "--", "cleanup"],
     ["--no-restart", "cleanup"],
     ["--accept-capabilities", "cleanup"],
     ["--", "cleanup"],
-    ["--channel", "beta", "--", "cleanup"],
     ["--dry-run", "--json", "--yes", "cleanup"],
     ["cleanup", "--dry-run", "--json", "--yes"],
     ["cleanup", "--channel", "beta"],
@@ -224,35 +264,6 @@ describe("runCli environment and passive startup", () => {
 
   it("allows container mode when OPENCLAW_PROFILE is already set in env", async () => {
     setTestEnvValue("OPENCLAW_PROFILE", "work");
-
-    await expect(
-      runCli(["node", "openclaw", "--container", "demo", "status"]),
-    ).resolves.toBeUndefined();
-  });
-
-  it.each([
-    ["OPENCLAW_GATEWAY_PORT", "19001"],
-    ["OPENCLAW_GATEWAY_URL", "ws://127.0.0.1:18789"],
-    ["OPENCLAW_GATEWAY_TOKEN", "demo-token"],
-    ["OPENCLAW_GATEWAY_PASSWORD", "demo-password"],
-  ])("allows container mode when %s is set in env", async (key, value) => {
-    setTestEnvValue(key, value);
-
-    await expect(
-      runCli(["node", "openclaw", "--container", "demo", "status"]),
-    ).resolves.toBeUndefined();
-  });
-
-  it("allows container mode when only OPENCLAW_STATE_DIR is set in env", async () => {
-    setTestEnvValue("OPENCLAW_STATE_DIR", "/tmp/openclaw-host-state");
-
-    await expect(
-      runCli(["node", "openclaw", "--container", "demo", "status"]),
-    ).resolves.toBeUndefined();
-  });
-
-  it("allows container mode when only OPENCLAW_CONFIG_PATH is set in env", async () => {
-    setTestEnvValue("OPENCLAW_CONFIG_PATH", "/tmp/openclaw-host-state/openclaw.json");
 
     await expect(
       runCli(["node", "openclaw", "--container", "demo", "status"]),

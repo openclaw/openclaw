@@ -7,6 +7,27 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
+const FAILURE_REASON_PRIORITY: AuthProfileFailureReason[] = [
+  "auth_permanent",
+  "auth",
+  "session_expired",
+  "billing",
+  "format",
+  "model_not_found",
+  "overloaded",
+  "timeout",
+  "rate_limit",
+  "empty_response",
+  "no_error_details",
+  "unclassified",
+  "unknown",
+];
+const FAILURE_REASON_SET = new Set<string>(FAILURE_REASON_PRIORITY);
+
+function isAuthProfileFailureReason(reason: string): reason is AuthProfileFailureReason {
+  return FAILURE_REASON_SET.has(reason);
+}
+
 /** Clears failure windows while preserving unrelated usage history. */
 export function resetAuthProfileFailureState(
   existing: ProfileUsageStats,
@@ -307,4 +328,97 @@ export function clearExpiredCooldowns(store: AuthProfileStore, now?: number): bo
   }
 
   return mutated;
+}
+
+/**
+ * Infer the most likely reason all candidate profiles are currently unavailable.
+ *
+ * We prefer explicit active `disabledReason` values (for example billing/auth)
+ * over generic cooldown buckets, then fall back to failure-count signals.
+ */
+export function resolveProfilesUnavailableReason(params: {
+  store: AuthProfileStore;
+  profileIds: string[];
+  now?: number;
+}): AuthProfileFailureReason | null {
+  const now = params.now ?? Date.now();
+  const scores = new Map<AuthProfileFailureReason, number>();
+  const addScore = (reason: AuthProfileFailureReason, value: number) => {
+    if (!FAILURE_REASON_SET.has(reason) || value <= 0 || !Number.isFinite(value)) {
+      return;
+    }
+    scores.set(reason, (scores.get(reason) ?? 0) + value);
+  };
+
+  for (const profileId of params.profileIds) {
+    const stats = params.store.usageStats?.[profileId];
+    if (!stats) {
+      continue;
+    }
+
+    const disabledActive = isActiveUnusableWindow(stats.disabledUntil, now);
+    if (disabledActive && stats.disabledReason && FAILURE_REASON_SET.has(stats.disabledReason)) {
+      // Disabled reasons are explicit and high-signal; weight heavily.
+      addScore(stats.disabledReason, 1_000);
+      continue;
+    }
+
+    if (isActiveUnusableWindow(stats.blockedUntil, now)) {
+      addScore("rate_limit", 1_000);
+      continue;
+    }
+
+    const cooldownActive = isActiveUnusableWindow(stats.cooldownUntil, now);
+    if (!cooldownActive) {
+      continue;
+    }
+
+    if (stats.cooldownReason && FAILURE_REASON_SET.has(stats.cooldownReason)) {
+      addScore(stats.cooldownReason, 1_000);
+      continue;
+    }
+
+    let recordedReason = false;
+    for (const [reason, rawCount] of Object.entries(stats.failureCounts ?? {})) {
+      const count = typeof rawCount === "number" ? rawCount : 0;
+      if (!isAuthProfileFailureReason(reason) || count <= 0) {
+        continue;
+      }
+      addScore(reason, count);
+      recordedReason = true;
+    }
+    if (!recordedReason) {
+      // No failure counts recorded for this cooldown window. Previously this
+      // defaulted to "rate_limit", which caused false "rate limit reached"
+      // warnings when the actual reason was unknown (e.g. transient network
+      // blip or server error without a classified failure count).
+      addScore("unknown", 1);
+    }
+  }
+
+  let best: AuthProfileFailureReason | null = null;
+  let bestScore = -1;
+  for (const reason of FAILURE_REASON_PRIORITY) {
+    const score = scores.get(reason);
+    if (score !== undefined && score > bestScore) {
+      best = reason;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+/** Resolves the display-facing unusable timestamp, honoring provider bypasses. */
+export function resolveProfileUnusableUntilForDisplay(
+  store: AuthProfileStore,
+  profileId: string,
+): number | null {
+  if (isAuthCooldownBypassedForProvider(store.profiles[profileId]?.provider)) {
+    return null;
+  }
+  const stats = store.usageStats?.[profileId];
+  if (!stats) {
+    return null;
+  }
+  return resolveProfileUnusableUntil(stats);
 }

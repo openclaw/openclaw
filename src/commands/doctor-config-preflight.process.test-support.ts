@@ -1,10 +1,15 @@
-import { execFile, spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
-import { ensureOpenClawAgentDatabaseSchema } from "../state/openclaw-agent-db.js";
+import { runCliProcessChild } from "../cli/cli-process-child.test-helpers.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
+import { seedOpenClawAgentSchemaV21 } from "../state/openclaw-agent-schema-v21.test-support.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 
 const execFileAsync = promisify(execFile);
@@ -12,7 +17,7 @@ const isolatedRuntimeNodeExecPath = resolveTestNodeExecPath();
 // The fixture owns its package assets; resolving linked source back to the checkout
 // makes Doctor repair that checkout instead, including building its Control UI.
 // Dependency realpaths still own their transitive packages under isolated installs.
-const ISOLATED_RUNTIME_NODE_ARGS = [
+export const ISOLATED_RUNTIME_NODE_ARGS = [
   "--preserve-symlinks",
   "--preserve-symlinks-main",
   "--import",
@@ -42,17 +47,15 @@ export function runBuiltRuntime(
   timeout: number,
   maxBuffer?: number,
 ) {
-  return spawnSync(
-    isolatedRuntimeNodeExecPath,
-    [...ISOLATED_RUNTIME_NODE_ARGS, path.join(runtimeRoot, "dist", "entry.js"), ...args],
-    {
-      cwd: runtimeRoot,
-      encoding: "utf8",
-      env,
-      timeout,
-      ...(maxBuffer === undefined ? {} : { maxBuffer }),
-    },
-  );
+  return runCliProcessChild({
+    nodeExecutable: isolatedRuntimeNodeExecPath,
+    nodeArgs: [...ISOLATED_RUNTIME_NODE_ARGS, path.join(runtimeRoot, "dist", "entry.js"), ...args],
+    nodeArgsPolicy: "caller",
+    cwd: runtimeRoot,
+    env,
+    timeoutMs: timeout,
+    maxBuffer: maxBuffer ?? 1024 * 1024,
+  });
 }
 
 export function runSourceRuntime(
@@ -62,17 +65,15 @@ export function runSourceRuntime(
   timeout: number,
   maxBuffer?: number,
 ) {
-  return spawnSync(
-    isolatedRuntimeNodeExecPath,
-    [...ISOLATED_RUNTIME_NODE_ARGS, "--import", "tsx", ...args],
-    {
-      cwd: runtimeRoot,
-      encoding: "utf8",
-      env,
-      timeout,
-      ...(maxBuffer === undefined ? {} : { maxBuffer }),
-    },
-  );
+  return runCliProcessChild({
+    nodeExecutable: isolatedRuntimeNodeExecPath,
+    nodeArgs: [...ISOLATED_RUNTIME_NODE_ARGS, "--import", "tsx", ...args],
+    nodeArgsPolicy: "caller",
+    cwd: runtimeRoot,
+    env,
+    timeoutMs: timeout,
+    maxBuffer: maxBuffer ?? 1024 * 1024,
+  });
 }
 
 export function runIsolatedModuleScript(
@@ -111,10 +112,15 @@ export function createSourceRuntime(root: string): string {
     );
   }
   for (const filename of [
+    "node-host-launcher.mjs",
+    "node-compile-cache.mjs",
     "node-version.mjs",
     "node-sqlite.mjs",
     "node-runtime-update.mjs",
     "node-runtime-recovery.mjs",
+    "cli-root-options.mjs",
+    "gateway-run-argv.mjs",
+    "gateway-shutdown-budget.mjs",
     "package.json",
     "tsconfig.json",
   ]) {
@@ -159,20 +165,69 @@ export function createBuiltRuntime(
   return runtimeRoot;
 }
 
+export function seedPluginStateSidecar(stateDir: string, canonicalCreatedAt: number): void {
+  const sharedPath = path.join(stateDir, "state", "openclaw.sqlite");
+  const sidecarPath = path.join(stateDir, "plugin-state", "state.sqlite");
+  fs.mkdirSync(path.dirname(sharedPath), { recursive: true });
+  fs.mkdirSync(path.dirname(sidecarPath), { recursive: true });
+
+  openOpenClawStateDatabase({
+    path: sharedPath,
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+  });
+  closeOpenClawStateDatabaseForTest();
+
+  const shared = new DatabaseSync(sharedPath);
+  try {
+    shared
+      .prepare(`
+        INSERT INTO plugin_state_entries (
+          plugin_id, namespace, entry_key, value_json, created_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `)
+      .run("discord", "components", "interaction:1", '{"ok":false}', canonicalCreatedAt, null);
+  } finally {
+    shared.close();
+  }
+
+  const sidecar = new DatabaseSync(sidecarPath);
+  try {
+    sidecar.exec(`
+      CREATE TABLE plugin_state_entries (
+        plugin_id TEXT NOT NULL,
+        namespace TEXT NOT NULL,
+        entry_key TEXT NOT NULL,
+        value_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER,
+        PRIMARY KEY (plugin_id, namespace, entry_key)
+      );
+    `);
+    sidecar
+      .prepare(`
+        INSERT INTO plugin_state_entries (
+          plugin_id, namespace, entry_key, value_json, created_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `)
+      // Keep retired sidecar data distinct from the canonical row.
+      .run("discord", "components", "interaction:1", '{"ok":true}', 3_000, null);
+  } finally {
+    sidecar.close();
+  }
+}
+
 export function seedV17AdditiveRepairDatabase(
   stateDir: string,
   options: { participantDependency?: boolean } = {},
 ): string {
+  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  openOpenClawStateDatabase({ env });
+  closeOpenClawStateDatabaseForTest();
   const databasePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
   fs.mkdirSync(path.dirname(databasePath), { recursive: true });
   const database = new DatabaseSync(databasePath);
   try {
-    ensureOpenClawAgentDatabaseSchema(database, {
-      agentId: "main",
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      path: databasePath,
-      register: false,
-    });
+    seedOpenClawAgentSchemaV21(database);
     removeCanonicalValidationFromHistoricalAgentFixture(database);
     database.exec(`
       DROP TABLE session_participants;

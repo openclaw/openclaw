@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements suite runtime gateway behavior.
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
@@ -7,8 +6,9 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { QaSuiteInfraError } from "./errors.js";
 import { discardIgnoredResponseBody } from "./ignored-response-body.js";
+import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
+import { waitForQaHttpReady } from "./suite-http-readiness.js";
 import { applyQaMergePatch } from "./suite-merge-patch.js";
-import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type { QaConfigSnapshot, QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import { resolveQaGatewayTimeoutWithGraceMs } from "./timer-timeouts.js";
 
@@ -38,33 +38,15 @@ async function fetchJson<T>(url: string, timeoutMs = QA_SUITE_FETCH_JSON_TIMEOUT
 }
 
 async function waitForGatewayHealthy(env: Pick<QaSuiteRuntimeEnv, "gateway">, timeoutMs = 45_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const { response, release } = await fetchWithSsrFGuard({
-        url: `${env.gateway.baseUrl}/readyz`,
-        policy: { allowPrivateNetwork: true },
-        timeoutMs: Math.max(1, deadline - Date.now()),
-        auditContext: "qa-lab-suite-wait-for-gateway-healthy",
-      });
-      try {
-        const ready = response.ok;
-        await discardIgnoredResponseBody(response);
-        if (ready) {
-          return;
-        }
-      } finally {
-        await release();
-      }
-    } catch {
-      // retry
-    }
-    const remainingMs = deadline - Date.now();
-    if (remainingMs > 0) {
-      await sleep(Math.min(250, remainingMs));
-    }
+  const ready = await waitForQaHttpReady(
+    `${env.gateway.baseUrl}/readyz`,
+    timeoutMs,
+    250,
+    "qa-lab-suite-wait-for-gateway-healthy",
+  );
+  if (!ready) {
+    throw new QaSuiteInfraError("gateway_ready_timeout", `timed out after ${timeoutMs}ms`);
   }
-  throw new QaSuiteInfraError("gateway_ready_timeout", `timed out after ${timeoutMs}ms`);
 }
 
 async function waitForTransportReady(
@@ -193,7 +175,11 @@ function withoutQaConfigApplyVolatileFields(
   return comparable;
 }
 
-function isConfigApplyNoopForSnapshot(config: Record<string, unknown>, raw: string): boolean {
+function isConfigMutationNoopForSnapshot(
+  action: "config.patch" | "config.apply",
+  config: Record<string, unknown>,
+  raw: string,
+) {
   let nextConfig: unknown;
   try {
     nextConfig = JSON.parse(raw);
@@ -203,33 +189,12 @@ function isConfigApplyNoopForSnapshot(config: Record<string, unknown>, raw: stri
   if (!isPlainObject(nextConfig)) {
     return false;
   }
-  return areJsonValuesEqual(
-    withoutQaConfigApplyVolatileFields(config),
-    withoutQaConfigApplyVolatileFields(nextConfig),
-  );
-}
-
-function isConfigPatchNoopForSnapshot(config: Record<string, unknown>, raw: string): boolean {
-  let patch: unknown;
-  try {
-    patch = JSON.parse(raw);
-  } catch {
-    return false;
-  }
-  if (!isPlainObject(patch)) {
-    return false;
-  }
-  return areJsonValuesEqual(applyQaMergePatch(config, patch), config);
-}
-
-function isConfigMutationNoopForSnapshot(
-  action: "config.patch" | "config.apply",
-  config: Record<string, unknown>,
-  raw: string,
-) {
   return action === "config.patch"
-    ? isConfigPatchNoopForSnapshot(config, raw)
-    : isConfigApplyNoopForSnapshot(config, raw);
+    ? areJsonValuesEqual(applyQaMergePatch(config, nextConfig), config)
+    : areJsonValuesEqual(
+        withoutQaConfigApplyVolatileFields(config),
+        withoutQaConfigApplyVolatileFields(nextConfig),
+      );
 }
 
 async function readConfigSnapshot(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
@@ -265,7 +230,7 @@ async function runConfigMutation(params: {
   skipRestartDeferral?: boolean;
 }) {
   const restartDelayMs = params.restartDelayMs ?? 1_000;
-  const timeoutMs = liveTurnTimeoutMs(params.env, 180_000);
+  const timeoutMs = resolveQaLiveTurnTimeoutMs(params.env, 180_000);
   let lastConflict: unknown = null;
   for (let attempt = 1; attempt <= 8; attempt += 1) {
     const snapshot = await readConfigSnapshot(params.env);
@@ -310,7 +275,8 @@ async function runConfigMutation(params: {
             env: params.env.gateway.runtimeEnv,
             targetPid: restartTargetPid,
             reason: "config.patch",
-            intent: { force: true },
+            // QA checkpoints must be interrupted, not allowed to finish a graceful drain.
+            intent: { force: true, waitMs: 0 },
           })
         ) {
           throw new Error("qa gateway could not persist a forced restart intent");
@@ -369,49 +335,24 @@ async function runConfigMutation(params: {
   );
 }
 
-async function patchConfig(params: {
-  env: QaGatewayMutationEnv;
-  patch: Record<string, unknown>;
-  sessionKey?: string;
-  deliveryContext?: {
-    channel?: string;
-    to?: string;
-    accountId?: string;
-    threadId?: string | number;
-  };
-  note?: string;
-  restartDelayMs?: number;
-  restartSettleBufferMs?: number;
-  replacePaths?: readonly string[];
-  skipRestartDeferral?: boolean;
-}) {
+async function patchConfig(
+  params: Omit<Parameters<typeof runConfigMutation>[0], "action" | "raw"> & {
+    patch: Record<string, unknown>;
+  },
+) {
   return await runConfigMutation({
-    env: params.env,
+    ...params,
     action: "config.patch",
     raw: JSON.stringify(params.patch, null, 2),
-    sessionKey: params.sessionKey,
-    deliveryContext: params.deliveryContext,
-    note: params.note,
-    restartDelayMs: params.restartDelayMs,
-    restartSettleBufferMs: params.restartSettleBufferMs,
-    replacePaths: params.replacePaths,
-    skipRestartDeferral: params.skipRestartDeferral,
   });
 }
 
-async function applyConfig(params: {
-  env: QaGatewayMutationEnv;
-  nextConfig: Record<string, unknown>;
-  sessionKey?: string;
-  deliveryContext?: {
-    channel?: string;
-    to?: string;
-    accountId?: string;
-    threadId?: string | number;
-  };
-  note?: string;
-  restartDelayMs?: number;
-}) {
+async function applyConfig(
+  params: Omit<
+    Parameters<typeof runConfigMutation>[0],
+    "action" | "raw" | "restartSettleBufferMs" | "replacePaths" | "skipRestartDeferral"
+  > & { nextConfig: Record<string, unknown> },
+) {
   return await runConfigMutation({
     env: params.env,
     action: "config.apply",

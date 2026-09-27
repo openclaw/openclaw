@@ -96,7 +96,7 @@ export function createConfiguredProviderCatalogModelIdNormalizer(
     );
 }
 
-type ModelRefNormalizeOptions = ModelManifestNormalizationContext & {
+export type ModelRefNormalizeOptions = ModelManifestNormalizationContext & {
   allowManifestNormalization?: boolean;
   allowPluginNormalization?: boolean;
 };

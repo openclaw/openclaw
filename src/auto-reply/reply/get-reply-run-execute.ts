@@ -22,8 +22,10 @@ import { readChannelContextAdmissionEvidence } from "../../channels/message-acce
 import { getRuntimeConfig } from "../../config/config.js";
 import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
+import { sessionPersonalProfileId } from "../../config/sessions/session-entry-provenance.js";
 import { normalizeMediaFacts } from "../../media/media-facts.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
+import { isSessionPersonalBootstrapTurn } from "../../sessions/session-participant-input.js";
 import { MEDIA_ONLY_USER_TEXT } from "../../sessions/user-turn-media.js";
 import {
   createUserTurnTranscriptRecorder,
@@ -32,6 +34,7 @@ import {
 import { buildChannelUserTurnSender } from "../../sessions/user-turn-transcript.metadata.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { isConfiguredCommandOwner } from "../command-auth.js";
+import { bindCommandOwnerAuthority, getCommandOwnerAuthority } from "../command-owner-authority.js";
 import { getGroupThreadTurn } from "../group-thread-context.js";
 import { resolveInternalTurnTranscript } from "../internal-turn-source.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -56,6 +59,7 @@ import {
 import {
   buildChannelSourceTurnId,
   readChannelSourceTurnId,
+  resolveReplySourceTurnId,
   setChannelSourceTurnId,
   shouldMintChannelSourceTurnId,
 } from "./source-turn-id.js";
@@ -85,7 +89,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     queueKey,
     shouldSteer,
     shouldFollowup,
-    queueAdmissionState,
+    hasQueuedFollowups,
     isActive,
     authProfileId,
     authProfileIdSource,
@@ -113,9 +117,9 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     hasUserBody,
     shouldInjectGroupIntro,
     typingMode,
-    allowEmptyAssistantReplyAsSilent,
     terminalReplyExpectation,
   } = context;
+  const runParams = { ...params };
   const {
     ctx,
     sessionCtx,
@@ -126,12 +130,8 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     provider,
     model,
     requestedRouteResolution,
-    typing,
     opts,
-    defaultModel,
     timeoutMs,
-    blockStreamingEnabled,
-    blockReplyChunking,
     resolvedBlockStreamingBreak,
     sessionStore,
     sessionKey,
@@ -380,8 +380,21 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   }
   const admittedSessionSettings = opts?.admittedSessionSettings;
   const groupTurn = getGroupThreadTurn();
+  const personalBootstrapEligible = isSessionPersonalBootstrapTurn({
+    ...ctx,
+    InternalTurnSource: ctx.InternalTurnSource ?? sessionCtx.InternalTurnSource,
+    InputProvenance: inputProvenance,
+  });
   const followupRun = {
     prompt: queuedBody,
+    sourceTurnId: resolveReplySourceTurnId({
+      sourceTurnId,
+      admissionRunId: sourceMessageId,
+      ingressProvider: ctx.Provider ?? ctx.Surface ?? promptSessionCtx.Provider,
+      entry: preparedSessionState.sessionEntry,
+    }),
+    personalBootstrapEligible,
+    operatorAuthority: opts?.operatorAuthority,
     transcriptPrompt: transcriptCommandBody,
     ...(userTurnTranscriptRecorder ? { userTurnTranscriptRecorder } : {}),
     currentInboundEventKind: inboundEventKind,
@@ -430,13 +443,18 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       normalizeOptionalString(sessionCtx.ChatId),
     originatingChatType: replyRoute.chatType,
     run: {
+      providerReviewAcknowledgment: opts?.providerReviewAcknowledgment,
       agentId,
       agentDir,
       sessionId: preparedSessionState.sessionId,
       sessionKey,
       runtimePolicySessionKey,
       messageProvider,
+      mediaNormalizationOwner: opts?.mediaNormalizationOwner,
       clientCaps: ctx.GatewayClientCaps,
+      bootstrapUserProfileId: personalBootstrapEligible
+        ? sessionPersonalProfileId(preparedSessionState.sessionEntry)
+        : undefined,
       gatewayUiCommandTarget: ctx.GatewayUiCommandTarget,
       toolBindings: ctx.GatewayRunToolBindings,
       chatType: replyRoute.chatType,
@@ -553,7 +571,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       extraSystemPromptStatic,
       cliSessionBindingFacts,
       skipProviderRuntimeHints: useFastReplyRuntime,
-      allowEmptyAssistantReplyAsSilent,
       terminalReplyExpectation,
       suppressTranscriptOnlyAssistantPersistence: isRoomEvent,
       ...(opts?.skillWorkshopProposalRevision
@@ -569,6 +586,10 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     },
   };
   const sourceReplyDeliveryRuntimeOptions = opts as SourceReplyDeliveryRuntimeOptions | undefined;
+  const channelOwnerAuthority = getCommandOwnerAuthority(sessionCtx);
+  if (command.senderIsOwner && channelOwnerAuthority) {
+    bindCommandOwnerAuthority(followupRun.run, channelOwnerAuthority);
+  }
   if (sourceReplyDeliveryRuntimeOptions?.sourceReplyDeliveryModeOrigin) {
     const sourceReplyDeliveryRuntime = createSourceReplyDeliveryRuntime({
       origin: sourceReplyDeliveryRuntimeOptions.sourceReplyDeliveryModeOrigin,
@@ -604,6 +625,9 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     accountId: replyRoute.accountId,
     senderId: normalizeOptionalString(command.senderId),
   };
+  const isCurrentChannelOwner = () =>
+    channelOwnerAuthority?.isCurrent() ?? isConfiguredCommandOwner(getRuntimeConfig(), cronOwner);
+  // Only fresh owner ingress mints this identity. Management-only admissions do not imply it.
   const createdCronCreatorAuthorityCapability =
     !inheritedCronCreatorAuthorityCapability && authorityRunId && messageProvider
       ? createCronCreatorAuthorityCapability(
@@ -611,16 +635,18 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
           { kind: "external", channel: messageProvider },
           {
             source: "channel-owner",
-            isCurrent: () => isConfiguredCommandOwner(getRuntimeConfig(), cronOwner),
+            isCurrent: isCurrentChannelOwner,
           },
           undefined,
           channelRequester,
+          { isCurrent: isCurrentChannelOwner, ...cronOwner },
         )
       : undefined;
   const cronCreatorAuthorityCapability =
     inheritedCronCreatorAuthorityCapability ?? createdCronCreatorAuthorityCapability;
   const execute = () =>
     runReplyAgent({
+      ...runParams,
       commandBody: prefixedCommandBody,
       transcriptCommandBody,
       followupRun,
@@ -628,7 +654,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       resolvedQueue,
       shouldSteer,
       shouldFollowup,
-      queueAdmissionState,
+      hasQueuedFollowups,
       isActive,
       isRunActive: () => {
         const latestSessionState = resolvePreparedSessionState();
@@ -645,20 +671,11 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
               ...(cronCreatorAuthorityCapability ? { cronCreatorAuthorityCapability } : {}),
             }
           : opts,
-      typing,
       sessionEntry: preparedSessionState.sessionEntry,
-      sessionStore,
-      sessionKey,
       runtimePolicySessionKey,
-      storePath,
-      defaultModel,
       resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
       toolProgressDetail: resolveAgentConfig(cfg, agentId)?.toolProgressDetail,
       isNewSession: params.isNewSession,
-      blockStreamingEnabled,
-      blockReplyChunking,
-      resolvedBlockStreamingBreak,
-      sessionCtx,
       shouldInjectGroupIntro,
       typingMode,
       resetTriggered: effectiveResetTriggered,

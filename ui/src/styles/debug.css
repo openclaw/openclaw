@@ -19,6 +19,9 @@ openclaw-debug-overlay-content {
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-xl);
   backdrop-filter: blur(18px) saturate(1.15);
+  /* The layout owner animates size explicitly. Global reduced-motion durations
+     must not turn direct pointer/keyboard placement into CSS transitions. */
+  transition-property: none;
 }
 
 .debug-overlay__header {
@@ -28,6 +31,18 @@ openclaw-debug-overlay-content {
   gap: 16px;
   padding: 13px 14px 11px;
   border-bottom: 1px solid var(--border);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.debug-overlay__header:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.debug-overlay--dragging .debug-overlay__header {
+  cursor: grabbing;
 }
 
 .debug-overlay__header h2,
@@ -173,6 +188,15 @@ openclaw-debug-overlay-content {
 
   .sparkline-tile__chart {
     margin-inline: -5px;
+  }
+
+  .sparkline-tile__secondary {
+    font-size: 8px;
+    line-height: 9px;
+  }
+
+  .gateway-vital--cpu .sparkline-tile__chart svg {
+    height: 11px;
   }
 }
 

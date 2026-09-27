@@ -1,9 +1,9 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { icons } from "../../../components/icons.ts";
 import { scrollState } from "../../../components/scroll-state.ts";
-import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
+import { renderAttachmentPreviewChip } from "./chat-attachment-preview-chip.ts";
 import "../../../styles/chat/selection-annotations.css";
 
 registerChatMessageMetadataEnglish();
@@ -77,35 +77,17 @@ export function renderCommentPreviewChip(
   content: TemplateResult,
   onReveal?: () => void,
   openOnClick = false,
+  removal?: { onRemove: (event: Event) => void; disabled: boolean },
 ) {
-  return html`<openclaw-tooltip
-    class="chat-comment-preview"
-    placement="top-start"
-    auto-size
-    .describe=${false}
-    .openOnClick=${openOnClick}
-  >
-    <span
-      class="chat-attachment-thumb chat-attachment-thumb--file chat-selection-annotations__chip"
-      tabindex="0"
-      @pointerenter=${onReveal}
-      @focusin=${onReveal}
-      @click=${openOnClick ? onReveal : undefined}
-    >
-      <span class="chat-attachment-file">
-        <span aria-hidden="true">${icons.messageSquare}</span>
-        ${t(count === 1 ? "chat.messages.annotationCount" : "chat.messages.annotationsCount", { count: String(count) })}
-      </span>
-    </span>
-    <div
-      slot="content"
-      class="chat-comment-preview__scroll"
-      tabindex="0"
-      role="region"
-      aria-label=${t("chat.messages.annotations")}
-      ${scrollState()}
-    >
-      ${content}
-    </div>
-  </openclaw-tooltip>`;
+  return renderAttachmentPreviewChip({
+    label: t(count === 1 ? "chat.messages.annotationCount" : "chat.messages.annotationsCount", {
+      count: String(count),
+    }),
+    regionLabel: t("chat.messages.annotations"),
+    icon: icons.messageSquare,
+    content,
+    onReveal,
+    openOnClick,
+    removal: removal ? { ...removal, label: t("chat.messages.removeAnnotations") } : undefined,
+  });
 }

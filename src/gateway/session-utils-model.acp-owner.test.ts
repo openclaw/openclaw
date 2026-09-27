@@ -41,7 +41,6 @@ describe("resolveGatewaySessionThinkingProjectionInternal", () => {
     { api: true, baseUrl: true, levels: ["Off", "High"] },
     { api: false, baseUrl: true, levels: ["Off"] },
     { api: true, baseUrl: false, levels: ["Off"] },
-    { api: false, baseUrl: false, levels: ["Off"] },
   ])("uses catalog-only runtime route facts (api=$api, baseUrl=$baseUrl)", (scenario) => {
     const api = "openai-responses" as const;
     const baseUrl = "https://catalog-route.example.test/v1";

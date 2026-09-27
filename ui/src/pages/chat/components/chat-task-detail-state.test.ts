@@ -78,6 +78,40 @@ describe("task detail transcript state", () => {
     });
   });
 
+  it.each([{ messageId: "tool" }, { __openclaw: { id: "tool" } }])(
+    "attaches task activity before refresh replacement using %j",
+    async (identity) => {
+      const message = {
+        ...identity,
+        role: "toolResult",
+        toolCallId: "poll",
+        content: "Raw output",
+      };
+      const item = { itemId: "tool:poll", title: "Process", phase: "end", status: "failed" };
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce({
+          messages: [message],
+          activity: [{ messageId: "tool", items: [item] }],
+        })
+        .mockResolvedValueOnce({
+          messages: [message],
+          activity: [{ messageId: "tool", items: [] }],
+        });
+      const host = hostWith(request);
+      readTaskTranscript(host, { taskId: "task-1" });
+      await flushAsync();
+      expect(readTaskTranscript(host, { taskId: "task-1" })).toMatchObject({
+        messages: [{ ...message, activity: [item] }],
+      });
+      retryTaskTranscript(host);
+      await flushAsync();
+      expect(readTaskTranscript(host, { taskId: "task-1" })).toMatchObject({
+        messages: [{ ...message, activity: [] }],
+      });
+    },
+  );
+
   it("retries a failed history request", async () => {
     const pending = deferred<never>();
     const request = vi

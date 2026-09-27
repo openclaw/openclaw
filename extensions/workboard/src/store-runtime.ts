@@ -1,7 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import type { WorkboardChange } from "@openclaw/workboard-contract";
-import type { WorkboardCardStore, WorkboardKeyedStore } from "./persistence-types.js";
+import type {
+  WorkboardCardStore,
+  WorkboardKeyedStore,
+  WorkboardWriteAuthority,
+} from "./persistence-types.js";
 
 export class WorkboardStoreRuntime {
   private readonly operationScope = new AsyncLocalStorage<{ active: boolean }>();
@@ -20,6 +24,7 @@ export class WorkboardStoreRuntime {
     private readonly readDataVersion?: () => number | Promise<number>,
     private readonly closePersistence?: () => void | Promise<void>,
     ready?: Promise<number>,
+    private readonly runWithWriteAuthority?: WorkboardWriteAuthority,
   ) {
     this.initialization = Promise.resolve(ready ?? readDataVersion?.()).then((version) => {
       this.externalDataVersion = version;
@@ -95,33 +100,23 @@ export class WorkboardStoreRuntime {
   }
 
   protected trackCardStore(store: WorkboardCardStore): WorkboardCardStore {
+    const trackConditionalMutation = (run: () => Promise<boolean>) =>
+      this.runOperation(async () => {
+        const changed = await run();
+        if (changed) {
+          this.mutationRevision += 1;
+        }
+        return changed;
+      });
     return {
       ...this.track(store),
-      entries: (boardId) => this.runOperation(() => store.entries(boardId)),
+      entries: (scope) => this.runOperation(() => store.entries(scope)),
       registerIfAbsent: (key, value) =>
-        this.runOperation(async () => {
-          const inserted = await store.registerIfAbsent(key, value);
-          if (inserted) {
-            this.mutationRevision += 1;
-          }
-          return inserted;
-        }),
+        trackConditionalMutation(() => store.registerIfAbsent(key, value)),
       registerIfUpdatedAt: (key, value, expectedUpdatedAt) =>
-        this.runOperation(async () => {
-          const updated = await store.registerIfUpdatedAt(key, value, expectedUpdatedAt);
-          if (updated) {
-            this.mutationRevision += 1;
-          }
-          return updated;
-        }),
+        trackConditionalMutation(() => store.registerIfUpdatedAt(key, value, expectedUpdatedAt)),
       deleteIfUpdatedAt: (key, expectedUpdatedAt) =>
-        this.runOperation(async () => {
-          const deleted = await store.deleteIfUpdatedAt(key, expectedUpdatedAt);
-          if (deleted) {
-            this.mutationRevision += 1;
-          }
-          return deleted;
-        }),
+        trackConditionalMutation(() => store.deleteIfUpdatedAt(key, expectedUpdatedAt)),
       claimIfOwnerAvailable: (key, value, expectedUpdatedAt, ownerId, now) =>
         this.runOperation(async () => {
           const result = await store.claimIfOwnerAvailable(
@@ -167,9 +162,13 @@ export class WorkboardStoreRuntime {
     });
   }
 
-  protected async enqueueMutation<T>(run: () => Promise<T>): Promise<T> {
+  protected async enqueueMutation<T>(
+    run: () => Promise<T>,
+    assertCurrent?: () => void,
+  ): Promise<T> {
     return await this.runOperation(async () => {
-      const runAndNotify = async () => await this.runMutation(run);
+      const runAndNotify = async () =>
+        await this.withMutationAuthority(async () => await this.runMutation(run), assertCurrent);
       const result = this.mutationQueue.then(runAndNotify, runAndNotify);
       this.mutationQueue = result.then(
         () => undefined,
@@ -177,6 +176,19 @@ export class WorkboardStoreRuntime {
       );
       return await result;
     });
+  }
+
+  protected async withMutationAuthority<T>(
+    run: () => Promise<T>,
+    assertCurrent?: () => void,
+  ): Promise<T> {
+    if (!assertCurrent) {
+      return await run();
+    }
+    if (!this.runWithWriteAuthority) {
+      throw new Error("Workboard persistence does not support current-owner admission.");
+    }
+    return await this.runWithWriteAuthority(assertCurrent, run);
   }
 
   private async runMutation<T>(run: () => Promise<T>): Promise<T> {

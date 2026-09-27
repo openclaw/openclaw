@@ -60,6 +60,7 @@ import {
   resetAdjustedParamsByToolCallIdForTests,
   structuredReplaySafeToolCallIds,
 } from "./agent-tools.before-tool-call.state.js";
+import { runWithToolExecutionValidation } from "./agent-tools.execution-validation.js";
 import { normalizeToolParameters } from "./agent-tools.schema.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { markCodeModeControlTool } from "./code-mode-control-tools.js";
@@ -229,26 +230,17 @@ describe("before_tool_call hook integration", () => {
     expect(consumeTrackedToolExecutionStarted("call-1")).toBeUndefined();
   });
 
-  it("consumes private execution validation through the standard update slot", async () => {
+  it("validates final execution arguments before starting the tool", async () => {
     beforeToolCallHook = installBeforeToolCallHook({ enabled: false });
     const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
     const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "Read", execute }));
     const validate = vi.fn(() => {
       throw new Error("invalid projected arguments");
     });
-    const validationControl = {
-      [Symbol.for("openclaw.internalToolExecutionValidation")]: true,
-      toolCallId: "call-private-validation",
-      validate,
-    };
-
     await expect(
-      Reflect.apply(tool.execute, tool, [
-        "call-private-validation",
-        { path: 47 },
-        undefined,
-        validationControl,
-      ]),
+      runWithToolExecutionValidation("call-validation", validate, () =>
+        tool.execute("call-validation", { path: 47 }),
+      ),
     ).rejects.toThrow("invalid projected arguments");
 
     expect(validate).toHaveBeenCalledWith({ path: 47 });
@@ -1057,14 +1049,12 @@ describe("before_tool_call hook deduplication (#15502)", () => {
           language: "typescript",
         },
         toolKind: "code_mode_exec",
-        toolInputKind: "typescript",
         runId: "run-main",
         toolCallId: "call-code-mode-exec-typescript",
       },
       {
         toolName: "exec",
         toolKind: "code_mode_exec",
-        toolInputKind: "typescript",
         agentId: "main",
         sessionKey: "agent:main:main",
         sessionId: "session-main",
@@ -1676,14 +1666,12 @@ describe("before_tool_call hook deduplication (#15502)", () => {
             language: "typescript",
           },
           toolKind: "code_mode_exec",
-          toolInputKind: "typescript",
           runId: "run-main",
           toolCallId: "call-code-mode-trusted-language",
         },
         expect.objectContaining({
           toolName: "exec",
           toolKind: "code_mode_exec",
-          toolInputKind: "typescript",
           agentId: "main",
           sessionKey: "agent:main:main",
           sessionId: "session-main",
@@ -1701,14 +1689,12 @@ describe("before_tool_call hook deduplication (#15502)", () => {
             language: "typescript",
           },
           toolKind: "code_mode_exec",
-          toolInputKind: "typescript",
           runId: "run-main",
           toolCallId: "call-code-mode-trusted-language",
         },
         expect.objectContaining({
           toolName: "exec",
           toolKind: "code_mode_exec",
-          toolInputKind: "typescript",
           agentId: "main",
           sessionKey: "agent:main:main",
           sessionId: "session-main",

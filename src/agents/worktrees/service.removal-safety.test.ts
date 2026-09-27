@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import * as checkoutGitOwner from "./checkout-git-config.js";
 import * as gitOwner from "./git.js";
 import { getRegistryWorktree } from "./registry.js";
 import { ManagedWorktreeService } from "./service.js";
@@ -30,6 +31,27 @@ describe("managed removal custody", () => {
     repo = await initializeRepository(root);
     env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
     service = new ManagedWorktreeService({ env });
+    const withWorktreeGitConfig = checkoutGitOwner.withWorktreeGitConfig;
+    // The native policy captures its functions at module initialization. Route
+    // these synthetic faults through its action boundary, retaining real Git.
+    vi.spyOn(checkoutGitOwner, "withWorktreeGitConfig").mockImplementation(
+      async (cwd, sourceOnly, guard, operation) =>
+        await withWorktreeGitConfig(
+          cwd,
+          sourceOnly,
+          guard,
+          async (policy) =>
+            await operation(
+              sourceOnly
+                ? policy
+                : {
+                    ...policy,
+                    run: (...args) => gitOwner.runGit(...args),
+                    require: (...args) => gitOwner.requireGit(...args),
+                  },
+            ),
+        ),
+    );
   });
   afterEach(async () => {
     vi.restoreAllMocks();

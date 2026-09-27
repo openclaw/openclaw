@@ -81,7 +81,6 @@ function prepareDocsPublisher() {
     "lib/tsx-cli-shim.mjs",
     "lib/local-check-runtime.mts",
     "tsx.mjs",
-    "lib/mintlify-accordion.mjs",
     "docs-mdx-repair.md",
   ]) {
     const output = path.join(target, ".openclaw-sync", name);
@@ -134,10 +133,19 @@ function recordCommand(tool, cwd, commandArgs, configuration) {
   );
 }
 
+function notifyPublication() {
+  if (process.connected && process.send) {
+    // The owner can close IPC during cleanup. Its exit and existing watchdog
+    // still bound readiness; a closed channel must not crash an orphan actor.
+    process.send("fixture-publication", () => {});
+  }
+}
+
 function publish(name, value) {
   const target = path.join(root, name);
   fs.writeFileSync(`${target}.${process.pid}.tmp`, JSON.stringify(value));
   fs.renameSync(`${target}.${process.pid}.tmp`, target);
+  notifyPublication();
 }
 
 function stall(attempt) {
@@ -322,18 +330,67 @@ async function until(predicate, label, deadline) {
 async function waitForReady(predicate, child, stopped = () => !fs.existsSync(lease)) {
   // Readiness belongs to the owned child's lifetime. The supervisor's existing
   // watchdog bounds startup; an independent short timer can preempt legal Git work.
-  while (!stopped() && child.exitCode === null && child.signalCode === null) {
-    if (predicate()) {
-      return true;
+  return new Promise((resolve, reject) => {
+    const watchers = [];
+    let finished = false;
+    const finish = (ready, error) => {
+      if (finished) return;
+      finished = true;
+      for (const watcher of watchers) watcher.close();
+      child.off("exit", check);
+      child.off("error", fail);
+      child.off("message", published);
+      if (error) reject(error);
+      else resolve(ready);
+    };
+    const fail = (error) => finish(false, error);
+    const check = () => {
+      if (finished) return;
+      try {
+        if (stopped() || child.exitCode !== null || child.signalCode !== null) finish(false);
+        else if (predicate()) finish(true);
+      } catch (error) {
+        fail(error);
+      }
+    };
+    const published = (message) => {
+      if (message === "fixture-publication") {
+        check();
+      }
+    };
+    try {
+      // Owned Node actors signal after publishing. Directory notifications can
+      // be coalesced before the final rename, leaving a true predicate unwoken.
+      // Subscribe before the initial read so publication cannot fall between them.
+      if (child.channel) {
+        child.on("message", published);
+      } else {
+        // Bash cleanup/backoff waits retain their filesystem notification path.
+        for (const directory of [root, recordsDir]) {
+          const watcher = fs.watch(directory, check);
+          watchers.push(watcher);
+          watcher.on("error", fail);
+        }
+      }
+      child.once("exit", check);
+      child.once("error", fail);
+      check();
+    } catch (error) {
+      fail(error);
     }
-    await delay(10);
-  }
-  return false;
+  });
 }
 
 function launch(role, attempt) {
   const child = spawn(process.execPath, [fixture, role, root, policyScenario, String(attempt)], {
-    stdio: ["ignore", "ignore", "inherit"],
+    stdio: ["ignore", "ignore", "inherit", "ipc"],
+  });
+  // The grandchild publishes tree readiness; relay its wakeup through the
+  // directly owned child while the waiter rechecks the authoritative file.
+  child.on("message", (message) => {
+    if (message === "fixture-publication") {
+      notifyPublication();
+    }
   });
   child.on("error", (error) => {
     throw error;
@@ -355,14 +412,17 @@ function holdLease() {
   // Orphans stop themselves when the supervisor releases the lease; no PID discovery/kills.
   // The independent ceiling also covers a supervisor killed before it can unlink the lease.
   const deadline = Date.now() + 60_000;
-  setInterval(() => {
+  const checkLease = () => {
     if (!isLive() || Date.now() >= deadline) {
       process.exit(0);
     }
-  }, 20);
-  if (!isLive()) {
-    process.exit(0);
-  }
+  };
+  // Watch the owned root before rereading: replacing or retiring the lease
+  // must wake actors immediately, including a change during registration.
+  fs.watch(root, checkLease);
+  setTimeout(checkLease, Math.max(0, deadline - Date.now()));
+  checkLease();
+  return deadline;
 }
 
 function insideOwnedPath(target) {
@@ -391,13 +451,26 @@ function writeConsumer(target, tool) {
 }
 
 async function command() {
-  holdLease();
-  if (!options.performance || mode !== "observe") await record(process.pid, mode);
+  const actorDeadline = holdLease();
+  const descendant = mode === "child" || mode === "grandchild";
+  // Descendants publish their actual attempt below. Replacing a provisional PID
+  // record can race a Windows reader and fail before readiness with EPERM.
+  if (!descendant && (!options.performance || mode !== "observe")) {
+    await record(process.pid, mode);
+  }
   if (mode === "sentinel") {
     return;
   }
   if (mode === "observe") {
     await boundary(args[0]);
+    if (args[0] === "backoff-ready" && options.cancelDuringBackoff) {
+      publish("backoff-ready.json", true);
+      await until(
+        () => fs.existsSync(path.join(root, "backoff-release.json")),
+        "backoff cancellation acknowledgement",
+        actorDeadline,
+      );
+    }
     process.exit(0);
   }
   if (options.performance && ["curl", "tar", "sha256sum", "npm"].includes(mode)) {
@@ -429,7 +502,7 @@ async function command() {
     const result = spawnSync("/bin/rm", args, { stdio: "inherit" });
     process.exit(result.status ?? 1);
   }
-  if (mode === "child" || mode === "grandchild") {
+  if (descendant) {
     const attempt = Number(args[0]);
     process.on("SIGTERM", () => {
       if (
@@ -517,20 +590,46 @@ async function command() {
       const result = spawnSync("bash", [options.publisher.gh, ...args], { stdio: "inherit" });
       process.exit(result.status ?? 1);
     }
+    if (mode === "gh" && options.docsAgent) {
+      const runsEndpoint = `repos/${process.env.GITHUB_REPOSITORY}/actions/workflows/docs-agent.yml/runs`;
+      if (
+        args[0] === "api" &&
+        args[1] === "--method" &&
+        args[2] === "GET" &&
+        args[3] === runsEndpoint
+      ) {
+        fs.writeSync(1, JSON.stringify({ workflow_runs: options.workflowRuns ?? [] }));
+      } else {
+        const selected = options.workflowJobs?.find(
+          ({ runId, runAttempt }) =>
+            args[3] ===
+            `repos/${process.env.GITHUB_REPOSITORY}/actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`,
+        );
+        if (
+          args.length !== 4 ||
+          args[0] !== "api" ||
+          args[1] !== "--paginate" ||
+          args[2] !== "--slurp" ||
+          !selected
+        ) {
+          throw new Error(`Unexpected Docs Agent gh request: ${JSON.stringify(args)}`);
+        }
+        fs.writeSync(1, JSON.stringify([{ jobs: selected.jobs }]));
+      }
+      process.exit(0);
+    }
     if (mode === "gh") {
       fs.writeSync(
         1,
-        options.docsAgent
-          ? JSON.stringify({ workflow_runs: options.workflowRuns ?? [] })
-          : options.lsRemoteResults
-            ? args.includes(".status")
-              ? "ahead\n"
-              : `${"c".repeat(40)}\n`
-            : JSON.stringify({
-                state: "open",
-                head: { sha: "a".repeat(40) },
-                base: { repo: { full_name: "fixture/checkout" } },
-              }),
+        options.lsRemoteResults
+          ? args.includes(".status")
+            ? "ahead\n"
+            : `${"c".repeat(40)}\n`
+          : JSON.stringify({
+              state: "open",
+              head: { sha: "a".repeat(40) },
+              base: { repo: { full_name: "fixture/checkout" } },
+            }),
       );
     }
     process.exit(0);
@@ -1054,9 +1153,8 @@ async function supervise() {
   let shell;
   let stopping;
   let censusFailed = false;
-  const pendingChildren = new Set();
+  const pendingChildren = new Map();
   const track = (child) => {
-    pendingChildren.add(child);
     // Spawn errors precede close; only close releases a direct child's ownership.
     const closed = new Promise((resolve) => {
       child.once("close", (code) => {
@@ -1064,6 +1162,7 @@ async function supervise() {
         resolve(code);
       });
     });
+    pendingChildren.set(child, closed);
     child.on("error", (error) => void stop(error));
     return closed;
   };
@@ -1123,7 +1222,23 @@ async function supervise() {
           }
         }
         // Empty registration does not prove a spawned writer has closed.
-        await until(() => pendingChildren.size === 0, "direct child close", actorEnd);
+        let closeCutoff;
+        try {
+          await Promise.race([
+            Promise.all(pendingChildren.values()),
+            new Promise((_, reject) => {
+              closeCutoff = setTimeout(
+                () => reject(new Error("Timed out waiting for direct child close")),
+                Math.max(0, actorEnd - Date.now()),
+              );
+            }),
+          ]);
+          if (Date.now() >= actorEnd || pendingChildren.size !== 0) {
+            throw new Error("Timed out waiting for direct child close");
+          }
+        } finally {
+          clearTimeout(closeCutoff);
+        }
         await until(
           async () => {
             report.cleanupRemaining = await liveRecords();
@@ -1204,6 +1319,7 @@ async function supervise() {
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
     process.once(signal, () => void stop(`supervisor received ${signal}`));
   }
+  const supervisorDeadline = Date.now() + 45_000;
   setTimeout(() => void stop("fixture deadline exceeded"), 45_000);
   try {
     if (process.platform === "win32") {
@@ -1260,7 +1376,7 @@ async function supervise() {
     sentinel = spawn(process.execPath, [fixture, "sentinel", root, policyScenario], {
       // Parent teardown owns this group before self-registration. Keep startup
       // errors in the existing report so census failures do not become opaque exits.
-      stdio: ["ignore", output, output],
+      stdio: ["ignore", output, output, "ipc"],
     });
     // stop() joins the sentinel's actual close through pendingChildren before reporting.
     void track(sentinel);
@@ -1284,10 +1400,18 @@ async function supervise() {
       process.platform === "win32"
         ? [
             "-c",
-            'export PATH="$(cygpath -u "$1"):$PATH"; source "$2"',
+            `export PATH="$(cygpath -u "$1"):$PATH"
+git() {
+  ${gitArgs.map((value) => quote(shellPath(value))).join(" ")} "$@"
+}
+export -f git
+export TEMP="$3" TMP="$4"
+source "$2"`,
             "checkout-fixture",
             bin,
             checkoutScript,
+            options.env?.TEMP ?? root,
+            options.env?.TMP ?? root,
           ]
         : [checkoutScript];
     shell = spawn(workflowShell, ["--noprofile", "--norc", "-eo", "pipefail", ...shellArgs], {
@@ -1314,6 +1438,12 @@ async function supervise() {
         CHECKOUT_BASE_SHA: linux && scenario === "early-leader-exit" ? "c".repeat(40) : "",
         WORKFLOW_SHA: "b".repeat(40),
         ...options.env,
+        // MSYS shares its first /tmp mount across overlapping Bash processes.
+        // Bootstrap it from the retained artifact parent, then restore private
+        // TEMP/TMP in Bash before any checkout actor starts.
+        ...(process.platform === "win32"
+          ? { TEMP: path.dirname(root), TMP: path.dirname(root) }
+          : {}),
       },
     });
     const closed = track(shell);
@@ -1350,19 +1480,24 @@ async function supervise() {
       process.kill(owner.pid, "SIGTERM");
       report.cancelledDuringCleanup = true;
     }
-    if (
-      options.cancelDuringBackoff &&
-      (await waitForReady(
-        () =>
-          options.performance
-            ? fs.readFileSync(eventsFile, "utf8").includes('"name":"backoff"')
-            : fs.readFileSync(path.join(root, "workflow.log"), "utf8").includes("; retrying"),
-        shell,
-        () => Boolean(stopping),
-      ))
-    ) {
-      await boundary("backoff-cancel");
-      shell.kill("SIGTERM");
+    if (options.cancelDuringBackoff) {
+      try {
+        await until(
+          () =>
+            Boolean(stopping) ||
+            shell.exitCode !== null ||
+            shell.signalCode !== null ||
+            fs.existsSync(path.join(root, "backoff-ready.json")),
+          "owned backoff readiness",
+          supervisorDeadline,
+        );
+        if (!stopping && shell.exitCode === null && shell.signalCode === null) {
+          await boundary("backoff-cancel");
+          shell.kill("SIGTERM");
+        }
+      } finally {
+        publish("backoff-release.json", true);
+      }
     }
     const code = await closed;
     if (stopping) {

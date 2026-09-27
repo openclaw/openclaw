@@ -10,29 +10,11 @@ import {
   hasLegacyFlatAllowPrivateNetworkAlias,
   isPrivateNetworkOptInEnabled,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import type { z } from "zod";
+import type { TlonConfigSchema } from "./config-schema.js";
 
-type TlonAccountConfig = {
-  /** Megabyte cap for media this channel accepts and delivers. */
-  mediaMaxMb?: number;
-  name?: string;
-  enabled?: boolean;
-  ship?: string;
-  url?: string;
-  code?: string;
-  network?: {
-    dangerouslyAllowPrivateNetwork?: boolean;
-  };
-  groupChannels?: string[];
-  dmAllowlist?: string[];
-  groupInviteAllowlist?: string[];
-  autoDiscoverChannels?: boolean;
-  showModelSignature?: boolean;
-  autoAcceptDmInvites?: boolean;
-  autoAcceptGroupInvites?: boolean;
-  defaultAuthorizedShips?: string[];
-  ownerShip?: string;
+type TlonAccountConfig = z.input<typeof TlonConfigSchema> & {
   implicitMentions?: Partial<ResolvedChannelImplicitMentions>;
-  accounts?: Record<string, TlonAccountConfig>;
 };
 
 export type TlonResolvedAccount = {
@@ -41,6 +23,7 @@ export type TlonResolvedAccount = {
   enabled: boolean;
   configured: boolean;
   mediaMaxBytes?: number;
+  requireMentionInBotThreads?: boolean;
   ship: string | null;
   url: string | null;
   code: string | null;
@@ -142,6 +125,7 @@ export function resolveTlonAccount(
     name: merged.name ?? null,
     enabled: merged.enabled !== false,
     configured,
+    requireMentionInBotThreads: merged.requireMentionInBotThreads,
     mediaMaxBytes: resolveChannelMediaMaxBytes({
       cfg,
       accountId: resolvedAccountId,

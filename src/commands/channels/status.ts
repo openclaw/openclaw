@@ -1,6 +1,8 @@
 // Implements `openclaw channels status` with gateway status and config-only fallback.
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { isGatewayProtocolResponseError } from "../../../packages/gateway-client/src/protocol-request.js";
+import { DEFAULT_RESTART_HEALTH_TIMEOUT_MS } from "../../cli/daemon-cli/restart-health.constants.js";
 import {
   formatCliFailureLines,
   isExpectedCliError,
@@ -13,6 +15,7 @@ import { isGatewaySecretRefUnavailableError } from "../../gateway/credentials.js
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { waitForGatewayDiagnostic } from "../gateway-diagnostic-readiness.js";
 
 const loadChannelsStatusRuntime = createLazyRuntimeModule(() => import("./status.runtime.js"));
 
@@ -42,7 +45,7 @@ export async function channelsStatusCommand(
     normalizeOptionalLowercaseString(opts.channel) === "all"
       ? { ...opts, channel: undefined }
       : opts;
-  const timeoutMs = parseTimeoutMsWithFallback(opts.timeout, opts.probe ? 30_000 : 10_000, {
+  const timeoutMs = parseTimeoutMsWithFallback(opts.timeout, DEFAULT_RESTART_HEALTH_TIMEOUT_MS, {
     invalidType: "error",
   });
   const statusLabel = opts.probe ? "Checking channel status (probe)…" : "Checking channel status…";
@@ -51,6 +54,10 @@ export async function channelsStatusCommand(
     runtime.log(statusLabel);
   }
   try {
+    const remainingMs = await waitForGatewayDiagnostic({ timeoutMs, json: opts.json }, runtime);
+    if (remainingMs === undefined) {
+      return;
+    }
     const payload = await withProgress(
       {
         label: statusLabel,
@@ -60,7 +67,7 @@ export async function channelsStatusCommand(
       async () => {
         const params: { channel?: string; probe: boolean; timeoutMs: number } = {
           probe: Boolean(opts.probe),
-          timeoutMs,
+          timeoutMs: remainingMs,
         };
         if (args.channel) {
           params.channel = args.channel;
@@ -68,7 +75,8 @@ export async function channelsStatusCommand(
         return await callGateway({
           method: "channels.status",
           params,
-          timeoutMs,
+          timeoutMs: remainingMs,
+          sharedStateMode: "read-only",
         });
       },
     );
@@ -79,6 +87,9 @@ export async function channelsStatusCommand(
     const { formatGatewayChannelsStatusLines } = await loadChannelsStatusRuntime();
     runtime.log(formatGatewayChannelsStatusLines(payload).join("\n"));
   } catch (err) {
+    if (isGatewayProtocolResponseError(err)) {
+      throw err;
+    }
     const safeError = formatChannelsStatusError(err);
     const expectedError = isExpectedCliError(err);
     const gatewayAuthUnavailable =

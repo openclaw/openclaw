@@ -60,6 +60,15 @@ function createOptions(
   return { options, respond };
 }
 
+async function runSetupCode(params: Record<string, unknown>, config: Record<string, unknown> = {}) {
+  const { options, respond } = createOptions(params, config);
+  await expectDefined(
+    devicePairSetupHandlers["device.pair.setupCode"],
+    "device.pair.setupCode handler",
+  )(options);
+  return respond;
+}
+
 const okResolution = {
   ok: true as const,
   payload: {
@@ -93,11 +102,7 @@ describe("device.pair.setupCode", () => {
     mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
     mocks.renderQrPngDataUrl.mockResolvedValue("data:image/png;base64,qr");
 
-    const { options, respond } = createOptions({});
-    await expectDefined(
-      devicePairSetupHandlers["device.pair.setupCode"],
-      'devicePairSetupHandlers["device.pair.setupCode"] test invariant',
-    )(options);
+    const respond = await runSetupCode({});
 
     expect(respond).toHaveBeenCalledTimes(1);
     const [ok, payload, error] = expectDefined(
@@ -133,11 +138,7 @@ describe("device.pair.setupCode", () => {
     });
     mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
 
-    const { options, respond } = createOptions({ includeQr: false });
-    await expectDefined(
-      devicePairSetupHandlers["device.pair.setupCode"],
-      'devicePairSetupHandlers["device.pair.setupCode"] test invariant',
-    )(options);
+    const respond = await runSetupCode({ includeQr: false });
 
     expect(respond.mock.calls[0]?.[1]).toMatchObject({
       access: "limited",
@@ -150,7 +151,7 @@ describe("device.pair.setupCode", () => {
     mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
     mocks.renderQrPngDataUrl.mockResolvedValue("data:image/png;base64,qr");
 
-    const { options } = createOptions(
+    await runSetupCode(
       {},
       {
         plugins: {
@@ -160,10 +161,6 @@ describe("device.pair.setupCode", () => {
         },
       },
     );
-    await expectDefined(
-      devicePairSetupHandlers["device.pair.setupCode"],
-      'devicePairSetupHandlers["device.pair.setupCode"] test invariant',
-    )(options);
 
     expect(mocks.resolvePairingSetupFromConfig).toHaveBeenCalledWith(
       expect.any(Object),
@@ -176,11 +173,7 @@ describe("device.pair.setupCode", () => {
     mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
     mocks.renderQrPngDataUrl.mockResolvedValue("data:image/png;base64,qr");
 
-    const { options, respond } = createOptions({ publicUrl: "wss://request.example.com" });
-    await expectDefined(
-      devicePairSetupHandlers["device.pair.setupCode"],
-      'devicePairSetupHandlers["device.pair.setupCode"] test invariant',
-    )(options);
+    const respond = await runSetupCode({ publicUrl: "wss://request.example.com" });
 
     expect(mocks.resolvePairingSetupFromConfig).toHaveBeenCalledWith(
       expect.any(Object),
@@ -214,7 +207,7 @@ describe("device.pair.setupCode", () => {
     mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
     mocks.renderQrPngDataUrl.mockResolvedValue("data:image/png;base64,qr");
 
-    const { options } = createOptions(
+    await runSetupCode(
       { preferRemoteUrl: true },
       {
         plugins: {
@@ -224,10 +217,6 @@ describe("device.pair.setupCode", () => {
         },
       },
     );
-    await expectDefined(
-      devicePairSetupHandlers["device.pair.setupCode"],
-      'devicePairSetupHandlers["device.pair.setupCode"] test invariant',
-    )(options);
 
     expect(mocks.resolvePairingSetupFromConfig).toHaveBeenCalledWith(
       expect.any(Object),
@@ -239,11 +228,7 @@ describe("device.pair.setupCode", () => {
     mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);
     mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
 
-    const { options, respond } = createOptions({ includeQr: false });
-    await expectDefined(
-      devicePairSetupHandlers["device.pair.setupCode"],
-      'devicePairSetupHandlers["device.pair.setupCode"] test invariant',
-    )(options);
+    const respond = await runSetupCode({ includeQr: false });
 
     expect(mocks.renderQrPngDataUrl).not.toHaveBeenCalled();
     const [ok, payload] = expectDefined(
@@ -282,11 +267,7 @@ describe("device.pair.setupCode", () => {
     mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);
     mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
 
-    const { options, respond } = createOptions({ includeQr: false, bootstrapProfile });
-    await expectDefined(
-      devicePairSetupHandlers["device.pair.setupCode"],
-      'devicePairSetupHandlers["device.pair.setupCode"] test invariant',
-    )(options);
+    const respond = await runSetupCode({ includeQr: false, bootstrapProfile });
 
     expect(respond.mock.calls[0]?.[0]).toBe(true);
     expect(mocks.resolvePairingSetupFromConfig).toHaveBeenCalledWith(
@@ -316,11 +297,7 @@ describe("device.pair.setupCode", () => {
       .spyOn(devicePairingJoinCode, "registerDevicePairingJoinCode")
       .mockReturnValue("a".repeat(22));
 
-    const { options, respond } = createOptions({ includeQr: false, joinUrl: true });
-    await expectDefined(
-      devicePairSetupHandlers["device.pair.setupCode"],
-      'devicePairSetupHandlers["device.pair.setupCode"] test invariant',
-    )(options);
+    const respond = await runSetupCode({ includeQr: false, joinUrl: true });
 
     expect(mocks.resolvePairingSetupFromConfig).toHaveBeenCalledWith(
       expect.any(Object),
@@ -338,11 +315,7 @@ describe("device.pair.setupCode", () => {
   it.each(["limited", "voice-node"])(
     "does not put a %s grant in a join URL",
     async (bootstrapProfile) => {
-      const { options, respond } = createOptions({ joinUrl: true, bootstrapProfile });
-      await expectDefined(
-        devicePairSetupHandlers["device.pair.setupCode"],
-        'devicePairSetupHandlers["device.pair.setupCode"] test invariant',
-      )(options);
+      const respond = await runSetupCode({ joinUrl: true, bootstrapProfile });
 
       expect(respond.mock.calls[0]?.[0]).toBe(false);
       expect(mocks.resolvePairingSetupFromConfig).not.toHaveBeenCalled();
@@ -355,11 +328,7 @@ describe("device.pair.setupCode", () => {
     // Exceed the result schema's qrDataUrl bound (16_384) so the response stays valid.
     mocks.renderQrPngDataUrl.mockResolvedValue(`data:image/png;base64,${"a".repeat(20_000)}`);
 
-    const { options, respond } = createOptions({});
-    await expectDefined(
-      devicePairSetupHandlers["device.pair.setupCode"],
-      'devicePairSetupHandlers["device.pair.setupCode"] test invariant',
-    )(options);
+    const respond = await runSetupCode({});
 
     const [ok, payload] = expectDefined(
       respond.mock.calls[0],
@@ -376,11 +345,7 @@ describe("device.pair.setupCode", () => {
       error: "Gateway auth is not configured (no token or password).",
     });
 
-    const { options, respond } = createOptions({});
-    await expectDefined(
-      devicePairSetupHandlers["device.pair.setupCode"],
-      'devicePairSetupHandlers["device.pair.setupCode"] test invariant',
-    )(options);
+    const respond = await runSetupCode({});
 
     const [ok, payload, error] = expectDefined(
       respond.mock.calls[0],
@@ -393,11 +358,7 @@ describe("device.pair.setupCode", () => {
   });
 
   it("rejects unknown params before touching pairing helpers", async () => {
-    const { options, respond } = createOptions({ bogus: true });
-    await expectDefined(
-      devicePairSetupHandlers["device.pair.setupCode"],
-      'devicePairSetupHandlers["device.pair.setupCode"] test invariant',
-    )(options);
+    const respond = await runSetupCode({ bogus: true });
 
     const [ok] = expectDefined(respond.mock.calls[0], "respond.mock.calls[0] test invariant");
     expect(ok).toBe(false);
@@ -409,11 +370,7 @@ describe("device.pair.setupCode", () => {
     mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
     mocks.renderQrPngDataUrl.mockRejectedValue(new Error("qr boom"));
 
-    const { options, respond } = createOptions({});
-    await expectDefined(
-      devicePairSetupHandlers["device.pair.setupCode"],
-      'devicePairSetupHandlers["device.pair.setupCode"] test invariant',
-    )(options);
+    const respond = await runSetupCode({});
 
     const [ok, payload, error] = expectDefined(
       respond.mock.calls[0],

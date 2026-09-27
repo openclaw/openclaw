@@ -9,6 +9,7 @@ import {
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
 import { resolvePinnedHostnameWithPolicy, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { ZALO_DEFAULT_REQUEST_TIMEOUT_MS, ZALO_SEND_PHOTO_REQUEST_TIMEOUT_MS } from "./timeouts.js";
 
 const ZALO_API_BASE = "https://bot-api.zaloplatforms.com";
@@ -236,7 +237,11 @@ export async function sendPhoto(
   return callZaloApi<ZaloMessage>(
     "sendPhoto",
     token,
-    { ...params, photo: parsedPhotoUrl.href },
+    {
+      ...params,
+      photo: parsedPhotoUrl.href,
+      caption: params.caption === undefined ? undefined : truncateUtf16Safe(params.caption, 2000),
+    },
     {
       // Zalo receives a URL-only JSON body and may resolve that URL before replying.
       // Wait through the hosted-media lifetime plus normal response-processing grace.

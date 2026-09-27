@@ -66,11 +66,21 @@ If you previously used a preload that calls `Database.setCustomSQLite()`, remove
 
 When the KNN child cannot load extensions, memory search falls back to a batched embedding scan. It preserves provider and source filters and cancellation checks between batches, but can be slower on large indexes. See [Memory configuration](/reference/memory-config).
 
+## Browser subprocesses
+
+The browser plugin starts its helper processes with the Bun executable that runs OpenClaw, so browser automation needs no separate Node installation:
+
+- **Chrome MCP:** [existing-session profiles](/tools/browser/existing-session) start the packaged Chrome DevTools MCP server on Bun for `--autoConnect`, `browserUrl`, and `wsEndpoint` attaches. Actions, snapshots, screenshots, coordinate clicks, waits across cross-site navigations, and cleanup of the server process tree behave as on Node. A custom `mcpCommand` runs as configured.
+- **Chrome extension:** on macOS and Linux, the native messaging host and the relay daemon it starts use the runtime that ran `openclaw browser extension install`.
+
 ## Known limitations
 
 - **Desktop WebSockets:** OpenClaw uses the installed `ws` transport for desktop observers and paired-node desktop/portal streams. Bun 1.4.2's built-in `ws` server adapter lacks pause/resume and the Duplex stream bridge; the installed transport preserves backpressure, payload limits, and cleanup when a desktop disconnects.
 - **Lifecycle scripts:** Bun blocks dependency lifecycle scripts unless explicitly trusted with `bun pm trust`.
 - **Package scripts:** Some scripts hardcode pnpm, so `bun run` still invokes pnpm internally.
+- **PTY terminals:** macOS and Linux require an installed Node runtime for terminal I/O. OpenClaw skips Bun's `node` shim when selecting that runtime, including under `bun --bun`.
+- **Windows browser extension:** native messaging registration accepts only `node.exe` as the host interpreter. Run `openclaw browser extension install` with Node on Windows.
+- **Launched desktop apps:** Node marks inherited descriptors close-on-exec at startup and Bun 1.4.2 does not, so an app that Gateway computer control launches inherits the helper's standard streams. The Gateway's 30-second cleanup timeout then stops the app when its execution closes. OpenClaw's Bun fork adopts Node's behavior in [openclaw/bun#12](https://github.com/openclaw/bun/pull/12).
 - **SQLite handles:** Bun 1.4.2 can retain statement handles and WAL/shared-memory files after `DatabaseSync.close()` or `Symbol.dispose()`; OpenClaw cannot finalize them through Bun's public `node:sqlite` API. See the [upstream close fix](https://github.com/oven-sh/bun/pull/40005); use Node when prompt file release matters.
 - **SQLite storage workers:** Bun uses one worker per distinct database and can use up to 64 dedicated workers within the host's 64-client cap. Clients of the same database share its worker. Closing the last client waits for worker exit to release native handles; capacity exhaustion rejects new work without interrupting existing stores. Node multiplexes databases across four shared workers. Bun's dedicated layout can be revisited after the upstream close fix ships and repeated close/reopen tests prove native handles and locks are released.
 - **Workspace installation:** `bun install` cannot resolve this repository's pnpm workspace layout. Use `pnpm install`.
@@ -81,6 +91,8 @@ See [Bun](/install/bun) for the workflow and lifecycle trust commands.
 
 | Release                            | Change                                                                                                                                                                                               |
 | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unreleased (main)                  | Starts the packaged Chrome DevTools MCP server with the current runtime, so existing-session browser profiles no longer require a Node installation under Bun.                                       |
+| Unreleased (main)                  | Gateway computer control runs its host worker on the Gateway's own runtime, so a Bun Gateway controls its managed desktop without an installed Node.                                                 |
 | Unreleased (main)                  | Expands Bun SQLite storage from four databases to up to 64 dedicated workers within the existing 64-client cap while retaining worker-exit cleanup.                                                  |
 | Unreleased (main)                  | Managed Bun services on macOS persist OPENCLAW_SQLITE_LIBRARY and HOMEBREW_PREFIX from the installing shell.                                                                                         |
 | Unreleased (main)                  | Daemon install, repair, doctor, and service audits probe Bun executables through the same SQLite library selection as Gateway startup, with a minimal probe environment. #142186                     |

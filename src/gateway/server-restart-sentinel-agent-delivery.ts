@@ -41,6 +41,7 @@ import {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeMediaReferenceForComparison } from "../media/media-reference-comparison.js";
 import { getMediaDir } from "../media/store.js";
+import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import {
@@ -88,17 +89,8 @@ function resolveQueuedAgentRunId(entry: QueuedAgentTurnSessionDelivery) {
 }
 
 function collectVisiblePayloadMediaUrls(result: AgentDeliveryEvidence): string[] {
-  const urls = new Set<string>();
   const payloads = Array.isArray(result.payloads) ? result.payloads : [];
-  for (const payload of payloads) {
-    if (!hasExplicitlyVisibleAgentPayload(payload)) {
-      continue;
-    }
-    for (const url of collectDeliveredMediaUrls({ payloads: [payload] })) {
-      urls.add(url);
-    }
-  }
-  return Array.from(urls);
+  return collectDeliveredMediaUrls({ payloads: payloads.filter(hasExplicitlyVisibleAgentPayload) });
 }
 
 function collectQueuedDeliveredMediaUrls(params: {
@@ -420,6 +412,19 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
                 displayContent: content,
                 idempotencyKey: `${queuedRunId}:generated-media-transcript`,
                 updateMode: "inline",
+                onMessageCommitted: (receipt, acceptCompletion) => {
+                  acceptCompletion(async () => {
+                    if (
+                      !(await attachManagedOutgoingMediaToMessage({
+                        messageId: receipt.messageId,
+                        blocks: readAssistantDisplayContent(receipt.message),
+                        stateDir,
+                      }))
+                    ) {
+                      throw new Error("queued internal generated-media artifact attachment failed");
+                    }
+                  });
+                },
               });
           if (!appended.ok) {
             if (appended.code === "session-rebound") {
@@ -434,15 +439,16 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
             );
           }
           params.queueContext.admission.assertCurrent();
-          const attached = attachManagedOutgoingMediaToMessage({
-            messageId: appended.messageId,
-            blocks: content,
-            stateDir,
-          });
-          if (!attached) {
-            throw new Error("queued internal generated-media artifact attachment failed");
-          }
           if (enriched) {
+            if (
+              !(await attachManagedOutgoingMediaToMessage({
+                messageId: enriched.messageId,
+                blocks: content,
+                stateDir,
+              }))
+            ) {
+              throw new Error("queued internal generated-media artifact attachment failed");
+            }
             await publishAssistantTranscriptRewrite({ scope, rewritten: [enriched] });
           }
         }
@@ -510,8 +516,7 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
       {
         sessionKey: params.canonicalKey,
         message: entry.message,
-        deliver:
-          sourceReplyDeliveryMode === "automatic" && route.channel !== INTERNAL_MESSAGE_CHANNEL,
+        deliver: route.channel !== INTERNAL_MESSAGE_CHANNEL,
         bestEffortDeliver: false,
         channel: route.channel,
         accountId: route.accountId,

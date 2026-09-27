@@ -205,6 +205,55 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
     expect(child.connected).toBe(false);
   });
 
+  it.each(["SIGTERM", "SIGINT"] as const)(
+    "keeps command completion and cleanup spawning available after a supervisor %s",
+    async (signal) => {
+      const host = await start();
+      const brokerPid = host.pid!;
+      const child = host.spawn(
+        process.execPath,
+        [
+          "-e",
+          `
+          process.on('message', () => {
+            process.send('completed', () => process.disconnect());
+          });
+          process.send('ready');
+        `,
+        ],
+        { stdio: ["ignore", "ignore", "ignore", "ipc"] },
+      );
+      await child.ready();
+      expect((await once(child, "message"))[0]).toBe("ready");
+
+      process.kill(brokerPid, signal);
+      const [message, closed] = await Promise.all([
+        once(child, "message"),
+        once(child, "close"),
+        new Promise<void>((resolve, reject) => {
+          child.send("finish", (error) => (error ? reject(error) : resolve()));
+        }),
+      ]);
+      expect(message[0]).toBe("completed");
+      expect(closed).toEqual([0, null]);
+
+      const cleanup = host.spawn(
+        process.execPath,
+        ["-e", "process.stdout.write(String(process.ppid))"],
+        { stdio: ["ignore", "pipe", "ignore"] },
+      );
+      await cleanup.ready();
+      let output = "";
+      cleanup.stdout!.on("data", (chunk) => {
+        output += chunk;
+      });
+      expect(await once(cleanup, "close")).toEqual([0, null]);
+      expect(Number(output)).toBe(brokerPid);
+      expect(host.pid).toBe(brokerPid);
+    },
+    15_000,
+  );
+
   it("cleans a detached descendant after its root exits and the host disconnects", async () => {
     const host = await start();
     const child = host.spawn(

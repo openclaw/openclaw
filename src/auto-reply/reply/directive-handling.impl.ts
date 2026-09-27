@@ -12,7 +12,9 @@ import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
+import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { prefixSystemMessage } from "../../infra/system-message.js";
 import { applyModelOverrideWithAuthProfileCompatibility } from "../../sessions/auth-profile-preservation.js";
 import {
   isModelSelectionLocked,
@@ -41,7 +43,6 @@ import {
   canPersistSessionDirectiveDefaults,
   DIRECTIVE_ACK_MESSAGES,
   type IgnoredSessionDirectiveFlag,
-  formatDirectiveAck,
   formatElevatedRuntimeHint,
   formatElevatedUnavailableText,
   formatInternalExecPersistenceDeniedText,
@@ -77,7 +78,6 @@ export async function handleDirectiveOnly(
     defaultProvider,
     defaultModel,
     aliasIndex,
-    policyAliasIndex,
     allowedModelKeys,
     allowedModelCatalog,
     resetModelOverride,
@@ -132,8 +132,6 @@ export async function handleDirectiveOnly(
     defaultProvider,
     defaultModel,
     aliasIndex,
-    policyAliasIndex,
-    allowedModelKeys,
     allowedModelCatalog,
     currentThinkLevel: currentThinkLevel ?? "off",
     thinkingCatalog,
@@ -157,10 +155,9 @@ export async function handleDirectiveOnly(
     defaultModel,
     aliasIndex,
     allowedModelKeys,
-    allowedModelCatalog,
-    provider,
     agentId: activeAgentId,
     modelPolicy: params.modelPolicy,
+    operatorAuthority: params.operatorAuthority,
     requesterProfileId: params.ctx ? readSessionInputProfileId(params.ctx) : undefined,
   });
   if (modelResolution.errorText) {
@@ -191,7 +188,8 @@ export async function handleDirectiveOnly(
   }
   thinkingCatalog = preparedModel?.catalog ?? thinkingCatalog;
   const modelRuntimeResolution = preparedModel?.runtime ?? { kind: "unchanged" as const };
-  const validateRuntimeSelection = preparedModel?.validateRuntimeSelection;
+  const validateSelection = () =>
+    modelResolution.validateModelSelection?.() ?? preparedModel?.validateRuntimeSelection?.();
   const prospectiveSessionEntry = { ...sessionEntry };
   applyModelRuntimeDirective(prospectiveSessionEntry, modelRuntimeResolution);
   const selectedCatalogEntry = findSelectedCatalogEntry({
@@ -457,8 +455,7 @@ export async function handleDirectiveOnly(
     directives.reasoningLevel !== prevReasoningLevel;
   // Validated, authorized directives have already named every field they can mutate.
   if (touchedSessionFields.length > 0) {
-    const authProfileError =
-      modelResolution.validateAuthProfileSelection?.() ?? validateRuntimeSelection?.();
+    const authProfileError = validateSelection();
     if (authProfileError) {
       return rejectModelTransaction(authProfileError);
     }
@@ -501,8 +498,7 @@ export async function handleDirectiveOnly(
         reassertLiveModelSwitchPending:
           modelSelectionUpdated && sessionEntry.liveModelSwitchPending === true,
         touchedFields: touchedSessionFields,
-        validateCommit: () =>
-          modelResolution.validateAuthProfileSelection?.() ?? validateRuntimeSelection?.(),
+        validateCommit: validateSelection,
       });
       if (persistence.status !== "applied") {
         const errorText =
@@ -521,6 +517,10 @@ export async function handleDirectiveOnly(
       params.canPersistStickyModelSelection === true &&
       params.stickyModelSelectionTarget
     ) {
+      const modelError = modelResolution.validateModelSelection?.();
+      if (modelError) {
+        return rejectModelTransaction(modelError);
+      }
       configuredDefaultUpdate = persistStickyModelSelectionBestEffort({
         agentId: activeAgentId,
         model: `${modelSelection.provider}/${modelSelection.model}`,
@@ -571,7 +571,7 @@ export async function handleDirectiveOnly(
     const nextLabel = `${modelSelection.provider}/${modelSelection.model}`;
     if (nextLabel !== params.initialModelLabel) {
       enqueueSystemEvent(formatModelSwitchEvent(nextLabel, modelSelection.alias), {
-        sessionKey,
+        sessionKey: resolveSystemEventQueueKey(sessionKey, activeAgentId),
         contextKey: `model:${nextLabel}`,
       });
     }
@@ -580,7 +580,7 @@ export async function handleDirectiveOnly(
     enqueueModeSwitchEvents({
       enqueueSystemEvent,
       sessionEntry,
-      sessionKey,
+      sessionKey: resolveSystemEventQueueKey(sessionKey, activeAgentId),
       elevatedChanged,
       reasoningChanged,
     });
@@ -605,33 +605,33 @@ export async function handleDirectiveOnly(
     );
   }
   if (directives.clearFastMode) {
-    parts.push(formatDirectiveAck("Fast mode reset to default."));
+    parts.push(prefixSystemMessage("Fast mode reset to default."));
   } else if (directives.hasFastDirective && directives.fastMode !== undefined) {
     parts.push(
       directives.fastMode === "auto"
-        ? formatDirectiveAck("Fast mode set to auto.")
+        ? prefixSystemMessage("Fast mode set to auto.")
         : directives.fastMode
-          ? formatDirectiveAck("Fast mode enabled.")
-          : formatDirectiveAck("Fast mode disabled."),
+          ? prefixSystemMessage("Fast mode enabled.")
+          : prefixSystemMessage("Fast mode disabled."),
     );
   }
   if (directives.hasVerboseDirective && directives.verboseLevel) {
     const message = allowPrivilegedPersistence
       ? DIRECTIVE_ACK_MESSAGES.verbose[directives.verboseLevel]
       : formatInternalVerboseCurrentReplyOnlyText();
-    parts.push(formatDirectiveAck(message));
+    parts.push(prefixSystemMessage(message));
   }
   if (directives.hasTraceDirective && directives.traceLevel) {
-    parts.push(formatDirectiveAck(DIRECTIVE_ACK_MESSAGES.trace[directives.traceLevel]));
+    parts.push(prefixSystemMessage(DIRECTIVE_ACK_MESSAGES.trace[directives.traceLevel]));
   }
   if (directives.hasVerboseDirective && directives.verboseLevel && !allowPrivilegedPersistence) {
-    parts.push(formatDirectiveAck(formatInternalVerbosePersistenceDeniedText()));
+    parts.push(prefixSystemMessage(formatInternalVerbosePersistenceDeniedText()));
   }
   if (directives.hasReasoningDirective && directives.reasoningLevel) {
-    parts.push(formatDirectiveAck(DIRECTIVE_ACK_MESSAGES.reasoning[directives.reasoningLevel]));
+    parts.push(prefixSystemMessage(DIRECTIVE_ACK_MESSAGES.reasoning[directives.reasoningLevel]));
   }
   if (directives.hasElevatedDirective && directives.elevatedLevel) {
-    parts.push(formatDirectiveAck(DIRECTIVE_ACK_MESSAGES.elevated[directives.elevatedLevel]));
+    parts.push(prefixSystemMessage(DIRECTIVE_ACK_MESSAGES.elevated[directives.elevatedLevel]));
     if (shouldHintDirectRuntime) {
       parts.push(formatElevatedRuntimeHint());
     }
@@ -654,7 +654,7 @@ export async function handleDirectiveOnly(
         const message = label
           ? `${label} (${execParts.join(", ")}).`
           : formatInternalExecPersistenceDeniedText();
-        parts.push(formatDirectiveAck(message));
+        parts.push(prefixSystemMessage(message));
       }
     }
   }
@@ -688,18 +688,18 @@ export async function handleDirectiveOnly(
     );
   }
   if (directives.hasQueueDirective && directives.queueMode) {
-    parts.push(formatDirectiveAck(`Queue mode set to ${directives.queueMode}.`));
+    parts.push(prefixSystemMessage(`Queue mode set to ${directives.queueMode}.`));
   } else if (directives.hasQueueDirective && directives.queueReset) {
-    parts.push(formatDirectiveAck("Queue mode reset to default."));
+    parts.push(prefixSystemMessage("Queue mode reset to default."));
   }
   if (directives.hasQueueDirective && typeof directives.debounceMs === "number") {
-    parts.push(formatDirectiveAck(`Queue debounce set to ${directives.debounceMs}ms.`));
+    parts.push(prefixSystemMessage(`Queue debounce set to ${directives.debounceMs}ms.`));
   }
   if (directives.hasQueueDirective && typeof directives.cap === "number") {
-    parts.push(formatDirectiveAck(`Queue cap set to ${directives.cap}.`));
+    parts.push(prefixSystemMessage(`Queue cap set to ${directives.cap}.`));
   }
   if (directives.hasQueueDirective && directives.dropPolicy) {
-    parts.push(formatDirectiveAck(`Queue drop set to ${directives.dropPolicy}.`));
+    parts.push(prefixSystemMessage(`Queue drop set to ${directives.dropPolicy}.`));
   }
   if (fastModeChanged && !params.persistenceState) {
     const nextFastMode = directives.clearFastMode ? fastModeState.mode : sessionEntry.fastMode;
@@ -708,13 +708,10 @@ export async function handleDirectiveOnly(
         ? "Fast mode set to auto."
         : `Fast mode ${nextFastMode ? "enabled" : "disabled"}.`;
     enqueueSystemEvent(nextFastModeText, {
-      sessionKey,
+      sessionKey: resolveSystemEventQueueKey(sessionKey, activeAgentId),
       contextKey: `fast:${formatFastModeValue(nextFastMode)}`,
     });
   }
   const ack = parts.join(" ").trim();
-  if (!ack && directives.hasStatusDirective) {
-    return undefined;
-  }
-  return { text: ack || "OK." };
+  return !ack && directives.hasStatusDirective ? undefined : { text: ack || "OK." };
 }

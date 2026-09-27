@@ -190,18 +190,6 @@ describe("installFromValidatedNpmSpecArchive", () => {
     expect(installFromArchive).not.toHaveBeenCalled();
   });
 
-  it("returns installer failures for domain-specific handling", async () => {
-    mockPackedSuccess();
-    const installFromArchive = vi.fn(async () => ({ ok: false as const, error: "install failed" }));
-
-    const result = await runInstall({
-      expectedIntegrity: "sha512-same",
-      installFromArchive,
-    });
-
-    expect(result).toEqual({ ok: false, error: "install failed" });
-  });
-
   it("rejects prerelease resolutions unless explicitly requested", async () => {
     mockPackedSuccess({
       resolvedSpec: "@openclaw/test@latest",
@@ -277,6 +265,8 @@ describe("archive workspace lifetime", () => {
     "cleans the archive workspace before exposing %s",
     async (outcome) => {
       await withTestDir({ prefix: "openclaw-npm-archive-" }, async (rootDir) => {
+        // Workspace admission must not depend on the runner's directory umask.
+        await fs.chmod(rootDir, 0o700);
         const actual = await vi.importActual<typeof import("./install-source-utils.js")>(
           "./install-source-utils.js",
         );

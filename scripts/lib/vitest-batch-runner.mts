@@ -9,6 +9,7 @@ import { resolveVitestHomeSelection } from "./vitest-home-selection.mts";
 import { resolveVitestNodeArgs } from "./vitest-process-env.mts";
 import { exitVitestBySignal, spawnOwnedVitestProcess } from "./vitest-process.mts";
 import type { VitestReportOutcome } from "./vitest-report-owner.mts";
+import { resolveVitestTestCommand } from "./vitest-test-runtime.mts";
 import { createVitestWorkerRun } from "./vitest-worker-run.mts";
 
 export type VitestBatchRunParams = {
@@ -37,10 +38,31 @@ export async function runVitestBatch(params: VitestBatchRunParams): Promise<numb
       env,
     });
   assertTestHomeSelection(env, homeMode);
+  const testCommand = resolveVitestTestCommand(
+    [
+      ...resolveVitestNodeArgs(env),
+      resolveVitestCliEntry({ env }),
+      "run",
+      "--config",
+      params.config,
+      ...params.args,
+      ...params.targets,
+    ],
+    env,
+  );
   const workers =
     resolveExplicitVitestMode(["run", ...params.args]) === "watch"
       ? undefined
       : createVitestWorkerRun(env);
+  if (workers) {
+    const cliIndex = testCommand.args.findIndex((arg) => path.basename(arg) === "vitest.mjs");
+    testCommand.args.splice(
+      cliIndex,
+      0,
+      path.join(repoRoot, "scripts/lib/vitest-worker-bootstrap.mts"),
+      workers.descriptor.directory,
+    );
+  }
   let interrupted: NodeJS.Signals | undefined;
   const onSignal = (signal: NodeJS.Signals) => {
     interrupted ??= signal;
@@ -54,22 +76,7 @@ export async function runVitestBatch(params: VitestBatchRunParams): Promise<numb
     // rather than compiling the application independently inside every worker.
     const { child, completion } = spawnOwnedVitestProcess({
       homeMode,
-      command: process.execPath,
-      args: [
-        ...resolveVitestNodeArgs(env),
-        ...(workers
-          ? [
-              path.join(repoRoot, "scripts/lib/vitest-worker-bootstrap.mts"),
-              workers.descriptor.directory,
-            ]
-          : []),
-        resolveVitestCliEntry({ env }),
-        "run",
-        "--config",
-        params.config,
-        ...params.args,
-        ...params.targets,
-      ],
+      ...testCommand,
       options: {
         cwd: repoRoot,
         env,

@@ -583,6 +583,8 @@ export type SessionCatalogNodeHostBindingsOptions = {
   list: (params: unknown) => Promise<SessionCatalogPage>;
   read: (params: unknown) => Promise<SessionsCatalogReadResult>;
   requireSession: (threadId: string) => Promise<SessionCatalogSession>;
+  /** Explicitly account for work that can outlive any of the catalog handlers. */
+  hasActiveWork?: () => boolean;
   terminalIoRequiredMessage: string;
   terminalUnavailableMessage: string;
   invalidThreadIdMessage: string;
@@ -600,6 +602,7 @@ export function createSessionCatalogNodeHostBindings(
     cap: options.capability,
     dangerous: false,
     duplex: true,
+    hasActiveWork: options.hasActiveWork,
     isAvailable: options.terminalAvailable,
     handle: async (paramsJSON, io) => {
       if (!io) {
@@ -640,6 +643,7 @@ export function createSessionCatalogNodeHostBindings(
         command: options.listCommand,
         cap: options.capability,
         dangerous: false,
+        hasActiveWork: options.hasActiveWork,
         isAvailable: options.listAvailable,
         handle: async (paramsJSON) =>
           JSON.stringify(await options.list(options.parseParams(paramsJSON))),
@@ -648,6 +652,7 @@ export function createSessionCatalogNodeHostBindings(
         command: options.readCommand,
         cap: options.capability,
         dangerous: false,
+        hasActiveWork: options.hasActiveWork,
         isAvailable: options.listAvailable,
         handle: async (paramsJSON) =>
           JSON.stringify(await options.read(options.parseParams(paramsJSON))),

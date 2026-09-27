@@ -1,4 +1,5 @@
 import os from "node:os";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 
@@ -38,10 +39,6 @@ export function githubPublicationBaseFetchArgs(repository: string, sha: string):
     `https://github.com/${repository}.git`,
     sha,
   ];
-}
-
-export function githubPublicationBranchCreationArgs(branch: string): string[] {
-  return ["git", "reflog", "show", "--format=%H", "--end-of-options", `refs/heads/${branch}`];
 }
 
 export function githubPublicationBaseLineageArgs(ancestor: string, descendant: string): string[] {
@@ -96,12 +93,7 @@ export function parseGitHubPublicationBaseBranch(baseRef: string, defaultBranch:
 
 /** Returns the authenticated target-base SHA or fails the publication boundary closed. */
 export function parseGitHubPublicationBaseRef(raw: string, baseBranch: string): string {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new Error("GitHub publication workspace base branch could not be verified.");
-  }
+  const parsed = safeParseJson(raw);
   const ref = isRecord(parsed) ? readNonBlankString(parsed.ref) : undefined;
   const sha = isRecord(parsed) ? readNonBlankString(parsed.sha) : undefined;
   if (

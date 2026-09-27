@@ -176,6 +176,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     bundle: TransferArtifact,
     operationSignal?: AbortSignal,
   ): Promise<WorkerNodeRuntimePreparation> => {
+    await options.store.ready();
     const { binding, enrollmentSignal, current } = reserve(record, operationSignal);
     try {
       const prepared = await prepare(record, enrollmentSignal);
@@ -203,11 +204,13 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     record: WorkerEnvironmentRecord,
     operationSignal?: AbortSignal,
   ): Promise<WorkerNodeEnrollment> => {
+    await options.store.ready();
     const { binding, enrollmentSignal, current: requireCurrent } = reserve(record, operationSignal);
     try {
       const prepared = await prepare(record, enrollmentSignal);
       requireCurrent();
-      let current = options.store.ensureNodeEnrollment(record.environmentId);
+      let current = await options.store.ensureNodeEnrollment(record.environmentId);
+      requireCurrent();
       if (
         current.state !== "provisioning" ||
         current.destroyRequestedAtMs !== null ||
@@ -233,7 +236,8 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
         });
         requireCurrent();
         if (issued.status === "completed") {
-          current = options.store.ensureNodeEnrollment(record.environmentId);
+          current = await options.store.ensureNodeEnrollment(record.environmentId);
+          requireCurrent();
           if (!current.nodeDeviceId || current.nodeDeviceId !== issued.deviceId) {
             throw new Error("Worker node enrollment completion did not bind its environment");
           }

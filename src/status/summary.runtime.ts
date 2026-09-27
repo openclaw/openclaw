@@ -221,7 +221,7 @@ function resolveSessionRuntime(params: {
   });
   const runtime = resolveCurrentSessionAgentRuntimeMetadata({
     cfg: params.cfg,
-    agentId: params.agentId ?? "",
+    agentId: params.agentId ?? acpAgentId,
     provider: params.provider,
     model: params.model,
     sessionKey: acpSessionKey,

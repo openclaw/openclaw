@@ -36,7 +36,59 @@ suite.define(() => {
         methodResponses: {
           "tasks.list": { tasks: [task] },
           "tasks.history": {
+            activity: [
+              { messageId: "poll", items: [] },
+              {
+                messageId: "failed",
+                items: [
+                  {
+                    itemId: "tool:failed",
+                    toolCallId: "failed",
+                    kind: "tool",
+                    phase: "end",
+                    name: "exec",
+                    title: "Validate samples",
+                    status: "failed",
+                  },
+                ],
+              },
+            ],
             messages: [
+              {
+                role: "assistant",
+                messageId: "poll",
+                content: [
+                  {
+                    type: "toolCall",
+                    id: "poll",
+                    name: "process",
+                    arguments: { action: "poll", sessionId: "samples" },
+                  },
+                ],
+              },
+              {
+                role: "toolResult",
+                toolCallId: "poll",
+                content: [{ type: "text", text: "Still running" }],
+              },
+              {
+                role: "assistant",
+                messageId: "failed",
+                content: [
+                  {
+                    type: "toolCall",
+                    id: "failed",
+                    name: "exec",
+                    arguments: { command: "check-samples" },
+                  },
+                ],
+              },
+              {
+                role: "toolResult",
+                toolCallId: "failed",
+                isError: false,
+                content: [{ type: "text", text: "Missing title; exit 2" }],
+              },
               {
                 role: "assistant",
                 messageId: "child-update",
@@ -54,6 +106,14 @@ suite.define(() => {
       await notice.click();
       const inspector = page.locator("[data-task-detail-panel]");
       await inspector.getByText("The install evidence is ready.").waitFor();
+      const toolSummary = inspector.locator(".chat-task-feed__tool-group > summary");
+      expect(await toolSummary.textContent()).toContain("1 operation");
+      expect(await toolSummary.textContent()).toContain("1 failed");
+      await toolSummary.click();
+      expect(await inspector.locator(".chat-task-feed__calls").textContent()).toContain(
+        "check-samples",
+      );
+      expect(await inspector.locator(".chat-task-feed__calls").textContent()).toContain("process");
       expect(await inspector.locator(".chat-task-detail__observation").textContent()).toContain(
         "Current tool",
       );
@@ -129,8 +189,7 @@ suite.define(() => {
         task: { ...task, updatedAt: now + 3, execution: { state: "finished" } },
       });
       await inspector.getByText("Execution finished", { exact: true }).waitFor();
-      await expect.poll(() => notice.getAttribute("aria-label")).toContain("Execution finished");
-      expect(await notice.locator(".chat-reading-indicator").count()).toBe(0);
+      await notice.waitFor({ state: "detached" });
       expect(
         await inspector.getByRole("button", { name: "Stop Review release evidence" }).count(),
       ).toBe(1);
@@ -149,39 +208,20 @@ suite.define(() => {
       };
       await gateway.emitGatewayEvent("task", { action: "upserted", task: completed });
       await inspector.getByText("Queued for parent", { exact: true }).waitFor();
-      const resultReadyDescription = "Result ready — Queued for parent";
-      await expect.poll(() => notice.getAttribute("aria-label")).toContain(resultReadyDescription);
-      const tooltip = notice.locator("..").locator("wa-tooltip[open] .tooltip-content");
-      await notice.hover();
-      await tooltip.waitFor({ state: "visible" });
-      expect(await tooltip.textContent()).toContain(resultReadyDescription);
-      await page.keyboard.press("Escape");
-      await tooltip.waitFor({ state: "detached" });
-      await notice
-        .locator("..")
-        .locator("wa-tooltip .tooltip-content")
-        .waitFor({ state: "hidden" });
-      await page.mouse.move(1, 1);
+      expect(await notice.count()).toBe(0);
       expect(
         await inspector.getByRole("button", { name: "Stop Review release evidence" }).count(),
       ).toBe(0);
       expect(await inspector.getByText("Delivered to parent", { exact: true }).count()).toBe(0);
 
       // Delivery can settle in the same millisecond as execution. Its ordered
-      // event must still advance the selected detail and parent activity row.
+      // event must advance the selected detail without restoring inline activity.
       await gateway.emitGatewayEvent("task", {
         action: "upserted",
         task: { ...completed, deliveryStatus: "delivered" },
       });
       await inspector.getByText("Delivered to parent", { exact: true }).waitFor();
-      const deliveredDescription = "Completed — Delivered to parent";
-      await expect.poll(() => notice.getAttribute("aria-label")).toContain(deliveredDescription);
-      await page.keyboard.press("Tab");
-      await notice.focus();
-      await tooltip.waitFor({ state: "visible" });
-      expect(await tooltip.textContent()).toContain(deliveredDescription);
-      expect(await tooltip.textContent()).not.toContain(resultReadyDescription);
-      await page.keyboard.press("Escape");
+      expect(await notice.count()).toBe(0);
       expect(await inspector.getByText("Queued for parent", { exact: true }).count()).toBe(0);
       expect(
         await inspector.getByText("The release evidence is complete.", { exact: false }).count(),

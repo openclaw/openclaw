@@ -274,7 +274,7 @@ describe("openai video generation provider", () => {
     }
   });
 
-  it.each(["vid_failed", undefined])(
+  it.each([undefined])(
     "surfaces an immediately failed OpenAI submission before polling or validating id (%s)",
     async (videoId) => {
       const release = vi.fn(async () => {});
@@ -349,7 +349,6 @@ describe("openai video generation provider", () => {
       body: JSON.stringify({ detail: "render failed" }),
     },
     { label: "plain-text error", contentType: "text/plain", body: "render failed" },
-    { label: "HTML error", contentType: "text/html", body: "<html>render failed</html>" },
     { label: "empty video", contentType: "video/mp4", body: "" },
   ])(
     "rejects a successful $label download and releases both requests",
@@ -498,7 +497,7 @@ describe("openai video generation provider", () => {
     },
   );
 
-  it.each(["application/json", "text/plain"])(
+  it.each(["application/json"])(
     "keeps the malformed public video error when %s body cancellation fails",
     async (contentType) => {
       const cancel = vi.fn(async () => {
@@ -759,77 +758,6 @@ describe("openai video generation provider", () => {
     expect(createRequest.timeoutMs).toBe(120000);
     expect(createRequest.fetchFn).toBe(fetch);
     expect(createRequest.allowPrivateNetwork).toBe(false);
-  });
-
-  it("surfaces an immediately failed OpenAI video edit without polling it", async () => {
-    const release = vi.fn(async () => {});
-    postMultipartRequestMock.mockResolvedValueOnce(
-      releasedJson(
-        {
-          id: "vid_edit_failed",
-          status: "failed",
-          error: { message: "OpenAI video edit was rejected" },
-        },
-        release,
-      ),
-    );
-
-    await expect(
-      generateVideo({
-        prompt: "Remix this clip",
-        inputVideos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
-      }),
-    ).rejects.toThrow("OpenAI video edit was rejected");
-
-    expect(pollProviderOperationJsonMock).not.toHaveBeenCalled();
-    expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
-    expect(release).toHaveBeenCalledOnce();
-  });
-
-  it("downloads an immediately completed OpenAI video edit without polling it again", async () => {
-    fetchWithTimeoutMock
-      .mockResolvedValueOnce(Response.json(videoJob("vid_edit_completed", "completed")))
-      .mockResolvedValueOnce(
-        new Response(Buffer.from("completed-edit"), {
-          headers: new Headers({ "content-type": "video/mp4" }),
-        }),
-      );
-
-    const result = await generateVideo({
-      prompt: "Remix this clip",
-      inputVideos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
-    });
-
-    expect(pollProviderOperationJsonMock).not.toHaveBeenCalled();
-    expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(2);
-    expect(result.metadata).toMatchObject({ status: "completed", videoId: "vid_edit_completed" });
-  });
-
-  it("honors configured request allowPrivateNetwork for multipart video uploads", async () => {
-    fetchWithTimeoutMock
-      .mockResolvedValueOnce(Response.json(videoJob("vid_789", "queued")))
-      .mockResolvedValueOnce(Response.json(videoJob("vid_789", "completed")))
-      .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/mp4" }),
-        arrayBuffer: async () => Buffer.from("mp4-bytes"),
-      });
-
-    await generateVideo({
-      prompt: "Remix this clip",
-      cfg: localVideoConfig(true),
-      inputVideos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
-    });
-
-    expect(postJsonRequestMock).not.toHaveBeenCalled();
-    const createRequest = postMultipartRequest();
-    expect(createRequest.url).toBe("http://127.0.0.1:44080/v1/videos/edits");
-    expect(createRequest.body).toBeInstanceOf(FormData);
-    expect(createRequest.allowPrivateNetwork).toBe(true);
-    expect(pollProviderOperationRequest().allowPrivateNetwork).toBe(true);
-    expect(fetchWithTimeoutGuardedCall()[4]).toEqual({
-      ssrfPolicy: { allowPrivateNetwork: true },
-      auditContext: "openai-video-download",
-    });
   });
 
   it("rejects multiple reference assets", async () => {

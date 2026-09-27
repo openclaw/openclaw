@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { SQLITE_WORKER_PREPARE_COMMAND } from "../infra/sqlite-worker-contract.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import * as coordinator from "../infra/state-database-coordinator.js";
 import { buildFlowRecord } from "../tasks/task-flow-registry.records.js";
@@ -67,6 +68,9 @@ it.each(["create", "update"] as const)(
     let result: unknown;
     let failure: unknown;
     try {
+      await backend[SQLITE_WORKER_PREPARE_COMMAND]?.(
+        operation === "create" ? "flows.createManaged" : "flows.updateManaged",
+      );
       result = runWithSqliteWorkerStateContext(context, () =>
         operation === "create"
           ? backend.execute({ type: "flows.createManaged", input: { flow } })

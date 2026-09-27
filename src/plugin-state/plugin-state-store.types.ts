@@ -1,4 +1,7 @@
+import { threadId } from "node:worker_threads";
 import type { Result } from "@openclaw/normalization-core/result";
+import { VERSION } from "../version.js";
+import { capturePluginStateErrorCause } from "./plugin-state-error-cause.js";
 
 // Public plugin-state store contracts. Stores are keyed by plugin id and
 // namespace, persist JSON-compatible values, and enforce per-namespace limits.
@@ -24,8 +27,20 @@ export type PluginStateCompareResult<T> =
   | { status: "applied" | "unchanged" }
   | { status: "conflict"; current: PluginStateObservation<T> };
 
-/** Async plugin state API exposed to plugin runtimes. */
-export type PluginStateKeyedStore<T> = {
+export type PluginStateKeyRange = {
+  keyStartInclusive: string;
+  keyEndExclusive: string;
+  limit: number;
+  order?: "asc" | "desc";
+};
+
+export type PluginStateMoveEntries = {
+  /** Bounded logical source namespace belonging to the same plugin. */
+  namespace: string;
+  entries: Array<{ sourceKey: string; targetKey: string }>;
+};
+
+type PluginStateKeyedStoreBase<T> = {
   /** Prepares a mutation observation through canonical writable admission; may create state. */
   observe?: (key: string) => Promise<PluginStateObservation<T>>;
   /** Compares the observed row before applying prepared data; only explicit conflicts may retry. */
@@ -34,7 +49,11 @@ export type PluginStateKeyedStore<T> = {
     comparison: string,
     intent: PluginStateCompareIntent<T>,
   ) => Promise<PluginStateCompareResult<T>>;
-  register(key: string, value: T, opts?: { ttlMs?: number }): Promise<void>;
+  register(
+    key: string,
+    value: T,
+    opts?: { ttlMs?: number; assertCurrent?: () => void },
+  ): Promise<void>;
   registerIfAbsent(key: string, value: T, opts?: { ttlMs?: number }): Promise<boolean>;
   /**
    * The updater runs synchronously in the transaction; undefined leaves the entry unchanged.
@@ -60,12 +79,27 @@ export type PluginStateKeyedStore<T> = {
     keys: readonly string[],
   ) => Promise<Array<Result<T | undefined, PluginStateStoreError>>>;
   consume(key: string): Promise<T | undefined>;
-  delete(key: string): Promise<boolean>;
+  delete(key: string, opts?: { assertCurrent?: () => void }): Promise<boolean>;
   entries(): Promise<PluginStateEntry<T>[]>;
+  /** Reads a lexical key range with ordering and limit applied by storage. */
+  entriesInKeyRange?: (range: PluginStateKeyRange) => Promise<PluginStateEntry<T>[]>;
+  /**
+   * Atomically settles at most 10,000 bounded source rows into this retained store.
+   * Existing targets win; live expiring sources reject the entire operation.
+   */
+  moveEntriesFrom?: (source: PluginStateMoveEntries) => Promise<number>;
   /** Counts live stored rows without decoding values; absent on older hosts and adapters. */
   count?: () => Promise<number>;
   clear(): Promise<void>;
 };
+
+/** Version 2 is an action-bound, data-only view; legacy stores remain source-compatible. */
+export type PluginStateKeyedStore<T, Version extends 1 | 2 = 1> = Version extends 2
+  ? Required<Omit<PluginStateKeyedStoreBase<T>, "update" | "deleteIf">>
+  : PluginStateKeyedStoreBase<T> & {
+      /** Bind current action authority through read completion and final write admission. */
+      withCurrent?: (authority: { assertCurrent: () => void }) => PluginStateKeyedStore<T, 2>;
+    };
 
 /**
  * Synchronous plugin-state compatibility contract.
@@ -96,13 +130,27 @@ export type PluginStateSyncKeyedStore<T> = {
 /** Options for opening a keyed plugin-state namespace. */
 export type PluginStateOverflowPolicy = "evict-oldest" | "reject-new";
 
+/** Published bounded-store options; also used by sync stores, imports, and journals. */
 export type OpenKeyedStoreOptions = {
   namespace: string;
   maxEntries: number;
+  retention?: "bounded";
   overflowPolicy?: PluginStateOverflowPolicy;
   defaultTtlMs?: number;
   env?: NodeJS.ProcessEnv;
 };
+
+/** Retained stores are available only through asynchronous keyed-store openers. */
+export type OpenRetainedKeyedStoreOptions = {
+  namespace: string;
+  retention: "retained";
+  maxEntries?: never;
+  overflowPolicy?: never;
+  defaultTtlMs?: never;
+  env?: NodeJS.ProcessEnv;
+};
+
+export type OpenAsyncKeyedStoreOptions = OpenKeyedStoreOptions | OpenRetainedKeyedStoreOptions;
 
 export type PluginStateStoreErrorCode =
   | "PLUGIN_STATE_SQLITE_UNAVAILABLE"
@@ -133,6 +181,7 @@ type PluginStateStoreErrorOptions = {
   operation: PluginStateStoreOperation;
   path?: string;
   cause?: unknown;
+  owner?: { pid: number; threadId: number; version: string };
 };
 
 /** Typed error thrown for plugin-state validation and sqlite failures. */
@@ -140,27 +189,28 @@ export class PluginStateStoreError extends Error {
   readonly code: PluginStateStoreErrorCode;
   readonly operation: PluginStateStoreOperation;
   readonly path?: string;
+  readonly owner: { pid: number; threadId: number; version: string };
 
   constructor(message: string, options: PluginStateStoreErrorOptions) {
     super(message, { cause: options.cause });
     this.name = "PluginStateStoreError";
     this.code = options.code;
     this.operation = options.operation;
+    this.owner = options.owner ?? { pid: process.pid, threadId, version: VERSION };
     if (options.path) {
       this.path = options.path;
     }
   }
+
+  toJSON(): Record<string, unknown> {
+    return {
+      name: this.name,
+      message: this.message,
+      code: this.code,
+      operation: this.operation,
+      path: this.path,
+      owner: this.owner,
+      cause: capturePluginStateErrorCause(this.cause),
+    };
+  }
 }
-
-export type PluginStateStoreProbeStep = {
-  name: string;
-  ok: boolean;
-  code?: PluginStateStoreErrorCode;
-  message?: string;
-};
-
-export type PluginStateStoreProbeResult = {
-  ok: boolean;
-  databasePath: string;
-  steps: PluginStateStoreProbeStep[];
-};

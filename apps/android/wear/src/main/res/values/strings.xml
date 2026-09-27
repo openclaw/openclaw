@@ -130,4 +130,14 @@
     <string name="pulse_phase_counts" tools:ignore="MissingTranslation">Queued %1$d, Running %2$d, Done %3$d, Failed %4$d, Hidden %5$d</string>
     <string name="pulse_more_phases" tools:ignore="MissingTranslation">More phases not shown</string>
     <string name="pulse_unknown" tools:ignore="MissingTranslation">Unknown</string>
+    <string name="read_full_reply" tools:ignore="MissingTranslation">Read full reply</string>
+    <string name="reply_stream_preview" tools:ignore="MissingTranslation">Live preview. Read the full reply when it finishes.</string>
+    <string name="reply_previous_page" tools:ignore="MissingTranslation">Previous part</string>
+    <string name="reply_next_page" tools:ignore="MissingTranslation">Next part</string>
+    <string name="reply_loading" tools:ignore="MissingTranslation">Loading full reply…</string>
+    <string name="reply_unsupported" tools:ignore="MissingTranslation">Update the phone app and Gateway to read full replies.</string>
+    <string name="reply_too_large" tools:ignore="MissingTranslation">This reply is too large to read here. Open it on your phone.</string>
+    <string name="reply_changed" tools:ignore="MissingTranslation">The reply or connection changed. Retry from the beginning.</string>
+    <string name="reply_unavailable" tools:ignore="MissingTranslation">Full text is no longer available.</string>
+    <string name="reply_failed" tools:ignore="MissingTranslation">Could not load the full reply. Try again.</string>
 </resources>

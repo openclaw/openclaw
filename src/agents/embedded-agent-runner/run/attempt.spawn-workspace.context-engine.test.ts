@@ -11,12 +11,12 @@ import {
   createSessionEntryWithTranscript,
 } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.js";
+import type { ContextEngine } from "../../../context-engine/types.js";
 import { clearMemoryPluginState } from "../../../plugins/memory-state.test-fixtures.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { sumToolResultTextChars } from "../tool-result-context-guard.test-support.js";
-import type { AttemptContextEngine } from "./attempt-context-engine-helpers.js";
 import {
   cleanupTempPaths,
   createDefaultEmbeddedSession,
@@ -97,7 +97,7 @@ function expectFields(actual: Record<string, unknown>, expected: Record<string, 
   }
 }
 
-function createTestContextEngine(params: Partial<AttemptContextEngine>): AttemptContextEngine {
+function createTestContextEngine(params: Partial<ContextEngine>): ContextEngine {
   return {
     info: {
       id: "test-context-engine",
@@ -111,7 +111,7 @@ function createTestContextEngine(params: Partial<AttemptContextEngine>): Attempt
       reason: "not used in this test",
     }),
     ...params,
-  } as AttemptContextEngine;
+  } as ContextEngine;
 }
 
 describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
@@ -1320,12 +1320,12 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       return id === "orphan-leaf" ? orphanLeaf : undefined;
     });
     const replayedEntries: string[] = [];
-    hoisted.sessionManager.appendThinkingLevelChange.mockImplementation((...args: unknown[]) => {
-      replayedEntries.push(`thinking:${String(args[0])}`);
+    hoisted.sessionManager.appendThinkingLevelChange.mockImplementation(async (level) => {
+      replayedEntries.push(`thinking:${String(level)}`);
       return "replayed-thinking";
     });
-    hoisted.sessionManager.appendModelChange.mockImplementation((...args: unknown[]) => {
-      replayedEntries.push(`model:${String(args[0])}/${String(args[1])}`);
+    hoisted.sessionManager.appendModelChange.mockImplementation(async (provider, modelId) => {
+      replayedEntries.push(`model:${String(provider)}/${String(modelId)}`);
       return "replayed-model";
     });
     hoisted.sessionManager.appendCustomEntry.mockImplementation((...args: unknown[]) => {
@@ -1407,7 +1407,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       }
       return id === "orphan-leaf" ? orphanLeaf : undefined;
     });
-    hoisted.sessionManager.appendThinkingLevelChange.mockReturnValue("replayed-thinking");
+    hoisted.sessionManager.appendThinkingLevelChange.mockResolvedValue("replayed-thinking");
     hoisted.sessionManager.appendLabelChange.mockImplementation((targetId: unknown) => {
       throw new Error(`Entry ${String(targetId)} not found`);
     });

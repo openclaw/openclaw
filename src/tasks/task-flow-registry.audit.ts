@@ -1,5 +1,5 @@
 // Produces task-flow registry audit summaries for diagnostics and maintenance.
-import { listTasksForFlowId } from "./runtime-internal.js";
+import { listTaskStatesForFlowIds } from "./runtime-internal.js";
 import { isTaskFlowCancellationPending } from "./task-cancellation-state.js";
 import type {
   TaskFlowAuditCode,
@@ -9,8 +9,10 @@ import type {
 } from "./task-flow-registry.audit.types.js";
 import { getTaskFlowRegistryRestoreFailure, listTaskFlowRecords } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
-import { summarizeAuditFindings } from "./task-registry.audit.shared.js";
-import type { TaskRecord } from "./task-registry.types.js";
+import {
+  compareTaskAuditFindingSortKeys,
+  summarizeAuditFindings,
+} from "./task-registry.audit.shared.js";
 
 export type {
   TaskFlowAuditFinding,
@@ -47,29 +49,11 @@ function createFinding(params: {
   };
 }
 
-function severityRank(severity: TaskFlowAuditSeverity): number {
-  return severity === "error" ? 0 : 1;
-}
-
 function compareFindings(left: TaskFlowAuditFinding, right: TaskFlowAuditFinding): number {
-  const severityDiff = severityRank(left.severity) - severityRank(right.severity);
-  if (severityDiff !== 0) {
-    return severityDiff;
-  }
-  const leftAge = left.ageMs ?? -1;
-  const rightAge = right.ageMs ?? -1;
-  if (leftAge !== rightAge) {
-    return rightAge - leftAge;
-  }
-  return (left.flow?.createdAt ?? 0) - (right.flow?.createdAt ?? 0);
-}
-
-function getReferenceAt(flow: TaskFlowRecord): number {
-  return flow.updatedAt ?? flow.createdAt;
-}
-
-function getLinkedTasks(flowId: string): TaskRecord[] {
-  return listTasksForFlowId(flowId);
+  return compareTaskAuditFindingSortKeys(
+    { ...left, createdAt: left.flow?.createdAt ?? 0 },
+    { ...right, createdAt: right.flow?.createdAt ?? 0 },
+  );
 }
 
 function hasBlockingMetadata(flow: TaskFlowRecord): boolean {
@@ -79,31 +63,22 @@ function hasBlockingMetadata(flow: TaskFlowRecord): boolean {
 }
 
 function findTimestampInconsistency(flow: TaskFlowRecord): TaskFlowAuditFinding | null {
-  if (flow.updatedAt < flow.createdAt) {
-    return createFinding({
-      severity: "warn",
-      code: "inconsistent_timestamps",
-      flow,
-      detail: "updatedAt is earlier than createdAt",
-    });
-  }
-  if (flow.endedAt && flow.endedAt < flow.createdAt) {
-    return createFinding({
-      severity: "warn",
-      code: "inconsistent_timestamps",
-      flow,
-      detail: "endedAt is earlier than createdAt",
-    });
-  }
-  if (flow.endedAt && flow.endedAt < flow.updatedAt) {
-    return createFinding({
-      severity: "warn",
-      code: "inconsistent_timestamps",
-      flow,
-      detail: "endedAt is earlier than updatedAt",
-    });
-  }
-  return null;
+  const detail =
+    flow.updatedAt < flow.createdAt
+      ? "updatedAt is earlier than createdAt"
+      : flow.endedAt && flow.endedAt < flow.createdAt
+        ? "endedAt is earlier than createdAt"
+        : flow.endedAt && flow.endedAt < flow.updatedAt
+          ? "endedAt is earlier than updatedAt"
+          : undefined;
+  return detail
+    ? createFinding({
+        severity: "warn",
+        code: "inconsistent_timestamps",
+        flow,
+        detail,
+      })
+    : null;
 }
 
 function createEmptyTaskFlowAuditSummary(): TaskFlowAuditSummary {
@@ -130,9 +105,11 @@ export function listTaskFlowAuditFindings(
   const restoreFailure = getTaskFlowRegistryRestoreFailure();
   const flows = options.flows ?? (restoreFailure ? [] : listTaskFlowRecords());
   const now = options.now ?? Date.now();
-  const staleRunningMs = options.staleRunningMs ?? DEFAULT_STALE_RUNNING_MS;
-  const staleWaitingMs = options.staleWaitingMs ?? DEFAULT_STALE_WAITING_MS;
-  const staleBlockedMs = options.staleBlockedMs ?? DEFAULT_STALE_BLOCKED_MS;
+  const staleThresholds = {
+    running: options.staleRunningMs ?? DEFAULT_STALE_RUNNING_MS,
+    waiting: options.staleWaitingMs ?? DEFAULT_STALE_WAITING_MS,
+    blocked: options.staleBlockedMs ?? DEFAULT_STALE_BLOCKED_MS,
+  };
   const cancelStuckMs = options.cancelStuckMs ?? DEFAULT_CANCEL_STUCK_MS;
   const findings: TaskFlowAuditFinding[] = [];
 
@@ -146,44 +123,27 @@ export function listTaskFlowAuditFindings(
     );
   }
 
+  const tasksByFlowId =
+    flows.length > 0 ? listTaskStatesForFlowIds(flows.map((flow) => flow.flowId)) : undefined;
   for (const flow of flows) {
-    const referenceAt = getReferenceAt(flow);
+    const referenceAt = flow.updatedAt ?? flow.createdAt;
     const ageMs = Math.max(0, now - referenceAt);
-    const linkedTasks = getLinkedTasks(flow.flowId);
-    const activeTasks = linkedTasks.filter((task) => isTaskFlowCancellationPending(task));
+    const linkedTasks = tasksByFlowId?.get(flow.flowId.trim()) ?? [];
+    const hasActiveTasks = linkedTasks.some(isTaskFlowCancellationPending);
 
-    if (flow.status === "running" && ageMs >= staleRunningMs) {
+    const stale =
+      (flow.status === "running" || flow.status === "waiting" || flow.status === "blocked") &&
+      ageMs >= staleThresholds[flow.status]
+        ? flow.status
+        : undefined;
+    if (stale && (stale !== "blocked" || flow.endedAt == null)) {
       findings.push(
         createFinding({
-          severity: "error",
-          code: "stale_running",
+          severity: stale === "running" ? "error" : "warn",
+          code: `stale_${stale}`,
           flow,
           ageMs,
-          detail: "running TaskFlow has not advanced recently",
-        }),
-      );
-    }
-
-    if (flow.status === "waiting" && ageMs >= staleWaitingMs) {
-      findings.push(
-        createFinding({
-          severity: "warn",
-          code: "stale_waiting",
-          flow,
-          ageMs,
-          detail: "waiting TaskFlow has not advanced recently",
-        }),
-      );
-    }
-
-    if (flow.status === "blocked" && flow.endedAt == null && ageMs >= staleBlockedMs) {
-      findings.push(
-        createFinding({
-          severity: "warn",
-          code: "stale_blocked",
-          flow,
-          ageMs,
-          detail: "blocked TaskFlow has not advanced recently",
+          detail: `${stale} TaskFlow has not advanced recently`,
         }),
       );
     }
@@ -194,7 +154,7 @@ export function listTaskFlowAuditFindings(
       flow.status !== "failed" &&
       flow.status !== "succeeded" &&
       flow.status !== "lost" &&
-      activeTasks.length === 0 &&
+      !hasActiveTasks &&
       now - flow.cancelRequestedAt >= cancelStuckMs
     ) {
       findings.push(
@@ -210,13 +170,7 @@ export function listTaskFlowAuditFindings(
 
     if (
       flow.syncMode === "managed" &&
-      (flow.status === "running" || flow.status === "waiting" || flow.status === "blocked") &&
-      ageMs >=
-        (flow.status === "running"
-          ? staleRunningMs
-          : flow.status === "waiting"
-            ? staleWaitingMs
-            : staleBlockedMs) &&
+      stale &&
       linkedTasks.length === 0 &&
       !hasBlockingMetadata(flow)
     ) {

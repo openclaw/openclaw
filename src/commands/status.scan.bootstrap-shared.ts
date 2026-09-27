@@ -7,6 +7,7 @@ import type { UpdateCheckResult } from "../infra/update-check.js";
 import { runExec } from "../process/exec.js";
 import { createEmptyTaskAuditSummary } from "../tasks/task-registry.audit.shared.js";
 import { createEmptyTaskRegistrySummary } from "../tasks/task-registry.summary.js";
+import type { StatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 import {
   buildTailscaleHttpsUrl,
   resolveGatewayProbeSnapshot,
@@ -74,13 +75,13 @@ type StatusScanCoreBootstrapParams<TAgentStatus> = {
   configPath: string;
   env: NodeJS.ProcessEnv;
   hasConfiguredChannels: boolean;
-  opts: { timeoutMs?: number; all?: boolean };
+  opts: StatusGatewayProbeBudget & { all?: boolean };
   skipUpdateCheck?: boolean;
   fetchGitUpdate?: boolean;
   includeRegistryUpdate?: boolean;
   includeLocalStatusRpcFallback?: boolean;
-  gatewayProbeTimeoutMs?: number;
   gatewaySnapshot?: GatewayProbeSnapshot;
+  onGatewayProgress?: (phase: string) => void;
   getTailnetHostname: (runner: StatusScanExecRunner) => Promise<string | null>;
   getUpdateCheckResult: (params: {
     timeoutMs: number;
@@ -135,11 +136,9 @@ export async function createStatusScanCoreBootstrap<TAgentStatus>(
             env: params.env,
             opts: {
               ...params.opts,
-              ...(params.gatewayProbeTimeoutMs !== undefined
-                ? { timeoutMs: params.gatewayProbeTimeoutMs }
-                : {}),
               ...(skipColdStartNetworkChecks ? { skipProbe: true } : {}),
               localStatusRpcFallback: params.includeLocalStatusRpcFallback !== false,
+              onProgress: params.onGatewayProgress,
             },
           }),
         { config: params.cfg, env: params.env },

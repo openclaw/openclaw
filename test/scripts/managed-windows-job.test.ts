@@ -37,7 +37,7 @@ it("snapshots command inputs before admission and excludes every NODE_OPTIONS ca
     const owned = spawnWindowsJobChild("fixture", args, { env, stdio: "pipe" });
     args[0] = "mutated";
     env.VALUE = "mutated";
-    child.emit("message", "job-ready");
+    child.emit("message", { job: mocks.spawn.mock.calls[0]?.[1][1], type: "ready" });
     expect(send).toHaveBeenCalledWith(
       expect.objectContaining({
         command: "fixture",

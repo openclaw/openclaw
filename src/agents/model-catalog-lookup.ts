@@ -155,10 +155,20 @@ export function findModelInCatalog<T extends Pick<ModelCatalogEntry, "provider" 
   modelId: string,
 ): T | undefined {
   const normalizedProvider = normalizeProviderId(provider);
-  const providerCatalog = catalog.filter(
-    (entry) => normalizeProviderId(entry.provider) === normalizedProvider,
-  );
-  const literal = providerCatalog.find((entry) => entry.id === modelId.trim());
+  const trimmedModelId = modelId.trim();
+  const providerCatalog: T[] = [];
+  let literal: T | undefined;
+  catalog.some((entry) => {
+    if (normalizeProviderId(entry.provider) !== normalizedProvider) {
+      return false;
+    }
+    if (entry.id === trimmedModelId) {
+      literal = entry;
+      return true;
+    }
+    providerCatalog.push(entry);
+    return false;
+  });
   if (literal) {
     return literal;
   }
@@ -170,7 +180,7 @@ export function findModelInCatalog<T extends Pick<ModelCatalogEntry, "provider" 
       modelId: splitTrailingAuthProfile(id).model,
       surface,
     }) ?? id;
-  const identity = identityOf(modelId.trim());
+  const identity = identityOf(trimmedModelId);
   const exact = providerCatalog.find((entry) => identityOf(entry.id) === identity);
   if (exact) {
     return exact;

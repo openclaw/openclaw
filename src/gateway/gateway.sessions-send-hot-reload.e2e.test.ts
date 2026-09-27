@@ -168,7 +168,11 @@ async function startProvider() {
         return;
       }
       const raw = await readBody(request);
-      const rawModel = (JSON.parse(raw) as { model?: unknown }).model;
+      const body = JSON.parse(raw) as {
+        model?: unknown;
+        tools?: Array<{ type?: string; name?: string }>;
+      };
+      const rawModel = body.model;
       const modelId = typeof rawModel === "string" ? rawModel : "";
       if (raw.includes("Agent-to-agent announce step:")) {
         calls.push({ kind: "announce", model: modelId, raw });
@@ -188,6 +192,11 @@ async function startProvider() {
         textResponse(response, TARGET_REPLY);
       } else if (raw.includes(INITIAL_PROMPT)) {
         calls.push({ kind: "dispatch", model: modelId, raw });
+        expect(body.tools).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ type: "function", name: "sessions_send" }),
+          ]),
+        );
         toolResponse(response);
       } else {
         throw new Error(`unexpected model request: ${raw.slice(0, 500)}`);
@@ -316,6 +325,9 @@ describe("sessions_send across prepared runtime reload", () => {
         plugins: { slots: { memory: "none" } },
         tools: {
           profile: "full",
+          // This synthetic provider exercises reload, not Tool Search or Code Mode.
+          codeMode: false,
+          toolSearch: false,
           sessions: { visibility: "all" },
           agentToAgent: { enabled: true, allow: ["*"] },
         },

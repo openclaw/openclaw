@@ -542,8 +542,8 @@ describe("gateway server hooks", () => {
     testState.sessionConfig = { scope: "global" };
     await withGatewayServer(async ({ port }) => {
       expect((await postHook(port, "/hooks/mapped-wake", { subject: "Global" })).status).toBe(200);
-      await waitForSystemEventTexts("global");
-      expect(peekSystemEvents("global")).toContain("Mapped wake: Global");
+      await waitForSystemEventTexts("agent:hooks:global");
+      expect(peekSystemEvents("agent:hooks:global")).toContain("Mapped wake: Global");
     });
   });
 
@@ -790,21 +790,6 @@ describe("gateway server hooks", () => {
     });
   });
 
-  test("dedupes repeated /hooks/agent deliveries by idempotency key", async () => {
-    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
-    await withGatewayServer(async ({ port }) => {
-      mockIsolatedRunOk();
-      const firstBody = await expectFirstHookDelivery(port, "hook-idem-1");
-      expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
-
-      const second = await postAgentHookWithIdempotency(port, "hook-idem-1");
-      const secondBody = (await second.json()) as { runId?: string };
-      expect(secondBody.runId).toBe(firstBody.runId);
-      expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
-      expect(peekSystemEvents(resolveMainKey())).toHaveLength(0);
-    });
-  });
-
   test("dedupes hook retries even when trusted-proxy client IP changes", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
     const configPath = requireNonEmptyString(
@@ -828,6 +813,7 @@ describe("gateway server hooks", () => {
       const secondBody = (await second.json()) as { runId?: string };
       expect(secondBody.runId).toBe(firstBody.runId);
       expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      expect(peekSystemEvents(resolveMainKey())).toHaveLength(0);
     });
   });
 
@@ -1008,12 +994,12 @@ describe("gateway server hooks", () => {
           sessionKey: "agent:hooks:slack:channel:c123",
         });
         expect(resNoAgent.status).toBe(200);
-        await waitForSystemEventTexts(resolveMainKey());
+        await waitForSystemEventTexts("agent:main:global");
         const noAgentCall = cronRunCall();
         expect(noAgentCall?.job?.agentId).toBe("main");
         expect(noAgentCall?.sessionKey).toBe("agent:main:slack:channel:c123");
         expect(peekSystemEventEntries("agent:main:main")).toStrictEqual([]);
-        drainSystemEvents(resolveMainKey());
+        drainSystemEvents("agent:main:global");
       });
     },
   );

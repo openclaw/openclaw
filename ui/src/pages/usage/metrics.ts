@@ -1,5 +1,4 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-// Control UI view renders usage metrics screen content.
 import { html } from "lit";
 import {
   addCostUsageTotals,
@@ -36,6 +35,12 @@ function formatUsageTokens(n: number): string {
 // adaptive cost formatter would change labels as values cross its thresholds.
 function formatUsageCost(n: number, decimals = 2): string {
   return `$${n.toFixed(decimals)}`;
+}
+
+export function formatAnalysisCost(value: number): string {
+  const magnitude = Math.abs(value);
+  const decimals = magnitude === 0 || magnitude >= 0.01 ? 2 : magnitude >= 0.0001 ? 4 : 6;
+  return formatUsageCost(value, decimals);
 }
 
 function formatHourLabel(hour: number): string {
@@ -176,16 +181,16 @@ function getZonedWeekday(date: Date, zone: "local" | "utc"): number {
   return zone === "utc" ? date.getUTCDay() : date.getDay();
 }
 
-function getUtcQuarterHourBucketDate(dateStr: string, quarterIndex: number): Date | null {
+function parseUtcDate(dateStr: string): Date | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
-  if (!match || !Number.isInteger(quarterIndex) || quarterIndex < 0 || quarterIndex > 95) {
+  if (!match) {
     return null;
   }
   const [, yStr, mStr, dStr] = match;
   const y = Number(yStr);
   const m = Number(mStr);
   const d = Number(dStr);
-  const date = new Date(Date.UTC(y, m - 1, d, 0, quarterIndex * 15));
+  const date = new Date(Date.UTC(y, m - 1, d));
   if (
     Number.isNaN(date.valueOf()) ||
     date.getUTCFullYear() !== y ||
@@ -214,7 +219,7 @@ function mapUtcQuarterBucket(
   }
   if (dateStr !== state.utcDateKey) {
     state.utcDateKey = dateStr;
-    const date = getUtcQuarterHourBucketDate(dateStr, 0);
+    const date = parseUtcDate(dateStr);
     state.utcWeekday = date ? date.getUTCDay() : null;
     state.utcStartMs = date ? date.getTime() : 0;
   }
@@ -541,23 +546,8 @@ function parseYmdDate(dateStr: string): Date | null {
 }
 
 function parseIsoDayIndex(dateStr: string): number | null {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
-  if (!match) {
-    return null;
-  }
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const timestamp = Date.UTC(year, month - 1, day);
-  const date = new Date(timestamp);
-  if (
-    date.getUTCFullYear() !== year ||
-    date.getUTCMonth() !== month - 1 ||
-    date.getUTCDate() !== day
-  ) {
-    return null;
-  }
-  return timestamp / DAY_MS;
+  const date = parseUtcDate(dateStr);
+  return date ? date.getTime() / DAY_MS : null;
 }
 
 function formatIsoDayIndex(dayIndex: number): string {
@@ -656,13 +646,11 @@ const buildAggregatesFromSessions = (
 };
 
 type UsageInsightStats = {
-  durationSumMs: number;
   durationCount: number;
   avgDurationMs: number;
   throughputTokensPerMin?: number;
   throughputCostPerMin?: number;
   errorRate: number;
-  peakErrorDay?: { date: string; errors: number; messages: number; rate: number };
 };
 
 const buildUsageInsightStats = (
@@ -689,34 +677,13 @@ const buildUsageInsightStats = (
   const errorRate = aggregates.messages.total
     ? aggregates.messages.errors / aggregates.messages.total
     : 0;
-  let peakErrorDay: UsageInsightStats["peakErrorDay"];
-  for (const day of aggregates.daily) {
-    if (day.messages <= 0 || day.errors <= 0) {
-      continue;
-    }
-    const candidate = {
-      date: day.date,
-      errors: day.errors,
-      messages: day.messages,
-      rate: day.errors / day.messages,
-    };
-    if (
-      !peakErrorDay ||
-      candidate.rate > peakErrorDay.rate ||
-      (candidate.rate === peakErrorDay.rate && candidate.errors > peakErrorDay.errors)
-    ) {
-      peakErrorDay = candidate;
-    }
-  }
 
   return {
-    durationSumMs,
     durationCount,
     avgDurationMs,
     throughputTokensPerMin,
     throughputCostPerMin,
     errorRate,
-    peakErrorDay,
   };
 };
 

@@ -101,6 +101,7 @@ export function createLinuxLocationCommand(
     deps.resolveExecutable("where-am-i", env, GEOCLUE_DEMO_PATHS);
   return {
     command: "location.get",
+    hasActiveWork: () => false,
     cap: "location",
     isAvailable: (context) =>
       deps.platform === "linux" &&

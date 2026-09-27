@@ -25,6 +25,7 @@ type RemoteSkillNode = {
 const remoteSkillNodes = new Map<string, RemoteSkillNode>();
 const log = createSubsystemLogger("gateway/skills-remote");
 let reconcileRemoteSkillConnections: (() => ReadonlySet<string> | undefined) | null = null;
+let prepareRemoteSkillConnectionsOwner: (() => Promise<unknown>) | undefined;
 
 function remoteConnectionKey(nodeId: string, connId: string): string {
   return `${nodeId}\0${connId}`;
@@ -33,8 +34,15 @@ function remoteConnectionKey(nodeId: string, connId: string): string {
 /** Installs the gateway-owned persistent-generation reconciliation boundary. */
 export function setRemoteSkillConnectionReconciler(
   reconcile: (() => ReadonlySet<string> | undefined) | null,
+  prepare?: () => Promise<unknown>,
 ): void {
   reconcileRemoteSkillConnections = reconcile;
+  prepareRemoteSkillConnectionsOwner = prepare;
+}
+
+/** Acquire persistent pairing facts before synchronous remote skill projections. */
+export async function prepareRemoteSkillConnections(): Promise<void> {
+  await prepareRemoteSkillConnectionsOwner?.();
 }
 
 function prepareNodeSkills(
@@ -260,6 +268,7 @@ export function mergeRemoteNodeSkillEntries(
 function resetRemoteNodeSkillsForTests(): void {
   remoteSkillNodes.clear();
   reconcileRemoteSkillConnections = null;
+  prepareRemoteSkillConnectionsOwner = undefined;
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

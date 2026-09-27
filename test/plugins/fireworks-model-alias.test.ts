@@ -84,18 +84,18 @@ describe("Fireworks manifest provider alias", () => {
     });
   }
 
-  it("finds the alias owner before runtime loading and resolves the canonical catalog model", () => {
+  it("finds the alias owner before runtime loading and resolves the canonical catalog model", async () => {
     expect(resolveOwningPluginIdsForProviderRef({ provider: "fireworks-ai" })).toEqual([
       "fireworks",
     ]);
-    const canonical = resolveFireworksGlm("fireworks");
+    const canonical = await resolveFireworksGlm("fireworks");
     expect(canonical).toMatchObject({
       provider: "fireworks",
       id: modelId,
       api: "openai-completions",
       baseUrl: "https://api.fireworks.ai/inference/v1",
     });
-    expect(resolveFireworksGlm("fireworks-ai")).toEqual(canonical);
+    expect(await resolveFireworksGlm("fireworks-ai")).toEqual(canonical);
   });
 
   it.each([
@@ -110,7 +110,7 @@ describe("Fireworks manifest provider alias", () => {
     ],
   ] as const)(
     "preserves explicit alias configuration with %s",
-    (_name, providerApi, modelApi, configuredModelBaseUrl, expectedApi) => {
+    async (_name, providerApi, modelApi, configuredModelBaseUrl, expectedApi) => {
       const cfg: OpenClawConfig = {
         models: {
           providers: {
@@ -136,7 +136,7 @@ describe("Fireworks manifest provider alias", () => {
         },
       };
 
-      expect(resolveFireworksGlm("fireworks-ai", cfg)).toMatchObject({
+      expect(await resolveFireworksGlm("fireworks-ai", cfg)).toMatchObject({
         provider: "fireworks-ai",
         id: modelId,
         api: expectedApi,

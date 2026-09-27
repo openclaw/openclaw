@@ -1,8 +1,3 @@
-/**
- * Channel plugin helper utilities.
- *
- * Resolves default accounts, pairing hints, delimited entries, and DM security policy views.
- */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -16,8 +11,11 @@ export function resolveChannelDefaultAccountId<ResolvedAccount>(params: {
   cfg: OpenClawConfig;
   accountIds?: string[];
 }): string {
-  const accountIds = params.accountIds ?? params.plugin.config.listAccountIds(params.cfg);
-  return params.plugin.config.defaultAccountId?.(params.cfg) ?? accountIds[0] ?? DEFAULT_ACCOUNT_ID;
+  return (
+    params.plugin.config.defaultAccountId?.(params.cfg) ??
+    (params.accountIds ?? params.plugin.config.listAccountIds(params.cfg))[0] ??
+    DEFAULT_ACCOUNT_ID
+  );
 }
 
 export function formatPairingApproveHint(channelId: string): string {

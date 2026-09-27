@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { restoreFsSafePrebuild } from "./lib/fs-safe-prebuild.mjs";
 import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "./lib/package-lifecycle-marker.mjs";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PACKAGE_ROOT = join(scriptDir, "..");
@@ -375,6 +376,7 @@ export function runBundledPluginPostinstall(params = {}) {
     rmSync: params.rmSync,
     log,
   });
+  restoreFsSafePrebuild(packageRoot, env, log);
 }
 
 export function isDirectPostinstallInvocation(params = {}) {

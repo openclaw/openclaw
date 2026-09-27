@@ -68,7 +68,7 @@ it("reconciles saved and externally changed names through background DB-only pag
   const source = (await factory.homesForAgent("main"))[0]!;
   const control = factory.forRequest("main", source);
   const sanitize = vi.spyOn(terminalText, "sanitizeTerminalText");
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
   try {
     expect((await control.listPage({})).sessions.map((row) => row.name)).toEqual(
       expect.arrayContaining(["Previous renamed", "Previous cleared"]),
@@ -89,7 +89,7 @@ it("reconciles saved and externally changed names through background DB-only pag
       (await control.listPage({})).sessions.find((row) => row.threadId === "renamed")?.name,
     ).toBe(renamed.slice(0, 500));
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(15 * 60_000);
     await vi.waitFor(async () => {
       const sessions = (await control.listPage({})).sessions;
       expect(sessions.find((row) => row.threadId === "renamed")?.name).toBe(native[0]!.name);

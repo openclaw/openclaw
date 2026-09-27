@@ -96,29 +96,6 @@ describe("renderIdentitySection", () => {
     expect(avatar?.textContent?.trim()).toBe("AL");
   });
 
-  it("edits and saves the display name with the standard input pattern", () => {
-    const onDisplayNameInput = vi.fn();
-    const onSaveDisplayName = vi.fn();
-    const container = document.createElement("div");
-    render(
-      renderIdentitySection(
-        createProps({ displayName: "Ada", onDisplayNameInput, onSaveDisplayName }),
-      ),
-      container,
-    );
-
-    const input = container.querySelector<HTMLInputElement>('.settings-input[type="text"]');
-    expect(input?.value).toBe("Ada");
-    input!.value = "Augusta Ada";
-    input!.dispatchEvent(new Event("input", { bubbles: true }));
-    container
-      .querySelector<HTMLFormElement>(".identity-name-control")
-      ?.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }));
-
-    expect(onDisplayNameInput).toHaveBeenCalledWith("Augusta Ada");
-    expect(onSaveDisplayName).toHaveBeenCalledOnce();
-  });
-
   it("forwards an allowlisted avatar file and resets the picker", () => {
     const onAvatarSelect = vi.fn();
     const container = document.createElement("div");

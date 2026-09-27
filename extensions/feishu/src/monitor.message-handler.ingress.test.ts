@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "openclaw/plugin-sdk/channel-outbound";
 import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
@@ -171,6 +172,30 @@ afterEach(() => {
 });
 
 describe("Feishu durable ingress debounce lifecycle", () => {
+  it("releases a claim acquired after ingress abandonment instead of enqueueing it", async () => {
+    const transport = createLifecycle();
+    const logicalClaim = createClaim("delayed-admission");
+    const pending =
+      createDeferred<Awaited<ReturnType<typeof dedup.claimUnprocessedFeishuMessage>>>();
+    const harness = createHarness({
+      lifecycles: new Map([["evt-delayed", transport.lifecycle]]),
+      claims: [],
+      adoptTurn: true,
+    });
+    harness.claim.mockReturnValueOnce(pending.promise);
+    const handling = harness.handler(createTextEvent("evt-delayed", "om-delayed", "hello"));
+    transport.controller.abort();
+    await transport.lifecycle.onAbandoned();
+    pending.resolve({ kind: "claimed", handle: logicalClaim });
+
+    await expect(handling).resolves.toMatchObject({ kind: "failed-retryable" });
+    expect(logicalClaim.release).toHaveBeenCalledOnce();
+    expect(logicalClaim.commit).not.toHaveBeenCalled();
+    expect(harness.entries).toEqual([]);
+    expect(harness.handleMessage).not.toHaveBeenCalled();
+    expect(transport.calls.adopted).not.toHaveBeenCalled();
+  });
+
   it.each(["group", "topic_group", "private", "p2p"] as const)(
     "accepts an empty %s message body without losing bot mentions or ingress adoption",
     async (chatType) => {

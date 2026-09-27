@@ -75,8 +75,9 @@ export function renderChatTranscriptLayout<T>({
                     virtualRow.index === 0 ? "chat-virtual-row--first" : ""
                   }"
                   style=${styleMap({
-                    // Keep skipped overscan rows at the virtualizer's known size.
-                    containIntrinsicBlockSize: `auto ${virtualRow.size}px`,
+                    // The virtualizer owns measured sizes. Browser-remembered auto
+                    // sizes can lag reflow when a measured row becomes skipped again.
+                    containIntrinsicBlockSize: `${virtualRow.size}px`,
                   })}
                   data-index=${String(virtualRow.index)}
                   data-virtual-row-key=${row.key}

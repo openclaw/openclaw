@@ -108,7 +108,7 @@ function failureGuidance(status: string): string | typeof nothing {
   return guidance[status] ?? guidance.unknown!;
 }
 
-export function renderModelSetupFailure(status: string, error: string): TemplateResult {
+function renderModelSetupFailure(status: string, error: string): TemplateResult {
   return html`
     <div class="model-setup__failure" role="alert">
       <span class="model-setup__failure-icon" aria-hidden="true">${icons.alertTriangle}</span>
@@ -231,4 +231,14 @@ export function renderConfiguredModel(props: {
       </div>
     </section>
   `;
+}
+
+export function renderActivationFeedback(activation: ModelSetupActivationState) {
+  // Feedback follows the activation attempt, including prepared models absent from discovery.
+  if (activation.phase === "testing") {
+    return html`<div class="model-setup__testing" role="status">${t("modelSetup.testing")}</div>`;
+  }
+  return activation.phase === "failure"
+    ? renderModelSetupFailure(activation.status, activation.error)
+    : nothing;
 }

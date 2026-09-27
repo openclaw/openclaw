@@ -14,6 +14,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { observeSessionRowBackfill } from "./session-row-backfill.test-support.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
+import { ready as isMaterializedSessionRow } from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import type { SessionsListResult } from "./session-utils.types.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
@@ -37,31 +38,29 @@ const LIST_PARAMS = {
   limit: 100,
 };
 
-test.each([5, 40])(
-  "sessions.list refreshes sharing without rematerializing a %i-row lookup store",
-  async (rows) => {
-    await createSessionStoreDir();
-    const entries: Record<string, ReturnType<typeof sessionStoreEntry>> = {
-      main: sessionStoreEntry("sess-main"),
-    };
-    for (let index = 0; index < rows; index++) {
-      entries[`agent:main:row-${index}`] = sessionStoreEntry(`sess-row-${index}`, {
-        updatedAt: 1_781_000_000_000 - index * 1_000,
-      });
-    }
-    await writeSessionStore({ entries });
-    // The initial listing uses read-only access; sharing must not reload the full lookup store.
-    const lookupStoreRead = vi.spyOn(sessionAccessor, "listSessionEntriesCore");
-    try {
-      const result = await directSessionReq<SessionsListResult>("sessions.list", LIST_PARAMS);
-      expect(result.ok).toBe(true);
-      expect(result.payload?.sessions).toHaveLength(rows + 1);
-      expect(lookupStoreRead).not.toHaveBeenCalled();
-    } finally {
-      lookupStoreRead.mockRestore();
-    }
-  },
-);
+test("sessions.list refreshes sharing without rematerializing the lookup store", async () => {
+  const rows = 40;
+  await createSessionStoreDir();
+  const entries: Record<string, ReturnType<typeof sessionStoreEntry>> = {
+    main: sessionStoreEntry("sess-main"),
+  };
+  for (let index = 0; index < rows; index++) {
+    entries[`agent:main:row-${index}`] = sessionStoreEntry(`sess-row-${index}`, {
+      updatedAt: 1_781_000_000_000 - index * 1_000,
+    });
+  }
+  await writeSessionStore({ entries });
+  // The initial listing uses read-only access; sharing must not reload the full lookup store.
+  const lookupStoreRead = vi.spyOn(sessionAccessor, "listSessionEntriesCore");
+  try {
+    const result = await directSessionReq<SessionsListResult>("sessions.list", LIST_PARAMS);
+    expect(result.ok).toBe(true);
+    expect(result.payload?.sessions).toHaveLength(rows + 1);
+    expect(lookupStoreRead).not.toHaveBeenCalled();
+  } finally {
+    lookupStoreRead.mockRestore();
+  }
+});
 
 test("sessions.list reuses prepared store targets for sharing", async () => {
   await createSessionStoreDir();
@@ -115,7 +114,7 @@ test("sessions.list keeps roster enumeration bounded as ordinary rows grow", asy
   expect(rosterReads[1]).toBeLessThanOrEqual(rosterReads[0]!);
 });
 
-test("sessions.list retains transcript titles beyond the database handle cap", async () => {
+test("sessions.list retains stored titles and transcript previews beyond the database handle cap", async () => {
   const stateDir = process.env.OPENCLAW_STATE_DIR;
   if (!stateDir) {
     throw new Error("OPENCLAW_STATE_DIR is required for gateway session tests");
@@ -137,7 +136,10 @@ test("sessions.list retains transcript titles beyond the database handle cap", a
     await writeSessionStore({
       agentId,
       entries: {
-        [sessionKey]: sessionStoreEntry(sessionId, { updatedAt: 1_781_000_000_000 - index }),
+        [sessionKey]: sessionStoreEntry(sessionId, {
+          updatedAt: 1_781_000_000_000 - index,
+          displayName: `Title ${agentId}`,
+        }),
       },
       storePath,
     });
@@ -174,25 +176,31 @@ test("sessions.list retains transcript titles beyond the database handle cap", a
       expect(result.ok).toBe(true);
       expect(result.payload?.sessions).toHaveLength(agentIds.length);
       expect(
-        result.payload?.sessions.every(
-          (session) =>
-            session.derivedTitle?.startsWith("Title ") &&
-            session.lastMessagePreview?.startsWith("Reply "),
-        ),
-      ).toBe(true);
+        result.payload?.sessions.map(({ agentId, derivedTitle, lastMessagePreview }) => ({
+          agentId,
+          derivedTitle,
+          lastMessagePreview,
+        })),
+      ).toEqual(
+        agentIds.map((agentId) => ({
+          agentId,
+          derivedTitle: `Title ${agentId}`,
+          lastMessagePreview: `Reply ${agentId}`,
+        })),
+      );
     }
   } finally {
     projection.dispose();
   }
 });
 
-test("projection backfill retains transcript titles for clean snapshots", async () => {
+test("clean snapshots retain stored titles and backfilled previews without transcript reads", async () => {
   const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:warm-cache";
   const sessionId = "warm-cache";
   await writeSessionStore({
     entries: {
-      [sessionKey]: sessionStoreEntry(sessionId),
+      [sessionKey]: sessionStoreEntry(sessionId, { displayName: "Warm title" }),
     },
   });
   await seedSessionTranscript({
@@ -218,6 +226,7 @@ test("projection backfill retains transcript titles for clean snapshots", async 
     ).toBe("Warm response");
   });
   const titlePageSpy = vi.spyOn(sessionAccessor, "readSessionTranscriptMessageEventPage");
+  const previewPageSpy = vi.spyOn(sessionAccessor, "readSessionTranscriptBoundedMessageTailPage");
   try {
     expect(
       projection.snapshot(
@@ -232,9 +241,11 @@ test("projection backfill retains transcript titles for clean snapshots", async 
       }),
     );
     expect(titlePageSpy).not.toHaveBeenCalled();
+    expect(previewPageSpy).not.toHaveBeenCalled();
   } finally {
     projection.dispose();
     titlePageSpy.mockRestore();
+    previewPageSpy.mockRestore();
   }
 });
 
@@ -256,7 +267,7 @@ test("projection startup retains every row beyond the former prewarm limit", asy
   });
   try {
     await projection.ensureMaterialized();
-    expect(projection.select().length).toBe(2_001);
+    expect(projection.selectEntries().filter(isMaterializedSessionRow).length).toBe(2_001);
     expect(projection.snapshot({ agentId: "main", key: "agent:main:large-2000" }).row).toEqual(
       expect.objectContaining({ key: "agent:main:large-2000", sessionId: "large-2000" }),
     );
@@ -317,9 +328,7 @@ test("sessions.list projects out prompt snapshots without changing full entry re
   let projection: Awaited<ReturnType<typeof createSessionRowProjection>> | undefined;
   try {
     projection = await createSessionRowProjection({ cfg });
-    expect(readonly).toHaveBeenCalledWith(
-      expect.objectContaining({ projection: "list", clone: false }),
-    );
+    expect(readonly.mock.calls[0]?.[0]).toMatchObject({ projection: "list", clone: false });
     expect(readonly.mock.calls.every(([scope]) => scope?.projection === "list")).toBe(true);
     const resident = projection.describe({ agentId: "main", key: stored.session_key });
     expect(resident?.storedEntry?.skillsSnapshot).toBeUndefined();

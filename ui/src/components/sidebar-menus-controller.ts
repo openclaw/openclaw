@@ -14,10 +14,7 @@ import {
 } from "../lib/session-pull-requests.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
-import {
-  createSidebarCatalogMenuController,
-  type SidebarCatalogMenuController,
-} from "./app-sidebar-catalog-menu.ts";
+import { SidebarCatalogMenuController } from "./app-sidebar-catalog-menu.ts";
 import { isSidebarRouteActive, renderSidebarNavRoute } from "./app-sidebar-nav-menus.ts";
 import type {
   SidebarRecentSession,
@@ -38,25 +35,12 @@ type AgentMenuInteractionState = "closed" | "hover-pending" | "open-hover" | "op
 type MenuPosition = { x: number; y: number };
 type CatalogMenuPosition = MenuPosition & { catalogId: string };
 
-interface SidebarMenusControllerState {
-  customizeMenuPosition: { x: number; y: number } | null;
-  moreMenuPosition: { x: number; y: number } | null;
-  sessionMenu: SidebarSessionMenuState | null;
-  sessionMenuWork: SessionMenuWork | null;
-  sessionGroupMenu: SidebarSessionGroupMenuState | null;
-  sessionSortMenuPosition: MenuPosition | null;
-  catalogViewMenuPosition: CatalogMenuPosition | null;
-  agentMenuPosition: { x: number; top: number } | null;
-  agentMenuInteractionState: AgentMenuInteractionState;
-  identityMenuPosition: { x: number; bottom: number; width: number } | null;
-}
-
 export type SidebarFilterMenuView = "root" | "specific-owner" | "empty-groups";
 
 type SidebarMenusRenderer = typeof import("./sidebar-menus-render.ts");
 
 /** Popup ownership and stateless menu-renderer wiring. */
-export class SidebarMenusController implements ReactiveController, SidebarMenusControllerState {
+export class SidebarMenusController implements ReactiveController {
   customizeMenuPosition: { x: number; y: number } | null = null;
   moreMenuPosition: { x: number; y: number } | null = null;
   sessionMenu: SidebarSessionMenuState | null = null;
@@ -103,7 +87,7 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
   constructor(readonly host: SidebarMenusControllerHost) {
     host.addController(this);
     this.agentMenuAvatars = new IdentityAvatarController(host);
-    this.catalogMenu = createSidebarCatalogMenuController(host, () => {
+    this.catalogMenu = new SidebarCatalogMenuController(host, () => {
       this.dismissTransientMenus();
     });
   }
@@ -125,11 +109,12 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     this.routePreloadTimers.clear();
   }
 
-  private updateState<Key extends keyof SidebarMenusControllerState>(
+  private updateState<Key extends keyof SidebarMenusController>(
+    this: SidebarMenusController,
     key: Key,
-    value: SidebarMenusControllerState[Key],
+    value: SidebarMenusController[Key],
   ): void {
-    Object.assign(this, { [key]: value });
+    this[key] = value;
     this.host.requestUpdate();
   }
 
@@ -251,15 +236,6 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     if (!this.host.selectedSessionKeys.has(session.key)) {
       this.host.clearSessionSelection();
     }
-    this.showSessionMenu(session, x, y, trigger);
-  }
-
-  private showSessionMenu(
-    session: SidebarRecentSession,
-    x: number,
-    y: number,
-    trigger: HTMLElement | null = null,
-  ) {
     this.loadMenuRenderer();
     this.dismissTransientMenus();
     this.sessionMenuTrigger = trigger;
@@ -471,9 +447,9 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
   scheduleAgentMenuHoverOpen(trigger: HTMLElement, event: PointerEvent) {
     globalThis.clearTimeout(this.agentMenuHoverCloseTimer ?? undefined);
     this.agentMenuHoverCloseTimer = null;
+    // Pointer motion establishes intent; layout-only entry must not open the menu.
     if (
-      this.agentMenuInteractionState === "open-hover" ||
-      this.agentMenuInteractionState === "open-click" ||
+      this.agentMenuInteractionState !== "closed" ||
       event.pointerType === "touch" ||
       !globalThis.matchMedia("(hover: hover) and (pointer: fine)").matches
     ) {

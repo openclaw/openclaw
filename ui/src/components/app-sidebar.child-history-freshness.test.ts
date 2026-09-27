@@ -1,8 +1,8 @@
 /* @vitest-environment jsdom */
 
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
+import { createRequireRecord } from "../../../test/helpers/record.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import {
   createTestSessionCapability,
@@ -21,6 +21,46 @@ import "./app-sidebar.ts";
 const requireRecord = createRequireRecord("object", "expected-label");
 
 describe("sidebar routed-lineage freshness", () => {
+  it("keeps folded child failures in the parent hovercard and own failures in child cards", async () => {
+    const parent: GatewaySessionRow = {
+      key: "agent:main:failure-parent",
+      kind: "direct",
+      label: "Parent",
+    };
+    const child: GatewaySessionRow = {
+      key: "agent:main:failure-child",
+      kind: "direct",
+      label: "Validation",
+      spawnedBy: parent.key,
+      status: "failed",
+      lastRunError: "Worker disconnected",
+      updatedAt: 100,
+    };
+    const gateway = createGateway(
+      createTestGatewayClient(async (method) =>
+        method === "sessions.list" ? sessionsResult([parent, child], 100) : {},
+      ),
+    );
+    const sessions = createTestSessionCapability(gateway);
+    await sessions.refresh({ agentId: "main", force: true });
+    const { sidebar, provider } = await mountSidebar(gateway, sessions);
+    try {
+      await sidebar.updateComplete;
+      expect(sidebar.findSidebarHovercardRowByKey(parent.key)?.attention).toEqual({
+        kind: "error",
+        reason: child.lastRunError,
+        childLabel: child.label,
+      });
+      expect(sidebar.findSidebarHovercardRowByKey(child.key)?.attention).toEqual({
+        kind: "error",
+        reason: child.lastRunError,
+      });
+    } finally {
+      provider.remove();
+      sessions.dispose();
+    }
+  });
+
   it.each(["sibling", "away and back", "during publication"] as const)(
     "keeps fetched siblings after selection changes (%s)",
     async (transition) => {

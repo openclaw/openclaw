@@ -6,7 +6,6 @@ import type {
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import {
@@ -43,7 +42,7 @@ export interface SessionDataControllerHost extends ReactiveControllerHost {
   readonly connected: boolean;
   readonly activeRouteId?: string;
   getRouteSessionKey(): string;
-  readonly sessionDataContext: ApplicationContext<RouteId> | undefined;
+  readonly sessionDataContext: ApplicationContext | undefined;
   dismissTransientMenus(): boolean;
   expandedAgentId(): string;
   promoteCreatedSession(sessionKey: string): void;
@@ -55,7 +54,7 @@ export interface SessionDataControllerHost extends ReactiveControllerHost {
 }
 
 export interface SessionCatalogDataOwner {
-  readonly context: ApplicationContext<RouteId> | undefined;
+  readonly context: ApplicationContext | undefined;
   readonly isSessionDataHostConnected: boolean;
   readonly sessionDataHostConnected: boolean;
   sessionCatalogs: SessionCatalog[];
@@ -73,6 +72,34 @@ export interface SessionCatalogDataOwner {
   requestSessionDataUpdate(): void;
   refreshSessionCatalogs(): Promise<void>;
   sessionCatalogIdsWithoutVisibleRows(): readonly string[];
+}
+
+/** A completed list RPC can still leave pending hosts or hidden discovery pages. */
+export function areSessionCatalogsSettled(
+  owner: Pick<
+    SessionCatalogDataOwner,
+    | "context"
+    | "sessionCatalogs"
+    | "sessionCatalogRefreshStatus"
+    | "sessionCatalogLive"
+    | "loadingMoreSessionCatalogIds"
+  >,
+): boolean {
+  const status = owner.sessionCatalogRefreshStatus;
+  return (
+    !status.error &&
+    (isGatewayMethodAdvertised(owner.context?.gateway.snapshot ?? {}, "sessions.catalog.list") !==
+      true ||
+      (status.hasLoaded &&
+        !status.awaitingGateway &&
+        owner.sessionCatalogLive.requestGeneration === null &&
+        owner.loadingMoreSessionCatalogIds.size === 0 &&
+        owner.sessionCatalogs.every(
+          (catalog) =>
+            !catalog.error &&
+            catalog.hosts.every((entry) => !entry.pending && !entry.error && !entry.nextCursor),
+        )))
+  );
 }
 
 function visibleSessionCatalogClient(owner: SessionCatalogDataOwner): GatewayBrowserClient | null {
@@ -257,6 +284,8 @@ export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Pr
   }
   const generation = owner.sessionScopeGeneration;
   const revision = owner.sessionCatalogRevision;
+  // Publish the existing request lifecycle to settled-empty presentation too.
+  owner.requestSessionDataUpdate();
   await refreshSessionCatalogsLive({
     live: owner.sessionCatalogLive,
     client,
@@ -293,6 +322,7 @@ export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Pr
     },
     refresh: () => refreshSessionCatalogsInBackground(owner),
   });
+  owner.requestSessionDataUpdate();
 }
 
 function hiddenSessionCatalogPages(owner: SessionCatalogDataOwner) {
@@ -302,7 +332,7 @@ function hiddenSessionCatalogPages(owner: SessionCatalogDataOwner) {
       return [];
     }
     const hostIds = catalog.hosts
-      .filter((host) => host.nextCursor && !host.error)
+      .filter((host) => host.nextCursor && !host.pending && !host.error)
       .map((host) => host.hostId);
     return hostIds.length > 0 ? [{ catalogId: catalog.id, hostIds }] : [];
   });

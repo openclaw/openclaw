@@ -1,21 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { sanitizeChatHistoryMessages } from "./chat-display-projection.js";
 
+const hostTab = { targetId: "tab-1", target: "host", profile: "work" };
+const nodeTab = { ...hostTab, target: "node", node: "node-1" };
+
 describe("chat display tool-result detail projection", () => {
   it.each([
     [
       {
-        targetId: "tab-1",
-        target: "host",
-        profile: "work",
+        ...hostTab,
         url: "https://example.com",
         title: "Example",
         extra: "drop",
       },
       {
-        targetId: "tab-1",
-        target: "host",
-        profile: "work",
+        ...hostTab,
         url: "https://example.com",
         title: "Example",
       },
@@ -38,28 +37,18 @@ describe("chat display tool-result detail projection", () => {
         title: "t".repeat(511),
       },
     ],
-    [
-      { targetId: "tab-1", target: "host", profile: "work", url: 42, title: [] },
-      { targetId: "tab-1", target: "host", profile: "work" },
-    ],
+    [{ ...hostTab, url: 42, title: [] }, hostTab],
     ...[
       null,
       [],
       "tab-1",
-      {},
-      { targetId: "tab-1" },
-      { targetId: "tab-1", target: "sandbox", profile: "work" },
-      { targetId: "tab-1", target: "node", profile: "work" },
-      { targetId: "tab-1", target: "host", profile: "work", node: "node-1" },
+      { ...hostTab, target: "sandbox" },
+      { ...hostTab, target: "node" },
+      { ...hostTab, node: "node-1" },
+      ...[1, "", " padded "].map((targetId) => Object.assign({}, nodeTab, { targetId })),
       ...["targetId", "profile", "node"].flatMap((key) =>
-        [undefined, 1, "", "  ", " padded ", "x".repeat(key === "node" ? 257 : 129)].map(
-          (value) => ({
-            targetId: "tab-1",
-            target: "node",
-            profile: "work",
-            node: "node-1",
-            [key]: value,
-          }),
+        [undefined, "x".repeat(key === "node" ? 257 : 129)].map((value) =>
+          Object.assign({}, nodeTab, { [key]: value }),
         ),
       ),
     ].map((invalid) => [invalid, undefined] as const),
@@ -131,4 +120,65 @@ describe("chat display tool-result detail projection", () => {
     expect(created?.details).toEqual({ changed: true, created: true });
     expect(invalid).not.toHaveProperty("details");
   });
+});
+
+describe("bounded tool output previews", () => {
+  it("caps nested output once, preserves literal text, and removes private media", () => {
+    const text = " \n[[reply_to_current]] <tag>\r\n" + "x".repeat(20_000) + "  \n";
+    const message = {
+      role: "assistant",
+      __openclaw: {
+        id: "nested-output",
+        toolOutput: { source: "execution", modelInput: "unverified" },
+      },
+      content: [
+        {
+          type: "toolResult",
+          toolCallId: "nested-call",
+          toolName: "exec",
+          isError: true,
+          text,
+          content: [
+            { type: "text", text },
+            { type: "image", data: "PRIVATE_IMAGE", path: "/private/image.png" },
+          ],
+        },
+      ],
+    };
+    const original = structuredClone(message);
+    const [preview] = sanitizeChatHistoryMessages([message], 32) as Array<Record<string, unknown>>;
+    expect(preview).toMatchObject({
+      __openclaw: { ...message["__openclaw"], truncated: true, reason: "display-cap" },
+      content: [
+        {
+          type: "toolResult",
+          toolCallId: "nested-call",
+          toolName: "exec",
+          isError: true,
+          content: [
+            { type: "text", text: text.slice(0, 32) },
+            { type: "image", omitted: true },
+          ],
+        },
+      ],
+    });
+    const [block] = preview!.content as Array<Record<string, unknown>>;
+    expect(block).not.toHaveProperty("text");
+    expect(JSON.stringify(preview)).not.toContain("PRIVATE_IMAGE");
+    expect(JSON.stringify(preview)).not.toContain("/private/image.png");
+    expect(message).toEqual(original);
+  });
+
+  it.each(["toolResult", "tool_result", "tool", "function"])(
+    "keeps %s output whitespace and UTF-16 intact without adding a truncation sentinel",
+    (role) => {
+      const [preview] = sanitizeChatHistoryMessages([{ role, content: " \n😀  \n" }], 3) as Array<
+        Record<string, unknown>
+      >;
+      expect(preview).toMatchObject({
+        content: " \n",
+        __openclaw: { truncated: true, reason: "display-cap" },
+      });
+    },
+  );
 });

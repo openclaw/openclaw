@@ -1,9 +1,13 @@
 import type fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { replaceFileAtomic, replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { root } from "../infra/fs-safe.js";
-import { replaceFileAtomic, replaceFileAtomicSync } from "../infra/replace-file.js";
-import { appendConfigAuditRecord, appendConfigAuditRecordSync } from "./io.audit.js";
+import {
+  appendConfigAuditRecord,
+  appendConfigAuditRecordSync,
+  createConfigObserveAuditRecord,
+} from "./io.audit.js";
 import {
   persistBoundedClobberedConfigSnapshot,
   persistBoundedClobberedConfigSnapshotSync,
@@ -16,8 +20,13 @@ import {
 } from "./io.health-state.js";
 import type { ConfigHealthFingerprint, ConfigHealthSnapshot } from "./io.health-state.types.js";
 import {
+  createConfigRecoveryStatEffect,
+  createConfigBackupMissingEffect,
+  createConfigBackupReadEffect,
+  type ConfigRecoveryEffect,
+} from "./io.observe-recovery-effects.js";
+import {
   createConfigHealthFingerprint,
-  createConfigObserveAuditAppendParams,
   extractRestoreErrorDetails,
   readConfigFingerprintForPath,
   readConfigFingerprintForPathSync,
@@ -25,10 +34,10 @@ import {
 } from "./io.observe-state.js";
 import { resolveConfigReadRecoveryContext } from "./io.observe-suspicious.js";
 import { hashConfigRaw, resolveGatewayMode } from "./io.read-helpers.js";
+import type { NormalizedConfigIoDeps } from "./io.read.types.js";
 import type {
   ConfigRecoveryCandidate,
   ConfigRecoveryCandidatePreparation,
-  NormalizedConfigIoDeps,
   PrepareConfigRecoveryCandidate,
 } from "./io.types.js";
 import { chmodConfigBestEffort, chmodConfigBestEffortSync } from "./io.write-safety.js";
@@ -198,11 +207,6 @@ export function maybeRecoverSuspiciousConfigReadSync(
   return step.value;
 }
 
-type ConfigRecoveryEffect<T> = {
-  sync: () => T;
-  async: (health: ReturnType<typeof captureConfigHealthStateStore>) => T | Promise<T>;
-};
-
 type ConfigRecoveryOperation<T> = Generator<ConfigRecoveryEffect<unknown>, T, unknown>;
 type SuspiciousConfigRecoveryPlan = {
   candidate: ConfigReadRecoveryResult;
@@ -294,44 +298,17 @@ function* recoverSuspiciousConfigRead(
   return applied.superseded ? { raw, parsed } : plan.candidate;
 }
 
-function createConfigRecoveryStatEffect(
-  deps: ObserveRecoveryDeps,
-  configPath: string,
-): ConfigRecoveryEffect<fs.Stats | null> {
-  return {
-    sync: () => {
-      try {
-        return deps.fs.statSync(configPath, { throwIfNoEntry: false }) ?? null;
-      } catch {
-        return null;
-      }
-    },
-    async: () => deps.fs.promises.stat(configPath).catch(() => null),
-  };
-}
-
-function createConfigBackupReadEffect(
-  deps: ObserveRecoveryDeps,
-  backupPath: string,
-): ConfigRecoveryEffect<string | null> {
-  return {
-    sync: () => {
-      try {
-        return deps.fs.readFileSync(backupPath, "utf-8");
-      } catch {
-        return null;
-      }
-    },
-    async: () => deps.fs.promises.readFile(backupPath, "utf-8").catch(() => null),
-  };
-}
-
 function* planSuspiciousConfigRead(
   params: ConfigReadRecoveryParams,
 ): ConfigRecoveryOperation<SuspiciousConfigRecoveryPlan | null> {
   const { deps, configPath, raw, parsed } = params;
   // External owners also own recovery; do not substitute backup bytes or create sidecars.
   if (resolveIsConfigReadOnly(deps.env)) {
+    return null;
+  }
+  const backupPath = `${configPath}.bak`;
+  // Missing backups cannot recover config; avoid opening the health worker just to confirm that.
+  if (yield createConfigBackupMissingEffect(deps, backupPath)) {
     return null;
   }
   const stat = (yield createConfigRecoveryStatEffect(deps, configPath)) as fs.Stats | null;
@@ -351,7 +328,6 @@ function* planSuspiciousConfigRead(
   }
   const healthState = healthSnapshot.state;
   const entry = readConfigHealthEntry(healthState, configPath);
-  const backupPath = `${configPath}.bak`;
   const backupBaseline =
     entry.lastKnownGood ??
     ((yield {
@@ -485,19 +461,23 @@ function* planSuspiciousConfigRead(
           ? `; ${restoreErrorDetails.message}`
           : "";
       deps.logger.warn(`Config ${result}: ${configPath} (${suspicious.join(", ")}${detail})`);
-      const audit = createConfigObserveAuditAppendParams(deps, {
-        configPath,
-        valid: restoredFromBackup,
-        current,
-        suspicious,
-        lastKnownGood: entry.lastKnownGood,
-        backup,
-        clobberedPath,
-        restoredFromBackup,
-        restoredBackupPath: backupPath,
-        restoreErrorCode: restoreErrorDetails.code,
-        restoreErrorMessage: restoreErrorDetails.message,
-      });
+      const audit = {
+        env: deps.env,
+        homedir: deps.homedir,
+        record: createConfigObserveAuditRecord({
+          configPath,
+          valid: restoredFromBackup,
+          current,
+          suspicious,
+          lastKnownGood: entry.lastKnownGood,
+          backup,
+          clobberedPath,
+          restoredFromBackup,
+          restoredBackupPath: backupPath,
+          restoreErrorCode: restoreErrorDetails.code,
+          restoreErrorMessage: restoreErrorDetails.message,
+        }),
+      };
       yield {
         sync: () => appendConfigAuditRecordSync(audit),
         async: () => appendConfigAuditRecord(audit, params.assertCurrent),
@@ -700,8 +680,10 @@ export async function recoverConfigFromLastKnownGoodCore(params: {
   deps.logger.warn(
     `Config auto-restored from last-known-good: ${snapshot.path} (${params.reason})${issueSummary ? `; Rejected validation details: ${issueSummary}.` : ""}`,
   );
-  await appendConfigAuditRecord(
-    createConfigObserveAuditAppendParams(deps, {
+  await appendConfigAuditRecord({
+    env: deps.env,
+    homedir: deps.homedir,
+    record: createConfigObserveAuditRecord({
       configPath: snapshot.path,
       valid: snapshot.valid,
       current,
@@ -712,7 +694,7 @@ export async function recoverConfigFromLastKnownGoodCore(params: {
       restoredFromBackup: true,
       restoredBackupPath: lastGoodPath,
     }),
-  );
+  });
   await health.updateAfterFileCommit(
     {
       lastKnownGood: promoted,

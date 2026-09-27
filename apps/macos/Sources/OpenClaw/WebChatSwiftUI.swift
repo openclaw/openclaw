@@ -80,22 +80,17 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
         private var defaultGlobalAgentID: String?
 
         init(defaultGlobalAgentID: String?) {
-            self.defaultGlobalAgentID = Self.normalized(defaultGlobalAgentID)
+            self.defaultGlobalAgentID = WebChatRoute.normalizedAgentID(defaultGlobalAgentID)
         }
 
         func update(defaultGlobalAgentID: String?) {
             self.lock.withLock {
-                self.defaultGlobalAgentID = Self.normalized(defaultGlobalAgentID)
+                self.defaultGlobalAgentID = WebChatRoute.normalizedAgentID(defaultGlobalAgentID)
             }
         }
 
         func currentAgentID() -> String? {
             self.lock.withLock { self.defaultGlobalAgentID }
-        }
-
-        private static func normalized(_ agentID: String?) -> String? {
-            let normalized = agentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            return normalized?.isEmpty == false ? normalized : nil
         }
     }
 
@@ -115,8 +110,7 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
         self.connection = connection
         self.outboxGatewayID = outboxGatewayID
         self.routingIdentity = RoutingIdentity(defaultGlobalAgentID: defaultGlobalAgentID)
-        let fixed = fixedAgentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        self.fixedAgentID = fixed?.isEmpty == false ? fixed : nil
+        self.fixedAgentID = WebChatRoute.normalizedAgentID(fixedAgentID)
     }
 
     func updateDefaultGlobalAgentID(_ agentID: String?) {
@@ -853,6 +847,7 @@ private enum MacChatMessageSpeechClient {
 
 @MainActor
 private struct MacChatSurface: View {
+    let windowCommands: OpenClawChatWindowCommands
     @State private var viewModel: OpenClawChatViewModel
     @State private var appState = AppStateStore.shared
     @State private var talkController = TalkModeController.shared
@@ -869,12 +864,14 @@ private struct MacChatSurface: View {
 
     init(
         viewModel: OpenClawChatViewModel,
+        windowCommands: OpenClawChatWindowCommands,
         usesPrimaryAppRuntime: Bool,
         approvalQueue: ExecApprovalQueueStore?,
         speech: OpenClawChatSpeechController,
         voiceNoteRecorder: OpenClawVoiceNoteRecorder)
     {
         _viewModel = State(initialValue: viewModel)
+        self.windowCommands = windowCommands
         self.usesPrimaryAppRuntime = usesPrimaryAppRuntime
         self.approvalQueue = approvalQueue
         self.speech = speech
@@ -884,6 +881,7 @@ private struct MacChatSurface: View {
     var body: some View {
         OpenClawChatWindowShell(
             viewModel: self.viewModel,
+            windowCommands: self.windowCommands,
             userAccent: ColorHexSupport.color(fromHex: self.appState.effectiveAccentHex),
             attentionRequests: self.approvalQueue?.attentionRequests ?? [],
             displayOptions: self.displayOptions,
@@ -997,7 +995,18 @@ private final class WebChatSessionKeyRelay {
 
 @MainActor
 final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
-    private let sessionKey: String
+    private let windowCommands = OpenClawChatWindowCommands()
+    var onResignedKey: (() -> Void)?
+
+    var isKeyChatWindow: Bool {
+        self.window?.isKeyWindow == true && self.window?.isHiddenForExperience == false
+    }
+
+    func showCommandPalette() {
+        guard self.isKeyChatWindow, self.window?.attachedSheet == nil else { return }
+        self.windowCommands.isCommandPalettePresented = true
+    }
+
     private let viewModel: OpenClawChatViewModel
     private let contentController: NSViewController
     private let sessionKeyRelay: WebChatSessionKeyRelay
@@ -1089,7 +1098,6 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
         windowTitle: String = "OpenClaw Chat",
         windowAutosaveName: String = WebChatSwiftUILayout.windowFrameAutosaveName)
     {
-        self.sessionKey = sessionKey
         let initialActiveAgentID = WebChatRoute.normalizedAgentID(initialActiveAgentID)
         let voiceNoteRecorder = OpenClawVoiceNoteRecorder()
         voiceNoteRecorder.setCaptureAdmissionHandler {
@@ -1177,6 +1185,7 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
         // toolbar pickers bridged into the NSToolbar.
         let hosting = NSHostingController(rootView: MacChatSurface(
             viewModel: vm,
+            windowCommands: self.windowCommands,
             usesPrimaryAppRuntime: usesPrimaryAppRuntime,
             approvalQueue: gatewayTransport?.connection.approvalQueue,
             speech: speech,
@@ -1226,6 +1235,11 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
     func windowDidBecomeKey(_ notification: Notification) {
         guard let window, notification.object as? NSWindow === window, !window.isHiddenForExperience else { return }
         self.onBecameKey?()
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        guard notification.object as? NSWindow === self.window else { return }
+        self.onResignedKey?()
     }
 
     func cascade(from source: WebChatSwiftUIWindowController?) {

@@ -9,6 +9,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { advanceCronActiveJobGeneration, markCronJobActive } from "../active-jobs.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
@@ -302,6 +303,7 @@ describe("cron outcome receipt finalization", () => {
     const events: Array<{ action: string; jobId: string }> = [];
     const warn = vi.fn();
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       cronEnabled: true,
       storePath: store.storePath,
       log: { ...noopLogger, warn },
@@ -313,7 +315,7 @@ describe("cron outcome receipt finalization", () => {
     });
     const database = openOpenClawStateDatabase().db;
     database.exec(`
-      CREATE TEMP TRIGGER reject_post_finalization_maintenance
+      CREATE TRIGGER reject_post_finalization_maintenance
       BEFORE UPDATE ON cron_jobs
       WHEN NEW.job_id = '${sibling.id}'
       BEGIN

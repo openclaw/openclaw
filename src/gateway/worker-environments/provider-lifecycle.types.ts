@@ -12,9 +12,11 @@ import type {
 import type { NodeWorkerPreparedWorkspaceResult } from "../../worker/node-workspace-prepared-protocol.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerCredentialBroker } from "./credential-broker.js";
+import type { createGatewayNodeWorkerBundleInstaller } from "./node-worker-bundle-installer.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerPreparationArtifacts } from "./preparation-identity.js";
 import type { createWorkerProjectPreparation } from "./project-preparation.js";
+import type { WorkerSshIdentityResolver } from "./ssh.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import type {
   WorkerEnvironmentRecord,
@@ -40,7 +42,7 @@ export type WorkerProviderLifecycleInputOptions = {
     operationId: string;
     sshEndpoint: WorkerSshEndpoint;
     installation: WorkerInstallationArtifact;
-    resolveIdentity: (keyRef: SecretRef) => Promise<WorkerSshIdentity>;
+    resolveIdentity: WorkerSshIdentityResolver;
     signal: AbortSignal;
     assertCurrent?: () => void;
   }) => Promise<WorkerAdmissionHandshake>;
@@ -49,14 +51,9 @@ export type WorkerProviderLifecycleInputOptions = {
     leaseId: string;
     profile: WorkerProfile;
     keyRef: SecretRef;
+    assertAuthorized: () => void;
   }) => Promise<WorkerSshIdentity>;
-  ensureNodeWorkerBundle?: (params: {
-    deviceId: string;
-    artifact: Extract<WorkerInstallationArtifact, { install: "bundle" }>;
-    prewarm: boolean;
-    signal?: AbortSignal;
-    assertCurrent?: () => void;
-  }) => Promise<WorkerAdmissionHandshake>;
+  ensureNodeWorkerBundle?: ReturnType<typeof createGatewayNodeWorkerBundleInstaller>;
   prepareNodeBootstrap?: (record: WorkerEnvironmentRecord, signal?: AbortSignal) => Promise<string>;
   prepareNodeRuntime?: (
     record: WorkerEnvironmentRecord,
@@ -128,8 +125,9 @@ export type WorkerProviderLifecycleOptions = Omit<
     record: WorkerEnvironmentRecord,
     to: WorkerEnvironmentState,
     patch?: WorkerEnvironmentTransitionPatch,
-  ) => WorkerEnvironmentRecord;
-  saveError: (record: WorkerEnvironmentRecord, error: unknown) => WorkerEnvironmentRecord;
+    assertCurrent?: () => void,
+  ) => Promise<WorkerEnvironmentRecord>;
+  saveError: (record: WorkerEnvironmentRecord, error: unknown) => Promise<WorkerEnvironmentRecord>;
   serviceError: (
     code:
       | "bootstrap_failure"

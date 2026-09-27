@@ -5,10 +5,9 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
-  resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { createTaskRecord, findTaskByRunId, listTaskRecords } from "../../tasks/task-registry.js";
-import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { withPluginSubagentTestState } from "./agent-task-tracking.test-helpers.js";
 import {
   backendGatewayClient,
   describe0AfterEach0,
@@ -18,7 +17,6 @@ import {
   makeContext,
   operatorWriteCliClient,
   resetAgentTaskRegistryForTests,
-  useTestStateDir,
   waitForAssertion,
 } from "./agent.test-harness.js";
 import { runTaskHandler } from "./tasks.test-helpers.js";
@@ -31,10 +29,8 @@ describe("gateway agent follow-up activity", () => {
   it.each(["completed", "yielded"] as const)(
     "shows parent-sent work on a %s child without replacing its previous result or wait",
     async (previousState) => {
-      await withTestDir({ prefix: "openclaw-parent-followup-" }, async (root) => {
-        useTestStateDir(root);
+      await withPluginSubagentTestState("openclaw-parent-followup-", async ({ stateDir: root }) => {
         resetAgentTaskRegistryForTests();
-        resetSubagentRegistryForTests({ persist: false });
         const requesterSessionKey = "agent:main:main";
         const childSessionKey = "agent:main:subagent:review";
         const previousRunId = "previous-review";
@@ -130,8 +126,7 @@ describe("gateway agent follow-up activity", () => {
     { name: "another sender", publicClient: false, source: "agent:main:other" },
     { name: "ACP child", publicClient: false, source: "agent:main:parent", acp: true },
   ])("does not publish parent activity for $name", async ({ publicClient, source, acp }) => {
-    await withTestDir({ prefix: "openclaw-followup-scope-" }, async (root) => {
-      useTestStateDir(root);
+    await withPluginSubagentTestState("openclaw-followup-scope-", async ({ stateDir: root }) => {
       const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
       mocks.userTurnStorePath = storePath;
       const childSessionKey = `agent:main:${acp ? "acp" : "subagent"}:review`;

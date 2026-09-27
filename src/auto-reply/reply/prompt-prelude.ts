@@ -20,6 +20,7 @@ const ROOM_EVENT_PARTICIPATION_RULE =
 const RESUMABLE_ROOM_CONTEXT_OMITTED_PREFIXES = [
   "Conversation context (chronological, selected for current message):",
   "Chat history since last reply:",
+  "Recent chat history:",
 ];
 
 /** Builds command/transcript/queued prompt bodies from inbound context. */

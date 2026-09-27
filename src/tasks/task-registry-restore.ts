@@ -1,4 +1,6 @@
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
+import { isSqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import type { OpenClawStateDatabaseReadAdmission } from "../state/openclaw-state-db-async-lifecycle.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 
@@ -9,7 +11,7 @@ type RestoreState =
 type SnapshotStore<Snapshot> = {
   withSnapshotAsync<T>(
     context: OpenClawStateWorkerContext,
-    consume: (snapshot: Snapshot) => T,
+    consume: (snapshot: Snapshot, reconcile?: () => Promise<void>) => T,
   ): Promise<T>;
 };
 
@@ -79,6 +81,7 @@ export function createAsyncRegistryRestore<Snapshot, Store extends SnapshotStore
     snapshot: Snapshot,
     context: OpenClawStateWorkerContext,
     store: Store,
+    reconcile: () => Promise<void>,
   ) => Promise<void>;
   install: (
     snapshot: Snapshot,
@@ -117,12 +120,20 @@ export function createAsyncRegistryRestore<Snapshot, Store extends SnapshotStore
       throw state.error;
     }
     const restore = Promise.resolve().then(async () => {
-      const receipts: Array<{ snapshot: Snapshot; store: Store }> = [];
+      const receipts: Array<{
+        snapshot: Snapshot;
+        store: Store;
+        reconcile: () => Promise<void>;
+      }> = [];
       const reconcile = async () => {
         const errors: unknown[] = [];
         for (let receipt = receipts.shift(); receipt; receipt = receipts.shift()) {
           try {
-            await owner.reconcile?.(receipt.snapshot, context, receipt.store);
+            if (owner.reconcile) {
+              await owner.reconcile(receipt.snapshot, context, receipt.store, receipt.reconcile);
+            } else {
+              await receipt.reconcile();
+            }
           } catch (error) {
             errors.push(error);
           }
@@ -164,9 +175,9 @@ export function createAsyncRegistryRestore<Snapshot, Store extends SnapshotStore
             owner.getStore() === store;
           let applied = false;
           failCurrent = () => !applied && isCurrent();
-          await store.withSnapshotAsync(context, async (snapshot) => {
-            if (owner.reconcile) {
-              receipts.push({ snapshot, store });
+          await store.withSnapshotAsync(context, async (snapshot, reconcileSnapshot) => {
+            if (owner.reconcile || reconcileSnapshot) {
+              receipts.push({ snapshot, store, reconcile: reconcileSnapshot ?? (async () => {}) });
             }
             owner.received?.(snapshot, context, store);
             context.admission.assertCurrent();
@@ -190,7 +201,8 @@ export function createAsyncRegistryRestore<Snapshot, Store extends SnapshotStore
             secondary.push(admissionError);
           }
         }
-        if (admitted && failCurrent?.()) {
+        // A pre-dispatch capacity refusal leaves preparation available to its bounded retry owner.
+        if (admitted && failCurrent?.() && !isSqliteWorkerError(error, "overloaded")) {
           try {
             owner.fail(error, context.admission);
           } catch (restoreError) {
@@ -205,7 +217,7 @@ export function createAsyncRegistryRestore<Snapshot, Store extends SnapshotStore
         if (secondary.length > 0) {
           throw createSqliteLifecycleAggregateError(
             [failure, ...secondary],
-            "Registry restore failed with additional lifecycle errors",
+            `Registry restore failed with additional lifecycle errors: ${formatErrorMessage(failure)}`,
             failure,
           );
         }

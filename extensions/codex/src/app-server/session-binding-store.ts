@@ -1,8 +1,5 @@
 /** Synchronous binding reads with lazy mutation, lease, and auth machinery. */
-import type {
-  PluginStateKeyedStore,
-  PluginStateSyncKeyedStore,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createCodexManagedThreadStore,
   type CodexManagedThreadStore,
@@ -14,19 +11,21 @@ import {
 } from "./session-binding-meta.js";
 import {
   readCurrentCodexAppServerBinding,
+  readCurrentCodexAppServerBindings,
   readCurrentCodexNativeSubagentSubmissions,
 } from "./session-binding-record.js";
-import type { CodexAppServerBindingStore, StoredCodexAppServerBinding } from "./session-binding.js";
+import type {
+  CodexAppServerBindingIdentity,
+  CodexAppServerBindingStore,
+  CodexBindingStateStore,
+} from "./session-binding.js";
 
 export { CODEX_APP_SERVER_BINDING_MAX_ENTRIES, CODEX_APP_SERVER_BINDING_NAMESPACE };
 export type { StoredCodexAppServerBinding } from "./session-binding.js";
 
 /** Keeps lifecycle/auth loading behind mutations while sharing the canonical read codec. */
 export function createLazyCodexAppServerBindingStore(
-  state: Pick<
-    PluginStateSyncKeyedStore<StoredCodexAppServerBinding>,
-    "deleteIf" | "entries" | "lookup" | "registerIfAbsent" | "update"
-  >,
+  state: CodexBindingStateStore,
   managedThreadState?: Pick<
     PluginStateKeyedStore<StoredCodexManagedThread>,
     "entries" | "lookup" | "registerIfAbsent"
@@ -43,6 +42,13 @@ export function createLazyCodexAppServerBindingStore(
   return {
     ...(managedThreads ? { managedThreads } : {}),
     read: (identity) => readCurrentCodexAppServerBinding(state, identity),
+    // Capability discovery can open plugin state; keep it out of registration.
+    get readMany() {
+      return state.lookupMany
+        ? (identities: readonly CodexAppServerBindingIdentity[]) =>
+            readCurrentCodexAppServerBindings(state, identities)
+        : undefined;
+    },
     readNativeSubagentSubmissions: (identity, owner) =>
       readCurrentCodexNativeSubagentSubmissions(state, identity, owner),
     hasOtherThreadOwner: async (threadId, currentIdentity) =>

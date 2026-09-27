@@ -3,7 +3,11 @@ import { presenceUserKey } from "../../shared/presence-user.js";
 import { buildAuthenticatedPresenceUser } from "../authenticated-presence-user.js";
 import { WEBSOCKET_OPEN_READY_STATE } from "../server-constants.js";
 import type { GatewayClient } from "../server-methods/types.js";
+import type { GatewayClientRegistry } from "./client-registry.js";
 import type { GatewayWsClient } from "./ws-types.js";
+
+const ACTIVITY_BROADCAST_INTERVAL_MS = 30_000;
+const activityPublications = new WeakMap<GatewayWsClient, { identity: string; at: number }>();
 
 function isLiveClient(client: GatewayWsClient): boolean {
   return !client.invalidated && client.socket.readyState === WEBSOCKET_OPEN_READY_STATE;
@@ -18,10 +22,11 @@ function presenceIdentity(client: GatewayWsClient): string | undefined {
       : undefined;
 }
 
-/** Reconciles canonical identity and timing using only currently registered sockets. */
+/** Reconciles live identity/timing and returns whether a presence snapshot is needed. */
 export function refreshClientPresence(
   clients: ReadonlySet<GatewayWsClient>,
   client: GatewayWsClient,
+  activityAt?: number,
 ): boolean {
   if (!clients.has(client) || !isLiveClient(client) || !client.presenceKey) {
     return false;
@@ -47,11 +52,29 @@ export function refreshClientPresence(
       }
     }
   }
+  const publication = activityPublications.get(client);
+  const publish =
+    activityAt === undefined ||
+    timing?.lastActivityAt === undefined ||
+    publication?.identity !== identity ||
+    activityAt < publication.at ||
+    activityAt - publication.at >= ACTIVITY_BROADCAST_INTERVAL_MS;
+  if (timing && activityAt !== undefined) {
+    timing.lastActivityAt = activityAt;
+  }
+  // Keep exact activity in the store; only publication is coalesced. Share the
+  // window across live peers, with weak keys so a full reconnect starts fresh.
+  const nextPublication = publish
+    ? { identity, at: activityAt ?? timing?.lastActivityAt ?? Date.now() }
+    : publication;
   for (const peer of peers) {
     // Copy interval facts so later profile qualification cannot leave raw and
     // profile sockets sharing mutable activity. Nodes retain their device lifecycle.
     if (timing && peer.personPresence) {
       peer.personPresence = { ...timing };
+    }
+    if (nextPublication) {
+      activityPublications.set(peer, nextPublication);
     }
     upsertPresence(peer.presenceKey!, {
       clientId: peer.connect.client.id,
@@ -60,26 +83,19 @@ export function refreshClientPresence(
       ...peer.personPresence,
     });
   }
-  return true;
+  return publish;
 }
 
 /** Records accepted human activity; copies and clients closed during admission cannot write. */
 export function recordClientPresenceActivity(
-  clients: ReadonlySet<GatewayWsClient>,
+  clients: GatewayClientRegistry,
   client: GatewayClient | null,
 ): boolean {
-  for (const live of clients) {
-    if (
-      live !== client ||
-      !isLiveClient(live) ||
-      !live.presenceKey ||
-      !live.personPresence ||
-      !presenceIdentity(live)
-    ) {
-      continue;
-    }
-    live.personPresence = { ...live.personPresence, lastActivityAt: Date.now() };
-    return refreshClientPresence(clients, live);
-  }
-  return false;
+  const live = client?.connId ? clients.getByConnectionId(client.connId) : undefined;
+  return Boolean(
+    live &&
+    live === client &&
+    live.personPresence &&
+    refreshClientPresence(clients, live, Date.now()),
+  );
 }

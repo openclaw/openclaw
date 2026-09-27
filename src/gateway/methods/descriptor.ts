@@ -24,6 +24,14 @@ export type GatewayMethodOwner =
 type GatewayMethodStartupAvailability = "available" | "unavailable-until-sidecars";
 export type GatewayMethodProfileAccess = "independent" | "required";
 
+/** A plugin operation addresses one existing session through the shared participation policy. */
+export type GatewayMethodSessionAccess = {
+  mode: "write";
+  allowOwnSessionScope?: boolean;
+  /** Reuse the complete effective session tool policy for this capability. */
+  requiredTool?: string;
+};
+
 export type GatewayMethodHandler = (opts: never) => unknown;
 
 /** Complete metadata for one dispatchable gateway method. */
@@ -33,6 +41,7 @@ export type GatewayMethodDescriptor = {
   scope: GatewayMethodScope;
   owner: GatewayMethodOwner;
   profileAccess: GatewayMethodProfileAccess;
+  sessionAccess?: GatewayMethodSessionAccess;
   since?: string;
   startup?: GatewayMethodStartupAvailability;
   controlPlaneWrite?: boolean;
@@ -41,11 +50,7 @@ export type GatewayMethodDescriptor = {
 };
 
 /** Input descriptor shape before registry normalization trims and validates the method name. */
-export type GatewayMethodDescriptorInput = Omit<
-  GatewayMethodDescriptor,
-  "name" | "profileAccess"
-> & {
-  name: string;
+export type GatewayMethodDescriptorInput = Omit<GatewayMethodDescriptor, "profileAccess"> & {
   profileAccess?: GatewayMethodProfileAccess;
 };
 
@@ -56,6 +61,7 @@ export function createPluginGatewayMethodDescriptor(params: {
   handler: GatewayMethodHandler;
   scope?: OperatorScope;
   profileAccess?: GatewayMethodProfileAccess;
+  sessionAccess?: GatewayMethodSessionAccess;
 }): GatewayMethodDescriptor {
   const normalizedScope = normalizePluginGatewayMethodScope(params.name, params.scope).scope;
   return {
@@ -63,6 +69,7 @@ export function createPluginGatewayMethodDescriptor(params: {
     handler: params.handler,
     owner: { kind: "plugin", pluginId: params.pluginId },
     profileAccess: params.profileAccess ?? "required",
+    ...(params.sessionAccess ? { sessionAccess: params.sessionAccess } : {}),
     scope: normalizedScope ?? ADMIN_SCOPE,
   };
 }
@@ -75,6 +82,7 @@ export type GatewayMethodRegistryView = {
   listMethods: () => string[];
   listAdvertisedMethods: () => string[];
   getScope: (name: string) => GatewayMethodScope | undefined;
+  getSessionAccess?: (name: string) => GatewayMethodSessionAccess | undefined;
   isStartupUnavailable: (name: string) => boolean;
   isControlPlaneWrite: (name: string) => boolean;
   requiresAuthenticatedProfile: (name: string) => boolean;

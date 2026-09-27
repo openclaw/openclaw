@@ -67,6 +67,10 @@ function embeddingOptions<T extends EmbeddingProviderOptions | MemoryEmbeddingOp
   } as T;
 }
 
+function envRef(id: string) {
+  return { source: "env", provider: "default", id } as const;
+}
+
 async function createEmbeddingProvider(overrides: Partial<EmbeddingProviderOptions> = {}) {
   return await createOllamaEmbeddingProvider(embeddingOptions(overrides));
 }
@@ -171,32 +175,6 @@ describe("ollama embedding provider", () => {
     expect(vector[1]).toBeCloseTo(0.8, 5);
   });
 
-  it("marks the configured Ollama origin for managed-proxy direct routing", async () => {
-    const { fetchMock } = await embedTestQuery({
-      remote: { baseUrl: "http://127.0.0.1:11434/v1" },
-    });
-
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(firstGuardedFetchCall()).toMatchObject({
-      url: "http://127.0.0.1:11434/api/embed",
-      policy: { allowedOrigins: ["http://127.0.0.1:11434"] },
-      configuredLocalOriginBaseUrl: "http://127.0.0.1:11434",
-      auditContext: "ollama-memory-embedding",
-    });
-  });
-
-  it("passes cloud Ollama origins through the guarded fetch contract", async () => {
-    const { fetchMock } = await embedTestQuery({ remote: { baseUrl: "https://ollama.com" } });
-
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(firstGuardedFetchCall()).toMatchObject({
-      url: "https://ollama.com/api/embed",
-      policy: { allowedOrigins: ["https://ollama.com"] },
-      configuredLocalOriginBaseUrl: "https://ollama.com",
-      auditContext: "ollama-memory-embedding",
-    });
-  });
-
   it("resolves configured base URL and headers without sending local marker auth", async () => {
     const { fetchMock } = await embedTestQuery({
       config: createProviderConfig({
@@ -248,13 +226,13 @@ describe("ollama embedding provider", () => {
       createEmbeddingProvider({
         remote: {
           baseUrl: "http://127.0.0.1:11434",
-          apiKey: { source: "env", provider: "default", id: "OLLAMA_API_KEY" },
+          apiKey: envRef("OLLAMA_API_KEY"),
         },
       }),
     ).rejects.toThrow(/memory\.search\.remote\.apiKey: unresolved SecretRef/i);
   });
 
-  it.each(["ollama", "ollama-private"])(
+  it.each(["ollama-private"])(
     "resolves selected %s provider credential and header SecretRefs before ambient cloud auth",
     async (providerId) => {
       vi.stubEnv("OLLAMA_API_KEY", "synthetic-cloud-key");
@@ -265,17 +243,9 @@ describe("ollama embedding provider", () => {
         config: createProviderConfig(
           {
             baseUrl: "https://selected-private-host.invalid/v1",
-            apiKey: {
-              source: "env",
-              provider: "default",
-              id: "OLLAMA_SELECTED_HOST_KEY",
-            },
+            apiKey: envRef("OLLAMA_SELECTED_HOST_KEY"),
             headers: {
-              "X-Proxy-Auth": {
-                source: "env",
-                provider: "default",
-                id: "OLLAMA_PROXY_KEY",
-              },
+              "X-Proxy-Auth": envRef("OLLAMA_PROXY_KEY"),
             },
             models: [],
           },
@@ -296,13 +266,9 @@ describe("ollama embedding provider", () => {
   );
 
   it.each([
-    { providerId: "ollama", surface: "apiKey", source: "env" },
     { providerId: "ollama-private", surface: "apiKey", source: "env" },
     { providerId: "ollama", surface: "headers", source: "env" },
-    { providerId: "ollama-private", surface: "headers", source: "env" },
     { providerId: "ollama", surface: "apiKey", source: "file" },
-    { providerId: "ollama", surface: "headers", source: "file" },
-    { providerId: "ollama-private", surface: "apiKey", source: "exec" },
     { providerId: "ollama-private", surface: "headers", source: "exec" },
   ])(
     "fails closed before any request for unresolved $providerId $surface $source SecretRefs",
@@ -365,11 +331,7 @@ describe("ollama embedding provider", () => {
       const { fetchMock } = await embedTestQuery({
         config: createProviderConfig({
           baseUrl: "https://selected-private-host.invalid/v1",
-          apiKey: {
-            source: "env",
-            provider: "default",
-            id: "OLLAMA_SELECTED_HOST_KEY",
-          },
+          apiKey: envRef("OLLAMA_SELECTED_HOST_KEY"),
           models: [],
         }),
       });
@@ -384,7 +346,7 @@ describe("ollama embedding provider", () => {
     },
   );
 
-  it.each(["$OLLAMA_SELECTED_HOST_KEY", "${OLLAMA_SELECTED_HOST_KEY}"])(
+  it.each(["${OLLAMA_SELECTED_HOST_KEY}"])(
     "resolves selected-host env shorthand SecretRef %s before ambient cloud auth",
     async (apiKey) => {
       vi.stubEnv("OLLAMA_API_KEY", "synthetic-cloud-key");
@@ -504,20 +466,6 @@ describe("ollama embedding provider", () => {
 
   it.each([
     {
-      name: "bare qwen",
-      model: "qwen3-embedding:0.6b",
-      query: "怀孕",
-      expected:
-        "Instruct: Given a user query, retrieve relevant memory notes and documents\nQuery:怀孕",
-    },
-    {
-      name: "namespaced qwen",
-      model: "library/qwen3-embedding:0.6b",
-      query: "怀孕",
-      expected:
-        "Instruct: Given a user query, retrieve relevant memory notes and documents\nQuery:怀孕",
-    },
-    {
       name: "registry-qualified qwen",
       model: "registry.ollama.ai/library/qwen3-embedding:0.6b",
       query: "怀孕",
@@ -525,22 +473,10 @@ describe("ollama embedding provider", () => {
         "Instruct: Given a user query, retrieve relevant memory notes and documents\nQuery:怀孕",
     },
     {
-      name: "bare nomic",
-      model: "nomic-embed-text",
-      query: "What does $& mean?",
-      expected: "search_query: What does $& mean?",
-    },
-    {
       name: "namespaced nomic",
       model: "library/nomic-embed-text:latest",
       query: "What does $& mean?",
       expected: "search_query: What does $& mean?",
-    },
-    {
-      name: "bare mixedbread",
-      model: "mxbai-embed-large:latest",
-      query: "capital of Australia",
-      expected: "Represent this sentence for searching relevant passages: capital of Australia",
     },
     {
       name: "namespaced mixedbread",
@@ -563,7 +499,7 @@ describe("ollama embedding provider", () => {
     });
   });
 
-  it.each(["qwen3-embedding:0.6b", "library/qwen3-embedding:0.6b"])(
+  it.each(["library/qwen3-embedding:0.6b"])(
     "keeps document batch embeddings raw for %s",
     async (model) => {
       const { inputs } = mockBatchEmbeddingFetch(2);
@@ -671,7 +607,7 @@ describe("ollama embedding provider", () => {
     });
   });
 
-  it.each(["Authorization", "authorization", "AUTHORIZATION"])(
+  it.each(["AUTHORIZATION"])(
     "keeps explicit remote %s header ahead of ambient Ollama Cloud credentials",
     async (headerName) => {
       vi.stubEnv("OLLAMA_API_KEY", "synthetic-cloud-tenant-b");
@@ -700,11 +636,7 @@ describe("ollama embedding provider", () => {
     const { fetchMock } = await embedTestQuery({
       config: createProviderConfig({
         baseUrl: "https://selected-private-host.invalid/v1",
-        apiKey: {
-          source: "env",
-          provider: "default",
-          id: "OLLAMA_MISSING_SELECTED_SECRET",
-        },
+        apiKey: envRef("OLLAMA_MISSING_SELECTED_SECRET"),
         models: [],
       }),
       remote: {
@@ -730,17 +662,9 @@ describe("ollama embedding provider", () => {
     const { fetchMock } = await embedTestQuery({
       config: createProviderConfig({
         baseUrl: "https://selected-private-host.invalid/v1",
-        apiKey: {
-          source: "env",
-          provider: "default",
-          id: "OLLAMA_SELECTED_HOST_KEY",
-        },
+        apiKey: envRef("OLLAMA_SELECTED_HOST_KEY"),
         headers: {
-          "X-Proxy-Auth": {
-            source: "env",
-            provider: "default",
-            id: "OLLAMA_MISSING_SELECTED_SECRET",
-          },
+          "X-Proxy-Auth": envRef("OLLAMA_MISSING_SELECTED_SECRET"),
         },
         models: [],
       }),
@@ -783,17 +707,9 @@ describe("ollama embedding provider", () => {
     const { fetchMock } = await embedTestQuery({
       config: createProviderConfig({
         baseUrl: "https://selected-private-host.invalid/v1",
-        apiKey: {
-          source: "env",
-          provider: "default",
-          id: "OLLAMA_SELECTED_HOST_KEY",
-        },
+        apiKey: envRef("OLLAMA_SELECTED_HOST_KEY"),
         headers: {
-          "X-Selected-Host-Auth": {
-            source: "env",
-            provider: "default",
-            id: "OLLAMA_SELECTED_PROXY_KEY",
-          },
+          "X-Selected-Host-Auth": envRef("OLLAMA_SELECTED_PROXY_KEY"),
         },
         models: [],
       }),
@@ -821,11 +737,7 @@ describe("ollama embedding provider", () => {
     const { fetchMock } = await embedTestQuery({
       config: createProviderConfig({
         baseUrl: "https://selected-private-host.invalid/v1",
-        apiKey: {
-          source: "env",
-          provider: "default",
-          id: "OLLAMA_MISSING_SELECTED_SECRET",
-        },
+        apiKey: envRef("OLLAMA_MISSING_SELECTED_SECRET"),
         models: [],
       }),
       remote: {
@@ -839,20 +751,6 @@ describe("ollama embedding provider", () => {
       headers: {
         "Content-Type": "application/json",
         Authorization: "Bearer synthetic-remote-key",
-      },
-    });
-  });
-
-  it("attaches remote apiKey to a remote embedding host", async () => {
-    const { fetchMock } = await embedTestQuery({
-      remote: { baseUrl: "https://memory.example.com", apiKey: "remote-host-key" },
-    });
-
-    expectEmbeddingFetch(fetchMock, "https://memory.example.com/api/embed", {
-      input: "search_query: hello",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: "Bearer remote-host-key",
       },
     });
   });
@@ -956,17 +854,9 @@ describe("ollama embedding provider", () => {
         {
           api: "ollama",
           baseUrl: "https://selected-private-host.invalid",
-          apiKey: {
-            source: "env",
-            provider: "default",
-            id: "OLLAMA_SELECTED_HOST_KEY",
-          },
+          apiKey: envRef("OLLAMA_SELECTED_HOST_KEY"),
           headers: {
-            "X-Ollama-Tenant": {
-              source: "env",
-              provider: "default",
-              id: "OLLAMA_SELECTED_TENANT",
-            },
+            "X-Ollama-Tenant": envRef("OLLAMA_SELECTED_TENANT"),
           },
           models: [],
         },

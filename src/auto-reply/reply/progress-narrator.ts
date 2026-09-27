@@ -415,14 +415,10 @@ export function attachProgressNarratorToReplyOptions(params: {
           },
         }
       : {}),
-    ...(opts.onCommandOutput
-      ? {
-          onCommandOutput: async (payload) => {
-            narrator.noteCommandOutput(payload);
-            return await opts.onCommandOutput?.(payload);
-          },
-        }
-      : {}),
+    onCommandOutput: async (payload) => {
+      narrator.noteCommandOutput(payload);
+      return await opts.onCommandOutput?.(payload);
+    },
     ...(opts.onItemEvent
       ? {
           onItemEvent: async (payload) => {

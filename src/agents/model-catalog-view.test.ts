@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ModelDefinitionConfig } from "../config/types.models.js";
+import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import * as providerPolicySurface from "../plugins/provider-policy-surface.js";
@@ -17,10 +17,7 @@ import {
   selectModelCatalogRuntimeEntry,
 } from "./model-catalog-view.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
-import {
-  setPreparedModelRuntimeAuthLabels,
-  setPreparedModelRuntimeAuthStore,
-} from "./prepared-model-runtime-auth.js";
+import { bindPreparedModelRuntimeAuth } from "./prepared-model-runtime-auth.js";
 
 const mocks = vi.hoisted(() => ({ loadSnapshot: vi.fn(), loadOwner: vi.fn(), metadata: vi.fn() }));
 vi.mock("./prepared-model-catalog.js", () => ({
@@ -95,6 +92,62 @@ describe("prepared model catalog view", () => {
     }
   });
 
+  it.each(["absent", "empty"])(
+    "prepares %s provider overrides once for distinct view rows",
+    (initial) => {
+      const providers: Record<string, ModelProviderConfig> =
+        initial === "empty" ? { fixture: { baseUrl: "", models: [] } } : {};
+      const enumerate = vi.fn((target: Record<string, ModelProviderConfig>) =>
+        Reflect.ownKeys(target),
+      );
+      const cfg: OpenClawConfig = {
+        models: { providers: new Proxy(providers, { ownKeys: enumerate }) },
+      };
+      const catalog = Array.from({ length: 1_000 }, (_, index) => row("fixture", `model-${index}`));
+      const keyOf = (entry: Pick<ModelCatalogEntry, "provider" | "id">) =>
+        `${entry.provider}/${entry.id}`;
+      const params = { cfg, catalog, keyOf };
+      const view = createModelCatalogView(params);
+      expect(enumerate).not.toHaveBeenCalled();
+      expect(
+        catalog.map((entry) => view.readProjection(entry, { kind: "unmanaged" }, keyOf(entry))),
+      ).toEqual(catalog.map((entry) => ({ entry, runtimeEntry: entry })));
+      expect(enumerate).toHaveBeenCalledOnce();
+
+      providers.fixture = {
+        baseUrl: "",
+        models: [
+          {
+            id: "model-0",
+            name: "Configured",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            maxTokens: 4096,
+          },
+        ],
+      };
+      const freshEntry = row("fixture", "model-0");
+      expect(view.readProjection(freshEntry, { kind: "unmanaged" }, keyOf(freshEntry))).toEqual({
+        entry: freshEntry,
+        runtimeEntry: freshEntry,
+      });
+      expect(enumerate).toHaveBeenCalledOnce();
+      const nextView = createModelCatalogView(params);
+      const expected = {
+        ...freshEntry,
+        name: "Configured",
+        reasoning: false,
+        configuredReasoning: false,
+        input: ["text"],
+      };
+      expect(nextView.readProjection(freshEntry, { kind: "unmanaged" }, keyOf(freshEntry))).toEqual(
+        { entry: expected, runtimeEntry: expected },
+      );
+      expect(enumerate).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it("keeps missing runtime credentials labeled missing", async () => {
     const prepared = facts();
     const owner = { ...prepared, config: prepared.cfg, modelCatalog: prepared.snapshot };
@@ -105,11 +158,10 @@ describe("prepared model catalog view", () => {
       source: "auth profile store",
       apiKeyOnly: false,
     };
-    setPreparedModelRuntimeAuthLabels(
-      owner,
-      new Map([["openai", { all: missing, apiKey: missing }]]),
-    );
-    setPreparedModelRuntimeAuthStore(owner, { version: 1, profiles: {} });
+    bindPreparedModelRuntimeAuth(owner, {
+      labels: new Map([["openai", { all: missing, apiKey: missing }]]),
+      store: { version: 1, profiles: {} },
+    });
     mocks.loadOwner.mockResolvedValue(owner);
     const view = await loadPreparedModelCatalogView({
       kind: "status",
@@ -366,7 +418,7 @@ function nativeRegistry(readiness: () => { accountType: string; authMode: string
 }
 
 describe("prepared native catalog readiness", () => {
-  it("reads prepared native rows without discovering a harness catalog", async () => {
+  it("reads prepared native rows without discovering a harness catalog", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -378,15 +430,55 @@ describe("prepared native catalog readiness", () => {
     const registry = nativeRegistry(() => ({ accountType: "apiKey", authMode: "oauth" }));
     const loadModelCatalog = vi.fn(async () => [nativeEntry]);
     registry.agentHarnesses[0]!.harness.loadModelCatalog = loadModelCatalog;
-    const result = await loadPreparedModelCatalogView({
-      kind: "prepared",
+    const result = prepareModelCatalogView({
       ...facts(cfg),
       snapshot: snapshot([nativeEntry]),
       pluginRegistry: registry,
-      refreshNative: false,
     });
     expect(result.catalog).toEqual([nativeEntry]);
     expect(loadModelCatalog).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "matching native observation", variants: [nativeEntry], available: true },
+    { name: "cold catalog", variants: [], available: undefined },
+    {
+      name: "another model",
+      variants: [{ ...nativeEntry, id: "other-model" }],
+      available: undefined,
+    },
+    {
+      name: "another runtime",
+      variants: [{ ...nativeEntry, nativeRuntime: "other-native" }],
+      available: undefined,
+    },
+  ])("evaluates configured rows using $name", ({ variants, available }) => {
+    const logical = row("custom", "native-model");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          models: { "custom/native-model": { agentRuntime: { id: "native-test" } } },
+        },
+      },
+    };
+    const registry = nativeRegistry(() => undefined);
+    delete registry.agentHarnesses[0]!.harness.readModelCatalogReadiness;
+    registry.agentHarnesses[0]!.harness.loadModelCatalog = () => {
+      throw new Error("Projection must not discover native models");
+    };
+    const view = prepareModelCatalogView({
+      ...facts(cfg),
+      snapshot: { entries: [logical], routeVariants: variants },
+      pluginRegistry: registry,
+    });
+    const decision = view.evaluateNative(logical, {
+      ...host,
+      unavailableReason: "missing-auth",
+    });
+    expect(decision.availability).toBe(available);
+    expect(decision.runtimeAuth).toEqual({ id: "native-test", source: "native" });
+    expect(decision.unavailableReason).toBeUndefined();
+    expect(decision.availabilityAuthoritative).toBe(true);
   });
 
   it("observes revoked login and generation without retaining prior readiness", () => {

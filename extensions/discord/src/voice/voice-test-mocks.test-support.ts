@@ -24,6 +24,7 @@ const {
   textToSpeechStreamMock,
   textToSpeechMock,
   logVerboseMock,
+  loggerInfoMock,
   loggerWarnMock,
   loggerErrorMock,
   resolveConfiguredRealtimeVoiceProviderMock,
@@ -38,7 +39,8 @@ const {
   assertSecretOwnerAvailableMock,
   isSecretOwnerAvailableMock,
   canonicalizeRealtimeVoiceProviderIdMock,
-} = vi.hoisted(() => {
+} = await vi.hoisted(async () => {
+  const { Readable } = await import("node:stream");
   type EventHandler = (...args: unknown[]) => unknown;
   type MockConnection = {
     destroy: ReturnType<typeof vi.fn>;
@@ -48,6 +50,7 @@ const {
     receiver: {
       speaking: {
         users: Map<string, number>;
+        emit: (event: string, userId: string) => void;
         on: ReturnType<typeof vi.fn>;
         off: ReturnType<typeof vi.fn>;
       };
@@ -76,8 +79,11 @@ const {
   const createConnectionMockLocal = (): MockConnection => {
     const handlers = new Map<string, EventHandler>();
     const daveSetPassthroughMode = vi.fn() as Mock;
+    const speakingHandlers = new Map<string, EventHandler>();
     const connection: MockConnection = {
-      destroy: vi.fn() as Mock,
+      destroy: vi.fn(() => {
+        connection.state.status = "destroyed";
+      }) as Mock,
       subscribe: vi.fn() as Mock,
       on: vi.fn((event: string, handler: EventHandler) => {
         handlers.set(event, handler);
@@ -86,15 +92,22 @@ const {
       receiver: {
         speaking: {
           users: new Map(),
-          on: vi.fn() as Mock,
-          off: vi.fn() as Mock,
+          on: vi.fn((event: string, handler: EventHandler) => {
+            speakingHandlers.set(event, handler);
+          }),
+          off: vi.fn((event: string) => {
+            speakingHandlers.delete(event);
+          }),
+          emit: (event, userId) => {
+            if (event === "start") {
+              connection.receiver.speaking.users.set(userId, Date.now());
+            } else {
+              connection.receiver.speaking.users.delete(userId);
+            }
+            speakingHandlers.get(event)?.(userId);
+          },
         },
-        subscribe: vi.fn(() => ({
-          on: vi.fn() as Mock,
-          off: vi.fn() as Mock,
-          destroy: vi.fn() as Mock,
-          async *[Symbol.asyncIterator]() {},
-        })),
+        subscribe: vi.fn(() => Readable.from([])),
       },
       state: {
         status: "ready",
@@ -156,13 +169,41 @@ const {
       playbackDuration: 0,
       read: vi.fn(() => null),
     })) as Mock,
-    createAudioPlayerMock: vi.fn(() => ({
-      on: vi.fn() as Mock,
-      off: vi.fn() as Mock,
-      stop: vi.fn() as Mock,
-      play: vi.fn() as Mock,
-      state: { status: "idle" },
-    })),
+    createAudioPlayerMock: vi.fn(() => {
+      const listeners = new Map<string, EventHandler[]>();
+      let status = "idle";
+      const state = {
+        get status() {
+          return status;
+        },
+        set status(value: string) {
+          const old = { status };
+          status = value;
+          for (const listener of listeners.get("stateChange") ?? []) {
+            listener(old, state);
+          }
+        },
+      };
+      return {
+        emit(event: string, ...args: unknown[]) {
+          for (const listener of listeners.get(event) ?? []) {
+            listener(...args);
+          }
+        },
+        on: vi.fn((event: string, listener: EventHandler) => {
+          listeners.set(event, [...(listeners.get(event) ?? []), listener]);
+        }),
+        off: vi.fn((event: string, listener: EventHandler) => {
+          listeners.set(
+            event,
+            (listeners.get(event) ?? []).filter((current) => current !== listener),
+          );
+        }),
+        stop: vi.fn() as Mock,
+        play: vi.fn() as Mock,
+        state,
+      };
+    }),
     resolveAgentRouteMock: vi.fn(() => ({ agentId: "agent-1", sessionKey: "discord:g1:c1" })),
     agentCommandMock: vi.fn(
       async (
@@ -192,6 +233,7 @@ const {
     })),
     textToSpeechMock: vi.fn(async () => ({ success: true, audioPath: "/tmp/voice.mp3" })),
     logVerboseMock: vi.fn() as Mock,
+    loggerInfoMock: vi.fn() as Mock,
     loggerWarnMock: vi.fn() as Mock,
     loggerErrorMock: vi.fn() as Mock,
     resolveConfiguredRealtimeVoiceProviderMock: vi.fn<
@@ -263,6 +305,7 @@ export const voiceTestMocks = {
   textToSpeechStreamMock,
   textToSpeechMock,
   logVerboseMock,
+  loggerInfoMock,
   loggerWarnMock,
   loggerErrorMock,
   resolveConfiguredRealtimeVoiceProviderMock,
@@ -287,6 +330,19 @@ vi.mock("openclaw/plugin-sdk/channel-secret-owner-runtime", async () => {
     ...actual,
     assertSecretOwnerAvailable: assertSecretOwnerAvailableMock,
     isSecretOwnerAvailable: isSecretOwnerAvailableMock,
+  };
+});
+
+vi.mock("./audio-worker-thread.js", async () => {
+  const { InProcessDiscordAudioWorker } = await import("./audio-worker.test-support.js");
+  return {
+    createDiscordAudioWorkerThread: (
+      options: import("./audio-worker-protocol.js").DiscordAudioWorkerOptions,
+    ) => {
+      const worker = new InProcessDiscordAudioWorker(undefined, { workerData: options });
+      vi.spyOn(worker.media["player"], "stop");
+      return worker;
+    },
   };
 });
 
@@ -321,16 +377,9 @@ vi.mock("openclaw/plugin-sdk/routing", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/agent-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/agent-runtime")>(
-    "openclaw/plugin-sdk/agent-runtime",
-  );
-  return {
-    ...actual,
-    agentCommandFromIngress: agentCommandMock,
-    resolveAgentDir: vi.fn(() => "/tmp/openclaw-agent"),
-  };
-});
+vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
+  resolveAgentDir: vi.fn(() => "/tmp/openclaw-agent"),
+}));
 
 vi.mock("openclaw/plugin-sdk/realtime-bootstrap-context", async () => {
   const actual = await vi.importActual<
@@ -350,6 +399,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
     ...actual,
     createSubsystemLogger: (subsystem: string) => ({
       ...actual.createSubsystemLogger(subsystem),
+      info: loggerInfoMock,
       warn: loggerWarnMock,
       error: loggerErrorMock,
     }),

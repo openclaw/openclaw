@@ -179,6 +179,10 @@ export class CodexCatalogPersistence {
     private readonly report: (error: unknown) => void,
   ) {}
 
+  hasActiveWork(): boolean {
+    return this.writing !== undefined || this.pending.size > 0;
+  }
+
   async readSnapshot() {
     await this.drain();
     return await readCodexCatalogSnapshot(this.state);

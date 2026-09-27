@@ -5,6 +5,7 @@
  */
 
 type StableStringNormalizer = (value: string) => string;
+type StableStringWriter = (chunk: string) => void;
 
 const preserveString = (value: string) => value;
 
@@ -16,10 +17,20 @@ export function stableStringify(
   return stringifyStableValue(value, new WeakSet(), normalizeString);
 }
 
+/** Writes the same deterministic text without retaining completed container strings. */
+export function writeStableStringify(
+  value: unknown,
+  write: StableStringWriter,
+  normalizeString: StableStringNormalizer = preserveString,
+): void {
+  write(stringifyStableValue(value, new WeakSet(), normalizeString, write));
+}
+
 function stringifyStableValue(
   value: unknown,
   stack: WeakSet<object>,
   normalizeString: StableStringNormalizer,
+  write?: StableStringWriter,
 ): string {
   if (value === null || value === undefined) {
     return String(value);
@@ -42,7 +53,7 @@ function stringifyStableValue(
 
   stack.add(value);
   try {
-    return stringifyObjectValue(value, stack, normalizeString);
+    return stringifyObjectValue(value, stack, normalizeString, write);
   } finally {
     stack.delete(value);
   }
@@ -52,6 +63,7 @@ function stringifyObjectValue(
   value: object,
   stack: WeakSet<object>,
   normalizeString: StableStringNormalizer,
+  write?: StableStringWriter,
 ): string {
   if (value instanceof Error) {
     return stringifyStableValue(
@@ -62,6 +74,7 @@ function stringifyObjectValue(
       },
       stack,
       normalizeString,
+      write,
     );
   }
   if (value instanceof Uint8Array) {
@@ -72,9 +85,21 @@ function stringifyObjectValue(
       },
       stack,
       normalizeString,
+      write,
     );
   }
   if (Array.isArray(value)) {
+    if (write) {
+      write("[");
+      let separator = "";
+      for (const entry of value) {
+        write(separator);
+        write(stringifyStableValue(entry, stack, normalizeString, write));
+        separator = ",";
+      }
+      write("]");
+      return "";
+    }
     const serializedEntries: string[] = [];
     for (const entry of value) {
       serializedEntries.push(stringifyStableValue(entry, stack, normalizeString));
@@ -85,6 +110,17 @@ function stringifyObjectValue(
   if (normalizeString === preserveString) {
     // oxlint-disable-next-line unicorn/no-array-sort -- Object.keys creates a private array.
     const fields = Object.keys(record).sort();
+    if (write) {
+      write("{");
+      let separator = "";
+      for (const key of fields) {
+        write(`${separator}${JSON.stringify(key)}:`);
+        write(stringifyStableValue(record[key], stack, normalizeString, write));
+        separator = ",";
+      }
+      write("}");
+      return "";
+    }
     let fieldIndex = 0;
     for (const key of fields) {
       fields[fieldIndex++] =
@@ -101,6 +137,17 @@ function stringifyObjectValue(
       return normalizedOrder || compareStableStrings(left.key, right.key);
     });
   const serializedFields: string[] = [];
+  if (write) {
+    write("{");
+    let separator = "";
+    for (const { key, normalizedKey } of entries) {
+      write(`${separator}${JSON.stringify(normalizedKey)}:`);
+      write(stringifyStableValue(record[key], stack, normalizeString, write));
+      separator = ",";
+    }
+    write("}");
+    return "";
+  }
   for (const { key, normalizedKey } of entries) {
     serializedFields.push(
       `${JSON.stringify(normalizedKey)}:${stringifyStableValue(record[key], stack, normalizeString)}`,

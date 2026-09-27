@@ -8,7 +8,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/exec-approvals.js";
 import type { DevicePairingList } from "../../../../src/gateway/device-pairing-list.types.js";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
-import { cloneConfigObject, removePathValue, setPathValue } from "../config-form-utils.ts";
+import { removePathValue, setPathValue } from "../config-form-utils.ts";
 import { formatUiError } from "../format-error.ts";
 import { clearDeviceAuthToken, loadOrCreateDeviceIdentity, storeDeviceAuthToken } from "./index.ts";
 
@@ -528,26 +528,19 @@ export async function revokeDeviceToken(
   }
 }
 
-function resolveExecApprovalsRpc(target?: ExecApprovalsTarget | null): {
-  method: string;
-  params: Record<string, unknown>;
-} | null {
-  if (!target || target.kind === "gateway") {
-    return { method: "exec.approvals.get", params: {} };
-  }
-  const nodeId = target.nodeId.trim();
-  return nodeId ? { method: "exec.approvals.node.get", params: { nodeId } } : null;
-}
-
-function resolveExecApprovalsSaveRpc(
+function resolveExecApprovalsRpc(
   target: ExecApprovalsTarget | null | undefined,
-  params: { file: ExecApprovalsFile; baseHash: string },
+  write?: { file: ExecApprovalsFile; baseHash: string },
 ): { method: string; params: Record<string, unknown> } | null {
+  const operation = write ? "set" : "get";
+  const params = write ?? {};
   if (!target || target.kind === "gateway") {
-    return { method: "exec.approvals.set", params };
+    return { method: `exec.approvals.${operation}`, params };
   }
   const nodeId = target.nodeId.trim();
-  return nodeId ? { method: "exec.approvals.node.set", params: { ...params, nodeId } } : null;
+  return nodeId
+    ? { method: `exec.approvals.node.${operation}`, params: { ...params, nodeId } }
+    : null;
 }
 
 export async function loadExecApprovals(
@@ -591,7 +584,7 @@ function applyExecApprovalsSnapshot(state: ExecApprovalsState, snapshot: ExecApp
     return;
   }
   if (!state.execApprovalsDirty) {
-    state.execApprovalsForm = cloneConfigObject(snapshot.file);
+    state.execApprovalsForm = structuredClone(snapshot.file);
   }
 }
 
@@ -625,7 +618,7 @@ export async function saveExecApprovals(
       return;
     }
     const file = state.execApprovalsForm ?? state.execApprovalsSnapshot?.file ?? {};
-    const rpc = resolveExecApprovalsSaveRpc(target, { file, baseHash });
+    const rpc = resolveExecApprovalsRpc(target, { file, baseHash });
     if (!rpc) {
       state.lastError = "Select a node before saving exec approvals.";
       return;
@@ -647,35 +640,31 @@ export async function saveExecApprovals(
   }
 }
 
-export function updateExecApprovalsFormValue(
+function mutateExecApprovalsForm(
   state: ExecApprovalsState,
-  path: Array<string | number>,
-  value: unknown,
+  mutate: (form: ExecApprovalsFile) => void,
 ) {
   if (isNativeExecApprovalsSnapshot(state.execApprovalsSnapshot)) {
     state.lastError = "Host-native node approvals are read-only here.";
     return;
   }
-  const base = cloneConfigObject(
-    state.execApprovalsForm ?? state.execApprovalsSnapshot?.file ?? {},
-  );
-  setPathValue(base, path, value);
+  const base = structuredClone(state.execApprovalsForm ?? state.execApprovalsSnapshot?.file ?? {});
+  mutate(base);
   state.execApprovalsForm = base;
   state.execApprovalsDirty = true;
+}
+
+export function updateExecApprovalsFormValue(
+  state: ExecApprovalsState,
+  path: Array<string | number>,
+  value: unknown,
+) {
+  mutateExecApprovalsForm(state, (form) => setPathValue(form, path, value));
 }
 
 export function removeExecApprovalsFormValue(
   state: ExecApprovalsState,
   path: Array<string | number>,
 ) {
-  if (isNativeExecApprovalsSnapshot(state.execApprovalsSnapshot)) {
-    state.lastError = "Host-native node approvals are read-only here.";
-    return;
-  }
-  const base = cloneConfigObject(
-    state.execApprovalsForm ?? state.execApprovalsSnapshot?.file ?? {},
-  );
-  removePathValue(base, path);
-  state.execApprovalsForm = base;
-  state.execApprovalsDirty = true;
+  mutateExecApprovalsForm(state, (form) => removePathValue(form, path));
 }

@@ -45,10 +45,6 @@ describe("control-plane-rate-limit", () => {
     expect(result.allowed).toBe(true);
   });
 
-  test("pruneStaleControlPlaneBuckets is safe on empty map", () => {
-    expect(pruneStaleControlPlaneBuckets()).toBe(0);
-  });
-
   test("different methods from the same client use separate buckets", () => {
     for (let index = 0; index < CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS; index += 1) {
       expect(

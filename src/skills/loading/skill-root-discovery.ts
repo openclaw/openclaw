@@ -9,6 +9,9 @@ import type { LocalSkillLoadDiagnostic } from "./local-loader.js";
 import type { PluginSkillRoot } from "./plugin-skill-root.js";
 import { compactSkillPath } from "./skill-paths.js";
 import { findContainingAllowedSkillSymlinkTarget, tryRealpath } from "./symlink-targets.js";
+import type { ResolvedSkillDiscoveryLimits } from "./workspace-skill-sources.types.js";
+
+export type { ResolvedSkillDiscoveryLimits } from "./workspace-skill-sources.types.js";
 
 const skillsLogger = createSubsystemLogger("skills");
 
@@ -23,12 +26,6 @@ const MAX_GROUPED_SKILL_SCAN_DEPTH = 6;
 const MAX_CONFIGURED_ROOT_GROUPED_SKILL_SCAN_DEPTH = 2;
 
 type SkillDiscoveryReporter = (diagnostic: LocalSkillLoadDiagnostic) => void;
-
-export type ResolvedSkillDiscoveryLimits = {
-  maxCandidatesPerRoot: number;
-  maxSkillsLoadedPerSource: number;
-  maxSkillFileBytes: number;
-};
 
 export type CandidateSkillDir = {
   skillDir: string;
@@ -240,24 +237,18 @@ function buildEscapedSkillPathReason(params: { source: string; candidatePath: st
   consoleHint: string;
 } {
   const candidateIsSymlink = isSymlinkPath(params.candidatePath);
-  if (params.source === "openclaw-bundled" && candidateIsSymlink) {
-    return {
-      reason: "bundled-symlink-escape",
-      consoleHint:
-        "reason=bundled-symlink-escape hint=likely-stray-local-symlink-or-checkout-mutation",
-    };
-  }
-  if (candidateIsSymlink) {
-    return { reason: "symlink-escape", consoleHint: "reason=symlink-escape" };
-  }
-  if (params.source === "openclaw-bundled") {
-    return {
-      reason: "bundled-root-escape",
-      consoleHint:
-        "reason=bundled-root-escape hint=likely-stray-local-symlink-or-checkout-mutation",
-    };
-  }
-  return { reason: "path-escape", consoleHint: "reason=path-escape" };
+  const bundled = params.source === "openclaw-bundled";
+  const reason = bundled
+    ? candidateIsSymlink
+      ? "bundled-symlink-escape"
+      : "bundled-root-escape"
+    : candidateIsSymlink
+      ? "symlink-escape"
+      : "path-escape";
+  return {
+    reason,
+    consoleHint: `reason=${reason}${bundled ? " hint=likely-stray-local-symlink-or-checkout-mutation" : ""}`,
+  };
 }
 
 function warnEscapedSkillPath(params: {
@@ -401,14 +392,10 @@ function resolveSkillRootCandidatePath(params: {
     return tryRealpath(params.candidatePath);
   }
   return resolveContainedSkillPath({
-    source: params.source,
-    rootDir: params.rootDir,
-    rootRealPath: params.rootRealPath,
-    candidatePath: params.candidatePath,
+    ...params,
     allowedSymlinkTargetRealPaths: shouldUseConfiguredSymlinkTargets(params.source)
       ? params.allowedSymlinkTargetRealPaths
       : [],
-    onDiagnostic: params.onDiagnostic,
   });
 }
 

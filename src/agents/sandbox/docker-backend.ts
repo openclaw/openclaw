@@ -4,6 +4,7 @@
  * Creates/reuses Docker containers and exposes backend-neutral exec and shell-command handles.
  */
 import { createContainerEnvFile } from "../../infra/container-env-file.js";
+import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import type { SandboxBackendCommandParams } from "./backend-handle.types.js";
 import type {
   CreateSandboxBackendParams,
@@ -11,6 +12,11 @@ import type {
   SandboxBackendManager,
 } from "./backend.types.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
+import { containerHasTerminated } from "./container-inspect.js";
+import {
+  captureSandboxContainerTermination,
+  removeSandboxContainerRuntime,
+} from "./container-lifecycle.js";
 import {
   containerState,
   bindPodmanSandboxEngine,
@@ -25,6 +31,7 @@ import {
   validateSandboxContainerEngineTarget,
 } from "./docker.js";
 import { resolveSandboxContainerOnlyMounts } from "./mount-plan.js";
+import { createSandboxProcessCleanup } from "./process-cleanup.js";
 import type { SandboxRegistryEntry } from "./registry.js";
 
 type ContainerExecFinalizeToken = () => Promise<void>;
@@ -80,7 +87,13 @@ function resolveConfiguredDockerRuntimeImage(params: {
 async function createContainerSandboxBackend(
   engine: SandboxContainerEngine,
   params: CreateSandboxBackendParams,
+  operatorAuthority?: AdmittedRunOperatorAuthority,
 ): Promise<SandboxBackendHandle> {
+  const assertCurrent = () => {
+    operatorAuthority?.assertCurrent();
+    params.assertRuntimeCurrent?.();
+  };
+  assertCurrent();
   if (engine.id === "podman" && params.cfg.browser.enabled) {
     throw new Error(
       "Podman sandboxing does not support browser sandboxes. Install Docker and select the docker backend, or disable sandbox.browser.enabled.",
@@ -89,11 +102,14 @@ async function createContainerSandboxBackend(
   const podmanTarget =
     engine.id === "podman" ? (await resolvePodmanSandboxRuntimeInfo()).target : undefined;
   const boundEngine = podmanTarget ? bindPodmanSandboxEngine(podmanTarget) : engine;
-  const containerName = await ensureSandboxContainer({
+  const { containerName, containerId } = await ensureSandboxContainer({
     engine: boundEngine,
     ...(podmanTarget ? { podmanTarget } : {}),
     scopeKey: params.scopeKey,
     workspaceDir: params.workspaceDir,
+    workspaceSource: params.workspaceSource,
+    assertCurrent,
+    operatorAuthority,
     agentWorkspaceDir: params.agentWorkspaceDir,
     skillsWorkspaceDir: params.skillsWorkspaceDir,
     readOnlyResourceMounts: params.readOnlyResourceMounts,
@@ -102,20 +118,26 @@ async function createContainerSandboxBackend(
       ? { requireCurrentConfig: params.requireCurrentConfig }
       : {}),
   });
-  // Image volumes and engine-created tmpfs are runtime facts. Snapshot them
-  // once at preparation so file tools never read an obscured host subtree.
+  assertCurrent();
+  // Allocation pins the generation under its lifecycle lock; never rediscover it
+  // by reusable name after another admission or recreation can acquire the lock.
   const containerOnlyMounts = await resolveSandboxContainerOnlyMounts({
     engine: boundEngine,
-    containerName,
+    containerName: containerId,
+    assertCurrent,
   });
+  assertCurrent();
   const { createSandboxFsBridge } = await import("./fs-bridge.js");
+  assertCurrent();
   const handle = createContainerSandboxBackendHandle({
     engine: boundEngine,
     containerName,
+    containerId,
     workdir: params.cfg.docker.workdir,
     env: params.cfg.docker.env,
     image: params.cfg.docker.image,
     podmanTarget,
+    assertCurrent,
   });
   handle.createFsBridge = ({ sandbox }) => createSandboxFsBridge({ sandbox, containerOnlyMounts });
   return handle;
@@ -123,23 +145,27 @@ async function createContainerSandboxBackend(
 
 export async function createDockerSandboxBackend(
   params: CreateSandboxBackendParams,
+  operatorAuthority?: AdmittedRunOperatorAuthority,
 ): Promise<SandboxBackendHandle> {
-  return await createContainerSandboxBackend(DOCKER_SANDBOX_ENGINE, params);
+  return await createContainerSandboxBackend(DOCKER_SANDBOX_ENGINE, params, operatorAuthority);
 }
 
 export async function createPodmanSandboxBackend(
   params: CreateSandboxBackendParams,
+  operatorAuthority?: AdmittedRunOperatorAuthority,
 ): Promise<SandboxBackendHandle> {
-  return await createContainerSandboxBackend(PODMAN_SANDBOX_ENGINE, params);
+  return await createContainerSandboxBackend(PODMAN_SANDBOX_ENGINE, params, operatorAuthority);
 }
 
 function createContainerSandboxBackendHandle(params: {
   engine: SandboxContainerEngine;
   containerName: string;
+  containerId: string;
   workdir: string;
   env?: Record<string, string>;
   image: string;
   podmanTarget?: SandboxContainerEngineTarget;
+  assertCurrent?: () => void;
 }): SandboxBackendHandle {
   return {
     id: params.engine.id,
@@ -155,13 +181,15 @@ function createContainerSandboxBackendHandle(params: {
     },
     async buildExecSpec({ command, workdir, env, usePty }) {
       await validateSandboxContainerEngineTarget(params.engine, params.podmanTarget);
+      params.assertCurrent?.();
       const envFile = await createContainerEnvFile(resolveContainerExecEnv(env));
       try {
+        params.assertCurrent?.();
         const argv = [
           params.engine.command,
           ...(params.engine.globalArgs ?? []),
           ...buildContainerExecArgs({
-            containerName: params.containerName,
+            containerName: params.containerId,
             command,
             workdir: workdir ?? params.workdir,
             env,
@@ -189,12 +217,60 @@ function createContainerSandboxBackendHandle(params: {
       }
       await token();
     },
+    prepareProcessCleanup(env) {
+      params.assertCurrent?.();
+      const wasTerminated = captureSandboxContainerTermination(
+        params.engine,
+        params.containerName,
+        params.containerId,
+      );
+      const run = (command: SandboxBackendCommandParams, assertCurrent?: () => void) =>
+        runContainerSandboxShellCommand({
+          engine: params.engine,
+          containerName: params.containerId,
+          podmanTarget: params.podmanTarget,
+          ...command,
+          assertCurrent,
+        });
+      return createSandboxProcessCleanup(
+        (command) => run(command, params.assertCurrent),
+        env,
+        async (command) => {
+          const settled = { code: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
+          try {
+            if (wasTerminated()) {
+              return settled;
+            }
+            const result = await run(command);
+            if (result.code === 0) {
+              return result;
+            }
+            // A fresh authorized request may already have restarted the same ID.
+            // Preserve the old lifetime's confirmed termination across either await.
+            if (
+              wasTerminated() ||
+              (await containerHasTerminated(params.engine, params.containerId, command.signal)) ||
+              wasTerminated()
+            ) {
+              return settled;
+            }
+            return result;
+          } catch (error) {
+            if (wasTerminated()) {
+              return settled;
+            }
+            throw error;
+          }
+        },
+      );
+    },
     runShellCommand(command) {
       return runContainerSandboxShellCommand({
         engine: params.engine,
-        containerName: params.containerName,
+        containerName: params.containerId,
         podmanTarget: params.podmanTarget,
         ...command,
+        assertCurrent: params.assertCurrent,
       });
     },
   };
@@ -205,6 +281,7 @@ async function runContainerSandboxShellCommand(
     engine: SandboxContainerEngine;
     containerName: string;
     podmanTarget?: SandboxContainerEngineTarget;
+    assertCurrent?: () => void;
   } & SandboxBackendCommandParams,
 ) {
   await validateSandboxContainerEngineTarget(params.engine, params.podmanTarget);
@@ -220,6 +297,8 @@ async function runContainerSandboxShellCommand(
   if (params.args?.length) {
     dockerArgs.push(...params.args);
   }
+  // The engine-target probe above can outlive the admitted workspace owner.
+  params.assertCurrent?.();
   return execContainerRaw(params.engine, dockerArgs, {
     input: params.stdin,
     allowFailure: params.allowFailure,
@@ -320,18 +399,7 @@ function createContainerSandboxBackendManager(
       const podmanTarget = resolvePodmanTarget(entry);
       await validateSandboxContainerEngineTarget(engine, podmanTarget);
       const runtimeEngine = podmanTarget ? bindPodmanSandboxEngine(podmanTarget) : engine;
-      const result = await execContainer(runtimeEngine, ["rm", "-f", entry.containerName], {
-        allowFailure: true,
-      });
-      if (result.code !== 0) {
-        const detail = result.stderr.trim() || result.stdout.trim() || `exit ${result.code}`;
-        if (/No such (container|object)|does not exist/iu.test(detail)) {
-          return;
-        }
-        throw new Error(
-          `Failed to remove ${engine.displayName} sandbox runtime ${entry.containerName}: ${detail}`,
-        );
-      }
+      await removeSandboxContainerRuntime(runtimeEngine, entry.containerName);
     },
   };
 }

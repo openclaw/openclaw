@@ -9,7 +9,7 @@ import {
   createSqliteLifecycleAggregateError,
   runWithSqliteCoordinator,
 } from "../infra/sqlite-coordinator.js";
-import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
+import { isSqliteLockError, withSqliteNativeOpen } from "../infra/sqlite-error-diagnostics.js";
 import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
 import {
   prepareSqliteReadOnlyLocation,
@@ -127,9 +127,13 @@ export function inspectOpenClawStateOwnershipFromDatabase(
     if (!configMachineStateTableReady && !tableExists(database, "config_machine_state")) {
       return null;
     }
-    const row = database
-      .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ? LIMIT 1")
-      .get(STATE_SUPERVISION_KEY) as { value_json?: unknown } | undefined;
+    // Raw admission must not mistake a damaged ownership index for an unclaimed store.
+    const ownershipSql = configMachineStateTableReady
+      ? "SELECT value_json FROM config_machine_state WHERE state_key = ? LIMIT 1"
+      : "SELECT value_json FROM config_machine_state NOT INDEXED WHERE state_key = ? LIMIT 1";
+    const row = database.prepare(ownershipSql).get(STATE_SUPERVISION_KEY) as
+      | { value_json?: unknown }
+      | undefined;
     if (!row) {
       return null;
     }
@@ -147,7 +151,7 @@ function inspectOwnershipThroughConnection(
   databasePath: string,
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
 ): OpenClawExternalStateOwnership | null {
-  const database = openNodeSqliteDatabase(location, { readOnly: true });
+  const database = withSqliteNativeOpen(() => openNodeSqliteDatabase(location, { readOnly: true }));
   let closeAdmission: (() => void) | undefined;
   try {
     closeAdmission = openStateSchemaReadAdmission?.(database);
@@ -186,7 +190,8 @@ function inspectOwnershipWhileCoordinatorHeld(
   }
   // Write admission owns locking and recovery while the coordinator is held.
   // Inspect the live committed view without cloning a potentially busy family.
-  const database = openNodeSqliteDatabase(resolveExistingSqliteFileUri(resolvedPath));
+  const location = resolveExistingSqliteFileUri(resolvedPath);
+  const database = withSqliteNativeOpen(() => openNodeSqliteDatabase(location));
   let closeAdmission: (() => void) | undefined;
   try {
     closeAdmission = openStateSchemaReadAdmission?.(database);
@@ -201,20 +206,16 @@ function inspectOwnershipWhileCoordinatorHeld(
   }
 }
 
-function acquireOpenClawStateOwnershipCoordinator(databasePath: string, busyTimeoutMs: number) {
-  return acquireStateDatabaseCoordinator({
-    databasePath,
-    busyTimeoutMs,
-  });
-}
-
 export function runWithOpenClawStateOwnershipCoordinator<T>(
   databasePath: string,
   operationLabel: string,
   operation: () => T,
 ): T {
   return runWithSqliteCoordinator(
-    acquireOpenClawStateOwnershipCoordinator(databasePath, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS),
+    acquireStateDatabaseCoordinator({
+      databasePath,
+      busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+    }),
     operationLabel,
     operation,
   );
@@ -253,7 +254,7 @@ function acquireOpenClawStateWriteAccess(options: {
     options.busyTimeoutMs ?? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
     "busyTimeoutMs",
   );
-  const access = acquireOpenClawStateOwnershipCoordinator(resolvedPath, busyTimeoutMs);
+  const access = acquireStateDatabaseCoordinator({ databasePath: resolvedPath, busyTimeoutMs });
   try {
     quarantineOrphanedSqliteSidecars(resolvedPath);
     assertOwnershipAllowsWrite(
@@ -267,15 +268,9 @@ function acquireOpenClawStateWriteAccess(options: {
     );
     return access;
   } catch (operationError) {
-    let releaseFailed = false;
-    let releaseError: unknown;
     try {
       access.release();
-    } catch (error) {
-      releaseFailed = true;
-      releaseError = error;
-    }
-    if (releaseFailed) {
+    } catch (releaseError) {
       throw createSqliteLifecycleAggregateError(
         [operationError, releaseError],
         "state ownership inspection and coordinator release both failed",

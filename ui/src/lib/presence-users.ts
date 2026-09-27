@@ -1,3 +1,4 @@
+import { normalizeOptionalString as normalized } from "@openclaw/normalization-core/string-coerce";
 import type { SessionParticipantIdentity } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
@@ -14,13 +15,8 @@ export type PresenceViewer = NonNullable<PresenceEntry["user"]> & {
   entries?: readonly PresenceEntry[];
 };
 
-// Matches the native Mac's recent-input window for interactive presence.
-const PRESENCE_ACTIVE_INPUT_THRESHOLD_SECONDS = 120;
-
-function normalized(value: string | null | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
+export const PRESENCE_ACTIVE_WINDOW_MS = 120_000;
+export type PresenceActivity = "active" | "idle" | "unknown";
 
 function firstSorted(values: Iterable<string | null | undefined>): string | undefined {
   return [...values]
@@ -107,18 +103,40 @@ export function presenceViewerLabel(user: Pick<PresenceViewer, "id" | "name" | "
   return presenceUserLabel(user).name;
 }
 
-export function isPresenceViewerIdle(user: PresenceViewer): boolean {
-  const recencies = (user.entries ?? []).flatMap((entry) =>
-    entry.lastInputSeconds === undefined ? [] : [entry.lastInputSeconds],
+export function presenceViewerLastActivity(user: PresenceViewer): number | undefined {
+  const timestamps = (user.entries ?? []).flatMap((entry) =>
+    entry.reason !== "disconnect" &&
+    entry.lastActivityAt !== undefined &&
+    Number.isFinite(entry.lastActivityAt)
+      ? [entry.lastActivityAt]
+      : [],
   );
-  return (
-    recencies.length > 0 &&
-    recencies.every((seconds) => seconds > PRESENCE_ACTIVE_INPUT_THRESHOLD_SECONDS)
+  return timestamps.length ? Math.max(...timestamps) : undefined;
+}
+
+export function presenceViewerActivity(user: PresenceViewer, now = Date.now()): PresenceActivity {
+  const lastActivityAt = presenceViewerLastActivity(user);
+  return lastActivityAt === undefined
+    ? "unknown"
+    : now - lastActivityAt < PRESENCE_ACTIVE_WINDOW_MS
+      ? "active"
+      : "idle";
+}
+
+export function presenceActivityLabel(activity: PresenceActivity): string {
+  return t(
+    activity === "active"
+      ? "presence.onlineActive"
+      : activity === "idle"
+        ? "presence.onlineIdle"
+        : "presence.rosterTitle",
   );
 }
 
-function comparePresenceViewers(a: PresenceViewer, b: PresenceViewer): number {
-  const activityOrder = Number(isPresenceViewerIdle(a)) - Number(isPresenceViewerIdle(b));
+function comparePresenceViewers(a: PresenceViewer, b: PresenceViewer, now: number): number {
+  const order = { active: 0, idle: 1, unknown: 2 };
+  const activityOrder =
+    order[presenceViewerActivity(a, now)] - order[presenceViewerActivity(b, now)];
   if (activityOrder !== 0) {
     return activityOrder;
   }
@@ -157,8 +175,9 @@ export function projectOnlinePresenceViewers(
   authenticatedSelfUser?: AuthenticatedUser | null,
   selfInstanceId?: string,
 ): readonly PresenceViewer[] {
-  return projectPresenceViewers(value, authenticatedSelfUser, selfInstanceId).toSorted(
-    comparePresenceViewers,
+  const now = Date.now();
+  return projectPresenceViewers(value, authenticatedSelfUser, selfInstanceId).toSorted((a, b) =>
+    comparePresenceViewers(a, b, now),
   );
 }
 

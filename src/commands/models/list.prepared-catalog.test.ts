@@ -1,13 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
 } from "../../agents/auth-profiles/credential-fixtures.test-support.js";
 import * as catalog from "../../agents/prepared-model-catalog.js";
-import { setPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
+import { bindPreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
 import { markPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.full-catalog.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.types.js";
+import { runCommandWithRuntime } from "../../cli/cli-utils.js";
 import * as runtimeConfig from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as gateway from "../../gateway/call.js";
@@ -76,17 +78,17 @@ function createOwner(): PreparedModelRuntimeSnapshot {
     allowGatewaySubagentBinding: false,
     modelCatalog: markPreparedModelCatalogFull({ entries: [entry], routeVariants: [entry] }),
     configuredRuntimeModels: [],
+    findConfiguredRuntimeModel: () => undefined,
     inlineProviderModels: [],
     createStores() {
       throw new Error("Inventory must not start model execution");
     },
   };
-  setPreparedModelRuntimeAuthStore(
-    owner,
-    createAuthProfileStoreFixture({
+  bindPreparedModelRuntimeAuth(owner, {
+    store: createAuthProfileStoreFixture({
       "catalog-provider:test": createApiKeyCredential("catalog-provider", "synthetic-catalog-key"),
     }),
-  );
+  });
   return owner;
 }
 let owner: PreparedModelRuntimeSnapshot;
@@ -189,6 +191,27 @@ describe("models list published transport", () => {
     );
   });
 
+  it("prints an unknown provider rejection and exits unsuccessfully", async () => {
+    const message =
+      'Unknown model catalog provider "missing". Run openclaw models list --all to list models and their provider IDs.';
+    vi.mocked(gateway.callGateway).mockRejectedValue(
+      new GatewayClientRequestError({ code: "INVALID_REQUEST", message }),
+    );
+
+    await runCommandWithRuntime(runtime, () => list({ provider: "missing" }));
+
+    expect(gateway.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "models.list",
+        params: expect.objectContaining({ provider: "missing" }),
+      }),
+    );
+    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(message);
+    expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(catalog.withPreparedModelCatalogOwner).not.toHaveBeenCalled();
+  });
+
   it("treats an explicit Gateway port as a selected target even without a local lock", async () => {
     await withEnvAsync({ OPENCLAW_GATEWAY_PORT: "19002" }, () =>
       modelsListCommand({ json: true }, runtime),
@@ -232,26 +255,33 @@ describe("models list published transport", () => {
 
   it.each([
     { refresh: true, refreshFailed: undefined },
+    { refresh: false, refreshFailed: undefined },
     { refresh: true, refreshFailed: true },
     { refresh: false, refreshFailed: true },
-  ])("warns and retains published rows for %j", async ({ refresh, refreshFailed }) => {
-    vi.mocked(gateway.callGateway).mockResolvedValue({
-      models: [model],
-      ...(refreshFailed
-        ? { refreshFailed }
-        : { providerOutcomes: [{ provider: "catalog-provider", status: "unavailable" }] }),
-    });
-    await list({ refresh, json: true });
-    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
-      "Model discovery could not refresh all providers. Showing the available published model list.",
-    );
-    expect(runtime.writeJson).toHaveBeenCalledWith(expect.objectContaining({ count: 1 }), 2);
-    expect(gateway.callGateway).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        params: { view: "default", includeDetails: true, ...(refresh ? { refresh: true } : {}) },
-      }),
-    );
-  });
+  ])(
+    "uses published refresh status with rejected auth for %j",
+    async ({ refresh, refreshFailed }) => {
+      vi.mocked(gateway.callGateway).mockResolvedValue({
+        models: [model],
+        refreshFailed,
+        providerOutcomes: [{ provider: "signed-out", status: "auth-rejected" }],
+      });
+      await list({ refresh, json: true });
+      if (refreshFailed) {
+        expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+          "Model discovery could not refresh all providers. Showing the available published model list.",
+        );
+      } else {
+        expect(runtime.error).not.toHaveBeenCalled();
+      }
+      expect(runtime.writeJson).toHaveBeenCalledWith(expect.objectContaining({ count: 1 }), 2);
+      expect(gateway.callGateway).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          params: { view: "default", includeDetails: true, ...(refresh ? { refresh: true } : {}) },
+        }),
+      );
+    },
+  );
 
   it.each([false, true])(
     "uses the standalone owner only with no selected Gateway, refresh=%s",

@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   listSessionEntryKeysReadOnly,
   rewriteDoctorSessionEntries,
@@ -10,6 +11,11 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
+import {
+  listExistingAgentDatabaseTargets,
+  resolveTargetSqliteOptions,
+  type ExistingAgentDatabaseTarget,
+} from "../infra/session-sqlite-migration-readers.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
@@ -33,10 +39,6 @@ import {
   type ReservedKeyRename,
   writeRepairJournal,
 } from "./doctor-session-incognito-key-repair-state.js";
-import {
-  listExistingAgentDatabaseTargets,
-  resolveTargetSqliteOptions,
-} from "./doctor-session-sqlite-readers.js";
 
 export type ReservedIncognitoKeyRepairReport = {
   found: number;
@@ -47,11 +49,14 @@ export async function repairReservedIncognitoSessionKeys(params: {
   apply: boolean;
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  targets?: readonly ExistingAgentDatabaseTarget[];
 }): Promise<ReservedIncognitoKeyRepairReport> {
-  const targets = listExistingAgentDatabaseTargets(params.cfg, params.env).map((target) => ({
-    target,
-    databaseOptions: resolveTargetSqliteOptions(target, params.env),
-  }));
+  const targets = (params.targets ?? listExistingAgentDatabaseTargets(params.cfg, params.env)).map(
+    (target) => ({
+      target,
+      databaseOptions: resolveTargetSqliteOptions(target, params.env),
+    }),
+  );
   const reservedKeys = new Set<string>();
   const sharedDatabase = params.apply ? openOpenClawStateDatabase({ env: params.env }) : undefined;
   const journalRenames = sharedDatabase
@@ -188,11 +193,25 @@ function applyReservedIncognitoKeyRenameColumns(
   // Board widget foreign keys are immediate; defer them so every key-bearing row renames atomically.
   database.db.exec("PRAGMA defer_foreign_keys = ON;"); // sqlite-allow-raw -- transaction-local FK deferral.
   for (const rename of renames) {
+    const affected = executeSqliteQuerySync(
+      database.db,
+      getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)
+        .selectFrom("session_nodes")
+        .select("session_key")
+        .where((eb) =>
+          eb.or([
+            eb("session_key", "=", rename.from),
+            eb("parent_session_key", "=", rename.from),
+            eb("spawned_by", "=", rename.from),
+            eb("fork_source_session_key", "=", rename.from),
+          ]),
+        ),
+    ).rows;
     updateSessionKeyColumns(database.db, rename);
-    publishSessionEntryCacheInvalidation(database, { sessionKey: rename.to });
+    for (const sessionKey of new Set([rename.to, ...affected.map((row) => row.session_key)])) {
+      publishSessionEntryCacheInvalidation(database, { sessionKey });
+    }
   }
-  // Key and lineage columns reshape the cached map even when no entry JSON needs rewriting.
-  publishSessionEntryCacheInvalidation(database);
 }
 
 function legacyIncognitoSessionKey(sessionKey: string): string {
@@ -287,86 +306,26 @@ function collectOccupiedSessionKeys(database: DatabaseSync): Set<string> {
 
 function updateSessionKeyColumns(database: DatabaseSync, rename: ReservedKeyRename): void {
   const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database);
-  const update = (query: Parameters<typeof executeSqliteQuerySync>[1]) =>
-    executeSqliteQuerySync(database, query);
-  update(
-    db
-      .updateTable("session_windows")
-      .set({ session_key: rename.to })
-      .where("session_key", "=", rename.from),
-  );
-  update(
-    db
-      .updateTable("session_windows")
-      .set({ parent_session_key: rename.to })
-      .where("parent_session_key", "=", rename.from),
-  );
-  update(
-    db
-      .updateTable("session_windows")
-      .set({ spawned_by: rename.to })
-      .where("spawned_by", "=", rename.from),
-  );
-  update(
-    db
-      .updateTable("session_nodes")
-      .set({ session_key: rename.to })
-      .where("session_key", "=", rename.from),
-  );
-  update(
-    db
-      .updateTable("session_nodes")
-      .set({ parent_session_key: rename.to })
-      .where("parent_session_key", "=", rename.from),
-  );
-  update(
-    db
-      .updateTable("session_nodes")
-      .set({ spawned_by: rename.to })
-      .where("spawned_by", "=", rename.from),
-  );
-  update(
-    db
-      .updateTable("session_nodes")
-      .set({ fork_source_session_key: rename.to })
-      .where("fork_source_session_key", "=", rename.from),
-  );
-  update(
-    db
-      .updateTable("conversation_deliveries")
-      .set({ source_session_key: rename.to })
-      .where("source_session_key", "=", rename.from),
-  );
-  update(
-    db
-      .updateTable("session_members")
-      .set({ session_key: rename.to })
-      .where("session_key", "=", rename.from),
-  );
-  update(
-    db
-      .updateTable("board_tabs")
-      .set({ session_key: rename.to })
-      .where("session_key", "=", rename.from),
-  );
-  update(
-    db
-      .updateTable("board_widgets")
-      .set({ session_key: rename.to })
-      .where("session_key", "=", rename.from),
-  );
-  update(
-    db
-      .updateTable("heartbeat_outcomes")
-      .set({ session_key: rename.to })
-      .where("session_key", "=", rename.from),
-  );
-  update(
-    db
-      .updateTable("heartbeat_outcomes")
-      .set({ run_session_key: rename.to })
-      .where("run_session_key", "=", rename.from),
-  );
+  for (const [table, column] of [
+    ["session_windows", "session_key"],
+    ["session_windows", "parent_session_key"],
+    ["session_windows", "spawned_by"],
+    ["session_nodes", "session_key"],
+    ["session_nodes", "parent_session_key"],
+    ["session_nodes", "spawned_by"],
+    ["session_nodes", "fork_source_session_key"],
+    ["conversation_deliveries", "source_session_key"],
+    ["session_members", "session_key"],
+    ["board_tabs", "session_key"],
+    ["board_widgets", "session_key"],
+    ["heartbeat_outcomes", "session_key"],
+    ["heartbeat_outcomes", "run_session_key"],
+  ] as const) {
+    executeSqliteQuerySync(
+      database,
+      db.updateTable(table).set(column, rename.to).where(column, "=", rename.from),
+    );
+  }
 }
 
 function rewriteSessionEntryKeyFields<T>(value: T, renames: ReadonlyMap<string, string>): T {
@@ -392,10 +351,10 @@ function visitSessionEntryKeyFields(
   value: unknown,
   visit: (record: Record<string, unknown>, key: string) => void,
 ): void {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return;
   }
-  const entry = value as Record<string, unknown>;
+  const entry = value;
   for (const key of [
     "heartbeatIsolatedBaseSessionKey",
     "spawnedBy",
@@ -404,29 +363,17 @@ function visitSessionEntryKeyFields(
   ]) {
     visit(entry, key);
   }
-  if (
-    entry.forkSource &&
-    typeof entry.forkSource === "object" &&
-    !Array.isArray(entry.forkSource)
-  ) {
-    const forkSource = entry.forkSource as Record<string, unknown>;
-    visit(forkSource, "sessionKey");
+  if (isRecord(entry.forkSource)) {
+    visit(entry.forkSource, "sessionKey");
   }
   if (Array.isArray(entry.compactionCheckpoints)) {
     for (const checkpoint of entry.compactionCheckpoints) {
-      if (!checkpoint || typeof checkpoint !== "object" || Array.isArray(checkpoint)) {
-        continue;
+      if (isRecord(checkpoint)) {
+        visit(checkpoint, "sessionKey");
       }
-      const record = checkpoint as Record<string, unknown>;
-      visit(record, "sessionKey");
     }
   }
-  if (
-    entry.systemPromptReport &&
-    typeof entry.systemPromptReport === "object" &&
-    !Array.isArray(entry.systemPromptReport)
-  ) {
-    const report = entry.systemPromptReport as Record<string, unknown>;
-    visit(report, "sessionKey");
+  if (isRecord(entry.systemPromptReport)) {
+    visit(entry.systemPromptReport, "sessionKey");
   }
 }

@@ -16,7 +16,9 @@ import {
   createTaskScope,
   notifyChildStarted,
   registerCodexNativeSubagentMonitor,
+  successfulSendInputOutput,
   threadRead,
+  turnStartedNotification,
 } from "./native-subagent-monitor.test-support.js";
 import type { CodexNativeSubagentSubmissionStore } from "./native-subagent-submission.js";
 import { matchesCodexNativeSubagentSubmissionBinding } from "./session-binding-record.js";
@@ -74,7 +76,7 @@ async function createSubmissionFixture() {
       ),
     consume,
   };
-  const parent = registerCodexNativeSubagentMonitor({
+  const parent = await registerCodexNativeSubagentMonitor({
     client: client as never,
     parentThreadId: binding.threadId,
     requesterSessionKey: "agent:main:main",
@@ -104,10 +106,7 @@ async function createSubmissionFixture() {
   });
   parent.bindTurn("parent-turn-a");
   await notifyChildStarted(client);
-  await client.notify({
-    method: "turn/started",
-    params: { threadId: "child-thread", turn: { id: "turn-a", status: "inProgress", items: [] } },
-  });
+  await client.notify(turnStartedNotification("turn-a"));
   await client.notify(
     childTurnCompletedNotification({
       turnId: "turn-a",
@@ -156,18 +155,14 @@ async function createSubmissionFixture() {
         },
       },
     });
-    await client.notify({
-      method: "rawResponseItem/completed",
-      params: {
-        threadId: binding.threadId,
+    await client.notify(
+      successfulSendInputOutput({
+        parentThreadId: binding.threadId,
         turnId: "parent-turn-b",
-        item: {
-          type: "function_call_output",
-          call_id: "send-b",
-          output: JSON.stringify({ submission_id: submissionId }),
-        },
-      },
-    });
+        callId: "send-b",
+        submissionId,
+      }),
+    );
     await parent.unregister();
     expect(submissionStore.read()).toHaveLength(1);
     expect(holds).toEqual({ client: 0, parent: 0, child: 0 });
@@ -213,13 +208,7 @@ it("stops observing opaque receipts when existing warm subscriptions expire", as
   expect(records.get("codex-thread:child-thread")).toEqual(fixture.initial);
   expect(consume).not.toHaveBeenCalled();
   expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
-  await client.notify({
-    method: "turn/started",
-    params: {
-      threadId: "child-thread",
-      turn: { id: receipt[0]!.submissionId, status: "inProgress", items: [] },
-    },
-  });
+  await client.notify(turnStartedNotification(receipt[0]!.submissionId));
   expect(records.size).toBe(1);
   expect(records.get("codex-thread:child-thread")).toEqual(fixture.initial);
   expect(submissionStore.read()).toEqual(receipt);
@@ -232,10 +221,7 @@ it("admits a delayed exact start under warm backing and preserves the active tas
   await releaseCodexAppServerLiveThread(client as never, "parent-thread");
   expect(hasCodexAppServerLiveThread(client as never, "child-thread")).toBe(true);
   await fixture.submit("turn-b");
-  await client.notify({
-    method: "turn/started",
-    params: { threadId: "child-thread", turn: { id: "turn-b", status: "inProgress", items: [] } },
-  });
+  await client.notify(turnStartedNotification("turn-b"));
   const runId = "codex-thread:child-thread:turn:turn-b";
   await vi.waitFor(() => expect(submissionStore.read()).toEqual([]));
   expect(records.size).toBe(2);

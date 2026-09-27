@@ -21,13 +21,14 @@ import { broadcastChatMetadataChanged } from "../server-chat-metadata-lifecycle.
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 import { usersHandlers } from "./users.js";
 
-const getUserProfileListItem = vi.hoisted(() => vi.fn());
 const resolveUserProfileId = vi.hoisted(() => vi.fn());
-const ensureProfileForEmail = vi.hoisted(() => vi.fn());
+const prepareUserProfileSelectionAuthority = vi.hoisted(() => vi.fn());
 const connectUserModelAccount = vi.hoisted(() => vi.fn());
 const listUserProfileAuthLinks = vi.hoisted(() => vi.fn());
 const listUserModelAccounts = vi.hoisted(() => vi.fn());
 const readUserModelAccountSummary = vi.hoisted(() => vi.fn());
+const isUserModelAuthProfileOwner = vi.hoisted(() => vi.fn());
+const readUserModelAuthProfile = vi.hoisted(() => vi.fn());
 const setUserProfileAuthLink = vi.hoisted(() => vi.fn());
 const clearUserProfileAuthLink = vi.hoisted(() => vi.fn());
 const ensureAuthProfileStoreWithoutExternalProfiles = vi.hoisted(() => vi.fn());
@@ -40,17 +41,22 @@ vi.mock("../../state/user-profiles.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../state/user-profiles.js")>();
   return {
     ...actual,
-    ensureProfileForEmail,
-    getUserProfileListItem,
-    resolveUserProfileId,
     getUserProfileRole: () => null,
   };
 });
+vi.mock("../../state/user-channel-identity-operations.js", () => ({
+  prepareUserProfileSelectionAuthority,
+}));
+vi.mock("../../state/user-profile-email.js", () => ({
+  ensureProfileIdForEmail: async () => "profile-1",
+}));
 vi.mock("../../state/user-model-accounts.js", () => ({
   connectUserModelAccount,
   listUserProfileAuthLinks,
   listUserModelAccounts,
   readUserModelAccountSummary,
+  isUserModelAuthProfileOwner,
+  readUserModelAuthProfile,
   setUserProfileAuthLink,
   clearUserProfileAuthLink,
 }));
@@ -83,6 +89,8 @@ const credential: OAuthCredential = {
   refresh: "synthetic-refresh",
   accountId: "workspace-1",
   expires: 123,
+  clientId: "synthetic-client",
+  authorizationScope: "openid profile resource.invoke offline_access",
 };
 const authorized: ProviderAuthResult = {
   profiles: [{ profileId: "openai:ignored-shared-id", credential }],
@@ -147,16 +155,26 @@ async function rpc(
   });
   return respond;
 }
+function flowRpc(
+  action: "answer" | "cancel" | "status",
+  flow: UsersAuthConnectStartResult,
+  params: Record<string, unknown> = {},
+  profileId = "profile-1",
+  client = self,
+) {
+  return rpc(
+    `users.authConnect.${action}`,
+    { profileId, connectId: flow.connectId, ...params },
+    client,
+  );
+}
 async function startFlow(
   profileId = "profile-1",
   client = self,
   provider = "openai",
+  method = "oauth",
 ): Promise<UsersAuthConnectStartResult> {
-  const respond = await rpc(
-    "users.authConnect.start",
-    { profileId, provider, method: "oauth" },
-    client,
-  );
+  const respond = await rpc("users.authConnect.start", { profileId, provider, method }, client);
   expect(respond).toHaveBeenCalledWith(
     true,
     expect.objectContaining({ connectId: expect.any(String) }),
@@ -172,14 +190,14 @@ async function startFlow(
 }
 async function complete(flow: UsersAuthConnectStartResult, profileId = "profile-1", client = self) {
   const current: UsersAuthConnectStatusResult = await status(flow, profileId, client);
-  return rpc(
-    "users.authConnect.answer",
+  return flowRpc(
+    "answer",
+    flow,
     {
-      profileId,
-      connectId: flow.connectId,
       stepId: current.status === "pending" ? current.step!.id : "retired-step",
       value: "synthetic-code",
     },
+    profileId,
     client,
   );
 }
@@ -195,11 +213,7 @@ async function terminal(
   return status(flow, profileId, client);
 }
 async function status(flow: UsersAuthConnectStartResult, profileId = "profile-1", client = self) {
-  const respond = await rpc(
-    "users.authConnect.status",
-    { profileId, connectId: flow.connectId },
-    client,
-  );
+  const respond = await flowRpc("status", flow, {}, profileId, client);
   expect(respond.mock.calls[0]?.[0]).toBe(true);
   return respond.mock.calls[0]?.[1];
 }
@@ -215,6 +229,8 @@ beforeEach(async () => {
   listUserProfileAuthLinks.mockImplementation((owner: string) => linksByOwner.get(owner) ?? []);
   listUserModelAccounts.mockReset().mockReturnValue({ accounts: [] });
   readUserModelAccountSummary.mockReset();
+  isUserModelAuthProfileOwner.mockReset().mockReturnValue(false);
+  readUserModelAuthProfile.mockReset();
   ensureAuthProfileStoreWithoutExternalProfiles
     .mockReset()
     .mockReturnValue({ version: 1, profiles: { "openai:shared": credential } });
@@ -247,13 +263,16 @@ beforeEach(async () => {
         return links;
       },
     );
-  getUserProfileListItem.mockImplementation((id: string) => ({
-    id,
-    displayName: "Ada",
-    emails: [],
-  }));
   resolveUserProfileId.mockImplementation((id: string) => id);
-  ensureProfileForEmail.mockReturnValue({ id: "profile-1" });
+  prepareUserProfileSelectionAuthority.mockImplementation(async (reference: string) => {
+    const profileId = resolveUserProfileId(reference);
+    return {
+      profileId,
+      isCurrent: () =>
+        resolveUserProfileId(reference) === profileId &&
+        resolveUserProfileId(profileId) === profileId,
+    };
+  });
   listPersonalAccountAuthChoices.mockReturnValue([
     {
       pluginId: "openai",
@@ -385,7 +404,7 @@ describe("users model-account connection lifecycle", () => {
         undefined,
         expect.objectContaining({ code: "FORBIDDEN" }),
       );
-      expect(getUserProfileListItem).not.toHaveBeenCalled();
+      expect(prepareUserProfileSelectionAuthority).not.toHaveBeenCalled();
       expect(runAuth).not.toHaveBeenCalled();
       expect(writes).toEqual([]);
       expect(linksByOwner.size).toBe(0);
@@ -577,9 +596,7 @@ describe("users model-account connection lifecycle", () => {
       });
       const flow = await startFlow();
       const pending = await status(flow);
-      const invalid = await rpc("users.authConnect.answer", {
-        profileId: "profile-1",
-        connectId: flow.connectId,
+      const invalid = await flowRpc("answer", flow, {
         stepId: pending.step.id,
         value: "secret-invalid",
       });
@@ -592,12 +609,7 @@ describe("users model-account connection lifecycle", () => {
       expect(registerSecretValueForRedaction).toHaveBeenCalledWith("secret-invalid");
       expect(exchange).not.toHaveBeenCalled();
       expect(
-        await rpc("users.authConnect.answer", {
-          profileId: "profile-1",
-          connectId: flow.connectId,
-          stepId: "stale",
-          value: "synthetic-code",
-        }),
+        await flowRpc("answer", flow, { stepId: "stale", value: "synthetic-code" }),
       ).toHaveBeenCalledWith(true, {
         status: "pending",
         step: pending.step,
@@ -637,6 +649,7 @@ describe("users model-account connection lifecycle", () => {
     expect(ctx).toMatchObject({
       config: {},
       env: {},
+      existingProfiles: [],
       secretInputMode: "plaintext",
       allowSecretRefPrompt: false,
     });
@@ -652,6 +665,31 @@ describe("users model-account connection lifecycle", () => {
     expect(config.agents).toBeUndefined();
     expect(writes).toEqual([credential]);
   });
+
+  it.each([
+    { authProfileId: "personal:profile-1:saved", owned: true },
+    { authProfileId: "personal:profile-2:saved", owned: false },
+    { authProfileId: "openai:shared", owned: false },
+  ])(
+    "offers only the owner's selected personal profile ($authProfileId)",
+    async ({ authProfileId, owned }) => {
+      linksByOwner.set("profile-1", [{ provider: "openai", authProfileId, updatedAt: 1 }]);
+      isUserModelAuthProfileOwner.mockReturnValue(owned);
+      readUserModelAuthProfile.mockReturnValue({ credential });
+
+      await startFlow();
+
+      expect(runAuth.mock.calls[0]?.[0].existingProfiles).toEqual(
+        owned ? [{ profileId: authProfileId, credential }] : [],
+      );
+      expect(isUserModelAuthProfileOwner).toHaveBeenCalledWith({
+        profileId: "profile-1",
+        authProfileId,
+      });
+      expect(readUserModelAuthProfile.mock.calls).toEqual(owned ? [[authProfileId]] : []);
+      expect(ensureAuthProfileStoreWithoutExternalProfiles).not.toHaveBeenCalled();
+    },
+  );
 
   it("records provider completion while a prompt is open without requiring an answer", async () => {
     const callback = createDeferredCore<ProviderAuthResult>();
@@ -683,12 +721,7 @@ describe("users model-account connection lifecycle", () => {
     const next = await status(flow);
     expect(next.step.id).not.toBe(first.step.id);
     expect(
-      await rpc("users.authConnect.answer", {
-        profileId: "profile-1",
-        connectId: flow.connectId,
-        stepId: first.step.id,
-        value: "stale",
-      }),
+      await flowRpc("answer", flow, { stepId: first.step.id, value: "stale" }),
     ).toHaveBeenCalledWith(true, {
       status: "pending",
       step: next.step,
@@ -696,11 +729,7 @@ describe("users model-account connection lifecycle", () => {
     });
     expect(writes).toEqual([]);
     expect(await status(flow)).toEqual(next);
-    await rpc("users.authConnect.answer", {
-      profileId: "profile-1",
-      connectId: flow.connectId,
-      stepId: next.step.id,
-    });
+    await flowRpc("answer", flow, { stepId: next.step.id });
     await terminal(flow, "connected");
     expect(writes).toEqual([credential]);
   });
@@ -726,9 +755,7 @@ describe("users model-account connection lifecycle", () => {
     });
     const flow = await startFlow();
     const first = await status(flow);
-    const response = await rpc("users.authConnect.answer", {
-      profileId: "profile-1",
-      connectId: flow.connectId,
+    const response = await flowRpc("answer", flow, {
       stepId: first.step.id,
       value: "rejected-secret",
     });
@@ -739,16 +766,12 @@ describe("users model-account connection lifecycle", () => {
       expect(await status(flow)).toMatchObject({ status: "pending", step: { type: "note" } }),
     );
     const next = await status(flow);
-    await rpc("users.authConnect.answer", {
-      profileId: "profile-1",
-      connectId: flow.connectId,
-      stepId: next.step.id,
-    });
+    await flowRpc("answer", flow, { stepId: next.step.id });
     await terminal(flow, "connected");
     expect(writes).toEqual([credential]);
   });
 
-  it.each(["status", "answer", "cancel"])(
+  it.each(["status", "answer", "cancel"] as const)(
     "replays %s with current links, not the original default",
     async (action) => {
       const flow = await startFlow();
@@ -757,11 +780,7 @@ describe("users model-account connection lifecycle", () => {
       linksByOwner.set("profile-1", []);
       service.supersede("profile-1", "openai");
       expect(
-        await rpc(`users.authConnect.${action}`, {
-          profileId: "profile-1",
-          connectId: flow.connectId,
-          ...(action === "answer" ? { stepId: "retired" } : {}),
-        }),
+        await flowRpc(action, flow, action === "answer" ? { stepId: "retired" } : {}),
       ).toHaveBeenCalledWith(true, {
         status: "connected",
         authProfileId: "personal:profile-1:account-1",
@@ -854,13 +873,11 @@ describe("users model-account connection lifecycle", () => {
     // A merged-away owner cannot authorize even an observation of its old operation.
     const observer = createClient("profile-admin", ["operator.admin"]);
     if (change === "merge") {
-      expect(
-        await rpc(
-          "users.authConnect.status",
-          { profileId: "profile-1", connectId: flow.connectId },
-          observer,
-        ),
-      ).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code: "FORBIDDEN" }));
+      expect(await flowRpc("status", flow, {}, "profile-1", observer)).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "FORBIDDEN" }),
+      );
       expect(writes).toEqual([]);
       return;
     }
@@ -882,10 +899,7 @@ describe("users model-account connection lifecycle", () => {
       await vi.waitFor(() => expect(exchange).toHaveBeenCalledOnce());
       const signal: AbortSignal = exchange.mock.calls[0]![1];
       if (change === "cancel") {
-        await rpc("users.authConnect.cancel", {
-          profileId: "profile-1",
-          connectId: flow.connectId,
-        });
+        await flowRpc("cancel", flow);
       }
       if (change === "supersede") {
         service.supersede("profile-1", "openai");
@@ -913,9 +927,7 @@ describe("users model-account connection lifecycle", () => {
   it("retires replaced operations without letting an old cancel affect the new one", async () => {
     const first = await startFlow();
     const replacement = await startFlow();
-    expect(
-      await rpc("users.authConnect.cancel", { profileId: "profile-1", connectId: first.connectId }),
-    ).toHaveBeenCalledWith(true, { status: "cancelled" });
+    expect(await flowRpc("cancel", first)).toHaveBeenCalledWith(true, { status: "cancelled" });
     await complete(replacement);
     await terminal(replacement, "connected");
     expect(writes).toEqual([credential]);
@@ -934,11 +946,7 @@ describe("users model-account connection lifecycle", () => {
         admin,
       ),
     ).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code: "UNAVAILABLE" }));
-    await rpc(
-      "users.authConnect.cancel",
-      { profileId: "profile-0", connectId: flows[0]!.connectId },
-      admin,
-    );
+    await flowRpc("cancel", flows[0]!, {}, "profile-0", admin);
     expect((await startFlow("profile-9", admin)).connectId).toBeTruthy();
   });
 
@@ -957,13 +965,7 @@ describe("users model-account connection lifecycle", () => {
     exchange.mockResolvedValueOnce({
       profiles: [{ profileId: "ignored-id", credential: keyCredential }],
     });
-    const started = await rpc("users.authConnect.start", {
-      profileId: "profile-1",
-      provider: "example-ai",
-      method: "api-key",
-    });
-    const flow = started.mock.calls[0]![1] as UsersAuthConnectStartResult;
-    await vi.waitFor(async () => expect(await status(flow)).toHaveProperty("step"));
+    const flow = await startFlow("profile-1", self, "example-ai", "api-key");
     await complete(flow);
     await terminal(flow, "connected");
     expect(writes).toEqual([keyCredential]);
@@ -1022,7 +1024,7 @@ describe("users model-account connection lifecycle", () => {
         undefined,
         expect.objectContaining({ code: "INVALID_REQUEST" }),
       );
-      expect(getUserProfileListItem).not.toHaveBeenCalled();
+      expect(prepareUserProfileSelectionAuthority).not.toHaveBeenCalled();
       expect(resolvePersonalAccountAuthMethod).not.toHaveBeenCalled();
       expect(listUserProfileAuthLinks).not.toHaveBeenCalled();
       expect(setUserProfileAuthLink).not.toHaveBeenCalled();

@@ -1,5 +1,5 @@
-// Telegram plugin module implements audit membership runtime behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { makeProxyFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -10,7 +10,6 @@ import type {
   TelegramGroupMembershipAuditEntry,
 } from "./audit.types.js";
 import { resolveTelegramApiBase, resolveTelegramFetch } from "./fetch.js";
-import { makeProxyFetch } from "./proxy.js";
 
 type TelegramApiOk<T> = { ok: true; result: T };
 type TelegramApiErr = { ok: false; description?: string };

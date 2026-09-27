@@ -12,7 +12,7 @@ import type {
 } from "../../app/native-notifications.ts";
 import type { ServerUiPrefProvenance } from "../../app/server-prefs.ts";
 import type { ChatFollowUpMode, ChatSendShortcut, CatalogOpenTarget } from "../../app/settings.ts";
-import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
+import type { ThemeCatalogSnapshot } from "../../app/theme-catalog.ts";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
 import type { TypefaceId } from "../../app/typography.ts";
 import type { WebPushSnapshot } from "../../app/web-push.ts";
@@ -103,7 +103,6 @@ export type ConfigProps = {
   onSave: () => void;
   onRawDiscard: () => void;
   onOpenFile?: () => void;
-  version: string;
   theme: ThemeName;
   themeOverridden: boolean;
   themeProvenance: ServerUiPrefProvenance;
@@ -127,8 +126,10 @@ export type ConfigProps = {
   localeProvenance: ServerUiPrefProvenance;
   localeResetValue?: Locale;
   onLocaleChange: (locale: Locale | undefined) => void;
-  setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
-  setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
+  themeCatalog?: ThemeCatalogSnapshot;
+  onRetryThemeCatalog?: () => void;
+  setTheme: (theme: ThemeName) => void;
+  setThemeMode: (mode: ThemeMode) => void;
   setAccent: (accent: string | undefined) => void;
   hasCustomTheme: boolean;
   customThemeLabel: string | null;
@@ -152,6 +153,8 @@ export type ConfigProps = {
   setSessionCatalogHidden: (catalogId: string, hidden: boolean) => void;
   chatMessageMaxWidth?: string;
   setChatMessageMaxWidth: (value: string | undefined) => void;
+  chatShowTaskProgress: boolean;
+  setChatShowTaskProgress: (enabled: boolean) => void;
   chatCollapseTaskProgress: boolean;
   setChatCollapseTaskProgress: (enabled: boolean) => void;
   showAdvancedSettings: boolean;

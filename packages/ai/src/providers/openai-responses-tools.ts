@@ -1,6 +1,7 @@
 // OpenAI Responses tool helpers convert runtime tools to Responses API schemas.
 import type { FunctionTool } from "openai/resources/responses/responses.js";
 import { getAiTransportHost } from "../host.js";
+import { resolveOpenAICompletionsCompat } from "../transports/openai-completions-compat.js";
 import { resolveOpenAIStrictToolFlagWithDiagnostics } from "../transports/openai-transport-params.js";
 import type { Model, Tool } from "../types.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
@@ -96,7 +97,9 @@ function resolveResponsesStrictToolSetting(
   if (options?.model) {
     return getAiTransportHost().resolveOpenAIStrictToolSetting(options.model, {
       transport: "stream",
-      supportsStrictMode: options.supportsStrictMode,
+      supportsStrictMode:
+        options.supportsStrictMode ??
+        resolveOpenAICompletionsCompat(options.model).supportsStrictMode,
     });
   }
   return false;

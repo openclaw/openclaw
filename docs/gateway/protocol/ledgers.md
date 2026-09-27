@@ -165,6 +165,18 @@ return sanitized task summaries, not raw runtime state.
     use their recorded terminal activity time, then creation time, as the
     canonical completion timestamp before pagination.
   - Result: `{ "tasks": TaskSummary[], "nextCursor"?: string }`.
+  - Cursors are bound to the current task data, caller access, and task database.
+    If those change, request a fresh first page. Unrelated database lifecycle
+    activity preserves the cursor.
+  - A stale cursor returns `INVALID_REQUEST` with `details.reason` identifying
+    `access-changed`, `tasks-changed`, or `page-invalid` (the selected page lost
+    validity before the response). The message names the cause and instructs
+    the caller to restart pagination without a cursor.
+  - Failed session-metadata reads return `UNAVAILABLE` with the recorded cause
+    instead of an empty or partial page when an existing store cannot be read,
+    its schema is not ready, or a required table is missing. An absent database
+    is an empty metadata store; normal task visibility rules still apply.
+    Genuinely empty authorized results remain successful empty pages.
 - `tasks.get` requires `operator.read`.
   - Params: `{ "taskId": string }`.
   - Result: `{ "task": TaskSummary }`.

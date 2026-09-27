@@ -15,6 +15,7 @@ import {
   shouldResolveConfiguredLocalOriginManagedProxyBypass,
   type ConfiguredLocalOriginManagedProxyBypass,
 } from "./configured-local-origin-bypass.js";
+import { captureGuardedFetchRequestAuthority } from "./fetch-request-authority.js";
 import { responseWithAbortSignal } from "./guarded-body-stream.js";
 import { PinnedDispatcherPool, type PinnedDispatcherLease } from "./pinned-dispatcher-pool.js";
 import { shouldUseEnvHttpProxyForUrl } from "./proxy-env.js";
@@ -301,11 +302,11 @@ async function prepareGuardedFetchCapture(params: GuardedFetchOptions, fetchImpl
   if (params.capture === false || !isTruthyEnvValue(process.env[OPENCLAW_DEBUG_PROXY_ENABLED])) {
     return { fetchImpl };
   }
-  const { prepareHttpCapture, resolveDebugProxyFetchTransport } =
+  const { prepareHttpCaptureForTransport, resolveDebugProxyFetchTransport } =
     await import("../../proxy-capture/runtime.js");
   return {
     fetchImpl: resolveDebugProxyFetchTransport(fetchImpl),
-    capture: prepareHttpCapture(),
+    capture: prepareHttpCaptureForTransport(),
   };
 }
 
@@ -443,6 +444,7 @@ export async function fetchConfiguredLocalOriginWithSsrFGuard({
 async function fetchWithSsrFGuardInternal(
   params: GuardedFetchInternalOptions,
 ): Promise<GuardedFetchResult> {
+  const assertCurrent = captureGuardedFetchRequestAuthority();
   const globalFetch = globalThis.fetch;
   const defaultFetch: FetchLike | undefined = params.fetchImpl ?? globalFetch;
   if (!defaultFetch) {
@@ -669,6 +671,7 @@ async function fetchWithSsrFGuardInternal(
         void Promise.resolve(beforeRequestResult).catch(() => undefined);
         throw new TypeError("beforeRequest must be synchronous.");
       }
+      assertCurrent?.();
       const captureParams = {
         url: parsedUrl.toString(),
         method: currentInit?.method ?? "GET",
@@ -693,10 +696,10 @@ async function fetchWithSsrFGuardInternal(
           ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
           : await captureAdmission.fetchImpl(parsedUrl.toString(), init);
       } catch (error) {
-        captureAdmission.capture?.({ ...captureParams, error });
+        void captureAdmission.capture?.({ ...captureParams, error });
         throw error;
       }
-      captureAdmission.capture?.({ ...captureParams, response });
+      void captureAdmission.capture?.({ ...captureParams, response });
 
       if (isRedirectStatus(response.status)) {
         redirectCount += 1;

@@ -42,7 +42,12 @@ describe("audio processing disposition", () => {
     });
     const models: MediaUnderstandingModelConfig[] = entries.map((entry) =>
       entry === "cli"
-        ? { type: "cli", command: "synthetic-stt", capabilities: ["audio"] }
+        ? {
+            type: "cli",
+            command: "synthetic-stt",
+            args: ["{{AttachmentPath}}"],
+            capabilities: ["audio"],
+          }
         : {
             provider: "synthetic-audio",
             model: "synthetic-stt",

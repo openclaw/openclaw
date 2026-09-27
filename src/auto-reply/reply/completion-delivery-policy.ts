@@ -3,7 +3,7 @@ import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { deriveSessionChatTypeFromKey } from "../../sessions/session-chat-type-shared.js";
-import { sessionDeliveryOrigin } from "../../utils/delivery-context.shared.js";
+import { sessionDeliveryOrigin } from "../../utils/delivery-context.read.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { SourceReplyDeliveryMode } from "../source-reply-delivery-mode.types.js";
 import { resolveSourceReplyDeliveryMode } from "./source-reply-delivery-mode.js";

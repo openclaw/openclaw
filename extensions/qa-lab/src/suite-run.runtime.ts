@@ -35,16 +35,16 @@ import {
 export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Promise<QaSuiteResult> {
   const startedAt = new Date();
   const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
-  const catalog = readQaBootstrapScenarioCatalog();
+  const scenarios = params?.scenarioDefinitions ?? readQaBootstrapScenarioCatalog().scenarios;
   const requestedModels = resolveRequestedQaSuiteModels({
     ...params,
-    scenarios: catalog.scenarios,
+    scenarios,
   });
   const transportId = normalizeQaTransportId(params?.transportId);
   const outputDir = await resolveQaSuiteOutputDir(repoRoot, params?.outputDir);
   const channelDriver = params?.channelDriver;
   const selectedScenarios = selectQaFlowSuiteScenarios({
-    scenarios: catalog.scenarios,
+    scenarios,
     scenarioIds: params?.scenarioIds,
     providerMode: requestedModels.providerMode,
     primaryModel: requestedModels.primaryModel,
@@ -151,37 +151,12 @@ export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Prom
   });
   if (params?.runtimePair) {
     return await runQaRuntimeParitySuite({
+      ...preparedParams,
+      ...context,
       runQaFlowSuite: runQaFlowSuiteFromRuntime,
-      adapterFactories: preparedParams.adapterFactories,
-      adapterOptions: params.adapterOptions,
-      evidenceMode: params.evidenceMode,
-      repoRoot,
-      outputDir,
-      startedAt,
-      providerMode,
-      transportId,
-      channelDriver: params.channelDriver,
-      channelId: params.channelId,
-      primaryModel,
-      alternateModel,
-      fastMode,
-      controlUiEnabled: params.controlUiEnabled,
-      thinkingDefault: params.thinkingDefault,
-      claudeCliAuthMode: params.claudeCliAuthMode,
+      // Each parity child adds its scenario plugins during its own preparation.
       enabledPluginIds: params.enabledPluginIds,
-      concurrency,
-      selectedScenarios,
-      startLab: params.startLab,
-      lab: params.lab,
-      progressEnabled,
-      scenarioIds: params.scenarioIds,
       runtimePair: params.runtimePair,
-      sutOpenClawCommand: params.sutOpenClawCommand,
-      mutateConfig: params.mutateConfig,
-      writeEvidenceFile: params.writeEvidenceFile,
-      evidenceAnchors: params.evidenceAnchors,
-      evidenceContinuation: params.evidenceContinuation,
-      onEvidence: params.onEvidence,
     });
   }
   return useIsolatedScenarioWorkers

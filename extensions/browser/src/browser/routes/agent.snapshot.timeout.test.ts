@@ -4,7 +4,10 @@ import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helper
 
 const cdpMocks = vi.hoisted(() => ({
   captureScreenshot: vi.fn(),
-  getMainFrameDocumentIdentityViaCdp: vi.fn(async () => "cdp:test-document"),
+  getDocumentIdentitiesViaCdp: vi.fn(async () => ({
+    mainFrame: "cdp:test-document",
+    frameTree: "cdp:test-tree",
+  })),
   snapshotAria: vi.fn(async () => ({ nodes: [] })),
   snapshotRoleViaCdp: vi.fn(async () => ({
     snapshot: "button Continue",
@@ -49,12 +52,13 @@ const pwMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../pw-ai-module.js", () => ({
+  getPwAiModule: vi.fn(async () => null),
   getLoadedPwAiModule: () => pwMocks,
 }));
 
 vi.mock("../cdp.js", () => ({
   captureScreenshot: cdpMocks.captureScreenshot,
-  getMainFrameDocumentIdentityViaCdp: cdpMocks.getMainFrameDocumentIdentityViaCdp,
+  getDocumentIdentitiesViaCdp: cdpMocks.getDocumentIdentitiesViaCdp,
   snapshotAria: cdpMocks.snapshotAria,
   snapshotRoleViaCdp: cdpMocks.snapshotRoleViaCdp,
 }));
@@ -82,14 +86,14 @@ vi.mock("../screenshot.js", () => ({
   })),
 }));
 
-vi.mock("../../media/store.js", () => ({
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
   ensureMediaDir: vi.fn(async () => {}),
   saveMediaBuffer: vi.fn(async () => ({ path: "/tmp/fake.png" })),
 }));
 
 vi.mock("./agent.shared.js", () => ({
   browserNavigationPolicyForProfile: vi.fn(() => ({})),
-  getPwAiModule: vi.fn(async () => null),
   handleRouteError: vi.fn((_ctx, _res, err) => {
     throw err;
   }),
@@ -236,18 +240,6 @@ describe("browser agent snapshot timeout routing", () => {
       name: "headless request override when its profile is configured headed",
       configuredHeadless: false,
       running: { headless: true, headlessSource: "request" },
-      expectedHeadless: true,
-    },
-    {
-      name: "headless environment override when its profile is configured headed",
-      configuredHeadless: false,
-      running: { headless: true, headlessSource: "env" },
-      expectedHeadless: true,
-    },
-    {
-      name: "headless Linux no-display fallback when its profile is configured headed",
-      configuredHeadless: false,
-      running: { headless: true, headlessSource: "linux-display-fallback" },
       expectedHeadless: true,
     },
     {

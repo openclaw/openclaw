@@ -27,17 +27,8 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
 
     func updateUIView(_ textView: ChatComposerUITextView, context: Context) {
         context.coordinator.parent = self
-        textView.isEditable = self.isEnabled
-        textView.isSelectable = self.isEnabled
+        context.coordinator.scheduleInteractionUpdate(textView)
         self.configureHistoryHandlers(textView)
-
-        // UIKit owns user-initiated focus. A false focus request is not a blur request;
-        // conflating the two cancels a tap before SwiftUI observes first-responder state.
-        if self.focusRequested, self.isEnabled, !textView.isFirstResponder {
-            textView.becomeFirstResponder()
-        } else if !self.isEnabled, textView.isFirstResponder {
-            textView.resignFirstResponder()
-        }
 
         let isEcho = context.coordinator.lastReportedText == self.text
         if textView.isFirstResponder, isEcho {
@@ -79,9 +70,46 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
         var parent: ChatComposerTextViewIOS
         var isProgrammaticUpdate = false
         var lastReportedText: String?
+        private var interactionUpdateScheduled = false
 
         init(_ parent: ChatComposerTextViewIOS) {
             self.parent = parent
+        }
+
+        func scheduleInteractionUpdate(_ textView: ChatComposerUITextView) {
+            guard !self.interactionUpdateScheduled else { return }
+            self.interactionUpdateScheduled = true
+            // Disabling a focused UITextView synchronously resigns first responder.
+            // Inside updateUIView that re-enters SwiftUI's responder graph and can
+            // spin in AttributeGraph. Apply UIKit state after the graph update,
+            // reading the latest parent so a queued disable cannot outlive recovery.
+            DispatchQueue.main.async { [weak self, weak textView] in
+                guard let self else { return }
+                self.interactionUpdateScheduled = false
+                guard let textView else { return }
+                if textView.isEditable != self.parent.isEnabled {
+                    textView.isEditable = self.parent.isEnabled
+                }
+                if textView.isSelectable != self.parent.isEnabled {
+                    textView.isSelectable = self.parent.isEnabled
+                }
+                // UIKit owns user-initiated focus; false is not a blur request.
+                if self.parent.focusRequested, self.parent.isEnabled,
+                   !textView.isFirstResponder
+                {
+                    textView.becomeFirstResponder()
+                } else if !self.parent.isEnabled, textView.isFirstResponder {
+                    textView.resignFirstResponder()
+                }
+            }
+        }
+
+        func textViewShouldBeginEditing(_ textView: UITextView) -> Bool {
+            self.parent.isEnabled
+        }
+
+        func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+            self.parent.isEnabled
         }
 
         func textViewDidBeginEditing(_ textView: UITextView) {

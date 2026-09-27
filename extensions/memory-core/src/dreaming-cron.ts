@@ -1,0 +1,303 @@
+/** Stateless convergence of the memory-core-owned dreaming cron job family. */
+import {
+  LEGACY_MEMORY_LIGHT_DREAMING_CRON_NAME,
+  LEGACY_MEMORY_LIGHT_DREAMING_CRON_TAG,
+  LEGACY_MEMORY_LIGHT_DREAMING_EVENT_TEXT,
+  LEGACY_MEMORY_REM_DREAMING_CRON_NAME,
+  LEGACY_MEMORY_REM_DREAMING_CRON_TAG,
+  LEGACY_MEMORY_REM_DREAMING_EVENT_TEXT,
+  MANAGED_MEMORY_DREAMING_CRON_NAME,
+  MANAGED_MEMORY_DREAMING_CRON_TAG,
+  MEMORY_DREAMING_SYSTEM_EVENT_TEXT,
+  type resolveMemoryDeepDreamingConfig,
+} from "openclaw/plugin-sdk/memory-core-host-status";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { MANAGED_DREAMING_DECLARATION_KEY } from "./dreaming-cron-contract.js";
+import { formatErrorMessage } from "./dreaming-shared.js";
+import { classifyDreamingCronJob } from "./migration/dreaming-cron-classifier.js";
+
+const dreamingCronIdentifiers = {
+  LEGACY_MEMORY_LIGHT_DREAMING_CRON_NAME,
+  LEGACY_MEMORY_LIGHT_DREAMING_CRON_TAG,
+  LEGACY_MEMORY_LIGHT_DREAMING_EVENT_TEXT,
+  LEGACY_MEMORY_REM_DREAMING_CRON_NAME,
+  LEGACY_MEMORY_REM_DREAMING_CRON_TAG,
+  LEGACY_MEMORY_REM_DREAMING_EVENT_TEXT,
+  MANAGED_MEMORY_DREAMING_CRON_NAME,
+  MANAGED_MEMORY_DREAMING_CRON_TAG,
+  MEMORY_DREAMING_SYSTEM_EVENT_TEXT,
+} as const;
+
+type Logger = Pick<OpenClawPluginApi["logger"], "info" | "warn" | "error">;
+type ShortTermPromotionDreamingConfig = ReturnType<typeof resolveMemoryDeepDreamingConfig>;
+
+type CronSchedule = { kind: "cron"; expr: string; tz?: string };
+type CronPayload = { kind: "agentTurn"; message: string; lightContext?: boolean };
+type ManagedCronJobCreate = {
+  declarationKey: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  schedule: CronSchedule;
+  sessionTarget: "main" | "isolated";
+  wakeMode: "now";
+  payload: CronPayload;
+  delivery?: {
+    mode: "none";
+  };
+};
+
+type ManagedCronJobPatch = Partial<Omit<ManagedCronJobCreate, "declarationKey">>;
+
+type ManagedCronJobLike = {
+  id: string;
+  declarationKey?: string;
+  name?: string;
+  description?: string;
+  enabled?: boolean;
+  schedule?: {
+    kind?: string;
+    expr?: string;
+    tz?: string;
+  };
+  sessionTarget?: string;
+  wakeMode?: string;
+  payload?: {
+    kind?: string;
+    message?: string;
+    lightContext?: boolean;
+  };
+  delivery?: {
+    mode?: string;
+  };
+  createdAtMs?: number;
+};
+
+export type CronServiceLike = {
+  isEnabled?: () => Promise<boolean>;
+  list: (opts?: { includeDisabled?: boolean }) => Promise<ManagedCronJobLike[]>;
+  add: (input: ManagedCronJobCreate) => Promise<unknown>;
+  update: (id: string, patch: ManagedCronJobPatch) => Promise<unknown>;
+  remove: (id: string) => Promise<{ removed?: boolean }>;
+};
+
+type ReconcileResult = {
+  status: "unavailable" | "disabled" | "doctor-required" | "added" | "updated" | "noop";
+  removed: number;
+};
+
+function resolveManagedCronDescription(config: ShortTermPromotionDreamingConfig): string {
+  const recencyHalfLifeDays = config.recencyHalfLifeDays;
+  return `${MANAGED_MEMORY_DREAMING_CRON_TAG} Promote weighted short-term recalls into MEMORY.md (limit=${config.limit}, minScore=${config.minScore.toFixed(3)}, minRecallCount=${config.minRecallCount}, minUniqueQueries=${config.minUniqueQueries}, recencyHalfLifeDays=${recencyHalfLifeDays}, maxAgeDays=${config.maxAgeDays ?? "none"}).`;
+}
+
+function buildManagedDreamingCronJob(
+  config: ShortTermPromotionDreamingConfig,
+): ManagedCronJobCreate {
+  return {
+    declarationKey: MANAGED_DREAMING_DECLARATION_KEY,
+    name: MANAGED_MEMORY_DREAMING_CRON_NAME,
+    description: resolveManagedCronDescription(config),
+    enabled: true,
+    schedule: {
+      kind: "cron",
+      expr: config.cron,
+      ...(config.timezone ? { tz: config.timezone } : {}),
+    },
+    sessionTarget: "isolated",
+    wakeMode: "now",
+    payload: {
+      kind: "agentTurn",
+      message: MEMORY_DREAMING_SYSTEM_EVENT_TEXT,
+      lightContext: true,
+    },
+    // Dreaming is a maintenance sweep, not a user-facing announce job.
+    delivery: {
+      mode: "none",
+    },
+  };
+}
+
+function buildManagedDreamingPatch(
+  job: ManagedCronJobLike,
+  desired: ManagedCronJobCreate,
+): ManagedCronJobPatch | null {
+  const patch: ManagedCronJobPatch = {};
+
+  if (normalizeOptionalString(job.name) !== desired.name) {
+    patch.name = desired.name;
+  }
+  if (normalizeOptionalString(job.description) !== desired.description) {
+    patch.description = desired.description;
+  }
+  if (job.enabled !== true) {
+    patch.enabled = true;
+  }
+
+  const scheduleKind = normalizeLowercaseStringOrEmpty(normalizeOptionalString(job.schedule?.kind));
+  const scheduleExpr = normalizeOptionalString(job.schedule?.expr);
+  const scheduleTz = normalizeOptionalString(job.schedule?.tz);
+  if (
+    scheduleKind !== "cron" ||
+    scheduleExpr !== desired.schedule.expr ||
+    scheduleTz !== desired.schedule.tz
+  ) {
+    patch.schedule = desired.schedule;
+  }
+
+  const sessionTarget = normalizeLowercaseStringOrEmpty(normalizeOptionalString(job.sessionTarget));
+  if (sessionTarget !== desired.sessionTarget) {
+    patch.sessionTarget = desired.sessionTarget;
+  }
+  const wakeMode = normalizeLowercaseStringOrEmpty(normalizeOptionalString(job.wakeMode));
+  if (wakeMode !== "now") {
+    patch.wakeMode = "now";
+  }
+
+  const payloadNeedsUpdate =
+    normalizeOptionalString(job.payload?.message) !== desired.payload.message ||
+    job.payload?.lightContext !== desired.payload.lightContext;
+  if (payloadNeedsUpdate) {
+    patch.payload = desired.payload;
+  }
+  const deliveryMode = normalizeLowercaseStringOrEmpty(normalizeOptionalString(job.delivery?.mode));
+  if (deliveryMode !== "none") {
+    patch.delivery = desired.delivery;
+  }
+
+  return Object.keys(patch).length > 0 ? patch : null;
+}
+
+function sortManagedJobs(managed: ManagedCronJobLike[]): ManagedCronJobLike[] {
+  return managed.toSorted((a, b) => {
+    const aCreated =
+      typeof a.createdAtMs === "number" && Number.isFinite(a.createdAtMs)
+        ? a.createdAtMs
+        : Number.MAX_SAFE_INTEGER;
+    const bCreated =
+      typeof b.createdAtMs === "number" && Number.isFinite(b.createdAtMs)
+        ? b.createdAtMs
+        : Number.MAX_SAFE_INTEGER;
+    if (aCreated !== bCreated) {
+      return aCreated - bCreated;
+    }
+    return a.id.localeCompare(b.id);
+  });
+}
+
+function isCronServiceLike(candidate: unknown): candidate is CronServiceLike {
+  return (
+    isRecord(candidate) &&
+    (candidate.isEnabled === undefined || typeof candidate.isEnabled === "function") &&
+    typeof candidate.list === "function" &&
+    typeof candidate.add === "function" &&
+    typeof candidate.update === "function" &&
+    typeof candidate.remove === "function"
+  );
+}
+
+export function resolveCronServiceFromGatewayContext(context: { getCron?: () => unknown }) {
+  const cron = context.getCron?.();
+  return isCronServiceLike(cron) ? cron : null;
+}
+
+export async function reconcileShortTermDreamingCronJob(params: {
+  cron: CronServiceLike | null;
+  config: ShortTermPromotionDreamingConfig;
+  logger: Logger;
+}): Promise<ReconcileResult> {
+  const cron = params.cron;
+  if (!cron) {
+    return { status: "unavailable", removed: 0 };
+  }
+
+  const allJobs = await cron.list({ includeDisabled: true });
+  const managed = allJobs.filter((job) => job.declarationKey === MANAGED_DREAMING_DECLARATION_KEY);
+  // Diagnosis reuses Doctor's classifier on the active rows already listed; it never grants ownership.
+  let unresolvedLegacy = false;
+  const ambiguousIds: string[] = [];
+  for (const job of allJobs) {
+    const kind = classifyDreamingCronJob(job, dreamingCronIdentifiers);
+    if (kind === "ambiguous") {
+      ambiguousIds.push(job.id);
+    } else if (kind === "legacy" || kind === "phase") {
+      unresolvedLegacy = true;
+    }
+  }
+  if (ambiguousIds.length > 0) {
+    params.logger.warn(
+      `memory-core: cron jobs ${ambiguousIds.join(", ")} retain historical dreaming tags with authored payloads; rows left unchanged. Review their ownership manually.`,
+    );
+  }
+  const needsDoctor = (removed: number): ReconcileResult => {
+    params.logger.warn(
+      "memory-core: historical dreaming cron jobs require repair; run openclaw doctor --fix. Runtime reconciliation left legacy jobs unchanged.",
+    );
+    return { status: "doctor-required", removed };
+  };
+
+  if (!params.config.enabled) {
+    let removed = 0;
+    for (const job of managed) {
+      try {
+        const result = await cron.remove(job.id);
+        if (result.removed === true) {
+          removed += 1;
+        }
+      } catch (err) {
+        params.logger.warn(
+          `memory-core: failed to remove managed dreaming cron job ${job.id}: ${formatErrorMessage(err)}`,
+        );
+      }
+    }
+    if (removed > 0) {
+      params.logger.info(`memory-core: removed ${removed} managed dreaming cron job(s).`);
+    }
+    return unresolvedLegacy ? needsDoctor(removed) : { status: "disabled", removed };
+  }
+
+  const retiredPayload = managed.find((job) => job.payload?.kind !== "agentTurn");
+  if (retiredPayload || unresolvedLegacy) {
+    return needsDoctor(0);
+  }
+
+  const desired = buildManagedDreamingCronJob(params.config);
+  const primary = managed[0];
+  if (!primary) {
+    await cron.add(desired);
+    params.logger.info("memory-core: created managed dreaming cron job.");
+    return { status: "added", removed: 0 };
+  }
+
+  const duplicates = sortManagedJobs(managed.filter((job) => job.id !== primary.id));
+  let removed = 0;
+  for (const duplicate of duplicates) {
+    try {
+      const result = await cron.remove(duplicate.id);
+      if (result.removed === true) {
+        removed += 1;
+      }
+    } catch (err) {
+      params.logger.warn(
+        `memory-core: failed to prune duplicate managed dreaming cron job ${duplicate.id}: ${formatErrorMessage(err)}`,
+      );
+    }
+  }
+
+  const patch = buildManagedDreamingPatch(primary, desired);
+  if (!patch) {
+    if (removed > 0) {
+      params.logger.info("memory-core: pruned duplicate managed dreaming cron jobs.");
+    }
+    return { status: "noop", removed };
+  }
+
+  await cron.update(primary.id, patch);
+  params.logger.info("memory-core: updated managed dreaming cron job.");
+  return { status: "updated", removed };
+}

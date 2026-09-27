@@ -126,4 +126,14 @@
     <string name="pulse_phase_counts" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"대기 중 %1$d, 실행 중 %2$d, 완료 %3$d, 실패 %4$d, 숨김 %5$d"</string>
     <string name="pulse_more_phases" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"표시되지 않은 단계 더 있음"</string>
     <string name="pulse_unknown" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"알 수 없음"</string>
+    <string name="read_full_reply" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"전체 답변 읽기"</string>
+    <string name="reply_stream_preview" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"실시간 미리보기입니다. 답변이 완료되면 전체 내용을 읽어보세요."</string>
+    <string name="reply_previous_page" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"이전 부분"</string>
+    <string name="reply_next_page" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"다음 부분"</string>
+    <string name="reply_loading" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"전체 답변 불러오는 중…"</string>
+    <string name="reply_unsupported" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"전체 답변을 읽으려면 휴대전화 앱과 Gateway를 업데이트하세요."</string>
+    <string name="reply_too_large" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"이 답변은 너무 길어서 여기에서 읽을 수 없습니다. 휴대전화에서 열어 보세요."</string>
+    <string name="reply_changed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"답변 또는 연결이 변경되었습니다. 처음부터 다시 시도하세요."</string>
+    <string name="reply_unavailable" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"전체 텍스트를 더 이상 볼 수 없습니다."</string>
+    <string name="reply_failed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"전체 답변을 불러오지 못했습니다. 다시 시도하세요."</string>
 </resources>

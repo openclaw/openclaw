@@ -37,13 +37,7 @@ import type {
 } from "./types.js";
 
 export type ApplyMediaUnderstandingResult = {
-  outputs: MediaUnderstandingOutput[];
-  decisions: MediaUnderstandingDecision[];
   extractedFileImages: ExtractedFileImage[];
-  appliedImage: boolean;
-  appliedAudio: boolean;
-  appliedVideo: boolean;
-  appliedFile: boolean;
   enableLocalPathSelfServe?: (
     contexts: MsgContext[],
     stagedPaths?: ReadonlyMap<number, string>,
@@ -299,13 +293,7 @@ export async function applyMediaUnderstanding(params: {
     }
 
     return {
-      outputs,
-      decisions,
       extractedFileImages: fileContext.images,
-      appliedImage: outputs.some((output) => output.kind === "image.description"),
-      appliedAudio: outputs.some((output) => output.kind === "audio.transcription"),
-      appliedVideo: outputs.some((output) => output.kind === "video.description"),
-      appliedFile: fileContext.blocks.length > 0,
       ...(fileContext.localPathSelfServeUpgrades.length > 0
         ? {
             enableLocalPathSelfServe: (

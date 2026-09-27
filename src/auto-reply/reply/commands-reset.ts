@@ -7,6 +7,7 @@ import { logVerbose } from "../../globals.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { isResetAuthorizedForContext } from "../command-auth.js";
+import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import { applyCommandTextToContext } from "./command-context-rewrite.js";
 import { commandReply } from "./command-gates.js";
 import { resolveBoundAcpThreadSessionKey } from "./commands-acp/targets.js";
@@ -58,9 +59,14 @@ export async function maybeHandleResetCommand(
         )
       : { shouldContinue: false };
   }
+  const commandTargetSessionKey = resolveCommandTurnTargetSessionKey(params.ctx);
   const softReset = parseSoftResetCommand(params.command.commandBodyNormalized);
   if (softReset.matched) {
-    const boundAcpSessionKey = resolveBoundAcpThreadSessionKey(params);
+    const boundAcpSessionKey = await resolveBoundAcpThreadSessionKey(
+      params,
+      commandTargetSessionKey,
+    );
+    params.opts?.abortSignal?.throwIfAborted();
     const boundAcpKey =
       boundAcpSessionKey && isAcpSessionKey(boundAcpSessionKey)
         ? boundAcpSessionKey.trim()
@@ -136,7 +142,8 @@ export async function maybeHandleResetCommand(
   const commandAction: ResetCommandAction =
     resetMatch[1]?.toLowerCase() === "reset" ? "reset" : "new";
   const resetTail = params.command.commandBodyNormalized.slice(resetMatch[0].length).trimStart();
-  const boundAcpSessionKey = resolveBoundAcpThreadSessionKey(params);
+  const boundAcpSessionKey = await resolveBoundAcpThreadSessionKey(params, commandTargetSessionKey);
+  params.opts?.abortSignal?.throwIfAborted();
   const boundAcpKey =
     boundAcpSessionKey && isAcpSessionKey(boundAcpSessionKey)
       ? boundAcpSessionKey.trim()

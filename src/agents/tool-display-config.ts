@@ -69,6 +69,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Screen",
       detailKeys: ["action", "sessionKey", "dock"],
     },
+    theme: {
+      emoji: "🎨",
+      title: "Theme",
+      detailKeys: ["action", "id", "mode"],
+    },
     terminal: {
       emoji: "⌨️",
       title: "Terminal",
@@ -103,6 +108,15 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       emoji: "📝",
       title: "Edit",
       detailKeys: ["path"],
+    },
+    personal_instructions: {
+      emoji: "📝",
+      title: "Personal Instructions",
+      detailKeys: ["action", "agentId"],
+      actions: {
+        get: displayAction("read", ["agentId"]),
+        set: displayAction("save", ["agentId"]),
+      },
     },
     attach: {
       emoji: "📎",
@@ -385,7 +399,15 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
     sessions_spawn: {
       emoji: "🧑‍🔧",
       title: "Sub-agent",
-      detailKeys: ["label", "task", "agentId", "model", "thinking", "runTimeoutSeconds", "cleanup"],
+      detailKeys: [
+        "label",
+        "taskName",
+        "agentId",
+        "model",
+        "thinking",
+        "runTimeoutSeconds",
+        "cleanup",
+      ],
     },
     agents_wait: { emoji: "⏳", title: "Wait for Agents", detailKeys: ["ids", "timeoutSeconds"] },
     structured_output: { emoji: "🧾", title: "Structured Output", detailKeys: ["result"] },
@@ -427,6 +449,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       emoji: "🧮",
       title: "Code Execution",
       detailKeys: ["task"],
+    },
+    decision_evaluate: {
+      emoji: "⚖️",
+      title: "Decision Evaluation",
+      detailKeys: [],
     },
     message: MESSAGE_TOOL_DISPLAY_SPEC,
     apply_patch: {

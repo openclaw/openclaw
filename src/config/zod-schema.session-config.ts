@@ -40,6 +40,7 @@ export const SessionSchema = z
       .enum(["main", "per-peer", "per-channel-peer", "per-account-channel-peer"])
       .optional(),
     groupScope: z.enum(["main", "per-group"]).optional(),
+    notifyOnCreate: z.boolean().optional(),
     identityLinks: z.record(z.string(), z.array(z.string())).optional(),
     resetTriggers: z.array(z.string()).optional(),
     reset: SessionResetConfigSchema.optional(),

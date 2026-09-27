@@ -803,7 +803,7 @@ function installPackageLocalBundledDependencies(params: PluginPackageContext) {
   const patched = packPatchedDependencies(params.packageDir, params.patchedDependencies ?? []);
   const installPackageJson = packageJsonForNpmLock(
     installPackageJsonBase,
-    readNpmLockOverrides(),
+    readNpmLockOverrides(installPackageJsonBase, params.packageDir, patched.artifacts),
     patched.artifacts,
   );
   const installPackageJsonText = `${JSON.stringify(installPackageJson, null, 2)}\n`;
@@ -886,7 +886,7 @@ export function resolveAugmentedPluginNpmPackageJson(params: PluginPackageParams
     };
   }
 
-  const plan = resolvePluginNpmRuntimeBuildPlan({ repoRoot, packageDir });
+  const plan = resolvePluginNpmRuntimeBuildPlan({ repoRoot, packageDir, profile: params.profile });
   if (!plan) {
     return {
       packageJsonPath,
@@ -912,6 +912,7 @@ export function resolveAugmentedPluginNpmPackageJson(params: PluginPackageParams
     openclaw: {
       ...plan.packageJson.openclaw,
       ...(packagedChannel ? { channel: packagedChannel } : {}),
+      ...(plan.profile === "qa-gateway-fixture" ? { extensions: plan.runtimeExtensions } : {}),
       runtimeExtensions: plan.runtimeExtensions,
       ...(plan.runtimeSetupEntry
         ? {
@@ -939,7 +940,7 @@ export function resolveAugmentedPluginNpmPackageJson(params: PluginPackageParams
     delete packageJson.bundleDependencies;
     delete packageJson.devDependencies;
   }
-  const changed = JSON.stringify(packageJson) !== JSON.stringify(plan.packageJson);
+  const changed = JSON.stringify(packageJson) !== JSON.stringify(readJsonFile(packageJsonPath));
   return {
     packageJsonPath,
     packageDir,
@@ -1077,7 +1078,14 @@ export function resolveAugmentedPluginNpmManifest(params: PluginPackageParams) {
   }
 
   const manifest = readJsonFile(manifestPath);
-  let publicationManifest = manifest;
+  const fixturePlan =
+    params.profile === "qa-gateway-fixture"
+      ? resolvePluginNpmRuntimeBuildPlan({ repoRoot, packageDir, profile: params.profile })
+      : undefined;
+  let publicationManifest = fixturePlan?.manifest ?? manifest;
+  if (fixturePlan && params.clawhubMetadataDir) {
+    throw new Error("Private QA Gateway fixtures cannot use publication metadata.");
+  }
   if (params.clawhubMetadataDir) {
     const metadataDir = path.resolve(params.clawhubMetadataDir);
     const metadata = readJsonFile(path.join(metadataDir, "openclaw.plugin.json"));
@@ -1112,11 +1120,18 @@ export function resolveAugmentedPluginNpmManifest(params: PluginPackageParams) {
   const pluginId =
     typeof manifest.id === "string" && manifest.id ? manifest.id : path.basename(packageDir);
   const generatedChannelConfigs = readGeneratedBundledChannelConfigs(repoRoot).get(pluginId);
+  if (
+    params.profile === "qa-gateway-fixture" &&
+    pluginId === "qa-channel" &&
+    !generatedChannelConfigs?.["qa-channel"]
+  ) {
+    throw new Error("QA Channel fixtures require the canonical generated channel config metadata.");
+  }
   // Manifest-only overlays have no package runtime to rewrite.
   const runtimePlan =
     (manifest.providerCatalogEntry || manifest.capabilityCatalogEntry) &&
     fs.existsSync(resolvePackageJsonPath(packageDir))
-      ? resolvePluginNpmRuntimeBuildPlan({ repoRoot, packageDir })
+      ? resolvePluginNpmRuntimeBuildPlan({ repoRoot, packageDir, profile: params.profile })
       : null;
   const augmentedManifest = mergeGeneratedChannelConfigs(
     runtimePlan
@@ -1154,16 +1169,25 @@ export function withAugmentedPluginNpmManifestForPackage<T>(
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDir = resolvePackageDir(repoRoot, params.packageDir);
   const packageJsonPath = resolvePackageJsonPath(packageDir);
-  const packageJson = fs.existsSync(packageJsonPath) ? readJsonFile(packageJsonPath) : undefined;
+  const packageJson =
+    params.profile === "qa-gateway-fixture"
+      ? resolvePluginNpmRuntimeBuildPlan({ repoRoot, packageDir, profile: params.profile })
+          ?.packageJson
+      : fs.existsSync(packageJsonPath)
+        ? readJsonFile(packageJsonPath)
+        : undefined;
   const patchedDependencies = packageJson
     ? collectWorkspacePatchedDependencies(repoRoot, packageDir, packageJson)
     : [];
   const resolvedParams = { ...params, patchedDependencies };
+  const bundleDependencies = shouldBundleDependencies(
+    params.bundleDependencies,
+    packageJson,
+    patchedDependencies,
+  );
   if (
     !params.clawhubMetadataDir &&
-    (!packageJson ||
-      !shouldBundleDependencies(params.bundleDependencies, packageJson, patchedDependencies) ||
-      !hasPackageRuntimeDependencies(packageJson))
+    (!packageJson || !bundleDependencies || !hasPackageRuntimeDependencies(packageJson))
   ) {
     return withPluginNpmManifestOverlay(resolvedParams, callback);
   }
@@ -1176,7 +1200,12 @@ export function withAugmentedPluginNpmManifestForPackage<T>(
   try {
     fs.cpSync(packageDir, stagedPackageDir, {
       recursive: true,
-      filter: (source) => path.basename(source) !== "node_modules",
+      // Historical candidates contain npm shrinkwraps. npm ci prefers them to
+      // the fresh pnpm-policy lock, so exclude only the bundle's root shrinkwrap
+      // from staging; preserve the frozen source and dependency-owned locks.
+      filter: (source) =>
+        path.basename(source) !== "node_modules" &&
+        (!bundleDependencies || source !== path.join(packageDir, "npm-shrinkwrap.json")),
     });
     return withPluginNpmManifestOverlay(
       { ...resolvedParams, repoRoot, packageDir: stagedPackageDir },
@@ -1194,9 +1223,13 @@ function withPluginNpmManifestOverlay<T>(
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDir = resolvePackageDir(repoRoot, params.packageDir);
   const packageJsonPath = resolvePackageJsonPath(packageDir);
-  const packageJsonForBundlePolicy = fs.existsSync(packageJsonPath)
-    ? readJsonFile(packageJsonPath)
-    : undefined;
+  const packageJsonForBundlePolicy =
+    params.profile === "qa-gateway-fixture"
+      ? resolvePluginNpmRuntimeBuildPlan({ repoRoot, packageDir, profile: params.profile })
+          ?.packageJson
+      : fs.existsSync(packageJsonPath)
+        ? readJsonFile(packageJsonPath)
+        : undefined;
   const bundleDependencies = shouldBundleDependencies(
     params.bundleDependencies,
     packageJsonForBundlePolicy,
@@ -1206,12 +1239,14 @@ function withPluginNpmManifestOverlay<T>(
     repoRoot,
     packageDir,
     clawhubMetadataDir: params.clawhubMetadataDir,
+    profile: params.profile,
   });
   const resolvedPackageJson = resolveAugmentedPluginNpmPackageJson({
     repoRoot,
     packageDir,
     bundleDependencies: params.bundleDependencies,
     patchedDependencies: params.patchedDependencies,
+    profile: params.profile,
   });
 
   const originalManifest =
@@ -1261,7 +1296,7 @@ function withPluginNpmManifestOverlay<T>(
 }
 
 const RUN_USAGE =
-  "usage: node scripts/lib/plugin-npm-package-manifest.mjs --run <package-dir> [--clawhub-metadata <package-dir>] -- <command> [args...]";
+  "usage: node scripts/lib/plugin-npm-package-manifest.mjs --run <package-dir> [--clawhub-metadata <package-dir> | --qa-gateway-fixture] -- <command> [args...]";
 
 function readRunPackageDir(argv: string[]) {
   const packageDir = argv[1];
@@ -1279,6 +1314,7 @@ export function parseRunArgs(argv: string[]):
       command: string;
       args: string[];
       clawhubMetadataDir?: string;
+      profile?: "qa-gateway-fixture";
       help?: undefined;
     } {
   if (argv[0] === "--help" || argv[0] === "-h") {
@@ -1292,9 +1328,11 @@ export function parseRunArgs(argv: string[]):
   if (!packageDir || separatorIndex === -1 || separatorIndex === argv.length - 1) {
     throw new Error(RUN_USAGE);
   }
+  const fixture = argv[2] === "--qa-gateway-fixture";
   const clawhubMetadataDir = argv[2] === "--clawhub-metadata" ? argv[3] : undefined;
   if (
     separatorIndex !== 2 &&
+    !(fixture && separatorIndex === 3) &&
     (separatorIndex !== 4 || !clawhubMetadataDir || clawhubMetadataDir.startsWith("--"))
   ) {
     throw new Error(`unexpected plugin npm package manifest run argument: ${argv[2]}`);
@@ -1306,6 +1344,7 @@ export function parseRunArgs(argv: string[]):
   return {
     packageDir,
     ...(clawhubMetadataDir ? { clawhubMetadataDir: path.resolve(clawhubMetadataDir) } : {}),
+    ...(fixture ? { profile: "qa-gateway-fixture" as const } : {}),
     command,
     args: argv.slice(separatorIndex + 2),
   };
@@ -1323,6 +1362,7 @@ function main(argv: string[] = process.argv.slice(2)) {
       packageDir,
       bundleDependencies: process.env.OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES,
       clawhubMetadataDir: parsedArgs.clawhubMetadataDir,
+      profile: parsedArgs.profile,
     },
     ({ packageDir: cwd }) => {
       const commandArgs = [...args];

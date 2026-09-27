@@ -5,6 +5,7 @@ import type { ApplicationContext } from "../app/context.ts";
 import { sessionPlacementRecoveryExactStorageKey } from "../lib/sessions/session-placement-recovery-storage-key.ts";
 import type { SessionPlacementPausedRecovery } from "../lib/sessions/session-placement-recovery.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { openChatModelPicker } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   SESSION_LIST_DEFAULTS,
@@ -21,6 +22,7 @@ import {
   pollLocatorText,
   replaceGatewayClient,
   waitForCommittedChatRoute,
+  waitForGatewayRecoveryScope,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -33,7 +35,8 @@ suite.define(() => {
       const sessionId = "session-late-active-retry";
       const messageId = "late-active-first-turn";
       const message = "Continue the saved cloud task";
-      const diagnostic = "session placement reconciliation timed out";
+      const diagnostic =
+        "Worker setup is still in progress. Retry to check the existing worker; your message has not been sent.";
       const placement = {
         state: "active",
         generation: 1,
@@ -67,6 +70,8 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await expect.poll(() => composer.isDisabled()).toBe(false);
+      // Pending history permits editing before the authenticated recovery scope is ready.
+      await waitForGatewayRecoveryScope(page);
       const owner = await page.evaluate(() => {
         const app = document.querySelector("openclaw-app") as HTMLElement & {
           runtime: { context: ApplicationContext };
@@ -106,9 +111,11 @@ suite.define(() => {
       await pollLocatorText(initialTurn.locator(".chat-send-status")).toContain("Not sent");
       const alert = page.getByRole("alert").filter({ hasText: diagnostic });
       await alert.waitFor({ state: "visible" });
+      await pollLocatorText(alert).toContain("startup needs attention");
       expect(await composer.isDisabled()).toBe(true);
       expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
       if (captureUiProof) {
+        await alert.locator("summary").click();
         await writeFile(
           path.join(suite.artifactDir, "late-active-retry-before.png"),
           await takeControlUiViewportScreenshot(page, page.locator(".shell"), [initialTurn]),
@@ -269,7 +276,8 @@ suite.define(() => {
         .toBe("fast");
       await page.locator(".new-session-page__message").fill(message);
       await pastePng(page.locator(".new-session-page__message"));
-      await page.locator('[data-chat-model-select="true"]').click();
+      await expectPastedPngImage(page.getByRole("img", { name: "pixel.png" }));
+      await openChatModelPicker(page);
       const picker = page.locator("[data-chat-account-selection]");
       await picker.locator("[data-chat-account-group-toggle]").click();
       await picker.locator(`[data-chat-account-option="account:${account.authProfileId}"]`).click();

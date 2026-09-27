@@ -26,7 +26,6 @@ import {
   statWorkspacePath,
   toUpdatedAtMs,
   WORKSPACE_PREVIEW_MAX_BYTES,
-  workspaceStatKind,
   type WorkspaceDirEntry,
   type WorkspaceRoot,
   updateWorkspaceFile,
@@ -40,7 +39,6 @@ export type LoadedSessionFiles = {
   diffCwd?: string;
   files: TouchedFile[];
 };
-type FileKind = TouchedFile["kind"];
 const MAX_PREVIEW_BYTES = WORKSPACE_PREVIEW_MAX_BYTES;
 const MAX_BROWSER_ENTRIES = 250;
 const MAX_SEARCH_ENTRIES = 500;
@@ -113,10 +111,6 @@ export function resolveFileRoot(params: {
   return isPathInside(resolvedRoot, resolvedCwd) ? params.spawnedCwd : params.root;
 }
 
-function relevanceForKind(kind: FileKind): SessionFileRelevance {
-  return kind;
-}
-
 function mergeRelevance(
   current: SessionFileRelevance | undefined,
   next: SessionFileRelevance | undefined,
@@ -138,7 +132,7 @@ function buildSessionRelevanceMap(
   const relevance = new Map<string, SessionFileRelevance>();
   if (!root) {
     for (const file of files) {
-      relevance.set(normalizeRelativePath(file.path), relevanceForKind(file.kind));
+      relevance.set(normalizeRelativePath(file.path), file.kind);
     }
     return relevance;
   }
@@ -147,7 +141,7 @@ function buildSessionRelevanceMap(
     if (!resolved) {
       continue;
     }
-    relevance.set(toDisplayPath(root, resolved), relevanceForKind(file.kind));
+    relevance.set(toDisplayPath(root, resolved), file.kind);
   }
   return relevance;
 }
@@ -247,7 +241,7 @@ async function toSessionFileEntry(
   }
   const browserPath = toDisplayPath(root!, resolved);
   const stat = await statWorkspacePath(opts.workspaceRoot ?? root!, browserPath);
-  if (!stat || workspaceStatKind(stat) !== "file") {
+  if (!stat?.isFile) {
     return { ...base, missing: true };
   }
   const entry: SessionFileEntry = {
@@ -299,13 +293,12 @@ function resolveSessionFileCandidates(params: {
   });
 }
 
-async function toBrowserEntry(
+function toBrowserEntry(
   browserPath: string,
   dirent: WorkspaceDirEntry,
   relevance: ReadonlyMap<string, SessionFileRelevance>,
-): Promise<SessionFileBrowserEntry | undefined> {
-  const statKind = workspaceStatKind(dirent);
-  const kind = statKind === "directory" ? "directory" : statKind === "file" ? "file" : null;
+): SessionFileBrowserEntry | undefined {
+  const kind = dirent.isFile ? "file" : dirent.isDirectory ? "directory" : null;
   if (!kind) {
     return undefined;
   }
@@ -358,12 +351,12 @@ async function searchBrowserEntries(params: {
       visitedEntries += 1;
       const browserPath = dir ? `${dir}/${dirent.name}` : dirent.name;
       if (matchesSearch(browserPath, dirent.name, params.query)) {
-        const entry = await toBrowserEntry(browserPath, dirent, params.relevance);
+        const entry = toBrowserEntry(browserPath, dirent, params.relevance);
         if (entry) {
           entries.push(entry);
         }
       }
-      if (workspaceStatKind(dirent) === "directory" && !SEARCH_SKIP_DIRS.has(dirent.name)) {
+      if (dirent.isDirectory && !SEARCH_SKIP_DIRS.has(dirent.name)) {
         await visit(browserPath);
       }
     }
@@ -404,23 +397,20 @@ async function buildBrowserResult(params: {
     return undefined;
   }
   const stat = await statWorkspacePath(params.workspaceRoot ?? params.root, browserPath);
-  if (!stat || workspaceStatKind(stat) !== "directory") {
+  if (!stat?.isDirectory) {
     return undefined;
   }
   const dirents = await listWorkspacePath(params.workspaceRoot ?? params.root, browserPath);
   if (!dirents) {
     return undefined;
   }
-  const entries = (
-    await Promise.all(
-      sortDirents(dirents)
-        .slice(0, MAX_BROWSER_ENTRIES + 1)
-        .map((dirent) => {
-          const entryPath = browserPath ? `${browserPath}/${dirent.name}` : dirent.name;
-          return toBrowserEntry(entryPath, dirent, relevance);
-        }),
-    )
-  ).filter((entry): entry is SessionFileBrowserEntry => Boolean(entry));
+  const entries = sortDirents(dirents)
+    .slice(0, MAX_BROWSER_ENTRIES + 1)
+    .map((dirent) => {
+      const entryPath = browserPath ? `${browserPath}/${dirent.name}` : dirent.name;
+      return toBrowserEntry(entryPath, dirent, relevance);
+    })
+    .filter((entry): entry is SessionFileBrowserEntry => Boolean(entry));
   const parent = path.dirname(browserPath);
   return {
     path: browserPath,
@@ -553,7 +543,7 @@ export async function setSessionWorkspaceFile(params: {
   for (const candidate of candidates) {
     const candidatePath = toDisplayPath(params.root, candidate);
     const stat = await statWorkspacePath(params.root, candidatePath);
-    if (stat && workspaceStatKind(stat) === "file") {
+    if (stat?.isFile) {
       browserPath = candidatePath;
       break;
     }

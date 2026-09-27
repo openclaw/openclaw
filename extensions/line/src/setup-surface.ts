@@ -1,4 +1,3 @@
-// Line plugin module implements setup surface behavior.
 import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
 import {
   createAllowFromSection,

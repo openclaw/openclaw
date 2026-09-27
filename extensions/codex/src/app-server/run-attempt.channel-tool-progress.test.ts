@@ -1,4 +1,5 @@
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { itemNotification } from "./protocol.test-helpers.js";
 import {
@@ -13,13 +14,15 @@ setupRunAttemptTestHooks();
 
 describe("Codex channel tool progress", () => {
   it("keeps raw command detail behind the channel commandText policy", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const harness = createStartedThreadHarness();
     const params = createParams(
       path.join(tempDir, "channel-command-privacy-session.jsonl"),
       path.join(tempDir, "channel-command-privacy-workspace"),
     );
     const onAgentEvent = vi.fn();
-    const onToolResult = vi.fn();
+    const progressReceived = createDeferred<void>();
+    const onToolResult = vi.fn(() => progressReceived.resolve());
     params.config = {
       channels: {
         telegram: {
@@ -44,10 +47,11 @@ describe("Codex channel tool progress", () => {
         status: "inProgress",
       }),
     );
+    await progressReceived.promise;
 
     expect(onToolResult).toHaveBeenCalledWith({
       text: "🛠️ Bash",
-      channelData: { openclawToolProgressId: "private-command-1" },
+      channelData: { openclawToolProgressId: "tool:private-command-1" },
     });
     const toolStart = onAgentEvent.mock.calls
       .map(([event]) => event)
@@ -68,13 +72,29 @@ describe("Codex channel tool progress", () => {
   });
 
   it("keeps every tool source available to channel policy and verbose callbacks", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const harness = createStartedThreadHarness();
     const params = createParams(
       path.join(tempDir, "channel-tool-progress-session.jsonl"),
       path.join(tempDir, "channel-tool-progress-workspace"),
     );
-    const onAgentEvent = vi.fn();
-    const onToolResult = vi.fn();
+    let expectedToolCallId: string;
+    let toolEnded = createDeferred<void>();
+    let progressReceived = createDeferred<void>();
+    const onAgentEvent = vi.fn<NonNullable<typeof params.onAgentEvent>>((event) => {
+      if (
+        event.stream === "item" &&
+        event.data.phase === "end" &&
+        event.data.toolCallId === expectedToolCallId
+      ) {
+        toolEnded.resolve();
+      }
+    });
+    const onToolResult = vi.fn<NonNullable<typeof params.onToolResult>>((payload) => {
+      if (payload.channelData?.openclawToolProgressId === `tool:${expectedToolCallId}`) {
+        progressReceived.resolve();
+      }
+    });
     params.messageChannel = "telegram";
     params.verboseLevel = "on";
     params.onAgentEvent = onAgentEvent;
@@ -190,8 +210,12 @@ describe("Codex channel tool progress", () => {
     ];
 
     for (const testCase of cases) {
+      expectedToolCallId = testCase.toolCallId;
+      toolEnded = createDeferred<void>();
+      progressReceived = createDeferred<void>();
       const resultCount = onToolResult.mock.calls.length;
       await testCase.drive();
+      await Promise.all([toolEnded.promise, progressReceived.promise]);
       const toolEvents = onAgentEvent.mock.calls
         .map(([event]) => event)
         .filter(
@@ -212,8 +236,24 @@ describe("Codex channel tool progress", () => {
       expect(onToolResult.mock.calls.length, `${testCase.label} verbose callback`).toBe(
         resultCount + 1,
       );
+      const prepared = onAgentEvent.mock.calls
+        .map(([event]) => event)
+        .filter(
+          (event) =>
+            event.stream === "item" &&
+            event.data.toolCallId === testCase.toolCallId &&
+            !event.data.suppressChannelProgress,
+        );
+      expect(
+        prepared.map((event) => event.data.phase),
+        testCase.label,
+      ).toEqual(["start", "end"]);
+      expect(
+        prepared.map((event) => event.data.itemId),
+        testCase.label,
+      ).toEqual([`tool:${testCase.toolCallId}`, `tool:${testCase.toolCallId}`]);
       expect(onToolResult.mock.calls[resultCount]?.[0], testCase.label).toMatchObject({
-        channelData: { openclawToolProgressId: testCase.toolCallId },
+        channelData: { openclawToolProgressId: prepared[0]?.data.itemId },
       });
     }
 

@@ -141,6 +141,7 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
   try {
     const { updateCommand } = await import("./update-command.js");
     await updateCommand({
+      runtimeRecoveryEnv: opts.runtimeRecoveryEnv,
       channel: requestedChannel ?? undefined,
       restart,
       timeout: opts.timeout,

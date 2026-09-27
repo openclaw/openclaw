@@ -1,6 +1,7 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -14,7 +15,6 @@ import {
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "./session-accessor.js";
-import { planSessionLifecycleArtifactCleanup } from "./session-accessor.sqlite-lifecycle-artifacts.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { runByteLimitedArchiveCleanupFixture } from "./test-helpers.js";
@@ -395,17 +395,6 @@ describe("SQLite lifecycle cleanup races", () => {
     }
     const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
     const cleanupNow = Date.now() + 60_000;
-    const planned = planSessionLifecycleArtifactCleanup(database, {
-      archiveRemovedEntryTranscripts: true,
-      archiveDirectory: path.dirname(storePath),
-      sessionKeySegmentPrefix: "cleanup-race",
-      transcriptContentMarker: "cleanup-race-marker",
-      orphanTranscriptMinAgeMs: 0,
-      nowMs: cleanupNow,
-    });
-    expect(planned.entries).toHaveLength(1);
-    expect(planned.deletePlans).toHaveLength(1);
-
     const refreshedEntry = { label: "refreshed", sessionId, updatedAt: now + 1 };
     let refreshed = false;
     archiveMaterializationHook.afterMaterialize = () => {
@@ -826,6 +815,14 @@ describe("SQLite lifecycle cleanup races", () => {
       );
     };
 
+    const publishedRemovals: string[] = [];
+    onTestFinished(
+      onSessionIdentityMutation((mutation) => {
+        if (mutation.kind === "delete") {
+          publishedRemovals.push(...mutation.previous.sessionKeys);
+        }
+      }),
+    );
     const result = await applySessionEntryLifecycleMutation({
       storePath,
       maintenanceOverride: {
@@ -836,6 +833,8 @@ describe("SQLite lifecycle cleanup races", () => {
     });
 
     expect(batchSizes).toEqual([64, 2]);
+    expect(publishedRemovals).not.toContain(racedKey);
+    expect(publishedRemovals).toHaveLength(64);
     expect(result).toMatchObject({
       beforeCount: entryCount,
       afterCount: 2,

@@ -50,6 +50,7 @@ export const revalidateManagedGatewayServiceAfterUpdate = async () => verdict;
     "../daemon/service.ts",
     `${shared}
 const service = {
+  readCommand: async () => command,
   restart: async ({assertCurrent}) => {
     assertCurrent();
     await fs.writeFile(statePath, 'running');
@@ -58,8 +59,11 @@ const service = {
   },
 };
 export const resolveGatewayService = () => service;
-export const readGatewayServiceState = async () => ({ env: env(), command,
-  runtime: { status: (await fs.readFile(statePath, 'utf8')) } });
+export const readGatewayServiceState = async () => {
+  const status = await fs.readFile(statePath, 'utf8');
+  return { env: env(), command, installed: true, running: status === 'running',
+    loadState: { status: 'loaded' }, runtime: { status } };
+};
 `,
   );
   override(

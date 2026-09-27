@@ -23,6 +23,50 @@ import { jsonResult } from "./tools/common.js";
 const fakeTool = pluginToolWithExecute;
 afterEach(resetCodeModeTestState);
 describe("Code Mode output provenance", () => {
+  it.each(["interactive", "headless"])(
+    "settles final getter work exactly once across %s suspension",
+    async (mode) => {
+      const writes: string[] = [];
+      const writer = fakeTool("getter_write", "Record a synthetic write", async () => {
+        writes.push("saved");
+        return jsonResult({ ok: true });
+      });
+      const code = `let reads = 0;
+        return { get value() {
+          reads += 1;
+          text("computed:" + reads);
+          void getter_write({ value: "saved" });
+          void yield_control();
+          return reads;
+        } };`;
+      let result;
+      if (mode === "headless") {
+        result = await runCodeModeScriptHeadless({
+          ctx: createHeadlessCodeModeHarness([writer]),
+          code,
+        });
+      } else {
+        const h = createCodeModeHarness();
+        applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, writer] });
+        const first = resultDetails(await h.tools[0]!.execute("getter-output", { code }));
+        expect(first.status).toBe("waiting");
+        const final = await waitUntilCompleted({ details: first, waitTool: h.tools[1]! });
+        result = {
+          ...final,
+          output: [...(first.output as unknown[]), ...(final.output as unknown[])],
+        };
+      }
+      expect(result).toEqual(
+        expect.objectContaining({
+          status: "completed",
+          value: { value: 1 },
+          output: [{ type: "text", text: "computed:1" }],
+        }),
+      );
+      expect(writes).toEqual(["saved"]);
+    },
+  );
+
   it("identifies unawaited catalog descriptions in output and final values", async () => {
     const fixture = pluginTool("promise_fixture", "Describe a synthetic tool");
     const result = await runCodeModeScriptHeadless({

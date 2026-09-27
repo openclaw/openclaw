@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements process tree cpu behavior.
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import {

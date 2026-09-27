@@ -1,13 +1,20 @@
-import { spawn, type ChildProcess, type SendHandle } from "node:child_process";
+import type { ChildProcess, SendHandle } from "node:child_process";
 import { Socket } from "node:net";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { killProcessTree } from "../kill-tree.js";
+import { spawnWithInheritedOomScore } from "../linux-oom-score.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "../supervisor/cancellation-policy.js";
 import { hasLiveOwnedProcessGroupMembers } from "../supervisor/service-child-group-ownership.js";
+import { serializeExecaError } from "./execa-protocol.js";
 import { startBrokerExeca } from "./execa-worker.js";
 import { createBrokerReceiver } from "./ipc.js";
 import { holdPipeForTransfer, takePipePrefix } from "./pipe.js";
-import { serializeBrokerError, type BrokerRequest, type BrokerResponse } from "./protocol.js";
+import {
+  serializeBrokerError,
+  SpawnBrokerError,
+  type BrokerRequest,
+  type BrokerResponse,
+} from "./protocol.js";
 import { createWorkerSender } from "./worker-sender.js";
 
 type ExecaRun = Awaited<ReturnType<typeof startBrokerExeca>>;
@@ -113,13 +120,32 @@ async function launch(
   message: Extract<BrokerRequest, { type: "spawn" | "spawn-execa" }>,
 ): Promise<void> {
   if (stopping || owned.size + starting.size >= 256) {
+    const error = new SpawnBrokerError("Spawn broker request capacity exceeded");
+    // The ordered failed-admission result proves no native work was started.
+    // No command metadata exists because this guard precedes spawn preparation.
+    await report({
+      type: "execa-result",
+      id: message.id,
+      result: {
+        failed: true,
+        code: error.code,
+        timedOut: false,
+        isCanceled: false,
+        isGracefullyCanceled: false,
+        isMaxBuffer: false,
+        isTerminated: false,
+        isForcefullyTerminated: false,
+        command: "",
+        escapedCommand: "",
+        cwd: process.cwd(),
+        durationMs: 0,
+        error: serializeExecaError(error),
+      },
+    });
     await report({
       type: "error",
       id: message.id,
-      error: {
-        message: "Spawn broker request capacity exceeded",
-        code: "ERR_SPAWN_BROKER_UNAVAILABLE",
-      },
+      error: serializeBrokerError(error),
       resultUnavailable: true,
     });
     return;
@@ -144,7 +170,7 @@ async function launch(
       const child =
         execa?.child ??
         (message.type === "spawn"
-          ? spawn(message.argv[0]!, message.argv.slice(1), message.options)
+          ? spawnWithInheritedOomScore(message.argv[0]!, message.argv.slice(1), message.options)
           : undefined);
       spawnedChild = child;
       if (!child) {
@@ -331,8 +357,15 @@ async function launch(
 }
 
 process.once("disconnect", shutdown);
-process.on("SIGTERM", shutdown);
-process.on("SIGINT", shutdown);
+const onSupervisorSignal = () => {
+  // A cgroup stop can reach the broker before the Gateway finishes child cleanup.
+  // Keep its transport alive until the parent relinquishes ownership through IPC.
+  if (!process.connected) {
+    shutdown();
+  }
+};
+process.on("SIGTERM", onSupervisorSignal);
+process.on("SIGINT", onSupervisorSignal);
 process.on("message", (raw: unknown, handle: SendHandle) => {
   // Only the version-matched parent can write this private IPC channel.
   let decoded: unknown;
@@ -383,7 +416,10 @@ process.on("message", (raw: unknown, handle: SendHandle) => {
   } else if (message.type === "cancel") {
     entry.execa?.cancel();
   } else if (message.type === "output-drained") {
-    entry.execa?.outputDrained(message.fd, message.error ? new Error(message.error) : undefined);
+    entry.execa?.outputDrained(
+      message.fd,
+      message.error ? Object.assign(new Error(message.error.message), message.error) : undefined,
+    );
     entry.openPipes.delete(message.fd);
     forget(message.id, entry);
   } else if (message.type === "disconnect" && entry.child.connected) {

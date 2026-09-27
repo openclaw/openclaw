@@ -21,7 +21,6 @@ const dispatch = vi.hoisted(() =>
     ) => ({ runId: "override-run" }),
   ),
 );
-const normalization = vi.hoisted(() => ({ chainedAlias: false }));
 vi.mock("./server-plugin-in-process-dispatch.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./server-plugin-in-process-dispatch.js")>()),
   dispatchGatewayMethodInProcess: dispatch,
@@ -35,7 +34,7 @@ vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
       ? undefined
       : params.context.modelId === "literal"
         ? "permitted"
-        : normalization.chainedAlias && params.context.modelId === "permitted"
+        : params.context.modelId === "permitted"
           ? "different"
           : undefined,
 }));
@@ -44,7 +43,6 @@ let config: OpenClawConfig;
 
 beforeEach(() => {
   dispatch.mockClear();
-  normalization.chainedAlias = false;
   config = {
     agents: { entries: { worker: { model: "fixture/literal" } } },
     models: {
@@ -119,16 +117,10 @@ describe("plugin subagent initial override policy", () => {
     },
   );
 
-  it.each([
-    { override: { provider: "fixture", model: "literal" }, chainedAlias: false },
-    { override: { model: "fixture/literal" }, chainedAlias: false },
-    { override: { provider: "fixture", model: "literal" }, chainedAlias: true },
-    { override: { model: "fixture/literal" }, chainedAlias: true },
-  ])(
-    "preserves command selection for $override with chained aliases=$chainedAlias",
-    async ({ override, chainedAlias }) => {
+  it.each([{ provider: "fixture", model: "literal" }, { model: "fixture/literal" }])(
+    "preserves command selection for %j with chained aliases",
+    async (override) => {
       config.models!.providers!.fixture!.models = [];
-      normalization.chainedAlias = chainedAlias;
       await expect(run(override)).resolves.toMatchObject({ runId: "override-run" });
       const request = dispatch.mock.calls[0]?.[1];
       expect(request).toMatchObject(override);

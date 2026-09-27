@@ -15,8 +15,7 @@ Gateway HTTP hooks: how an external service calls OpenClaw to wake an agent or s
 
 Gateway HTTP hooks let an external service wake an agent or submit an agent turn.
 They are disabled by default. These endpoints are separate from [internal event
-hooks](/automation/hooks) (`HOOK.md` handlers) and the [Webhooks
-plugin](/plugins/webhooks), which manages TaskFlow records. They also differ from
+hooks](/automation/hooks) (`HOOK.md` handlers). They also differ from
 outbound automation webhook delivery: here, the external service calls OpenClaw.
 
 ### Enable and test an agent hook

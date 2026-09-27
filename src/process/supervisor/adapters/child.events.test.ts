@@ -1,5 +1,6 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { ProcessExtinctionResult } from "../types.js";
 import { createChildAdapter } from "./child.js";
 import { createStubChild, readyChildAdapter } from "./child.test-support.js";
 
@@ -66,7 +67,7 @@ it("records tree signaling rejection in cleanup without an unhandled rejection",
   signalProcessTree.mockImplementationOnce(() => {
     throw failure;
   });
-  let cleanup: Promise<void> | undefined;
+  let cleanup: Promise<ProcessExtinctionResult> | undefined;
   const adapter = await startChildAdapter({
     argv: ["synthetic-child"],
     stdinMode: "pipe-open",

@@ -2,19 +2,16 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
+import { extractSqliteTableSchema, quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
 import {
   canRepairLegacyAuditEventsSchema,
   hasCanonicalAuditEventsSchema,
 } from "./openclaw-state-db-audit-migration.js";
 import {
   OPENCLAW_STATE_STRICT_SCHEMA_VERSION,
-  type OpenClawStateDatabaseOptions,
   type OpenClawStateDatabaseSchemaMigration,
 } from "./openclaw-state-db-contract.js";
-import { resolveDatabasePath } from "./openclaw-state-db-maintenance.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
-import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "./openclaw-state-db-readonly.js";
 import {
   tableExists,
   tableHasColumn,
@@ -61,15 +58,11 @@ export function migrateWorkerPlacementExecutionModeSchema(
       db.exec(`ALTER TABLE worker_session_placements ADD COLUMN ${definition};`);
     }
   }
-  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
-    "CREATE TABLE IF NOT EXISTS worker_session_placements (",
+  const placementSchema = extractSqliteTableSchema(
+    OPENCLAW_STATE_SCHEMA_SQL,
+    "worker_session_placements",
+    { errorMessage: "Canonical worker placement schema block is missing" },
   );
-  const endMarker = "\n) STRICT;";
-  const end = start >= 0 ? OPENCLAW_STATE_SCHEMA_SQL.indexOf(endMarker, start) : -1;
-  if (start < 0 || end < 0) {
-    throw new Error("Canonical worker placement schema block is missing");
-  }
-  const placementSchema = OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + endMarker.length);
   const canonical = openNodeSqliteDatabase(":memory:");
   let canonicalColumns: string[];
   try {
@@ -349,29 +342,6 @@ export function assertCanonicalStateSchemaShape(db: DatabaseSync, pathname: stri
     );
   }
 }
-export function detectOpenClawStateDatabaseSchemaMigrations(
-  options: OpenClawStateDatabaseOptions = {},
-  behavior: { artifactPreservingReadOnly?: boolean } = {},
-): OpenClawStateDatabaseSchemaMigration[] {
-  const pathname = resolveDatabasePath(options);
-  if (!existsSync(pathname)) {
-    return [];
-  }
-  if (behavior.artifactPreservingReadOnly) {
-    return (
-      withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
-        ({ db }) => detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(db, pathname),
-        { ...options, path: pathname },
-      ) ?? []
-    );
-  }
-  const db = openNodeSqliteDatabase(pathname, { readOnly: true });
-  try {
-    return detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(db, pathname);
-  } finally {
-    db.close();
-  }
-}
 
 /**
  * Detect migrations against a caller-owned handle.
@@ -450,6 +420,14 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
     !tableHasColumn(db, "worker_environments", "preparation_consumed_at_ms")
   ) {
     migrations.push({ kind: "prepared-worker-ownership-v17", path: pathname });
+  }
+  if (
+    userVersion < 18 &&
+    ["github_publication_session_lifecycles", "github_repository_publication_requests"].some(
+      (table) => tableExists(db, table) && !tableHasColumn(db, table, "requester_authority_json"),
+    )
+  ) {
+    migrations.push({ kind: "github-publication-requester-authority-v18", path: pathname });
   }
   if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
     migrations.push({ kind: "agent-databases-composite-primary-key", path: pathname });

@@ -2,8 +2,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, vi } from "vitest";
+import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import type { OpenClawConfig } from "../../config/types.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  registerAgentRunContext,
+  releaseAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
 import type {
   WorkerDesktopEndpoint,
   WorkerNodeEnrollment,
@@ -12,14 +19,23 @@ import type {
 } from "../../plugins/types.js";
 import {
   closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerInferenceStore } from "./inference-store.js";
+import { sameWorkerSessionTurnClaim, type WorkerSessionTurnClaim } from "./placement-record.js";
+import type { PlacementTurnClaimAuthority } from "./placement-turn-authority.js";
+import {
+  attachWorkerTurnExecutionIdentityStore,
+  bindWorkerTurnOwner,
+  getWorkerTurnExecutionIdentityCapability,
+} from "./placement-turn-claim-events.js";
 import { createWorkerEnvironmentService, type WorkerEnvironmentService } from "./service.js";
 import {
   createWorkerEnvironmentStore,
@@ -112,12 +128,16 @@ export const testState = {} as {
   config: OpenClawConfig;
   nowMs: number;
   providersEnabled: boolean;
+  reuseReadWorkers: boolean;
+  releaseTurnOwners: Array<() => void | Promise<void>>;
   prepareInstallation: WorkerEnvironmentServiceOptions["prepareInstallation"];
   bootstrapWorker: WorkerEnvironmentServiceOptions["bootstrapWorker"];
 };
 
-export function setupWorkerEnvironmentServiceSuite() {
+export function setupWorkerEnvironmentServiceSuite(options: { reuseReadWorkers?: boolean } = {}) {
   beforeEach(async () => {
+    testState.reuseReadWorkers = options.reuseReadWorkers === true;
+    testState.releaseTurnOwners = [];
     testState.root = await fs.mkdtemp(
       path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-service-"),
     );
@@ -126,7 +146,7 @@ export function setupWorkerEnvironmentServiceSuite() {
     });
     testState.nowMs = 1_000;
     testState.providersEnabled = true;
-    testState.store = createWorkerEnvironmentStore({
+    testState.store = await createWorkerEnvironmentStore({
       database: testState.stateDb,
       now: () => testState.nowMs,
     });
@@ -154,11 +174,33 @@ export function setupWorkerEnvironmentServiceSuite() {
   afterEach(async () => {
     // Shutdown may schedule cleanup after a test leaves fake timers installed.
     vi.useRealTimers();
-    await testState.service?.stop();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
+    try {
+      await testState.service?.stop();
+    } finally {
+      for (const release of testState.releaseTurnOwners) {
+        await release();
+      }
+    }
+    await closeWorkerEnvironmentDatabase();
     await fs.rm(testState.root, { recursive: true, force: true });
   });
+
+  if (options.reuseReadWorkers) {
+    afterAll(async () => {
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+    });
+  }
+}
+
+async function closeWorkerEnvironmentDatabase() {
+  if (testState.reuseReadWorkers) {
+    // Close native handles and admission for this case; retain only the reader worker code.
+    await closeOpenClawStateDatabaseByPathAsync(testState.stateDb.path);
+  } else {
+    await closeOpenClawStateDatabaseAsync();
+  }
+  closeOpenClawStateDatabaseForTest();
 }
 
 export function getDevelopmentProfile() {
@@ -171,12 +213,11 @@ export function getDevelopmentProfile() {
 export async function reopenWorkerEnvironmentStore() {
   await testState.service?.stop();
   testState.service = undefined;
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
+  await closeWorkerEnvironmentDatabase();
   testState.stateDb = openOpenClawStateDatabase({
     env: { OPENCLAW_STATE_DIR: testState.root },
   });
-  testState.store = createWorkerEnvironmentStore({
+  testState.store = await createWorkerEnvironmentStore({
     database: testState.stateDb,
     now: () => testState.nowMs,
   });
@@ -190,6 +231,8 @@ export function createService(
       | "applyTranscriptCommit"
       | "bootstrapCallTimeoutMs"
       | "executeInference"
+      | "inferenceStore"
+      | "closeNodeBootstrapArtifacts"
       | "executeSessionTool"
       | "executeComputer"
       | "providerCallTimeoutMs"
@@ -209,6 +252,7 @@ export function createService(
       | "generateWorkerCredential"
       | "liveEvents"
       | "maintainProviders"
+      | "scheduler"
       | "logger"
       | "now"
       | "nodeTunnelManager"
@@ -220,6 +264,7 @@ export function createService(
   > = {},
 ) {
   testState.service = createWorkerEnvironmentService({
+    scheduler: createTestGatewayScheduler(),
     store: testState.store,
     getConfig: () => testState.config,
     resolveProvider: (providerId) =>
@@ -237,7 +282,7 @@ export function createService(
       message: "Inference cancelled",
     }),
     inferenceStore: createWorkerInferenceStore({
-      database: testState.stateDb,
+      path: testState.stateDb.path,
       now: () => testState.nowMs,
     }),
     now: () => testState.nowMs,
@@ -262,28 +307,26 @@ export function createProvider(overrides: Partial<WorkerProvider> = {}): WorkerP
 export function createLiveEvents(overrides: Record<string, unknown> = {}) {
   return {
     apply: vi.fn(async () => LIVE_EVENT_ACK),
-    bindSession: vi.fn(() => true),
     clear: vi.fn(),
     clearEnvironment: vi.fn(),
     rotateCredential: vi.fn(() => true),
-    start: vi.fn(),
     ...overrides,
   };
 }
 
-export function seedBootstrapping(
+export async function seedBootstrapping(
   environmentId: string,
   install?: WorkerInstallationArtifact["install"],
   sharedHost = false,
 ) {
-  const intent = testState.store.createIntent({
+  const intent = await testState.store.createIntent({
     environmentId,
     providerId: "fake",
     profileId: "development",
     profileSnapshot: { ...(install ? { install } : {}), settings: { region: "test" } },
     provisionOperationId: `provision:${environmentId}`,
   });
-  const provisioning = testState.store.transition({
+  const provisioning = await testState.store.transition({
     environmentId,
     from: intent.state,
     to: "provisioning",
@@ -296,12 +339,12 @@ export function seedBootstrapping(
   });
 }
 
-export function seedReady(
+export async function seedReady(
   environmentId: string,
   install?: WorkerInstallationArtifact["install"],
   sharedHost = false,
 ) {
-  const bootstrapping = seedBootstrapping(environmentId, install, sharedHost);
+  const bootstrapping = await seedBootstrapping(environmentId, install, sharedHost);
   return testState.store.transition({
     environmentId,
     from: bootstrapping.state,
@@ -310,20 +353,23 @@ export function seedReady(
   });
 }
 
-export function seedReadyDesktop(environmentId: string, desktop: WorkerDesktopEndpoint = DESKTOP) {
-  const intent = testState.store.createIntent({
+export async function seedReadyDesktop(
+  environmentId: string,
+  desktop: WorkerDesktopEndpoint = DESKTOP,
+) {
+  const intent = await testState.store.createIntent({
     environmentId,
     providerId: "fake",
     profileId: "development",
     profileSnapshot: { settings: { region: "test", desktop: true } },
     provisionOperationId: `provision:${environmentId}`,
   });
-  const provisioning = testState.store.transition({
+  const provisioning = await testState.store.transition({
     environmentId,
     from: intent.state,
     to: "provisioning",
   });
-  const bootstrapping = testState.store.transition({
+  const bootstrapping = await testState.store.transition({
     environmentId,
     from: provisioning.state,
     to: "bootstrapping",
@@ -341,18 +387,18 @@ export function seedReadyDesktop(environmentId: string, desktop: WorkerDesktopEn
   });
 }
 
-export function seedReadyNodeDesktop(
+export async function seedReadyNodeDesktop(
   environmentId: string,
   desktop: WorkerDesktopEndpoint = DESKTOP,
 ) {
-  const intent = testState.store.createIntent({
+  const intent = await testState.store.createIntent({
     environmentId,
     providerId: "fake",
     profileId: "development",
     profileSnapshot: { settings: { region: "test", desktop: true } },
     provisionOperationId: `provision:${environmentId}`,
   });
-  const provisioning = testState.store.transition({
+  const provisioning = await testState.store.transition({
     environmentId,
     from: intent.state,
     to: "provisioning",
@@ -410,12 +456,12 @@ export function admissionFor(environmentId: string) {
   };
 }
 
-export function seedAttachedIdentity(
+export async function seedAttachedIdentity(
   environmentId: string,
   sessionId: string,
-): WorkerConnectionIdentity {
-  const ready = seedReady(environmentId);
-  const attached = testState.store.transition({
+): Promise<WorkerConnectionIdentity> {
+  const ready = await seedReady(environmentId);
+  const attached = await testState.store.transition({
     environmentId,
     from: ready.state,
     to: "attached",
@@ -525,35 +571,147 @@ export function sequencedLiveEvents(ackedSeq = (seq: number) => seq) {
   return { apply, liveEvents: createLiveEvents({ apply }) };
 }
 
-export function placementHarness(
+export async function placementHarness(
   environmentId: string,
   sessionId: string,
   serviceOptions: Parameters<typeof createService>[1] = {},
+  sessionTarget?: BoundAgentRunSessionTarget,
 ) {
-  const identity = seedAttachedIdentity(environmentId, sessionId);
+  const identity = await seedAttachedIdentity(environmentId, sessionId);
   const claim = identity.turnClaim!;
   const credentialHash = hashWorkerCredential(
     [CREDENTIAL, environmentId, sessionId].join("-"),
     claim,
   );
-  testState.stateDb.db
-    .prepare(
-      "UPDATE worker_environment_credentials SET credential_hash = ? WHERE environment_id = ?",
-    )
-    .run(credentialHash, environmentId);
+  await testState.store.renewCredential({
+    environmentId,
+    expectedOwnerEpoch: identity.ownerEpoch,
+    credentialHash,
+    sessionId,
+    rpcSetVersion: identity.rpcSetVersion,
+    expiresAtMs: identity.credentialExpiresAtMs,
+  });
   identity.credentialHash = credentialHash;
+  return bindPlacementHarness(identity, serviceOptions, sessionTarget);
+}
+
+export async function bindPlacementHarness(
+  identity: WorkerConnectionIdentity,
+  serviceOptions: Parameters<typeof createService>[1] = {},
+  target?: BoundAgentRunSessionTarget,
+) {
+  const sessionId = expectDefined(identity.sessionId, "worker fixture session identity");
+  const claim = structuredClone(expectDefined(identity.turnClaim, "worker fixture turn claim"));
+  const sessionTarget = target ?? {
+    agentId: "main",
+    sessionId,
+    sessionKey: `agent:main:${sessionId}`,
+    storePath: path.join(testState.root, "sessions.json"),
+  };
+  const validateWorkerTurn = vi.fn<(claim: WorkerSessionTurnClaim) => boolean>(() => true);
+  let sourceReleased = false;
+  const retainedClaims = new Set<() => void>();
+  const executionStore = {
+    async prepareTurnClaimAuthority(
+      requested: WorkerSessionTurnClaim,
+    ): Promise<PlacementTurnClaimAuthority> {
+      const captured = structuredClone(requested);
+      Object.freeze(captured.owner);
+      Object.freeze(captured);
+      let released = false;
+      let revoked = false;
+      const listeners = new Set<() => void>();
+      const revoke = () => {
+        if (revoked) {
+          return;
+        }
+        revoked = true;
+        const pending = [...listeners];
+        listeners.clear();
+        for (const listener of pending) {
+          listener();
+        }
+      };
+      const isCurrent = () =>
+        !released &&
+        !revoked &&
+        !sourceReleased &&
+        sameWorkerSessionTurnClaim(captured, claim) &&
+        validateWorkerTurn(captured);
+      retainedClaims.add(revoke);
+      return {
+        claim: captured,
+        identity: Object.freeze({
+          agentId: sessionTarget.agentId,
+          sessionKey: sessionTarget.sessionKey,
+        }),
+        isCurrent,
+        onRevoked(listener) {
+          if (!isCurrent()) {
+            listener();
+            return () => {};
+          }
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+        release() {
+          released = true;
+          listeners.clear();
+          retainedClaims.delete(revoke);
+        },
+      };
+    },
+  };
+  const databasePath = testState.stateDb.path;
+  attachWorkerTurnExecutionIdentityStore(executionStore, databasePath);
   const placementStore = {
     assertWorkerRuntimeRefresh: vi.fn(() => {
       throw new Error("Cannot refresh a worker runtime while its turn is active");
     }),
     readWorkerTurnClaim: vi.fn(() => claim),
     readWorkerTurnLiveAckCursor: vi.fn(() => 0),
-    validateWorkerTurn: vi.fn(() => true),
+    validateWorkerTurn,
+    getExecutionIdentityCapability: (current: WorkerSessionTurnClaim) =>
+      getWorkerTurnExecutionIdentityCapability(executionStore, current),
     isWorkerTurnToolAuthorized: vi.fn(() => true),
     updateAckCursors: vi.fn(),
     prepareWorkspaceResultOwnerRevocation: vi.fn(),
     registerTurnClaimClosedHandler: vi.fn(() => () => {}),
   };
+  const instance = createOperationalRunInstanceRef(claim.runId);
+  const authority = claimAgentRunDelegatedAuthority(instance);
+  registerAgentRunContext(
+    claim.runId,
+    {
+      agentId: sessionTarget.agentId,
+      sessionId: sessionTarget.sessionId,
+      sessionKey: sessionTarget.sessionKey,
+    },
+    authority.claimId,
+  );
+  const releaseSource = () => {
+    if (sourceReleased) {
+      return;
+    }
+    sourceReleased = true;
+    for (const revoke of retainedClaims) {
+      revoke();
+    }
+    releaseAgentRunDelegatedAuthority(authority);
+  };
+  testState.releaseTurnOwners.push(releaseSource);
+  const { capability: source } = await bindWorkerTurnOwner(
+    executionStore,
+    claim,
+    undefined,
+    instance,
+    sessionTarget,
+    () => {
+      if (!validateWorkerTurn(claim)) {
+        throw new Error("Worker fixture claim is no longer current");
+      }
+    },
+  );
   const workerService = createService(createProvider(), { ...serviceOptions, placementStore });
-  return { identity, placementStore, workerService };
+  return { identity, placementStore, workerService, source, releaseSource };
 }

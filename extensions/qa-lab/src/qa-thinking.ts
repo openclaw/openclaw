@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements qa thinking behavior.
 export type QaThinkingLevel =
   | "off"
   | "minimal"

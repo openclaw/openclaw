@@ -29,17 +29,19 @@ import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import { ensureProfileForEmail, setAvatar, setDisplayName } from "../state/user-profiles.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
+import { readSseEvent } from "./session-history-fixtures.test-support.js";
 import * as sessionHistoryState from "./session-history-state.js";
 import { SessionHistorySseState } from "./session-history-state.js";
+import { closeHistoryHarness, withGatewayHarness } from "./sessions-history-http.test-support.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectReq,
-  createGatewaySuiteHarness,
   installGatewayTestHooks,
   rpcReq,
   startServerWithClient,
   writeSessionStore,
 } from "./test-helpers.server.js";
+import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
 
 const AUTH_HEADER = { Authorization: "Bearer test-gateway-token-1234567890" };
 const READ_SCOPE_HEADER = { "x-openclaw-scopes": "operator.read" };
@@ -246,21 +248,6 @@ async function fetchSessionHistory(
   );
 }
 
-async function withGatewayHarness<T>(
-  run: (harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>) => Promise<T>,
-) {
-  const harness = await createGatewaySuiteHarness({
-    serverOptions: {
-      auth: { mode: "none" },
-    },
-  });
-  try {
-    return await run(harness);
-  } finally {
-    await harness.close();
-  }
-}
-
 type SessionHistoryMessage = {
   content?: Array<{ text?: string }>;
   __openclaw?: { id?: string; seq?: number; turnBoundary?: boolean };
@@ -284,8 +271,7 @@ function sessionHistoryRowIdentity(message: unknown): string {
     (typeof firstContent?.text === "string" ? firstContent.text : undefined) ??
     (typeof firstContent?.id === "string" ? firstContent.id : undefined) ??
     (typeof record.toolCallId === "string" ? record.toolCallId : "");
-  const kind = record.openclawMessageToolMirror ? "mirror" : String(record.role);
-  return `${String(metadata.seq)}:${kind}:${label}`;
+  return `${String(metadata.seq)}:${String(record.role)}:${label}`;
 }
 
 async function readSessionHistoryBody(
@@ -331,39 +317,6 @@ function currentProfileAvatarUrl(profileId: string): string {
     throw new Error("expected a resolved current profile display");
   }
   return display.avatarUrl;
-}
-
-async function readSseEvent(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  state: { buffer: string },
-): Promise<{ event: string; data: unknown }> {
-  const decoder = new TextDecoder();
-  while (true) {
-    const boundary = state.buffer.indexOf("\n\n");
-    if (boundary >= 0) {
-      const rawEvent = state.buffer.slice(0, boundary);
-      state.buffer = state.buffer.slice(boundary + 2);
-      const lines = rawEvent.split("\n");
-      const event =
-        lines
-          .find((line) => line.startsWith("event:"))
-          ?.slice("event:".length)
-          .trim() ?? "message";
-      const data = lines
-        .filter((line) => line.startsWith("data:"))
-        .map((line) => line.slice("data:".length).trim())
-        .join("\n");
-      if (!data) {
-        continue;
-      }
-      return { event, data: JSON.parse(data) };
-    }
-    const chunk = await reader.read();
-    if (chunk.done) {
-      throw new Error("SSE stream ended before next event");
-    }
-    state.buffer += decoder.decode(chunk.value, { stream: true });
-  }
 }
 
 type SessionHistorySseStream = {
@@ -476,14 +429,15 @@ async function openBoundedHistoryStreamWithSecondMessage(
 }
 
 describe("session history HTTP endpoints", () => {
-  installGatewayTestHooks();
+  installGatewayTestHooks({ scope: "suite", cleanup: closeHistoryHarness });
 
   afterEach(async () => {
+    for (const dir of cleanupDirs.splice(0)) {
+      await releaseGatewaySessionStoreFixture(dir);
+      await fs.rm(dir, { recursive: true, force: true });
+    }
     testState.sessionConfig = undefined;
     testState.agentsConfig = undefined;
-    await Promise.all(
-      cleanupDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-    );
   });
 
   test("uses SSE only for an explicit acceptable event-stream media range", async () => {
@@ -956,6 +910,7 @@ describe("session history HTTP endpoints", () => {
   test.each([false, true])(
     "returns 404 for unknown sessions (missing store: %s)",
     async (missing) => {
+      await closeHistoryHarness();
       const storePath = await createSessionStoreFile();
       let sessionKey = "agent:main:missing";
       let missingDatabasePath: string | undefined;
@@ -977,24 +932,28 @@ describe("session history HTTP endpoints", () => {
           { agentId },
         ).path;
       }
-      await withGatewayHarness(async (harness) => {
-        if (missingDatabasePath) {
-          await expect(fs.stat(missingDatabasePath)).rejects.toMatchObject({ code: "ENOENT" });
-        }
-        const res = await fetchSessionHistory(harness.port, sessionKey);
-        expect(res.status).toBe(404);
-        expectErrorResponse(await res.json(), {
-          type: "not_found",
-          message: `Session not found: ${sessionKey}`,
-        });
-        if (missingDatabasePath) {
-          expect((await fs.stat(missingDatabasePath)).isFile()).toBe(true);
-        }
-      });
+      await withGatewayHarness(
+        async (harness) => {
+          if (missingDatabasePath) {
+            await expect(fs.stat(missingDatabasePath)).rejects.toMatchObject({ code: "ENOENT" });
+          }
+          const res = await fetchSessionHistory(harness.port, sessionKey);
+          expect(res.status).toBe(404);
+          expectErrorResponse(await res.json(), {
+            type: "not_found",
+            message: `Session not found: ${sessionKey}`,
+          });
+          if (missingDatabasePath) {
+            expect((await fs.stat(missingDatabasePath)).isFile()).toBe(true);
+          }
+        },
+        { fresh: true },
+      );
     },
   );
 
   test("rejects duplicate canonical rows with an actionable migration error", async () => {
+    await closeHistoryHarness();
     testState.sessionConfig = { mainKey: "work" };
     const storePath = await createSessionStoreFile();
     await replaceTranscriptEvents(
@@ -1026,31 +985,34 @@ describe("session history HTTP endpoints", () => {
       ],
     );
 
-    await withGatewayHarness(async (harness) => {
-      // Exercise the HTTP reader against a malformed hot write after admission.
-      seedRawSessionRows({
-        storePath,
-        rows: [
-          {
-            sessionId: "sess-stale-main",
-            sessionKey: "agent:main:work",
-            updatedAt: 1,
-          },
-          {
-            sessionId: "sess-fresh-main",
-            sessionKey: "agent:main:main",
-            updatedAt: 2,
-          },
-        ],
-      });
-      const res = await fetchSessionHistory(harness.port, "agent:main:work");
-      expect(res.status).toBe(409);
-      expectErrorResponse(await res.json(), {
-        type: "migration_required",
-        message:
-          "duplicate rows resolve to canonical session key agent:main:work; stop the Gateway and run openclaw doctor --fix",
-      });
-    });
+    await withGatewayHarness(
+      async (harness) => {
+        // Exercise the HTTP reader against a malformed hot write after admission.
+        seedRawSessionRows({
+          storePath,
+          rows: [
+            {
+              sessionId: "sess-stale-main",
+              sessionKey: "agent:main:work",
+              updatedAt: 1,
+            },
+            {
+              sessionId: "sess-fresh-main",
+              sessionKey: "agent:main:main",
+              updatedAt: 2,
+            },
+          ],
+        });
+        const res = await fetchSessionHistory(harness.port, "agent:main:work");
+        expect(res.status).toBe(409);
+        expectErrorResponse(await res.json(), {
+          type: "migration_required",
+          message:
+            "duplicate rows resolve to canonical session key agent:main:work; stop the Gateway and run openclaw doctor --fix",
+        });
+      },
+      { fresh: true },
+    );
   });
 
   test("supports cursor pagination over direct REST while preserving the messages field", async () => {
@@ -1159,22 +1121,21 @@ describe("session history HTTP endpoints", () => {
         },
       },
       {
-        id: "history-tool-result-first",
+        id: "history-commentary",
         message: {
-          role: "toolResult",
-          toolName: "message",
-          toolCallId: "call-message-first",
-          content: { ok: true, messageId: "same-sequence-first" },
+          ...makeTranscriptAssistantMessage({ text: "" }),
+          content: ["First visible reply.", "Second visible reply."].map((text, index) => ({
+            type: "text",
+            text,
+            textSignature: JSON.stringify({ v: 1, id: `commentary-${index}`, phase: "commentary" }),
+          })),
           timestamp: sharedTimestamp,
         },
       },
       {
-        id: "history-tool-result-second",
+        id: "history-hidden-reply",
         message: {
-          role: "toolResult",
-          toolName: "message",
-          toolCallId: "call-message-second",
-          content: { ok: true, messageId: "same-sequence-second" },
+          ...makeTranscriptAssistantMessage({ text: "NO_REPLY" }),
           timestamp: sharedTimestamp,
         },
       },
@@ -1192,10 +1153,8 @@ describe("session history HTTP endpoints", () => {
         query: "?limit=1",
       });
       expect(firstPage.messages?.map(sessionHistoryRowIdentity)).toEqual([
-        "3:toolResult:call-message-first",
-        "4:toolResult:call-message-second",
-        "3:mirror:First visible reply.",
-        "4:mirror:Second visible reply.",
+        "3:assistant:First visible reply.",
+        "3:assistant:Second visible reply.",
       ]);
       expect(firstPage.hasMore).toBe(true);
       expect(firstPage.nextCursor).toBe("3");
@@ -1232,14 +1191,12 @@ describe("session history HTTP endpoints", () => {
       expect(chronologicalRows.map(sessionHistoryRowIdentity)).toEqual([
         "1:user:reply here",
         "2:assistant:call-message-first",
-        "3:toolResult:call-message-first",
-        "4:toolResult:call-message-second",
-        "3:mirror:First visible reply.",
-        "4:mirror:Second visible reply.",
+        "3:assistant:First visible reply.",
+        "3:assistant:Second visible reply.",
       ]);
       expect(
         chronologicalRows.map((message) => requireRecord(message, "history timestamp").timestamp),
-      ).toEqual(Array.from({ length: 6 }, () => sharedTimestamp));
+      ).toEqual(Array.from({ length: 4 }, () => sharedTimestamp));
       expect(
         pages
           .flatMap((page) => page.messages ?? [])
@@ -1512,6 +1469,7 @@ describe("session history HTTP endpoints", () => {
     { mode: "limited", query: "?limit=2" },
     { mode: "cursor", query: "?limit=2&cursor=3" },
     { mode: "transcript-only", query: undefined },
+    { mode: "weak-inline", query: undefined },
   ])("coalesces $mode updates committed during an SSE refresh", async ({ mode, query }) => {
     const sessionKey = "agent:main:main";
     const seeds = ["seed-1", "seed-2", "seed-3", "seed-4"];
@@ -1550,13 +1508,35 @@ describe("session history HTTP endpoints", () => {
           );
           return read;
         });
-        const append = (text: string) =>
-          appendTranscriptMessage({
+        let messageSeq = seeds.length;
+        const append = async (text: string) => {
+          const message = makeTranscriptAssistantMessage({ text });
+          if (mode !== "weak-inline") {
+            return appendTranscriptMessage({
+              sessionKey,
+              storePath,
+              message,
+              emitInlineMessage: mode !== "transcript-only",
+            });
+          }
+          const appended = await appendExactAssistantMessageToSessionTranscript({
             sessionKey,
             storePath,
-            message: makeTranscriptAssistantMessage({ text }),
-            emitInlineMessage: mode !== "transcript-only",
+            message,
+            updateMode: "none",
           });
+          expect(appended.ok).toBe(true);
+          if (!appended.ok) {
+            throw new Error(appended.reason);
+          }
+          emitSessionTranscriptUpdate({
+            target: { agentId: AGENT_ID, sessionId: "sess-main", sessionKey },
+            message,
+            messageId: appended.messageId,
+            messageSeq: ++messageSeq,
+          });
+          return appended.messageId;
+        };
         const burst = Array.from({ length: 12 }, (_, index) => `burst-${index + 1}`);
         await append("burst-1");
         await firstRead.promise;
@@ -1885,31 +1865,34 @@ describe("session history HTTP endpoints", () => {
     }
   });
 
-  test("streams identity-only transcript updates over SSE", async () => {
-    await seedSession({ text: "first message" });
+  test("refetches durable history for weak identity-only notifications", async () => {
+    const { storePath } = await seedSession({ text: "first message" });
 
     await withGatewayHarness(async (harness) => {
       const stream = await openSessionHistorySse(harness.port, "agent:main:main");
-      await expectHistoryEventTexts(stream, ["first message"]);
-
-      emitSessionTranscriptUpdate({
-        target: {
-          agentId: "main",
-          sessionId: "sess-main",
+      try {
+        await expectHistoryEventTexts(stream, ["first message"]);
+        const appended = await appendExactAssistantMessageToSessionTranscript({
           sessionKey: "agent:main:main",
-        },
-        message: makeTranscriptAssistantMessage({ text: "identity second message" }),
-        messageId: "msg-identity-second",
-        messageSeq: 3,
-      });
-
-      await expectMessageEventMatch(stream, {
-        text: "identity second message",
-        seq: 3,
-        id: "msg-identity-second",
-      });
-
-      await stream.reader.cancel();
+          storePath,
+          message: makeTranscriptAssistantMessage({ text: "committed second message" }),
+          updateMode: "none",
+        });
+        expect(appended.ok).toBe(true);
+        emitSessionTranscriptUpdate({
+          target: {
+            agentId: "main",
+            sessionId: "sess-main",
+            sessionKey: "agent:main:main",
+          },
+          message: makeTranscriptAssistantMessage({ text: "unwritten carried payload" }),
+          messageId: "unproven-message",
+          messageSeq: 99,
+        });
+        await expectHistoryEventTexts(stream, ["first message", "committed second message"]);
+      } finally {
+        await stream.reader.cancel();
+      }
     });
   });
 
@@ -2050,6 +2033,7 @@ describe("session history HTTP endpoints", () => {
   });
 
   test("rejects session history when operator.read is not requested", async () => {
+    await closeHistoryHarness();
     await seedSession({ text: "scope-guarded history" });
 
     const started = await startServerWithClient("test-gateway-token-1234567890");
@@ -2075,6 +2059,7 @@ describe("session history HTTP endpoints", () => {
   });
 
   test("allows HTTP session history reads with shared-secret bearer auth and default scopes", async () => {
+    await closeHistoryHarness();
     await seedSession({ text: "bearer allowed history" });
 
     const started = await startServerWithClient("test-gateway-token-1234567890");
@@ -2098,6 +2083,7 @@ describe("session history HTTP endpoints", () => {
   });
 
   test("maintains HTTP SSE streams with shared-secret bearer auth across transcript updates", async () => {
+    await closeHistoryHarness();
     const { storePath } = await seedSession({ text: "bearer allowed history" });
 
     const started = await startServerWithClient("test-gateway-token-1234567890");

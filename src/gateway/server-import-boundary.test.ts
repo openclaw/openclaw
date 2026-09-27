@@ -2,10 +2,13 @@
 // heavyweight cron, doctor, secret, task, and WebSocket handlers from eager loads.
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import * as ts from "typescript/unstable/ast";
+import { afterAll, describe, expect, it } from "vitest";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 
 function readSource(relativePath: string): string {
   return readFileSync(path.join(repoRoot, relativePath), "utf8");
@@ -29,12 +32,12 @@ function resolveRelativeSource(importer: string, specifier: string): string | nu
 }
 
 function staticValueSpecifiers(filePath: string, source: string): string[] {
-  const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true);
+  const sourceFile = parser.parseSourceFile(filePath, source);
   const specifiers: string[] = [];
   for (const statement of sourceFile.statements) {
     if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
       const clause = statement.importClause;
-      if (clause?.isTypeOnly) {
+      if (clause?.phaseModifier === ts.SyntaxKind.TypeKeyword) {
         continue;
       }
       if (
@@ -165,9 +168,6 @@ describe("gateway startup import boundaries", () => {
     expect(serverImpl).not.toMatch(
       /import\s+\{[^}]*resolveSessionKeyForRun[^}]*\}\s+from "\.\/server-session-key\.js"/s,
     );
-    expect(serverImpl).not.toMatch(
-      /export\s+\{[^}]*resetPreparedModelCatalogForTest[^}]*\}\s+from "\.\/server-model-catalog\.js"/s,
-    );
     expect(readSource("src/gateway/server-runtime-subscriptions.ts")).toContain(
       'import("./server-session-key.js")',
     );
@@ -230,14 +230,13 @@ describe("gateway startup import boundaries", () => {
   it("defers retained plugin generation cleanup to the post-ready idle scheduler", () => {
     const serverImpl = readServerImplementation();
     const cleanup = readSource("src/gateway/server-retained-plugin-cleanup.ts");
-    const importBoundary = serverImpl.indexOf("type LoadGatewayModelCatalog");
+    const staticImports = staticValueSpecifiers("server-implementation.ts", serverImpl);
     const serverStart = serverImpl.indexOf("export async function startGatewayServerCore");
     const postReadyStart = serverImpl.indexOf("scheduleGatewayPostReadyMaintenance({", serverStart);
     const cleanupCall = serverImpl.lastIndexOf("cleanupRetainedPluginInstallGenerations(");
 
-    expect(importBoundary).toBeGreaterThan(-1);
-    expect(serverImpl.slice(0, importBoundary)).not.toContain("managed-npm-retention");
-    expect(serverImpl.slice(0, importBoundary)).not.toContain("installed-plugin-index-records");
+    expect(staticImports).not.toContain("../plugins/managed-npm-retention.js");
+    expect(staticImports).not.toContain("../plugins/installed-plugin-index-records.js");
     expect(cleanup).toContain('import("../plugins/managed-npm-retention.js")');
     expect(cleanup).toContain('import("../plugins/installed-plugin-index-records.js")');
     expect(postReadyStart).toBeGreaterThan(serverStart);

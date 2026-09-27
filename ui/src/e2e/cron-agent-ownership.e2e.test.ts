@@ -1,9 +1,11 @@
 // Control UI browser proof covers explicit automation ownership across widened page scope.
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it } from "vitest";
+import { createRequireRecord } from "../../../test/helpers/record.js";
+import type { CronJob } from "../api/types.ts";
 import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
+import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -19,7 +21,7 @@ function requestParams(request: MockGatewayRequest): Record<string, unknown> {
   return requireRecord(request.params);
 }
 
-function cronListResponse(jobs: unknown[]) {
+function cronListResponse(jobs: CronJob[]) {
   return {
     jobs,
     snapshotRevision: "cron-agent-ownership-fixture",
@@ -57,7 +59,7 @@ suite.define(() => {
           await expect
             .poll(() => picker.locator('[role="option"][data-value="fixture/old"]').count())
             .toBe(1);
-          await page.keyboard.press("Control+K");
+          await page.keyboard.press("ControlOrMeta+K");
           const palette = page.locator(".cmd-palette");
           await page.locator(".cmd-palette__input").fill("needle");
           await palette.getByText("Needle old", { exact: true }).waitFor();
@@ -83,7 +85,11 @@ suite.define(() => {
             ? "Some models could not be refreshed. Open Models to try again."
             : "Models unavailable";
           await automations.getByText(warning, { exact: true }).waitFor();
-          await palette.getByRole("status").filter({ hasText: warning }).waitFor();
+          await palette
+            .locator(".cmd-palette__search")
+            .getByRole("status")
+            .filter({ hasText: warning })
+            .waitFor();
           expect(await palette.getByText("Needle old", { exact: true }).count()).toBe(0);
           expect(await palette.getByText("Needle current", { exact: true }).count()).toBe(
             hasRows ? 1 : 0,
@@ -99,14 +105,20 @@ suite.define(() => {
           await page.screenshot({
             path: path.join(suite.artifactDir, `internal-catalog-automations-${hasRows}.png`),
           });
-          await page.keyboard.press("Control+K");
+          await page.keyboard.press("ControlOrMeta+K");
           await page.locator(".cmd-palette__input").fill("needle");
-          await palette.getByRole("status").filter({ hasText: warning }).waitFor();
+          await palette
+            .locator(".cmd-palette__search")
+            .getByRole("status")
+            .filter({ hasText: warning })
+            .waitFor();
 
           await gateway.setMethodResponse("models.list", { models: [] });
           await gateway.emitGatewayEvent("chat.metadata.changed", {});
           await expect.poll(() => automations.getByText(warning, { exact: true }).count()).toBe(0);
-          await expect.poll(() => palette.getByRole("status").count()).toBe(0);
+          await expect
+            .poll(() => palette.locator(".cmd-palette__search").getByRole("status").count())
+            .toBe(0);
           expect(await palette.getByText("Needle current", { exact: true }).count()).toBe(0);
           expect(await page.locator("#cron-name").inputValue()).toBe("Keep this draft");
           const requests = await gateway.getRequests();
@@ -246,7 +258,7 @@ suite.define(() => {
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "Prepare the weekday report" },
       state: {},
-    };
+    } satisfies CronJob;
     await suite.withPage(
       {
         locale: "en-US",
@@ -295,12 +307,13 @@ suite.define(() => {
         await page.locator('[data-test-id="cron-new-task"]').click();
         await page.locator("#cron-name").fill(createdJob.name);
         await page.locator("#cron-payload-text").fill(createdJob.payload.message);
-        await gateway.setMethodResponse("cron.list", {
-          cases: [
+        await gateway.setMethodResponse(
+          "cron.list",
+          cronListResponseFixture([
             { match: { lastRunStatus: "error" }, response: cronListResponse([]) },
             { response: cronListResponse([createdJob]) },
-          ],
-        });
+          ]),
+        );
         await page.locator('[data-test-id="cron-submit"]').click();
 
         expect(requestParams(await gateway.waitForRequest("models.list"))).toEqual({

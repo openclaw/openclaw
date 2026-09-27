@@ -46,7 +46,12 @@ export function formatRealtimeInterruptionLog(event: RealtimeVoiceBridgeEvent): 
 }
 
 export function formatRealtimeLifecycleLog(event: RealtimeVoiceBridgeEvent): string | undefined {
-  if (!event.type.startsWith("session.")) {
+  if (
+    !event.type.startsWith("session.") ||
+    event.type.startsWith("session.output_audio") ||
+    event.type.endsWith(".delta") ||
+    event.type.endsWith(".append")
+  ) {
     return undefined;
   }
   const detail = event.detail ? ` ${event.detail}` : "";

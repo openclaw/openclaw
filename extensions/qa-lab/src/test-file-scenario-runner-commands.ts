@@ -12,100 +12,52 @@ export type QaScenarioCommandStep = {
   command: string;
 };
 
-type QaTestFileRunnerDefinition = {
-  buildEvidenceSummary: typeof buildVitestEvidenceSummary;
-  buildSteps(scenario: QaTestFileScenario, context: { outputDir: string }): QaScenarioCommandStep[];
-};
-
-function vitestReporterArgs(
-  scenario: QaTestFileScenario,
-  context: { outputDir: string },
-): string[] {
-  return [
-    "--reporter=verbose",
-    "--reporter=json",
-    `--outputFile.json=${resolveNativeVitestReportPath(scenario, context.outputDir)}`,
-  ];
-}
-
-function vitestSteps(
+export function buildQaScenarioCommandSteps(
   scenario: QaTestFileScenario,
   context: { outputDir: string },
 ): QaScenarioCommandStep[] {
-  const e2eConfigArgs = scenario.execution.path.endsWith(".e2e.test.ts")
-    ? ["run", "--config", "test/vitest/vitest.e2e.config.ts"]
-    : [];
-  return [
-    {
-      command: process.execPath,
-      args: [
-        "scripts/run-vitest.mjs",
-        ...e2eConfigArgs,
-        scenario.execution.path,
-        ...vitestReporterArgs(scenario, context),
-      ],
-    },
-  ];
-}
+  const execution = scenario.execution;
+  if (execution.kind === "script") {
+    const scenarioOutputDir = path.join(context.outputDir, scenario.id);
+    const args = (execution.args ?? []).map((arg) =>
+      arg.replaceAll("${outputDir}", scenarioOutputDir).replaceAll("${scenarioId}", scenario.id),
+    );
+    return [
+      {
+        command: resolveQaScriptRuntimeExecutable(),
+        args: ["--import", "tsx", execution.path, ...args],
+      },
+    ];
+  }
 
-function playwrightSteps(
-  scenario: QaTestFileScenario,
-  context: { outputDir: string },
-): QaScenarioCommandStep[] {
-  const testNamePattern =
-    scenario.execution.kind === "playwright" ? scenario.execution.testNamePattern : undefined;
-  const testNameArgs = testNamePattern ? ["--testNamePattern", testNamePattern] : [];
-  return [
-    {
+  const configArgs =
+    execution.kind === "playwright"
+      ? ["run", "--config", "test/vitest/vitest.ui-e2e.config.ts", "--configLoader", "runner"]
+      : execution.path.endsWith(".e2e.test.ts")
+        ? ["run", "--config", "test/vitest/vitest.e2e.config.ts"]
+        : [];
+  const steps: QaScenarioCommandStep[] = [];
+  if (execution.kind === "playwright") {
+    steps.push({
       command: process.execPath,
       args: ["--import", "tsx", "scripts/ensure-playwright-chromium.mts"],
-    },
-    {
-      command: process.execPath,
-      args: [
-        "scripts/run-vitest.mjs",
-        "run",
-        "--config",
-        "test/vitest/vitest.ui-e2e.config.ts",
-        "--configLoader",
-        "runner",
-        scenario.execution.path,
-        ...vitestReporterArgs(scenario, context),
-        ...testNameArgs,
-      ],
-    },
-  ];
-}
-
-function replaceScriptArgTokens(
-  args: readonly string[] | undefined,
-  context: { outputDir: string; scenarioId: string },
-) {
-  return (args ?? []).map((arg) =>
-    arg
-      .replaceAll("${outputDir}", context.outputDir)
-      .replaceAll("${scenarioId}", context.scenarioId),
-  );
-}
-
-function scriptSteps(
-  scenario: QaTestFileScenario,
-  context: { outputDir: string },
-): QaScenarioCommandStep[] {
-  const scenarioOutputDir = path.join(context.outputDir, scenario.id);
-  const scriptArgs =
-    scenario.execution.kind === "script"
-      ? replaceScriptArgTokens(scenario.execution.args, {
-          outputDir: scenarioOutputDir,
-          scenarioId: scenario.id,
-        })
-      : [];
-  return [
-    {
-      command: resolveQaScriptRuntimeExecutable(),
-      args: ["--import", "tsx", scenario.execution.path, ...scriptArgs],
-    },
-  ];
+    });
+  }
+  steps.push({
+    command: process.execPath,
+    args: [
+      "scripts/run-vitest.mjs",
+      ...configArgs,
+      execution.path,
+      "--reporter=verbose",
+      "--reporter=json",
+      `--outputFile.json=${resolveNativeVitestReportPath(scenario, context.outputDir)}`,
+      ...(execution.kind === "playwright" && execution.testNamePattern
+        ? ["--testNamePattern", execution.testNamePattern]
+        : []),
+    ],
+  });
+  return steps;
 }
 
 export function resolveQaScriptRuntimeExecutable(): string {
@@ -114,19 +66,11 @@ export function resolveQaScriptRuntimeExecutable(): string {
   return process.versions.bun ? "node" : process.execPath;
 }
 
-const testFileRunnerDefinitions: Record<QaTestFileExecutionKind, QaTestFileRunnerDefinition> = {
-  script: {
-    buildEvidenceSummary: buildScriptEvidenceSummary,
-    buildSteps: scriptSteps,
-  },
-  vitest: {
-    buildEvidenceSummary: buildVitestEvidenceSummary,
-    buildSteps: vitestSteps,
-  },
-  playwright: {
-    buildEvidenceSummary: buildPlaywrightEvidenceSummary,
-    buildSteps: playwrightSteps,
-  },
+export const testFileEvidenceBuilders: Record<
+  QaTestFileExecutionKind,
+  typeof buildVitestEvidenceSummary
+> = {
+  script: buildScriptEvidenceSummary,
+  vitest: buildVitestEvidenceSummary,
+  playwright: buildPlaywrightEvidenceSummary,
 };
-
-export { testFileRunnerDefinitions };

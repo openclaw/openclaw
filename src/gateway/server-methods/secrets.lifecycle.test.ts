@@ -19,7 +19,7 @@ import {
   writeSecretStoreEntry,
 } from "../../secrets/store/secret-store.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { QuestionManager } from "../question-manager.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createQuestionHandlers } from "./question.js";
@@ -57,6 +57,40 @@ async function invoke(
 const resolveSecrets = async () => ({ assignments: [], diagnostics: [], inactiveRefPaths: [] });
 
 describe("secret store mutation lifecycle", () => {
+  it("rejects a redaction sentinel without replacing the stored credential", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const name = "OPENCLAW_GATEWAY_TOKEN";
+      const value = "synthetic-gateway-token";
+      writeSecretStoreEntry({
+        scope: { kind: "team" },
+        name,
+        value,
+        kind: "secret",
+        updatedBy: "test",
+      });
+      const reloadSecrets = vi.fn(async () => ({ warningCount: 0 }));
+      const handlers = createSecretsHandlers({
+        reloadSecrets,
+        resolveSecrets,
+        storeWriteService: createSecretStoreWriteService({ reloadSecrets }),
+      });
+
+      expect(
+        await invoke(handlers, "secrets.store.set", {
+          name,
+          value: "__OPENCLAW_REDACTED__",
+          kind: "secret",
+        }),
+      ).toMatchObject([
+        false,
+        undefined,
+        { code: "INVALID_REQUEST", message: expect.stringContaining(name) },
+      ]);
+      expect(readSecretStoreValue({ scope: { kind: "team" }, name })).toEqual({ ok: true, value });
+      expect(reloadSecrets).not.toHaveBeenCalled();
+    });
+  });
+
   it.each(["dispatch continuation", "mutation logging"] as const)(
     "does not delete when admitted authority closes during %s",
     async (closure) => {

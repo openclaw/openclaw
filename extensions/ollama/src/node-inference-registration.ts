@@ -33,6 +33,7 @@ function createLazyNodeHostCommand(
   return {
     command,
     cap: OLLAMA_NODE_INFERENCE_CAPABILITY,
+    hasActiveWork: () => false,
     handle: async (paramsJSON, io, context) => {
       const runtimeCommand = await loadRuntimeCommand();
       return await runtimeCommand.handle(paramsJSON, io, context);

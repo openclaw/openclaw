@@ -12,11 +12,14 @@ import type {
 export function projectSubagentRunForSessionList(entry: SubagentRunRecord): SubagentRunReadRecord {
   return {
     runId: entry.runId,
+    ...(entry.taskRunId !== undefined ? { taskRunId: entry.taskRunId } : {}),
     ...(entry.pauseReason ? { pauseReason: entry.pauseReason } : {}),
     ...(entry.swarmRunId ? { swarmRunId: entry.swarmRunId } : {}),
     childSessionKey: entry.childSessionKey,
     ...(entry.controllerSessionKey ? { controllerSessionKey: entry.controllerSessionKey } : {}),
     requesterSessionKey: entry.requesterSessionKey,
+    requesterStorePath: entry.requesterStorePath,
+    controllerStorePath: entry.controllerStorePath,
     ...(entry.collect
       ? {
           collect: true,

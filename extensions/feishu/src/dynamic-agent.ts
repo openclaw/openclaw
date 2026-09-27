@@ -1,4 +1,3 @@
-// Feishu plugin module implements dynamic agent behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";

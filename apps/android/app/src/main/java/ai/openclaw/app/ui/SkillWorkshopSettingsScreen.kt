@@ -23,8 +23,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
@@ -44,7 +42,14 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
-private val skillWorkshopFilterLabels = listOf("Pending", "Held", "Applied", "Rejected", "All")
+private val skillWorkshopFilters =
+  listOf(
+    "pending" to "Pending",
+    "held" to "Held",
+    "applied" to "Applied",
+    "rejected" to "Rejected",
+    "all" to "All",
+  )
 
 @Composable
 internal fun SkillWorkshopSettingsScreen(
@@ -200,16 +205,19 @@ internal fun SkillWorkshopSettingsScreen(
       }
 
       else -> {
-        SkillWorkshopProposalList(
-          proposals = filteredProposals,
-          selectedProposalId = selectedProposal?.id,
-          inspectingProposalId = inspectingProposalId,
-          mutatingProposalId = mutatingProposalId,
-          onSelect = { proposal ->
-            selectedProposalId = proposal.id
-            viewModel.inspectSkillWorkshopProposal(proposalId = proposal.id, agentId = selectedAgentParam)
-          },
-        )
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+          filteredProposals.forEach { proposal ->
+            SkillWorkshopProposalRow(
+              proposal = proposal,
+              selected = proposal.id == selectedProposal?.id,
+              busy = proposal.id == inspectingProposalId || proposal.id == mutatingProposalId,
+              onClick = {
+                selectedProposalId = proposal.id
+                viewModel.inspectSkillWorkshopProposal(proposalId = proposal.id, agentId = selectedAgentParam)
+              },
+            )
+          }
+        }
         selectedProposal?.let { proposal ->
           SkillWorkshopProposalDetail(
             proposal = proposal,
@@ -220,26 +228,10 @@ internal fun SkillWorkshopSettingsScreen(
             onInspect = {
               viewModel.inspectSkillWorkshopProposal(proposalId = proposal.id, agentId = selectedAgentParam)
             },
-            onApply = {
+            onAction = { action ->
               pendingAction =
                 SkillWorkshopPendingAction(
-                  action = SkillWorkshopProposalAction.Apply,
-                  proposalId = proposal.id,
-                  title = proposal.title,
-                )
-            },
-            onReject = {
-              pendingAction =
-                SkillWorkshopPendingAction(
-                  action = SkillWorkshopProposalAction.Reject,
-                  proposalId = proposal.id,
-                  title = proposal.title,
-                )
-            },
-            onQuarantine = {
-              pendingAction =
-                SkillWorkshopPendingAction(
-                  action = SkillWorkshopProposalAction.Quarantine,
+                  action = action,
                   proposalId = proposal.id,
                   title = proposal.title,
                 )
@@ -291,7 +283,7 @@ private fun SkillWorkshopActionConfirmDialog(
         nativeString("This will quarantine \"\$proposalTitle\" and refresh Skill Workshop state from the gateway.", action.title)
       }
     }
-  AlertDialog(
+  AppAlertDialog(
     onDismissRequest = onDismiss,
     title = { Text(dialogTitle) },
     text = {
@@ -346,9 +338,11 @@ private fun SkillWorkshopControls(
         )
       }
       ClawSegmentedControl(
-        options = skillWorkshopFilterLabels.map(::nativeString),
-        selected = skillWorkshopFilterLabel(statusFilter),
-        onSelect = { label -> onStatusFilterChange(skillWorkshopFilterFromLabel(label)) },
+        options = skillWorkshopFilters.map { (_, label) -> nativeString(label) },
+        selected = nativeString(skillWorkshopFilters.firstOrNull { it.first == statusFilter }?.second ?: "All"),
+        onSelect = { label ->
+          onStatusFilterChange(skillWorkshopFilters.firstOrNull { nativeString(it.second) == label }?.first ?: "all")
+        },
         maxOptionsPerRow = 4,
       )
       ClawTextField(
@@ -384,7 +378,7 @@ private fun SkillWorkshopAgentMenu(
       modifier = Modifier.fillMaxWidth(),
       enabled = selectableAgents.isNotEmpty(),
     )
-    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+    AppDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
       DropdownMenuItem(
         text = { Text(nativeString("Default agent")) },
         onClick = {
@@ -404,26 +398,6 @@ private fun SkillWorkshopAgentMenu(
             },
           )
         }
-    }
-  }
-}
-
-@Composable
-private fun SkillWorkshopProposalList(
-  proposals: List<GatewaySkillWorkshopProposal>,
-  selectedProposalId: String?,
-  inspectingProposalId: String?,
-  mutatingProposalId: String?,
-  onSelect: (GatewaySkillWorkshopProposal) -> Unit,
-) {
-  Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-    proposals.forEach { proposal ->
-      SkillWorkshopProposalRow(
-        proposal = proposal,
-        selected = proposal.id == selectedProposalId,
-        busy = proposal.id == inspectingProposalId || proposal.id == mutatingProposalId,
-        onClick = { onSelect(proposal) },
-      )
     }
   }
 }
@@ -487,10 +461,15 @@ private fun SkillWorkshopProposalDetail(
   isConnected: Boolean,
   operatorAdminScopeAvailable: Boolean,
   onInspect: () -> Unit,
-  onApply: () -> Unit,
-  onReject: () -> Unit,
-  onQuarantine: () -> Unit,
+  onAction: (SkillWorkshopProposalAction) -> Unit,
 ) {
+  val actionEnabled =
+    skillWorkshopProposalActionEnabled(
+      isConnected = isConnected,
+      operatorAdminScopeAvailable = operatorAdminScopeAvailable,
+      busy = inspecting || mutating,
+      status = proposal.status,
+    )
   ClawPanel {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
       Row(
@@ -569,14 +548,8 @@ private fun SkillWorkshopProposalDetail(
         )
         ClawPrimaryButton(
           text = if (mutating) nativeString("Working") else nativeString("Apply"),
-          onClick = onApply,
-          enabled =
-            skillWorkshopProposalActionEnabled(
-              isConnected = isConnected,
-              operatorAdminScopeAvailable = operatorAdminScopeAvailable,
-              busy = inspecting || mutating,
-              status = proposal.status,
-            ),
+          onClick = { onAction(SkillWorkshopProposalAction.Apply) },
+          enabled = actionEnabled,
           modifier = Modifier.weight(1f),
         )
       }
@@ -589,26 +562,14 @@ private fun SkillWorkshopProposalDetail(
       ) {
         ClawSecondaryButton(
           text = nativeString("Reject"),
-          onClick = onReject,
-          enabled =
-            skillWorkshopProposalActionEnabled(
-              isConnected = isConnected,
-              operatorAdminScopeAvailable = operatorAdminScopeAvailable,
-              busy = inspecting || mutating,
-              status = proposal.status,
-            ),
+          onClick = { onAction(SkillWorkshopProposalAction.Reject) },
+          enabled = actionEnabled,
           modifier = Modifier.weight(1f),
         )
         ClawSecondaryButton(
           text = nativeString("Quarantine"),
-          onClick = onQuarantine,
-          enabled =
-            skillWorkshopProposalActionEnabled(
-              isConnected = isConnected,
-              operatorAdminScopeAvailable = operatorAdminScopeAvailable,
-              busy = inspecting || mutating,
-              status = proposal.status,
-            ),
+          onClick = { onAction(SkillWorkshopProposalAction.Quarantine) },
+          enabled = actionEnabled,
           modifier = Modifier.weight(1f),
         )
       }
@@ -646,17 +607,15 @@ internal fun skillWorkshopFilteredProposals(
   query: String,
 ): List<GatewaySkillWorkshopProposal> {
   val normalizedQuery = query.trim().lowercase()
-  val matchingStatus =
-    proposals.filter { proposal -> skillWorkshopStatusMatchesFilter(proposal.status, statusFilter) }
-  val matchingQuery =
-    matchingStatus.filter { proposal ->
+  return proposals
+    .filter { proposal ->
+      if (!skillWorkshopStatusMatchesFilter(proposal.status, statusFilter)) return@filter false
       if (normalizedQuery.isEmpty()) return@filter true
       val pieces =
         listOf(proposal.title, proposal.description.orEmpty(), proposal.skillName, proposal.skillKey)
       val haystack = pieces.joinToString(" ").lowercase()
       haystack.contains(normalizedQuery)
-    }
-  return matchingQuery.sortedByDescending { it.updatedAt }
+    }.sortedByDescending { it.updatedAt }
 }
 
 internal fun skillWorkshopStatusMatchesFilter(
@@ -686,24 +645,6 @@ internal fun skillWorkshopStatusLabel(status: String): String =
     else -> status
   }
 
-private fun skillWorkshopFilterLabel(filter: String): String =
-  when (filter) {
-    "pending" -> nativeString("Pending")
-    "held" -> nativeString("Held")
-    "applied" -> nativeString("Applied")
-    "rejected" -> nativeString("Rejected")
-    else -> nativeString("All")
-  }
-
-private fun skillWorkshopFilterFromLabel(label: String): String =
-  when (label) {
-    nativeString("Pending") -> "pending"
-    nativeString("Held") -> "held"
-    nativeString("Applied") -> "applied"
-    nativeString("Rejected") -> "rejected"
-    else -> "all"
-  }
-
 private fun skillWorkshopAgentLabel(
   agents: List<GatewayAgentSummary>,
   defaultAgentId: String?,
@@ -725,7 +666,6 @@ private fun skillWorkshopStatusPill(status: String): ClawStatus =
   when (status) {
     "pending", "quarantined", "stale" -> ClawStatus.Warning
     "applied" -> ClawStatus.Success
-    "rejected" -> ClawStatus.Neutral
     else -> ClawStatus.Neutral
   }
 

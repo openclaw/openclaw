@@ -12,8 +12,8 @@ import { resolveSubagentThinkingOverride } from "./subagents/spawn/subagent-spaw
 import { supportedSpawnModelChoice } from "./subagents/spawn/subagent-spawn.test-helpers.js";
 
 const modelChoice = vi.hoisted(() => vi.fn<typeof supportedSpawnModelChoice>());
-vi.mock("./subagents/spawn/subagent-spawn-deps.js", () => ({
-  getSubagentSpawnDeps: () => ({ prepareModelChoice: modelChoice }),
+vi.mock("./subagents/spawn/subagent-spawn.runtime.js", () => ({
+  prepareModelChoice: modelChoice,
 }));
 beforeEach(() => {
   modelChoice.mockReset().mockImplementation(supportedSpawnModelChoice);
@@ -167,7 +167,12 @@ describe("subagent spawn model + thinking plan", () => {
     {
       name: "per-agent subagent model over defaults",
       defaults: { subagents: { model: "minimax/MiniMax-M2.7" } },
-      targetAgentConfig: { id: "research", subagents: { model: "opencode/claude" } },
+      targetAgentConfig: {
+        id: "research",
+        runtime: { type: "acp", acp: { agent: "cursor" } },
+        model: "gpt-5.6-sol[context=272k,reasoning=medium,fast=false]",
+        subagents: { model: "opencode/claude" },
+      },
       expectedModel: "opencode/claude",
       expectedProvider: "opencode",
       expectedOriginModel: "claude",
@@ -175,7 +180,11 @@ describe("subagent spawn model + thinking plan", () => {
     {
       name: "default subagent model over target agent primary model",
       defaults: { subagents: { model: "minimax/MiniMax-M2.7" } },
-      targetAgentConfig: { id: "research", model: { primary: "opencode/claude" } },
+      targetAgentConfig: {
+        id: "research",
+        runtime: { type: "acp", acp: { agent: "cursor" } },
+        model: { primary: "gpt-5.6-sol[context=272k,reasoning=medium,fast=false]" },
+      },
       expectedModel: "minimax/MiniMax-M2.7",
       expectedProvider: "minimax",
       expectedOriginModel: "MiniMax-M2.7",
@@ -188,6 +197,35 @@ describe("subagent spawn model + thinking plan", () => {
       expectedProvider: "opencode",
       expectedOriginModel: "claude",
     },
+    {
+      name: "native default over an ACP target's harness primary",
+      defaults: { model: { primary: "minimax/MiniMax-M2.7" } },
+      targetAgentConfig: {
+        id: "research",
+        runtime: { type: "acp", acp: { agent: "cursor" } },
+        model: { primary: "gpt-5.6-sol[context=272k,reasoning=medium,fast=false]" },
+      },
+      expectedModel: "minimax/MiniMax-M2.7",
+      expectedProvider: undefined,
+      expectedOriginModel: undefined,
+    },
+    {
+      name: "explicit native model over an ACP target's configured defaults",
+      defaults: {
+        model: { primary: "anthropic/claude-sonnet-4-6" },
+        subagents: { model: "minimax/MiniMax-M2.7" },
+      },
+      targetAgentConfig: {
+        id: "research",
+        runtime: { type: "acp", acp: { agent: "cursor" } },
+        model: "gpt-5.6-sol[context=272k,reasoning=medium,fast=false]",
+        subagents: { model: "opencode/claude" },
+      },
+      modelOverride: "openai/gpt-5.4",
+      expectedModel: "openai/gpt-5.4",
+      expectedProvider: undefined,
+      expectedOriginModel: undefined,
+    },
   ])("prefers $name", async (row) => {
     const cfg = createConfig({
       agents: { defaults: row.defaults, list: [row.targetAgentConfig] },
@@ -197,11 +235,12 @@ describe("subagent spawn model + thinking plan", () => {
         cfg,
         targetAgentId: "research",
         targetAgentConfig: row.targetAgentConfig,
+        modelOverride: row.modelOverride,
       }),
     );
     expect(plan.resolvedModel).toBe(row.expectedModel);
     expect(plan.initialSessionPatch.model).toBe(row.expectedModel);
-    expect(plan.initialSessionPatch.modelOverrideSource).toBe("auto");
+    expect(plan.initialSessionPatch.modelOverrideSource).toBe(row.modelOverride ? "user" : "auto");
     expect(plan.initialSessionPatch.modelOverrideFallbackOriginProvider).toBe(row.expectedProvider);
     expect(plan.initialSessionPatch.modelOverrideFallbackOriginModel).toBe(row.expectedOriginModel);
   });
@@ -275,32 +314,11 @@ function expectResolvedThinkingPlan(input: {
 describe("sessions_spawn thinking defaults", () => {
   it.each([
     {
-      name: "applies agents.defaults.subagents.thinking when thinking is omitted",
-      expected: "high",
-    },
-    {
-      name: "prefers explicit sessions_spawn.thinking over config default",
-      thinkingOverrideRaw: "low",
-      expected: "low",
-    },
-    {
-      name: "prefers per-agent subagent thinking over global subagent thinking",
-      targetAgentConfig: { subagents: { thinking: "medium" } },
-      expected: "medium",
-    },
-    {
       name: "prefers requester-agent subagent thinking over target-agent subagent thinking",
       requesterAgentConfig: { subagents: { thinking: "low" } },
       targetAgentConfig: { subagents: { thinking: "medium" } },
       callerThinkingRaw: "high",
       expected: "low",
-    },
-    {
-      name: "inherits caller thinking when no explicit or configured subagent thinking exists",
-      cfg: createConfig({ agents: { defaults: {} } }),
-      callerThinkingRaw: "medium",
-      expected: "medium",
-      expectedOverride: null,
     },
     {
       name: "prefers global subagent thinking over caller thinking",

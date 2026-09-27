@@ -59,8 +59,3 @@ export type MatrixMessageAttachmentSummary = {
   caption?: string;
   filename?: string;
 };
-
-export type MatrixActionClient = {
-  client: MatrixClient;
-  stopOnDone: boolean;
-};

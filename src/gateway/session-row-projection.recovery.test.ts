@@ -1,7 +1,7 @@
-import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import {
+  loadSessionEntry,
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
   upsertSessionEntryCore,
@@ -23,6 +23,7 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { listOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.test-support.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { sessionByKeyReadHandlers } from "./server-methods/sessions-read-by-key.js";
 import {
@@ -42,6 +43,11 @@ it.each(["background", "capture"] as const)(
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = { agents: { list: [{ id: "main", default: true }, { id: "worker" }] } };
       const query = { agentId: "worker", key: "agent:worker:recovering" };
+      const unaffected = { agentId: "main", key: "agent:main:unchanged" };
+      replaceSessionEntrySync(
+        { agentId: unaffected.agentId, sessionKey: unaffected.key },
+        { sessionId: "unchanged", updatedAt: 1 },
+      );
       replaceSessionEntrySync(
         { agentId: query.agentId, sessionKey: query.key },
         { sessionId: "recovering", updatedAt: 1 },
@@ -57,7 +63,8 @@ it.each(["background", "capture"] as const)(
       recordAgentDatabaseAdmissions([refusal], { source: "startup" });
       const projection = await createSessionRowProjection({ cfg });
       try {
-        expect(projection.select()).toEqual([]);
+        expect(projection.snapshot(query).row).toBeNull();
+        let beforeRecovery = 0;
         await preparePendingAgentDatabase(refusal, { assertCurrent() {} }, async () => {
           sessionChanges.emit({ all: true, scope: "config" });
           if (read === "capture") {
@@ -66,9 +73,12 @@ it.each(["background", "capture"] as const)(
           await projection.ensureMaterialized();
           expect(projection.snapshot(query).row).toBeNull();
           expect(listOpenClawAgentDatabasesForTest().some((db) => db.path === path)).toBe(false);
+          beforeRecovery = projection.materializedCount;
         });
         await projection.ensureMaterialized();
         expect(projection.snapshot(query).row?.sessionId).toBe("recovering");
+        expect(projection.snapshot(unaffected).row?.sessionId).toBe("unchanged");
+        expect(projection.materializedCount - beforeRecovery).toBe(1);
       } finally {
         projection.dispose();
       }
@@ -76,7 +86,7 @@ it.each(["background", "capture"] as const)(
   },
 );
 
-it("heals resident titles after reconciliation without a transcript mutation or clean-read SQLite", async () => {
+it("refreshes previews after reconciliation without metadata mutation or clean-read SQLite", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } };
     setRuntimeConfigSnapshot(cfg);
@@ -103,11 +113,12 @@ it("heals resident titles after reconciliation without a transcript mutation or 
       "SELECT seq, event_json FROM transcript_events WHERE session_id = ? ORDER BY seq",
     );
     const originalEvents = events.all(scope.sessionId);
+    const originalEntry = loadSessionEntry(scope);
     const context = requestContext(cfg);
     const client = identifiedClient("owner@example.com");
     const options = { includeDerivedTitles: true, includeLastMessage: true };
     // Model the optional reader's unavailable result without racing automatic reconciliation.
-    const titleRead = vi
+    const previewRead = vi
       .spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields")
       .mockResolvedValue({});
     const transcriptUpdates = vi.fn();
@@ -121,8 +132,8 @@ it("heals resident titles after reconciliation without a transcript mutation or 
           lastMessagePreview: undefined,
         }),
       ]);
-      await vi.waitFor(() => expect(titleRead).toHaveBeenCalled());
-      titleRead.mockRestore();
+      await vi.waitFor(() => expect(previewRead).toHaveBeenCalled());
+      previewRead.mockRestore();
       database.db
         .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
         .run(scope.sessionId);
@@ -136,7 +147,7 @@ it("heals resident titles after reconciliation without a transcript mutation or 
 
       const expected = {
         key: scope.sessionKey,
-        derivedTitle: "Explain the recovered session",
+        derivedTitle: undefined,
         lastMessagePreview: "The existing reply is available again.",
       };
       await vi.waitFor(() =>
@@ -144,11 +155,8 @@ it("heals resident titles after reconciliation without a transcript mutation or 
           projection.snapshot({ agentId: scope.agentId, key: scope.sessionKey }, options).row,
         ).toMatchObject(expected),
       );
-      const prepares = vi.spyOn(DatabaseSync.prototype, "prepare");
-      const execs = vi.spyOn(DatabaseSync.prototype, "exec");
-      const nativeCalls = (["all", "get", "iterate", "run"] as const).map((method) =>
-        vi.spyOn(StatementSync.prototype, method),
-      );
+      expect(loadSessionEntry(scope)).toEqual(originalEntry);
+      const nativeCalls = observeMainThreadSql();
       const healed = await listSessions({ context, client, request: options });
       expect(healed.sessions).toEqual([expect.objectContaining(expected)]);
       const respond = vi.fn();
@@ -166,11 +174,7 @@ it("heals resident titles after reconciliation without a transcript mutation or 
       expect(
         projection.snapshot({ agentId: scope.agentId, key: scope.sessionKey }, options).row,
       ).toMatchObject(expected);
-      expect(prepares).not.toHaveBeenCalled();
-      expect(execs).not.toHaveBeenCalled();
-      for (const calls of nativeCalls) {
-        expect(calls).not.toHaveBeenCalled();
-      }
+      nativeCalls.expectIdle();
     } finally {
       stop();
       getSessionRowProjection(context)?.dispose();

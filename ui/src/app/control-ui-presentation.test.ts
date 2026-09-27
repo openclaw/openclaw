@@ -32,6 +32,12 @@ describe("Control UI accent presentation", () => {
     expect(style.getPropertyValue("--accent-foreground")).toBe("#000000");
     expect(style.getPropertyValue("--primary-foreground")).toBe("#000000");
 
+    applyControlUiAccent("theme");
+    expect(style.getPropertyValue("--accent")).toBe("");
+    expect(style.getPropertyValue("--primary-hover")).toBe("");
+    applyControlUiPresentation({ environment: null, seamColor: "#abcdef" });
+    expect(style.getPropertyValue("--accent")).toBe("");
+    applyControlUiPresentation({ environment: null, seamColor: "#123456" });
     applyControlUiAccent();
     expect(style.getPropertyValue("--accent")).toBe("#123456");
     expect(style.getPropertyValue("--primary-foreground")).toBe("#ffffff");
@@ -75,6 +81,52 @@ describe("Control UI accent presentation", () => {
 });
 
 describe("Live display preference presentation", () => {
+  it("adopts navigation bindings without publishing or reapplying presentation", () => {
+    const previous = loadSettings();
+    saveSettings({ ...previous, theme: "claw", themeMode: "dark", chatShowThinking: true });
+    const { gateway } = createGatewayStoreTestStore({ settings: loadSettings() });
+    const theme = createApplicationTheme(loadSettings(), gateway);
+    const notify = vi.fn();
+    theme.subscribe(notify);
+    const presentation = new MutationObserver(() => {});
+    presentation.observe(document.documentElement, {
+      attributes: true,
+      childList: true,
+      subtree: true,
+    });
+    try {
+      for (const patch of [
+        { sessionKey: "agent:research:review" },
+        { lastActiveSessionKey: "agent:research:review" },
+        { selectedAgentId: "research" },
+        { sessionKey: "agent:main:next", lastActiveSessionKey: "agent:main:next" },
+      ]) {
+        patchSettings(patch);
+        expect(theme.settings).toMatchObject(patch);
+        expect.soft(notify).not.toHaveBeenCalled();
+        expect.soft(presentation.takeRecords()).toEqual([]);
+      }
+
+      patchSettings({ themeMode: "light" });
+      expect(notify).toHaveBeenCalledOnce();
+      expect(document.documentElement.dataset.themeMode).toBe("light");
+      expect(presentation.takeRecords().length).toBeGreaterThan(0);
+
+      notify.mockClear();
+      patchSettings({ sessionKey: "agent:main:mixed", chatShowThinking: false });
+      expect(theme.settings).toMatchObject({
+        sessionKey: "agent:main:mixed",
+        chatShowThinking: false,
+      });
+      expect(notify).toHaveBeenCalledOnce();
+    } finally {
+      presentation.disconnect();
+      theme.dispose();
+      gateway.stop();
+      saveSettings(previous);
+    }
+  });
+
   it.each(["claw", "knot"] as const)(
     "publishes preferences without waiting for the %s palette or render-time storage reads",
     (palette) => {

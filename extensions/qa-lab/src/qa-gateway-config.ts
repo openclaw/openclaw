@@ -1,4 +1,3 @@
-// Qa Lab helper module supports qa gateway config behavior.
 import { OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
@@ -11,6 +10,10 @@ import {
 import { resolveQaRuntimeModelPair } from "./model-selection.runtime.js";
 import { getQaProvider, DEFAULT_QA_PROVIDER_MODE } from "./providers/index.js";
 import { QA_FRONTIER_PROVIDER_IDS } from "./providers/live-frontier/catalog.js";
+import {
+  QA_SESSION_OBSERVER_HEADER,
+  resolveQaSessionObserverUrl,
+} from "./providers/shared/session-observer-registry.js";
 import type { QaThinkingLevel } from "./qa-thinking.js";
 import type { QaTransportGatewayConfig } from "./qa-transport.js";
 import type { RuntimeId } from "./runtime-parity.js";
@@ -52,6 +55,7 @@ export function buildQaGatewayConfig(params: {
   gatewayPort: number;
   gatewayToken: string;
   providerBaseUrl?: string;
+  mockSessionObserverUrl?: string;
   workspaceDir: string;
   stampCurrentVersion?: boolean;
   controlUiRoot?: string;
@@ -71,6 +75,8 @@ export function buildQaGatewayConfig(params: {
   forcedRuntime?: RuntimeId;
 }): OpenClawConfig {
   const providerBaseUrl = params.providerBaseUrl ?? "http://127.0.0.1:44080/v1";
+  const mockSessionObserverUrl =
+    params.mockSessionObserverUrl ?? resolveQaSessionObserverUrl(providerBaseUrl);
   const providerMode = normalizeQaProviderMode(params.providerMode ?? DEFAULT_QA_PROVIDER_MODE);
   const provider = getQaProvider(providerMode);
   const usesCodexMockAppServer = params.forcedRuntime === "codex" && providerMode === "mock-openai";
@@ -183,7 +189,7 @@ export function buildQaGatewayConfig(params: {
     liveProviderConfigs: params.liveProviderConfigs,
   });
   const codexMockOpenAiCatalog = providerGatewayModels?.providers.openai;
-  const gatewayModels =
+  const gatewayModels: ReturnType<typeof provider.buildGatewayModels> =
     usesCodexMockAppServer && codexMockOpenAiCatalog
       ? {
           mode: "merge" as const,
@@ -194,10 +200,21 @@ export function buildQaGatewayConfig(params: {
               // private mock route that the Codex harness cannot reproduce.
               baseUrl: QA_CODEX_OPENAI_CATALOG_BASE_URL,
               request: undefined,
+              models: codexMockOpenAiCatalog.models.map(({ compat: _compat, ...model }) => model),
             },
           },
         }
       : providerGatewayModels;
+  const mockProvider = gatewayModels?.providers["mock-openai"];
+  if (mockSessionObserverUrl && mockProvider) {
+    mockProvider.request = {
+      ...mockProvider.request,
+      headers: {
+        ...mockProvider.request?.headers,
+        [QA_SESSION_OBSERVER_HEADER]: mockSessionObserverUrl,
+      },
+    };
+  }
   const mockMemorySearch =
     provider.kind === "mock"
       ? {

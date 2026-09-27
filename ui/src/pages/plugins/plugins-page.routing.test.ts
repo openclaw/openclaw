@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ToolsCatalogResult } from "../../api/types.ts";
 import { configMocks } from "../../e2e/plugins-settings-admin.test-support.ts";
-import { i18n, t } from "../../i18n/index.ts";
+import { i18n } from "../../i18n/index.ts";
 import type { PluginCatalogItem, PluginDiscoveryDetailResult } from "../../lib/plugins/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import {
@@ -29,7 +29,7 @@ function discoveryDetail(
   return {
     plugin: {
       id: plugin.catalogId,
-      catalog: { name: plugin.name, official: true, categories: [] },
+      catalog: { name: plugin.name, official: true, categories: ["productivity"] },
       local: {
         present: plugin.installed,
         installed: plugin.installed,
@@ -78,7 +78,7 @@ describe("PluginsPage routing", () => {
   afterEach(resetPluginsPageTestState);
 
   it.each([false, true])(
-    "a chat install link opens review only when installed=%s permits it",
+    "a chat install link opens details without installing (installed=%s)",
     async (installed) => {
       const detail = {
         plugin: {
@@ -130,7 +130,7 @@ describe("PluginsPage routing", () => {
           search: "",
         }),
       );
-      expect(Boolean(page.querySelector(".plugin-install-wizard"))).toBe(!installed);
+      expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
       expect(request.mock.calls.some(([method]) => method === "plugins.install")).toBe(false);
     },
   );
@@ -155,6 +155,7 @@ describe("PluginsPage routing", () => {
     expect(page.querySelector("#plugins-tab-skills")).not.toBeNull();
     expect(page.querySelector("#plugins-tab-installed")).toBeNull();
     expect(page.querySelector("#plugins-tab-discover")).toBeNull();
+    expect(page.querySelector("openclaw-plugin-manager")).toBeNull();
 
     clickHubTab(page, "plugins");
     expect(context.navigate).not.toHaveBeenCalled();
@@ -162,85 +163,6 @@ describe("PluginsPage routing", () => {
     expect(context.navigate).toHaveBeenCalledWith("skills");
     clickHubTab(page, "skill-workshop");
     expect(context.navigate).toHaveBeenCalledWith("skill-workshop");
-  });
-
-  it("keeps the canonical settings inventory at /settings/plugins", async () => {
-    const { client } = createClient(async () => createResult());
-    const harness = createGateway(client);
-    const context = createContext(harness.gateway);
-    const routeData = createPluginsRouteData(
-      harness.gateway,
-      createResult(),
-      createPluginsRouteLocation("/settings/plugins"),
-    );
-    const { page } = await mountPage(context, routeData);
-    await switchToSettingsSurface(page, routeData);
-
-    expect(context.replace).not.toHaveBeenCalled();
-    expect(page.querySelector('.plugins-settings-search input[type="search"]')).not.toBeNull();
-    expect(page.querySelector(".plugins-settings-tabs")?.classList.contains("oc-segmented")).toBe(
-      true,
-    );
-    const row = page.querySelector('[data-plugin-id="workboard"]');
-    expect(row?.querySelector("wa-switch")).toBeNull();
-    expect(row?.querySelector('[data-plugin-state="disabled"]')).not.toBeNull();
-  });
-
-  it.each([
-    {
-      label: "Settings",
-      route: "/settings/plugins/workboard",
-      target: "plugin-settings" as const,
-      pathname: "/settings/plugins",
-      href: "/settings/plugins",
-    },
-    {
-      label: "Plugins",
-      route: "/settings/plugins/workboard?from=plugins",
-      target: "plugins" as const,
-      pathname: "/plugins",
-      href: "/plugins",
-    },
-  ])("opens a settings detail with its $label breadcrumb", async (testCase) => {
-    const { client, request } = createClient(async (method) =>
-      method === "plugins.inspect" ? createInspectResult() : createResult(),
-    );
-    const harness = createGateway(client);
-    const context = createContext(harness.gateway);
-    const routeData = createPluginsRouteData(
-      harness.gateway,
-      createResult(),
-      createPluginsRouteLocation(testCase.route),
-    );
-    const { page } = await mountPage(context, routeData);
-    await switchToSettingsSurface(page, routeData);
-
-    await vi.waitFor(() => {
-      expect(page.querySelector("h1")?.textContent).toContain("Workboard");
-    });
-    expect(request).toHaveBeenCalledWith("plugins.inspect", { pluginId: "workboard" });
-
-    const breadcrumb = page.querySelector<HTMLAnchorElement>(
-      ".plugins-settings-breadcrumb__parent",
-    );
-    expect(breadcrumb?.textContent).toBe(testCase.label);
-    expect(breadcrumb?.getAttribute("href")).toBe(testCase.href);
-    expect(page.querySelector('[aria-current="page"]')?.textContent).toBe("Workboard");
-    const hero = page.querySelector(".plugin-catalog-detail__hero");
-    expect(page.querySelector(".plugin-catalog-detail--no-sidebar")).not.toBeNull();
-    expect(hero?.querySelector(".plugin-catalog-detail__sidebar")).toBeNull();
-    expect(hero?.querySelector(".plugin-catalog-detail__icon")).not.toBeNull();
-    expect(hero?.querySelector(".plugin-catalog-detail__publisher-icon")).toBeNull();
-    expect(hero?.querySelector("h1")?.textContent).toBe("Workboard");
-    expect(hero?.querySelector(".plugin-catalog-detail__summary")?.textContent).toBe(
-      t("subtitles.workboard"),
-    );
-    expect(hero?.querySelector('[aria-label="Enable Workboard"]')).not.toBeNull();
-    breadcrumb?.click();
-    await page.updateComplete;
-    expect(context.navigate).toHaveBeenCalledWith(testCase.target, {
-      pathname: testCase.pathname,
-    });
   });
 
   it("retries a failed configuration write without discarding the pending draft", async () => {
@@ -595,46 +517,49 @@ describe("PluginsPage routing", () => {
     expect(request.mock.calls.filter(([method]) => method === "plugins.inspect")).toHaveLength(2);
   });
 
-  it.each(["review", "installing"])(
-    "keeps the latest Install selection while its wizard is %s",
-    async (stage) => {
-      const details = ["Alpha", "Beta"].map((name) =>
-        discoveryDetail({
-          ...createPlugin({
-            id: name.toLowerCase(),
-            name,
-            installed: false,
-            state: "not-installed",
-          }),
-          catalogId: name === "Alpha" ? "ch_YWxwaGE" : "ch_YmV0YQ",
+  it.each(["installed", "unavailable"])(
+    "reports when a listed install becomes %s",
+    async (change) => {
+      const offered = discoveryDetail({
+        ...createPlugin({
+          id: "calendar",
+          name: "Calendar",
+          installed: false,
+          state: "not-installed",
         }),
-      );
-      const [alpha, beta] = details;
-      const alphaRead = deferred<PluginDiscoveryDetailResult>();
-      const betaRead = deferred<PluginDiscoveryDetailResult>();
-      const installation = deferred<unknown>();
+        catalogId: "ch_Y2FsZW5kYXI",
+      });
+      const current = {
+        ...offered,
+        plugin: {
+          ...offered.plugin,
+          local: {
+            ...offered.plugin.local,
+            installed: change === "installed",
+            action: change === "installed" ? ("manage" as const) : ("unavailable" as const),
+          },
+        },
+      };
       const { client, request } = createClient(async (method, params) => {
         if (method === "plugins.catalog.browse") {
           return {
-            items:
-              asNullableRecord(params)?.intent === "all"
-                ? details.map((detail) => detail.plugin)
-                : [],
+            items: asNullableRecord(params)?.intent === "all" ? [offered.plugin] : [],
+            categories: [
+              {
+                slug: "productivity",
+                label: "Productivity",
+                description: "Work tools",
+                icon: "checkSquare",
+                order: 1,
+              },
+            ],
           };
         }
         if (method === "plugins.catalog.categories") {
           return { categories: [] };
         }
         if (method === "plugins.catalog.get") {
-          return asNullableRecord(params)?.id === alpha!.plugin.id
-            ? alphaRead.promise
-            : betaRead.promise;
-        }
-        if (method === "plugins.install") {
-          return installation.promise;
-        }
-        if (method === "plugins.list") {
-          return createResult();
+          return current;
         }
         throw new Error(`Unexpected method: ${method}`);
       });
@@ -647,63 +572,130 @@ describe("PluginsPage routing", () => {
           createPluginsRouteLocation("/plugins"),
         ),
       );
-      try {
-        await vi.waitFor(() =>
-          expect(page.querySelectorAll(".plugin-catalog-card__install")).toHaveLength(2),
-        );
-        page.querySelector<HTMLButtonElement>('[aria-label="Install Alpha"]')!.click();
-        page.querySelector<HTMLButtonElement>('[aria-label="Install Beta"]')!.click();
-        await vi.waitFor(() =>
-          expect(
-            request.mock.calls.filter(([method]) => method === "plugins.catalog.get"),
-          ).toHaveLength(2),
-        );
-        betaRead.resolve(beta!);
-        const wizard = () => page.querySelector(".plugin-install-wizard");
-        await vi.waitFor(() => expect(wizard()?.querySelector("h2")?.textContent).toBe("Beta"));
-        if (stage === "installing") {
-          [...wizard()!.querySelectorAll<HTMLButtonElement>("button")]
-            .find((button) => button.textContent?.trim() === "Install Beta")!
-            .click();
-          await vi.waitFor(() =>
-            expect(request).toHaveBeenCalledWith("plugins.install", {
-              source: "clawhub",
-              packageName: "beta",
-            }),
-          );
-          expect(wizard()?.getAttribute("data-stage")).toBe("installing");
-        }
-        alphaRead.resolve(alpha!);
-        await alphaRead.promise;
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 0);
-        });
-        await page.updateComplete;
-
-        expect(wizard()?.querySelector("h2")?.textContent).toBe("Beta");
-        expect(wizard()?.getAttribute("data-stage")).toBe(stage);
-        expect(request.mock.calls.filter(([method]) => method === "plugins.install")).toHaveLength(
-          stage === "installing" ? 1 : 0,
-        );
-      } finally {
-        alphaRead.resolve(alpha!);
-        betaRead.resolve(beta!);
-        installation.resolve({
-          ok: true,
-          plugin: createPlugin({ id: "beta", name: "Beta", enabled: true, state: "enabled" }),
-          restartRequired: false,
-        });
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 0);
-        });
-        await page.updateComplete;
-      }
+      await vi.waitFor(() =>
+        expect(page.querySelector('[aria-label="Install Calendar"]')).not.toBeNull(),
+      );
+      page.querySelector<HTMLButtonElement>('[aria-label="Install Calendar"]')!.click();
+      await vi.waitFor(() => expect(page.textContent).toContain("Plugin availability changed"));
+      expect(request.mock.calls.some(([method]) => method === "plugins.install")).toBe(false);
+      expect(
+        page.querySelector<HTMLButtonElement>('[aria-label="Install Calendar"]')?.disabled,
+      ).toBe(false);
     },
   );
 
-  it.each(["/settings/plugins/workboard", "/plugins/ch_QG9wZW5jbGF3L3dvcmtib2FyZA"])(
-    "renders local controls at %s while optional metadata settles independently",
-    async (route) => {
+  it("keeps the latest Install request while an older catalog detail is pending", async () => {
+    const details = ["Alpha", "Beta"].map((name) =>
+      discoveryDetail({
+        ...createPlugin({
+          id: name.toLowerCase(),
+          name,
+          installed: false,
+          state: "not-installed",
+        }),
+        catalogId: name === "Alpha" ? "ch_YWxwaGE" : "ch_YmV0YQ",
+      }),
+    );
+    const [alpha, beta] = details;
+    const alphaRead = deferred<PluginDiscoveryDetailResult>();
+    const betaRead = deferred<PluginDiscoveryDetailResult>();
+    const installation = deferred<unknown>();
+    const { client, request } = createClient(async (method, params) => {
+      if (method === "plugins.catalog.browse") {
+        return {
+          items:
+            asNullableRecord(params)?.intent === "all"
+              ? details.map((detail) => detail.plugin)
+              : [],
+          categories: [
+            {
+              slug: "productivity",
+              label: "Productivity",
+              description: "Work tools",
+              icon: "checkSquare",
+              order: 1,
+            },
+          ],
+        };
+      }
+      if (method === "plugins.catalog.categories") {
+        return { categories: [] };
+      }
+      if (method === "plugins.catalog.get") {
+        return asNullableRecord(params)?.id === alpha!.plugin.id
+          ? alphaRead.promise
+          : betaRead.promise;
+      }
+      if (method === "plugins.install") {
+        return installation.promise;
+      }
+      if (method === "plugins.list") {
+        return createResult();
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    const harness = createGateway(client);
+    const { page } = await mountPage(
+      createContext(harness.gateway),
+      createPluginsRouteData(
+        harness.gateway,
+        createResult(),
+        createPluginsRouteLocation("/plugins"),
+      ),
+    );
+    try {
+      await vi.waitFor(() =>
+        expect(page.querySelectorAll(".plugin-catalog-card__install")).toHaveLength(2),
+      );
+      page.querySelector<HTMLButtonElement>('[aria-label="Install Alpha"]')!.click();
+      page.querySelector<HTMLButtonElement>('[aria-label="Install Beta"]')!.click();
+      await vi.waitFor(() =>
+        expect(
+          request.mock.calls.filter(([method]) => method === "plugins.catalog.get"),
+        ).toHaveLength(2),
+      );
+      betaRead.resolve(beta!);
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith(
+          "plugins.install",
+          {
+            source: "clawhub",
+            packageName: "beta",
+          },
+          expect.objectContaining({ onSent: expect.any(Function) }),
+        ),
+      );
+      alphaRead.resolve(alpha!);
+      await alphaRead.promise;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+      await page.updateComplete;
+
+      expect(request.mock.calls.filter(([method]) => method === "plugins.install")).toHaveLength(1);
+      expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
+    } finally {
+      alphaRead.resolve(alpha!);
+      betaRead.resolve(beta!);
+      installation.resolve({
+        ok: true,
+        plugin: createPlugin({ id: "beta", name: "Beta", enabled: true, state: "enabled" }),
+        restartRequired: false,
+      });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+      await page.updateComplete;
+    }
+  });
+
+  it.each(
+    ["/settings/plugins/workboard", "/plugins/ch_QG9wZW5jbGF3L3dvcmtib2FyZA"].flatMap((route) =>
+      [false, true].map((remoteFails) => ({ route, remoteFails })),
+    ),
+  )(
+    "renders local controls at $route while optional metadata settles (failure: $remoteFails)",
+    async ({ route, remoteFails }) => {
       const plugin = createPlugin({
         catalogId: "ch_QG9wZW5jbGF3L3dvcmtib2FyZA",
         clawhubPackage: "@openclaw/workboard",
@@ -740,8 +732,10 @@ describe("PluginsPage routing", () => {
       };
       const tools = deferred<ToolsCatalogResult>();
       let resolveCatalog!: (value: typeof catalog) => void;
-      const catalogPending = new Promise<typeof catalog>((resolve) => {
+      let rejectCatalog!: (error: Error) => void;
+      const catalogPending = new Promise<typeof catalog>((resolve, reject) => {
         resolveCatalog = resolve;
+        rejectCatalog = reject;
       });
       const { client, request } = createClient(async (method) => {
         if (method === "plugins.inspect") {
@@ -775,6 +769,10 @@ describe("PluginsPage routing", () => {
       await vi.waitFor(() => expect(page.querySelector("h1")?.textContent).toContain("Workboard"));
       expect(page.querySelector('[aria-label="Enable Workboard"]')).not.toBeNull();
       expect(page.querySelector(".plugin-catalog-detail__sidebar")?.textContent).toContain("1.2.3");
+      expect(page.querySelector(".plugin-metadata__loading[role=status]")).not.toBeNull();
+      expect(page.querySelector(".plugin-capability__static")?.textContent).toContain(
+        "board_create",
+      );
       expect(request).toHaveBeenCalledWith(
         "plugins.catalog.get",
         {
@@ -784,10 +782,16 @@ describe("PluginsPage routing", () => {
         undefined,
       );
 
-      resolveCatalog(catalog);
-      await vi.waitFor(() =>
-        expect(page.querySelector(".plugin-catalog-detail__sidebar")).not.toBeNull(),
+      if (remoteFails) {
+        rejectCatalog(new Error("Catalog unavailable"));
+      } else {
+        resolveCatalog(catalog);
+      }
+      await vi.waitFor(() => expect(page.querySelector(".plugin-metadata__loading")).toBeNull());
+      expect(page.querySelector(".plugin-metadata__categories .chip")?.textContent).toBe(
+        remoteFails ? undefined : "tools",
       );
+      expect(page.querySelector(".plugin-catalog-detail__sidebar")?.textContent).toContain("1.2.3");
       tools.resolve({
         agentId: "main",
         profiles: [],
@@ -968,9 +972,9 @@ describe("PluginsPage routing", () => {
     expect(page.querySelector(".plugins-settings-detail-setup")).toBeNull();
     expect(page.querySelector('[role="tablist"]')).toBeNull();
     expect(page.querySelector(".plugin-catalog-detail__panel .oc-banner-warning")).toBeNull();
-    const settings = [
-      ...page.querySelectorAll<HTMLAnchorElement>(".plugin-catalog-detail__actions a"),
-    ].find((link) => link.textContent?.includes("Settings"));
+    const settings = page.querySelector<HTMLAnchorElement>(
+      '.plugin-catalog-detail__actions a[aria-label="Settings"]',
+    );
     expect(settings?.href).toContain("view=settings");
     expect(
       page.querySelector('[aria-label="Enable Team Reports"]')?.getAttribute("aria-disabled"),

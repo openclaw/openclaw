@@ -25,8 +25,15 @@ import {
   manualLibraryFiles as supporting,
 } from "../../skills/test-support/manual-library.test-support.js";
 import type { SkillSnapshot } from "../../skills/types.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { hasOpenClawAgentDatabaseAsyncResources } from "../../state/openclaw-agent-db-resources.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawCodingTools, createOpenClawCodingToolsInternal } from "../agent-tools.js";
 import { createAdmittedHostCapabilityTestFixture } from "../harness/host-capability.test-support.js";
@@ -39,14 +46,20 @@ import { prepareEmbeddedSkills } from "./skill-runtime.js";
 const hosts: Array<Awaited<ReturnType<typeof createAdmittedHostCapabilityTestFixture>>> = [];
 
 const temps = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
+  afterEach(async () => {
     for (const host of hosts.splice(0)) {
       host.closeHost();
       host.closeAdmission();
     }
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
+    expect(
+      hasOpenClawAgentDatabaseAsyncResources(),
+      "fixture workers must settle before root deletion",
+    ).toBe(false);
     cleanup();
   }),
 );

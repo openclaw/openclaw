@@ -1,20 +1,8 @@
 import path from "node:path";
-import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
-import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/session-store-runtime";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawStateDatabaseAsync,
-} from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import type { CodexAppServerThreadBinding } from "./app-server/session-binding.js";
-import {
-  resetCodexTestBindingStore,
-  testCodexAppServerBindingStore,
-} from "./app-server/session-binding.test-helpers.js";
-import { resetSharedCodexAppServerClientForTests } from "./app-server/shared-client.js";
-import { codexDiagnosticsFeedbackState } from "./command-diagnostics-state.js";
+import { testCodexAppServerBindingStore } from "./app-server/session-binding.test-helpers.js";
 import { handleCodexCommand } from "./command-dispatch.js";
 import {
   createContext,
@@ -26,27 +14,45 @@ import {
   requestParams,
   supervisedTestBinding,
   writeTestBinding,
+  useCodexCommandTestState,
 } from "./commands.test-support.js";
 
 describe("codex command", () => {
   let tempDir: string;
-  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-    afterEach(async () => {
-      codexDiagnosticsFeedbackState.clear();
-      resetSharedCodexAppServerClientForTests();
-      await closeOpenClawAgentDatabasesAsync();
-      await closeOpenClawStateDatabaseAsync();
-      clearRuntimeAuthProfileStoreSnapshots();
-      clearSessionStoreCacheForTest();
-      vi.unstubAllEnvs();
-      cleanup();
-    }),
-  );
+  useCodexCommandTestState({
+    onSetup: (stateDir) => {
+      tempDir = stateDir;
+    },
+  });
 
-  beforeEach(() => {
-    resetCodexTestBindingStore();
-    tempDir = tempDirs.make("openclaw-codex-diagnostics-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
+  it("preserves an accepted upload and blocks the next target after owner revocation", async () => {
+    for (const sessionId of ["session-1", "session-2"]) {
+      await writeTestBinding(
+        { kind: "session", agentId: "main", sessionId },
+        { threadId: `thread-${sessionId}`, cwd: "/repo" },
+      );
+    }
+    let ownerCurrent = true;
+    const safeCodexControlRequest = vi.fn(async () => {
+      ownerCurrent = false;
+      return { ok: true as const, value: { threadId: "thread-session-1" } };
+    });
+    const result = await handleCodexCommand(
+      createContext("diagnostics", undefined, {
+        diagnosticsUploadApproved: true,
+        diagnosticsSessions: [{ sessionId: "session-2", channel: "test" }],
+        assertOwnerCurrent: () => {
+          if (!ownerCurrent) {
+            throw new Error("Command owner was revoked");
+          }
+        },
+      }),
+      { deps: createDeps({ safeCodexControlRequest }) },
+    );
+    expect(safeCodexControlRequest).toHaveBeenCalledOnce();
+    expect(result.text).toContain("Codex diagnostics sent to OpenAI servers:");
+    expect(result.text).toContain("Could not send Codex diagnostics:");
+    expect(result.text).toContain("Command owner was revoked");
   });
 
   it("asks before sending diagnostics feedback for the attached Codex thread", async () => {
@@ -217,54 +223,32 @@ describe("codex command", () => {
     );
   });
 
-  it("rejects diagnostics confirmation when private connection scope changes", async () => {
+  it.each([
+    {
+      change: "private connection scope",
+      replacement: { threadId: "thread-scope-change", cwd: "/repo" },
+    },
+    {
+      change: "supervised connection",
+      replacement: {
+        ...supervisedTestBinding("thread-scope-change"),
+        appServerRuntimeFingerprint: "changed-connection",
+      },
+    },
+  ])("rejects diagnostics confirmation when the $change changes", async ({ replacement }) => {
     let binding: CodexAppServerThreadBinding = supervisedTestBinding("thread-scope-change");
-    const readBinding = vi.fn(() => binding);
     const safeCodexControlRequest = vi.fn();
     const deps = createDeps({
-      bindingStore: { ...testCodexAppServerBindingStore, read: readBinding },
+      bindingStore: { ...testCodexAppServerBindingStore, read: () => binding },
       safeCodexControlRequest,
     });
     const pluginConfig = { supervision: { enabled: true } };
-    const request = await handleCodexCommand(createContext("diagnostics"), {
-      deps,
-      pluginConfig,
-    });
+    const request = await handleCodexCommand(createContext("diagnostics"), { deps, pluginConfig });
     const token = readDiagnosticsConfirmationToken(request);
-    binding = { threadId: "thread-scope-change", cwd: "/repo" };
+    binding = replacement;
 
     await expect(
-      handleCodexCommand(createContext(`diagnostics confirm ${token}`), {
-        deps,
-        pluginConfig,
-      }),
-    ).resolves.toEqual({
-      text: "The Codex diagnostics sessions changed before confirmation. Run /diagnostics again for the current threads.",
-    });
-    expect(safeCodexControlRequest).not.toHaveBeenCalled();
-  });
-
-  it("rejects diagnostics confirmation when the supervised connection changes", async () => {
-    let binding: CodexAppServerThreadBinding = supervisedTestBinding("thread-connection-change");
-    const readBinding = vi.fn(() => binding);
-    const safeCodexControlRequest = vi.fn();
-    const deps = createDeps({
-      bindingStore: { ...testCodexAppServerBindingStore, read: readBinding },
-      safeCodexControlRequest,
-    });
-    const pluginConfig = { supervision: { enabled: true } };
-    const request = await handleCodexCommand(createContext("diagnostics"), {
-      deps,
-      pluginConfig,
-    });
-    const token = readDiagnosticsConfirmationToken(request);
-    binding = { ...binding, appServerRuntimeFingerprint: "changed-connection" };
-
-    await expect(
-      handleCodexCommand(createContext(`diagnostics confirm ${token}`), {
-        deps,
-        pluginConfig,
-      }),
+      handleCodexCommand(createContext(`diagnostics confirm ${token}`), { deps, pluginConfig }),
     ).resolves.toEqual({
       text: "The Codex diagnostics sessions changed before confirmation. Run /diagnostics again for the current threads.",
     });
@@ -286,28 +270,19 @@ describe("codex command", () => {
     const request = await handleCodexCommand(createContext("diagnostics", sessionFile), { deps });
     const token = readDiagnosticsConfirmationToken(request);
 
-    await expect(
-      handleCodexCommand(createContext(`diagnostics confirm ${token} extra`, sessionFile), {
-        deps,
-      }),
-    ).resolves.toEqual({
-      text: [
-        "Usage: /codex diagnostics [note]",
-        "Usage: /codex diagnostics confirm <token>",
-        "Usage: /codex diagnostics cancel <token>",
-      ].join("\n"),
-    });
-    await expect(
-      handleCodexCommand(createContext(`diagnostics cancel ${token} extra`, sessionFile), {
-        deps,
-      }),
-    ).resolves.toEqual({
-      text: [
-        "Usage: /codex diagnostics [note]",
-        "Usage: /codex diagnostics confirm <token>",
-        "Usage: /codex diagnostics cancel <token>",
-      ].join("\n"),
-    });
+    for (const action of ["confirm", "cancel"]) {
+      await expect(
+        handleCodexCommand(createContext(`diagnostics ${action} ${token} extra`, sessionFile), {
+          deps,
+        }),
+      ).resolves.toEqual({
+        text: [
+          "Usage: /codex diagnostics [note]",
+          "Usage: /codex diagnostics confirm <token>",
+          "Usage: /codex diagnostics cancel <token>",
+        ].join("\n"),
+      });
+    }
     expect(safeCodexControlRequest).not.toHaveBeenCalled();
 
     const confirmResult = await handleCodexCommand(
@@ -359,68 +334,6 @@ describe("codex command", () => {
     expect(result.text).not.toContain("To send:");
     expect(result.interactive).toBeUndefined();
     expect(safeCodexControlRequest).not.toHaveBeenCalled();
-  });
-
-  it("sends diagnostics feedback immediately after exec approval", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    await writeTestBinding(
-      {
-        kind: "session",
-        agentId: "main",
-        sessionId: "session-approved",
-        sessionKey: "agent:main:telegram:approved",
-      },
-      { threadId: "thread-approved", cwd: "/repo" },
-    );
-    const safeCodexControlRequest = vi.fn(async () => ({
-      ok: true as const,
-      value: { threadId: "thread-approved" },
-    }));
-    const deps = createDeps({ safeCodexControlRequest });
-    await expect(
-      handleCodexCommand(
-        createContext("diagnostics approved repro", sessionFile, {
-          diagnosticsUploadApproved: true,
-          senderId: "user-1",
-          sessionId: "session-approved",
-          sessionKey: "agent:main:telegram:approved",
-        }),
-        { deps },
-      ),
-    ).resolves.toEqual({
-      text: [
-        "Codex diagnostics sent to OpenAI servers:",
-        ...expectedDiagnosticsTargetBlock({
-          channel: "test",
-          sessionKey: "agent:main:telegram:approved",
-          sessionId: "session-approved",
-          threadId: "thread-approved",
-        }),
-        "Included Codex logs and spawned Codex subthreads when available.",
-      ].join("\n"),
-    });
-    expect(safeCodexControlRequest).toHaveBeenCalledTimes(1);
-    expect(safeCodexControlRequest).toHaveBeenCalledWith(
-      undefined,
-      CODEX_CONTROL_METHODS.feedback,
-      {
-        classification: "bug",
-        reason: "approved repro",
-        threadId: "thread-approved",
-        includeLogs: true,
-        tags: {
-          source: "openclaw-diagnostics",
-          channel: "test",
-        },
-      },
-      {
-        config: {},
-        agentDir: path.join(tempDir, "agents", "main", "agent"),
-        assertCurrent: expect.any(Function),
-        sessionId: "session-approved",
-        sessionKey: "agent:main:telegram:approved",
-      },
-    );
   });
 
   it("uploads all Codex diagnostics sessions and reports their channel/thread breakdown", async () => {
@@ -521,31 +434,23 @@ describe("codex command", () => {
       ].join("\n"),
     });
     expect(safeCodexControlRequest).toHaveBeenCalledTimes(2);
-    expect(mockArg(safeCodexControlRequest, 0, 0)).toBeUndefined();
-    expect(mockArg(safeCodexControlRequest, 0, 1)).toBe(CODEX_CONTROL_METHODS.feedback);
-    const firstFeedbackParams = requestParams(safeCodexControlRequest);
-    expect(firstFeedbackParams.threadId).toBe("thread-111");
-    expect(firstFeedbackParams.includeLogs).toBe(true);
-    expect(mockArg(safeCodexControlRequest, 0, 3)).toEqual({
-      config: {},
-      agentDir: path.join(tempDir, "agents", "first", "agent"),
-      assertCurrent: expect.any(Function),
-      authProfileId: "openai:first",
-      sessionId: "session-one",
-      sessionKey: "agent:first:whatsapp:one",
-    });
-    expect(mockArg(safeCodexControlRequest, 1, 0)).toBeUndefined();
-    expect(mockArg(safeCodexControlRequest, 1, 1)).toBe(CODEX_CONTROL_METHODS.feedback);
-    const secondFeedbackParams = requestParams(safeCodexControlRequest, 1);
-    expect(secondFeedbackParams.threadId).toBe("thread-222");
-    expect(secondFeedbackParams.includeLogs).toBe(true);
-    expect(mockArg(safeCodexControlRequest, 1, 3)).toEqual({
-      config: {},
-      agentDir: path.join(tempDir, "agents", "second", "agent"),
-      assertCurrent: expect.any(Function),
-      authProfileId: "openai:second",
-      sessionId: "session-two",
-      sessionKey: "agent:second:discord:two",
-    });
+    for (const [index, agentId, sessionId, sessionKey, threadId] of [
+      [0, "first", "session-one", "agent:first:whatsapp:one", "thread-111"],
+      [1, "second", "session-two", "agent:second:discord:two", "thread-222"],
+    ] as const) {
+      expect(mockArg(safeCodexControlRequest, index, 0)).toBeUndefined();
+      expect(mockArg(safeCodexControlRequest, index, 1)).toBe(CODEX_CONTROL_METHODS.feedback);
+      const feedback = requestParams(safeCodexControlRequest, index);
+      expect(feedback.threadId).toBe(threadId);
+      expect(feedback.includeLogs).toBe(true);
+      expect(mockArg(safeCodexControlRequest, index, 3)).toEqual({
+        config: {},
+        agentDir: path.join(tempDir, "agents", agentId, "agent"),
+        assertCurrent: expect.any(Function),
+        authProfileId: `openai:${agentId}`,
+        sessionId,
+        sessionKey,
+      });
+    }
   });
 });

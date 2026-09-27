@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { requestNodePairing } from "../infra/device-pairing-node.js";
+import { persistDeviceBootstrapTokenRecords } from "../infra/device-pairing-store.js";
 import { listDevicePairing } from "../infra/device-pairing.js";
 import { configureSqliteConnectionPragmas } from "../infra/sqlite-wal.js";
 import {
@@ -35,7 +36,8 @@ describe("gateway node pairing memoization", () => {
   });
 
   describeWithGatewayServer("node.list pairing snapshots", (getStarted) => {
-    test("scans pairing tables once across two node.list dispatches", async () => {
+    test("serves node.list without host pairing-table queries across unrelated state writes", async () => {
+      const nodeId = "node-list-memo-scan-count";
       const ws = await openTrackedWs(getStarted().port);
       try {
         await connectOk(ws, {
@@ -43,7 +45,7 @@ describe("gateway node pairing memoization", () => {
           scopes: ["operator.read", "operator.pairing"],
           deviceIdentityPath: `${await makeNodePairingStateDir()}/memo-scan-count.sqlite`,
         });
-        await seedNodeDevice("node-list-memo-scan-count");
+        await seedNodeDevice(nodeId);
         const database = openOpenClawStateDatabase();
         const { counts: tableSelects, restore } = trackSqliteStatementExecutions(
           database.db,
@@ -59,9 +61,18 @@ describe("gateway node pairing memoization", () => {
           },
         );
         try {
-          expect((await rpcReq(ws, "node.list", {})).ok).toBe(true);
-          expect((await rpcReq(ws, "node.list", {})).ok).toBe(true);
-          expect(tableSelects).toEqual({ paired: 1, pending: 1 });
+          expect(await rpcReq(ws, "node.list", {})).toMatchObject({
+            ok: true,
+            payload: { nodes: expect.arrayContaining([expect.objectContaining({ nodeId })]) },
+          });
+          persistDeviceBootstrapTokenRecords({
+            memo: { token: "synthetic-bootstrap", ts: Date.now(), issuedAtMs: Date.now() },
+          });
+          expect(await rpcReq(ws, "node.list", {})).toMatchObject({
+            ok: true,
+            payload: { nodes: expect.arrayContaining([expect.objectContaining({ nodeId })]) },
+          });
+          expect(tableSelects).toEqual({ paired: 0, pending: 0 });
         } finally {
           restore();
         }

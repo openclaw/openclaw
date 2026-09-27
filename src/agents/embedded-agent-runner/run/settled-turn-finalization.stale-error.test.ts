@@ -23,7 +23,9 @@ const transcriptMocks = vi.hoisted(() => ({
 
 vi.mock("./backend.js", () => ({
   resolveRuntimeModelAttempt: vi.fn(),
-  runEmbeddedSettledTurnFinalizationWithBackend: backendMocks.runSettledFinalization,
+}));
+vi.mock("../../harness/selection.js", () => ({
+  runAgentHarnessSettledTurnFinalization: backendMocks.runSettledFinalization,
 }));
 vi.mock("../../../plugin-sdk/session-transcript-runtime.js", () => ({
   appendAssistantMirrorMessageByIdentity: transcriptMocks.appendAssistantMirrorMessageByIdentity,
@@ -192,6 +194,9 @@ describe("settled-turn finalization after an earlier tool failure", () => {
       const result = await prepareTerminalWithSettledTurnFinalization(input);
 
       expect(attempt.lastToolError).toBe(denial);
+      expect(result.prepared.attemptToolSummary).toMatchObject({
+        unresolvedError: { toolName: "exec" },
+      });
       expect(result.prepared.failureSignal).toEqual({
         kind: "execution_denied",
         source: "tool",

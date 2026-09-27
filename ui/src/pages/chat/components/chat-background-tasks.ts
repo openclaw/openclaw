@@ -11,7 +11,6 @@ import { formatUiError } from "../../../lib/format-error.ts";
 import type { SessionScopeHost } from "../../../lib/sessions/index.ts";
 import {
   canonicalUiSessionKeyForPersistence,
-  parseAgentSessionKey,
   resolveUiConversationIdentity,
 } from "../../../lib/sessions/session-key.ts";
 import {
@@ -19,19 +18,27 @@ import {
   type CoalescedTaskEvent,
   isActiveTask,
   mergeTaskLists,
+  newestTaskSnapshot,
   normalizeTaskEventPayload,
   normalizeTasksCancelResult,
   normalizeTasksGetResult,
   normalizeTasksListResult,
   replayTaskEvents,
   sortTasks,
-  taskTimestampMs,
 } from "../../../lib/tasks/data.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
-import { newestTaskSnapshot } from "./chat-background-tasks-shared.ts";
+import { taskMatchesSessionScope } from "./chat-background-task-scope.ts";
+import {
+  prepareTaskSnapshot,
+  type BackgroundTaskObservations,
+} from "./chat-background-tasks-shared.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import { deriveSubagentActivity } from "./chat-subagent-activity.ts";
-import { observeTaskDetailEvent } from "./chat-task-detail-state.ts";
+import {
+  observeTaskDetailEvent,
+  resetTaskDetail,
+  type TaskTranscriptHost,
+} from "./chat-task-detail-state.ts";
 
 registerBackgroundTasksEnglish();
 
@@ -47,12 +54,13 @@ type BackgroundTaskSnapshotResult =
   | { kind: "deferred"; retryAttempt: number }
   | { kind: "stale" };
 
-type BackgroundTasksState = {
+type BackgroundTasksState = BackgroundTaskObservations & {
   cancellingTaskIds: Set<string>;
   collapsed: boolean;
   connectionClient: GatewayBrowserClient | null;
   connectionEpoch: number | undefined;
   error: string | null;
+  errorTaskId?: string;
   explicitReadRequested: boolean;
   deferredRetryAttempt?: number;
   finishedCollapsed: boolean;
@@ -68,32 +76,23 @@ type BackgroundTasksState = {
   // wa-tooltip anchors by document id, so the status row's id must stay unique
   // per pane: two panes on the same agent would otherwise cross-anchor.
   statusRowId: string;
-  subagentActivityExpiryAt: number | null;
-  subagentActivityExpiryTimer: number | null;
-  taskActivityById: Map<string, Pick<TaskSummary, "lastActivity" | "diffStat">>;
-  terminalObservedAtByTask: Map<string, number>;
   tasks: TaskSummary[] | null;
   taskDetails: Map<string, TaskSummary>;
   taskDetailErrors: Map<string, string>;
-  taskDetailLoadingIds: Set<string>;
+  taskDetailRequests: Map<string, symbol>;
 };
 
-export type BackgroundTasksHost = {
+export type BackgroundTasksHost = TaskTranscriptHost & {
   sessionKey: string;
   assistantAgentId?: string | null;
-  client: GatewayBrowserClient | null;
-  connected: boolean;
-  connectionEpoch?: number;
   hello: GatewayHelloOk | null;
   agentsList?: SessionScopeHost["agentsList"];
   backgroundTasksState?: BackgroundTasksState;
   chatSecondaryReadsReady?: (explicit?: boolean) => boolean;
-  requestUpdate?: () => void;
 };
 
-// The chat rail stays bounded to its session while the full Tasks page drains
-// every active page. A separate active query still keeps long-running work
-// from hiding behind newer terminal records here.
+// The chat rail stays bounded to its session. A separate active query keeps
+// long-running work from hiding behind newer terminal records.
 const ACTIVE_TASKS_LIMIT = 200;
 const RECENT_TASKS_LIMIT = 100;
 const TASK_LIST_MAX_ATTEMPTS = 2;
@@ -113,12 +112,7 @@ function getBackgroundTasksState(host: BackgroundTasksHost): BackgroundTasksStat
   ) {
     return current;
   }
-  if (
-    current?.subagentActivityExpiryTimer !== null &&
-    current?.subagentActivityExpiryTimer !== undefined
-  ) {
-    window.clearTimeout(current.subagentActivityExpiryTimer);
-  }
+  resetTaskDetail(host);
   nextStatusRowId += 1;
   const next: BackgroundTasksState = {
     cancellingTaskIds: new Set(),
@@ -142,97 +136,14 @@ function getBackgroundTasksState(host: BackgroundTasksHost): BackgroundTasksStat
     sessionKey,
     agentId,
     statusRowId: `chat-tasks-status-${nextStatusRowId}`,
-    subagentActivityExpiryAt: null,
-    subagentActivityExpiryTimer: null,
     taskActivityById: new Map(),
-    terminalObservedAtByTask: new Map(),
     tasks: null,
     taskDetails: new Map(),
     taskDetailErrors: new Map(),
-    taskDetailLoadingIds: new Set(),
+    taskDetailRequests: new Map(),
   };
   host.backgroundTasksState = next;
   return next;
-}
-
-function retainTaskStreamingFields(state: BackgroundTasksState, task: TaskSummary): TaskSummary {
-  const retained = state.taskActivityById.get(task.id);
-  const lastActivity = isActiveTask(task)
-    ? (task.lastActivity ?? retained?.lastActivity)
-    : undefined;
-  const diffStat = task.diffStat ?? retained?.diffStat;
-  const streamingFields = {
-    ...(lastActivity ? { lastActivity } : {}),
-    ...(diffStat ? { diffStat } : {}),
-  };
-  if (lastActivity || diffStat) {
-    state.taskActivityById.set(task.id, streamingFields);
-  } else {
-    state.taskActivityById.delete(task.id);
-  }
-  if (lastActivity === task.lastActivity && diffStat === task.diffStat) {
-    return task;
-  }
-  const next = { ...task, ...streamingFields };
-  if (!lastActivity) {
-    delete next.lastActivity;
-  }
-  return next;
-}
-
-function prepareTaskSnapshot(state: BackgroundTasksState, task: TaskSummary): TaskSummary {
-  const retained = retainTaskStreamingFields(state, task);
-  if (isActiveTask(retained)) {
-    state.terminalObservedAtByTask.delete(retained.id);
-  }
-  return retained;
-}
-
-function observeTaskTerminal(
-  state: BackgroundTasksState,
-  task: TaskSummary,
-  source: "event" | "snapshot",
-) {
-  if (isActiveTask(task)) {
-    state.terminalObservedAtByTask.delete(task.id);
-    return;
-  }
-  if (!state.terminalObservedAtByTask.has(task.id)) {
-    const terminalAt =
-      source === "event" ? Date.now() : taskTimestampMs(task.endedAt ?? task.updatedAt);
-    if (terminalAt > 0) {
-      state.terminalObservedAtByTask.set(task.id, terminalAt);
-    }
-  }
-}
-
-function scheduleSubagentActivityExpiry(
-  host: BackgroundTasksHost,
-  state: BackgroundTasksState,
-  nextExpiryAt: number | null,
-) {
-  if (state.subagentActivityExpiryAt === nextExpiryAt) {
-    return;
-  }
-  if (state.subagentActivityExpiryTimer !== null) {
-    window.clearTimeout(state.subagentActivityExpiryTimer);
-  }
-  state.subagentActivityExpiryAt = nextExpiryAt;
-  state.subagentActivityExpiryTimer = null;
-  if (nextExpiryAt === null) {
-    return;
-  }
-  state.subagentActivityExpiryTimer = window.setTimeout(
-    () => {
-      if (getBackgroundTasksState(host) !== state) {
-        return;
-      }
-      state.subagentActivityExpiryAt = null;
-      state.subagentActivityExpiryTimer = null;
-      host.requestUpdate?.();
-    },
-    Math.max(0, nextExpiryAt - Date.now()),
-  );
 }
 
 function taskListRetryDelayMs(error: unknown): number | undefined {
@@ -333,6 +244,7 @@ function loadBackgroundTasks(
   state.pendingTaskEvents = buffer;
   state.loading = true;
   state.error = null;
+  delete state.errorTaskId;
   state.pendingReload = false;
   host.requestUpdate?.();
   void (async () => {
@@ -362,9 +274,6 @@ function loadBackgroundTasks(
       current.tasks = sortTasks(
         merged.map((task) => newestTaskSnapshot(task, current.taskDetails.get(task.id))),
       );
-      for (const task of current.tasks) {
-        observeTaskTerminal(current, task, "snapshot");
-      }
       current.loadedClient = client;
     } catch (error) {
       const current = getBackgroundTasksState(host);
@@ -373,11 +282,9 @@ function loadBackgroundTasks(
           // Real registry events remain authoritative when an initial page
           // fails; discarding them would hide active work and completions.
           current.tasks = replayTaskEvents([], buffer.events);
-          for (const task of current.tasks) {
-            observeTaskTerminal(current, task, "event");
-          }
         }
         current.error = formatUiError(error, t("tasksPage.loadFailed"));
+        delete current.errorTaskId;
       }
     } finally {
       const current = getBackgroundTasksState(host);
@@ -394,43 +301,12 @@ function loadBackgroundTasks(
           current.loadedClient = null;
           // The superseded read's error must not block its queued replacement on resume.
           current.error = null;
+          delete current.errorTaskId;
         }
       }
       host.requestUpdate?.();
     }
   })();
-}
-
-function taskMatchesSessionScope(
-  host: BackgroundTasksHost,
-  task: TaskSummary,
-  state: BackgroundTasksState,
-): "match" | "refresh" | "ignore" {
-  let result: "refresh" | "ignore" = "ignore";
-  for (const candidate of [
-    { key: task.sessionKey },
-    { key: task.childSessionKey, agentId: task.agentId },
-    { key: task.ownerKey },
-  ]) {
-    const key = normalizeOptionalString(candidate.key);
-    if (!key) {
-      continue;
-    }
-    const identity = resolveUiConversationIdentity(host, key, candidate.agentId);
-    if (identity.sessionKey !== state.sessionKey) {
-      continue;
-    }
-    // TaskSummary exposes the executor, not the bare requester/owner's agent.
-    // Only this conversation's authoritative list can admit that task ID.
-    if (!parseAgentSessionKey(key) && !candidate.agentId) {
-      result = "refresh";
-    } else if (identity.agentId === state.agentId) {
-      return "match";
-    }
-  }
-  return result === "refresh" && state.tasks?.some((listed) => listed.id === task.id)
-    ? "match"
-    : result;
 }
 
 function bufferBackgroundTaskEvent(
@@ -487,6 +363,9 @@ export function handleBackgroundTasksEvent(
   const readReady =
     presented && host.chatSecondaryReadsReady?.(state.explicitReadRequested) !== false;
   if (event.action === "restored") {
+    state.taskDetailRequests.clear();
+    state.taskDetails.clear();
+    state.taskDetailErrors.clear();
     state.pendingTaskEvents?.events.clear();
     delete state.deferredRetryAttempt;
   }
@@ -500,8 +379,21 @@ export function handleBackgroundTasksEvent(
     state.tasks = null;
     state.loadedClient = null;
     state.error = null;
+    delete state.errorTaskId;
     host.requestUpdate?.();
     return;
+  }
+  if (
+    event.action === "deleted" &&
+    (state.taskDetails.has(event.taskId) ||
+      state.taskDetailRequests.has(event.taskId) ||
+      state.taskDetailErrors.has(event.taskId) ||
+      state.tasks?.some((task) => task.id === event.taskId))
+  ) {
+    state.taskDetails.delete(event.taskId);
+    state.taskDetailRequests.delete(event.taskId);
+    state.taskDetailErrors.set(event.taskId, t("chat.backgroundTasks.taskUnavailable"));
+    host.requestUpdate?.();
   }
   if (state.tasks === null) {
     // The exact in-flight snapshot already replays its buffered events; a
@@ -525,9 +417,7 @@ export function handleBackgroundTasksEvent(
     state.tasks = state.tasks.filter((task) => task.id !== event.taskId);
     state.taskDetails.delete(event.taskId);
     state.taskActivityById.delete(event.taskId);
-    state.terminalObservedAtByTask.delete(event.taskId);
-    state.taskDetailErrors.delete(event.taskId);
-    state.taskDetailLoadingIds.delete(event.taskId);
+
     host.requestUpdate?.();
     return;
   }
@@ -535,7 +425,6 @@ export function handleBackgroundTasksEvent(
   const detail = state.taskDetails.get(event.task.id);
   let newest = current ? newestTaskSnapshot(current, event.task, "event") : event.task;
   newest = newestTaskSnapshot(newest, detail);
-  observeTaskTerminal(state, newest, "event");
   state.tasks = sortTasks([newest, ...state.tasks.filter((task) => task.id !== event.task.id)]);
   if (detail) {
     state.taskDetails = new Map(state.taskDetails).set(event.task.id, {
@@ -549,27 +438,29 @@ export function handleBackgroundTasksEvent(
 async function loadBackgroundTaskDetail(
   host: BackgroundTasksHost,
   state: BackgroundTasksState,
-  task: TaskSummary,
+  rowId: string,
 ) {
-  const rowId = task.id;
   const client = host.client;
   if (
     !client ||
     !host.connected ||
     getBackgroundTasksState(host) !== state ||
     state.taskDetails.has(rowId) ||
-    state.taskDetailLoadingIds.has(rowId)
+    state.taskDetailRequests.has(rowId)
   ) {
     return;
   }
-  state.taskDetailLoadingIds = new Set(state.taskDetailLoadingIds).add(rowId);
+  const request = Symbol(rowId);
+  state.taskDetailRequests.set(rowId, request);
+  const isCurrent = () =>
+    getBackgroundTasksState(host) === state && state.taskDetailRequests.get(rowId) === request;
   const nextErrors = new Map(state.taskDetailErrors);
   nextErrors.delete(rowId);
   state.taskDetailErrors = nextErrors;
   host.requestUpdate?.();
   try {
     const payload = await client.request("tasks.get", { taskId: rowId });
-    if (getBackgroundTasksState(host) !== state) {
+    if (!isCurrent()) {
       return;
     }
     const normalizedDetail = normalizeTasksGetResult(payload);
@@ -578,33 +469,28 @@ async function loadBackgroundTaskDetail(
       throw new Error(t("chat.backgroundTasks.detailFailed"));
     }
     const current = state.tasks?.find((candidate) => candidate.id === rowId);
-    // A delete event invalidates the in-flight lookup. Do not let its late
-    // response resurrect a registry entry that no longer exists.
-    if (!current) {
-      return;
+    if (!current && taskMatchesSessionScope(host, detail, state) !== "match") {
+      throw new Error(t("chat.backgroundTasks.taskUnavailable"));
     }
-    const newest = newestTaskSnapshot(current, detail);
-    observeTaskTerminal(state, newest, "snapshot");
+    const newest = current ? newestTaskSnapshot(current, detail) : detail;
     state.taskDetails = new Map(state.taskDetails).set(rowId, {
       ...newest,
       ...(detail.prompt ? { prompt: detail.prompt } : {}),
     });
-    if (state.tasks) {
+    if (current && state.tasks) {
       state.tasks = sortTasks([
         newest,
         ...state.tasks.filter((candidate) => candidate.id !== rowId),
       ]);
     }
   } catch (error) {
-    if (getBackgroundTasksState(host) === state) {
+    if (isCurrent()) {
       const message = formatUiError(error, t("chat.backgroundTasks.detailFailed"));
       state.taskDetailErrors = new Map(state.taskDetailErrors).set(rowId, message);
     }
   } finally {
-    if (getBackgroundTasksState(host) === state) {
-      const next = new Set(state.taskDetailLoadingIds);
-      next.delete(rowId);
-      state.taskDetailLoadingIds = next;
+    if (isCurrent()) {
+      state.taskDetailRequests.delete(rowId);
     }
     host.requestUpdate?.();
   }
@@ -626,6 +512,7 @@ async function cancelBackgroundTask(
   }
   state.cancellingTaskIds = new Set([...state.cancellingTaskIds, taskId]);
   state.error = null;
+  delete state.errorTaskId;
   host.requestUpdate?.();
   try {
     const payload = await client.request("tasks.cancel", { taskId });
@@ -635,13 +522,9 @@ async function cancelBackgroundTask(
     const result = normalizeTasksCancelResult(payload);
     if (result?.task && state.tasks !== null) {
       const cancelled = prepareTaskSnapshot(state, result.task);
-      observeTaskTerminal(state, cancelled, "event");
-      const event = normalizeTaskEventPayload({ action: "upserted", task: cancelled });
-      if (event) {
-        // A slow client may miss the best-effort task event; the successful
-        // cancel response must still survive its own in-flight list snapshot.
-        bufferBackgroundTaskEvent(state, event);
-      }
+      // A slow client may miss the best-effort task event; the successful
+      // cancel response must still survive its own in-flight list snapshot.
+      bufferBackgroundTaskEvent(state, { action: "upserted", task: cancelled });
       state.tasks = sortTasks([
         cancelled,
         ...state.tasks.filter((task) => task.id !== cancelled.id),
@@ -650,12 +533,14 @@ async function cancelBackgroundTask(
     // Refusals (already terminal, stale id, no cancellation handle) are
     // successful responses with cancelled=false; surface them like errors.
     if (!result?.cancelled) {
-      const reason = result?.reason?.trim();
+      const reason = result?.reason;
       state.error = reason ? formatUiError(reason) : t("tasksPage.cancelFailed");
+      state.errorTaskId = taskId;
     }
   } catch (error) {
     if (getBackgroundTasksState(host) === state) {
       state.error = formatUiError(error, t("tasksPage.cancelFailed"));
+      state.errorTaskId = taskId;
     }
   } finally {
     if (getBackgroundTasksState(host) === state) {
@@ -680,8 +565,9 @@ export function createBackgroundTasksProps(
   host: BackgroundTasksHost,
   opts: {
     narrowLayout?: boolean;
-    openTaskId?: string;
+    selectedTaskId?: string;
     onOpenTaskDetail?: (task: TaskSummary) => void;
+    onOpenTaskList?: () => void;
     presented?: boolean;
   } = {},
 ): BackgroundTasksProps {
@@ -703,16 +589,26 @@ export function createBackgroundTasksProps(
   ) {
     loadBackgroundTasks(host, state);
   }
+  if (
+    opts.presented !== false &&
+    opts.selectedTaskId &&
+    !state.loading &&
+    state.tasks !== null &&
+    host.chatSecondaryReadsReady?.(state.explicitReadRequested) !== false &&
+    !state.tasks?.some((task) => task.id === opts.selectedTaskId) &&
+    !state.taskDetails.has(opts.selectedTaskId) &&
+    !state.taskDetailErrors.has(opts.selectedTaskId)
+  ) {
+    void loadBackgroundTaskDetail(host, state, opts.selectedTaskId);
+  }
   const subagentActivity = deriveSubagentActivity({
     tasks: state.tasks ?? [],
     sessionKey: state.sessionKey,
-    terminalObservedAtByTask: state.terminalObservedAtByTask,
     canonicalizeSessionKey: (sessionKey) =>
       canonicalUiSessionKeyForPersistence(host, sessionKey) ||
       normalizeOptionalString(sessionKey) ||
       "",
   });
-  scheduleSubagentActivityExpiry(host, state, subagentActivity.nextExpiryAt);
   return {
     sessionKey: state.sessionKey,
     statusRowId: state.statusRowId,
@@ -722,14 +618,17 @@ export function createBackgroundTasksProps(
     // tasks.cancel needs operator.write; read-only operators get no button.
     canCancel: host.connected && hasOperatorWriteAccess(host.hello?.auth ?? null),
     loading: state.loading,
-    error: state.error,
+    error:
+      state.errorTaskId && opts.selectedTaskId && state.errorTaskId !== opts.selectedTaskId
+        ? null
+        : state.error,
     tasks: state.tasks,
     activeCount: state.tasks?.filter(isActiveTask).length ?? 0,
     subagentActivity,
-    openTaskId: opts.openTaskId,
+    selectedTaskId: opts.selectedTaskId,
     taskDetails: state.taskDetails,
     taskDetailErrors: state.taskDetailErrors,
-    taskDetailLoadingIds: state.taskDetailLoadingIds,
+    taskDetailLoadingIds: new Set(state.taskDetailRequests.keys()),
     cancellingTaskIds: state.cancellingTaskIds,
     finishedCollapsed: state.finishedCollapsed,
     onToggleCollapsed: () => {
@@ -743,9 +642,24 @@ export function createBackgroundTasksProps(
     },
     onRefresh: () => refreshBackgroundTasks(host, state),
     onCancel: (taskId) => void cancelBackgroundTask(host, state, taskId),
-    onLoadDetail: (task) => void loadBackgroundTaskDetail(host, state, task),
+    onLoadDetail: (task) => void loadBackgroundTaskDetail(host, state, task.id),
+    onOpenTaskList: () => {
+      if (getBackgroundTasksState(host) !== state) {
+        return;
+      }
+      resetTaskDetail(host);
+      state.collapsed = false;
+      opts.onOpenTaskList?.();
+      host.requestUpdate?.();
+    },
     onOpenTaskDetail: opts.onOpenTaskDetail
       ? (task) => {
+          if (getBackgroundTasksState(host) !== state) {
+            return;
+          }
+          if (host.taskDetailState?.taskId !== task.id) {
+            resetTaskDetail(host);
+          }
           // Opening retries a failed tasks.get: the panel's render-driven load
           // must skip errored tasks (a retry there would loop every paint), so
           // user selection is the one path that clears the error.
@@ -755,6 +669,7 @@ export function createBackgroundTasksProps(
             state.taskDetailErrors = next;
           }
           opts.onOpenTaskDetail?.(task);
+          host.requestUpdate?.();
         }
       : undefined,
   };

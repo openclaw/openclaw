@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { it } from "vitest";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { stateLeaseRetentionRuntimeEntrypoint } from "./openclaw-state-lease-runtime.test-support.js";
 
 it.each(["completed", "completed-worker", "paused"])(
   "releases caller state after lease timers are %s",
@@ -10,9 +11,7 @@ it.each(["completed", "completed-worker", "paused"])(
       process.execPath,
       [
         "--expose-gc",
-        "--import",
-        "tsx",
-        fileURLToPath(new URL("./openclaw-state-lease.retention.test-support.ts", import.meta.url)),
+        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(stateLeaseRetentionRuntimeEntrypoint)),
         scenario,
       ],
       { timeout: 30_000 },

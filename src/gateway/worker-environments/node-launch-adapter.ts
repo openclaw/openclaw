@@ -11,6 +11,7 @@ import {
   formatNodeRunnerUpdateRequired,
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
+  resolveNodeWorkerExecutionIssue,
 } from "../../infra/node-runner-inventory.js";
 import {
   nodeWorkerPlanHash,
@@ -32,6 +33,7 @@ import type {
 } from "../node-registry-private.js";
 import { raceNodeWorkerOperation } from "./node-worker-abort.js";
 import { WorkerRunnerCapacityError, WorkerRunnerUnavailableError } from "./tunnel-contract.js";
+import { boundedWorkerError } from "./worker-error.js";
 
 const DEFAULT_RPC_TIMEOUT_MS = 30_000;
 const DEFAULT_POLL_INTERVAL_MS = 250;
@@ -332,7 +334,8 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       });
       if (
         params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND &&
-        node.workerHost.environmentSession !== NODE_WORKER_ENVIRONMENT_SESSION_VERSION
+        (node.workerHost.environmentSession !== NODE_WORKER_ENVIRONMENT_SESSION_VERSION ||
+          resolveNodeWorkerExecutionIssue(node.workerHost))
       ) {
         throw new Error(
           formatNodeRunnerUpdateRequired(node.nodeId, NODE_RUNNER_UPDATE_REQUIRED_ISSUE),
@@ -363,9 +366,12 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
         if (code === NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE) {
           throw new WorkerRunnerCapacityError();
         }
+        const detail = result.error?.message?.trim();
         throw new NodeWorkerLaunchTransportError(
           code,
-          `node worker supervisor invocation failed (${code})`,
+          boundedWorkerError(
+            `node worker supervisor ${params.command} failed (${code})${detail ? `: ${detail}` : ""}`,
+          ),
         );
       }
       return parseInvokeReceipt(result.payloadJSON);
@@ -448,7 +454,9 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     } finally {
       deadline.dispose();
     }
-    throw new Error("node worker cancellation outcome is unknown after transport loss");
+    throw new Error(
+      "node worker cancellation did not produce a terminal receipt before its deadline",
+    );
   };
 
   const launch = async (
@@ -600,11 +608,10 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       try {
         terminal = await cancelUntilTerminal({ request: stableRequest, expected });
       } catch (cancelError) {
-        throw Object.assign(
-          new Error("node worker launch failed and cancellation could not be confirmed", {
-            cause: error instanceof Error ? error : new Error("node worker launch failed"),
-          }),
-          { cancellationError: cancelError },
+        throw new AggregateError(
+          [error, cancelError],
+          "node worker launch failed and cancellation could not be confirmed",
+          { cause: cancelError },
         );
       }
       if (deadline.signal.aborted || !stableRequest.isDispatchAuthorized()) {

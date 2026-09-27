@@ -14,7 +14,7 @@
  *   local CLI sessions are never locked out. Failed auth still incurs a
  *   bounded, escalating delay.
  * - The module is side-effect-free: callers create an instance via
- *   {@link createAuthRateLimiter} and pass it where needed.
+ *   {@link createGatewayAuthRateLimiter} and pass it where needed.
  */
 
 import {
@@ -22,6 +22,7 @@ import {
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import type { GatewayAuthRateLimitConfig } from "../config/types.gateway.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { isLoopbackAddress, resolveClientIp } from "./net.js";
 
@@ -46,12 +47,8 @@ export const AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING = "node-pairing";
 // Paired-node approval-surface changes use a dedicated limiter so reconnect
 // storms cannot queue unbounded writes behind the shared pairing-state lock.
 export const AUTH_RATE_LIMIT_SCOPE_NODE_REAPPROVAL = "node-reapproval";
-// Per-IP gate for the pre-auth bootstrap-token verify path.
-// `verifyDeviceBootstrapToken` is `withLock`-serialized in
-// `device-bootstrap.ts` and runs fs read + fs write on every attempt;
-// without a scope-specific limiter, attackers presenting a valid
-// device signature can queue the bootstrap-pairing flow behind their
-// requests, blocking legitimate node onboarding during the attack.
+// Bootstrap verification queues SQLite worker operations behind the shared lock.
+// Limit attempts before they can delay legitimate onboarding.
 export const AUTH_RATE_LIMIT_SCOPE_BOOTSTRAP_TOKEN = "bootstrap-token";
 // Public join-code exchange burns SQLite state, so misses are serialized and
 // throttled before they can queue unbounded writes behind the shared DB lock.
@@ -180,7 +177,10 @@ function resolveAuthRateLimitPolicy(config?: GatewayAuthRateLimitConfig) {
   };
 }
 
-export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter & {
+export function createGatewayAuthRateLimiter(
+  config: RateLimitConfig | undefined,
+  { scheduler, id = "auth-rate-limit" }: { scheduler: GatewayScheduler; id?: string },
+): AuthRateLimiter & {
   updateConfig: (config?: GatewayAuthRateLimitConfig) => void;
 } {
   let policy = resolveAuthRateLimitPolicy(config);
@@ -188,20 +188,24 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
   const maxEntries = resolveIntegerOption(config?.maxEntries, DEFAULT_MAX_ENTRIES, { min: 1 });
 
   const entries = new Map<string, RateLimitEntry>();
-  // One promise and timer per key preserve earned delays across concurrent
+  // One promise and deadline per key preserve earned delays across concurrent
   // failures and history resets; dispose releases them for Gateway shutdown.
   const loopbackPenaltyWaiters = new Map<
     string,
     Deferred & { deadline: number; timer: ReturnType<typeof setTimeout> }
   >();
   let overflowLockedUntil: number | undefined;
+  let disposed = false;
 
-  // Periodic cleanup to avoid unbounded map growth.
-  const pruneTimer = pruneIntervalMs > 0 ? setInterval(() => prune(), pruneIntervalMs) : null;
-  // Allow the Node.js process to exit even if the timer is still active.
-  if (pruneTimer?.unref) {
-    pruneTimer.unref();
-  }
+  const pruneJob =
+    pruneIntervalMs > 0
+      ? scheduler.schedule({
+          id: `${id}:prune`,
+          atMs: scheduler.now() + pruneIntervalMs,
+          everyMs: pruneIntervalMs,
+          run: prune,
+        })
+      : null;
 
   function resolveKey(
     rawIp: string | undefined,
@@ -236,7 +240,7 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
       return { allowed: true, remaining: policy.maxAttempts, retryAfterMs: 0 };
     }
 
-    const now = Date.now();
+    const now = scheduler.now();
     const entry = entries.get(key);
 
     if (!entry) {
@@ -264,7 +268,7 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
     const { key, ip } = resolveKey(rawIp, rawScope);
     const exempt = isExempt(ip);
 
-    const now = Date.now();
+    const now = scheduler.now();
     let entry = entries.get(key);
 
     if (!entry) {
@@ -295,6 +299,9 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
   }
 
   function recordFailureAndDelay(rawIp: string | undefined, rawScope?: string): Promise<void> {
+    if (disposed) {
+      return Promise.resolve();
+    }
     const { key, ip } = resolveKey(rawIp, rawScope);
     recordFailure(rawIp, rawScope);
     if (!isExempt(ip)) {
@@ -306,7 +313,7 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
       LOOPBACK_FAILURE_DELAY_BASE_MS * 2 ** Math.min(failureCount - 1, 30),
       LOOPBACK_FAILURE_DELAY_MAX_MS,
     );
-    const deadline = Date.now() + penaltyMs;
+    const deadline = scheduler.now() + penaltyMs;
     let waiters = loopbackPenaltyWaiters.get(key);
     if (!waiters) {
       waiters = {
@@ -324,7 +331,11 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
   }
 
   function scheduleRelease(key: string, deadline: number): ReturnType<typeof setTimeout> {
-    const timer = setTimeout(() => releaseLoopbackWaiters(key), Math.max(0, deadline - Date.now()));
+    // Auth responses still settle while Gateway maintenance is stopping.
+    const timer = setTimeout(
+      () => releaseLoopbackWaiters(key),
+      Math.max(0, deadline - scheduler.now()),
+    );
     timer.unref?.();
     return timer;
   }
@@ -400,7 +411,7 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
   }
 
   function prune(): void {
-    pruneExpiredEntries(Date.now());
+    pruneExpiredEntries(scheduler.now());
   }
 
   function size(): number {
@@ -408,9 +419,8 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
   }
 
   function dispose(): void {
-    if (pruneTimer) {
-      clearInterval(pruneTimer);
-    }
+    disposed = true;
+    pruneJob?.cancel();
     entries.clear();
     overflowLockedUntil = undefined;
     for (const key of loopbackPenaltyWaiters.keys()) {

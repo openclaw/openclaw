@@ -17,7 +17,10 @@ import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
+import {
+  waitForSessionTranscriptIndexReconcile,
+  waitForSessionTranscriptProjection,
+} from "../config/sessions/session-transcript-reconcile.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import {
@@ -30,24 +33,14 @@ import * as userProfiles from "../state/user-profiles.js";
 import { buildControlUiUserAvatarPath } from "./control-ui-contract.js";
 import * as managedOutgoingMedia from "./managed-image-attachments.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
-import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
+import {
+  disposeSessionReadContexts,
+  initializeSessionReadContext,
+} from "./server-methods/sessions-read-cache.test-support.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import { createTranscriptUpdateBroadcastHandler } from "./server-session-events.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { installGatewayTestHooks, testState, writeSessionStore } from "./test-helpers.js";
-
-const targetWarnings = vi.hoisted(() => vi.fn());
-vi.mock("../logging/subsystem.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../logging/subsystem.js")>("../logging/subsystem.js");
-  return {
-    ...actual,
-    createSubsystemLogger: (subsystem: string) => {
-      const logger = actual.createSubsystemLogger(subsystem);
-      return subsystem === "sessions/targets" ? { ...logger, warn: targetWarnings } : logger;
-    },
-  };
-});
 
 installGatewayTestHooks({ scope: "suite" });
 const tempDirs = createTempDirTracker();
@@ -105,9 +98,8 @@ async function createCursorSession(initialEvents?: unknown[]) {
       }),
     ]) as Parameters<typeof replaceTranscriptEvents>[1],
   );
-  const context = createDirectChatContext({
-    getRuntimeConfig: () => ({ session: { store: storePath } }),
-  });
+  const config = { session: { store: storePath } };
+  const context = createDirectChatContext({ getRuntimeConfig: () => config });
   await initializeSessionReadContext(context);
   return { context, storePath };
 }
@@ -153,6 +145,7 @@ function renderedMessages(messages: readonly unknown[]): unknown[] {
 }
 
 afterEach(async () => {
+  await disposeSessionReadContexts();
   for (const directory of tempDirs.dirs) {
     await closeOpenClawAgentDatabasesAsync(directory);
     closeOpenClawAgentDatabasesForTest(directory);
@@ -461,13 +454,12 @@ describe("chat.history cursor catch-up", () => {
     }
   });
 
-  test("returns an empty delta at the cached head", async () => {
+  test("returns an empty delta at the cached head with a fixed multi-agent store", async () => {
     testState.agentsConfig = {
       ownership: "explicit",
       entries: { main: { default: true }, ops: {} },
     };
     const { context } = await createCursorSession();
-    targetWarnings.mockClear();
     const page = await callChat<{ deltaCursor?: string; messages?: unknown[] }>(
       context,
       "chat.history",
@@ -496,11 +488,6 @@ describe("chat.history cursor catch-up", () => {
         sessionInfo: { activeLeafEntryId: "cached" },
       },
     });
-    expect(targetWarnings).toHaveBeenCalledWith(
-      expect.stringMatching(
-        /owner "main" selected by database-(?:registry|path); suffixed owner\(s\): "ops"\./,
-      ),
-    );
   });
 
   test.each(["chat.history", "chat.startup"] as const)(
@@ -713,21 +700,6 @@ describe("chat.history cursor catch-up", () => {
 
   test.each([
     {
-      name: "plain messages",
-      append: async (storePath: string) => {
-        const user = await appendTranscriptMessage(currentScope(storePath), {
-          eventId: "user-2",
-          parentId: "cached",
-          message: { role: "user", content: "question", timestamp: 2 },
-        });
-        await appendTranscriptMessage(currentScope(storePath), {
-          eventId: "assistant-2",
-          parentId: user?.messageId,
-          message: { role: "assistant", content: "answer", timestamp: 3 },
-        });
-      },
-    },
-    {
       name: "tool result pairing",
       append: async (storePath: string) => {
         const call = await appendTranscriptMessage(currentScope(storePath), {
@@ -879,6 +851,50 @@ describe("chat.history cursor catch-up", () => {
     const cursor = await prepare(context, storePath);
     const result = await callChat(context, "chat.history", { cursor });
     expect(result).toMatchObject({ ok: true, payload: { kind: "reset" } });
+  });
+
+  test("resets cached history after an appended leaf rewinds the active branch", async () => {
+    const { context, storePath } = await createCursorSession([
+      transcriptEvent({ content: "retained", id: "root", parentId: null, role: "user" }),
+      transcriptEvent({
+        content: "rejected draft",
+        id: "abandoned",
+        parentId: "root",
+        role: "assistant",
+      }),
+    ]);
+    const cached = await callChat<{ deltaCursor: string }>(context, "chat.history");
+    expect(cached).toMatchObject({
+      ok: true,
+      payload: {
+        deltaCursor: expect.any(String),
+        messages: [{ __openclaw: { id: "root" } }, { __openclaw: { id: "abandoned" } }],
+      },
+    });
+    const scope = currentScope(storePath);
+    await appendTranscriptEvent(scope, {
+      type: "leaf",
+      id: "rewind",
+      parentId: "abandoned",
+      targetId: "root",
+      appendParentId: "root",
+    });
+    await waitForSessionTranscriptProjection(scope);
+
+    const fresh = await callChat(context, "chat.history");
+    expect(fresh).toMatchObject({
+      ok: true,
+      payload: { messages: [{ __openclaw: { id: "root" } }] },
+    });
+    expect(
+      readTranscriptDisplayDelta(scope, { cursor: cached.payload!.deltaCursor }),
+    ).toMatchObject({
+      kind: "page",
+      activeLeafEntryId: "root",
+      events: [{ event: { type: "leaf", id: "rewind" } }],
+    });
+    const delta = await callChat(context, "chat.history", { cursor: cached.payload!.deltaCursor });
+    expect(delta).toMatchObject({ ok: true, payload: { kind: "reset" } });
   });
 
   test.each(["compaction", "reset"] as const)(

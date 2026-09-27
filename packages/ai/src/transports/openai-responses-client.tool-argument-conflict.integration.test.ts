@@ -14,19 +14,29 @@ const lookupTool: Tool = {
   description: "Look up a file by path.",
   parameters: {
     type: "object",
-    properties: { path: { type: "string" } },
+    properties: { path: { type: "string" }, record_id: { type: ["integer", "string"] } },
     required: ["path"],
     additionalProperties: false,
   },
 };
-const streamedArguments = '{"path":"README.md"}';
+const streamedArguments = '{"path":"README.md","record_id":9007199254740993}';
 const staleArguments = '{"path":"READ"}';
-const completeArguments = { path: "README.md" };
+const completeArguments = {
+  path: "README.md",
+  record_id: "9007199254740993",
+};
 const scenarios = [
   {
     name: "stale-done-snapshot",
     itemDone: staleArguments,
     terminal: streamedArguments,
+    deltas: true,
+  },
+  {
+    name: "stale-done-identity-conflict",
+    itemDone: staleArguments,
+    terminal: streamedArguments,
+    terminalCallId: "call_terminal_conflict",
     deltas: true,
   },
   { name: "healthy", itemDone: streamedArguments, terminal: streamedArguments, deltas: true },
@@ -85,7 +95,13 @@ function responseEvents(scenario: (typeof scenarios)[number]) {
       response: {
         id: "resp_argument_conflict",
         status: "completed",
-        output: [{ ...call, arguments: scenario.terminal }],
+        output: [
+          {
+            ...call,
+            ...("terminalCallId" in scenario ? { call_id: scenario.terminalCallId } : {}),
+            arguments: scenario.terminal,
+          },
+        ],
         usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
       },
     },
@@ -125,8 +141,29 @@ it.each(
       expect.objectContaining({ type: "function", name: lookupTool.name }),
     ]);
 
-    // All scenarios should complete with the correct arguments from the done snapshot.
-    expect(result.stopReason).toBe("toolUse");
+    const identityConflict = "terminalCallId" in scenario;
+    expect(result.stopReason).toBe(identityConflict ? "error" : "toolUse");
+    if (identityConflict) {
+      expect(events).toEqual([
+        "start",
+        "toolcall_start",
+        "toolcall_delta",
+        "toolcall_delta",
+        "toolcall_end",
+        "error",
+      ]);
+      expect(result.errorCode).toBe("responses_output_identity_conflict");
+      expect(JSON.parse(result.errorBody ?? "{}")).toEqual({
+        outputIndex: 0,
+        expectedType: "function_call",
+        actualType: "function_call",
+        completed: true,
+        completedToolCall: true,
+        eventType: "response.completed",
+        retrySafe: false,
+        mismatch: "call_id",
+      });
+    }
     expect(events.filter((type) => type === "toolcall_end")).toEqual(["toolcall_end"]);
     expect(toolCalls).toEqual([
       expect.objectContaining({ name: lookupTool.name, arguments: completeArguments }),

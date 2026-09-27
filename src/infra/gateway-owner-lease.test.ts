@@ -183,6 +183,15 @@ describe("Gateway owner lease", () => {
     );
     vi.spyOn(leaseHeartbeat, "startOpenClawStateLeaseHeartbeat").mockImplementation(() => ({
       ready: Promise.reject(new Error("heartbeat startup failed")),
+      assertRunning() {
+        throw new Error("heartbeat startup failed");
+      },
+      async verify() {
+        throw new Error("heartbeat startup failed");
+      },
+      async renew() {
+        throw new Error("heartbeat startup failed");
+      },
       close: () => undefined,
       stop: async () => {
         throw new Error("heartbeat cleanup retained native custody");

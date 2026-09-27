@@ -1,6 +1,9 @@
 // Exercise history preparation and prompt submission together: child state belongs after history.
+import path from "node:path";
 import { Type } from "typebox";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../../internal-runtime-context.js";
 import type { SubagentRunRecord } from "../../subagents/registry/subagent-registry.types.js";
 import type { AnyAgentTool } from "../../tools/common.js";
@@ -14,10 +17,11 @@ import {
 } from "./attempt-spawn-workspace.test-support.js";
 
 const tempPaths: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sessionKey = "agent:main:runtime-facts";
 let registry: typeof import("../../subagents/registry/subagent-registry.test-helpers.js");
 
-async function captureAttempt(codeModeOverride: boolean) {
+async function captureAttempt(codeModeOverride: boolean, sessionStore: string) {
   resetEmbeddedAttemptHarness();
   getHoisted().createOpenClawCodingToolsMock.mockReturnValue([
     {
@@ -34,6 +38,13 @@ async function captureAttempt(codeModeOverride: boolean) {
     sessionKey,
     tempPaths,
     attemptOverrides: {
+      config: { session: { store: sessionStore } },
+      sessionTarget: {
+        agentId: "main",
+        sessionId: "embedded-session",
+        sessionKey,
+        storePath: sessionStore,
+      },
       codeModeOverride,
       disableTools: false,
       trigger: "user",
@@ -79,11 +90,18 @@ describe("subagent facts through full attempt history preparation", () => {
   it.each([false, true])(
     "preserves the complete system prompt across child state with codeMode=%s",
     async (codeModeOverride) => {
+      const sessionStore = path.join(
+        tempDirs.make("openclaw-attempt-subagent-facts-"),
+        "sessions.json",
+      );
+      const storePath = resolvePhysicalSessionStorePath({ sessionKey, storePath: sessionStore });
       const run = {
         runId: "run-worker",
         childSessionKey: "agent:main:subagent:worker",
         controllerSessionKey: sessionKey,
         requesterSessionKey: sessionKey,
+        requesterStorePath: storePath,
+        controllerStorePath: storePath,
         requesterDisplayKey: "main",
         task: "Inspect fixtures",
         label: "Worker",
@@ -92,14 +110,14 @@ describe("subagent facts through full attempt history preparation", () => {
         execution: { status: "queued" },
       } satisfies SubagentRunRecord;
       registry.addSubagentRunForTests(run);
-      const queued = await captureAttempt(codeModeOverride);
+      const queued = await captureAttempt(codeModeOverride, sessionStore);
       registry.addSubagentRunForTests({
         ...run,
         execution: { status: "running", startedAt: Date.now() },
       });
-      const running = await captureAttempt(codeModeOverride);
+      const running = await captureAttempt(codeModeOverride, sessionStore);
       registry.resetSubagentRegistryForTests();
-      const empty = await captureAttempt(codeModeOverride);
+      const empty = await captureAttempt(codeModeOverride, sessionStore);
 
       expect(queued.systemPrompt).toContain("system prompt");
       expect(running.systemPrompt).toBe(queued.systemPrompt);

@@ -5,6 +5,7 @@ import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
+  loadTranscriptEventsSync,
   persistSessionTranscriptTurn,
   readTranscriptStatsSync,
   replaceTranscriptEvents,
@@ -22,6 +23,7 @@ import {
   readRecentSessionTranscriptHistoryEvents,
   readTranscriptDisplayDelta,
 } from "./session-accessor.sqlite-history-events.js";
+import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import {
   shouldRebuildSessionTranscriptIndexSynchronously,
   SYNC_REBUILD_MAX_BYTES,
@@ -257,7 +259,9 @@ it.each(["incoming", "stored"])(
   (source) => {
     const db = openNodeSqliteDatabase(":memory:");
     try {
-      db.exec("CREATE TABLE transcript_events (session_id TEXT, event_json TEXT)");
+      db.exec(
+        "CREATE TABLE transcript_events (session_id TEXT, event_json TEXT, event_utf8_bytes INTEGER)",
+      );
       const event = { message: { role: "user", content: "🦞".repeat(SYNC_REBUILD_MAX_BYTES / 4) } };
       const serialized = JSON.stringify(event);
       expect(serialized.length).toBeLessThan(SYNC_REBUILD_MAX_BYTES);
@@ -266,7 +270,10 @@ it.each(["incoming", "stored"])(
         shouldRebuildSessionTranscriptIndexSynchronously(db, "budget", [{ message: "small" }]),
       ).toBe(true);
       if (source === "stored") {
-        db.prepare("INSERT INTO transcript_events VALUES (?, ?)").run("budget", serialized);
+        db.prepare("INSERT INTO transcript_events (session_id, event_json) VALUES (?, ?)").run(
+          "budget",
+          serialized,
+        );
       }
       expect(
         shouldRebuildSessionTranscriptIndexSynchronously(
@@ -281,6 +288,62 @@ it.each(["incoming", "stored"])(
   },
 );
 
+it("admits compressed transcript bytes before decoding and preserves canonical snapshot text", async () => {
+  await withOpenClawTestState({ label: "compressed-transcript-byte-budget" }, async (state) => {
+    const scope = {
+      agentId: "main",
+      env: state.env,
+      sessionId: "compressed-byte-budget",
+      sessionKey: "agent:main:compressed-byte-budget",
+    };
+    const events = [
+      {
+        type: "message",
+        id: "large",
+        parentId: null,
+        message: { role: "user", content: "雪🦞".repeat(4096) },
+      },
+      {
+        type: "message",
+        id: "small",
+        parentId: "large",
+        message: { role: "assistant", content: "done" },
+      },
+    ];
+    await replaceTranscriptEvents(scope, events);
+    const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: state.env });
+    const compressed = database.db
+      .prepare("SELECT seq FROM transcript_events WHERE session_id = ? AND event_zstd IS NOT NULL")
+      .get(scope.sessionId);
+    expect(compressed).toBeDefined();
+    const canonical = events.map((event) => JSON.stringify(event));
+    const sizeBytes = Buffer.byteLength(canonical.join("\n"));
+    expect(readTranscriptStatsSync(scope).sizeBytes).toBe(sizeBytes);
+    expect(loadTranscriptEventsSync({ ...scope, maxEventBytes: sizeBytes })).toEqual(events);
+    expect(readTranscriptEventRows(database, scope.sessionId).map((row) => row.eventJson)).toEqual(
+      canonical,
+    );
+
+    database.db
+      .prepare(
+        "UPDATE transcript_events SET event_zstd = x'010203' WHERE session_id = ? AND seq = ?",
+      )
+      .run(scope.sessionId, compressed!.seq!);
+    expect(readTranscriptStatsSync(scope).sizeBytes).toBe(sizeBytes);
+    expect(readTranscriptRawDelta(scope, { maxBytes: 1 })).toMatchObject({
+      kind: "page",
+      events: [],
+      hasMore: true,
+      requiredBytes: Buffer.byteLength(canonical[0]!) + 1,
+      serializedBytes: 0,
+    });
+    expect(() => loadTranscriptEventsSync({ ...scope, maxEventBytes: sizeBytes - 1 })).toThrow(
+      /transcript store is too large to export/u,
+    );
+    expect(() => loadTranscriptEventsSync({ ...scope, maxEventBytes: sizeBytes })).toThrow();
+  });
+});
+
 it.each([
   { incomingRows: 0, storedRows: SYNC_REBUILD_MAX_ROWS, synchronous: true },
   { incomingRows: 0, storedRows: SYNC_REBUILD_MAX_ROWS * 2, synchronous: false },
@@ -292,10 +355,14 @@ it.each([
   ({ incomingRows, storedRows, synchronous }) => {
     const db = openNodeSqliteDatabase(":memory:");
     try {
-      db.exec("CREATE TABLE transcript_events (session_id TEXT, event_json TEXT)");
+      db.exec(
+        "CREATE TABLE transcript_events (session_id TEXT, event_json TEXT, event_utf8_bytes INTEGER)",
+      );
       const event = { message: { role: "user", content: "small" } };
       const serialized = JSON.stringify(event);
-      const insert = db.prepare("INSERT INTO transcript_events VALUES (?, ?)");
+      const insert = db.prepare(
+        "INSERT INTO transcript_events (session_id, event_json) VALUES (?, ?)",
+      );
       for (let index = 0; index < storedRows; index++) {
         insert.run("budget", serialized);
       }

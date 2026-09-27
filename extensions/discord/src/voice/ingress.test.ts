@@ -1,3 +1,4 @@
+import type { RealtimeVoiceSelectionHandle } from "openclaw/plugin-sdk/realtime-voice";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type MockIngressInput = {
@@ -5,6 +6,7 @@ type MockIngressInput = {
   message?: string;
   sessionKey?: string;
   runId?: string;
+  senderIsOwner?: boolean;
 };
 
 const mocks = vi.hoisted(() => ({
@@ -23,9 +25,14 @@ import { runDiscordVoiceAgentTurn } from "./ingress.js";
 
 describe("Discord voice ingress execution correlation", () => {
   beforeEach(() => mocks.agentCommandFromIngress.mockClear());
-  it.each([false, true])(
-    "binds an owner voice command for its lifetime, including failure=%s",
-    async (fail) => {
+  it.each([
+    { owner: true, fail: false },
+    { owner: true, fail: true },
+    { owner: false, fail: false },
+    { owner: false, fail: true },
+  ])(
+    "binds an admitted voice command for its lifetime (owner=$owner, failure=$fail)",
+    async ({ owner, fail }) => {
       const release = vi.fn();
       const bindRun = vi.fn(() => release);
       const entry = {
@@ -36,6 +43,7 @@ describe("Discord voice ingress execution correlation", () => {
       mocks.agentCommandFromIngress.mockImplementationOnce(async (input) => {
         expect(bindRun).toHaveBeenCalledWith(expect.objectContaining({ runId: input.runId }));
         expect(input.runId).toEqual(expect.any(String));
+        expect(input.senderIsOwner).toBe(owner);
         expect(release).not.toHaveBeenCalled();
         if (fail) {
           throw new Error("Agent turn failed");
@@ -45,15 +53,12 @@ describe("Discord voice ingress execution correlation", () => {
       const turn = runDiscordVoiceAgentTurn({
         entry: entry as never,
         accountId: "work",
-        userId: "owner",
+        userId: owner ? "owner" : "guest",
         message: "Change your voice",
-        cfg: {},
         discordConfig: {},
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        context: { senderIsOwner: true, speakerLabel: "Owner" },
+        context: { senderIsOwner: owner, speakerLabel: owner ? "Owner" : "Guest" },
         voiceSelection: { bindRun, unregister: vi.fn() },
-        fetchGuildName: vi.fn(async () => "Guild"),
-        speakerContext: {} as never,
       });
       if (fail) {
         await expect(turn).rejects.toThrow("Agent turn failed");
@@ -64,7 +69,50 @@ describe("Discord voice ingress execution correlation", () => {
     },
   );
 
-  it("admits sequential same-session turns without inventing a public run id", async () => {
+  it.each(["policy", "call", "abort"] as const)(
+    "revokes a non-owner voice binding when %s authority ends during the turn",
+    async (revoked) => {
+      const release = vi.fn();
+      const bindRun = vi.fn<RealtimeVoiceSelectionHandle["bindRun"]>(() => release);
+      const cancellation = new AbortController();
+      let current = true;
+      const entry = {
+        captureOnly: false,
+        sessionLifecycle: { status: "active" },
+        route: { agentId: "main", sessionKey: "agent:main:discord:voice:room" },
+      };
+      mocks.agentCommandFromIngress.mockImplementationOnce(async () => {
+        expect(bindRun).toHaveBeenCalledOnce();
+        const binding = bindRun.mock.calls[0]![0];
+        expect(binding.assertCurrent).not.toThrow();
+        if (revoked === "policy") {
+          current = false;
+        } else if (revoked === "call") {
+          entry.sessionLifecycle.status = "stopped";
+        } else {
+          cancellation.abort(new Error("Voice turn cancelled"));
+        }
+        expect(binding.assertCurrent).toThrow(
+          revoked === "abort" ? "Voice turn cancelled" : "Discord voice access is no longer valid",
+        );
+        return { payloads: [{ text: "Voice change unavailable." }] };
+      });
+      await runDiscordVoiceAgentTurn({
+        entry: entry as never,
+        accountId: "work",
+        userId: "guest",
+        message: "Change your voice",
+        discordConfig: {},
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        context: { senderIsOwner: false, speakerLabel: "Guest", isCurrent: () => current },
+        voiceSelection: { bindRun, unregister: vi.fn() },
+        signal: cancellation.signal,
+      });
+      expect(release).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("admits sequential batch voice turns without inventing a public run id", async () => {
     const entry = {
       guildId: "guild-1",
       channelId: "channel-1",
@@ -76,13 +124,9 @@ describe("Discord voice ingress execution correlation", () => {
       entry: entry as never,
       accountId: "work",
       userId: "user-1",
-      cfg: {} as never,
       discordConfig: {} as never,
       runtime: { log: vi.fn(), error: vi.fn() } as never,
       context: { senderIsOwner: false, speakerLabel: "Guest" },
-      voiceSelection: { bindRun: vi.fn(() => () => {}), unregister: vi.fn() },
-      fetchGuildName: vi.fn(async () => "Guild"),
-      speakerContext: {} as never,
     };
 
     await runDiscordVoiceAgentTurn({ ...shared, message: "first turn" });
@@ -99,7 +143,6 @@ describe("Discord voice ingress execution correlation", () => {
     for (const input of inputs) {
       expect(input).not.toHaveProperty("runId");
     }
-    expect(shared.voiceSelection.bindRun).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -123,12 +166,9 @@ describe("Discord voice ingress execution correlation", () => {
         accountId: "work",
         userId: owner ? "owner-1" : "guest-1",
         message: "run the tool",
-        cfg: {} as never,
         discordConfig: {} as never,
         runtime: { log: vi.fn(), error: vi.fn() } as never,
         context: { senderIsOwner: owner, speakerLabel: owner ? "Owner" : "Guest" },
-        fetchGuildName: vi.fn(async () => "Guild"),
-        speakerContext: {} as never,
       });
 
       if (captureOnly || state !== "active") {

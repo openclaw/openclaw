@@ -6,7 +6,7 @@ import {
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 // Compiles plugin manifest schemas for validation without runtime loading.
 import { Format } from "typebox/format";
-import { Compile, type Validator as TypeBoxValidator } from "typebox/schema";
+import { Compile, Pointer, type Validator as TypeBoxValidator } from "typebox/schema";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "../config/allowed-values.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
@@ -101,7 +101,7 @@ function applyValidatedSourceDefaults(
 }
 
 function compileSchema(schema: JsonSchemaValue): TypeBoxValidator {
-  return Compile(normalizeJsonSchemaForTypeBox(schema) as never);
+  return withPluginFormatSemantics(() => Compile(normalizeJsonSchemaForTypeBox(schema) as never));
 }
 
 function relaxConditionalRequiredKeywords(
@@ -133,7 +133,8 @@ function relaxConditionalRequiredKeywords(
 
 function withPluginFormatSemantics<T>(callback: () => T): T {
   const previousFormats = Format.Entries();
-  // TypeBox format checks are global; snapshot/restore keeps plugin schema semantics local.
+  // Compiled checks capture format functions; interpreted errors read the global registry.
+  // Scope both paths without changing other TypeBox consumers.
   Format.Set("uri", (value) => URL.canParse(value));
   for (const format of annotationOnlyFormats) {
     Format.Set(format, () => true);
@@ -197,7 +198,9 @@ export function parseJsonSchemaIssuePath(
 }
 
 function normalizeErrorPath(instancePath: string | undefined): string {
-  const path = instancePath?.replace(/^\//, "").replace(/\//g, ".");
+  const path = Pointer.Indices(instancePath ?? "")
+    .join(".")
+    .replace(/\//g, ".");
   return path && path.length > 0 ? path : "<root>";
 }
 
@@ -388,18 +391,19 @@ export function validatePluginSchemaValue(
 
 /**
  * Validate a plugin-owned value against a JSON Schema, optionally hydrating schema defaults.
- * The cache key is caller-owned so repeated plugin/schema validations can reuse compiled TypeBox validators.
+ * Callers can supply a stable cache key; otherwise the schema fingerprint owns cache identity.
  */
 export function validateJsonSchemaValue(params: {
   schema: JsonSchemaValue;
-  cacheKey: string;
+  cacheKey?: string;
   value: unknown;
   /** Persisted input paired with this runtime value, before secret resolution. */
   sourceValue?: unknown;
   applyDefaults?: boolean;
   cache?: boolean;
 }): { ok: true; value: unknown } | { ok: false; errors: JsonSchemaValidationError[] } {
-  const cacheKey = params.applyDefaults ? `${params.cacheKey}::defaults` : params.cacheKey;
+  const schemaKey = params.cacheKey ?? fingerprintSchema(params.schema);
+  const cacheKey = params.applyDefaults ? `${schemaKey}::defaults` : schemaKey;
   let cached = params.cache === false ? undefined : schemaCache.get(cacheKey);
   if (!cached || cached.schema !== params.schema) {
     const schemaError = findJsonSchemaShapeError(params.schema);

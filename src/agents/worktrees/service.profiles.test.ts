@@ -5,7 +5,10 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as commandExec from "../../process/exec.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import * as baseRefs from "./base-ref.js";
 import { resolveWorktreeSourceProfile } from "./checkout-profiles.js";
 import { addManagedWorktree } from "./checkout.js";
@@ -21,8 +24,9 @@ async function git(cwd: string, ...args: string[]) {
 describe("repository source profile creation", () => {
   const initializeRepository = useManagedWorktreeTestRepository();
   const roots = useAutoCleanupTempDirTracker((cleanup) =>
-    afterEach(() => {
+    afterEach(async () => {
       vi.restoreAllMocks();
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       cleanup();
     }),
@@ -114,7 +118,7 @@ describe("repository source profile creation", () => {
         }),
       ).rejects.toThrow(/directory/);
       expect(await git(repo, "branch", "--list", "openclaw/invalid")).toBe("");
-      expect(service.listRegistryRecords()).toEqual([]);
+      expect(await service.listRegistryRecords()).toEqual([]);
       expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("/invalid");
     },
   );
@@ -136,7 +140,7 @@ describe("repository source profile creation", () => {
     await expect(fs.access(path.join(sparse.path, "excluded/source.txt"))).rejects.toMatchObject({
       code: "ENOENT",
     });
-    const before = service.listRegistryRecords();
+    const before = await service.listRegistryRecords();
     await expect(
       service.create({
         repoRoot: repo,
@@ -144,7 +148,7 @@ describe("repository source profile creation", () => {
         profiles: ["both"],
       }),
     ).rejects.toThrow(/new worktree/);
-    expect(service.listRegistryRecords()).toEqual(before);
+    expect(await service.listRegistryRecords()).toEqual(before);
     expect(await fs.readFile(path.join(sparse.path, "excluded/sentinel"), "utf8")).toBe(
       "provisioned bytes\n",
     );
@@ -207,7 +211,7 @@ describe("repository source profile creation", () => {
     const params = { repoRoot: repo, name: "partial", baseRef: "HEAD", profiles: ["alpha"] };
     await expect(service.create(params)).rejects.toThrow(/setup failure/);
     expect(target).not.toBe("");
-    expect(service.listRegistryRecords()).toEqual([]);
+    expect(await service.listRegistryRecords()).toEqual([]);
     await expect(service.create({ ...params, profiles: ["both"] })).rejects.toThrow();
     expect(sparseCalls).toBe(1);
     expect(setupCalls).toBe(1);
@@ -241,12 +245,12 @@ describe("repository source profile creation", () => {
       "owned ignored bytes\n",
     );
     await service.remove({ id: full.id, reason: "archive" });
-    const before = service.listRegistryRecords();
+    const before = await service.listRegistryRecords();
     expect(before[0]?.snapshotRef).toBeTruthy();
     await expect(service.create({ ...params, profiles: ["alpha"] })).rejects.toThrow(
       /new worktree/,
     );
-    expect(service.listRegistryRecords()).toEqual(before);
+    expect(await service.listRegistryRecords()).toEqual(before);
     const restored = await service.restore({ id: full.id });
     expect(await fs.readFile(path.join(restored.path, "excluded/sentinel"), "utf8")).toBe(
       "owned ignored bytes\n",
@@ -373,7 +377,7 @@ describe("repository source profile creation", () => {
       "partial recovery evidence\n",
     );
     expect(await git(repo, "worktree", "list", "--porcelain")).toContain(target);
-    expect(service.listRegistryRecords()).toEqual([]);
+    expect(await service.listRegistryRecords()).toEqual([]);
     await expect(service.create({ ...params, profiles: ["both"] })).rejects.toThrow(
       /branch already exists/,
     );
@@ -395,7 +399,7 @@ describe("repository source profile creation", () => {
         }),
       ).rejects.toThrow(/lowercase name/);
       expect(await git(repo, "branch", "--list", "openclaw/invalid-name")).toBe("");
-      expect(service.listRegistryRecords()).toEqual([]);
+      expect(await service.listRegistryRecords()).toEqual([]);
     },
   );
 
@@ -445,7 +449,7 @@ describe("repository source profile creation", () => {
     if (missing) {
       await expect(result).rejects.toThrow(/tracked regular file/);
       expect(attempts).toBe(1);
-      expect(service.listRegistryRecords()).toEqual([]);
+      expect(await service.listRegistryRecords()).toEqual([]);
       expect(await git(repo, "branch", "--list", "openclaw/retry")).toBe("");
     } else {
       const target = await result;

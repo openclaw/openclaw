@@ -101,6 +101,32 @@ At the architecture level, the split is:
 - YAML scenario files under `qa/scenarios/` define the test run; `qa-lab`
   provides the reusable runtime surface that executes them.
 
+### Adapter shutdown and failure hooks
+
+The optional QA runner hooks follow one host-owned teardown order:
+
+1. `cleanup()` stops new fixture actions while retaining credential authority
+   and ownership of pending writes. Observers needed for final receipts can
+   remain active through Gateway shutdown. Bound transport requests themselves;
+   a scenario deadline does not settle an already-dispatched request.
+2. The host stops the Gateway and confirms process shutdown.
+3. `captureBeforeGatewayCleanup()` snapshots final native receipts before
+   temporary Gateway state is removed. A successful capture runs once per
+   Gateway lifetime. A thrown error retains the runtime evidence and fails
+   teardown; it does not prevent post-stop fixture cleanup.
+4. `cleanupAfterGatewayStop()` settles pending writes and owned fixture cleanup,
+   then releases the credential lease. The host withholds this hook if Gateway
+   shutdown is unconfirmed. Report failures rather than claiming successful cleanup.
+
+Omitted hooks perform no adapter-specific work; normal host teardown still
+runs. Errors are accumulated across cleanup phases. Keep unknown remote write
+outcomes explicit instead of inferring ownership or replaying writes.
+
+An optional `whenUnhealthy` promise **resolves**, rather than rejects, with a
+terminal error. The host aborts active flow admission; the adapter still owns
+settlement during cleanup. Adapters that omit it retain their explicit health
+checks and scenario deadlines.
+
 ### Adding a channel
 
 Adding a channel to the YAML QA system requires the channel implementation
@@ -130,6 +156,7 @@ Runner plugins own the transport contract:
 - how outbound messages are observed
 - how transcripts and normalized transport state are exposed
 - how transport-backed actions are executed
+- which trusted module preloads the Gateway runtime needs
 - how transport-specific reset or cleanup is handled
 
 The minimum adoption bar for a new channel:

@@ -351,7 +351,7 @@ export type CronJobState = Omit<
   startupCatchupAtMs?: number;
   /** Exact paced completion slot protected from future-slot repair until consumed. */
   pacedNextRunAtMs?: number;
-  /** Exact recurring slot retained across an out-of-band manual force run. */
+  /** Exact occurrence retained across a manual run; authored one-shots survive pause. */
   forcePreservedNextRunAtMs?: number;
   /** Durable pre-admission reservation. Cleared on restart without recording a run. */
   queuedAtMs?: number;

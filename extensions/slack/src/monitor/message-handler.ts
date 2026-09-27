@@ -265,6 +265,11 @@ export function createSlackMessageHandler(params: {
                     opts: {
                       ...lastOpts,
                       wasMentioned: combinedMentioned || last.opts.wasMentioned,
+                      sourceMessageIds: surviving.flatMap((entry) =>
+                        entry.message.ts ? [entry.message.ts] : [],
+                      ),
+                      abortSignal: admissionLifecycle.abortSignal,
+                      isRuntimePolicyCurrent: runtimeContext.isRuntimePolicyCurrent,
                       onVisibleDrop: () => {
                         visibleDrop = true;
                       },

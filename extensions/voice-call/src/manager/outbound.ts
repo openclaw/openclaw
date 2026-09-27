@@ -58,24 +58,8 @@ type SpeakContext = Pick<
   | "isStopping"
 >;
 
-type ConversationContext = Pick<
-  CallManagerContext,
-  | "activeCalls"
-  | "providerCallIdMap"
-  | "provider"
-  | "config"
-  | "storePath"
-  | "stateRuntime"
-  | "activeTurnCalls"
-  | "transcriptWaiters"
-  | "maxDurationTimers"
-  | "initialMessageInFlight"
-  | "notifyHangupTimers"
-  | "endCallOperations"
-  | "mutationQueue"
-  | "trackCallWork"
-  | "isStopping"
->;
+type ConversationContext = SpeakContext &
+  Pick<CallManagerContext, "activeTurnCalls" | "initialMessageInFlight" | "notifyHangupTimers">;
 
 type EndCallContext = Pick<
   CallManagerContext,
@@ -102,15 +86,6 @@ type ConnectedCallLookup =
       provider: NonNullable<ConnectedCallContext["provider"]>;
     };
 
-type ConnectedCallResolution =
-  | { ok: false; error: string }
-  | {
-      ok: true;
-      call: CallRecord;
-      providerCallId: string;
-      provider: NonNullable<ConnectedCallContext["provider"]>;
-    };
-
 function lookupConnectedCall(ctx: ConnectedCallContext, callId: CallId): ConnectedCallLookup {
   const call = ctx.activeCalls.get(callId);
   if (!call) {
@@ -125,20 +100,12 @@ function lookupConnectedCall(ctx: ConnectedCallContext, callId: CallId): Connect
   return { kind: "ok", call, providerCallId: call.providerCallId, provider: ctx.provider };
 }
 
-function requireConnectedCall(ctx: ConnectedCallContext, callId: CallId): ConnectedCallResolution {
+function requireConnectedCall(
+  ctx: ConnectedCallContext,
+  callId: CallId,
+): Exclude<ConnectedCallLookup, { kind: "ended" }> {
   const lookup = lookupConnectedCall(ctx, callId);
-  if (lookup.kind === "error") {
-    return { ok: false, error: lookup.error };
-  }
-  if (lookup.kind === "ended") {
-    return { ok: false, error: "Call has ended" };
-  }
-  return {
-    ok: true,
-    call: lookup.call,
-    providerCallId: lookup.providerCallId,
-    provider: lookup.provider,
-  };
+  return lookup.kind === "ended" ? { kind: "error", error: "Call has ended" } : lookup;
 }
 
 function isCurrentCall(ctx: Pick<CallManagerContext, "activeCalls">, call: CallRecord): boolean {
@@ -322,7 +289,7 @@ export async function speak(
   options?: SpeakOptions,
 ): Promise<{ success: boolean; error?: string }> {
   const connected = requireConnectedCall(ctx, callId);
-  if (!connected.ok) {
+  if (connected.kind === "error") {
     return { success: false, error: connected.error };
   }
   const { call, providerCallId, provider } = connected;
@@ -416,7 +383,7 @@ export async function sendDtmf(
     return { success: false, error: validationError };
   }
   const connected = requireConnectedCall(ctx, callId);
-  if (!connected.ok) {
+  if (connected.kind === "error") {
     return { success: false, error: connected.error };
   }
   if (!connected.provider.sendDtmf) {
@@ -551,7 +518,7 @@ export async function continueCall(
   prompt: string,
 ): Promise<{ success: boolean; transcript?: string; error?: string }> {
   const connected = requireConnectedCall(ctx, callId);
-  if (!connected.ok) {
+  if (connected.kind === "error") {
     return { success: false, error: connected.error };
   }
   const { call, providerCallId, provider } = connected;

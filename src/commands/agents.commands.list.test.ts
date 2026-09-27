@@ -82,7 +82,7 @@ describe("agentsListCommand", () => {
     buildProviderSummaryMetadataIndexMock.mockReturnValue(providerSummaryMetadataMock);
     listProvidersForAgentMock.mockReturnValue(["Telegram default: configured"]);
     listAgentProvenanceMock.mockResolvedValue([]);
-    readAgentProvenanceForDisplayMock.mockResolvedValue(undefined);
+    readAgentProvenanceForDisplayMock.mockResolvedValue([]);
     summarizeBindingsMock.mockReturnValue(["Telegram default"]);
   });
 
@@ -139,12 +139,14 @@ describe("agentsListCommand", () => {
   it("adds durable provenance to JSON without loading provider details", async () => {
     const runtime = createRuntime();
     listAgentProvenanceMock.mockRejectedValue(new Error("unrelated stored provenance is invalid"));
-    readAgentProvenanceForDisplayMock.mockResolvedValue({
-      agentId: "main",
-      createdVia: "operator",
-      creatorAgentId: null,
-      createdAtMs: 42,
-    });
+    readAgentProvenanceForDisplayMock.mockResolvedValue([
+      {
+        agentId: "main",
+        createdVia: "operator",
+        creatorAgentId: null,
+        createdAtMs: 42,
+      },
+    ]);
 
     await agentsListCommand({ json: true }, runtime);
 
@@ -159,6 +161,10 @@ describe("agentsListCommand", () => {
     });
     expect(summary).not.toHaveProperty("routes");
     expect(summary).not.toHaveProperty("providers");
+
+    await expect(agentsListCommand({ json: true, tree: true }, createRuntime())).rejects.toThrow(
+      "unrelated stored provenance is invalid",
+    );
   });
 
   it("renders roots, children, missing rows, and dangling creators as a tree", async () => {
@@ -310,6 +316,46 @@ describe("agentsListCommand", () => {
         `Identity: ${expected.identityEmoji} ${expected.identityName} (${source})`,
       );
       expect(fs.readFileSync(identityPath, "utf8")).toBe(identityFile);
+    });
+  });
+
+  it("keeps JSON identity fields when local avatar preparation fails", async () => {
+    await withTestDir({ prefix: "openclaw-agent-identity-list-" }, async (workspace) => {
+      const avatarRuntime = await import("../agents/identity-avatar-file-runtime.js");
+      const prepareAvatar = vi
+        .spyOn(avatarRuntime, "prepareLocalAgentAvatar")
+        .mockRejectedValue(new Error("avatar worker unavailable"));
+      try {
+        requireValidConfigMock.mockResolvedValueOnce({
+          agents: {
+            entries: {
+              proof: {
+                workspace,
+                identity: { name: "Chosen Identity", emoji: "🦉", avatar: "avatar.png" },
+              },
+            },
+          },
+        } satisfies OpenClawConfig);
+        const runtime = createRuntime();
+
+        await agentsListCommand({ json: true }, runtime);
+
+        expect(prepareAvatar).toHaveBeenCalledOnce();
+        const output = runtime.writeJson.mock.calls[0]?.[0];
+        expect(output).toEqual([
+          expect.objectContaining({
+            id: "proof",
+            identityName: "Chosen Identity",
+            identityEmoji: "🦉",
+            identitySource: "config",
+          }),
+        ]);
+        expect((output as Array<Record<string, unknown>>)[0]).not.toHaveProperty(
+          "identityAvatarUrl",
+        );
+      } finally {
+        prepareAvatar.mockRestore();
+      }
     });
   });
 

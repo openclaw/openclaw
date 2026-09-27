@@ -6,6 +6,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import { readCodexAsyncQuestions } from "./async-questions.js";
 import { auditNativeToolName, itemName, itemStatus } from "./event-projector-items.js";
+import { codexProviderRefusalDetails, readCodexProviderRefusal } from "./event-projector-values.js";
 import type { CodexThread, CodexTurn, JsonValue } from "./protocol.js";
 import type { CodexHistoryItemEntry } from "./thread-history-page.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
@@ -39,8 +40,35 @@ type BoundedCodexThreadHistoryProjection = CodexThreadHistoryImportResult & {
 type ProjectedCodexHistoryMessage = {
   message: AgentMessage;
   responseItem: JsonValue;
-  textBytes: number;
+  messageBytes: number;
 };
+
+function projectCodexHistoryMessage(
+  message: Extract<AgentMessage, { role: "user" | "assistant" }>,
+  text: string,
+): ProjectedCodexHistoryMessage {
+  const phase =
+    message.role === "assistant" &&
+    "phase" in message &&
+    (message.phase === "commentary" || message.phase === "final_answer")
+      ? message.phase
+      : undefined;
+  return {
+    message,
+    responseItem: {
+      type: "message",
+      role: message.role,
+      content: [{ type: message.role === "assistant" ? "output_text" : "input_text", text }],
+      ...(phase ? { phase } : {}),
+    },
+    messageBytes:
+      Buffer.byteLength(text, "utf8") +
+      (message.role === "assistant"
+        ? Buffer.byteLength(message.errorMessage ?? "", "utf8") +
+          (message.diagnostics ? Buffer.byteLength(JSON.stringify(message.diagnostics), "utf8") : 0)
+        : 0),
+  };
+}
 
 function normalizeImportedHistoryText(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -120,6 +148,7 @@ function projectCodexThreadHistory(params: {
   turns: CodexTurn[];
   importedAt: number;
   modelProvider?: string;
+  includeErrorOnlyTurns?: boolean;
 }): ProjectedCodexHistoryMessage[] {
   const projected: ProjectedCodexHistoryMessage[] = [];
   const threadTimestamp =
@@ -128,6 +157,15 @@ function projectCodexThreadHistory(params: {
       : params.importedAt;
   let itemOffset = 0;
   for (const turn of params.turns) {
+    const refusal =
+      turn.status === "failed"
+        ? readCodexProviderRefusal(turn.error?.message, turn.error?.codexErrorInfo, {
+            misalignment: turn.error?.misalignment,
+            nativeThreadId: params.thread.id,
+            nativeTurnId: turn.id,
+          })
+        : undefined;
+    let hasAssistantMessage = false;
     for (const value of turn.items) {
       const item = value;
       const itemId = normalizeOptionalString(item.id);
@@ -159,6 +197,8 @@ function projectCodexThreadHistory(params: {
       const phase =
         item.phase === "commentary" || item.phase === "final_answer" ? item.phase : undefined;
       const asyncDelivery = item.delivery === "async";
+      const terminalAssistant = role === "assistant" && phase !== "commentary" && !asyncDelivery;
+      hasAssistantMessage ||= terminalAssistant;
       const questions = asyncDelivery ? readCodexAsyncQuestions(item.questions) : undefined;
       const message =
         role === "assistant"
@@ -182,6 +222,17 @@ function projectCodexThreadHistory(params: {
                 ...(turn.status === "failed" && turn.error?.message
                   ? { errorMessage: turn.error.message }
                   : {}),
+                ...(refusal && terminalAssistant
+                  ? {
+                      diagnostics: [
+                        {
+                          type: "provider_refusal",
+                          timestamp,
+                          details: codexProviderRefusalDetails(refusal),
+                        },
+                      ],
+                    }
+                  : {}),
                 ...(phase ? { phase } : {}),
                 ...(asyncDelivery && itemId
                   ? { openclawAsyncDelivery: { itemId, ...(questions ? { questions } : {}) } }
@@ -190,22 +241,46 @@ function projectCodexThreadHistory(params: {
               } satisfies AssistantMessage,
               identity,
             )
-          : attachCodexMirrorIdentity({ role, content: text, timestamp } as AgentMessage, identity);
-      projected.push({
-        message,
-        responseItem: {
-          type: "message",
-          role,
-          content: [
-            {
-              type: role === "assistant" ? "output_text" : "input_text",
-              text,
-            },
-          ],
-          ...(role === "assistant" && phase ? { phase } : {}),
+          : attachCodexMirrorIdentity({ role, content: text, timestamp }, identity);
+      projected.push(projectCodexHistoryMessage(message, text));
+    }
+    if (
+      params.includeErrorOnlyTurns &&
+      !hasAssistantMessage &&
+      turn.status === "failed" &&
+      turn.error?.message
+    ) {
+      const timestamp = (turn.completedAt ?? turn.startedAt ?? threadTimestamp / 1000) * 1000;
+      const text = normalizeImportedHistoryText(turn.error.message) ?? "Codex turn failed.";
+      const message: AssistantMessage = attachCodexMirrorIdentity(
+        {
+          role: "assistant",
+          content: [],
+          api: CODEX_HISTORY_ASSISTANT_API,
+          provider:
+            normalizeOptionalString(params.modelProvider) ??
+            normalizeOptionalString(params.thread.modelProvider) ??
+            CODEX_HISTORY_ASSISTANT_PROVIDER,
+          model: CODEX_HISTORY_ASSISTANT_MODEL,
+          usage: CODEX_HISTORY_ZERO_USAGE,
+          stopReason: "error",
+          errorMessage: text,
+          ...(refusal
+            ? {
+                diagnostics: [
+                  {
+                    type: "provider_refusal",
+                    timestamp,
+                    details: codexProviderRefusalDetails(refusal),
+                  },
+                ],
+              }
+            : {}),
+          timestamp,
         },
-        textBytes: Buffer.byteLength(text, "utf8"),
-      });
+        `${turn.id}:assistant`,
+      );
+      projected.push(projectCodexHistoryMessage(message, ""));
     }
   }
   return projected;
@@ -223,12 +298,12 @@ function selectBoundedCodexHistoryTail(
     }
     if (
       selected.length >= CODEX_HISTORY_IMPORT_MAX_MESSAGES ||
-      selectedBytes + candidate.textBytes > CODEX_HISTORY_IMPORT_MAX_BYTES
+      selectedBytes + candidate.messageBytes > CODEX_HISTORY_IMPORT_MAX_BYTES
     ) {
       break;
     }
     selected.push(candidate);
-    selectedBytes += candidate.textBytes;
+    selectedBytes += candidate.messageBytes;
   }
   return selected.toReversed();
 }
@@ -244,6 +319,7 @@ export function projectBoundedCodexThreadHistory(params: {
     thread: params.thread,
     turns: selectTurnsThroughBoundary(params.thread, params.throughTurnId),
     importedAt: params.importedAt,
+    includeErrorOnlyTurns: true,
     ...(params.modelProvider ? { modelProvider: params.modelProvider } : {}),
   });
   const selected = selectBoundedCodexHistoryTail(projected);
@@ -270,19 +346,19 @@ export function projectBoundedCodexVisibleSessionHistory(
   entries: readonly SessionTranscriptMessageEntry[],
 ): JsonValue[] {
   const projected: ProjectedCodexHistoryMessage[] = [];
-  for (const entry of entries) {
-    if ((entry.role !== "user" && entry.role !== "assistant") || !("content" in entry.message)) {
+  for (const { message } of entries) {
+    if ((message.role !== "user" && message.role !== "assistant") || !("content" in message)) {
       continue;
     }
     if (
-      entry.role === "assistant" &&
-      (("stopReason" in entry.message &&
-        (entry.message.stopReason === "aborted" || entry.message.stopReason === "error")) ||
-        "openclawAsyncDelivery" in entry.message)
+      message.role === "assistant" &&
+      (message.stopReason === "aborted" ||
+        message.stopReason === "error" ||
+        "openclawAsyncDelivery" in message)
     ) {
       continue;
     }
-    const content = entry.message.content;
+    const content = message.content;
     const text = normalizeImportedHistoryText(
       typeof content === "string"
         ? content
@@ -299,20 +375,7 @@ export function projectBoundedCodexVisibleSessionHistory(
     if (!text) {
       continue;
     }
-    projected.push({
-      message: entry.message,
-      responseItem: {
-        type: "message",
-        role: entry.role,
-        content: [
-          {
-            type: entry.role === "assistant" ? "output_text" : "input_text",
-            text,
-          },
-        ],
-      },
-      textBytes: Buffer.byteLength(text, "utf8"),
-    });
+    projected.push(projectCodexHistoryMessage(message, text));
   }
   return selectBoundedCodexHistoryTail(projected).map(({ responseItem }) => responseItem);
 }

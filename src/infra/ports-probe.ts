@@ -67,11 +67,47 @@ export async function tryListenOnPort(params: ListenOnPortParams): Promise<numbe
   });
 }
 
-async function probePortOnHost(port: number, host: string): Promise<PortUsageStatus | "skip"> {
+/** Observe a listener without retaining its socket or cancellation hook. */
+export async function probeTcpListener(
+  port: number,
+  host: string,
+  signal?: AbortSignal,
+): Promise<PortUsageStatus> {
+  signal?.throwIfAborted();
+  return await new Promise<PortUsageStatus>((resolve) => {
+    const socket = net.connect({ host, port });
+    let result: PortUsageStatus = "unknown";
+    const destroy = () => socket.destroy();
+    signal?.addEventListener("abort", destroy, { once: true });
+    socket.once("connect", () => {
+      result = "busy";
+      destroy();
+    });
+    socket.once("error", (error) => {
+      result = isErrno(error) && error.code === "ECONNREFUSED" ? "free" : "unknown";
+      destroy();
+    });
+    socket.setTimeout(250, destroy);
+    // Closing, not just requesting destruction, releases the probe's I/O and timer.
+    socket.once("close", () => {
+      signal?.removeEventListener("abort", destroy);
+      resolve(result);
+    });
+  });
+}
+
+async function probePortOnHost(
+  port: number,
+  host: string,
+  signal?: AbortSignal,
+): Promise<PortUsageStatus | "skip"> {
   try {
-    await tryListenOnPort({ port, host, exclusive: true });
-    return "free";
+    await tryListenOnPort({ port, host, exclusive: true, ...(signal ? { signal } : {}) });
+    // A successful scoped bind can coexist with a wildcard listener on macOS.
+    // Confirm the endpoint before declaring it free, even without lsof or ss.
+    return await probeTcpListener(port, host, signal);
   } catch (err) {
+    signal?.throwIfAborted();
     if (isErrno(err) && err.code === "EADDRINUSE") {
       return "busy";
     }
@@ -86,10 +122,13 @@ async function probePortOnHost(port: number, host: string): Promise<PortUsageSta
 export async function probePortUsage(
   port: number,
   probeHosts: readonly string[] = PORT_PROBE_HOSTS,
+  signal?: AbortSignal,
 ): Promise<PortUsageStatus> {
+  signal?.throwIfAborted();
   let sawUnknown = false;
   for (const host of probeHosts) {
-    const result = await probePortOnHost(port, host);
+    const result = await probePortOnHost(port, host, signal);
+    signal?.throwIfAborted();
     if (result === "busy") {
       return "busy";
     }

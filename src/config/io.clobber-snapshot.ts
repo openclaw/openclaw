@@ -1,6 +1,6 @@
-// Detects suspicious config clobbers and finds recovery snapshots.
 import path from "node:path";
 import { createDedupeCache } from "../infra/dedupe.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { sleep } from "../utils/sleep.js";
 
@@ -52,12 +52,7 @@ function formatConfigArtifactTimestamp(ts: string): string {
 }
 
 function isFsErrorCode(error: unknown, code: string): boolean {
-  return (
-    error instanceof Error &&
-    "code" in error &&
-    typeof (error as { code?: unknown }).code === "string" &&
-    (error as { code: string }).code === code
-  );
+  return error instanceof Error && hasErrnoCode(error, code);
 }
 
 function resolveClobberPaths(configPath: string): {

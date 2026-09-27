@@ -35,6 +35,7 @@ it("binds a first native chat.send before streaming and persists its stopped par
   const providerClosed = createDeferred();
   const firstDelta = createDeferred();
   const terminal = createDeferred();
+  const persistedPartial = createDeferred();
   const requestBodies: string[] = [];
   // Call-through observation exposes the real Gateway-owned buffer and registration.
   const observeSubscriptions = vi.spyOn(subscriptions, "startGatewayEventSubscriptions");
@@ -99,6 +100,8 @@ it("binds a first native chat.send before streaming and persists its stopped par
         const payload = event.payload as
           | {
               runId?: string;
+              sessionKey?: string;
+              message?: { role?: string };
               state?: string;
               stream?: string;
               sessionId?: string;
@@ -107,6 +110,13 @@ it("binds a first native chat.send before streaming and persists its stopped par
           | undefined;
         if (payload?.runId !== runId) {
           return;
+        }
+        if (
+          event.event === "session.message" &&
+          payload.sessionKey === sessionKey &&
+          payload.message?.role === "assistant"
+        ) {
+          persistedPartial.resolve();
         }
         if (event.event === "chat" && payload.state === "delta") {
           firstDelta.resolve();
@@ -172,11 +182,49 @@ it("binds a first native chat.send before streaming and persists its stopped par
     expect(lifecycle).toContainEqual(
       expect.objectContaining({ phase: "start", sessionId: committed.entry.sessionId }),
     );
+    const history = await gateway.client.request<{
+      sessionId: string;
+      sessionInfo: { activeLeafEntryId: string | null };
+    }>("chat.history", { sessionKey });
+    expect(history).toMatchObject({
+      sessionId: committed.entry.sessionId,
+      sessionInfo: { activeLeafEntryId: expect.any(String) },
+    });
+    const transcriptScope = {
+      sessionKey,
+      sessionId: committed.entry.sessionId,
+      agentId: "main",
+    };
+    const beforeRejectedStops = await loadTranscriptEvents(transcriptScope);
+    for (const guard of [
+      {
+        idempotencyKey: "stop-stale-first-native-leaf",
+        expectedLeafEntryId: "stale-first-native-leaf",
+        sessionId: history.sessionId,
+      },
+      {
+        idempotencyKey: "stop-copied-first-native-leaf",
+        expectedLeafEntryId: history.sessionInfo.activeLeafEntryId,
+        sessionId: "previous-first-native-session",
+      },
+    ]) {
+      await expect(
+        gateway.client.request("chat.send", { sessionKey, message: "/stop", ...guard }),
+      ).rejects.toMatchObject({ details: { reason: "active-leaf-changed" } });
+      expect(original.controller.signal.aborted).toBe(false);
+      expect(runtime.chatAbortControllers.get(runId)).toBe(original);
+      expect(runtime.chatRunState.resolveBuffer(runId).text).toBe(partial);
+      expect(response.destroyed).toBe(false);
+      expect(requestBodies).toHaveLength(1);
+      expect(await loadTranscriptEvents(transcriptScope)).toEqual(beforeRejectedStops);
+    }
     const stop = await gateway.client
       .request("chat.send", {
         sessionKey,
         message: "/stop",
         idempotencyKey: "stop-first-native-turn",
+        expectedLeafEntryId: history.sessionInfo.activeLeafEntryId,
+        sessionId: history.sessionId,
       })
       .then(
         (result) => ({ result }),
@@ -205,11 +253,8 @@ it("binds a first native chat.send before streaming and persists its stopped par
         }),
       ),
     );
-    const events = await loadTranscriptEvents({
-      sessionKey,
-      sessionId: committed.entry.sessionId,
-      agentId: "main",
-    });
+    await persistedPartial.promise;
+    const events = await loadTranscriptEvents(transcriptScope);
     expect(events).toContainEqual(
       expect.objectContaining({
         message: expect.objectContaining({

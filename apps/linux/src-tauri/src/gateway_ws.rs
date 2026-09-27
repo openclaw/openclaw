@@ -39,6 +39,7 @@ use uuid::Uuid;
 const AGENT_KIND_CLIENT_CAPABILITY: &str = "agent-kind";
 const GATEWAY_STATE_EVENT: &str = "quickchat:gateway-state";
 const CHAT_EVENT: &str = "quickchat:chat-event";
+const SEND_PREPARED_EVENT: &str = "quickchat:send-prepared";
 const GATEWAY_DEVICE_IDENTITY_FILE: &str = "quickchat-gateway-device.json";
 const AGENTS_CACHE_TTL: Duration = Duration::from_secs(60);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -68,10 +69,11 @@ pub enum GatewayOwnership {
 
 #[derive(Clone)]
 pub struct GatewayWsConfig {
-    ws_url: String,
-    token: Option<String>,
-    password: Option<String>,
-    tls_fingerprint: Option<String>,
+    pub(crate) ws_url: String,
+    pub(crate) token: Option<String>,
+    pub(crate) password: Option<String>,
+    pub(crate) tls_fingerprint: Option<String>,
+    pub(crate) node_identity_scope: String,
     ownership: GatewayOwnership,
 }
 
@@ -84,12 +86,18 @@ impl GatewayWsConfig {
         ownership: GatewayOwnership,
     ) -> Self {
         Self {
+            node_identity_scope: ws_url.clone(),
             ws_url,
             token,
             password,
             tls_fingerprint,
             ownership,
         }
+    }
+
+    pub(crate) fn with_node_identity_scope(mut self, scope: String) -> Self {
+        self.node_identity_scope = scope;
+        self
     }
 }
 
@@ -533,7 +541,13 @@ impl GatewayClient {
     }
 
     fn set_configuration(&self, app: &AppHandle, config: Option<GatewayWsConfig>) {
-        self.replace_configuration(config);
+        let generation = GatewayGeneration(self.replace_configuration(config.clone()));
+        if let Some(node) = app.try_state::<crate::desktop_node::DesktopNode>() {
+            let _ = self.with_generation(generation, || {
+                node.configure(generation, config);
+                Ok(())
+            });
+        }
         self.inner.reconnect_paused.store(false, Ordering::SeqCst);
         self.set_connection_state(app, GatewayConnectionState::Down, None);
         self.emit_connection_state(app);
@@ -1686,6 +1700,24 @@ async fn perform_request_while_dispatching(
     deadline: Instant,
     config_changed: &AtomicBool,
 ) -> Result<GatewayResponse, RequestFailure> {
+    if let GatewayRequest::ChatSend { params, generation } = &request {
+        // Queue this WebView event before polling the request that can produce chat events.
+        client
+            .with_generation(*generation, || {
+                app.emit_to(
+                    QUICKCHAT_LABEL,
+                    SEND_PREPARED_EVENT,
+                    json!({
+                        "sessionKey": params.session_key,
+                        "agentId": params.agent_id,
+                        "runId": params.idempotency_key,
+                        "gatewayGeneration": generation,
+                    }),
+                )
+                .map_err(|error| format!("Could not prepare the Quick Chat reply: {error}"))
+            })
+            .map_err(|error| RequestFailure::method_with_details(error, None))?;
+    }
     await_session_result_while_dispatching(
         session,
         perform_session_request(client, connection_generation, session, request, deadline),
@@ -3401,6 +3433,7 @@ esac
                 tls_fingerprint: None,
             };
             crate::remote_ws_config(&request, &Url::parse(url).expect("Gateway URL"))
+                .expect("remote config")
         }
 
         struct SleepSocketFixture {

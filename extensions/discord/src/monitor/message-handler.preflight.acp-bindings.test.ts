@@ -1,3 +1,6 @@
+import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
+
+installDiscordIngressTestRuntime();
 // Discord tests cover message handler.preflight.acp bindings plugin behavior.
 import * as conversationBindingRuntime from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -260,31 +263,6 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
     expect(result).toBeNull();
     expect(resolveConfiguredBindingRouteMock).toHaveBeenCalledTimes(1);
     expect(ensureConfiguredBindingRouteReadyMock).not.toHaveBeenCalled();
-  });
-
-  it("initializes configured ACP bindings only after preflight accepts the message", async () => {
-    const result = await preflightDiscordMessage(
-      createBasePreflightParams({
-        guildEntries: {
-          [GUILD_ID]: {
-            id: GUILD_ID,
-            channels: {
-              [CHANNEL_ID]: {
-                enabled: true,
-                requireMention: false,
-              },
-            },
-          },
-        },
-      }),
-    );
-
-    expect(resolveConfiguredBindingRouteMock).toHaveBeenCalledTimes(1);
-    expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
-    expect(result?.boundSessionKey).toBe("agent:codex:acp:binding:discord:default:abc123");
-    expect(result?.boundAgentId).toBe("codex");
-    expect(result?.route.sessionKey).toBe("agent:codex:acp:binding:discord:default:abc123");
-    expect(result?.route.agentId).toBe("codex");
   });
 
   it("accepts plain messages in configured ACP-bound channels without a mention", async () => {

@@ -6,8 +6,12 @@ import { afterAll, beforeAll, expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { buildBoardWidgetSandboxPath } from "../../../src/gateway/board-sandbox.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
-import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { dockChatSidePanel } from "./chat-side-panel.test-support.ts";
+import {
+  controlUiSessionUrl,
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
+import { dockChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -78,6 +82,90 @@ suite.define(() => {
   afterAll(async () => {
     await new Promise<void>((resolve) => {
       sandbox?.close(() => resolve());
+    });
+  });
+
+  it("associates split-pane tabs with their own content after swapping Chat and Tasks", async () => {
+    await suite.withPage({ viewport: { width: 2200, height: 1000 } }, async ({ page }) => {
+      await installMockGateway(page, {
+        sessionKey,
+        featureMethods: [...defaultControlUiFeatureMethods, "tasks.list"],
+        methodResponses: { "tasks.list": { tasks: [] } },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+      await openChatSidePanelType(page, "Tasks");
+      await page.getByRole("button", { name: "Open split view", exact: true }).click();
+      const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
+      await expect.poll(() => panes.count()).toBe(2);
+      for (const pane of await panes.all()) {
+        await pane.locator('.side-panel__header wa-tab[panel="tasks"]').waitFor();
+      }
+      const roots = await panes
+        .locator('.sidebar-region__primary, .side-panel__panel[data-panel-slot="tasks"]')
+        .elementHandles();
+      expect(roots).toHaveLength(4);
+      const targets = () =>
+        panes.evaluateAll((elements) =>
+          elements.map((pane) => {
+            const tab = pane.querySelector(".side-panel__header wa-tab[active]")!;
+            const target = document.getElementById(tab.getAttribute("aria-controls")!);
+            return {
+              tabId: tab.id,
+              targetId: target?.id,
+              withinPane: target?.closest("openclaw-chat-pane") === pane,
+              role: target?.getAttribute("role"),
+              label: target?.getAttribute("aria-label"),
+              hasComposer: Boolean(
+                target?.querySelector(".agent-chat__composer-combobox textarea"),
+              ),
+              taskPanel: target?.getAttribute("data-panel-slot") === "tasks",
+            };
+          }),
+        );
+      const original = await targets();
+      expect(await page.getByRole("region", { name: "Side panel", exact: true }).count()).toBe(0);
+      expect(new Set(original.map((target) => target.tabId)).size).toBe(2);
+      expect(new Set(original.map((target) => target.targetId)).size).toBe(2);
+      for (const target of original) {
+        expect(target).toMatchObject({
+          withinPane: true,
+          role: "region",
+          label: "Tasks",
+          hasComposer: false,
+          taskPanel: true,
+        });
+      }
+      for (const pane of await panes.all()) {
+        await pane.locator(".agent-chat__composer-combobox textarea").click();
+        await pane.locator(".chat-panel-swap").click();
+        await pane.locator('.sidebar-region__primary[data-region="side"]').waitFor();
+      }
+      const swapped = await targets();
+      expect(new Set(swapped.map((target) => target.targetId)).size).toBe(2);
+      for (const target of swapped) {
+        expect(target).toMatchObject({
+          withinPane: true,
+          role: "region",
+          label: "Chat",
+          hasComposer: true,
+          taskPanel: false,
+        });
+      }
+      for (const pane of await panes.all()) {
+        await pane.locator(".agent-chat__composer-combobox textarea").click();
+        await pane.locator(".chat-panel-swap").click();
+        await pane.locator('.sidebar-region__primary[data-region="main"]').waitFor();
+      }
+      expect(await targets()).toEqual(original);
+      for (const root of roots) {
+        expect(
+          await root.evaluate(
+            (element) =>
+              element instanceof HTMLElement && document.getElementById(element.id) === element,
+          ),
+        ).toBe(true);
+      }
     });
   });
 

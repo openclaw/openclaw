@@ -1,4 +1,3 @@
-// Memory Core plugin module implements watch pressure behavior.
 import type { FSWatcher } from "chokidar";
 
 const MEMORY_WATCH_PRESSURE_WARNING_THRESHOLD = 2_000;

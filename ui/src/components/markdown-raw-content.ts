@@ -85,7 +85,8 @@ export function stripProgressCardRawContentBlocks(input: string): string {
     indices.push(index);
     closingTagsByName.set(tag.name, indices);
   }
-  const matchingClose = Array.from({ length: tags.length }, () => -1);
+  let output = "";
+  let cursor = 0;
   for (let index = 0; index < tags.length; index += 1) {
     const tag = tags[index];
     if (!tag || tag.isClosing) {
@@ -107,21 +108,8 @@ export function stripProgressCardRawContentBlocks(input: string): string {
         low = middle + 1;
       }
     }
-    matchingClose[index] = closingIndices[low] ?? -1;
-  }
-
-  let output = "";
-  let cursor = 0;
-  for (let index = 0; index < tags.length; index += 1) {
-    const tag = tags[index];
-    if (!tag) {
-      continue;
-    }
-    const closeIndex = matchingClose[index] ?? -1;
-    if (tag.isClosing || closeIndex < 0) {
-      continue;
-    }
-    const close = tags[closeIndex];
+    const closeIndex = closingIndices[low];
+    const close = closeIndex === undefined ? undefined : tags[closeIndex];
     if (!close) {
       continue;
     }

@@ -1,5 +1,5 @@
 // Gateway Protocol schema module defines protocol validation shapes.
-import { Type, type TSchema } from "typebox";
+import { Type, type Static, type TSchema } from "typebox";
 import { closedObject } from "./closed-object.js";
 import {
   CronDateTimestampMsSchema,
@@ -9,6 +9,7 @@ import {
   cronScriptPayloadSchema,
 } from "./cron-shared.js";
 import { FailoverReasonSchema } from "./failover-reason.js";
+import { ChatHistoryActivitySchema } from "./logs-chat.js";
 import { NonEmptyString } from "./primitives.js";
 
 /**
@@ -465,6 +466,9 @@ export const CronJobStateSchema = closedObject({
   lastErrorReason: Type.Optional(FailoverReasonSchema),
   lastDurationMs: Type.Optional(Type.Integer({ minimum: 0 })),
   consecutiveErrors: Type.Optional(Type.Integer({ minimum: 0 })),
+  // Report-only schedule-computation error counter behind auto-disable;
+  // callers cannot patch this field.
+  scheduleErrorCount: Type.Optional(Type.Integer({ minimum: 0 })),
   // Report-only scheduler ownership fact; callers cannot patch this field.
   autoDisabled: Type.Optional(CronAutoDisabledSchema),
   consecutiveSkipped: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -738,3 +742,20 @@ export const CronRunLogEntrySchema = closedObject({
   ),
   jobName: Type.Optional(Type.String()),
 });
+
+/** Transcript selection is bound to one recorded cron run, never a client-selected session. */
+export const CronHistoryParamsSchema = closedObject({
+  id: NonEmptyString,
+  runId: Type.Optional(NonEmptyString),
+  runAtMs: Type.Optional(CronDateTimestampMsSchema),
+  cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
+});
+
+export const CronHistoryResultSchema = closedObject({
+  messages: Type.Array(Type.Unknown()),
+  activity: Type.Optional(Type.Array(ChatHistoryActivitySchema)),
+  nextCursor: Type.Optional(Type.String({ maxLength: 8192 })),
+});
+export type CronHistoryParams = Static<typeof CronHistoryParamsSchema>;
+export type CronHistoryResult = Static<typeof CronHistoryResultSchema>;

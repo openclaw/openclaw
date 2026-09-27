@@ -33,6 +33,8 @@ Release artifacts and the GitHub Actions step summary show npm coverage as `chec
 
 The upstream scan has fixed bounds: 2,500 exact package versions, 4,000 HTTP requests, and five minutes per run. It uses four concurrent requests, up to five pages of 100 advisories per repository, and at most 10,000 advisories per run. Each response is limited to 2 MiB and each request to 15 seconds. It does not retry or reuse stale cached results.
 
+Matching findings from each repository page reserve request capacity across all workers and are checked against GitHub's reviewed advisory ranges before that task continues discovery. This prevents later repository scans from consuming the budget needed to reconcile already-discovered findings. Missing reviewed evidence preserves the publisher's finding and records partial coverage.
+
 Missing or unsupported repository metadata, malformed affected-version ranges, exhausted request or pagination budgets, and request or rate-limit failures produce `partial` upstream coverage, not an unaffected result. Confirmed findings remain in the report and enter the same severity policy. Inspect the coverage issue subjects and reasons before interpreting a zero-finding result.
 
 ## Published package behavior

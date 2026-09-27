@@ -1,9 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import {
   createManagedTaskBackingDetail,
+  sameTaskBackingInstance,
   selectCurrentCanonicalTaskBacking,
 } from "./task-backing-records.js";
 import type {
@@ -12,23 +11,14 @@ import type {
 } from "./task-flow-managed-run-task.types.js";
 import { normalizeRestoredFlowRecord } from "./task-flow-registry.records.js";
 import { readTaskFlowRecord } from "./task-flow-registry.store.kernel.js";
-import { isTerminalTaskFlow, type TaskFlowRecord } from "./task-flow-registry.types.js";
-import { assertTaskOwner } from "./task-registry-common.js";
+import { isTerminalTaskFlow } from "./task-flow-registry.types.js";
 import {
-  buildTaskCreateMergePatch,
-  selectExistingTaskForCreate,
-} from "./task-registry-create-rules.js";
-import {
-  applyTaskRecordPatch,
-  buildTaskRecordForCreate,
-  resolveTaskCreateIdentity,
-  type CreateTaskRecordParams,
-} from "./task-registry-records.js";
-import {
-  readTaskRegistryMutationSnapshotInDatabase,
-  upsertTaskDeliveryStateInDatabase,
-  upsertTaskWithDeliveryStateInDatabase,
-} from "./task-registry.store.kernel.js";
+  createTaskRecordInDatabase,
+  type TaskCreateResult,
+} from "./task-registry-create.kernel.js";
+import { isParentFlowLinkError } from "./task-registry-parent-flow-rules.js";
+import type { CreateTaskRecordParams } from "./task-registry-records.js";
+import { readTaskRegistryMutationSnapshotInDatabase } from "./task-registry.store.kernel.js";
 import { isTerminalTaskStatus } from "./task-registry.types.js";
 
 export type ManagedTaskInFlowInput = {
@@ -38,143 +28,168 @@ export type ManagedTaskInFlowInput = {
   now: number;
 };
 
+export type ManagedTaskInFlowReceipt = RunTaskInFlowResult & {
+  taskMutation?: TaskCreateResult["mutation"];
+};
+
+class ManagedTaskCreationRefused extends Error {
+  constructor(readonly result: RunTaskInFlowResult) {
+    super(result.reason);
+  }
+}
+
 /** The caller holds shared writer custody; write retains the owner's separate transactions. */
 export function runManagedTaskInFlowInDatabase(
   db: DatabaseSync,
   input: ManagedTaskInFlowInput,
   write: <T>(operation: () => T) => T,
-  onCommitted: (result: RunTaskInFlowResult) => void,
-): RunTaskInFlowResult {
+  onCommitted: (result: ManagedTaskInFlowReceipt) => void,
+  admission?: { assertCurrent: () => void; retainTaskCommit: (taskId: string) => void },
+): ManagedTaskInFlowReceipt {
   const { params } = input;
-  const storedFlow = readTaskFlowRecord(db, params.flowId);
-  const finish = (result: RunTaskInFlowResult) => {
-    onCommitted(result);
-    return result;
-  };
-  if (
-    !storedFlow ||
-    normalizeOptionalString(storedFlow.ownerKey) !== normalizeOptionalString(input.callerOwnerKey)
-  ) {
-    return finish({ found: false, created: false, reason: "Flow not found." });
-  }
-  const flow = normalizeRestoredFlowRecord(storedFlow);
-  const refuse = (reason: string) => finish({ found: true, created: false, reason, flow });
-  if (flow.syncMode !== "managed") {
-    return refuse("Flow does not accept managed child tasks.");
-  }
-  if (flow.cancelRequestedAt != null) {
-    return refuse("Flow cancellation has already been requested.");
-  }
-  if (isTerminalTaskFlow(flow)) {
-    return refuse(`Flow is already ${flow.status}.`);
-  }
-
-  const snapshot = readTaskRegistryMutationSnapshotInDatabase(db, {
-    ...params,
-    taskId: input.taskId,
-  });
-  const candidates = [...snapshot.tasks.values()];
-  const flows = new Map<string, TaskFlowRecord | undefined>([[flow.flowId, flow]]);
-  const isTaskMirroredFlow = (flowId: string) => {
-    if (!flows.has(flowId)) {
-      flows.set(flowId, readTaskFlowRecord(db, flowId));
+  const readManagedFlow = () => {
+    const storedFlow = readTaskFlowRecord(db, params.flowId);
+    if (
+      !storedFlow ||
+      normalizeOptionalString(storedFlow.ownerKey) !== normalizeOptionalString(input.callerOwnerKey)
+    ) {
+      throw new ManagedTaskCreationRefused({
+        found: false,
+        created: false,
+        reason: "Flow not found.",
+      });
     }
-    return flows.get(flowId)?.syncMode === "task_mirrored";
-  };
-  const childSessionKey = params.childSessionKey?.trim();
-  const runId = params.runId?.trim();
-  const backing =
-    childSessionKey && runId && (params.runtime === "acp" || params.runtime === "subagent")
-      ? selectCurrentCanonicalTaskBacking({
-          runtime: params.runtime,
-          scopeKind: "session",
-          ownerKey: flow.ownerKey,
-          childSessionKey,
-          runId,
-          candidates,
-          isTaskMirroredFlow,
-        })
-      : undefined;
-  if (childSessionKey && (params.runtime === "acp" || params.runtime === "subagent") && !backing) {
-    return refuse("Task backing ownership could not be verified.");
-  }
-  const createParams: CreateTaskRecordParams = {
-    runtime: params.runtime,
-    sourceId: params.sourceId,
-    ownerKey: flow.ownerKey,
-    scopeKind: "session",
-    requesterOrigin: flow.requesterOrigin,
-    parentFlowId: flow.flowId,
-    childSessionKey: params.childSessionKey,
-    parentTaskId: params.parentTaskId,
-    agentId: params.agentId,
-    runId: params.runId,
-    label: params.label,
-    task: params.task,
-    preferMetadata: params.preferMetadata,
-    notifyPolicy: params.notifyPolicy,
-    deliveryStatus: params.deliveryStatus ?? "pending",
-    detail: createManagedTaskBackingDetail(backing),
-    status: params.status === "running" ? "running" : "queued",
-    ...(params.status === "running"
-      ? {
-          startedAt: params.startedAt,
-          lastEventAt: params.lastEventAt,
-          progressSummary: params.progressSummary,
-        }
-      : {}),
-  };
-  const identity = resolveTaskCreateIdentity(createParams);
-  assertTaskOwner(identity);
-  const existing = selectExistingTaskForCreate({
-    ...params,
-    ownerKey: identity.ownerKey,
-    scopeKind: identity.scopeKind,
-    parentFlowId: flow.flowId,
-    detail: createParams.detail,
-    candidates,
-    isTaskMirroredFlow,
-  });
-  // Terminal projections may still accept metadata; they cannot restart the backing run.
-  if (
-    backing &&
-    isTerminalTaskStatus(backing.task.status) &&
-    (!existing || !isTerminalTaskStatus(existing.status))
-  ) {
-    return refuse("Task backing ownership could not be verified.");
-  }
-  let task;
-  let deliveryState;
-  if (existing) {
-    deliveryState = snapshot.deliveryStates.get(existing.taskId);
-    const requesterOrigin = normalizeDeliveryContext(createParams.requesterOrigin);
-    if (requesterOrigin && !deliveryState?.requesterOrigin) {
-      const nextDeliveryState = {
-        taskId: existing.taskId,
-        requesterOrigin,
-        lastNotifiedEventAt: deliveryState?.lastNotifiedEventAt,
-      };
-      // Preserve the origin-only commit before an optional task metadata update.
-      write(() => upsertTaskDeliveryStateInDatabase(db, nextDeliveryState));
-      deliveryState = nextDeliveryState;
+    const flow = normalizeRestoredFlowRecord(storedFlow);
+    const reason =
+      flow.syncMode !== "managed"
+        ? "Flow does not accept managed child tasks."
+        : flow.cancelRequestedAt != null
+          ? "Flow cancellation has already been requested."
+          : isTerminalTaskFlow(flow)
+            ? `Flow is already ${flow.status}.`
+            : undefined;
+    if (reason) {
+      throw new ManagedTaskCreationRefused({ found: true, created: false, reason, flow });
     }
-    const patch = buildTaskCreateMergePatch(existing, {
-      ...createParams,
-      agentId: identity.agentId,
+    return flow;
+  };
+  try {
+    const flow = readManagedFlow();
+    const childSessionKey = params.childSessionKey?.trim();
+    const runId = params.runId?.trim();
+    const readBacking = () => {
+      const snapshot = readTaskRegistryMutationSnapshotInDatabase(db, {
+        ...params,
+        taskId: input.taskId,
+      });
+      const backing =
+        childSessionKey && runId && (params.runtime === "acp" || params.runtime === "subagent")
+          ? selectCurrentCanonicalTaskBacking({
+              runtime: params.runtime,
+              scopeKind: "session",
+              ownerKey: flow.ownerKey,
+              childSessionKey,
+              runId,
+              candidates: [...snapshot.tasks.values()],
+              isTaskMirroredFlow: (flowId) =>
+                readTaskFlowRecord(db, flowId)?.syncMode === "task_mirrored",
+            })
+          : undefined;
+      if (
+        childSessionKey &&
+        (params.runtime === "acp" || params.runtime === "subagent") &&
+        !backing
+      ) {
+        throw new ManagedTaskCreationRefused({
+          found: true,
+          created: false,
+          reason: "Task backing ownership could not be verified.",
+          flow,
+        });
+      }
+      return backing;
+    };
+    const backing = readBacking();
+    const createParams: CreateTaskRecordParams = {
+      runtime: params.runtime,
+      sourceId: params.sourceId,
+      ownerKey: flow.ownerKey,
+      scopeKind: "session",
+      requesterOrigin: flow.requesterOrigin,
+      parentFlowId: flow.flowId,
+      childSessionKey: params.childSessionKey,
+      parentTaskId: params.parentTaskId,
+      agentId: params.agentId,
+      runId: params.runId,
+      label: params.label,
+      task: params.task,
+      preferMetadata: params.preferMetadata,
+      notifyPolicy: params.notifyPolicy,
+      deliveryStatus: params.deliveryStatus ?? "pending",
+      detail: createManagedTaskBackingDetail(backing),
+      status: params.status === "running" ? "running" : "queued",
+      ...(params.status === "running"
+        ? {
+            startedAt: params.startedAt,
+            lastEventAt: params.lastEventAt,
+            progressSummary: params.progressSummary,
+          }
+        : {}),
+    };
+    const resultForTask = (receipt: TaskCreateResult): ManagedTaskInFlowReceipt => ({
+      found: true,
+      created: true,
+      flow,
+      task: receipt.task,
+      taskMutation: receipt.mutation,
     });
-    if (Object.keys(patch).length === 0) {
-      return finish({ found: true, created: true, flow, task: existing });
+    const created = createTaskRecordInDatabase(db, { ...input, params: createParams }, write, {
+      retainTaskCommit: admission?.retainTaskCommit,
+      assertCurrent: (existing) => {
+        readManagedFlow();
+        const currentBacking = readBacking();
+        if (
+          backing &&
+          (!currentBacking ||
+            currentBacking.task.taskId !== backing.task.taskId ||
+            !sameTaskBackingInstance(currentBacking.instance, backing.instance) ||
+            // Terminal projections accept metadata, but cannot restart their backing run.
+            (isTerminalTaskStatus(currentBacking.task.status) &&
+              (!existing || !isTerminalTaskStatus(existing.status))))
+        ) {
+          throw new ManagedTaskCreationRefused({
+            found: true,
+            created: false,
+            reason: "Task backing ownership could not be verified.",
+            flow,
+          });
+        }
+        admission?.assertCurrent();
+      },
+      onCommitted: (commit) => {
+        if (commit.kind === "task") {
+          onCommitted(resultForTask(commit.result));
+        }
+      },
+    });
+    return resultForTask(created);
+  } catch (error) {
+    if (isParentFlowLinkError(error)) {
+      // Translate fresh parent refusal through the managed API's existing result contract.
+      try {
+        readManagedFlow();
+      } catch (flowError) {
+        if (flowError instanceof ManagedTaskCreationRefused) {
+          onCommitted(flowError.result);
+          return flowError.result;
+        }
+        throw flowError;
+      }
     }
-    task = applyTaskRecordPatch(existing, patch, input.now);
-  } else {
-    const prepared = buildTaskRecordForCreate(createParams, identity, input);
-    task = prepared.record;
-    deliveryState = prepared.deliveryState;
+    if (error instanceof ManagedTaskCreationRefused) {
+      onCommitted(error.result);
+      return error.result;
+    }
+    throw error;
   }
-  const result: RunTaskInFlowResult = { found: true, created: true, flow, task };
-  write(() => {
-    upsertTaskWithDeliveryStateInDatabase({ db }, { task, deliveryState });
-    deferSqlitePostCommitPublication(db, () => onCommitted(result));
-  });
-  return result;
 }

@@ -9,7 +9,7 @@ import {
   type MediaGenerationCatalogKind,
 } from "../../../packages/media-generation-core/src/catalog.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
+import { getProviderEnvVarsCore } from "../../secrets/provider-env-vars.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isCapabilityProviderConfigured } from "./media-tool-shared.js";
 
@@ -99,7 +99,7 @@ export function createMediaGenerateProviderListActionResult<
           agentDir: params.agentDir,
           authStore: params.authStore,
         }),
-        authEnvVars: getProviderEnvVars(provider.id),
+        authEnvVars: getProviderEnvVarsCore(provider.id),
         capabilities: provider.capabilities,
         // Catalog entries are generated for model browser/search without invoking provider code.
         catalog: synthesizeMediaGenerationCatalogEntries({
@@ -116,7 +116,7 @@ export function createMediaGenerateProviderListActionResult<
     if (!provider) {
       return [];
     }
-    const authHints = getProviderEnvVars(provider.id);
+    const authHints = getProviderEnvVarsCore(provider.id);
     const capabilities = params.summarizeCapabilities(provider);
     const modelLine = details.models.length > 0 ? details.models.join(", ") : "unknown";
     const authHint =

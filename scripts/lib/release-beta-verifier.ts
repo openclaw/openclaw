@@ -19,6 +19,7 @@ import { normalizeOptionalString } from "../../packages/normalization-core/src/s
 import { readPublicationArtifactArchive, sha256Digest } from "./actions-artifact-archive.mjs";
 import { readBoundedResponseText } from "./bounded-response.mjs";
 import { resolveNpmJsonEntries } from "./npm-json-output.mts";
+import { npmRegistryReadbackDeadline } from "./npm-publish-plan.mjs";
 import { collectClawHubPublishablePluginPackages } from "./plugin-clawhub-release.ts";
 import {
   collectPublishablePluginPackages,
@@ -68,10 +69,10 @@ type FetchWithRetryResult = {
 
 type WorkflowRunSummary = {
   id: string;
+  runAttempt?: number;
   label: string;
   url?: string;
   durationSeconds?: number;
-  advisory?: { status: string; conclusion: string; failedJobs: string[] };
   bootstrapEvidence?: {
     targetSha: string;
     workflowSha: string;
@@ -101,10 +102,6 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const POSITIVE_INTEGER_PATTERN = /^[1-9][0-9]*$/u;
 const SHA512_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]+={0,2}$/u;
 const TRUSTED_TOOLING_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-// Trusted publish can finish before npm registry metadata converges. Keep the
-// verifier on the same release train instead of forcing a republish/correction.
-const NPM_VIEW_ATTEMPTS = 30;
-const NPM_VIEW_RETRY_MAX_DELAY_MS = 10_000;
 const RELEASE_COMMAND_TIMEOUT_MS = 120_000;
 const RELEASE_COMMAND_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
 
@@ -520,6 +517,11 @@ class PostpublishDiagnostics {
       diagnosticValue(diagnosticSchema.shape.children.valueType.shape.status, run.status) ??
       "unknown";
     child.conclusion = diagnosticValue(diagnosticOutcome, run.conclusion) ?? "unknown";
+    child.runAttempt =
+      diagnosticValue(
+        diagnosticId,
+        typeof run.attempt === "number" ? String(run.attempt) : run.attempt,
+      ) ?? child.runAttempt;
     child.failedJobCount = Math.min(10000, failedJobCount);
     this.save();
   }
@@ -756,14 +758,20 @@ export async function runNpmViewWithRetry(
     run?: (args: string[]) => string;
   } = {},
 ): Promise<string> {
-  const attempts = options.attempts ?? NPM_VIEW_ATTEMPTS;
+  const deadlineMs = npmRegistryReadbackDeadline();
+  const attempts = options.attempts ?? Infinity;
   const delay =
     options.delay ??
     ((delayMs: number) =>
       new Promise((resolveDelay) => {
         setTimeout(resolveDelay, delayMs);
       }));
-  const run = options.run ?? ((npmArgs: string[]) => runReleaseVerifierCommand("npm", npmArgs));
+  const run =
+    options.run ??
+    ((npmArgs: string[]) =>
+      runReleaseVerifierCommand("npm", npmArgs, {
+        timeoutMs: Math.min(RELEASE_COMMAND_TIMEOUT_MS, Math.max(1, deadlineMs - Date.now())),
+      }));
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -776,10 +784,20 @@ export async function runNpmViewWithRetry(
       lastError = error;
     }
     if (attempt < attempts) {
-      await delay(Math.min(attempt * 1000, NPM_VIEW_RETRY_MAX_DELAY_MS));
+      const remainingMs = deadlineMs - Date.now();
+      if (remainingMs <= 0) {
+        break;
+      }
+      await delay(Math.min(10_000, remainingMs));
+      if (Date.now() >= deadlineMs) {
+        break;
+      }
     }
   }
 
+  if (lastError instanceof Error) {
+    lastError.message += "; verification pending. Retry readback, not publication.";
+  }
   throw lastError;
 }
 
@@ -1235,8 +1253,9 @@ function verifyWorkflowRun(params: {
   repo: string;
   expectedWorkflowName: string;
   expectedHeadBranch?: string;
+  expectedRunAttempt?: number;
+  expectedHeadSha?: string;
   allowedHeadBranches?: string[];
-  advisory?: boolean;
   rerunFailed: boolean;
   observe?: (run: JsonRecord, failedJobCount: number) => void;
 }): WorkflowRunSummary {
@@ -1247,11 +1266,24 @@ function verifyWorkflowRun(params: {
     "--repo",
     params.repo,
     "--json",
-    "workflowName,headBranch,event,status,conclusion,url,createdAt,updatedAt,jobs",
+    "workflowName,headBranch,headSha,databaseId,attempt,event,status,conclusion,url,createdAt,updatedAt,jobs",
+    ...(params.expectedRunAttempt === undefined
+      ? []
+      : ["--attempt", String(params.expectedRunAttempt)]),
   ]);
   const run = parseJson(raw, `gh run view ${params.id}`);
   if (!isJsonRecord(run)) {
     throw new Error(`${params.label}: workflow run returned an unsupported JSON shape.`);
+  }
+  if (
+    params.expectedRunAttempt !== undefined &&
+    (run.attempt !== params.expectedRunAttempt ||
+      run.databaseId !== Number(params.id) ||
+      run.headSha !== params.expectedHeadSha)
+  ) {
+    throw new Error(
+      `${params.label}: historical publisher identity does not match its signed attempt.`,
+    );
   }
   const workflowName = normalizeOptionalString(run.workflowName);
   if (workflowName !== params.expectedWorkflowName) {
@@ -1290,10 +1322,7 @@ function verifyWorkflowRun(params: {
       `${params.label}: reran ${failedJobs.length} failed job(s); rerun verifier after it finishes.`,
     );
   }
-  if (
-    status !== "completed" ||
-    (!params.advisory && (conclusion !== "success" || failedJobs.length > 0))
-  ) {
+  if (status !== "completed" || conclusion !== "success" || failedJobs.length > 0) {
     const failedNames = failedJobs
       .map((job) => normalizeOptionalString(job.name) ?? "<unnamed>")
       .join(", ");
@@ -1311,18 +1340,10 @@ function verifyWorkflowRun(params: {
       : undefined;
   return {
     id: params.id,
+    ...(params.expectedRunAttempt === undefined ? {} : { runAttempt: params.expectedRunAttempt }),
     label: params.label,
     url: normalizeOptionalString(run.url),
     durationSeconds,
-    ...(params.advisory
-      ? {
-          advisory: {
-            status: status ?? "unavailable",
-            conclusion: conclusion ?? "unavailable",
-            failedJobs: failedJobs.map((job) => normalizeOptionalString(job.name) ?? "<unnamed>"),
-          },
-        }
-      : {}),
   };
 }
 
@@ -1928,7 +1949,18 @@ function assertSelectedPackagesResolved(params: {
 
 export async function verifyBetaRelease(
   args: ReleaseVerifyBetaArgs,
-  options: { rootDir?: string } = {},
+  options: {
+    rootDir?: string;
+    pluginNpmReadback?: {
+      // Resolves to an informational note for a superseded published version.
+      verify: (
+        packageName: string,
+        version: string,
+        distTag: string,
+      ) => Promise<string | undefined>;
+      evidence: Record<string, unknown>[];
+    };
+  } = {},
 ): Promise<string[]> {
   const rootDir = options.rootDir ?? resolve(".");
   const diagnostic = new PostpublishDiagnostics(args, rootDir, "verify");
@@ -2001,7 +2033,20 @@ export async function verifyBetaRelease(
     });
     for (const plugin of npmPlugins) {
       diagnostic.package("pluginNpm", plugin.packageName, "started");
-      await verifyNpmPackage(plugin.packageName, args.version, args.distTag);
+      // Full publication owns tarball readback, including prior-parent publishes.
+      // Only standalone health checks retain metadata verification.
+      if (options.pluginNpmReadback) {
+        const note = await options.pluginNpmReadback.verify(
+          plugin.packageName,
+          args.version,
+          args.distTag,
+        );
+        if (note !== undefined) {
+          lines.push(`plugin npm WARN: ${note}`);
+        }
+      } else {
+        await verifyNpmPackage(plugin.packageName, args.version, args.distTag);
+      }
       const scope: NpmDiagnosticScope = { stage: "pluginNpm", packageName: plugin.packageName };
       diagnostic.observeNpmPublication(scope);
       const betaFloorError = await readNpmBetaFloorError(plugin.packageName, args.version);
@@ -2138,13 +2183,25 @@ export async function verifyBetaRelease(
     }
     if (args.workflowRuns.openclawNpm !== undefined) {
       diagnostic.start("openclawNpm");
+      const originalAttempt = normalizeOptionalString(
+        process.env.OPENCLAW_NPM_EXPECTED_RUN_ATTEMPT,
+      );
       workflowRuns.push(
         verifyWorkflowRun({
           id: args.workflowRuns.openclawNpm,
           label: "OpenClaw NPM Release",
           repo: args.repo,
           expectedWorkflowName: "OpenClaw NPM Release",
-          expectedHeadBranch: args.workflowRef,
+          expectedRunAttempt:
+            originalAttempt === undefined
+              ? undefined
+              : requirePositiveSafeInteger(originalAttempt, "original npm publisher attempt"),
+          expectedHeadSha: process.env.OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA,
+          expectedHeadBranch:
+            process.env.OPENCLAW_NPM_EXPECTED_WORKFLOW_REF?.replace(
+              /^refs\/(?:tags|heads)\//u,
+              "",
+            ) ?? args.workflowRef,
           rerunFailed: false,
           observe: (run, count) => diagnostic.observeRun("openclawNpm", run, count),
         }),
@@ -2160,7 +2217,6 @@ export async function verifyBetaRelease(
           repo: args.repo,
           expectedWorkflowName: "NPM Telegram Beta E2E",
           allowedHeadBranches: allowedReleaseWorkflowHeadBranches,
-          advisory: true,
           rerunFailed: false,
           observe: (run, count) => diagnostic.observeRun("npmTelegram", run, count),
         }),
@@ -2168,15 +2224,9 @@ export async function verifyBetaRelease(
       diagnostic.success("npmTelegram");
     }
     for (const run of workflowRuns) {
-      if (run.advisory) {
-        lines.push(
-          `${run.label} advisory: ${run.id} (${run.advisory.status}/${run.advisory.conclusion}; failed jobs: ${run.advisory.failedJobs.join(", ") || "none"})${run.url ? ` ${run.url}` : ""}`,
-        );
-      } else {
-        lines.push(
-          `${run.label} OK: ${run.id} (${formatDuration(run.durationSeconds)})${run.url ? ` ${run.url}` : ""}`,
-        );
-      }
+      lines.push(
+        `${run.label} OK: ${run.id} (${formatDuration(run.durationSeconds)})${run.url ? ` ${run.url}` : ""}`,
+      );
     }
 
     diagnostic.data.verification = "success";
@@ -2200,6 +2250,9 @@ export async function verifyBetaRelease(
             npmProvenanceAttestationMatched: args.skipPostpublish ? null : true,
             githubReleaseUrl: releaseUrl ?? null,
             pluginNpmPackageCount: npmPlugins.length,
+            ...(options.pluginNpmReadback
+              ? { pluginNpmPublicationReadbacks: options.pluginNpmReadback.evidence }
+              : {}),
             clawHubPackageCount: clawHubPlugins.length,
             workflowRuns,
             clawHubBootstrapEvidence:

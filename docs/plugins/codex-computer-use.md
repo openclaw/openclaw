@@ -13,7 +13,10 @@ does not vendor the desktop app, execute desktop actions itself, or bypass
 Codex permissions. The bundled `codex` plugin only prepares Codex app-server:
 it enables Codex plugin support, finds or installs the configured Computer Use
 plugin, checks that the configured MCP server is available, and then lets Codex
-own the native MCP tool calls during Codex-mode turns. Readiness uses
+own the native MCP tool calls during Codex-mode turns. Ordinary non-strict
+turns check installation and tool availability without running a live probe.
+Explicit status/install commands, strict-readiness startup, and enabled periodic
+health checks run live probes. These use
 `list_apps` when the server exposes the legacy Computer Use surface. A newer
 server that exposes `js` instead is probed with one `await cua.getState();`
 call. An MCP response with `isError: true` fails readiness instead of counting
@@ -128,10 +131,35 @@ and revalidates the owned parent around each staged swap.
 On macOS, OpenClaw exposes the selected desktop app's bundled marketplace
 through a real, isolated-home-owned wrapper at
 `$CODEX_HOME/.tmp/bundled-marketplaces/openai-bundled`. Codex reserves that
-path for the `openai-bundled` marketplace; the wrapper links only the manifest
-and plugin directory from the selected standard desktop app. OpenClaw then asks
+path for the `openai-bundled` marketplace. Legacy desktop bundles use links to
+their manifest and plugin directory. When a newer desktop bundle replaces the
+legacy MCP plugin with `unified-computer-use`, the wrapper materializes that
+plugin's launch descriptor using the same selected desktop's Node, Node REPL,
+and CUA package. Its `cua_repl` server uses the isolated home's signed Computer
+Use service. Native installation and reinstallation copy this prepared source;
+the desktop bundle and desktop user's plugin cache are not modified or copied.
+Other plugins, including separate browser integrations, retain their source links.
+OpenClaw then asks
 Codex app-server to register the wrapper. If setup still cannot make the MCP
 server available, the turn fails before the thread starts.
+
+The legacy default plugin/server pair follows this replacement automatically,
+including an explicitly configured `pluginName: "computer-use"` with the default
+server name. Custom plugin, server, or marketplace selections remain unchanged.
+An explicit native `mcp_servers.computer-use` entry or legacy plugin MCP tool
+policy keeps the legacy identity, so a renamed server cannot bypass those
+restrictions. Update that native policy explicitly before selecting the unified
+server. Native `cua_repl` overrides continue to take precedence over the plugin.
+The managed unified runtime enables its **computer** surface, preserving desktop
+app discovery and control. It does not attach the agent to the desktop app's
+browser sessions or advertise the unified browser surface. Native MCP policy,
+tool restrictions, and macOS permissions still apply. Desktop updates refresh
+the prepared source and client generation together.
+With the default `strictReadiness: false`, startup does not create a temporary
+probe thread or wait for a readiness tool call. Use `/codex computer-use status`
+to verify live desktop access, or enable `healthCheckEnabled` for periodic
+checks owned by the active app-server client. Set `strictReadiness: true` when
+every turn must wait for a successful live probe before its thread starts.
 Strict readiness failures are harness preflight failures, so model fallback
 does not repeat the same local readiness sequence for every Codex candidate.
 A candidate resolved to another harness remains eligible and enters that
@@ -140,10 +168,11 @@ runtime through its normal policy checks.
 After changing Computer Use config, use `/new` or `/reset` in the affected
 chat before testing if an existing Codex thread has already started.
 
-On macOS, managed startup for Computer Use prefers the desktop app binary at
-`/Applications/ChatGPT.app/Contents/Resources/codex`, then falls
-back to `/Applications/Codex.app/Contents/Resources/codex` for legacy
-standalone installs. This also applies to one-off Computer Use status and
+On macOS, managed startup for Computer Use prefers `ChatGPT.app`, then
+`Codex.app` for standalone installs. Within each app's `Contents/Resources`,
+it checks `codex-cli/CodexCLI.app/Contents/MacOS/codex` before the older `codex`
+layout. Computer Use dependencies stay rooted in that app's `Contents/Resources`
+for either executable layout. This also applies to one-off Computer Use status and
 install commands that start their own client. It keeps desktop control under
 the app bundle that owns the local macOS permissions. If the desktop app is not
 installed, OpenClaw falls back to the managed Codex binary installed beside the
@@ -282,7 +311,7 @@ reconciliation so OpenClaw does not override that selection.
 ## Remote marketplaces
 
 Remote marketplace support was introduced in Codex 0.146.1 and remains
-available in OpenClaw's pinned Codex 0.154.0. OpenClaw passes the opaque remote
+available in OpenClaw's pinned Codex 0.155.1. OpenClaw passes the opaque remote
 plugin ID returned by Codex to `plugin/read` and `plugin/install`; a
 human-readable plugin name is not a valid substitute.
 
@@ -303,7 +332,7 @@ install plugins or modify Codex configuration.
 | `healthCheckEnabled`            | false          | Run periodic readiness probes while the owning app-server client is active.    |
 | `healthCheckIntervalMinutes`    | 60             | Probe cadence; accepted values are 30, 60, 120, or 240 minutes.                |
 | `pluginCacheMode`               | `independent`  | Use `shared` to refresh the Codex-home cache from the bundled desktop plugin.  |
-| `strictReadiness`               | false          | Stop startup on a failed live probe instead of continuing with a warning.      |
+| `strictReadiness`               | false          | Run a live probe at startup and stop startup if it fails.                      |
 | `autoRepair`                    | false          | Reload the Codex-owned MCP runtime and retry a failed probe once.              |
 | `marketplaceSource`             | unset          | Source string passed to Codex app-server `marketplace/add`.                    |
 | `marketplacePath`               | unset          | Local Codex marketplace file path containing the plugin.                       |
@@ -375,9 +404,10 @@ verify the Codex-side Computer Use setup first:
 - macOS has granted the required permissions for the desktop-control app.
 - The current host session can access the desktop being controlled.
 
-OpenClaw intentionally fails closed when `computerUse.enabled` is true. A
-Codex-mode turn should not silently proceed without the native desktop tools
-that the config required.
+When `computerUse.enabled` is true, OpenClaw fails closed if the plugin or its
+MCP tools are missing. Live desktop readiness gates startup only when
+`computerUse.strictReadiness` is true. Non-strict startup does not guarantee that
+the desktop bridge will answer; actual tool calls still report failures.
 
 ## Troubleshooting
 

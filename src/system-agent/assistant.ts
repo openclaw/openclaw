@@ -63,19 +63,8 @@ const SYSTEM_AGENT_PLANNER_RESPONSE_SCHEMA = {
   additionalProperties: false,
 } as const;
 
-export async function planSystemAgentCommand(params: {
-  input: string;
-  overview: SystemAgentOverview;
-  history?: SystemAgentAssistantTurn[];
-  pendingOperation?: string;
-  readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
-  deps?: SystemAgentConfiguredModelPlannerDeps;
-}): Promise<SystemAgentAssistantPlan | null> {
-  return await planSystemAgentCommandWithConfiguredModel(params);
-}
-
 /** Plan only through the configured default agent's verified route. */
-export async function planSystemAgentCommandWithConfiguredModel(params: {
+export async function planSystemAgentCommand(params: {
   input: string;
   overview: SystemAgentOverview;
   history?: SystemAgentAssistantTurn[];

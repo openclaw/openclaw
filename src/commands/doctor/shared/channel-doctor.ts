@@ -311,6 +311,7 @@ export async function runChannelDoctorConfigSequences(params: {
     return { changeNotes: [], warningNotes: preserved.warnings ?? [] };
   }
   const changeNotes: string[] = [];
+  const infoNotes: string[] = [];
   const warningNotes: string[] = [];
   for (const entry of listChannelDoctorEntries(collectConfiguredChannelIds(params.cfg), {
     cfg: params.cfg,
@@ -321,9 +322,10 @@ export async function runChannelDoctorConfigSequences(params: {
       continue;
     }
     changeNotes.push(...result.changeNotes);
+    infoNotes.push(...(result.infoNotes ?? []));
     warningNotes.push(...result.warningNotes);
   }
-  return { changeNotes, warningNotes };
+  return { changeNotes, warningNotes, ...(infoNotes.length > 0 ? { infoNotes } : {}) };
 }
 
 /** Collect compatibility migrations from configured channel doctor adapters in order. */
@@ -439,18 +441,6 @@ export async function collectChannelDoctorRepairMutations(params: {
     nextCfg = appendChannelDoctorMutation(mutations, nextCfg, mutation);
   }
   return mutations;
-}
-
-/** Collect plugin-provided empty allowlist warning lines for one channel/account context. */
-export function collectChannelDoctorEmptyAllowlistExtraWarnings(
-  params: ChannelDoctorEmptyAllowlistLookupParams,
-): string[] {
-  return collectEmptyAllowlistExtraWarningsForEntries(
-    listChannelDoctorEntries([params.channelName], {
-      cfg: params.cfg ?? {},
-    }),
-    params,
-  );
 }
 
 /** Return true when a channel doctor owns empty group-allowlist warning behavior. */

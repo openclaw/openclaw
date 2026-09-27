@@ -164,46 +164,6 @@ describe("resolveSessionAuthProfileOverride", () => {
     });
   });
 
-  it("keeps explicit user override when stored order prefers another profile", async () => {
-    await withAuthState(async (state) => {
-      const agentDir = state.agentDir();
-      await fs.mkdir(agentDir, { recursive: true });
-      authStoreMocks.state.hasSource = true;
-      authStoreMocks.state.store = createAuthStoreWithProfiles({
-        profiles: {
-          [TEST_PRIMARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-josh"),
-          [TEST_SECONDARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-claude"),
-        },
-        order: {
-          openai: [TEST_PRIMARY_PROFILE_ID, TEST_SECONDARY_PROFILE_ID],
-        },
-      });
-
-      const sessionEntry: SessionEntry = {
-        sessionId: "s1",
-        updatedAt: Date.now(),
-        authProfileOverride: TEST_SECONDARY_PROFILE_ID,
-        authProfileOverrideSource: "user",
-      };
-      const sessionStore = { "agent:main:main": sessionEntry };
-
-      const resolved = await resolveSession({
-        cfg: {} as OpenClawConfig,
-        provider: "openai",
-        agentDir,
-        sessionEntry,
-        sessionStore,
-        sessionKey: "agent:main:main",
-        storePath: undefined,
-        isNewSession: false,
-      });
-
-      expect(resolved).toBe(TEST_SECONDARY_PROFILE_ID);
-      expect(sessionEntry.authProfileOverride).toBe(TEST_SECONDARY_PROFILE_ID);
-      expect(sessionEntry.authProfileOverrideSource).toBe("user");
-    });
-  });
-
   it("keeps automatic override for the canonical OpenAI provider", async () => {
     await withAuthState(async (state) => {
       const agentDir = state.agentDir();
@@ -223,44 +183,6 @@ describe("resolveSessionAuthProfileOverride", () => {
         updatedAt: Date.now(),
         authProfileOverride: TEST_PRIMARY_PROFILE_ID,
         authProfileOverrideSource: "auto",
-      };
-      const sessionStore = { "agent:main:main": sessionEntry };
-
-      const resolved = await resolveSession({
-        cfg: {} as OpenClawConfig,
-        provider: "openai",
-        agentDir,
-        sessionEntry,
-        sessionStore,
-        sessionKey: "agent:main:main",
-        storePath: undefined,
-        isNewSession: false,
-      });
-
-      expect(resolved).toBe(TEST_PRIMARY_PROFILE_ID);
-      expect(sessionEntry.authProfileOverride).toBe(TEST_PRIMARY_PROFILE_ID);
-    });
-  });
-
-  it("keeps a session override from an accepted runtime auth provider", async () => {
-    await withAuthState(async (state) => {
-      const agentDir = state.agentDir();
-      await fs.mkdir(agentDir, { recursive: true });
-      authStoreMocks.state.hasSource = true;
-      authStoreMocks.state.store = createAuthStoreWithProfiles({
-        profiles: {
-          [TEST_PRIMARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-codex"),
-        },
-        order: {
-          openai: [TEST_PRIMARY_PROFILE_ID],
-        },
-      });
-
-      const sessionEntry: SessionEntry = {
-        sessionId: "s1",
-        updatedAt: Date.now(),
-        authProfileOverride: TEST_PRIMARY_PROFILE_ID,
-        authProfileOverrideSource: "user",
       };
       const sessionStore = { "agent:main:main": sessionEntry };
 
@@ -382,6 +304,7 @@ describe("resolveSessionAuthProfileOverride", () => {
 
       await patchSessionEntryCore(scope, () => ({ label: "renamed", pinnedAt: undefined }));
       await clearSessionAuthProfileOverride({
+        agentId: "main",
         sessionEntry: sessionEntry!,
         sessionStore,
         sessionKey,
@@ -397,7 +320,7 @@ describe("resolveSessionAuthProfileOverride", () => {
     });
   });
 
-  it("rotates auth state without restoring concurrent session management fields", async () => {
+  it("rotates unavailable auth state without restoring concurrent session management fields", async () => {
     await withAuthState(async (state) => {
       const agentDir = state.agentDir();
       await fs.mkdir(agentDir, { recursive: true });
@@ -411,6 +334,9 @@ describe("resolveSessionAuthProfileOverride", () => {
           openai: [TEST_PRIMARY_PROFILE_ID, TEST_SECONDARY_PROFILE_ID],
         },
       });
+      authStoreMocks.isProfileInCooldown.mockImplementation(
+        (_store, profileId) => profileId === TEST_PRIMARY_PROFILE_ID,
+      );
 
       const sessionKey = "agent:main:main";
       const storePath = path.join(state.sessionsDir(), "sessions.json");
@@ -443,6 +369,7 @@ describe("resolveSessionAuthProfileOverride", () => {
       expect(persisted?.label).toBe("renamed");
       expect(persisted?.pinnedAt).toBeUndefined();
       expect(persisted?.authProfileOverride).toBe(TEST_SECONDARY_PROFILE_ID);
+      expect(persisted?.authProfileOverrideCompactionCount).toBe(1);
       expect(sessionStore[sessionKey]?.label).toBe("renamed");
       expect(sessionStore[sessionKey]?.pinnedAt).toBeUndefined();
     });

@@ -1,9 +1,9 @@
 // Plugin authoring commands for init/build/validate manifest generation.
 import fs from "node:fs";
 import path from "node:path";
+import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { jsonSchemaValuesEqual } from "@openclaw/normalization-core/json-schema";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { replaceFileAtomic } from "../infra/replace-file.js";
 import { formatCwdRelativePathOrAbsolute as formatOutputPath } from "../infra/safe-cwd.js";
 import { getToolPluginMetadata, type ToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
 import {
@@ -22,6 +22,7 @@ import { VERSION } from "../version.js";
 import { formatCliOperatorError } from "./failure-output.js";
 import { buildPluginControlUi, writePluginBuildManifest } from "./plugins-control-ui-build.js";
 import { writeFeaturePluginScaffold } from "./plugins-feature-scaffold.js";
+import { buildScaffoldTsconfig, type PluginScaffoldType } from "./plugins-scaffold-config.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -47,8 +48,6 @@ export type PluginsInitOptions = {
   name?: string;
   type?: string;
 };
-
-type PluginScaffoldType = "tool" | "provider" | "feature";
 
 type LoadedToolPlugin = {
   entry: unknown;
@@ -217,12 +216,7 @@ export function buildToolPluginPackageManifest(params: {
   packageManifest: JsonObject;
   entry: string;
 }): JsonObject {
-  const openclaw =
-    params.packageManifest.openclaw &&
-    typeof params.packageManifest.openclaw === "object" &&
-    !Array.isArray(params.packageManifest.openclaw)
-      ? { ...(params.packageManifest.openclaw as JsonObject) }
-      : {};
+  const openclaw = isRecord(params.packageManifest.openclaw) ? params.packageManifest.openclaw : {};
   const existingExtensions = Array.isArray(openclaw.extensions)
     ? openclaw.extensions.filter((entry): entry is string => typeof entry === "string")
     : [];
@@ -477,21 +471,6 @@ const createPluginPackageMetadata = (pluginApi: string) => ({
   build: { openclawVersion: VERSION },
 });
 
-function buildScaffoldTsconfig(type: PluginScaffoldType): JsonObject {
-  return {
-    compilerOptions: {
-      target: "ES2022",
-      module: "NodeNext",
-      moduleResolution: "NodeNext",
-      strict: true,
-      declaration: type === "tool",
-      outDir: "dist",
-      skipLibCheck: true,
-    },
-    include: type === "feature" ? ["src/**/*.ts"] : ["src/index.ts"],
-  };
-}
-
 function writeScaffoldVitestConfig(rootDir: string): void {
   fs.writeFileSync(
     path.join(rootDir, "vitest.config.ts"),
@@ -528,7 +507,7 @@ function writeToolPluginScaffold(params: { rootDir: string; id: string; name: st
     },
     devDependencies: {
       openclaw: "latest",
-      typescript: "^5.9.0",
+      typescript: "7.0.2",
       vitest: "^3.2.0",
     },
     openclaw: createPluginPackageMetadata(TOOL_PLUGIN_API_RANGE),
@@ -625,7 +604,7 @@ function writeProviderPluginScaffold(params: { rootDir: string; id: string; name
     devDependencies: {
       clawhub: "latest",
       openclaw: "latest",
-      typescript: "^5.9.0",
+      typescript: "7.0.2",
       vitest: "^3.2.0",
     },
     openclaw: {

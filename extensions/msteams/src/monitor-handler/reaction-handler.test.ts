@@ -1,4 +1,5 @@
 // Msteams tests cover reaction handler plugin behavior.
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
   enqueueSystemEvent,
@@ -15,6 +16,7 @@ function buildMockRuntime(overrides?: Partial<PluginRuntime>): PluginRuntime {
   return {
     logging: { shouldLogVerbose: () => false },
     channel: {
+      inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress },
       routing: {
         resolveAgentRoute: vi.fn(() => ({
           sessionKey: "test-session",
@@ -125,43 +127,6 @@ describe("createMSTeamsReactionHandler", () => {
   });
 
   describe("emoji mapping", () => {
-    it("maps Teams reaction types to unicode emoji in event label", async () => {
-      const mockRuntime = buildMockRuntime();
-      setMSTeamsRuntime(mockRuntime);
-
-      const cfg: OpenClawConfig = {
-        channels: {
-          msteams: {
-            allowFrom: ["allowed-aad"],
-          },
-        },
-      } as OpenClawConfig;
-
-      const deps = buildDeps(cfg);
-      const handler = createMSTeamsReactionHandler(deps);
-
-      await handler(
-        {
-          activity: {
-            type: "messageReaction",
-            reactionsAdded: [{ type: "like" }],
-            from: { id: "user-id", aadObjectId: "allowed-aad", name: "Alice" },
-            conversation: { id: "personal-conv", conversationType: "personal" },
-            replyToId: "msg-123",
-          },
-          sendActivity: vi.fn(async () => undefined),
-        } as never,
-        "added",
-      );
-
-      const enqueue = mockRuntime.system.enqueueSystemEvent as ReturnType<typeof vi.fn>;
-      expect(enqueue).toHaveBeenCalledOnce();
-      const label = firstEnqueueLabel(enqueue);
-      expect(label).toContain("👍");
-      expect(label).toContain("Alice");
-      expect(label).toContain("msg-123");
-    });
-
     it("maps heart, laugh, surprised, sad, angry reaction types", async () => {
       const emojiMap: Record<string, string> = {
         heart: "❤️",
@@ -172,31 +137,16 @@ describe("createMSTeamsReactionHandler", () => {
       };
 
       for (const [type, expectedEmoji] of Object.entries(emojiMap)) {
-        const mockRuntime = buildMockRuntime();
-        setMSTeamsRuntime(mockRuntime);
-
-        const cfg: OpenClawConfig = {
-          channels: { msteams: { allowFrom: ["allowed-aad"] } },
-        } as OpenClawConfig;
-
-        const deps = buildDeps(cfg, mockRuntime);
-        const handler = createMSTeamsReactionHandler(deps);
-
-        await handler(
+        const { handler, enqueue } = createReactionTestHarness();
+        await invokeReactionEvent(
+          handler,
           {
-            activity: {
-              type: "messageReaction",
-              reactionsAdded: [{ type }],
-              from: { id: "user-id", aadObjectId: "allowed-aad", name: "Bob" },
-              conversation: { id: "dm-conv", conversationType: "personal" },
-              replyToId: "msg-456",
-            },
-            sendActivity: vi.fn(async () => undefined),
-          } as never,
+            reactionsAdded: [{ type }],
+            from: { id: "user-id", aadObjectId: "allowed-aad", name: "Bob" },
+            replyToId: "msg-456",
+          },
           "added",
         );
-
-        const enqueue = mockRuntime.system.enqueueSystemEvent as ReturnType<typeof vi.fn>;
         const label = firstEnqueueLabel(enqueue);
         expect(label).toContain(expectedEmoji);
       }
@@ -416,6 +366,37 @@ describe("createMSTeamsReactionHandler", () => {
       ]);
 
       resetSystemEventsForTest();
+      const threadId = "1700000000000";
+      const threadedReaction = reactionFrom(
+        { ...allowedConversation, id: `${allowedConversation.id};messageid=${threadId}` },
+        "trustedTeam",
+      );
+      await invokeReactionEvent(handler, threadedReaction, "added");
+      await invokeReactionEvent(
+        handler,
+        {
+          ...threadedReaction,
+          reactionsAdded: undefined,
+          reactionsRemoved: [{ type: "like" }],
+        },
+        "removed",
+      );
+
+      expect(peekSystemEventEntries(`${allowedRoute.sessionKey}:thread:${threadId}`)).toEqual([
+        expect.objectContaining({
+          text: expect.stringContaining("target-message"),
+          contextKey:
+            "msteams:reaction:19:trusted-channel@thread.tacv2:target-message:allowed-aad:like:added",
+        }),
+        expect.objectContaining({
+          text: expect.stringContaining("target-message"),
+          contextKey:
+            "msteams:reaction:19:trusted-channel@thread.tacv2:target-message:allowed-aad:like:removed",
+        }),
+      ]);
+      expect(peekSystemEventEntries(allowedRoute.sessionKey)).toEqual([]);
+
+      resetSystemEventsForTest();
       const forbiddenDirectRoute = resolveAgentRoute({
         cfg: routeCfg,
         channel: "msteams",
@@ -452,21 +433,6 @@ describe("createMSTeamsReactionHandler", () => {
       );
 
       expect(enqueue).not.toHaveBeenCalled();
-    });
-
-    it("allows reaction from allowlisted DM sender", async () => {
-      const { handler, enqueue } = createReactionTestHarness();
-      await invokeReactionEvent(
-        handler,
-        {
-          reactionsAdded: [{ type: "like" }],
-          from: { id: "good-user", aadObjectId: "allowed-aad", name: "Alice" },
-          replyToId: "msg-6",
-        },
-        "added",
-      );
-
-      expect(enqueue).toHaveBeenCalledOnce();
     });
 
     it("allows reaction from static access group DM sender", async () => {

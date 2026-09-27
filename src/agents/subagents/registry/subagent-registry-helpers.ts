@@ -185,6 +185,8 @@ export async function persistSubagentSessionTiming(
       return next;
     },
     {
+      // A queued completion can lose ownership before commit; abandon its projection quietly.
+      shouldCommit: options?.isCurrentGeneration,
       assertCommitAllowed: options?.assertCommitAllowed,
       replaceEntry: true,
     },
@@ -252,7 +254,9 @@ export function updateSubagentArchiveAtMs(entry: SubagentRunRecord, cfg?: OpenCl
         ? entry.completion.capturedAt
         : endedAt
     : entry.cleanup === "delete" && entry.pauseReason !== "sessions_yield"
-      ? endedAt
+      ? entry.delivery?.discardReason === "task-missing"
+        ? (entry.delivery.discardedAt ?? endedAt)
+        : endedAt
       : undefined;
   const archiveAfterMs =
     entry.spawnMode === "session" || completedAt === undefined

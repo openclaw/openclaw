@@ -2,10 +2,9 @@ package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatToolActivity
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.nonBlankString
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.contentOrNull
 
 internal enum class CompletedToolKind { Command, Read, Edit, Write, Search, Fetch, Progress, Other }
 
@@ -29,40 +28,17 @@ internal fun completedToolDisplayName(name: String): String =
   }
 
 internal fun completedToolGroupSummary(tools: List<ChatToolActivity>): String {
-  val segments = mutableListOf<String>()
-  val counts = mutableMapOf<CompletedToolKind, Int>()
-  val others = mutableListOf<ChatToolActivity>()
-  tools.forEach { tool ->
-    val kind = completedToolKind(tool.name)
-    counts[kind] = (counts[kind] ?: 0) + 1
-    if (kind == CompletedToolKind.Progress || kind == CompletedToolKind.Other) others += tool
+  val items =
+    tools
+      .mapNotNull { it.activity }
+      .filter { !it.suppressChannelProgress }
+      .associateBy { it.toolCallId ?: it.itemId }
+      .values
+      .filter { it.isVisible }
+  if (items.isEmpty()) return nativeString("Tool details")
+  return items.groupingBy { if (it.status == "failed" || it.status == "blocked") nativeString("\${it.title} (\${it.status})", it.title, it.status) else it.title }.eachCount().entries.joinToString(", ") { (title, count) ->
+    if (count == 1) title else nativeString("\$title ×\$count", title, count)
   }
-
-  fun count(kind: CompletedToolKind) = counts[kind] ?: 0
-  val commands = count(CompletedToolKind.Command)
-  if (commands > 0) segments += if (commands == 1) nativeString("ran a command") else nativeString("ran \$count commands", commands)
-  listOf(
-    CompletedToolKind.Read to (nativeString("read a file") to { count: Int -> nativeString("read \$count files", count) }),
-    CompletedToolKind.Edit to (nativeString("edited a file") to { count: Int -> nativeString("edited \$count files", count) }),
-    CompletedToolKind.Write to (nativeString("created a file") to { count: Int -> nativeString("created \$count files", count) }),
-    CompletedToolKind.Search to (nativeString("ran a search") to { count: Int -> nativeString("ran \$count searches", count) }),
-    CompletedToolKind.Fetch to (nativeString("fetched a page") to { count: Int -> nativeString("fetched \$count pages", count) }),
-  ).forEach { (kind, labels) ->
-    val amount = count(kind)
-    if (amount > 0) segments += if (amount == 1) labels.first else labels.second(amount)
-  }
-  if (others.isNotEmpty()) {
-    val names = others.map { completedToolDisplayName(it.name) }.distinct()
-    segments +=
-      if (names.size <= 2) {
-        val suffix = if (others.size > names.size) nativeString(" ×\$count", others.size) else ""
-        nativeString("used \$names\$suffix", names.joinToString(", "), suffix)
-      } else {
-        nativeString("used \$count tools", others.size)
-      }
-  }
-  if (segments.isEmpty()) return nativeString("Ran \$count tool calls", tools.size)
-  return segments.joinToString(", ").replaceFirstChar { it.uppercase() }
 }
 
 internal fun completedCommandText(
@@ -70,8 +46,8 @@ internal fun completedCommandText(
   singleLine: Boolean = true,
 ): String? {
   val raw =
-    tool.arguments.string("command")
-      ?: tool.arguments.string("cmd")
+    tool.arguments.nonBlankString("command")
+      ?: tool.arguments.nonBlankString("cmd")
       ?: tool.detail?.substringAfter(": ", tool.detail)
   var command = raw?.trim()?.takeIf(String::isNotEmpty) ?: return null
   command = command.replace(Regex("^(?:/bin/)?(?:bash|zsh|sh)\\s+-lc\\s+"), "").trim()
@@ -117,14 +93,12 @@ internal fun progressReceiptLabel(tool: ChatToolActivity): String {
   val args = tool.arguments
   val steps = (args?.get("plan") as? JsonArray)?.mapNotNull { it as? JsonObject }.orEmpty()
   if (steps.isNotEmpty()) {
-    val completed = steps.count { it.string("status") == "completed" }
+    val completed = steps.count { it.nonBlankString("status") == "completed" }
     val current =
-      steps.firstOrNull { it.string("status") == "in_progress" }
-        ?: steps.firstOrNull { it.string("status") == "pending" }
-        ?: steps.lastOrNull { it.string("status") == "completed" }
-    return nativeString("Progress updated — \$completed/\$total · \$step", completed, steps.size, current?.string("step").orEmpty()).trimEnd(' ', '·')
+      steps.firstOrNull { it.nonBlankString("status") == "in_progress" }
+        ?: steps.firstOrNull { it.nonBlankString("status") == "pending" }
+        ?: steps.lastOrNull { it.nonBlankString("status") == "completed" }
+    return nativeString("Progress updated — \$completed/\$total · \$step", completed, steps.size, current?.nonBlankString("step").orEmpty()).trimEnd(' ', '·')
   }
-  return if (!args.string("markdown").isNullOrBlank()) nativeString("Progress note updated") else nativeString("Progress cleared")
+  return if (!args.nonBlankString("markdown").isNullOrBlank()) nativeString("Progress note updated") else nativeString("Progress cleared")
 }
-
-private fun JsonObject?.string(key: String): String? = (this?.get(key) as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf(String::isNotEmpty)

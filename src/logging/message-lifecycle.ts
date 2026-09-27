@@ -1,4 +1,3 @@
-// Message lifecycle logging helpers emit queue and processing diagnostic events.
 import { logMessageProcessed, logMessageQueued, logSessionStateChange } from "./diagnostic.js";
 
 type MessageLifecycleRef = {
@@ -12,6 +11,7 @@ type MessageLifecycleProcessedOptions = MessageLifecycleRef & {
   durationMs?: number;
   reason?: string;
   error?: string;
+  agentId?: string;
 };
 
 export function createDiagnosticMessageLifecycle(
@@ -24,6 +24,7 @@ export function createDiagnosticMessageLifecycle(
     processingReason?: string;
     startedAtMs?: number;
     trackSessionState: boolean;
+    agentId?: string;
   },
 ) {
   const startedAtMs = params.startedAtMs ?? Date.now();
@@ -85,6 +86,7 @@ export function createDiagnosticMessageLifecycle(
         messageId: params.messageId,
         sessionId: ref.sessionId,
         sessionKey: ref.sessionKey,
+        agentId: options?.agentId ?? params.agentId,
         durationMs: options?.durationMs ?? Date.now() - startedAtMs,
         outcome,
         reason: options?.reason,

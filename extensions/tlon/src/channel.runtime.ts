@@ -11,7 +11,7 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { monitorTlonProvider } from "./monitor/index.js";
-import { tlonSetupWizard } from "./setup-surface.js";
+import "./setup-surface.js";
 import { formatTargetHint, normalizeShip, parseTlonTarget } from "./targets.js";
 import { resolveTlonAccount } from "./types.js";
 import { authenticate } from "./urbit/auth.js";
@@ -20,6 +20,7 @@ import { urbitFetch } from "./urbit/fetch.js";
 import { buildMediaStory, sendDmWithStory, sendGroupMessageWithStory } from "./urbit/send.js";
 import { markdownToStory } from "./urbit/story.js";
 import { uploadImageFromUrl } from "./urbit/upload.js";
+export { tlonSetupWizard } from "./setup-surface.js";
 
 type ResolvedTlonAccount = ReturnType<typeof resolveTlonAccount>;
 type ConfiguredTlonAccount = ResolvedTlonAccount & {
@@ -231,5 +232,3 @@ export async function startTlonGatewayAccount(
     accountId: account.accountId,
   });
 }
-
-export { tlonSetupWizard };

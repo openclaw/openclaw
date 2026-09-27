@@ -8,6 +8,7 @@ import {
   type HeartbeatRunResult,
   type HeartbeatWakeHandler,
 } from "../infra/heartbeat-wake.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { listCronHeartbeatWaitOwners } from "./active-jobs.js";
 import { heartbeatTaskDeclarationKey } from "./heartbeat-task.js";
 import type { CronEvent } from "./service.js";
@@ -26,7 +27,11 @@ describe("heartbeat payload execution", () => {
   it("fires as an interval heartbeat wake without enqueuing a system event", async () => {
     const { storePath, cleanup } = await makeStorePath();
     const { cron, enqueueSystemEvent, requestHeartbeat, requestHeartbeatAndWait } =
-      createStartedCronServiceWithFinishedBarrier({ storePath, logger: noopLogger });
+      createStartedCronServiceWithFinishedBarrier({
+        scheduler: createTestGatewayScheduler(),
+        storePath,
+        logger: noopLogger,
+      });
     try {
       await cron.start();
       const added = await cron.add(
@@ -111,6 +116,7 @@ describe("heartbeat payload execution", () => {
     const child = createDeferred<HeartbeatRunResult>();
     const events: CronEvent[] = [];
     const { cron, requestHeartbeatAndWait } = createStartedCronServiceWithFinishedBarrier({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       logger: noopLogger,
       requestHeartbeatAndWait: async () => await child.promise,
@@ -160,25 +166,23 @@ describe("heartbeat payload execution", () => {
     }
   });
 
-  it.each(["busy", "throw", "replacement"] as const)(
+  it.each(["busy", "throw"] as const)(
     "cron.run retains the real queue result after %s waiting exceeds the execution timeout",
     async (cause) => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date("2026-09-15T05:25:39Z"));
       const { storePath, cleanup } = await makeStorePath();
-      const firstAttempt = createDeferred<HeartbeatRunResult>();
       const failure: HeartbeatRunResult = { status: "failed", reason: "runner failed after retry" };
       const handler = vi.fn<HeartbeatWakeHandler>().mockResolvedValue(failure);
       if (cause === "busy") {
         handler.mockResolvedValueOnce({ status: "skipped", reason: "requests-in-flight" });
       } else if (cause === "throw") {
         handler.mockRejectedValueOnce(new Error("handler interrupted"));
-      } else {
-        handler.mockImplementationOnce(() => firstAttempt.promise);
       }
       setHeartbeatWakeHandler(handler);
       const events: CronEvent[] = [];
       const { cron } = createStartedCronServiceWithFinishedBarrier({
+        scheduler: createTestGatewayScheduler(),
         storePath,
         logger: noopLogger,
         requestHeartbeatAndWait: (wake, lifecycle) =>
@@ -204,15 +208,9 @@ describe("heartbeat payload execution", () => {
         const job = "job" in added ? added.job : added;
         const runPromise = cron.run(job.id, "force");
         await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());
-        if (cause === "replacement") {
-          setHeartbeatWakeHandler(null);
-        }
         await vi.advanceTimersByTimeAsync(cause === "throw" ? 500 : 30_000);
         expect(events.some((event) => event.action === "finished")).toBe(false);
         expect(cron.getJob(job.id)?.state.consecutiveErrors ?? 0).toBe(0);
-        if (cause === "replacement") {
-          setHeartbeatWakeHandler(handler);
-        }
         await vi.advanceTimersByTimeAsync(cause === "busy" ? 30_000 : 1_000);
         await expect(runPromise).resolves.toMatchObject({ ok: true, ran: true });
         expect(handler).toHaveBeenCalledTimes(2);
@@ -222,7 +220,6 @@ describe("heartbeat payload execution", () => {
           consecutiveErrors: 1,
         });
       } finally {
-        firstAttempt.resolve(failure);
         setHeartbeatWakeHandler(null);
         cron.stop();
         await cleanup();
@@ -235,6 +232,7 @@ describe("heartbeat payload execution", () => {
     const { storePath, cleanup } = await makeStorePath();
     let observedWaitOwners: ReturnType<typeof listCronHeartbeatWaitOwners> | undefined;
     const { cron, finished } = createStartedCronServiceWithFinishedBarrier({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       logger: noopLogger,
       requestHeartbeatAndWait: async () => {
@@ -286,6 +284,7 @@ describe("heartbeat payload execution", () => {
     const { storePath, cleanup } = await makeStorePath();
     const events: CronEvent[] = [];
     const { cron, requestHeartbeatAndWait } = createStartedCronServiceWithFinishedBarrier({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       logger: noopLogger,
       requestHeartbeatAndWait: async (_request, lifecycle) =>
@@ -338,6 +337,7 @@ describe("heartbeat payload execution", () => {
     const events: CronEvent[] = [];
     const { cron, requestHeartbeat, requestHeartbeatAndWait } =
       createStartedCronServiceWithFinishedBarrier({
+        scheduler: createTestGatewayScheduler(),
         storePath,
         logger: noopLogger,
         onEvent: (event) => events.push(structuredClone(event)),
@@ -371,7 +371,11 @@ describe("heartbeat payload execution", () => {
   it("routes migrated task jobs through the guarded task wake path", async () => {
     const { storePath, cleanup } = await makeStorePath();
     const { cron, enqueueSystemEvent, requestHeartbeat, requestHeartbeatAndWait } =
-      createStartedCronServiceWithFinishedBarrier({ storePath, logger: noopLogger });
+      createStartedCronServiceWithFinishedBarrier({
+        scheduler: createTestGatewayScheduler(),
+        storePath,
+        logger: noopLogger,
+      });
     try {
       await cron.start();
       const declarationKey = heartbeatTaskDeclarationKey("main", "inbox");

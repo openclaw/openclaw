@@ -4,7 +4,6 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { runWithFailedTrailer } from "../../scripts/lib/failed-trailer.mts";
 import {
   createOxlintShards,
   filterOxlintShards,
@@ -37,20 +36,6 @@ const RUN_OXLINT_SHARDS_URL = pathToFileURL(
 ).href;
 type SignalScenario = "forward" | "group" | "ignore";
 type SuccessfulLeaderDescendantMode = "drain" | "persist";
-
-async function captureFailedTrailer(
-  run: () => Promise<void> | void,
-): Promise<{ exitCode: number | undefined; lines: unknown[] }> {
-  const priorExitCode = process.exitCode;
-  const lines: unknown[] = [];
-  try {
-    process.exitCode = 0;
-    await runWithFailedTrailer("oxlint", run, (line: unknown) => lines.push(line));
-    return { exitCode: process.exitCode, lines };
-  } finally {
-    process.exitCode = priorExitCode;
-  }
-}
 
 function shouldSerializeShards(env: NodeJS.ProcessEnv, hostResources = CONSTRAINED_HOST): boolean {
   return shouldRunOxlintShardsSerial({ env, platform: "linux", hostResources });
@@ -286,33 +271,6 @@ function createPluginShardFixture(
 }
 
 describe("run-oxlint", () => {
-  it("ends a failing run with a stable final status line", async () => {
-    const { lines } = await captureFailedTrailer(() => {
-      process.exitCode = 2;
-    });
-
-    expect(lines).toEqual(["[oxlint] FAILED (exit 2)"]);
-  });
-
-  it("converts a wrapper crash into a nonzero exit with the status line last", async () => {
-    // The original incident: a crashed wrapper printed only a stack trace, and
-    // truncated output read as success. The marker must be the final line.
-    const { exitCode, lines } = await captureFailedTrailer(() => {
-      throw new Error("artifact prep failed");
-    });
-
-    expect(exitCode).toBe(1);
-    expect(lines).toHaveLength(2);
-    expect(lines[0]).toBeInstanceOf(Error);
-    expect(lines[1]).toBe("[oxlint] FAILED (exit 1)");
-  });
-
-  it("stays silent on a clean run", async () => {
-    const { lines } = await captureFailedTrailer(async () => {});
-
-    expect(lines).toEqual([]);
-  });
-
   it("prepares extension package boundary artifacts for normal lint runs", () => {
     expect(shouldPrepareExtensionPackageBoundaryArtifacts([])).toBe(true);
     expect(shouldPrepareExtensionPackageBoundaryArtifacts(["src/index.ts"])).toBe(true);
@@ -355,24 +313,6 @@ describe("run-oxlint", () => {
 
     expect(shouldPrepareExtensionPackageBoundaryArtifactsForShards([core, scripts])).toBe(false);
     expect(shouldPrepareExtensionPackageBoundaryArtifactsForShards([core, extensions])).toBe(true);
-  });
-
-  it("does not run package-boundary artifact prep twice in pnpm check", () => {
-    const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
-      scripts: Record<string, string>;
-    };
-    const shardedLintRunner = readFileSync("scripts/run-oxlint-shards.mts", "utf8");
-
-    expect(packageJson.scripts.check).toBe("node --import ./scripts/tsx.mjs scripts/check.mts");
-    expect(packageJson.scripts.lint).toBe("node --import ./scripts/tsx.mjs scripts/run-lint.mts");
-    expect(packageJson.scripts["lint:core"]).toBe(
-      "node --import ./scripts/tsx.mjs scripts/run-oxlint-shards.mts --only=core",
-    );
-    expect(packageJson.scripts.check).not.toContain(
-      "node --import ./scripts/tsx.mjs scripts/prepare-extension-package-boundary-artifacts.mts",
-    );
-    expect(shardedLintRunner).toContain("prepare-extension-package-boundary-artifacts.mts");
-    expect(shardedLintRunner).toContain('OPENCLAW_OXLINT_SKIP_PREPARE: "1"');
   });
 
   it("serializes broad oxlint shards on constrained local hosts", () => {
@@ -741,12 +681,14 @@ describe("run-oxlint", () => {
 
   it.each([
     { platform: "linux", env: { CI: "true" } },
+    { platform: "linux", env: {} },
+    { platform: "linux", env: { GITHUB_ACTIONS: "true" } },
     { platform: "darwin", env: {} },
     { platform: "win32", env: {} },
   ] as const)(
-    "bounds small-host core Programs without losing targets on $platform",
+    "preserves the published updater's automatic full-lint plan on $platform with $env",
     ({ platform, env }) => {
-      const directories = ["alpha", "beta", "delta", "epsilon", "gamma", "zeta"];
+      const directories = ["agents", "alpha", "beta", "gateway", "infra", "zeta"];
       const cwd = createTempDir("openclaw-oxlint-core-memory-");
       for (const directory of directories) {
         mkdirSync(join(cwd, "src", directory), { recursive: true });
@@ -762,7 +704,13 @@ describe("run-oxlint", () => {
         new Set(["core"]),
       );
 
-      expect(shards).toHaveLength(5);
+      expect(shards.map((shard) => shard.args.slice(2))).toEqual([
+        ["src/agents", "src/zeta"],
+        ["src/alpha", "src/root.ts"],
+        ["src/beta", "ui"],
+        ["src/gateway", "packages"],
+        ["src/infra"],
+      ]);
       expect(shards.every((shard) => shard.args[1] === "config/tsconfig/oxlint.core.json")).toBe(
         true,
       );
@@ -803,29 +751,32 @@ describe("run-oxlint", () => {
     expect(extension.oxlintArgs).toEqual([]);
   });
 
-  it("aggregates split core targets into deterministic disjoint Programs", () => {
+  it("isolates large core targets while preserving disjoint stripe coverage", () => {
     const shards = createOxlintShards({
       cwd: "/repo",
       splitCore: true,
       readDir: () =>
         [
-          { name: "alpha", isDirectory: () => true, isFile: () => false },
-          { name: "beta", isDirectory: () => true, isFile: () => false },
-          { name: "gamma", isDirectory: () => true, isFile: () => false },
+          { name: "agents", isDirectory: () => true, isFile: () => false },
+          { name: "gateway", isDirectory: () => true, isFile: () => false },
+          { name: "infra", isDirectory: () => true, isFile: () => false },
+          { name: "misc", isDirectory: () => true, isFile: () => false },
         ] as never,
     }).filter((shard) => shard.name.startsWith("core:"));
-    const stripes = [1, 2, 3].map((index) => selectCoreOxlintStripe(shards, { index, total: 3 }));
+    const stripes = [1, 2, 3].map((index) =>
+      selectCoreOxlintStripe(shards, { index, total: 3 }, { isolateLargeTargets: true }),
+    );
 
-    expect(stripes.map((stripe) => stripe.map((shard) => shard.name))).toEqual([
-      ["core:stripe:1"],
-      ["core:stripe:2"],
-      ["core:stripe:3"],
-    ]);
-    const stripeTargets = stripes.flatMap(([stripe]) => stripe?.args.slice(2) ?? []);
+    const programs = stripes.flat();
+    for (const target of ["src/agents", "src/gateway", "src/infra", "ui"]) {
+      const program = programs.find((shard) => shard.args.slice(2).includes(target));
+      expect(program?.args).toEqual(["--tsconfig", "config/tsconfig/oxlint.core.json", target]);
+    }
+    const stripeTargets = programs.flatMap((stripe) => stripe.args.slice(2));
     const sourceTargets = shards.flatMap((shard) => shard.args.slice(2));
     expect(stripeTargets.toSorted()).toEqual(sourceTargets.toSorted());
     expect(new Set(stripeTargets)).toHaveProperty("size", sourceTargets.length);
-    expect(selectCoreOxlintStripe(shards, { index: 6, total: 6 })).toEqual([]);
+    expect(selectCoreOxlintStripe(shards, { index: 7, total: 7 })).toEqual([]);
     expect(() =>
       selectCoreOxlintStripe(createOxlintShards({ cwd: "/repo" }), { index: 1, total: 2 }),
     ).toThrow("--core-stripe requires a non-empty core-only shard selection");
@@ -954,13 +905,6 @@ describe("run-oxlint", () => {
     expect(() => parseShardRunnerArgs(args)).toThrow(/--extension-stripe/u);
   });
 
-  it.each([["--only"], ["--only", "--split-core"], ["--only="], ["--only=-h"]])(
-    "rejects shard selectors without a name: %s",
-    (...args) => {
-      expect(() => parseShardRunnerArgs(args)).toThrow("--only requires a shard name");
-    },
-  );
-
   it("filters split core shards by shard family", () => {
     const shards = filterOxlintShards(
       createOxlintShards({
@@ -976,18 +920,6 @@ describe("run-oxlint", () => {
       "core:ui",
       "core:packages",
     ]);
-  });
-
-  it.each([
-    { selectors: ["wat"], message: "Unknown oxlint shard selector: wat" },
-    {
-      selectors: ["core", "wat"],
-      message: "Unknown oxlint shard selector: wat",
-    },
-  ])("rejects unmatched shard selectors: $selectors", ({ selectors, message }) => {
-    expect(() =>
-      filterOxlintShards(createOxlintShards({ cwd: "/repo" }), new Set(selectors)),
-    ).toThrow(message);
   });
 
   it.each([

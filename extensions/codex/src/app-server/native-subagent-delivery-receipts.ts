@@ -84,7 +84,7 @@ export function registerCodexNativeSubagentReceiptAlias<Parent extends ReceiptPa
   return known.deliveryReceipts.addAlias(childThreadId, agentPath);
 }
 
-type Receipt = { id: string; agentPath: string; result?: string };
+type Receipt = { agentPath: string; result?: string };
 type Outcome = {
   paths: Set<string>;
   result?: string;
@@ -96,7 +96,7 @@ type Outcome = {
 export class CodexNativeSubagentDeliveryReceipts {
   private readonly seen = new Set<string>();
   private readonly pending: Receipt[] = [];
-  private readonly outcomes = new Map<string, Outcome>();
+  private outcomes = new Map<string, Outcome>();
 
   observe(notification: CodexServerNotification): string[] {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
@@ -120,29 +120,20 @@ export class CodexNativeSubagentDeliveryReceipts {
         const child = item.agentsStates[agentPath];
         result = isJsonObject(child) ? readString(child, "message") : result;
       }
-      this.pending.push({ id, agentPath, result: receiptResultKey(result) });
+      this.pending.push({ agentPath, result: receiptResultKey(result) });
     }
     return this.match();
   }
 
   record(runId: string, paths: Iterable<string>, result: string): string[] {
-    const outcome: Outcome = this.outcomes.get(runId) ?? {
-      paths: new Set(paths),
-      received: false,
-      receiptResults: new Set(),
-    };
+    const outcome = this.getOutcome(runId, paths);
     outcome.result = receiptResultKey(result);
     this.outcomes.set(runId, outcome);
-    const matched = this.match();
-    return outcome.received ? [...new Set([...matched, runId])] : matched;
+    return this.track(runId, []);
   }
 
   track(runId: string, paths: Iterable<string>): string[] {
-    const outcome = this.outcomes.get(runId) ?? {
-      paths: new Set<string>(),
-      received: false,
-      receiptResults: new Set<string | undefined>(),
-    };
+    const outcome = this.getOutcome(runId);
     for (const path of paths) {
       outcome.paths.add(path);
     }
@@ -156,11 +147,7 @@ export class CodexNativeSubagentDeliveryReceipts {
   ): string[] {
     const restored = new Map<string, Outcome>();
     for (const assignment of assignments) {
-      const outcome = this.outcomes.get(assignment.runId) ?? {
-        paths: new Set<string>(),
-        received: false,
-        receiptResults: new Set<string | undefined>(),
-      };
+      const outcome = this.getOutcome(assignment.runId);
       for (const path of assignment.paths) {
         outcome.paths.add(path);
       }
@@ -174,10 +161,7 @@ export class CodexNativeSubagentDeliveryReceipts {
         restored.set(runId, outcome);
       }
     }
-    this.outcomes.clear();
-    for (const [runId, outcome] of restored) {
-      this.outcomes.set(runId, outcome);
-    }
+    this.outcomes = restored;
     const matched = this.match();
     return [
       ...new Set([
@@ -203,6 +187,16 @@ export class CodexNativeSubagentDeliveryReceipts {
       }
     }
     return this.match();
+  }
+
+  private getOutcome(runId: string, paths: Iterable<string> = []): Outcome {
+    return (
+      this.outcomes.get(runId) ?? {
+        paths: new Set(paths),
+        received: false,
+        receiptResults: new Set(),
+      }
+    );
   }
 
   private match(): string[] {

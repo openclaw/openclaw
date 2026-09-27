@@ -1,9 +1,7 @@
-/** Records optional Codex runtime trajectory events through the host recorder. */
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { flattenCodexDynamicToolFunctions, type CodexDynamicToolSpec } from "./protocol.js";
 
-/** Runtime trajectory recorder used by Codex run attempts and event projectors. */
 export type CodexTrajectoryRecorder = {
   recordEvent: (type: string, data?: Record<string, unknown>) => void;
   flush: () => Promise<void>;
@@ -18,7 +16,6 @@ type CodexTrajectoryInit = {
   tools?: CodexDynamicToolSpec[];
 };
 
-/** Creates a trajectory recorder when the host exposes its capture capability. */
 export function createCodexTrajectoryRecorder(
   params: CodexTrajectoryInit,
 ): CodexTrajectoryRecorder | null {
@@ -40,7 +37,6 @@ export function createCodexTrajectoryRecorder(
   };
 }
 
-/** Records compiled prompt/tool context at the start of a Codex runtime attempt. */
 export function recordCodexTrajectoryContext(
   recorder: CodexTrajectoryRecorder | null,
   params: CodexTrajectoryInit,
@@ -56,7 +52,6 @@ export function recordCodexTrajectoryContext(
   });
 }
 
-/** Records final Codex model completion metadata and assistant snapshots. */
 export function recordCodexTrajectoryCompletion(
   recorder: CodexTrajectoryRecorder | null,
   params: {
@@ -109,7 +104,6 @@ function toTrajectoryToolDefinitions(
     .toSorted((left, right) => left.name.localeCompare(right.name));
 }
 
-/** Converts arbitrary prompt errors into trajectory-safe text. */
 export function normalizeCodexTrajectoryError(value: unknown): string | null {
   if (!value) {
     return null;

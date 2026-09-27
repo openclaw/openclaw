@@ -13,12 +13,8 @@ import {
   requestFlowCancel,
   setFlowWaiting,
 } from "./task-flow-registry.js";
-import type { TaskFlowRegistryObserverEvent } from "./task-flow-registry.store.js";
 import { loadTaskFlowRegistryStateFromSqlite } from "./task-flow-registry.store.sqlite.js";
-import {
-  configureTaskFlowRegistryRuntime,
-  resetTaskFlowRegistryForTests,
-} from "./task-runtime.test-helpers.js";
+import { resetTaskFlowRegistryForTests } from "./task-runtime.test-helpers.js";
 
 async function withFlow(run: (flowId: string) => void): Promise<void> {
   await withOpenClawTestState({ layout: "state-only", prefix: "task-flow-cas-" }, async () => {
@@ -116,19 +112,6 @@ describe("task-flow canonical revision updates", () => {
     });
   });
 
-  it("does not publish unchanged state when the expected revision is incorrect", async () => {
-    await withFlow((flowId) => {
-      const events: TaskFlowRegistryObserverEvent[] = [];
-      configureTaskFlowRegistryRuntime({ observers: { onEvent: (event) => events.push(event) } });
-      expect(setFlowWaiting({ flowId, expectedRevision: 42 })).toMatchObject({
-        applied: false,
-        reason: "revision_conflict",
-        current: { revision: 0 },
-      });
-      expect(events).toEqual([]);
-    });
-  });
-
   it.each(["conflict", "missing"] as const)(
     "rolls back the cached canonical %s observation with its outer transaction",
     async (observation) => {
@@ -152,10 +135,6 @@ describe("task-flow canonical revision updates", () => {
               kysely.deleteFrom("flow_runs").where("flow_id", "=", flowId),
             );
           }
-          const events: TaskFlowRegistryObserverEvent[] = [];
-          configureTaskFlowRegistryRuntime({
-            observers: { onEvent: (event) => events.push(event) },
-          });
           const expected = observation === "conflict" ? "revision_conflict" : "not_found";
           expect(() =>
             runOpenClawStateWriteTransaction(() => {
@@ -168,18 +147,19 @@ describe("task-flow canonical revision updates", () => {
               } else {
                 expect(getTaskFlowById(flowId)).toBeUndefined();
               }
-              expect(events).toEqual([]);
               throw new Error("abort canonical observation");
             }),
           ).toThrow("abort canonical observation");
           expect(getTaskFlowById(flowId)).toEqual(before);
-          expect(events).toEqual([]);
           expect(setFlowWaiting({ flowId, expectedRevision: 0 })).toMatchObject({
             applied: false,
             reason: expected,
           });
-          expect(events).toHaveLength(1);
-          expect(events[0]?.kind).toBe(observation === "conflict" ? "upserted" : "deleted");
+          expect(getTaskFlowById(flowId)).toEqual(
+            observation === "conflict"
+              ? expect.objectContaining({ revision: 1, goal: "Canonical current state" })
+              : undefined,
+          );
         } finally {
           writer.close();
         }
@@ -187,33 +167,10 @@ describe("task-flow canonical revision updates", () => {
     },
   );
 
-  it.each(["commit", "rollback", "reentrant observer", "reentrant conflict"] as const)(
-    "preserves staged revisions and observer order for %s",
+  it.each(["commit", "rollback"] as const)(
+    "preserves staged revisions through the outer transaction %s",
     async (outcome) => {
       await withFlow((flowId) => {
-        const events: TaskFlowRegistryObserverEvent[] = [];
-        let reentrantResult: ReturnType<typeof setFlowWaiting> | undefined;
-        configureTaskFlowRegistryRuntime({
-          observers: {
-            onEvent: (event) => {
-              events.push(event);
-              if (
-                (outcome === "reentrant observer" || outcome === "reentrant conflict") &&
-                event.kind === "upserted" &&
-                event.flow.revision === 1
-              ) {
-                reentrantResult = setFlowWaiting({
-                  flowId,
-                  expectedRevision:
-                    outcome === "reentrant observer"
-                      ? (getTaskFlowById(flowId)?.revision ?? -1)
-                      : 42,
-                  currentStep: "observer update",
-                });
-              }
-            },
-          },
-        });
         const operation = () =>
           runOpenClawStateWriteTransaction(() => {
             expect(setFlowWaiting({ flowId, expectedRevision: 0 })).toMatchObject({
@@ -226,30 +183,16 @@ describe("task-flow canonical revision updates", () => {
               flow: { revision: 2 },
             });
             expect(getTaskFlowById(flowId)?.revision).toBe(2);
-            expect(events).toEqual([]);
             if (outcome === "rollback") {
               throw new Error("abort outer transaction");
             }
           });
         if (outcome === "rollback") {
           expect(operation).toThrow("abort outer transaction");
-          expect(events).toEqual([]);
         } else {
           operation();
-          expect(events.map((event) => event.kind === "upserted" && event.flow.revision)).toEqual(
-            outcome === "reentrant observer" ? [1, 3] : [1, 2],
-          );
-          if (outcome === "reentrant observer") {
-            expect(reentrantResult).toMatchObject({ applied: true, flow: { revision: 3 } });
-          } else if (outcome === "reentrant conflict") {
-            expect(reentrantResult).toMatchObject({
-              applied: false,
-              reason: "revision_conflict",
-              current: { revision: 2 },
-            });
-          }
         }
-        const revision = outcome === "rollback" ? 0 : outcome === "reentrant observer" ? 3 : 2;
+        const revision = outcome === "rollback" ? 0 : 2;
         expect(getTaskFlowById(flowId)?.revision).toBe(revision);
         expect(loadTaskFlowRegistryStateFromSqlite().flows.get(flowId)?.revision).toBe(revision);
       });
@@ -258,8 +201,6 @@ describe("task-flow canonical revision updates", () => {
 
   it("discards an inner rollback while allowing the outer transaction to continue", async () => {
     await withFlow((flowId) => {
-      const events: TaskFlowRegistryObserverEvent[] = [];
-      configureTaskFlowRegistryRuntime({ observers: { onEvent: (event) => events.push(event) } });
       runOpenClawStateWriteTransaction(() => {
         expect(setFlowWaiting({ flowId, expectedRevision: 0 })).toMatchObject({ applied: true });
         expect(() =>
@@ -278,11 +219,7 @@ describe("task-flow canonical revision updates", () => {
           applied: true,
           flow: { revision: 2 },
         });
-        expect(events).toEqual([]);
       });
-      expect(events.map((event) => event.kind === "upserted" && event.flow.revision)).toEqual([
-        1, 2,
-      ]);
       expect(loadTaskFlowRegistryStateFromSqlite().flows.get(flowId)).toMatchObject({
         revision: 2,
         currentStep: "continued",

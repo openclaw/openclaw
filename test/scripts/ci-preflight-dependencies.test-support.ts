@@ -57,7 +57,9 @@ registerHooks({
       OPENCLAW_CI_RUNNER_PROFILE: "github",
       OPENCLAW_CI_RUN_NODE: "true",
       OPENCLAW_CI_RUN_WINDOWS: "true",
-      OPENCLAW_CI_CHANGED_PATHS_JSON: '["scripts/lib/managed-child-process.mts"]',
+      // A product test keeps the real import guard on precise planning; tooling
+      // owners select the full maintainer plan, whose packing is covered separately.
+      OPENCLAW_CI_CHANGED_PATHS_JSON: '["src/infra/retry.test.ts"]',
     },
   });
   return {

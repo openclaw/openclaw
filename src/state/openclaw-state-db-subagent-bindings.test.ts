@@ -160,10 +160,21 @@ function readBindings(db: DatabaseSync) {
 }
 
 describe("released subagent task bindings", () => {
-  it.each(["terminal", "running"] as const)(
-    "upgrades a %s v2026.6.34 replacement and retains its owner after reopen",
-    (execution) => {
+  it.each([
+    { execution: "terminal", padded: false },
+    { execution: "running", padded: false },
+    { execution: "running", padded: true },
+  ] as const)(
+    "upgrades a $execution v2026.6.34 replacement (padded: $padded) and retains its owner after reopen",
+    ({ execution, padded }) => {
       const { db: released } = createReleasedDatabase(execution);
+      if (padded) {
+        released.exec(`
+          UPDATE task_runs SET run_id = ' ' || run_id || ' ',
+            child_session_key = ' ' || child_session_key || ' ';
+          UPDATE subagent_runs SET child_session_key = ' ' || child_session_key || ' ';
+        `);
+      }
       expect(released.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
       released.close();
 
@@ -218,6 +229,20 @@ describe("released subagent task bindings", () => {
       `${ADD_RUN}
       UPDATE subagent_runs SET child_session_key = 'another-child',
         payload_json = json_set(payload_json, '$.taskRunId', 'original-run')
+        WHERE run_id = 'second-run';`,
+    ],
+    [
+      "a padded remapped run collision in another child",
+      `${ADD_RUN}
+      UPDATE subagent_runs SET child_session_key = 'another-child',
+        payload_json = json_set(payload_json, '$.taskRunId', char(9) || 'original-run' || char(160))
+        WHERE run_id = 'second-run';`,
+    ],
+    [
+      "a blank remapping with a run collision in another child",
+      `${ADD_RUN}
+      UPDATE subagent_runs SET child_session_key = 'another-child', run_id = 'original-run',
+        payload_json = json_set(payload_json, '$.taskRunId', char(9) || char(160))
         WHERE run_id = 'second-run';`,
     ],
     [

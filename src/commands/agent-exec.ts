@@ -398,7 +398,7 @@ export async function agentExecCommand(
     const [
       { withAuthProfileStoreAgentDir, withEnvOnlyAuthProfileStore },
       { withHostExecInheritedEnvOmitted },
-      { listKnownProviderAuthEnvVarNames },
+      { listKnownProviderAuthEnvVarNamesCore },
       runAgent,
     ] = await Promise.all([
       import("../agents/auth-profiles.js"),
@@ -472,16 +472,14 @@ export async function agentExecCommand(
         try {
           stopLocalAuditWriter = (
             await import("./agent-local-audit.js")
-          ).startAgentLocalAuditWriter({
-            stateDir,
-          });
+          ).startAgentLocalAuditWriter(runConfig, { stateDir });
         } catch {
           // Admission emits a bounded warning if the direct-process writer is unavailable.
         }
       }
       return await toolBudget.run(() =>
         withHostExecInheritedEnvOmitted(
-          listKnownProviderAuthEnvVarNames({ env: process.env }),
+          listKnownProviderAuthEnvVarNamesCore({ env: process.env }),
           runWithAuthScope,
         ),
       );

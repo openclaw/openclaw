@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 // A paused heartbeat is not renewal. Retain the real file fence until the
 // admitted operation settles, bounded by every owner's freshly read deadline.
-import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
+import { throwSqliteLifecycleErrors } from "../infra/sqlite-coordinator.js";
 import {
   readStableSqliteFileGeneration,
   sameSqliteFileGeneration,
@@ -9,7 +9,6 @@ import {
 } from "../infra/sqlite-file-generation.js";
 import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
 import { acquireOpenClawStateDatabaseFileExclusion } from "./openclaw-state-db-cache.js";
-import type { OpenClawStateMutationOperation } from "./openclaw-state-lease-context.js";
 import type { CaptureOwner, LeaseExclusionParams } from "./openclaw-state-lease-owner.js";
 
 // Only live lexical owners are composed. Other tasks/processes remain foreign
@@ -21,19 +20,11 @@ export function runOutsideOpenClawStateLeaseScope<T>(run: () => T): T {
   return activeOwners.exit(run);
 }
 
-function fail(errors: unknown[]): never {
-  if (errors.length === 1) {
-    throw errors[0];
-  }
-  throw createSqliteLifecycleAggregateError(errors, "state lease exclusion failed", errors[0]);
-}
-
 async function perform<T>(
   owners: readonly CaptureOwner[],
   databasePath: string,
   operation: (assertCurrent: () => void) => Promise<T>,
   bindCaptured?: (captured: T, assertCurrent: () => void) => undefined,
-  mutation?: { run: (assertCurrent: () => void) => Promise<void>; assertCurrent: () => void },
 ): Promise<T> {
   const errors: unknown[] = [];
   const participants = owners.map<{
@@ -77,7 +68,7 @@ async function perform<T>(
     generation = readStableSqliteFileGeneration(databasePath);
     const held = exclusion;
     const deadline = Math.min(...participants.map((participant) => participant.expiresAt ?? 0));
-    const assertPhysicalCurrent = () => {
+    const assertCurrent = () => {
       if (!active) {
         throw new Error("state lease file exclusion is no longer current");
       }
@@ -89,14 +80,8 @@ async function perform<T>(
         throw error;
       }
     };
-    const assertCurrent = () => {
-      assertPhysicalCurrent();
-      mutation?.assertCurrent();
-    };
     for (const { owner } of participants) {
-      // Executor fences may themselves check these live leases. Keep the lease
-      // assertion physical; the writer/capture boundary composes the executor.
-      owner.assertion = assertPhysicalCurrent;
+      owner.assertion = assertCurrent;
     }
     timer = setTimeout(
       () => onLost(new Error("state lease expired during file exclusion")),
@@ -104,52 +89,6 @@ async function perform<T>(
     );
     timer.unref();
     assertCurrent();
-    if (mutation) {
-      const mutationErrors: unknown[] = [];
-      const before = generation.database;
-      for (const { owner } of participants) {
-        owner.mutationAssertion = held.assertMutationCurrent;
-      }
-      try {
-        await held.mutate(assertCurrent, () => mutation.run(assertCurrent));
-      } catch (error) {
-        mutationErrors.push(error);
-      } finally {
-        for (const { owner } of participants) {
-          owner.mutationAssertion = undefined;
-        }
-      }
-      try {
-        const after = readStableSqliteFileGeneration(databasePath);
-        if (
-          before.dev !== after.database.dev ||
-          before.ino !== after.database.ino ||
-          before.birthtimeNs !== after.database.birthtimeNs
-        ) {
-          throw new Error(
-            "Canonical mutation replaced its source; publication authority is required",
-          );
-        }
-        // Retained physical custody accounts for writes even on failure. This
-        // only permits cleanup; failed mutation never reaches capture or binding.
-        generation = after;
-        await held.runWithSourceReads(async () => {
-          for (const participant of participants) {
-            if (
-              participant.owner.params.readMutationExpiry(databasePath) !== participant.expiresAt
-            ) {
-              throw new Error("State lease changed during canonical mutation");
-            }
-          }
-        });
-      } catch (error) {
-        mutationErrors.push(error);
-      }
-      if (mutationErrors.length) {
-        fail(mutationErrors);
-      }
-      assertCurrent();
-    }
     const captured = await held.runWithSourceReads(() => operation(assertCurrent));
     result = captured;
     assertCurrent();
@@ -190,9 +129,7 @@ async function perform<T>(
       } catch (error) {
         bindingErrors.push(error);
       }
-      if (bindingErrors.length > 0) {
-        fail(bindingErrors);
-      }
+      throwSqliteLifecycleErrors(bindingErrors, "state lease exclusion failed");
       assertCurrent();
     }
   } catch (error) {
@@ -259,9 +196,7 @@ async function perform<T>(
       errors.push(error);
     }
   }
-  if (errors.length > 0) {
-    fail(errors);
-  }
+  throwSqliteLifecycleErrors(errors, "state lease exclusion failed");
   // SAFETY: successful operation assigned result; every failure above is rethrown.
   return result as T;
 }
@@ -277,13 +212,14 @@ export function createOpenClawStateLeaseExclusion(params: LeaseExclusionParams) 
   };
   const admit = <T>(
     operation: (participants: CaptureOwner[], databasePath: string) => Promise<T>,
-    scope: readonly CaptureOwner[] = [...ancestors, owner],
   ): Promise<T> => {
     const databasePath = owner.databasePath;
     if (!databasePath) {
       throw new Error("state lease has not entered its owner scope");
     }
-    const participants = scope.filter((candidate) => candidate.databasePath === databasePath);
+    const participants = [...ancestors, owner].filter(
+      (candidate) => candidate.databasePath === databasePath,
+    );
     for (const candidate of participants) {
       candidate.params.assertActive();
       if (candidate.admissionClosed) {
@@ -312,40 +248,6 @@ export function createOpenClawStateLeaseExclusion(params: LeaseExclusionParams) 
   };
   return {
     canRelease: () => owner.cleanupAllowed,
-    runMutation<T, R>(operation: OpenClawStateMutationOperation<T, R>): Promise<R> {
-      const scope = activeOwners.getStore();
-      if (!scope?.includes(owner)) {
-        throw new Error("Canonical mutation requires the live lexical lease scope");
-      }
-      let mutated: { value: T } | undefined;
-      return admit(
-        (participants, databasePath) =>
-          perform(
-            participants,
-            databasePath,
-            (assertCurrent) => {
-              if (!mutated) {
-                throw new Error("Canonical mutation did not finish before capture");
-              }
-              return operation.capture(mutated.value, assertCurrent);
-            },
-            operation.bind,
-            {
-              assertCurrent: operation.assertCurrent,
-              async run(assertCurrent) {
-                mutated = { value: await operation.mutate(assertCurrent) };
-              },
-            },
-          ),
-        scope,
-      );
-    },
-    assertMutationCurrent() {
-      if (!owner.mutationAssertion) {
-        throw new Error("a file-excluded lease cannot authorize a write transaction");
-      }
-      owner.mutationAssertion();
-    },
     runWithOwnerScope<T>(operation: () => Promise<T>): Promise<T> {
       // Resolve only inside the lease's protected callback entry/cleanup scope.
       params.assertActive();
@@ -385,9 +287,7 @@ export function createOpenClawStateLeaseExclusion(params: LeaseExclusionParams) 
       }
       // Close admission in the same turn as the final empty check.
       owner.admissionClosed = true;
-      if (errors.length > 0) {
-        fail(errors);
-      }
+      throwSqliteLifecycleErrors(errors, "state lease exclusion failed");
     },
   };
 }

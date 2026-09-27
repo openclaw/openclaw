@@ -92,8 +92,11 @@ export async function complete<TApi extends Api>(
   model: Model<TApi>,
   context: Context,
   options?: ProviderStreamOptions,
+  assertCurrent?: () => void,
 ): Promise<AssistantMessage> {
   await ensureTransportRuntimeHost();
+  assertCurrent?.();
+  options?.signal?.throwIfAborted();
   return await resolveRuntime(model).complete(model, context, options);
 }
 

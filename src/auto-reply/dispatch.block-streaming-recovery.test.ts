@@ -320,7 +320,11 @@ it.each([
           slots: { memory: "none" },
           ...(directMedia ? { allow: ["fixture-media"], load: { paths: [toolPluginPath] } } : {}),
         },
-        tools: { profile: "minimal", ...(directMedia ? { alsoAllow: ["fixture_media"] } : {}) },
+        tools: {
+          profile: "minimal",
+          // This provider scripts a direct media call to exercise delivery settlement.
+          ...(directMedia ? { toolSearch: false, alsoAllow: ["fixture_media"] } : {}),
+        },
       } satisfies OpenClawConfig;
       await state.writeConfig(cfg);
       setRuntimeConfigSnapshot(cfg);

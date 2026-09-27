@@ -175,9 +175,9 @@ suite.define(() => {
                   byAgent: [],
                   byChannel: [],
                   daily: [],
+                  costDaily: [],
                 },
               },
-              "usage.cost": { updatedAt: Date.now(), days: 7, daily: [], totals },
             },
           });
           await page.goto(`${suite.server.baseUrl}usage`);
@@ -186,7 +186,7 @@ suite.define(() => {
             .poll(() => page.locator("html").getAttribute("data-theme-mode"))
             .toBe(colorScheme);
           const expected = await resolvedBackground(page, "var(--accent-subtle)");
-          const filters = page.locator(".usage-controls");
+          const filters = page.locator(".usage-view-options");
           for (const label of ["Cost", "Tokens"]) {
             const selected = filters.getByRole("button", { name: label, exact: true });
             await selected.click();

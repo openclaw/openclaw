@@ -1,10 +1,10 @@
+import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { readSessionTranscriptRawDelta } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { clampInt } from "./config.js";
 import {
   readExplicitMemoryEvidence,
   readStructuredMemoryEvidenceFromContent,
@@ -23,31 +23,22 @@ import {
   type TranscriptReadLimits,
 } from "./types.js";
 
-function isUnavailableMemorySearchDebug(debug?: ActiveMemorySearchDebug): boolean {
-  return Boolean(debug?.error);
-}
 function resolveTranscriptReadLimits(
   limits?: TranscriptReadLimits,
 ): Required<TranscriptReadLimits> {
   return {
-    maxChars: clampInt(
-      limits?.maxChars,
-      DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS,
-      1,
-      DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS,
-    ),
-    maxLines: clampInt(
-      limits?.maxLines,
-      DEFAULT_TRANSCRIPT_READ_MAX_LINES,
-      1,
-      DEFAULT_TRANSCRIPT_READ_MAX_LINES,
-    ),
-    maxBytes: clampInt(
-      limits?.maxBytes,
-      DEFAULT_TRANSCRIPT_READ_MAX_BYTES,
-      1,
-      DEFAULT_TRANSCRIPT_READ_MAX_BYTES,
-    ),
+    maxChars: resolveIntegerOption(limits?.maxChars, DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS, {
+      min: 1,
+      max: DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS,
+    }),
+    maxLines: resolveIntegerOption(limits?.maxLines, DEFAULT_TRANSCRIPT_READ_MAX_LINES, {
+      min: 1,
+      max: DEFAULT_TRANSCRIPT_READ_MAX_LINES,
+    }),
+    maxBytes: resolveIntegerOption(limits?.maxBytes, DEFAULT_TRANSCRIPT_READ_MAX_BYTES, {
+      min: 1,
+      max: DEFAULT_TRANSCRIPT_READ_MAX_BYTES,
+    }),
   };
 }
 
@@ -86,18 +77,9 @@ function resolveToolResultMessage(value: unknown): Record<string, unknown> | und
   return message && normalizeOptionalString(message.role) === "toolResult" ? message : undefined;
 }
 
-function extractActiveMemorySearchDebugFromSessionRecord(
-  value: unknown,
+function extractActiveMemorySearchDebug(
+  details: Record<string, unknown> | undefined,
 ): ActiveMemorySearchDebug | undefined {
-  const message = resolveToolResultMessage(value);
-  if (!message) {
-    return undefined;
-  }
-  const toolName = normalizeLowercaseStringOrEmpty(message.toolName);
-  if (toolName !== "memory_search" && toolName !== "memory_recall") {
-    return undefined;
-  }
-  const details = asOptionalRecord(message.details);
   const debug = asOptionalRecord(details?.debug);
   const warning = normalizeOptionalString(details?.warning);
   const action = normalizeOptionalString(details?.action);
@@ -121,65 +103,44 @@ function extractActiveMemorySearchDebugFromSessionRecord(
   };
 }
 
-function extractToolResultNameFromSessionRecord(value: unknown): string | undefined {
-  const message = resolveToolResultMessage(value);
-  if (!message) {
-    return undefined;
-  }
-  const toolName = normalizeLowercaseStringOrEmpty(message.toolName);
-  return toolName || undefined;
-}
-
-function hasUnavailableMemoryResultInSessionRecord(
+function readMemoryResultFromSessionRecord(
   value: unknown,
   toolsAllow: readonly string[] = [
     ...DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW,
     ...LANCEDB_ACTIVE_MEMORY_TOOLS_ALLOW,
   ],
-): boolean {
+) {
   const message = resolveToolResultMessage(value);
-  if (!message) {
-    return false;
-  }
-  const toolName = normalizeLowercaseStringOrEmpty(message.toolName);
-  if (!toolName || !toolsAllow.includes(toolName)) {
-    return false;
-  }
-  const details = asOptionalRecord(message.details);
-  const unavailable = message.isError === true || readStructuredMemoryFailure(details) === true;
-  if (unavailable) {
-    return true;
-  }
-  return readStructuredMemoryFailureFromContent(message.content) === true;
-}
-
-function hasTerminalUnavailableMemoryResultInSessionRecord(
-  value: unknown,
-  toolsAllow: readonly string[],
-): boolean {
-  const message = resolveToolResultMessage(value);
-  if (!message) {
-    return false;
-  }
-  const toolName = normalizeLowercaseStringOrEmpty(message.toolName);
-  if (!toolName || !toolsAllow.includes(toolName)) {
-    return false;
-  }
-  const details = asOptionalRecord(message.details);
-  if (details?.disabled === true || details?.unavailable === true) {
-    return true;
-  }
+  const toolName = normalizeLowercaseStringOrEmpty(message?.toolName);
+  const details = asOptionalRecord(message?.details);
+  const isSearch = toolName === "memory_search" || toolName === "memory_recall";
+  const searchDebug = isSearch ? extractActiveMemorySearchDebug(details) : undefined;
+  const allowed = Boolean(toolName && toolsAllow.includes(toolName));
+  const hasUnavailableMemorySearchResult =
+    allowed &&
+    (message?.isError === true ||
+      readStructuredMemoryFailure(details) === true ||
+      readStructuredMemoryFailureFromContent(message?.content) === true);
   const status = normalizeOptionalString(details?.status)
     ?.toLowerCase()
     .replace(/[\s-]+/g, "_");
-  if (status === "disabled" || status === "unavailable") {
-    return true;
-  }
-  if (toolName !== "memory_search" && toolName !== "memory_recall") {
-    return false;
-  }
-  const debug = extractActiveMemorySearchDebugFromSessionRecord(value);
-  return Boolean(debug?.error) || Boolean(details?.error);
+  const terminalUnavailable =
+    allowed &&
+    (details?.disabled === true ||
+      details?.unavailable === true ||
+      status === "disabled" ||
+      status === "unavailable" ||
+      (isSearch && (Boolean(searchDebug?.error) || Boolean(details?.error))));
+  return {
+    toolName,
+    searchDebug,
+    hasUnavailableMemorySearchResult,
+    hasUsableMemoryResult:
+      allowed &&
+      !hasUnavailableMemorySearchResult &&
+      hasUsableMemoryResult(toolName, details, message?.content),
+    terminalUnavailable,
+  };
 }
 
 type ActiveMemoryHookDeadline = {
@@ -219,26 +180,12 @@ function createActiveMemoryHookDeadline(): ActiveMemoryHookDeadline {
   return { arm, promise, remainingMs, stop };
 }
 
-function hasUsableMemoryResultInSessionRecord(
-  value: unknown,
-  toolsAllow: readonly string[] = [
-    ...DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW,
-    ...LANCEDB_ACTIVE_MEMORY_TOOLS_ALLOW,
-  ],
+function hasUsableMemoryResult(
+  toolName: string,
+  details: Record<string, unknown> | undefined,
+  rawContent: unknown,
 ): boolean {
-  const message = resolveToolResultMessage(value);
-  if (!message) {
-    return false;
-  }
-  const toolName = normalizeLowercaseStringOrEmpty(message.toolName);
-  if (!toolName || !toolsAllow.includes(toolName)) {
-    return false;
-  }
-  if (hasUnavailableMemoryResultInSessionRecord(value, toolsAllow)) {
-    return false;
-  }
-  const details = asOptionalRecord(message.details);
-  const content = extractTextContent(message.content);
+  const content = extractTextContent(rawContent);
   if (toolName === "memory_search") {
     if (Array.isArray(details?.results)) {
       return details.results.length > 0;
@@ -298,7 +245,7 @@ function hasUsableMemoryResultInSessionRecord(
   const normalizedContent = normalizeOptionalString(content);
   const explicitEvidence = details ? readExplicitMemoryEvidence(details) : undefined;
   const structuredEvidence = normalizedContent
-    ? readStructuredMemoryEvidenceFromContent(message.content)
+    ? readStructuredMemoryEvidenceFromContent(rawContent)
     : undefined;
   // Custom recall tools have a shipped native-output contract. Preserve
   // non-empty model-visible results unless structured fields explicitly say
@@ -308,12 +255,7 @@ function hasUsableMemoryResultInSessionRecord(
 
 export {
   createActiveMemoryHookDeadline,
-  extractActiveMemorySearchDebugFromSessionRecord,
-  extractToolResultNameFromSessionRecord,
-  hasTerminalUnavailableMemoryResultInSessionRecord,
-  hasUnavailableMemoryResultInSessionRecord,
-  hasUsableMemoryResultInSessionRecord,
-  isUnavailableMemorySearchDebug,
+  readMemoryResultFromSessionRecord,
   resolveTranscriptReadLimits,
   streamActiveMemoryTranscriptRecords,
 };

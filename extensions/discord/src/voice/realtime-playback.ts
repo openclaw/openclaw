@@ -1,6 +1,8 @@
+import { MessageChannel } from "node:worker_threads";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+  type RealtimeVoiceAudioOutputPort,
   isRealtimeVoiceAudioAudible,
   realtimeVoiceAudioDurationMs,
   resolveRealtimeVoiceBargeIn,
@@ -12,6 +14,14 @@ import {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  DISCORD_CONTINUOUS_CLOCK_BYTES,
+  DISCORD_CONTINUOUS_ACTIVE,
+  DISCORD_CONTINUOUS_SOURCE_BYTES,
+  DISCORD_CONTINUOUS_EXACT_SPEECH,
+  restoreDiscordAudioError,
+  type DiscordAudioEvent,
+} from "./audio-worker-protocol.js";
 import { DiscordRealtimeOutput } from "./realtime-output.js";
 import type { DiscordRealtimePlayer } from "./realtime-player.js";
 import type { DiscordVoiceMode, VoiceSessionEntry } from "./session.js";
@@ -33,6 +43,7 @@ type RealtimeExactSpeechState =
       status: "active";
       message: string;
       output?: DiscordRealtimeOutput;
+      direct?: { clock: BigInt64Array; epoch: bigint };
     };
 
 function normalizeControlSpeechText(text: string): string {
@@ -54,6 +65,8 @@ export type DiscordRealtimePlaybackPort = Pick<
 >;
 
 export class DiscordRealtimePlayback<TState> {
+  private outputClearGeneration = 0;
+  private directOutput?: { id: number; clock: BigInt64Array; close: () => void };
   private readonly outputs = new Set<DiscordRealtimeOutput>();
   private readonly generatingItems = new Map<string, RealtimeVoicePlaybackItem>();
   private generatingOutput: DiscordRealtimeOutput | undefined;
@@ -63,6 +76,8 @@ export class DiscordRealtimePlayback<TState> {
   private speechSuccessor: Pick<DiscordRealtimePlaybackPort, "deliverRetainedSpeech"> | undefined;
   private retainedSpeechClosed = false;
   private exactSpeechState: RealtimeExactSpeechState = { status: "idle" };
+  private nextExactSpeechEpoch = 0n;
+  private pendingDirectCompletion: number | undefined;
   private wakeNameAckIndex = 0;
   private lastControlSpeech:
     | { normalizedText: string; sentAt: number; assistantTranscriptCount: number }
@@ -92,17 +107,89 @@ export class DiscordRealtimePlayback<TState> {
     });
   }
 
+  /** Only continuous provider media uses this generation-scoped, PCM24k mono port. */
+  createOutputAudioPort(enabled = true): RealtimeVoiceAudioOutputPort {
+    this.directOutput?.close();
+    const { port1, port2 } = new MessageChannel();
+    const id = this.params.entry.audio.allocateId();
+    const state = new Int32Array(new SharedArrayBuffer(4));
+    const clock = new BigInt64Array(new SharedArrayBuffer(DISCORD_CONTINUOUS_CLOCK_BYTES));
+    const unregister = this.params.player.registerOutput(id, (reason) =>
+      this.handleBargeIn(reason),
+    );
+    const onEvent = (event: DiscordAudioEvent) => {
+      if (!("id" in event) || event.id !== id || this.directOutput?.id !== id) {
+        return;
+      }
+      if (
+        (event.type === "continuous-start" || event.type === "continuous-idle") &&
+        this.exactSpeechState.status === "active" &&
+        this.exactSpeechState.direct &&
+        event.speechEpoch !== this.exactSpeechState.direct.epoch
+      ) {
+        return;
+      }
+      if (event.type === "continuous-error") {
+        this.stopAfterPlaybackFailure("direct-output-error", restoreDiscordAudioError(event.error));
+      }
+      if (event.type === "continuous-start") {
+        this.params.harness.outputActivity.markPlaybackStarted();
+      }
+      if (event.type === "continuous-flushed" && event.marker === this.pendingDirectCompletion) {
+        this.pendingDirectCompletion = undefined;
+        this.responseAudio = "completed";
+        this.completeExactSpeechResponse("provider-completed");
+      }
+      if (event.type === "continuous-idle") {
+        this.responseAudio = "completed";
+        this.params.harness.finishOutputAudio("player-idle");
+        this.params.harness.outputActivity.reset();
+        this.completeExactSpeechResponse("player-idle");
+      }
+    };
+    const close = () => {
+      Atomics.store(state, 0, 1);
+      this.params.entry.audio.off("event", onEvent);
+      unregister();
+      this.params.entry.audio.send({ type: "continuous-close", id });
+      if (this.directOutput?.id === id) {
+        this.directOutput = undefined;
+      }
+    };
+    this.directOutput = { id, clock, close };
+    this.params.entry.audio.on("event", onEvent);
+    this.params.entry.audio.send(
+      {
+        type: "continuous-port",
+        id,
+        enabled,
+        port: port1,
+        state: state.buffer,
+        clock: clock.buffer,
+      },
+      [port1],
+    );
+    return { port: port2, state: state.buffer };
+  }
+
+  activateOutputAudioPort(): void {
+    if (this.directOutput) {
+      this.params.entry.audio.send({ type: "continuous-activate", id: this.directOutput.id });
+    }
+  }
+
   close(preserveUnplayedSpeech = false): void {
     this.unregisterPlayerLane();
     if (preserveUnplayedSpeech) {
-      this.requeueUnplayedExactSpeech();
+      this.retireExactSpeech(true);
     } else {
       this.retainedSpeechClosed = true;
       this.speechSuccessor = undefined;
       this.queuedExactSpeechMessages = [];
-      this.exactSpeechState = { status: "idle" };
+      this.retireExactSpeech();
     }
     this.clearOutputAudio("session-close");
+    this.directOutput?.close();
   }
 
   transferPendingSpeechTo(
@@ -135,6 +222,7 @@ export class DiscordRealtimePlayback<TState> {
     );
     // A native handler may decline short audio as echo. Providers without one
     // still need local interruption when another speaker owns the incoming audio.
+    const clearGeneration = this.outputClearGeneration;
     const bridge = this.params.bridge();
     const outputs = Array.from(this.outputs);
     const items = Array.from(this.generatingItems.values());
@@ -144,6 +232,7 @@ export class DiscordRealtimePlayback<TState> {
       }
     });
     return (
+      clearGeneration !== this.outputClearGeneration ||
       outputs.some((output) => !this.outputs.has(output)) ||
       items.some((item) => this.generatingItems.get(item.itemId) !== item)
     );
@@ -261,11 +350,16 @@ export class DiscordRealtimePlayback<TState> {
       }
     }
     // Observers may interrupt synchronously; publish ownership before notifying them.
-    this.params.harness.recordOutputAudio(realtimePcm24kMono, activity);
-    output.append(realtimePcm24kMono, audible, item);
+    const onAccepted = () => this.params.harness.recordOutputAudio(realtimePcm24kMono, activity);
+    if (!output.append(realtimePcm24kMono, audible, item, onAccepted)) {
+      this.generatingOutput = undefined;
+      this.sendOutputAudio(realtimePcm24kMono, metadata);
+    }
   }
 
   clearOutputAudio(reason = "clear"): void {
+    this.outputClearGeneration += 1;
+    this.retireExactSpeech();
     if (this.isContinuousOutput()) {
       this.responseAudio = "completed";
     } else if (this.responseAudio === "accepting") {
@@ -280,12 +374,26 @@ export class DiscordRealtimePlayback<TState> {
       output.close(reason);
     }
     this.params.harness.outputActivity.reset();
+    if (this.directOutput) {
+      if (reason === "session-close" || this.params.stopped()) {
+        this.directOutput.close();
+      } else {
+        this.params.entry.audio.send({ type: "continuous-clear", id: this.directOutput.id });
+      }
+    }
     this.completeExactSpeechResponse(reason);
   }
 
   handleResponseDone(outcome: {
     status: "completed" | "cancelled" | "failed" | "incomplete";
   }): void {
+    // A port round trip drains preceding PCM and also settles a response with no audio.
+    if (this.directOutput && outcome.status === "completed") {
+      const marker = this.params.entry.audio.allocateId();
+      this.pendingDirectCompletion = marker;
+      this.params.entry.audio.send({ type: "continuous-flush", id: this.directOutput.id, marker });
+      return;
+    }
     const output = this.generatingOutput;
     this.generatingOutput = undefined;
     this.generatingItems.clear();
@@ -414,9 +522,15 @@ export class DiscordRealtimePlayback<TState> {
 
   private cancelForControl(): void {
     this.queuedExactSpeechMessages = [];
-    this.exactSpeechState = { status: "idle" };
+    this.retireExactSpeech();
     // Idle providers may retain their last audio item; forcing interruption can truncate it.
-    if (this.responseAudio === "completed" && this.outputs.size === 0) {
+    if (this.responseAudio === "completed" && !this.isOutputAudioActive()) {
+      return;
+    }
+    if (this.isContinuousOutput()) {
+      // Explicit room control clears local speech; it is not a microphone barge-in
+      // or an unsupported provider truncate/cancel request.
+      this.params.harness.flushOutput(() => this.clearOutputAudio("active-run-control"));
       return;
     }
     this.params.harness.handleBargeIn({ audioPlaybackActive: true, force: true }, () =>
@@ -450,31 +564,45 @@ export class DiscordRealtimePlayback<TState> {
 
   resetProviderContinuity(reason: string): void {
     this.lastControlSpeech = undefined;
-    this.requeueUnplayedExactSpeech();
+    this.retireExactSpeech(true);
     this.responseAudio = "discarding";
     this.params.harness.flushOutput(() => this.clearOutputAudio(reason));
     this.responseAudio = "completed";
     this.params.harness.finishOutputAudio(reason);
   }
 
-  private requeueUnplayedExactSpeech(): void {
-    const replayExactSpeech =
-      this.exactSpeechState.status === "active" &&
-      !this.exactSpeechState.output?.activity.snapshot().playbackStarted
-        ? this.exactSpeechState.message
-        : undefined;
+  private retireExactSpeech(preserveUnplayed = false): void {
+    this.pendingDirectCompletion = undefined;
+    const speech = this.exactSpeechState;
     this.exactSpeechState = { status: "idle" };
-    if (replayExactSpeech) {
-      this.queuedExactSpeechMessages.unshift(replayExactSpeech);
+    if (speech.status !== "active") {
+      return;
+    }
+    // Retirement races the worker start atomically, not its queued notification to main.
+    const directStarted =
+      speech.direct &&
+      Atomics.exchange(speech.direct.clock, DISCORD_CONTINUOUS_EXACT_SPEECH, 0n) ===
+        -speech.direct.epoch;
+    if (preserveUnplayed && !directStarted && !speech.output?.activity.snapshot().playbackStarted) {
+      this.queuedExactSpeechMessages.unshift(speech.message);
     }
   }
 
   outputAudioMs(): number {
-    return Math.floor(this.params.harness.outputActivity.snapshot().audioMs);
+    return this.directOutput
+      ? Math.floor(
+          Number(Atomics.load(this.directOutput.clock, DISCORD_CONTINUOUS_SOURCE_BYTES)) / 48,
+        )
+      : Math.floor(this.params.harness.outputActivity.snapshot().audioMs);
   }
 
   isOutputAudioActive(): boolean {
-    return this.outputs.size > 0 || this.generatingItems.size > 0;
+    return (
+      this.outputs.size > 0 ||
+      this.generatingItems.size > 0 ||
+      (this.directOutput !== undefined &&
+        Atomics.load(this.directOutput.clock, DISCORD_CONTINUOUS_ACTIVE) > 0n)
+    );
   }
 
   private isContinuousOutput(): boolean {
@@ -486,7 +614,7 @@ export class DiscordRealtimePlayback<TState> {
     this.speechSuccessor = undefined;
     this.params.stopTerminally();
     this.queuedExactSpeechMessages = [];
-    this.exactSpeechState = { status: "idle" };
+    this.retireExactSpeech();
     this.clearOutputAudio(reason);
     this.params.onTerminalError(error);
   }
@@ -495,7 +623,6 @@ export class DiscordRealtimePlayback<TState> {
     const logContext = `guild=${this.params.entry.guildId} channel=${this.params.entry.channelId}`;
     const output = new DiscordRealtimeOutput({
       player: this.params.player,
-      logContext,
       continuous: this.isContinuousOutput(),
       onStart: () => {
         this.params.harness.outputActivity.markPlaybackStarted();
@@ -547,16 +674,26 @@ export class DiscordRealtimePlayback<TState> {
     if (this.params.stopped() || !text.trim()) {
       return;
     }
-    this.exactSpeechState = { status: "active", message: text };
+    const direct = this.directOutput
+      ? { clock: this.directOutput.clock, epoch: ++this.nextExactSpeechEpoch }
+      : undefined;
+    this.exactSpeechState = { status: "active", message: text, direct };
+    if (direct) {
+      Atomics.store(direct.clock, DISCORD_CONTINUOUS_EXACT_SPEECH, direct.epoch);
+    }
     this.beginResponse();
     this.params.bridge()?.sendUserMessage(this.params.buildSpeakExactMessage(text));
   }
 
   private completeExactSpeechResponse(reason: string): void {
-    if (this.responseAudio !== "completed" || this.outputs.size > 0) {
+    if (
+      this.pendingDirectCompletion !== undefined ||
+      this.responseAudio !== "completed" ||
+      this.isOutputAudioActive()
+    ) {
       return;
     }
-    this.exactSpeechState = { status: "idle" };
+    this.retireExactSpeech();
     this.drainQueuedExactSpeechMessages(reason);
   }
 }

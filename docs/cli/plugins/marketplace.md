@@ -31,6 +31,9 @@ openclaw plugins marketplace refresh --expected-sha256 <sha256> --json
 
 Marketplace `list` accepts a local marketplace path, a `marketplace.json` path, a GitHub shorthand like `owner/repo`, a GitHub repo URL, or a git URL. `--json` prints the resolved source label plus the parsed marketplace manifest and plugin entries.
 
+Human output adds `v` only to numeric version labels, preserving existing prefixes
+and build names. JSON output keeps the parsed version values.
+
 Marketplace refresh loads a hosted OpenClaw marketplace feed and persists the
 validated response as the local hosted-feed snapshot. Without options, it uses
 the configured default feed profile. Use `--feed-profile <name>` to refresh a

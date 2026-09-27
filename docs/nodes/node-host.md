@@ -76,6 +76,8 @@ them before using the link if that access is too broad. See
 
 `node run` also accepts `--pair`, `--context-path` (Gateway WS context path), `--tls`, `--tls-fingerprint <sha256>`, and `--node-id` (override the legacy client instance ID; this does not reset pairing). On macOS, pass `--share-installed-apps` to advertise `device.apps`; sharing is off by default. Use `--no-share-installed-apps` to disable a previously saved opt-in.
 
+Pass `--session-host` to enable worker hosting for this foreground process without changing the saved preference. Automatic restarts preserve this choice.
+
 ### Remote gateway via SSH tunnel (loopback bind)
 
 If the Gateway binds to loopback (`gateway.bind=loopback`, default in local mode), remote node hosts cannot connect directly. Create an SSH tunnel and point the node host at the local end of the tunnel.
@@ -142,6 +144,28 @@ openclaw node restart
 
 `node install` also accepts `--context-path`, `--tls`, `--tls-fingerprint`, `--node-id` (legacy client instance ID only), `--share-installed-apps` / `--no-share-installed-apps`, `--runtime <node|bun>` (default: `node`), and `--force` to reinstall. Bun requires version 1.4+ with WAL-reset-safe `node:sqlite` and is an explicit opt-in; Node remains recommended. `node status`, `node stop`, and `node uninstall` are also available.
 
+Node shutdown waits for plugin availability watchers and active computer executions
+to finish cleanup, and reports failures from those cleanup operations. If a command
+reports `Node plugin cleanup failed`, reconnect the node to retry disconnect cleanup
+before sending another command.
+
+### Automatic node updates
+
+Packaged headless nodes check for updates hourly by default, in both foreground
+and service mode. They prepare a separate runtime, wait until all node work is
+idle, then restart and reconnect with the same identity, pairing, and launch
+options. A node update does not replace the global CLI package or a co-located
+Gateway. Automatic activations are at least 12 hours apart, and busy work can
+defer an update indefinitely.
+
+Set `nodeHost.autoUpdate.enabled: false` on the node to opt out. The shared
+`update.checkOnStart: false` and `OPENCLAW_NO_AUTO_UPDATE=1` opt-outs also apply.
+Source checkouts, native app nodes, private workers, `dev`, and
+`extended-stable` installs do not auto-apply. Releases requiring database
+migrations defer to the normal update workflow. See
+[Headless node updates](/install/updating/automatic-updates#headless-node-updates)
+for the idle-work rules and configuration.
+
 ### Pair + name
 
 On the Gateway host, approve the device request:
@@ -194,6 +218,12 @@ Retired `identity/device.json` and `identity/device-auth.json` files are
 Doctor-owned migration inputs. Stop the node host and run
 `openclaw doctor --fix`; Doctor imports and verifies their rows in SQLite before
 removing the old files.
+
+The headless node and macOS app worker check this state before preparing
+capabilities. Pending device auth, exec approvals, or a missing canonical
+identity with retired identity data requires Doctor; startup preserves the
+inputs and does not create replacement keys or import execution policy. A valid
+canonical identity keeps precedence over stale `identity/device.json` data.
 
 ## System commands (node host / mac node)
 

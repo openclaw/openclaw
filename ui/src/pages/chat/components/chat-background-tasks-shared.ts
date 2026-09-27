@@ -5,8 +5,6 @@ import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 
 registerBackgroundTasksEnglish();
 
-export { newestTaskSnapshot } from "../../../lib/tasks/data.ts";
-
 // Status tone drives the meta line's colored word and the running pulse dot;
 // pill chips read too heavy at rail width, so tone is typographic only.
 // Shared with the status row's hover preview.
@@ -68,4 +66,36 @@ export function backgroundTaskDeliveryLabel(task: TaskSummary): string | undefin
     not_applicable: "chat.backgroundTasks.deliveryNotApplicable",
   } as const;
   return t(labels[task.deliveryStatus]);
+}
+
+export type BackgroundTaskObservations = {
+  taskActivityById: Map<string, Pick<TaskSummary, "lastActivity" | "diffStat">>;
+};
+
+export function prepareTaskSnapshot(
+  state: BackgroundTaskObservations,
+  task: TaskSummary,
+): TaskSummary {
+  const retained = state.taskActivityById.get(task.id);
+  const lastActivity = isActiveTask(task)
+    ? (task.lastActivity ?? retained?.lastActivity)
+    : undefined;
+  const diffStat = task.diffStat ?? retained?.diffStat;
+  const streamingFields = {
+    ...(lastActivity ? { lastActivity } : {}),
+    ...(diffStat ? { diffStat } : {}),
+  };
+  if (lastActivity || diffStat) {
+    state.taskActivityById.set(task.id, streamingFields);
+  } else {
+    state.taskActivityById.delete(task.id);
+  }
+  if (lastActivity === task.lastActivity && diffStat === task.diffStat) {
+    return task;
+  }
+  const next = { ...task, ...streamingFields };
+  if (!lastActivity) {
+    delete next.lastActivity;
+  }
+  return next;
 }

@@ -35,6 +35,11 @@ extension OpenClawChatViewModel {
         defer { self.isApplyingRunSnapshot = false }
         self.updateActiveSessionRunWithoutChatSnapshot(false)
         self.adoptRunState(runId: runId, bufferedText: snapshot.text)
+        // Replay only this snapshot's narration through the live owner. Tool
+        // grouping and current assistant-text precedence keep their own paths.
+        for event in snapshot.events ?? [] where event.runId == runId {
+            self.handleAgentNarration(event)
+        }
     }
 
     func adoptRun(runId: String, bufferedText: String) {
@@ -51,7 +56,7 @@ extension OpenClawChatViewModel {
             // Replace stale local ownership so only that run consumes later events.
             clearPendingRuns(reason: nil)
             self.pendingRuns.insert(runId)
-            self.pendingToolCallsById = [:]
+            self.turnToolCallsById = [:]
             self.updateStreamingAssistantText(nil)
         }
         if self.runMessageScopesByRunID[runId] == nil {
@@ -61,8 +66,8 @@ extension OpenClawChatViewModel {
             armPendingRunOwner(runId: runId)
         }
         // Chat snapshots concatenate model turns; agent text owns the current item once observed.
-        if self.liveRunStateByRunID[runId]?.hasAgentAssistantText != true, !bufferedText.isEmpty {
-            self.updateStreamingAssistantText(bufferedText)
+        if self.liveRunStateByRunID[runId]?.hasAgentAssistantText != true {
+            self.updateStreamingAssistantText(bufferedText.isEmpty ? nil : bufferedText)
         }
         self.logDiagnostic(
             "chat.ui adopted in-flight run sessionKey=\(self.sessionKey) "

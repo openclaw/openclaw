@@ -143,11 +143,13 @@ export async function agentsListCommand(
   if (!hasAgentDatabaseAdmissions()) {
     recordAgentDatabaseAdmissions(await evaluateAgentDatabaseAdmissions(cfg));
   }
-  const summaries = buildAgentSummaries(cfg);
+  const summaries = await buildAgentSummaries(cfg);
   const provenance = opts.tree ? await listAgentProvenance() : [];
   if (opts.json) {
+    const records = await readAgentProvenanceForDisplay(summaries.map((summary) => summary.id));
+    const recordsById = new Map(records.map((record) => [record.agentId, record]));
     for (const summary of summaries) {
-      const record = await readAgentProvenanceForDisplay(summary.id);
+      const record = recordsById.get(summary.id);
       if (record) {
         summary.createdVia = record.createdVia;
         summary.creatorAgentId = record.creatorAgentId;

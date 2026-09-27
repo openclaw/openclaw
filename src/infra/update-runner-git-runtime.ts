@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
@@ -10,6 +9,7 @@ import {
   relocateRuntimeTree,
   type RuntimeRelocation,
 } from "./update-runtime-relocation.js";
+import { gitRuntimeStagingPath } from "./update-runtime-staging.js";
 
 async function collectRuntimeDirectories(
   root: string,
@@ -55,6 +55,71 @@ async function collectRuntimeDirectories(
           !entry.split("/").some((part) => part.startsWith(".")),
       )
   );
+}
+
+async function collectDisposableRuntimeCaches(
+  modulesDirs: string[],
+  runtimeRoots: string[],
+  storeRoots: string[],
+) {
+  const caches = new Set<string>();
+  const overlaps = (left: string, right: string) =>
+    isPathInside(left, right) || isPathInside(right, left);
+  for (const modulesDir of modulesDirs) {
+    // Only these tool-owned defaults are rebuildable. Package-internal caches
+    // and pnpm's virtual store can contain required runtime code.
+    for (const relative of [".cache/jiti", ".vite", ".vite-temp"]) {
+      const cache = path.join(modulesDir, relative);
+      try {
+        if (
+          (await fs.lstat(cache)).isDirectory() &&
+          (await fs.realpath(cache)) === cache &&
+          !storeRoots.some((store) => overlaps(cache, store))
+        ) {
+          caches.add(cache);
+        }
+      } catch {
+        // An absent or unresolved tool path is not evidence of a disposable cache.
+      }
+    }
+  }
+  // Decide before fs.cp prunes directories: dependency links may appear after
+  // their targets. A retained cache can itself reference another cache.
+  const pending = [...runtimeRoots];
+  const visited = new Set<string>();
+  while (caches.size > 0 && pending.length > 0) {
+    const entry = pending.pop()!;
+    if (visited.has(entry) || caches.has(entry)) {
+      continue;
+    }
+    visited.add(entry);
+    const stat = await fs.lstat(entry);
+    if (stat.isSymbolicLink()) {
+      const target = path.resolve(path.dirname(entry), await fs.readlink(entry));
+      const targets = [target];
+      try {
+        targets.push(await fs.realpath(entry));
+      } catch {
+        // Verbatim promotion accepts unresolved links. Retain caches when their
+        // dependency ownership cannot be established rather than reject an update.
+        caches.clear();
+        break;
+      }
+      for (const cache of caches) {
+        if (targets.some((dependency) => overlaps(cache, dependency))) {
+          caches.delete(cache);
+          pending.push(cache);
+        }
+      }
+    } else if (stat.isDirectory()) {
+      for (const child of await fs.readdir(entry, { withFileTypes: true })) {
+        if (child.isDirectory() || child.isSymbolicLink()) {
+          pending.push(path.join(entry, child.name));
+        }
+      }
+    }
+  }
+  return caches;
 }
 
 /** Stage on the destination filesystem; activation only renames the already validated runtime. */
@@ -137,8 +202,10 @@ export async function prepareGitRuntimePromotion(
   );
   // External payloads may survive a moved symlink, but stores inside renamed
   // directory entries disappear from the candidate's retained dependency links.
+  const storeRoots = [...stores.keys()];
   for (const store of stores.keys()) {
     const payload = await fs.realpath(store);
+    storeRoots.push(payload, ...(stores.get(store)?.sourceAliases ?? []));
     if (
       (!copiedRoots.has(store) && destinations.some((dest) => isPathInside(dest, store))) ||
       (!roots.some(({ sourceRoot }) => isPathInside(sourceRoot, payload)) &&
@@ -147,30 +214,49 @@ export async function prepareGitRuntimePromotion(
       throw new Error("Update pnpm virtual store overlaps a runtime directory being replaced.");
     }
   }
+  const disposableCaches = await collectDisposableRuntimeCaches(
+    directories
+      .filter((relative) => path.basename(relative) === "node_modules")
+      .map((relative) => path.join(relocation.sourceRoot, relative)),
+    roots.map(({ sourceRoot }) => sourceRoot),
+    storeRoots,
+  );
   const staged: Array<{ destination: string; temporary: string; previous: boolean }> = [];
   const promoted: typeof staged = [];
   let restoreStarted = false;
-  const cleanup = async () => {
+  const cleanup = async (assertCurrent = () => {}) => {
     // Failed restoration must retain pending originals; successfully restored
     // entries leave the promoted list before cleanup or another restore attempt.
-    await Promise.all(
+    const removed = await Promise.allSettled(
       staged
         .filter((entry) => !restoreStarted || !promoted.includes(entry))
-        .map((entry) => fs.rm(entry.temporary, { recursive: true, force: true })),
+        .map(async (entry) => {
+          assertCurrent();
+          await fs.rm(entry.temporary, { recursive: true, force: true });
+          assertCurrent();
+        }),
     );
+    const failures = removed.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (failures.length) {
+      throw new AggregateError(failures, "Git runtime backup cleanup did not finish.");
+    }
   };
   try {
     for (const { sourceRoot, destinationRoot: destination } of roots) {
       // .artifacts may point at another volume. A sibling of each destination
       // guarantees rename-only activation, including nested workspace outputs.
-      const temporary = `${destination}.openclaw-update-${randomUUID()}.tmp`;
+      const temporary = gitRuntimeStagingPath(destination);
       const entry = { destination, temporary, previous: false };
       staged.push(entry);
       await fs.mkdir(temporary, { recursive: true });
       const candidate = path.join(temporary, "candidate");
       await fs.cp(sourceRoot, candidate, {
         recursive: true,
+        preserveTimestamps: true,
         verbatimSymlinks: true,
+        filter: (source) => !disposableCaches.has(source),
       });
       await relocateRuntimeTree(candidate, sourceRoot, destination, relocations);
     }
@@ -179,6 +265,7 @@ export async function prepareGitRuntimePromotion(
     throw error;
   }
   return {
+    backupRoot: staged[0]?.temporary ?? root,
     // Source fences may hide only transaction-owned staging. The same exact
     // paths preserve pending originals while rollback cleans unrelated files.
     sourceTreeStagingPaths: staged.flatMap(({ temporary }) => {
@@ -204,12 +291,15 @@ export async function prepareGitRuntimePromotion(
         await fs.rename(path.join(entry.temporary, "candidate"), entry.destination);
       }
     },
-    async restore() {
+    async restore(assertCurrent = () => {}) {
       restoreStarted = true;
       for (const entry of promoted.toReversed()) {
+        assertCurrent();
         await fs.rm(entry.destination, { recursive: true, force: true });
+        assertCurrent();
         if (entry.previous) {
           await fs.rename(path.join(entry.temporary, "previous"), entry.destination);
+          assertCurrent();
         }
         promoted.pop();
       }

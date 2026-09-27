@@ -1,70 +1,63 @@
 import {
-  isSessionTranscriptProjectionUnavailableError,
-  readSessionTranscriptBoundedMessageTailPage,
-} from "../config/sessions/session-accessor.js";
-import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
+  resolveSqliteTranscriptReadScope,
+  toDatabaseOptions,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
+import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { withSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readSessionFallbackModel } from "../status/session-fallback-model.js";
-import { backfillSessionTitle } from "./dashboard-session-title-backfill.js";
-import { projectSessionDisplayMessage } from "./session-display-projection.js";
-import { sqliteMessageEventWithSeq } from "./session-transcript-entry-message.js";
+import type { SessionRowTranscriptReadParams } from "./session-row-transcript-backfill.types.js";
 
-/** Optional transcript fields run after foreground projection work, never during materialization. */
+/** Optional transcript facts keep the row generation and foreground admission on the host. */
 export async function backfillSessionRowTranscriptFields(
-  params: Parameters<typeof backfillSessionTitle>[0] & {
-    model?: Pick<
-      Parameters<typeof readSessionFallbackModel>[0],
-      "selectedProvider" | "selectedModel" | "config"
-    >;
+  params: Omit<SessionRowTranscriptReadParams, "includeTerminalModel"> & {
+    shouldCommit?: () => boolean;
+    model?: { selectedProvider: string; selectedModel: string; config?: OpenClawConfig };
   },
 ): Promise<{ lastMessagePreview?: string; fallbackModel?: { provider: string; model: string } }> {
   if (params.shouldCommit?.() === false) {
     return {};
   }
-  await backfillSessionTitle(params);
-  if (params.shouldCommit?.() === false) {
-    return {};
-  }
-  const transcriptScope = { ...params, agentId: params.storeAgentId ?? params.agentId };
-  try {
-    const fallback =
-      params.model &&
-      readSessionFallbackModel({
-        ...params.model,
-        sessionEntry: params.sessionEntry,
-        sessionScope: transcriptScope,
-      });
-    const fallbackModel = fallback
-      ? { provider: fallback.modelProvider, model: fallback.model }
-      : undefined;
-    const tail = readSessionTranscriptBoundedMessageTailPage(transcriptScope, {
-      maxMessages: 20,
-      maxBytes: 64 * 1024,
-      offset: 0,
-    });
-    // Older text cannot stand in for an oversized message skipped at the newest edge.
-    const events = tail.newestContiguousEventCount
-      ? tail.events.slice(-tail.newestContiguousEventCount)
-      : [];
-    for (const event of events.toReversed()) {
-      const projected = projectSessionDisplayMessage(sqliteMessageEventWithSeq(event), {
-        flattenMarkdown: true,
-      });
-      if (projected) {
-        // Detach resident strings from the parsed transcript payload.
-        return {
-          lastMessagePreview: Buffer.from(projected.text, "utf16le").toString("utf16le"),
-          ...(fallbackModel ? { fallbackModel } : {}),
-        };
+  const { shouldCommit, sessionEntry, model, ...scope } = params;
+  const input: SessionRowTranscriptReadParams = {
+    ...scope,
+    includeTerminalModel: model !== undefined,
+    sessionEntry: {
+      sessionId: sessionEntry.sessionId,
+      updatedAt: sessionEntry.updatedAt,
+      status: sessionEntry.status,
+      lastRunId: sessionEntry.lastRunId,
+      fallbackNotice: sessionEntry.fallbackNotice ? { ...sessionEntry.fallbackNotice } : undefined,
+    },
+  };
+  return withSessionHistoryWorkerDatabase(
+    toDatabaseOptions(
+      resolveSqliteTranscriptReadScope({
+        ...input,
+        agentId: params.storeAgentId ?? params.agentId,
+      }),
+    ),
+    async (owner) => {
+      const { terminalModel, ...fields } = await owner.readRowBackfill(input);
+      owner.assertCurrent();
+      if (shouldCommit?.() === false) {
+        return {};
       }
-    }
-    return fallbackModel ? { fallbackModel } : {};
-  } catch (error) {
-    if (
-      isSessionTranscriptProjectionUnavailableError(error) ||
-      error instanceof SessionTranscriptColdError
-    ) {
-      return {};
-    }
-    throw error;
-  }
+      const fallback =
+        model &&
+        readSessionFallbackModel({
+          ...model,
+          sessionEntry,
+          sessionScope: { ...scope, agentId: params.storeAgentId ?? params.agentId },
+          terminalModel: terminalModel ?? null,
+        });
+      return {
+        ...fields,
+        ...(fallback
+          ? { fallbackModel: { provider: fallback.modelProvider, model: fallback.model } }
+          : {}),
+      };
+    },
+    projectionLane,
+  );
 }

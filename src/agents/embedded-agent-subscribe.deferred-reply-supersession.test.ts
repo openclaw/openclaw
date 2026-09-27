@@ -67,15 +67,20 @@ function buildSubscriptionPayloads(
 }
 
 describe("subscribeEmbeddedAgentSession deferred reply supersession", () => {
-  it.each(["immediate", "rejected", "deferred", "none"] as const)(
-    "does not regenerate a canonical silent tail after a formatted answer (%s delivery)",
+  it.each(["immediate", "pending", "rejected", "deferred", "none"] as const)(
+    "recovers a missing required reply without stealing %s delivery ownership",
     async (delivery) => {
       const markdown =
         "## Result\n\n- **Saved** the note.\n- Keep `note.md` unchanged.\n\n```text\nfirst  second\n```";
       const delivered: string[] = [];
+      const pending: string[] = [];
       const onBlockReply = vi.fn(async (payload: { text?: string }) => {
         if (delivery === "rejected") {
           throw new Error("synthetic delivery failure");
+        }
+        if (delivery === "pending" && payload.text) {
+          pending.push(payload.text);
+          return;
         }
         if (payload.text) {
           delivered.push(payload.text);
@@ -114,8 +119,8 @@ describe("subscribeEmbeddedAgentSession deferred reply supersession", () => {
       const silent = makeAgentAssistantMessage({ content: [{ type: "text", text: "NO_REPLY" }] });
       const messages = [user, toolCall, toolResult, answer, silent];
       try {
-        // Preserve the incident order: settlement precedes the formatted answer,
-        // whose toolUse stop must not replace the later terminal silence owner.
+        // Settlement precedes the formatted answer. The later canonical NO_REPLY
+        // removes unsent text, but only the transport can prove delivery or custody.
         emit({ type: "message_end", message: user });
         emitAssistantMessage(emit, toolCall);
         emit({ type: "tool_execution_start", toolName: "read", toolCallId: "read-note", args: {} });
@@ -155,28 +160,37 @@ describe("subscribeEmbeddedAgentSession deferred reply supersession", () => {
           activeCount: 0,
         });
         expect(delivered).toEqual(delivery === "immediate" ? [markdown] : []);
-        expect(subscription.getVisibleBlockReplyCount()).toBe(delivery === "immediate" ? 1 : 0);
+        expect(pending).toEqual(delivery === "pending" ? [markdown] : []);
+        expect(subscription.getVisibleBlockReplyCount()).toBe(
+          delivery === "immediate" || delivery === "pending" ? 1 : 0,
+        );
         expect(payloads).toEqual([]);
-        expect(
-          resolveSettledTurnFinalizationRequest({
-            runParams: {
-              runId: "silent-tail",
-              sessionId: "silent-tail",
-              workspaceDir: "/synthetic",
-              prompt: user.content,
-              timeoutMs: 1000,
-              terminalReplyExpectation: "required",
-            },
-            attempt,
-            activeErrorContext: { provider: "openai", model: "mock-1" },
-            modelApi: "openai-responses",
-            executionContract: undefined,
-            payloadsWithToolMedia: payloads,
-            hasTerminalToolPresentation: false,
-            terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant }),
-            settledTurnFinalizationAvailable: true,
-          }),
-        ).toBeNull();
+        const replyDeliveryState =
+          delivered.length > 0 ? "delivered" : pending.length > 0 ? "pending" : "missing";
+        const finalizationRequest = resolveSettledTurnFinalizationRequest({
+          runParams: {
+            runId: "silent-tail",
+            sessionId: "silent-tail",
+            workspaceDir: "/synthetic",
+            prompt: user.content,
+            timeoutMs: 1000,
+            terminalReplyExpectation: "required",
+          },
+          attempt,
+          replyDeliveryState,
+          activeErrorContext: { provider: "openai", model: "mock-1" },
+          modelApi: "openai-responses",
+          executionContract: undefined,
+          payloadsWithToolMedia: payloads,
+          hasTerminalToolPresentation: false,
+          terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant }),
+          settledTurnFinalizationAvailable: true,
+        });
+        if (replyDeliveryState === "missing") {
+          expect(finalizationRequest).toContain("Tools are unavailable");
+        } else {
+          expect(finalizationRequest).toBeNull();
+        }
       } finally {
         subscription.unsubscribe();
       }

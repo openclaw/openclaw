@@ -1,12 +1,16 @@
 // Coverage for waiting on completion-required async tool tasks.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   completeTaskRunByRunId,
   createRunningTaskRun,
 } from "../../../tasks/detached-task-runtime.js";
 import type { TaskRecord } from "../../../tasks/runtime-internal.js";
-import { resetTaskRegistryForTests } from "../../../tasks/task-runtime.test-helpers.js";
+import { configureInMemoryTaskStoresForTests } from "../../../tasks/task-registry.test-support.js";
+import {
+  resetTaskFlowRegistryForTests,
+  resetTaskRegistryForTests,
+} from "../../../tasks/task-runtime.test-helpers.js";
 import {
   requiresCompletionRequiredAsyncTaskWait,
   shouldWaitForCompletionRequiredAsyncTasks,
@@ -46,9 +50,15 @@ function createPendingDeadlineTask() {
 }
 
 describe("waitForCompletionRequiredAsyncTasks", () => {
-  beforeAll(() => resetTaskRegistryForTests());
-  // Aborted and timed-out waits leave tasks running; release them before the next suite.
-  afterEach(() => resetTaskRegistryForTests());
+  beforeEach(() => {
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
+    configureInMemoryTaskStoresForTests();
+  });
+  afterEach(() => {
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
+  });
 
   it("waits for async task ids discovered during the attempt", async () => {
     // Tool metadata is the primary source for async task ids produced during
@@ -83,24 +93,29 @@ describe("waitForCompletionRequiredAsyncTasks", () => {
       getToolMetas: () => metas,
       getDeadlineAtMs: () => deadlineAtMs,
       pollIntervalMs: 1,
-    });
-    completeTaskRunByRunId({
-      runId: "tool:image_generate:run-123",
-      runtime: "cli",
-      sessionKey: "agent:main:cron:daily-media:run:run-123",
-      endedAt: Date.now(),
-      lastEventAt: Date.now(),
-      progressSummary: "Generated 1 image",
-      terminalSummary: "Generated 1 image.",
+      sleep: async () => {
+        completeTaskRunByRunId({
+          runId: "tool:image_generate:run-123",
+          runtime: "cli",
+          sessionKey: "agent:main:cron:daily-media:run:run-123",
+          endedAt: Date.now(),
+          lastEventAt: Date.now(),
+          progressSummary: "Generated 1 image",
+          terminalSummary: "Generated 1 image.",
+        });
+      },
     });
 
     await expect(waitPromise).resolves.toMatchObject({
       waitedRunIds: ["tool:image_generate:run-123"],
       timedOutRunIds: [],
+      terminalTasks: [
+        { taskId: task.taskId, status: "succeeded", terminalSummary: "Generated 1 image." },
+      ],
     });
   });
 
-  it("requires a wait when the cron run has an active tracked media task", () => {
+  it("requires a wait when the cron run has an active tracked media task", async () => {
     const sessionKey = "agent:main:cron:daily-media:run:run-123";
     createRunningTaskRun({
       runtime: "cli",
@@ -118,14 +133,14 @@ describe("waitForCompletionRequiredAsyncTasks", () => {
     });
 
     expect(
-      requiresCompletionRequiredAsyncTaskWait({
+      await requiresCompletionRequiredAsyncTaskWait({
         sessionKey,
         toolMetas: [],
       }),
     ).toBe(true);
   });
 
-  it("skips media task waiting after sessions_yield pauses the attempt", () => {
+  it("skips media task waiting after sessions_yield pauses the attempt", async () => {
     const sessionKey = "agent:main:cron:daily-media:run:run-123";
     createRunningTaskRun({
       runtime: "cli",
@@ -143,7 +158,7 @@ describe("waitForCompletionRequiredAsyncTasks", () => {
     });
 
     expect(
-      shouldWaitForCompletionRequiredAsyncTasks({
+      await shouldWaitForCompletionRequiredAsyncTasks({
         sessionKey,
         toolMetas: [
           {
@@ -156,7 +171,7 @@ describe("waitForCompletionRequiredAsyncTasks", () => {
       }),
     ).toBe(false);
     expect(
-      shouldWaitForCompletionRequiredAsyncTasks({
+      await shouldWaitForCompletionRequiredAsyncTasks({
         sessionKey,
         toolMetas: [],
         yieldDetected: false,
@@ -164,86 +179,85 @@ describe("waitForCompletionRequiredAsyncTasks", () => {
     ).toBe(true);
   });
 
-  it("waits for active cron media tasks from the task registry", async () => {
-    // Cron media tools may start tasks before metadata is flushed, so the
-    // registry is also consulted by session key.
-    const sessionKey = "agent:main:cron:daily-media:run:run-123";
-    createRunningTaskRun({
-      runtime: "cli",
-      taskKind: "image_generation",
-      sourceId: "image_generate:openai",
-      requesterSessionKey: sessionKey,
-      ownerKey: sessionKey,
-      scopeKind: "session",
-      runId: "tool:image_generate:run-123",
-      task: "daily image",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-      startedAt: 1,
-      lastEventAt: 1,
-    });
+  it.each(["image", "video"])(
+    "waits for active cron %s tasks discovered in the registry",
+    async (kind) => {
+      const sessionKey = "agent:main:cron:daily-media:run:run-123";
+      const runId = `tool:${kind}_generate:run-123`;
+      const task = requireCreatedTask(
+        createRunningTaskRun({
+          runtime: "cli",
+          taskKind: `${kind}_generation`,
+          sourceId: `${kind}_generate:test`,
+          requesterSessionKey: sessionKey,
+          ownerKey: sessionKey,
+          scopeKind: "session",
+          runId,
+          task: `daily ${kind}`,
+          deliveryStatus: "not_applicable",
+          notifyPolicy: "silent",
+          startedAt: 1,
+          lastEventAt: 1,
+        }),
+      );
 
-    const deadlineAtMs = Date.now() + 10_000;
-    const waitPromise = waitForCompletionRequiredAsyncTasks({
-      getToolMetas: () => [],
-      sessionKey,
-      getDeadlineAtMs: () => deadlineAtMs,
-      pollIntervalMs: 1,
-    });
-    completeTaskRunByRunId({
-      runId: "tool:image_generate:run-123",
-      runtime: "cli",
-      sessionKey,
-      endedAt: Date.now(),
-      lastEventAt: Date.now(),
-      progressSummary: "Generated 1 image",
-      terminalSummary: "Generated 1 image.",
-    });
+      const result = await waitForCompletionRequiredAsyncTasks({
+        getToolMetas: () => [],
+        sessionKey,
+        getDeadlineAtMs: () => 10,
+        now: () => 1,
+        pollIntervalMs: 1,
+        sleep: async () => {
+          completeTaskRunByRunId({
+            runId,
+            runtime: "cli",
+            sessionKey,
+            endedAt: 2,
+            lastEventAt: 2,
+            terminalSummary: `Generated ${kind}.`,
+          });
+        },
+      });
+      expect(result).toMatchObject({
+        waitedRunIds: [runId],
+        timedOutRunIds: [],
+        terminalTasks: [
+          { taskId: task.taskId, status: "succeeded", terminalSummary: `Generated ${kind}.` },
+        ],
+      });
+    },
+  );
 
-    await expect(waitPromise).resolves.toMatchObject({
-      waitedRunIds: ["tool:image_generate:run-123"],
-      timedOutRunIds: [],
-    });
-  });
-
-  it("waits for active cron video tasks from the task registry", async () => {
-    const sessionKey = "agent:main:cron:daily-media:run:run-123";
-    createRunningTaskRun({
-      runtime: "cli",
-      taskKind: "video_generation",
-      sourceId: "video_generate:fal",
-      requesterSessionKey: sessionKey,
-      ownerKey: sessionKey,
-      scopeKind: "session",
-      runId: "tool:video_generate:run-123",
-      task: "daily video",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-      startedAt: 1,
-      lastEventAt: 1,
-    });
-
-    const deadlineAtMs = Date.now() + 10_000;
-    const waitPromise = waitForCompletionRequiredAsyncTasks({
-      getToolMetas: () => [],
-      sessionKey,
-      getDeadlineAtMs: () => deadlineAtMs,
-      pollIntervalMs: 1,
-    });
-    completeTaskRunByRunId({
-      runId: "tool:video_generate:run-123",
-      runtime: "cli",
-      sessionKey,
-      endedAt: Date.now(),
-      lastEventAt: Date.now(),
-      progressSummary: "Generated 1 video",
-      terminalSummary: "Generated 1 video.",
-    });
-
-    await expect(waitPromise).resolves.toMatchObject({
-      waitedRunIds: ["tool:video_generate:run-123"],
-      timedOutRunIds: [],
-    });
+  it("does not wait on a media task when the session is only its child", async () => {
+    const sessionKey = "agent:main:cron:child-only:run:child";
+    requireCreatedTask(
+      createRunningTaskRun({
+        runtime: "cli",
+        taskKind: "image_generation",
+        sourceId: "image_generate:test",
+        requesterSessionKey: "agent:main:parent",
+        ownerKey: "agent:main:parent",
+        childSessionKey: sessionKey,
+        scopeKind: "session",
+        runId: "tool:image_generate:parent-run",
+        task: "Parent-owned image",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        startedAt: 1,
+        lastEventAt: 1,
+      }),
+    );
+    expect(await requiresCompletionRequiredAsyncTaskWait({ sessionKey, toolMetas: [] })).toBe(
+      false,
+    );
+    await expect(
+      waitForCompletionRequiredAsyncTasks({
+        sessionKey,
+        getToolMetas: () => [],
+        getDeadlineAtMs: () => 0,
+        now: () => 0,
+      }),
+    ).resolves.toEqual({ waitedRunIds: [], timedOutRunIds: [], terminalTasks: [] });
   });
 
   it("waits for async task ids discovered after an earlier async completion", async () => {
@@ -446,6 +460,10 @@ describe("waitForCompletionRequiredAsyncTasks", () => {
       const { sessionKey } = createPendingDeadlineTask();
       const controller = new AbortController();
       const reason = new Error("run cancelled during task poll");
+      let releaseSleep!: () => void;
+      const sleeping = new Promise<void>((resolve) => {
+        releaseSleep = resolve;
+      });
       const input = {
         getToolMetas: () => [],
         sessionKey,
@@ -455,15 +473,20 @@ describe("waitForCompletionRequiredAsyncTasks", () => {
         sleep: async (ms: number) => {
           expect(ms).toBe(500);
           controller.abort(reason);
-          await new Promise<void>(() => {});
+          await sleeping;
         },
         pollIntervalMs: 500,
       };
 
-      await expect(waitForCompletionRequiredAsyncTasks(input)).rejects.toMatchObject({
-        name: "AbortError",
-        cause: reason,
-      });
+      try {
+        await expect(waitForCompletionRequiredAsyncTasks(input)).rejects.toMatchObject({
+          name: "AbortError",
+          cause: reason,
+        });
+      } finally {
+        releaseSleep();
+        await sleeping;
+      }
     },
   );
 });

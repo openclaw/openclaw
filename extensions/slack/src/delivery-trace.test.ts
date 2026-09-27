@@ -12,6 +12,7 @@ import type { WebClient } from "@slack/web-api";
 // settles, including when native rejection requires ordinary-message fallback.
 // Refresh goldens with OPENCLAW_TRACE_UPDATE=1 (see delivery-trace harness docs).
 import { ChatStreamer } from "@slack/web-api/dist/chat-stream.js";
+import { projectAgentToolActivity } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   expectDeliveryTraceMatchesGolden,
   runDeliveryTraceScenario,
@@ -304,6 +305,7 @@ const slackTraceScenarios: Record<SlackTraceScenarioName, readonly DeliveryTrace
     { kind: "reply-start" },
     { kind: "tool-progress", name: "read", phase: "start" },
     { kind: "advance", ms: 2000 },
+    { kind: "tool-progress", name: "read", phase: "result" },
     { kind: "final", text: "The session card is complete." },
     { kind: "idle" },
   ],
@@ -525,12 +527,10 @@ function createPreparedTraceMessage(scenario: SlackTraceScenarioName): PreparedS
       textLimit: 4000,
       typingReaction: "",
       allowFrom: [],
-      setSlackSessionStatus: (p: {
-        channelId: string;
-        threadTs?: string;
-        status: "processing" | "active" | "suspended";
-        title?: string;
-      }) => setSlackSessionStatus({ ...p, client: client as unknown as WebClient }),
+      setSlackSessionStatus: ((p) =>
+        setSlackSessionStatus({ ...p, client: client as unknown as WebClient }).then(
+          ({ ok }) => ok,
+        )) satisfies PreparedSlackMessage["ctx"]["setSlackSessionStatus"],
     },
     account: {
       accountId: "default",
@@ -586,7 +586,6 @@ function createPreparedTraceMessage(scenario: SlackTraceScenarioName): PreparedS
     requireMention: true,
     isDirectMessage: false,
     isRoomish: true,
-    historyKey: "slack:trace",
     preview: "",
     ackReactionValue: "eyes",
     ackReactionPromise: null,
@@ -663,29 +662,32 @@ async function setupSlackTrace(
           await turn.replyOptions.onPartialReply?.({ text: step.text });
         }
         break;
-      case "tool-progress":
-        if (scenario === "progress-native-unified") {
-          if (step.phase === "start") {
-            await turn.replyOptions.onToolStart?.({
-              name: step.name,
-              phase: step.phase,
-              itemId: "write-1",
-              toolCallId: "write-call-1",
-              args: { path: "src/native-card.ts", content: "const unified = true;\n" },
-            });
-          } else {
-            await turn.replyOptions.onItemEvent?.({
-              kind: "tool",
-              itemId: "write-1",
-              toolCallId: "write-call-1",
-              phase: "end",
-              status: "completed",
-              progressText: "src/native-card.ts",
-              name: step.name,
-            });
-          }
+      case "tool-progress": {
+        const toolCallId = `${step.name}-call-1`;
+        const args =
+          scenario === "progress-native-unified"
+            ? { path: "src/native-card.ts", content: "const unified = true;\n" }
+            : undefined;
+        if (step.phase === "start") {
+          await turn.replyOptions.onItemEvent?.(
+            projectAgentToolActivity({ toolCallId, name: step.name, phase: "start", args }),
+          );
+          await turn.replyOptions.onToolStart?.({
+            toolCallId,
+            name: step.name,
+            phase: "start",
+            args,
+          });
         } else {
-          await turn.replyOptions.onToolStart?.({ name: step.name, phase: step.phase });
+          await turn.replyOptions.onItemEvent?.(
+            projectAgentToolActivity({
+              toolCallId,
+              name: step.name,
+              phase: "result",
+              status: "completed",
+              args,
+            }),
+          );
         }
         // The mocked core dispatcher owns default tool progress messages; when
         // dispatch did not suppress them it would deliver a tool-kind payload,
@@ -694,6 +696,7 @@ async function setupSlackTrace(
           await deliver({ text: `Using tool: ${step.name} (${step.phase})` }, "tool");
         }
         break;
+      }
       case "final":
         await deliver(
           {

@@ -162,11 +162,15 @@ export function makeMissingToolResult(params: {
   } as ToolResultMessage;
 }
 
-export function isSyntheticMissingToolResult(message: ToolResultMessage): boolean {
-  if (!(message as { isError?: unknown }).isError) {
+export function isSyntheticMissingToolResult(message: {
+  isError?: unknown;
+  details?: unknown;
+  content?: unknown;
+}): boolean {
+  if (!message.isError) {
     return false;
   }
-  const details = (message as { details?: unknown }).details;
+  const details = message.details;
   if (
     details &&
     typeof details === "object" &&
@@ -174,7 +178,7 @@ export function isSyntheticMissingToolResult(message: ToolResultMessage): boolea
   ) {
     return true;
   }
-  const content = (message as { content?: unknown }).content;
+  const content = message.content;
   return (
     Array.isArray(content) &&
     content.some(

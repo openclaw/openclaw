@@ -1,307 +1,211 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import crypto from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
-import type { Insertable, Selectable } from "kysely";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../infra/kysely-sync.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
-import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import { allocateHostPort } from "./cell-profile.js";
+import path from "node:path";
+import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
+import type { SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import type {
+  FleetCellOperationName,
+  FleetCellRecord,
+  FleetRegistryWriteOperations,
+  ReserveFleetCellParams,
+} from "./registry.types.js";
 
-export type FleetCellRecord = {
+export type { FleetCellOperationName, FleetCellRecord } from "./registry.types.js";
+
+type FleetOperationScope = Pick<SqliteWorkerStore<FleetRegistryWriteOperations>, "execute"> & {
+  context: OpenClawStateWorkerContext;
   tenantId: string;
-  createdAtMs: number;
-  image: string;
-  runtime: "docker" | "podman";
-  hostPort: number;
-  containerName: string;
-  dataDir: string;
+  owner: string;
+  assertCurrent(): void;
 };
+const fleetOperationScopes = resolveGlobalSingleton(
+  Symbol.for("openclaw.fleetOperationScopes"),
+  () => new AsyncLocalStorage<FleetOperationScope>(),
+);
 
-type ReserveFleetCellParams = Omit<FleetCellRecord, "hostPort"> & {
-  requestedPort?: number;
-};
+async function writeFleetCell<
+  Key extends "fleet.cell.reserve" | "fleet.cell.updateImage" | "fleet.cell.delete",
+>(
+  env: NodeJS.ProcessEnv,
+  command: { type: Key; input: FleetRegistryWriteOperations[Key]["input"] },
+): Promise<FleetRegistryWriteOperations[Key]["output"]> {
+  const scope = fleetOperationScopes.getStore();
+  if (scope) {
+    scope.assertCurrent();
+    if (
+      scope.tenantId !== command.input.tenantId ||
+      scope.context.admission.databasePath !== path.resolve(resolveOpenClawStateSqlitePath(env))
+    ) {
+      throw new Error("Fleet operation does not own the requested cell database");
+    }
+    return await scope.execute({
+      type: command.type,
+      input: { ...command.input, operationOwner: scope.owner },
+    });
+  }
+  return await writeFleetRegistry(captureOpenClawStateWorkerContext({ env }), command);
+}
 
-type FleetCellsTable = OpenClawStateKyselyDatabase["fleet_cells"];
-type FleetCellRow = Selectable<FleetCellsTable>;
-type FleetRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "fleet_cells" | "state_leases">;
-
-const FLEET_OPERATION_LEASE_SCOPE = "fleet-cell-operation";
-const FLEET_OPERATION_LEASE_TTL_MS = 5 * 60_000;
+async function writeFleetRegistry<Key extends keyof FleetRegistryWriteOperations>(
+  context: OpenClawStateWorkerContext,
+  command: { type: Key; input: FleetRegistryWriteOperations[Key]["input"] },
+): Promise<FleetRegistryWriteOperations[Key]["output"]> {
+  const { executeOpenClawStateWorker } = await import("../state/openclaw-state-worker-store.js");
+  return await executeOpenClawStateWorker(context, command);
+}
 
 type FleetCellOperationLease = {
-  heartbeat: (nowMs?: number) => void;
-  release: () => void;
+  heartbeat: (nowMs?: number) => Promise<void>;
+  release: () => Promise<void>;
   owner: string;
 };
 
-export type FleetCellOperationName =
-  | "create"
-  | "start"
-  | "stop"
-  | "restart"
-  | "upgrade"
-  | "backup"
-  | "restore"
-  | "rm";
-
-function kyselyFor(db: DatabaseSync) {
-  return getNodeSqliteKysely<FleetRegistryDatabase>(db);
-}
-
-function parseRuntime(runtime: string): FleetCellRecord["runtime"] {
-  if (runtime === "docker" || runtime === "podman") {
-    return runtime;
+/** CLI reads remain noncreating and never join Gateway writable lifecycle admission (#101290). */
+export async function listFleetCells(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<FleetCellRecord[]> {
+  const reply = await executeExistingOpenClawStateRead({ env }, { type: "fleet.list" });
+  if (!reply) {
+    return [];
   }
-  throw new Error(`Unsupported fleet runtime in state database: ${runtime}`);
+  if (!reply.ok || reply.type !== "fleet.list") {
+    throw new Error("Unexpected Fleet registry list result");
+  }
+  return reply.cells;
 }
 
-function rowToRecord(row: FleetCellRow): FleetCellRecord {
-  return {
-    tenantId: row.tenant_id,
-    createdAtMs: row.created_at_ms,
-    image: row.image,
-    runtime: parseRuntime(row.runtime),
-    hostPort: row.host_port,
-    containerName: row.container_name,
-    dataDir: row.data_dir,
-  };
-}
-
-function recordToRow(record: FleetCellRecord): Insertable<FleetCellsTable> {
-  return {
-    tenant_id: record.tenantId,
-    created_at_ms: record.createdAtMs,
-    image: record.image,
-    runtime: record.runtime,
-    host_port: record.hostPort,
-    container_name: record.containerName,
-    data_dir: record.dataDir,
-  };
-}
-
-export function listFleetCells(env: NodeJS.ProcessEnv = process.env): FleetCellRecord[] {
-  // CLI reads must not join the Gateway's writable SQLite lifecycle (#101290).
-  return (
-    withExistingOpenClawStateDatabaseReadOnly(
-      ({ db }) => {
-        if (!tableExists(db, "fleet_cells")) {
-          return [];
-        }
-        const rows = executeSqliteQuerySync(
-          db,
-          kyselyFor(db).selectFrom("fleet_cells").selectAll().orderBy("tenant_id", "asc"),
-        ).rows;
-        return rows.map(rowToRecord);
-      },
-      { env },
-    ) ?? []
-  );
-}
-
-export function getFleetCell(
+export async function getFleetCell(
   env: NodeJS.ProcessEnv,
   tenantId: string,
-): FleetCellRecord | undefined {
-  // CLI reads must not join the Gateway's writable SQLite lifecycle (#101290).
-  return withExistingOpenClawStateDatabaseReadOnly(
-    ({ db }) => {
-      if (!tableExists(db, "fleet_cells")) {
-        return undefined;
-      }
-      const row = executeSqliteQueryTakeFirstSync(
-        db,
-        kyselyFor(db).selectFrom("fleet_cells").selectAll().where("tenant_id", "=", tenantId),
-      );
-      return row ? rowToRecord(row) : undefined;
-    },
-    { env },
-  );
+): Promise<FleetCellRecord | undefined> {
+  const reply = await executeExistingOpenClawStateRead({ env }, { type: "fleet.get", tenantId });
+  if (!reply) {
+    return undefined;
+  }
+  if (!reply.ok || reply.type !== "fleet.get") {
+    throw new Error("Unexpected Fleet registry lookup result");
+  }
+  return reply.cell;
 }
 
-export function reserveFleetCell(
+export async function reserveFleetCell(
   env: NodeJS.ProcessEnv,
   params: ReserveFleetCellParams,
-): FleetCellRecord {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const kysely = kyselyFor(db);
-      const existing = executeSqliteQueryTakeFirstSync(
-        db,
-        kysely
-          .selectFrom("fleet_cells")
-          .select("tenant_id")
-          .where("tenant_id", "=", params.tenantId),
-      );
-      if (existing) {
-        throw new Error(`Fleet cell already exists: ${params.tenantId}`);
-      }
-
-      const usedPorts = executeSqliteQuerySync(
-        db,
-        kysely.selectFrom("fleet_cells").select("host_port"),
-      ).rows.map((row) => row.host_port);
-      // Allocate and reserve under one write lock so concurrent creates cannot claim one port.
-      const hostPort = allocateHostPort(usedPorts, params.requestedPort);
-      const record: FleetCellRecord = {
-        tenantId: params.tenantId,
-        createdAtMs: params.createdAtMs,
-        image: params.image,
-        runtime: params.runtime,
-        hostPort,
-        containerName: params.containerName,
-        dataDir: params.dataDir,
-      };
-      executeSqliteQuerySync(db, kysely.insertInto("fleet_cells").values(recordToRow(record)));
-      return record;
-    },
-    { env },
-  );
+): Promise<FleetCellRecord> {
+  return await writeFleetCell(env, {
+    type: "fleet.cell.reserve",
+    input: { ...params },
+  });
 }
 
-export function updateFleetCellImage(
+export async function updateFleetCellImage(
   env: NodeJS.ProcessEnv,
   tenantId: string,
   image: string,
-): void {
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const result = executeSqliteQuerySync(
-        db,
-        kyselyFor(db).updateTable("fleet_cells").set({ image }).where("tenant_id", "=", tenantId),
-      );
-      if (result.numAffectedRows !== 1n) {
-        throw new Error(`Fleet cell disappeared before its image could be updated: ${tenantId}`);
-      }
-    },
-    { env },
-  );
+): Promise<void> {
+  await writeFleetCell(env, {
+    type: "fleet.cell.updateImage",
+    input: { tenantId, image },
+  });
 }
 
-export function acquireFleetCellOperation(params: {
-  env: NodeJS.ProcessEnv;
-  tenantId: string;
-  operation: FleetCellOperationName;
-  owner?: string;
-  nowMs?: number;
-}): FleetCellOperationLease {
-  const nowMs = params.nowMs ?? Date.now();
-  const expiresAt = nowMs + FLEET_OPERATION_LEASE_TTL_MS;
+export async function deleteFleetCell(env: NodeJS.ProcessEnv, tenantId: string): Promise<void> {
+  await writeFleetCell(env, { type: "fleet.cell.delete", input: { tenantId } });
+}
+
+export async function withFleetCellOperationLease<T>(
+  params: {
+    env: NodeJS.ProcessEnv;
+    tenantId: string;
+    operation: FleetCellOperationName;
+    owner?: string;
+    nowMs?: number;
+  },
+  operation: (lease: FleetCellOperationLease) => Promise<T>,
+): Promise<T> {
+  const context = captureOpenClawStateWorkerContext({ env: params.env });
   const owner = params.owner ?? crypto.randomUUID();
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const kysely = kyselyFor(db);
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .deleteFrom("state_leases")
-          .where("scope", "=", FLEET_OPERATION_LEASE_SCOPE)
-          .where("lease_key", "=", params.tenantId)
-          .where("expires_at", "<=", nowMs),
-      );
-      const existing = executeSqliteQueryTakeFirstSync(
-        db,
-        kysely
-          .selectFrom("state_leases")
-          .select(["expires_at", "payload_json"])
-          .where("scope", "=", FLEET_OPERATION_LEASE_SCOPE)
-          .where("lease_key", "=", params.tenantId),
-      );
-      if (existing) {
-        let operation = "fleet operation";
-        try {
-          const payload: unknown = existing.payload_json
-            ? JSON.parse(existing.payload_json)
-            : undefined;
-          if (
-            typeof payload === "object" &&
-            payload !== null &&
-            "operation" in payload &&
-            typeof payload.operation === "string"
-          ) {
-            operation = `fleet ${payload.operation}`;
+  const tenantId = params.tenantId;
+  const claim = { tenantId, owner, operation: params.operation, nowMs: params.nowMs };
+  const { runOpenClawStateWorkerOperation } =
+    await import("../state/openclaw-state-worker-store.js");
+  let phase: "claim" | "operation" | "cleanup" | "closed" = "claim";
+  const assertCurrent = (commandType?: PropertyKey) => {
+    context.admission.assertCurrent();
+    if (phase === "closed" || (phase === "cleanup" && commandType !== "fleet.operation.release")) {
+      throw new Error(`Fleet operation scope is closed for ${tenantId}.`);
+    }
+  };
+  return await runOpenClawStateWorkerOperation(
+    context,
+    async (scope) => {
+      await scope.execute({ type: "fleet.operation.acquire", input: claim });
+      phase = "operation";
+      let release: Promise<void> | undefined;
+      const lease: FleetCellOperationLease = {
+        owner,
+        heartbeat: async (nowMs) => {
+          if (phase !== "operation") {
+            throw new Error(`Fleet operation lease was lost for ${tenantId}.`);
           }
-        } catch {
-          // Busy diagnostics are best-effort; lease ownership remains authoritative.
-        }
-        throw new Error(
-          `Another ${operation} is already running for ${params.tenantId}; retry after ${new Date(existing.expires_at ?? expiresAt).toISOString()}.`,
+          await scope.execute({
+            type: "fleet.operation.heartbeat",
+            input: { tenantId, owner, nowMs },
+          });
+        },
+        release: () => {
+          if (release) {
+            return release;
+          }
+          phase = "cleanup";
+          return (release = scope.execute({
+            type: "fleet.operation.release",
+            input: { tenantId, owner },
+          }));
+        },
+      };
+      let outcome: { value: T } | { error: unknown };
+      const errors: unknown[] = [];
+      try {
+        outcome = {
+          value: await fleetOperationScopes.run(
+            { ...scope, context, tenantId, owner, assertCurrent },
+            () => operation(lease),
+          ),
+        };
+        context.admission.assertCurrent();
+      } catch (error) {
+        outcome = { error };
+        errors.push(error);
+      }
+      try {
+        await lease.release();
+      } catch (error) {
+        errors.push(error);
+      } finally {
+        // The existing client joins dispatched work after closing further command admission.
+        phase = "closed";
+      }
+      if (errors.length === 1) {
+        throw errors[0];
+      }
+      if (errors.length > 1) {
+        throw createSqliteLifecycleAggregateError(
+          errors,
+          "Fleet operation and lease release failed",
+          errors[0],
         );
       }
-      executeSqliteQuerySync(
-        db,
-        kysely.insertInto("state_leases").values({
-          scope: FLEET_OPERATION_LEASE_SCOPE,
-          lease_key: params.tenantId,
-          owner,
-          expires_at: expiresAt,
-          heartbeat_at: nowMs,
-          payload_json: JSON.stringify({ operation: params.operation }),
-          created_at: nowMs,
-          updated_at: nowMs,
-        }),
-      );
+      if ("error" in outcome) {
+        throw outcome.error;
+      }
+      return outcome.value;
     },
-    { env: params.env },
-  );
-
-  return {
-    owner,
-    heartbeat: (heartbeatNowMs = Date.now()) => {
-      const heartbeatExpiresAt = heartbeatNowMs + FLEET_OPERATION_LEASE_TTL_MS;
-      runOpenClawStateWriteTransaction(
-        ({ db }) => {
-          const result = executeSqliteQuerySync(
-            db,
-            kyselyFor(db)
-              .updateTable("state_leases")
-              .set({
-                expires_at: heartbeatExpiresAt,
-                heartbeat_at: heartbeatNowMs,
-                updated_at: heartbeatNowMs,
-              })
-              .where("scope", "=", FLEET_OPERATION_LEASE_SCOPE)
-              .where("lease_key", "=", params.tenantId)
-              .where("owner", "=", owner)
-              .where("expires_at", ">", heartbeatNowMs),
-          );
-          if (result.numAffectedRows !== 1n) {
-            throw new Error(`Fleet operation lease was lost for ${params.tenantId}.`);
-          }
-        },
-        { env: params.env },
-      );
-    },
-    release: () => {
-      runOpenClawStateWriteTransaction(
-        ({ db }) => {
-          executeSqliteQuerySync(
-            db,
-            kyselyFor(db)
-              .deleteFrom("state_leases")
-              .where("scope", "=", FLEET_OPERATION_LEASE_SCOPE)
-              .where("lease_key", "=", params.tenantId)
-              .where("owner", "=", owner),
-          );
-        },
-        { env: params.env },
-      );
-    },
-  };
-}
-
-export function deleteFleetCell(env: NodeJS.ProcessEnv, tenantId: string): void {
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      executeSqliteQuerySync(
-        db,
-        kyselyFor(db).deleteFrom("fleet_cells").where("tenant_id", "=", tenantId),
-      );
-    },
-    { env },
+    { assertCurrent },
   );
 }

@@ -59,6 +59,13 @@ seed models as a successful refresh. HTTP 401/403 produces a catalog-scoped
 Neither a static catalog nor skipped discovery produces a live outcome.
 Each outcome carries the profile selected for the actual request, when one
 supplied its credential. Family providers report each sibling independently.
+Provider-scoped refreshes preserve explicit outcomes reported under a registered
+alias of the selected provider; unrelated sibling outcomes remain excluded.
+With a positive cache lifetime, validated empty results use the same
+successful-observation lifetime as nonempty results. After expiry, ordinary
+catalog reads return retained rows while the existing inventory owner refreshes
+the provider in the background. `ttlMs: 0` still disables response caching and
+does not record an expiry for this renewal path.
 
 Public metadata requests declare `authentication: "none"` in discovery
 options. The prepared request then has no credential or profile identity;
@@ -72,10 +79,17 @@ pass `{ discoveryMode: "strict" }` explicitly; Hugging Face discovery accepts
 this options object after its existing timeout argument. The Chutes public
 default retains its anonymous retry after HTTP 401; strict calls never retry
 without the selected credential.
-The strict and advisory paths share the same guarded transport and cache.
+The strict and advisory paths share the same guarded transport and cache, with
+separate cache identities. Advisory calls still retain only nonempty results.
 Custom live builders can use `runLiveProviderCatalog` at their catalog hook
-to convert acquisition errors into outcomes. Keep metadata-feed fallback
-separate from account discovery; do not retry a rejected account request
+to report successful acquisition and convert acquisition errors into outcomes.
+Returning provider configuration alone does not establish a live discovery outcome.
+For compatibility, nonempty rows returned by a legacy catalog hook without an
+outcome survive provider-wide failures under the same credentials. This does not
+establish a successful discovery origin or retain unrelated configured and
+supplemental rows. Empty legacy catalogs and profile-specific failures do not
+use that fallback; a successful replacement clears the previous row provenance.
+Keep metadata-feed fallback separate from account discovery; do not retry a rejected account request
 anonymously or substitute seed rows inside a strict builder.
 
 Custom catalog hooks may receive optional `mode` metadata from
@@ -218,6 +232,12 @@ appropriate for model-list freshness, avoid request-time filesystem polling,
 and pass a provider-specific `readRows` / `readModelId` only when the
 upstream response is not an OpenAI-compatible `{ data: [{ id, object }] }`
 shape.
+
+During model-runtime preparation, `staticCatalog.run` and `prepareSyntheticAuth`
+receive an optional `signal`. Shutdown and plugin/config replacement abort it.
+Stop awaited acquisition when it aborts and finish resource cleanup before the
+hook settles. OpenClaw discards cancelled results and joins cleanup before a
+replacement can acquire the same agent resources.
 
 For a separate authoritative metadata feed, the same
 `provider-catalog-live-runtime` subpath exposes `ProviderCatalogSnapshot`:

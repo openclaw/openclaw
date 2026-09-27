@@ -1,19 +1,20 @@
 import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { html as staticHtml, literal } from "lit/static-html.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { renderAgentRowChip } from "../../components/agent-row-chip.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/ip-location.ts";
 import "../../components/viewer-facepile.ts";
-import "../../components/web-awesome-popover.ts";
 import { renderSettingsStatus, renderSettingsSegmented } from "../../components/settings-ui.ts";
+import { syncPopoverLabel } from "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp, formatTimeAgo } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import {
-  isPresenceViewerIdle,
+  presenceViewerActivity,
+  presenceActivityLabel,
   presenceViewerLabel,
   type PresenceViewer,
 } from "../../lib/presence-users.ts";
@@ -45,7 +46,7 @@ import {
 } from "./session-activity.ts";
 
 type SessionActivityViewProps = {
-  context: ApplicationContext<RouteId>;
+  context: ApplicationContext;
   expandedAutomationDays: ReadonlySet<string>;
   filters: SessionActivityFilters;
   presenceViewers: readonly PresenceViewer[];
@@ -97,7 +98,9 @@ function renderPersonAvatar(person: PresenceViewer, showPresence = false) {
       showPresence && (person.entries?.length ?? 0) > 0
         ? html`<span
             class="activity-feed__presence-dot"
-            aria-label=${t("activityFeed.online")}
+            data-presence-activity=${presenceViewerActivity(person)}
+            role="img"
+            aria-label=${presenceActivityLabel(presenceViewerActivity(person))}
           ></span>`
         : nothing
     }
@@ -189,14 +192,16 @@ function renderPeopleControl(
         : nothing
     }
     <wa-popover
+      ${ref(syncPopoverLabel)}
       class="activity-feed__people-popover"
       for="activity-feed-people-trigger"
+      aria-label=${t("activityFeed.peopleButtonLabel")}
       placement="bottom-end"
       without-arrow
       @wa-show=${(event: Event) => setPeopleExpanded(event, true)}
       @wa-hide=${(event: Event) => setPeopleExpanded(event, false)}
     >
-      <div class="activity-feed__people-panel" aria-label=${t("activityFeed.peopleButtonLabel")}>
+      <div class="activity-feed__people-panel">
         <button
           type="button"
           class="session-menu__item activity-feed__people-row"
@@ -253,7 +258,7 @@ function dayLabel(timestamp: number | null, now = Date.now()): string {
 }
 
 function renderSessionLink(
-  context: ApplicationContext<RouteId>,
+  context: ApplicationContext,
   row: GatewaySessionRow,
   onSummaryRetry?: (row: GatewaySessionRow) => void,
 ) {
@@ -423,17 +428,13 @@ function renderDaySessions(
 }
 
 function renderIdentityHeader(
-  context: ApplicationContext<RouteId>,
+  context: ApplicationContext,
   identity: PresenceViewer,
   rows: readonly GatewaySessionRow[],
 ) {
   const online = (identity.entries?.length ?? 0) > 0;
-  const idle = online && isPresenceViewerIdle(identity);
-  const status = online
-    ? idle
-      ? t("activityFeed.idle")
-      : t("activityFeed.online")
-    : t("activityFeed.offline");
+  const activity = presenceViewerActivity(identity);
+  const status = online ? presenceActivityLabel(activity) : t("activityFeed.offline");
   const devices = identity.entries ?? [];
   const viewing = resolveViewingNow(identity, rows);
   return html`
@@ -449,7 +450,7 @@ function renderIdentityHeader(
           <h2>${presenceViewerLabel(identity)}</h2>
           ${identity.email ? html`<p>${identity.email}</p>` : nothing}
         </div>
-        ${renderSettingsStatus({ kind: online ? (idle ? "warn" : "ok") : "muted", label: status })}
+        ${renderSettingsStatus({ kind: online && activity !== "unknown" ? (activity === "idle" ? "warn" : "ok") : "muted", label: status })}
       </div>
       ${
         devices.length > 0
@@ -548,6 +549,7 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
           ${icons.search}
           <input
             type="search"
+            aria-label=${t("activityFeed.searchPlaceholder")}
             .value=${props.filters.query}
             placeholder=${t("activityFeed.searchPlaceholder")}
             @input=${(event: Event) => {

@@ -1,12 +1,25 @@
+import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../config/sessions/types.js";
-import { createDeferredCore } from "../shared/deferred.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import {
+  isSessionTranscriptIndexReconcileRunning,
+  waitForSessionTranscriptIndexReconcile,
+} from "../config/sessions/session-transcript-reconcile.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
+import * as nodeSqlite from "../infra/node-sqlite.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  getOpenClawAgentDatabaseIfOpen,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { backfillSessionTitle } from "./dashboard-session-title-backfill.js";
-import { maybeGenerateDashboardSessionTitle } from "./dashboard-session-title.js";
 import { backfillSessionRowTranscriptFields } from "./session-row-transcript-backfill.js";
+import { readSessionRowTranscriptFields } from "./session-row-transcript-backfill.kernel.js";
 
 const generateConversationLabelWithFallback = vi.hoisted(() => vi.fn());
 vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
@@ -23,14 +36,60 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-type BackfillParams = Parameters<typeof backfillSessionTitle>[0];
+type BackfillParams = Parameters<typeof backfillSessionRowTranscriptFields>[0];
+
+function sessionDatabaseOptions(params: BackfillParams) {
+  return {
+    agentId: params.agentId,
+    path: resolveSqliteTargetFromSessionStorePath(params.storePath, {
+      agentId: params.agentId,
+    }).path,
+  };
+}
+
+async function withColdStore(params: BackfillParams, read: () => Promise<void>) {
+  const options = sessionDatabaseOptions(params);
+  await waitForSessionTranscriptIndexReconcile(options);
+  await closeOpenClawAgentDatabaseByPathAsync(options.path, options.agentId);
+  expect(getOpenClawAgentDatabaseIfOpen(options) === undefined).toBe(true);
+  const opened: Array<{
+    database: ReturnType<typeof nodeSqlite.openNodeSqliteDatabase>;
+    readOnly: boolean;
+  }> = [];
+  const actualOpen = nodeSqlite.openNodeSqliteDatabase;
+  const observe = vi
+    .spyOn(nodeSqlite, "openNodeSqliteDatabase")
+    .mockImplementation((location, opts) => {
+      const database = actualOpen(location, opts);
+      if (
+        nodeSqlite.resolveSqliteFilesystemPath(database.location() ?? "") ===
+        nodeSqlite.resolveSqliteFilesystemPath(options.path)
+      ) {
+        opened.push({ database, readOnly: opts?.readOnly === true });
+      }
+      return database;
+    });
+  try {
+    await read();
+    expect(isSessionTranscriptIndexReconcileRunning(options)).toBe(false);
+    expect(getOpenClawAgentDatabaseIfOpen(options) === undefined).toBe(true);
+    expect(opened.every(({ readOnly }) => readOnly)).toBe(true);
+  } finally {
+    observe.mockRestore();
+    // Failed pre-fix assertions must still join any accidentally admitted rebuild.
+    await waitForSessionTranscriptIndexReconcile(options);
+    await closeOpenClawAgentDatabaseByPathAsync(options.path, options.agentId);
+  }
+  expect(opened.every(({ database }) => !database.isOpen)).toBe(true);
+}
 
 async function withSession(
   run: (params: BackfillParams) => Promise<void>,
-  messages: Array<{ role: string; content: string; provenance?: unknown }> = [
+  messages: Array<Record<string, unknown>> = [
     { role: "user", content: "Investigate why the gateway times out" },
     { role: "assistant", content: "**Found** the slow query" },
   ],
+  entry: Partial<InternalSessionEntry> = {},
 ) {
   await withOpenClawTestState({ label: "session-row-backfill" }, async (state) => {
     const params = {
@@ -51,6 +110,7 @@ async function withSession(
       updatedAt: 12,
       lastActivityAt: 11,
       lastInteractionAt: 10,
+      ...entry,
     });
     await run({
       ...params,
@@ -60,24 +120,157 @@ async function withSession(
 }
 
 describe("session row transcript backfill", () => {
-  it("persists a legacy title without moving its activity and returns a transient preview", async () => {
+  it("reads a cold preview without admitting a writer or changing legacy metadata", async () => {
     await withSession(
       async (params) => {
-        const before = sessionAccessor.loadSessionEntry(params);
-        await expect(backfillSessionRowTranscriptFields(params)).resolves.toEqual({
-          lastMessagePreview: "Found the slow query",
+        await withColdStore(params, async () => {
+          const hostSql = observeHostDataSql();
+          try {
+            await expect(backfillSessionRowTranscriptFields(params)).resolves.toEqual({
+              lastMessagePreview: "Found the slow query",
+            });
+            for (const statement of hostSql.calls) {
+              expect(statement).not.toHaveBeenCalled();
+            }
+          } finally {
+            hostSql.restore();
+          }
+          expect(sessionAccessor.loadSessionEntryReadOnly(params)).toEqual(params.sessionEntry);
+          expect(generateConversationLabelWithFallback).not.toHaveBeenCalled();
         });
-        expect(sessionAccessor.loadSessionEntry(params)).toEqual({
-          ...before,
-          displayName: "Investigate why the gateway times out",
-        });
-        expect(generateConversationLabelWithFallback).not.toHaveBeenCalled();
       },
       [
         { role: "user", content: "Internal relay", provenance: { kind: "inter_session" } },
         { role: "user", content: "Investigate why the gateway times out" },
         { role: "assistant", content: "**Found** the slow query" },
       ],
+    );
+  });
+
+  it.each(["current", "unavailable", "absent"] as const)(
+    "reads optional terminal fallback fields from %s storage without writer admission",
+    async (storage) => {
+      await withSession(
+        async (seeded) => {
+          const params = {
+            ...seeded,
+            ...(storage === "absent" ? { storePath: `${seeded.storePath}.missing.sqlite` } : {}),
+            model: { selectedProvider: "unit-test", selectedModel: "selected" },
+          };
+          const options = sessionDatabaseOptions(params);
+          if (storage === "unavailable") {
+            await waitForSessionTranscriptIndexReconcile(options);
+            openOpenClawAgentDatabase(options)
+              .db.prepare(
+                "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
+              )
+              .run(params.sessionId);
+          }
+          if (storage === "absent") {
+            expect(fs.existsSync(options.path)).toBe(false);
+          }
+          await withColdStore(params, async () => {
+            await expect(backfillSessionRowTranscriptFields(params)).resolves.toEqual(
+              storage === "current"
+                ? {
+                    lastMessagePreview: "Finished with fallback",
+                    fallbackModel: { provider: "unit-test", model: "fallback" },
+                  }
+                : {},
+            );
+            if (storage === "unavailable") {
+              expect(isSessionTranscriptIndexReconcileRunning(options)).toBe(false);
+              expect(
+                withOpenClawAgentDatabaseReadOnly(
+                  ({ db }) =>
+                    db
+                      .prepare(
+                        "SELECT needs_rebuild FROM session_transcript_index_state WHERE session_id = ?",
+                      )
+                      .get(params.sessionId),
+                  options,
+                ),
+              ).toEqual({ found: true, value: { needs_rebuild: 1 } });
+            }
+            if (storage === "absent") {
+              expect(fs.existsSync(options.path)).toBe(false);
+            }
+          });
+        },
+        [
+          {
+            role: "assistant",
+            content: "Finished with fallback",
+            provider: "unit-test",
+            model: "fallback",
+            stopReason: "stop",
+            __openclaw: { runId: "terminal-run" },
+          },
+        ],
+        {
+          lastRunId: "terminal-run",
+          fallbackNotice: {
+            kind: "active",
+            selectedModel: "unit-test/selected",
+            activeModel: "unit-test/fallback",
+          },
+        },
+      );
+    },
+  );
+
+  it("uses the host's runtime aliases when projecting worker-read terminal fallback facts", async () => {
+    await withSession(
+      async (params) => {
+        cliBackendsTesting.setDepsForTest({
+          resolvePluginSetupCliBackend: () => undefined,
+          resolveRuntimeCliBackends: () => [
+            {
+              id: "synthetic-cli",
+              modelProvider: "unit-test",
+              pluginId: "synthetic-runtime",
+              config: { command: "synthetic-cli" },
+            },
+          ],
+        });
+        const hostSql = observeHostDataSql();
+        try {
+          await expect(
+            backfillSessionRowTranscriptFields({
+              ...params,
+              model: {
+                selectedProvider: "synthetic-cli",
+                selectedModel: "same",
+                config: {},
+              },
+            }),
+          ).resolves.toEqual({ lastMessagePreview: "Finished on equivalent runtime" });
+          for (const statement of hostSql.calls) {
+            expect(statement).not.toHaveBeenCalled();
+          }
+        } finally {
+          hostSql.restore();
+          cliBackendsTesting.resetDepsForTest();
+        }
+      },
+      [
+        {
+          role: "assistant",
+          content: "Finished on equivalent runtime",
+          provider: "unit-test",
+          model: "same",
+          stopReason: "stop",
+          __openclaw: { runId: "terminal-run" },
+        },
+      ],
+      {
+        lastRunId: "terminal-run",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "synthetic-cli/same",
+          activeModel: "unit-test/same",
+        },
+      },
     );
   });
 
@@ -93,7 +286,7 @@ describe("session row transcript backfill", () => {
           }
           return parse(text, reviver);
         });
-        await expect(backfillSessionRowTranscriptFields(params)).resolves.toEqual({
+        expect(readSessionRowTranscriptFields(params)).toEqual({
           lastMessagePreview: "Latest reply",
         });
         expect(sessionAccessor.loadSessionEntry(params)?.displayName).toBeUndefined();
@@ -121,92 +314,5 @@ describe("session row transcript backfill", () => {
         { role: "assistant", content: "x".repeat(70 * 1024) },
       ],
     );
-  });
-
-  it.each([
-    ["a replacement lifecycle", { lifecycleRevision: "replacement" }],
-    ["a manual rename", { label: "Manual title" }],
-    ["a newly running turn", { status: "running" }],
-  ] satisfies Array<[string, Partial<SessionEntry>]>)(
-    "preserves %s admitted before its metadata write",
-    async (_name, mutation) => {
-      await withSession(async (params) => {
-        const patch = sessionAccessor.patchSessionEntryCore;
-        vi.spyOn(sessionAccessor, "patchSessionEntryCore").mockImplementationOnce(
-          async (scope, update, options) => {
-            await patch(scope, () => mutation);
-            return patch(scope, update, options);
-          },
-        );
-        await expect(backfillSessionTitle(params)).resolves.toBe(false);
-        expect(sessionAccessor.loadSessionEntry(params)).toMatchObject(mutation);
-        expect(sessionAccessor.loadSessionEntry(params)?.displayName).toBeUndefined();
-      });
-    },
-  );
-
-  it("rejects a title from a transcript rewritten before its metadata commit", async () => {
-    await withSession(async (params) => {
-      const patch = sessionAccessor.patchSessionEntryCore;
-      vi.spyOn(sessionAccessor, "patchSessionEntryCore").mockImplementationOnce(
-        async (scope, update, options) => {
-          await sessionAccessor.replaceTranscriptEvents(params, [
-            { type: "session", version: 3, id: params.sessionId },
-            {
-              type: "message",
-              id: "replacement-user",
-              parentId: null,
-              message: { role: "user", content: "A different branch" },
-            },
-          ]);
-          return patch(scope, update, options);
-        },
-      );
-      await expect(backfillSessionTitle(params)).resolves.toBe(false);
-      expect(sessionAccessor.loadSessionEntry(params)?.displayName).toBeUndefined();
-    });
-  });
-
-  it("does not commit after the resident owner revokes the queued backfill", async () => {
-    await withSession(async (params) => {
-      let active = true;
-      const patch = sessionAccessor.patchSessionEntryCore;
-      vi.spyOn(sessionAccessor, "patchSessionEntryCore").mockImplementationOnce(
-        (scope, update, options) => {
-          active = false;
-          return patch(scope, update, options);
-        },
-      );
-      await expect(backfillSessionTitle({ ...params, shouldCommit: () => active })).resolves.toBe(
-        false,
-      );
-      expect(sessionAccessor.loadSessionEntry(params)?.displayName).toBeUndefined();
-    });
-  });
-
-  it("lets an in-flight foreground title request keep its naming decision", async () => {
-    await withSession(async (params) => {
-      const started = createDeferredCore();
-      const title = createDeferredCore<string>();
-      generateConversationLabelWithFallback.mockImplementation(() => {
-        started.resolve();
-        return title.promise;
-      });
-      const foreground = maybeGenerateDashboardSessionTitle({
-        ...params,
-        cfg: { agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } },
-        entry: sessionAccessor.loadSessionEntry(params),
-        userMessage: "Investigate why the gateway times out",
-      });
-      await started.promise;
-      try {
-        await expect(backfillSessionTitle(params)).resolves.toBe(false);
-      } finally {
-        title.resolve("Model-generated title");
-        await foreground;
-      }
-      expect(sessionAccessor.loadSessionEntry(params)?.displayName).toBe("Model-generated title");
-      expect(generateConversationLabelWithFallback).toHaveBeenCalledOnce();
-    });
   });
 });

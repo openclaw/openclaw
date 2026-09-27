@@ -185,8 +185,8 @@ async function collectProviderApiKeysForLiveMedia(provider: string): Promise<unk
 }
 
 async function getProviderEnvVarsForLiveMedia(provider: string): Promise<string[]> {
-  const { getProviderEnvVars } = await import("../../../../src/secrets/provider-env-vars.js");
-  return getProviderEnvVars(provider);
+  const { getProviderEnvVarsCore } = await import("../../../../src/secrets/provider-env-vars.js");
+  return getProviderEnvVarsCore(provider);
 }
 
 async function loadShellEnvFallbackForLiveMedia(params: {
@@ -470,7 +470,7 @@ export async function buildRunPlan(
   );
 }
 
-export function formatHelp(): string {
+function formatHelp(): string {
   return `Media live harness
 
 Usage:

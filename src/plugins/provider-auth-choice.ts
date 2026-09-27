@@ -5,6 +5,7 @@ import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
+import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
 import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-shared.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
@@ -100,24 +101,17 @@ function restoreConfiguredPrimaryModel(
   if (!nextDefaults) {
     return nextConfig;
   }
-  if (originalModel !== undefined) {
-    return {
-      ...nextConfig,
-      agents: {
-        ...nextAgents,
-        defaults: {
-          ...nextDefaults,
-          model: originalModel,
-        },
-      },
-    };
+  const defaults = { ...nextDefaults };
+  if (originalModel === undefined) {
+    delete defaults.model;
+  } else {
+    defaults.model = originalModel;
   }
-  const { model: _model, ...restDefaults } = nextDefaults;
   return {
     ...nextConfig,
     agents: {
       ...nextAgents,
-      defaults: restDefaults,
+      defaults,
     },
   };
 }
@@ -284,6 +278,7 @@ export function applyProviderPluginAuthMethodResultConfig(params: {
 
 export async function runProviderPluginAuthMethod(params: {
   config: OpenClawConfig;
+  providerId: string;
   env?: NodeJS.ProcessEnv;
   runtime: RuntimeEnv;
   prompter: WizardPrompter;
@@ -322,8 +317,13 @@ async function prepareProviderPluginAuthMethod(
     params.workspaceDir ??
     resolveAgentWorkspaceDir(params.config, agentId) ??
     resolveDefaultAgentWorkspaceDir();
+  const store = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
+  const existingProfiles = Object.entries(store.profiles)
+    .filter(([, credential]) => credential.provider === params.providerId)
+    .map(([profileId, credential]) => ({ profileId, credential }));
   const result = await runProviderPluginAuthMethodUnpersisted({
     config: params.config,
+    existingProfiles,
     env: params.env,
     runtime: params.runtime,
     prompter: params.prompter,
@@ -566,6 +566,7 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
 
     const applied = await prepareProviderPluginAuthMethod({
       config: nextConfig,
+      providerId: resolved.provider.id,
       env: params.env,
       runtime: params.runtime,
       prompter: params.prompter,

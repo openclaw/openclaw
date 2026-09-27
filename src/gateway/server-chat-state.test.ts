@@ -6,6 +6,61 @@ import {
 } from "./server-chat-state.js";
 
 describe("createChatRunState", () => {
+  it("replays complete prepared items and evicts raw and item siblings together", () => {
+    const state = createChatRunState();
+    let seq = 0;
+    const send = (stream: string, data: Record<string, unknown>) => {
+      state.recordProgressEvent("run", { runId: "run", stream, data, seq: ++seq, ts: seq });
+    };
+    send("item", {
+      itemId: "preamble",
+      kind: "preamble",
+      phase: "end",
+      status: "completed",
+      title: "Status",
+      progressText: "Ready",
+    });
+    send("item", {
+      itemId: "preamble",
+      kind: "preamble",
+      phase: "update",
+      status: "running",
+      title: "Status",
+      progressText: "Checking",
+    });
+    expect(state.runs.get("run")?.progressSnapshot?.events).toMatchObject([
+      { data: { phase: "end", progressText: "Ready", title: "Status", status: "completed" } },
+    ]);
+    send("item", { itemId: "preamble", kind: "preamble", phase: "start", progressText: "" });
+    expect(state.runs.get("run")?.progressSnapshot?.events).toEqual([]);
+    for (let index = 0; index < 30; index += 1) {
+      const toolCallId = `call-${index}`;
+      send("tool", { toolCallId, name: "read", phase: "start", args: { path: "README.md" } });
+      send("item", {
+        itemId: `tool:${toolCallId}`,
+        toolCallId,
+        name: "read",
+        kind: "tool",
+        phase: "end",
+        title: "Read file",
+        status: "completed",
+        extraTypedFact: "retained",
+      });
+    }
+    const events = state.runs.get("run")?.progressSnapshot?.events ?? [];
+    expect(events).toHaveLength(50);
+    expect(
+      events.filter((event) => event.stream === "item").map((event) => event.data.toolCallId),
+    ).toEqual(
+      events.filter((event) => event.stream === "tool").map((event) => event.data.toolCallId),
+    );
+    expect(events.at(-1)?.data).toMatchObject({
+      title: "Read file",
+      status: "completed",
+      extraTypedFact: "retained",
+    });
+  });
+
   it.each([false, true])(
     "stops returning finalized recipients at expiry (other state: %s)",
     (keepState) => {
@@ -87,12 +142,11 @@ describe("createChatRunState", () => {
       rawBuffer: "raw",
       buffer: "projected",
       planSnapshot: { steps: [{ step: "Inspect", status: "in_progress" }] },
-      bufferUpdatedAt: 1,
       deltaSentAt: 2,
-      deltaLastBroadcastText: "projected",
       agentText: { assistant: { lastSentAt: 3 } },
       abortMarker: createChatAbortMarker(4),
     });
+    state.takeBufferDelta("run-1", "projected");
     state.recordProgressEvent("run-1", {
       runId: "run-1",
       seq: 1,
@@ -106,6 +160,7 @@ describe("createChatRunState", () => {
     expect(state.registry.peek("run-1")?.clientRunId).toBe("client-1");
     expect(state.toolEventRecipients.get("run-1")).toEqual(new Set(["conn-1"]));
     expect(state.runs.get("run-1")).toEqual({
+      lastActivityAt: expect.any(Number),
       registrations: expect.any(Array),
       abortMarker: expect.any(Object),
       toolRecipient: expect.any(Object),
@@ -154,13 +209,7 @@ describe("createChatRunState", () => {
     },
   );
 
-  it.each([
-    "naming_worktree",
-    "creating_worktree",
-    "running_setup",
-    "preparing_context",
-    "memory_flushing",
-  ])(
+  it.each(["waiting_for_state", "preparing_context", "memory_flushing"])(
     "retains only the latest startup status (%s) until observable run activity begins",
     (phase) => {
       const state = createChatRunState();
@@ -434,13 +483,52 @@ describe("createChatRunState", () => {
     },
   );
 
+  it.each(["single", "cumulative"])(
+    "stops capture before reading later fields when %s output exceeds the replay budget",
+    (size) => {
+      const state = createChatRunState();
+      let laterReads = 0;
+      const result = {
+        body:
+          size === "single"
+            ? "x".repeat(80_000)
+            : Array.from({ length: 100 }, () => "x".repeat(1_024)),
+        get later() {
+          laterReads += 1;
+          return "unused";
+        },
+      };
+      state.recordProgressEvent("run-1", {
+        runId: "run-1",
+        seq: 1,
+        stream: "tool",
+        ts: 1,
+        data: { phase: "result", toolCallId: "done", name: "read", result },
+      });
+      expect(laterReads).toBe(0);
+      expect(state.runs.get("run-1")?.progressSnapshot?.events[0]?.data).toEqual({
+        phase: "result",
+        toolCallId: "done",
+        name: "read",
+      });
+    },
+  );
+
   it("captures nested tool JSON once with the same values reconnect transport sends", () => {
     const state = createChatRunState();
     let serializations = 0;
+    let reads = 0;
     const details = {
       toJSON: () => {
         serializations += 1;
-        return { text: "é", omitted: undefined, values: [undefined, Number.NaN] };
+        return {
+          get text() {
+            reads += 1;
+            return reads === 1 ? "é" : "changed";
+          },
+          omitted: undefined,
+          values: [undefined, Number.NaN],
+        };
       },
     };
     state.recordProgressEvent("run-1", {
@@ -458,6 +546,7 @@ describe("createChatRunState", () => {
       data: { phase: "input_delta", toolCallId: "active", diff: { added: 1, removed: 0 } },
     });
     expect(serializations).toBe(1);
+    expect(reads).toBe(1);
     const snapshot = state.runs.get("run-1")?.progressSnapshot;
     expect(snapshot?.events[0]?.data.result).toEqual({
       details: { text: "é", values: [null, null] },
@@ -476,6 +565,116 @@ describe("createChatRunState", () => {
     );
   });
 
+  it.each(['é\n"\\\ud800', "🦞"])(
+    "retains the exact UTF-8 JSON limit and rejects one more byte with %j",
+    (prefix) => {
+      const state = createChatRunState();
+      const event = {
+        runId: "run-1",
+        seq: 1,
+        stream: "tool",
+        ts: 1,
+        data: { phase: "result", toolCallId: "done", name: "read", result: { text: prefix } },
+      };
+      const remaining = 64 * 1024 - Buffer.byteLength(JSON.stringify(event), "utf8");
+      event.data.result.text += "x".repeat(remaining);
+      state.recordProgressEvent("run-1", event);
+      expect(state.runs.get("run-1")?.progressSnapshot?.byteLength).toBe(64 * 1024);
+      expect(state.runs.get("run-1")?.progressSnapshot?.events[0]?.data.result).toEqual(
+        event.data.result,
+      );
+      event.seq += 1;
+      event.data.result.text += "x";
+      state.recordProgressEvent("run-1", event);
+      expect(state.runs.get("run-1")?.progressSnapshot?.events[0]?.data).toEqual({
+        phase: "result",
+        toolCallId: "done",
+        name: "read",
+      });
+    },
+  );
+
+  it("retains native boxed values, shared containers, and a proxy revoked by its last getter", () => {
+    const state = createChatRunState();
+    const numberHints: string[] = [];
+    const boxedNumber = Object.assign(Object(3), {
+      [Symbol.toPrimitive]: (hint: string) => {
+        numberHints.push(hint);
+        return -3.25;
+      },
+    });
+    const shared = { value: boxedNumber, text: Object("é"), enabled: Object(false) };
+    const revocable = Proxy.revocable(["last"], {
+      get(target, key, receiver) {
+        const value: unknown = Reflect.get(target, key, receiver);
+        if (key === "0") {
+          revocable.revoke();
+        }
+        return value;
+      },
+    });
+    state.recordProgressEvent("run-1", {
+      runId: "run-1",
+      seq: 1,
+      stream: "tool",
+      ts: 1,
+      data: {
+        phase: "result",
+        toolCallId: "done",
+        result: { first: shared, again: shared, last: revocable.proxy },
+      },
+    });
+    const event = state.runs.get("run-1")?.progressSnapshot?.events[0];
+    expect(event?.data.result).toEqual({
+      first: { value: -3.25, text: "é", enabled: false },
+      again: { value: -3.25, text: "é", enabled: false },
+      last: ["last"],
+    });
+    expect(numberHints).toEqual(["number", "number"]);
+    expect(state.runs.get("run-1")?.progressSnapshot?.byteLength).toBe(
+      Buffer.byteLength(JSON.stringify(event)),
+    );
+  });
+
+  it("counts native raw JSON bytes at the limit and stops before later getters on overflow", () => {
+    if (!("rawJSON" in JSON) || typeof JSON.rawJSON !== "function") {
+      throw new Error("This contract requires native JSON.rawJSON support");
+    }
+    const state = createChatRunState();
+    const event = {
+      runId: "run-1",
+      seq: 1,
+      stream: "tool",
+      ts: 1,
+      data: { phase: "result", toolCallId: "done", result: { raw: JSON.rawJSON('"é"') } },
+    };
+    const text = "é" + "x".repeat(64 * 1024 - Buffer.byteLength(JSON.stringify(event)));
+    event.data.result.raw = JSON.rawJSON(JSON.stringify(text));
+    state.recordProgressEvent("run-1", event);
+    expect(state.runs.get("run-1")?.progressSnapshot?.byteLength).toBe(64 * 1024);
+    expect(state.runs.get("run-1")?.progressSnapshot?.events[0]?.data.result).toEqual({
+      raw: text,
+    });
+
+    let laterReads = 0;
+    state.recordProgressEvent("run-1", {
+      ...event,
+      seq: 2,
+      data: {
+        ...event.data,
+        result: {
+          raw: JSON.rawJSON(JSON.stringify(`${text}x`)),
+          get later() {
+            laterReads += 1;
+            return "unused";
+          },
+        },
+      },
+    });
+    expect(laterReads).toBe(0);
+    expect(state.runs.get("run-1")?.progressSnapshot?.events[0]?.data.result).toBeUndefined();
+  });
+
   it.each([
     [
       "cyclic",
@@ -486,6 +685,10 @@ describe("createChatRunState", () => {
       },
     ],
     ["bigint", (): unknown => 1n],
+    [
+      "boxed number coercing to bigint",
+      (): unknown => Object.assign(Object(1), { [Symbol.toPrimitive]: () => 2n }),
+    ],
     [
       "throwing toJSON",
       (): unknown => ({
@@ -674,7 +877,10 @@ describe("createSessionMessageSubscriberRegistry", () => {
       expect([...subscribers.getApprovals("agent:main:main")]).toEqual(
         includeApprovals ? ["conn"] : [],
       );
-      expect(onChange.mock.calls).toEqual([["agent:main:main"], ["agent:main:child"]]);
+      expect(onChange.mock.calls).toEqual([
+        ["agent:main:main", "conn"],
+        ["agent:main:child", "conn"],
+      ]);
     },
   );
 

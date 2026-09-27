@@ -29,6 +29,21 @@
   min-height: 0;
 }
 
+.chat-split-view__unbound {
+  grid-area: 1 / 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.chat-split-view__unbound strong {
+  color: var(--text);
+}
+
 .chat-pane-cache__pane {
   opacity: 0;
   grid-area: 1 / 1;
@@ -603,7 +618,6 @@
   .chat-pane__actions .chat-pane__split-right,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-side-panel-toggle,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__sharing-menu,
-  .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__branches-menu,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__nav-toggle,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__palette-open,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__participants,

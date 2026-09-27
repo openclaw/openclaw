@@ -282,18 +282,24 @@ function compareStatus(beforeItem: unknown, afterItem: unknown): ComparisonStatu
   return beforeItem ? "removed" : "added";
 }
 
+function keyedPairs<Entry>(
+  beforeItems: Entry[],
+  afterItems: Entry[],
+  getKey: (item: Entry) => string,
+) {
+  // Map overwrites retain first-key order; before keys precede after-only keys.
+  const beforeByKey = new Map(beforeItems.map((item) => [getKey(item), item]));
+  const afterByKey = new Map(afterItems.map((item) => [getKey(item), item]));
+  const keys = new Set([...beforeByKey.keys(), ...afterByKey.keys()]);
+  return [...keys].map((key) => [key, beforeByKey.get(key), afterByKey.get(key)] as const);
+}
+
 function compareCounters(
   beforeItems: ComparableCounter[] = [],
   afterItems: ComparableCounter[] = [],
 ) {
-  const beforeByKey = new Map(beforeItems.map((item) => [item.key, item]));
-  const afterByKey = new Map(afterItems.map((item) => [item.key, item]));
-  const keys = new Set([...beforeByKey.keys(), ...afterByKey.keys()]);
-
-  return [...keys]
-    .map((key) => {
-      const beforeItem = beforeByKey.get(key);
-      const afterItem = afterByKey.get(key);
+  return keyedPairs(beforeItems, afterItems, (item) => item.key)
+    .map(([key, beforeItem, afterItem]) => {
       const before = normalizeCounter(beforeItem);
       const after = normalizeCounter(afterItem);
       return {
@@ -330,14 +336,8 @@ function fileKey(item: Pick<ComparableFile, "config" | "file">): string {
 }
 
 function compareFiles(beforeFiles: ComparableFile[] = [], afterFiles: ComparableFile[] = []) {
-  const beforeByKey = new Map(beforeFiles.map((item) => [fileKey(item), item]));
-  const afterByKey = new Map(afterFiles.map((item) => [fileKey(item), item]));
-  const keys = new Set([...beforeByKey.keys(), ...afterByKey.keys()]);
-
-  return [...keys]
-    .map((key) => {
-      const beforeItem = beforeByKey.get(key);
-      const afterItem = afterByKey.get(key);
+  return keyedPairs(beforeFiles, afterFiles, fileKey)
+    .map(([key, beforeItem, afterItem]) => {
       const before = normalizeFileCounter(beforeItem);
       const after = normalizeFileCounter(afterItem);
       const source = afterItem ?? beforeItem;
@@ -401,14 +401,8 @@ function normalizeRun(run?: ComparableRun): RunSnapshot {
 }
 
 function compareRuns(beforeRuns: ComparableRun[] = [], afterRuns: ComparableRun[] = []) {
-  const beforeByKey = new Map(beforeRuns.map((run) => [runKey(run), run]));
-  const afterByKey = new Map(afterRuns.map((run) => [runKey(run), run]));
-  const keys = new Set([...beforeByKey.keys(), ...afterByKey.keys()]);
-
-  return [...keys]
-    .map((key) => {
-      const beforeRun = beforeByKey.get(key);
-      const afterRun = afterByKey.get(key);
+  return keyedPairs(beforeRuns, afterRuns, runKey)
+    .map(([key, beforeRun, afterRun]) => {
       const before = normalizeRun(beforeRun);
       const after = normalizeRun(afterRun);
       return {

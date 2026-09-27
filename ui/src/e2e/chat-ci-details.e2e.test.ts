@@ -132,10 +132,15 @@ let server: ControlUiE2eServer;
 const contexts = new Set<BrowserContext>();
 
 async function setup(
-  options: { width?: number; mode?: "running" | "failed" | "passed"; defer?: boolean } = {},
+  options: {
+    width?: number;
+    height?: number;
+    mode?: "running" | "failed" | "passed";
+    defer?: boolean;
+  } = {},
 ) {
   const context = await browser.newContext({
-    viewport: { width: options.width ?? 1180, height: 960 },
+    viewport: { width: options.width ?? 1180, height: options.height ?? 960 },
     colorScheme: "dark",
     locale: "en-US",
     serviceWorkers: "block",
@@ -245,6 +250,7 @@ describe("chat CI job and step details", () => {
     expect(await page.getByText("Auto-refresh while open", { exact: false }).count()).toBe(0);
     await page.keyboard.press("Escape");
     await expect.poll(() => page.locator(".chat-pr__checks[open]").count()).toBe(0);
+    await expect.poll(() => page.locator(".chat-pr__checks-menu").isVisible()).toBe(false);
   });
 
   it("does not display a pending response for the previous commit", async () => {
@@ -273,11 +279,12 @@ describe("chat CI job and step details", () => {
   });
 
   it.each([
-    { label: "desktop", width: 1180, mode: "running" as const },
-    { label: "desktop-passed", width: 1180, mode: "passed" as const },
-    { label: "mobile", width: 393, mode: "failed" as const },
-  ])("keeps expanded steps usable on $label", async ({ label, width, mode }) => {
-    const { page } = await setup({ width, mode });
+    { label: "desktop", width: 1180, height: 960, mode: "running" as const },
+    { label: "desktop-passed", width: 1180, height: 960, mode: "passed" as const },
+    { label: "mobile", width: 393, height: 960, mode: "failed" as const },
+    { label: "landscape", width: 844, height: 390, mode: "failed" as const },
+  ])("keeps expanded steps usable on $label", async ({ label, width, height, mode }) => {
+    const { page } = await setup({ width, height, mode });
     await page.locator(".chat-pr__checks-pill").click();
     await expandLinuxJob(page);
     const menu = page.locator(".chat-pr__checks-menu");
@@ -286,9 +293,13 @@ describe("chat CI job and step details", () => {
     expect(bounds!.x).toBeGreaterThanOrEqual(0);
     expect(bounds!.y).toBeGreaterThanOrEqual(0);
     expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+    expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(height);
     expect(await menu.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(
       true,
     );
+    await menu.getByRole("link", { name: "Open checks on GitHub" }).click({ trial: true });
+    const linuxJob = menu.locator('.chat-ci__job[data-check-id="11"]');
+    await linuxJob.locator(".chat-ci__job-link").click({ trial: true });
     if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
       const output = createControlUiE2eArtifactDir("ci-details-" + label);
       await writeFile(
@@ -311,7 +322,7 @@ describe("chat CI job and step details", () => {
               width - x,
               Math.ceil(Math.max(bounds.x + bounds.width, row.x + row.width) - x + 14),
             ),
-            height: Math.min(960 - y, Math.ceil(row.y + row.height - y + 14)),
+            height: Math.min(height - y, Math.ceil(row.y + row.height - y + 14)),
           },
         });
       }

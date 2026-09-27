@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireGit } from "../../agents/worktrees/git.js";
+import { runNodeWorkerWorkspaceTransfer } from "../../node-host/node-worker-transfer-client.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
@@ -56,6 +57,7 @@ async function createGitTransfer() {
     temporaryRoot,
     service,
     prepared,
+    gatewayUrl: server.gatewayUrl,
     fetchPack,
     packs: async () =>
       (await fs.readdir(temporaryRoot, { recursive: true })).filter((name) =>
@@ -69,6 +71,49 @@ async function createGitTransfer() {
 }
 
 describe("node workspace Git pack downloads", () => {
+  it("imports and recaptures a Git workspace beyond the Windows path limit", async () => {
+    const fixture = await createGitTransfer();
+    const workspaceDir = path.join(
+      fixture.root,
+      "node-host",
+      `gateway-${"a".repeat(32)}`,
+      "workspaces",
+      "b".repeat(96),
+      "c".repeat(96),
+      "workspace",
+    );
+    expect(workspaceDir.length).toBeGreaterThan(260);
+    await fs.mkdir(workspaceDir, { recursive: true, mode: 0o700 });
+    try {
+      const transfer = () =>
+        runNodeWorkerWorkspaceTransfer({
+          gatewayUrl: fixture.gatewayUrl,
+          environmentId: "environment",
+          workspaceDir,
+          manifestHome: fixture.root,
+          transfer: {
+            direction: "download",
+            token: fixture.prepared.token,
+            manifestRef: fixture.prepared.snapshot.manifestRef,
+          },
+        });
+      for (let attempt = 0; attempt < 2; attempt++) {
+        expect(await transfer()).toBe(fixture.prepared.snapshot.manifestRef);
+        expect(await fs.readFile(path.join(workspaceDir, "input.txt"), "utf8")).toBe(
+          "captured base\n",
+        );
+        expect(await requireGit(workspaceDir, ["status", "--porcelain"])).toBe("");
+        if (process.platform === "win32") {
+          expect(await requireGit(workspaceDir, ["config", "--local", "core.longpaths"])).toBe(
+            "true",
+          );
+        }
+      }
+    } finally {
+      await fixture.close();
+    }
+  });
+
   it("defers packing until authorized download and shares the captured base across manifests", async () => {
     const fixture = await createGitTransfer();
     const { localPath, prepared, service } = fixture;

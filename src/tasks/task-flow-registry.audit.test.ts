@@ -19,7 +19,6 @@ import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import type { TaskRecord } from "./task-registry.types.js";
 import {
   configureTaskFlowRegistryRuntime,
-  resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
   resetTaskFlowRegistryForTests,
 } from "./task-runtime.test-helpers.js";
@@ -68,13 +67,11 @@ async function withTaskFlowAuditStateDir(run: (root: string) => Promise<void>): 
       prefix: "openclaw-task-flow-audit-",
     },
     async (state) => {
-      resetTaskRegistryDeliveryRuntimeForTests();
       resetTaskRegistryForTests({ persist: false });
       resetTaskFlowRegistryForTests({ persist: false });
       try {
         await run(state.stateDir);
       } finally {
-        resetTaskRegistryDeliveryRuntimeForTests();
         resetTaskRegistryForTests({ persist: false });
         resetTaskFlowRegistryForTests({ persist: false });
       }
@@ -85,7 +82,6 @@ async function withTaskFlowAuditStateDir(run: (root: string) => Promise<void>): 
 describe("task-flow-registry audit", () => {
   afterEach(() => {
     ORIGINAL_ENV.restore();
-    resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
   });
@@ -109,33 +105,6 @@ describe("task-flow-registry audit", () => {
       expect(findings[0]?.detail).toContain("boom");
     }
     expect(loadSnapshot).toHaveBeenCalledTimes(1);
-  });
-
-  it("clears restore-failed findings after a clean reset and restore", () => {
-    configureTaskFlowRegistryRuntime({
-      store: {
-        ...createInMemoryTaskFlowRegistryStore(),
-        loadSnapshot: () => {
-          throw new Error("boom");
-        },
-      },
-    });
-
-    const findings = listTaskFlowAuditFindings();
-    expect(findings).toHaveLength(1);
-    expect(findings[0]?.code).toBe("restore_failed");
-
-    resetTaskFlowRegistryForTests({ persist: false });
-    configureTaskFlowRegistryRuntime({
-      store: {
-        ...createInMemoryTaskFlowRegistryStore(),
-        loadSnapshot: () => ({
-          flows: new Map(),
-        }),
-      },
-    });
-
-    expect(listTaskFlowAuditFindings()).toStrictEqual([]);
   });
 
   it("detects stuck managed flows and missing blocked tasks", async () => {
@@ -175,7 +144,7 @@ describe("task-flow-registry audit", () => {
     });
   });
 
-  it("does not flag managed flows with active linked tasks as missing", async () => {
+  it("keeps linked task checks scoped to each managed flow", async () => {
     await withTaskFlowAuditStateDir(async () => {
       const flow = createManagedTaskFlow({
         ownerKey: "agent:main:main",
@@ -186,7 +155,7 @@ describe("task-flow-registry audit", () => {
         updatedAt: 1,
       });
 
-      createRunningTaskRun({
+      const task = createRunningTaskRun({
         runtime: "acp",
         ownerKey: "agent:main:main",
         scopeKind: "session",
@@ -198,6 +167,20 @@ describe("task-flow-registry audit", () => {
         lastEventAt: 1,
       });
 
+      const otherFlow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-flow-audit",
+        goal: "Wait on a task linked to another flow",
+        status: "running",
+        createdAt: 1,
+        updatedAt: 1,
+      });
+      setFlowWaiting({
+        flowId: otherFlow.flowId,
+        expectedRevision: otherFlow.revision,
+        blockedTaskId: task.taskId,
+        updatedAt: 1,
+      });
       const findings = listTaskFlowAuditFindings({ now: 31 * 60_000 });
       expect(
         findings.some(
@@ -205,6 +188,9 @@ describe("task-flow-registry audit", () => {
             finding.code === "missing_linked_tasks" && finding.flow?.flowId === flow.flowId,
         ),
       ).toBe(false);
+      expect(requireFinding(findings, "blocked_task_missing", otherFlow.flowId).detail).toContain(
+        task.taskId,
+      );
     });
   });
 

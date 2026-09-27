@@ -262,14 +262,16 @@ describe("live person presence timing", () => {
         firstNamespace === "profile" ? ([qualified, raw] as const) : ([raw, qualified] as const);
       vi.setSystemTime(started + 3_000);
       // Activity can be the first presence operation after the profile snapshot changes.
-      recordClientPresenceActivity(clients, first.client);
+      expect(recordClientPresenceActivity(clients, first.client)).toBe(
+        firstNamespace === "profile",
+      );
       refreshClientPresence(clients, second.client);
       expect.soft(liveRows(firstNamespace !== "profile")[0]).toMatchObject({
         onlineSince: started,
         lastActivityAt: started + 2_000,
       });
       vi.setSystemTime(started + 4_000);
-      recordClientPresenceActivity(clients, second.client);
+      expect(recordClientPresenceActivity(clients, second.client)).toBe(false);
       refreshClientPresence(clients, first.client);
       expect.soft(liveRows(firstNamespace === "profile")[0]).toMatchObject({
         onlineSince: started,

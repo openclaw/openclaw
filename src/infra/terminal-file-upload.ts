@@ -11,6 +11,7 @@ import {
 } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
+import { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isCanonicalTerminalUploadBase64,
@@ -23,6 +24,7 @@ import type { TerminalUploadResult as ProtocolTerminalUploadResult } from "../..
 import { logWarn } from "../logger.js";
 import { BoundedSerialQueue } from "../shared/bounded-serial-queue.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { hasErrnoCode } from "./errno.js";
 import { createFileLockManager } from "./file-lock-manager.js";
 import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
@@ -33,8 +35,6 @@ const TERMINAL_UPLOAD_CLEANUP_RETRY_MS = 60 * 60 * 1000;
 const MAX_RETAINED_BYTES = 256 * 1024 * 1024;
 const MAX_RETAINED_DIRECTORIES = 64;
 const MAX_STAGED_NAME_BYTES = 180;
-const PORTABLE_NAME_FORBIDDEN = new RegExp(String.raw`[\u0000-\u001f\u007f<>:"/\\|?*%!]`, "g");
-const WINDOWS_RESERVED_NAME = /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/iu;
 const uploadLocks = createFileLockManager("openclaw.terminal-upload");
 const pendingUploadLockReleases = new Map<string, () => Promise<void>>();
 const uploadQueue = new BoundedSerialQueue({
@@ -73,29 +73,11 @@ export type TerminalUploadFile = {
 
 export type TerminalUploadResult = ProtocolTerminalUploadResult;
 
-function truncateUtf8(value: string, maxBytes: number): string {
-  let result = "";
-  let bytes = 0;
-  for (const character of value) {
-    const nextBytes = Buffer.byteLength(character, "utf8");
-    if (bytes + nextBytes > maxBytes) {
-      break;
-    }
-    result += character;
-    bytes += nextBytes;
-  }
-  return result;
-}
-
 function sanitizeTerminalUploadName(name: string): string {
-  const basename = path.posix.basename(name.replaceAll("\\", "/"));
-  const cleaned = basename
-    .replace(PORTABLE_NAME_FORBIDDEN, "_")
-    .trim()
-    .replace(/[. ]+$/u, "");
-  const portable = WINDOWS_RESERVED_NAME.test(cleaned) ? `_${cleaned}` : cleaned;
-  const safe = portable && portable !== "." && portable !== ".." ? portable : "upload";
-  return truncateUtf8(safe, MAX_STAGED_NAME_BYTES) || "upload";
+  const safe = sanitizeUntrustedFileName(name, "upload").replace(/[!%]/gu, "_");
+  const truncated = truncateUtf8Prefix(safe, MAX_STAGED_NAME_BYTES).replace(/[. ]+$/u, "");
+  // Truncation can expose a device name hidden by trailing padding.
+  return sanitizeUntrustedFileName(truncated, "upload");
 }
 
 function validateTerminalUpload(contentBase64: string): number {

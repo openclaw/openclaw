@@ -2,6 +2,7 @@
  * Session-owned browser tabs. Host-local durable ownership is canonical in
  * plugin SQLite; all other tabs remain process-local.
  */
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   type CleanupKind,
   type CloseParams,
@@ -50,6 +51,9 @@ async function performVolatileCleanup(
       : undefined;
   };
   while (true) {
+    if (params.isCurrent?.() === false) {
+      return 0;
+    }
     const current = resolveCurrent();
     if (!current) {
       return 0;
@@ -63,10 +67,7 @@ async function performVolatileCleanup(
       continue;
     }
 
-    let complete!: (operation: Promise<number>) => void;
-    const cleanup = new Promise<number>((resolve) => {
-      complete = resolve;
-    });
+    const { promise: cleanup, resolve: complete } = createDeferred<number>();
     // Preparation and dispatch share one reservation, including reentrant closers.
     // Completion retires only the acquired registrations.
     const owner = { registrations: volatileRegistrationsForTarget(targetKey), promise: cleanup };
@@ -156,6 +157,9 @@ async function closeTrackedTabs(
 export async function closeTrackedBrowserTabsForSessions(
   params: CloseParams & { sessionKeys: Array<string | undefined>; now?: number },
 ): Promise<number> {
+  if (params.isCurrent?.() === false) {
+    return 0;
+  }
   let dashboardClosed = 0;
   if (
     readDurableTabs(params.onWarn).some((tab) => tab.dashboard) ||
@@ -163,6 +167,9 @@ export async function closeTrackedBrowserTabsForSessions(
   ) {
     const { reconcileBrowserDashboards } = await import("../browser-dashboard.js");
     dashboardClosed = await reconcileBrowserDashboards(params);
+  }
+  if (params.isCurrent?.() === false) {
+    return dashboardClosed;
   }
   const tabs = selectTrackedTabsForSessions({
     durable: readDurableTabs(params.onWarn),
@@ -197,7 +204,15 @@ export async function sweepTrackedBrowserTabs(
     dashboardClosed = await reconcileBrowserDashboards(params);
   }
   if (params.ordinaryCleanup === false) {
-    return dashboardClosed;
+    return (
+      dashboardClosed +
+      (await closeTrackedTabs(
+        readDurableTabs(params.onWarn).filter(
+          (tab) => !tab.dashboard && tab.cleanupKind === "lifecycle",
+        ),
+        { ...params, now, cleanupKind: "lifecycle" },
+      ))
+    );
   }
   const volatile: VolatileTab[] = [];
   for (const tabs of volatileTabsBySession().values()) {

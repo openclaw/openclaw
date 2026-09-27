@@ -85,6 +85,7 @@ export const GATEWAY_CLIENT_CAPS = {
   MODEL_SELECTION_POLICY: "model-selection-policy",
   RUN_TOOL_BINDINGS: "run-tool-bindings",
   SESSION_SCOPED_EVENTS: "session-scoped-events",
+  SKILL_CURATOR_LIVE_INVENTORY: "skill-curator-live-inventory",
   PLUGIN_APPROVALS: "plugin-approvals",
   TASK_SUGGESTIONS: "task-suggestions",
   TERMINAL_OFFSET_SEQ: "terminal-offset-seq",

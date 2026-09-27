@@ -1,13 +1,13 @@
 import { isDeepStrictEqual } from "node:util";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { crabboxCommandError } from "./crabbox-worker-command-error.js";
-import { runCrabboxCommand, type CrabboxCommandRunner } from "./crabbox-worker-command.js";
+import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import {
   buildCrabboxAllocationArgs,
   resolveCrabboxWarmImageProfileKey,
   type parseCrabboxProfile,
   type resolveCrabboxProvisionProfile,
 } from "./crabbox-worker-profile.js";
+import { runProvisionWarmup } from "./crabbox-worker-provision-commands.js";
 import { WARM_IMAGE_COMMAND_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 import { createCrabboxWarmImageCapture } from "./crabbox-worker-warm-image-capture.js";
 import {
@@ -75,6 +75,7 @@ export function createCrabboxWarmImageManager(dependencies: {
   const policy = dependencies.policy ?? resolveCrabboxWarmImagePolicy();
   let store: ReturnType<typeof openCrabboxWarmImageStore> | undefined;
   const warned = new Set<string>();
+  let pausedCaptureSnapshot = "";
   const openStore = () => (store ??= openCrabboxWarmImageStore(dependencies.state));
   const assertCurrent = (context: RetirementContext) => {
     context.assertCurrent?.();
@@ -199,13 +200,28 @@ export function createCrabboxWarmImageManager(dependencies: {
 
   const collectImages = async (context: RetirementContext, phase: "allocation" | "teardown") => {
     const deadline = Date.now() + WARM_IMAGE_COMMAND_TIMEOUT_MS;
-    for (const { key, value } of await openStore().entries()) {
+    const entries = await openStore().entries();
+    assertCurrent(context);
+    const paused = entries
+      .flatMap(({ key, value }) => {
+        const capture = crabboxWarmImageCaptureStatus(key, value);
+        return capture && isCrabboxWarmImageCaptureUncertain(capture) ? [capture.selector] : [];
+      })
+      .toSorted();
+    const snapshot = JSON.stringify(paused);
+    if (snapshot !== pausedCaptureSnapshot) {
+      pausedCaptureSnapshot = snapshot;
+      if (paused.length > 0) {
+        dependencies.warn(
+          `Crabbox warm image capture paused (${paused.length}; ${paused.join(", ")}): ${crabboxWarmImageRecoveryHint(paused.length === 1 ? paused[0]! : "<selector>")}`,
+        );
+      }
+    }
+    for (const { key, value } of entries) {
       assertCurrent(context);
       const capture = crabboxWarmImageCaptureStatus(key, value);
       if (capture) {
-        if (isCrabboxWarmImageCaptureUncertain(capture)) {
-          warnOnce("capture paused", crabboxWarmImageRecoveryHint(capture.selector));
-        } else if (capture.stale) {
+        if (!isCrabboxWarmImageCaptureUncertain(capture) && capture.stale) {
           warnOnce(
             `capture ${capture.selector} still pending`,
             CRABBOX_WARM_IMAGE_WAIT_HINT,
@@ -656,17 +672,10 @@ export function createCrabboxWarmImageManager(dependencies: {
         }
       }
       assertCurrent(context);
-      const result = await runCrabboxCommand({
-        action: "warmup",
-        args: ["warmup", ...buildCrabboxAllocationArgs(context.profile, context.id, context.slug)],
-        binary: context.binary,
+      await runProvisionWarmup({
+        ...context,
         runCommand: dependencies.runCommand,
-        timeoutMs: context.timeoutMs(),
-        ...(context.signal ? { signal: context.signal } : {}),
       });
-      if (result.termination !== "exit" || result.code !== 0) {
-        throw crabboxCommandError("warmup", result);
-      }
       return { kind: "cold" };
     },
   };

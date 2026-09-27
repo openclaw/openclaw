@@ -1,8 +1,3 @@
-/**
- * Channel setup plugin registry.
- *
- * Resolves loaded or bundled setup plugins for onboarding flows.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   getActivePluginChannelRegistry,
@@ -12,11 +7,6 @@ import { CHAT_CHANNEL_ORDER, type ChatChannelId } from "../registry.js";
 import { listBundledChannelSetupPlugins } from "./bundled.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
-
-type ChannelSetupPluginView = {
-  sorted: ChannelPlugin[];
-  byId: Map<string, ChannelPlugin>;
-};
 
 function dedupeSetupPlugins(plugins: readonly ChannelPlugin[]): ChannelPlugin[] {
   const seen = new Set<string>();
@@ -47,31 +37,15 @@ function sortChannelSetupPlugins(plugins: readonly ChannelPlugin[]): ChannelPlug
   });
 }
 
-function resolveChannelSetupPlugins(): ChannelSetupPluginView {
+export function listChannelSetupPlugins(): ChannelPlugin[] {
   const registry = requireActivePluginRegistry();
 
   const registryPlugins = (registry.channelSetups ?? []).map((entry) => entry.plugin);
   // Before the registry has setup plugins, bundled setup plugins provide the
   // onboarding catalog so first-run setup can still render.
-  const sorted = sortChannelSetupPlugins(
+  return sortChannelSetupPlugins(
     registryPlugins.length > 0 ? registryPlugins : listBundledChannelSetupPlugins(),
   );
-  const byId = new Map<string, ChannelPlugin>();
-  for (const plugin of sorted) {
-    byId.set(plugin.id, plugin);
-  }
-
-  return {
-    sorted,
-    byId,
-  };
-}
-
-/**
- * Lists setup-capable channel plugins, falling back to bundled setup metadata.
- */
-export function listChannelSetupPlugins(): ChannelPlugin[] {
-  return resolveChannelSetupPlugins().sorted.slice();
 }
 
 /**
@@ -90,5 +64,5 @@ export function getChannelSetupPlugin(id: ChannelId): ChannelPlugin | undefined 
   if (!resolvedId) {
     return undefined;
   }
-  return resolveChannelSetupPlugins().byId.get(resolvedId);
+  return listChannelSetupPlugins().find((plugin) => plugin.id === resolvedId);
 }

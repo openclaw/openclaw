@@ -24,16 +24,18 @@ it("publishes affected session identities for registration, moves, models, and r
   const after = { sessionKey: "agent:other:after", agentId: "other" };
   try {
     registerAgentRunContext("moving", before);
-    expect(changed.mock.calls).toEqual([[before]]);
+    expect(changed.mock.calls).toEqual([[{ ...before, scope: "runtime" }]]);
     changed.mockClear();
 
     registerAgentRunContext("moving", after);
-    expect(changed.mock.calls).toEqual(expect.arrayContaining([[before], [after]]));
+    expect(changed.mock.calls).toEqual(
+      expect.arrayContaining([[{ ...before, scope: "runtime" }], [{ ...after, scope: "runtime" }]]),
+    );
     expect(changed).toHaveBeenCalledTimes(2);
     changed.mockClear();
 
     recordAgentRunModel("moving", { provider: "openai", model: "test-model" });
-    expect(changed.mock.calls).toEqual([[after]]);
+    expect(changed.mock.calls).toEqual([[{ ...after, scope: "runtime" }]]);
     changed.mockClear();
     recordAgentRunModel("moving", { provider: "openai", model: "test-model" });
     expect(changed).not.toHaveBeenCalled();
@@ -41,7 +43,7 @@ it("publishes affected session identities for registration, moves, models, and r
     const claim = claimAgentRunContext("moving", after, { trackOwner: true, ownsContext: true });
     changed.mockClear();
     releaseAgentRunContext("moving", claim);
-    expect(changed.mock.calls).toEqual([[after]]);
+    expect(changed.mock.calls).toEqual([[{ ...after, scope: "runtime" }]]);
     changed.mockClear();
     clearAgentRunContext("missing");
     expect(changed).not.toHaveBeenCalled();
@@ -62,7 +64,7 @@ it("invalidates the run projection on lifecycle rotation and orphan cleanup", ()
     expect(changed.mock.calls).toEqual([[{ all: true, scope: "agent-runs" }]]);
     changed.mockClear();
     registerAgentRunContext("session-id-only", { agentId: "worker", sessionId: "shared-id" });
-    expect(changed.mock.calls).toEqual([[{ all: true, scope: { agentId: "worker" } }]]);
+    expect(changed.mock.calls).toEqual([[{ all: true, scope: "agent-runs" }]]);
   } finally {
     stop();
   }

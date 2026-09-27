@@ -264,20 +264,16 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
     if (this.documentState === "loading") {
       return renderPanelLoadingSkeleton("board", t("common.loading"));
     }
-    if (this.documentState === "missing-session") {
-      return html`<div class="board-document__state" role="status">
-        ${t("dashboardDocument.missingSession")}
-      </div>`;
-    }
-    if (this.documentState === "not-found") {
-      return html`<div class="board-document__state" role="status">
-        ${t("dashboardDocument.notFound")}
-      </div>`;
-    }
-    if (this.documentState === "unavailable") {
-      return html`<div class="board-document__state" role="status">
-        ${t("dashboardDocument.unavailable")}
-      </div>`;
+    const statusText =
+      this.documentState === "missing-session"
+        ? t("dashboardDocument.missingSession")
+        : this.documentState === "not-found"
+          ? t("dashboardDocument.notFound")
+          : this.documentState === "unavailable"
+            ? t("dashboardDocument.unavailable")
+            : null;
+    if (statusText !== null) {
+      return html`<div class="board-document__state" role="status">${statusText}</div>`;
     }
     if (this.documentState === "error") {
       return html`<div class="board-document__state board-document__state--error" role="alert">

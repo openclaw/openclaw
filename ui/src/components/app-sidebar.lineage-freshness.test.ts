@@ -481,9 +481,9 @@ describe("sidebar routed-lineage freshness", () => {
   ])(
     "refreshes a routed child while preserving filtered membership (listed: $listed, rejected refresh: $rejectRefresh, pending selection: $pendingSelection)",
     async ({ listed, rejectRefresh, pendingSelection }) => {
+      vi.useFakeTimers();
       const parentKey = "agent:main:parent";
-      const key =
-        pendingSelection === "root" ? "agent:main:dashboard:child" : "agent:main:subagent:child";
+      const key = "agent:main:dashboard:child";
       const otherKey = "agent:main:other-owner";
       const owner = { type: "human" as const, id: "ada", label: "Ada" };
       const otherOwner = { type: "human" as const, id: "bob", label: "Bob" };
@@ -671,16 +671,14 @@ describe("sidebar routed-lineage freshness", () => {
                 activeRunIds: pendingSelection === "introduced-overlap" ? ["remaining-run"] : [],
               });
             } else if (pendingSelection === "introduced-event") {
-              expect(
-                sessions.reconcileChanged({
-                  key,
-                  sessionId: child.sessionId,
-                  updatedAt: 5,
-                  hasActiveRun: true,
-                  status: "running",
-                  archived: false,
-                }).applied,
-              ).toBe(true);
+              gatewayHarness.publishEvent("sessions.changed", {
+                key,
+                sessionId: child.sessionId,
+                updatedAt: 5,
+                hasActiveRun: true,
+                status: "running",
+                archived: false,
+              });
               expect(sessions.state.result?.sessions.find((row) => row.key === key)?.status).toBe(
                 "running",
               );
@@ -774,7 +772,7 @@ describe("sidebar routed-lineage freshness", () => {
             "Latest filtered child",
           );
           if (pendingSelection === "deletion") {
-            sessions.reconcileChanged({
+            gatewayHarness.publishEvent("sessions.changed", {
               key,
               sessionId: child.sessionId,
               agentId: "main",
@@ -822,9 +820,15 @@ describe("sidebar routed-lineage freshness", () => {
             ).toBe(false);
             return;
           }
-          expect(
-            sidebar.sessionData.sessionsResult?.sessions.find((row) => row.key === key),
-          ).toMatchObject({
+          const listedRow = sidebar.sessionData.sessionsResult?.sessions.find(
+            (row) => row.key === key,
+          );
+          expect({
+            label: listedRow?.label,
+            derivedTitle: listedRow?.derivedTitle,
+            lastMessagePreview: listedRow?.lastMessagePreview,
+            status: listedRow?.status,
+          }).toStrictEqual({
             ...presentation("Latest filtered child"),
             status: "done",
           });
@@ -840,7 +844,19 @@ describe("sidebar routed-lineage freshness", () => {
         }
 
         if (rejectRefresh) {
-          await waitForFast(() => expect(rejectedReads).toBe(1));
+          await vi.advanceTimersByTimeAsync(0);
+          await sidebar.updateComplete;
+          expect(sidebar.querySelector(`[data-session-key="${key}"]`)?.textContent).toContain(
+            "Current child",
+          );
+          gatewayHarness.publishEvent("sessions.changed", {
+            sessionKey: key,
+            agentId: "main",
+            reason: "patch",
+            spawnedBy: parentKey,
+          });
+          await vi.advanceTimersByTimeAsync(5_000);
+          expect(rejectedReads).toBe(1);
           expect(sidebar.textContent).toContain("Filtered session refresh unavailable");
         }
         await waitForFast(() =>

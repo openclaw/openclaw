@@ -23,8 +23,9 @@ Availability: The official iPhone app is available on the [App Store](https://ap
 - Keeps a small read-only offline cache of recent chat sessions and transcripts per paired Gateway: cold opens paint the last known transcript immediately and refresh once the Gateway responds, recent chats stay browsable while disconnected, and reset/forget purges the protected local cache.
 - Queues text messages sent while disconnected in a durable per-gateway outbox (up to 50): queued bubbles show in the transcript, flush in order on reconnect with idempotent retries, remain durable until canonical history confirms the send, retry with backoff before surfacing a retry/delete action, and expire instead of sending after 48 hours offline; reset/forget clears the queue with the cache.
 - Chat is the single text-and-voice surface. Chat actions can open the full Sessions screen without leaving Chat and can show or hide assistant reasoning and tool activity. Tap the microphone for draft dictation, open its menu to record a voice note, or use the inline Talk control for realtime voice; the Talk control animates from live microphone or playback level while listening or speaking.
-- Completed chat turns fold earlier work into a **Worked** disclosure above the reply on iPhone and iPad. Tap it to inspect the work. Final answers and media stay visible, and active or unanswered work stays expanded.
+- Agent narration appears inline as each segment finishes, including after reconnect. Narration, tool activity, and the reply stay grouped in one response with a single top-aligned agent avatar. Completed chat turns fold earlier work into a **Worked for …** disclosure above the reply on iPhone and iPad. Tap it to inspect the work. Final answers and media stay visible, and active or unanswered work stays expanded.
 - Chat accepts images from the photo picker, camera, Files, paste, and the iOS share sheet. Assistant-generated images render inline from short-lived Gateway artifact URLs, open in a full-screen preview, and remain available after reconnect or history reload without storing image bytes in the transcript cache.
+- Assistant file attachments have a **Download file** action. Tap it to fetch the managed file and open the system share sheet, where you can choose **Save to Files** or another app. Downloads use the current Gateway connection and its scoped artifact access; an expired or removed file must be sent again. Documents are limited to 100 MB.
 - Dictation shows when it is starting and listening, a live microphone waveform, and the words recognized so far. Tap **Done** to add the transcript to your draft or **Cancel** to discard it. Attachments show **Preparing attachments…** while loading and **Sending attachments…** during delivery; failed photo loads show an error so you can select them again.
 - Renders completed Mermaid code fences as inline diagrams, with source/copy controls and a full-screen zoomable preview. Diagram rendering uses bundled assets and works offline.
 - Long-press a message or open its actions menu and choose **Select Text** to select and copy any span in a native text view; code fences show a copy button that copies the raw code.
@@ -113,6 +114,14 @@ opens **Devices**, the Dashboard owner of paired nodes and connected clients.
 Long-press a session in the sidebar or Sessions screen to open its session actions, then choose **Color**. Select red, blue, green, yellow, purple, orange, pink, or cyan. **Default** clears the color.
 
 A colored session has a narrow leading stripe in session lists and a small dot beside its title in Chat. Unset colors show neither marker. The Gateway stores color names, not hex values; the app adjusts their hues for light and dark appearances.
+
+## Message times and models
+
+Completed message groups show relative time for the past week and a compact
+local date for older messages, alongside usage when available. VoiceOver reads
+the exact date, time, and time zone. Assistant replies show their recorded
+originating model when known; selecting another model does not change older
+replies. Streaming text, commentary, and tool activity do not gain these footers.
 
 ## Sources in chat
 

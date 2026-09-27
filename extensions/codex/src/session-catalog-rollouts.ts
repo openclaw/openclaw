@@ -6,7 +6,10 @@ import { root as openSafeRoot } from "openclaw/plugin-sdk/file-access-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import type { CodexSessionSource, CodexThread } from "./app-server/protocol.js";
-import type { CodexCatalogRolloutFingerprint } from "./session-catalog-index-row.js";
+import type {
+  CodexCatalogIndexRow,
+  CodexCatalogRolloutFingerprint,
+} from "./session-catalog-index-row.js";
 import { CODEX_CATALOG_MAX_ROWS, detachCodexCatalogString } from "./session-catalog-limits.js";
 import {
   boundedCatalogString,
@@ -94,6 +97,34 @@ class NewestRolloutCandidates {
 /** Codex returns the plain logical path for either rollout representation. */
 export function codexCatalogRolloutLogicalPath(rolloutPath: string): string {
   return rolloutPath.replace(/\.zst$/u, "");
+}
+
+export function resolveCodexCatalogRolloutFingerprint(
+  rolloutPath: string | undefined,
+  previous: Pick<CodexCatalogIndexRow, "rolloutPath" | "fingerprint"> | undefined,
+  files?: ReadonlyMap<string, CodexCatalogRolloutFingerprint>,
+): CodexCatalogRolloutFingerprint | undefined {
+  const logicalPath = rolloutPath && codexCatalogRolloutLogicalPath(rolloutPath);
+  if (!logicalPath) {
+    return undefined;
+  }
+  return (
+    files?.get(logicalPath) ??
+    files?.get(`${logicalPath}.zst`) ??
+    (previous?.rolloutPath && codexCatalogRolloutLogicalPath(previous.rolloutPath) === logicalPath
+      ? previous.fingerprint
+      : undefined)
+  );
+}
+
+export function indexCodexCatalogRowsByRollout(
+  rows: Iterable<CodexCatalogIndexRow>,
+): Map<string, CodexCatalogIndexRow> {
+  return new Map(
+    [...rows].flatMap((row) =>
+      row.rolloutPath ? [[codexCatalogRolloutLogicalPath(row.rolloutPath), row] as const] : [],
+    ),
+  );
 }
 
 /** Absence is meaningful only inside the layout visited by the currency scan. */

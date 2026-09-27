@@ -90,7 +90,7 @@ describe("node host stats receipt", () => {
   );
 });
 
-function createDesktopEventHarness() {
+function createNodeEventHarness() {
   const binding = { identity: "identity-1", generation: "generation-1" };
   const resolvePairing = vi.fn(async () => binding);
   const broadcast = vi.fn();
@@ -101,7 +101,12 @@ function createDesktopEventHarness() {
     sessionEventSubscribers: createSessionEventSubscriberRegistry(),
     sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
   });
-  const register = (connId: string, nodeId = "node-1") => {
+  const register = (
+    connId: string,
+    nodeId = "node-1",
+    clientId = "openclaw-macos",
+    platform = "darwin",
+  ) => {
     const client = {
       connId,
       usesSharedGatewayAuth: false,
@@ -110,7 +115,7 @@ function createDesktopEventHarness() {
         role: "node",
         scopes: [],
         device: { id: nodeId },
-        client: { id: "openclaw-macos", platform: "darwin", mode: "node", version: "1.0.0" },
+        client: { id: clientId, platform, mode: "node", version: "1.0.0" },
         caps: [],
         commands: [],
       },
@@ -121,8 +126,12 @@ function createDesktopEventHarness() {
     });
     return client;
   };
-  const send = async (client: GatewayWsClient, payload: unknown) => {
-    const params = { event: "node.desktop.availability", payload };
+  const send = async (
+    client: GatewayWsClient,
+    payload: unknown,
+    event = "node.desktop.availability",
+  ) => {
+    const params = { event, payload };
     const respond = vi.fn();
     await nodeEventHandlers["node.event"]!({
       req: { type: "req", id: "desktop-state", method: "node.event", params },
@@ -147,7 +156,7 @@ function createDesktopEventHarness() {
 
 describe("registered node desktop availability events", () => {
   it("invalidates only the reporting node's inventory on state changes and connection retirement", async () => {
-    const h = createDesktopEventHarness();
+    const h = createNodeEventHarness();
     const first = h.register("conn-first");
     h.register("conn-other", "node-other");
     for (const state of ["locked", "unlocked", "unknown"] as const) {
@@ -183,7 +192,7 @@ describe("registered node desktop availability events", () => {
   });
 
   it("rejects malformed states and attempts to supply another node identity", async () => {
-    const h = createDesktopEventHarness();
+    const h = createNodeEventHarness();
     const client = h.register("conn-1");
     for (const payload of [null, [], {}, { state: "idle" }, { state: "locked", nodeId: "other" }]) {
       const respond = await h.send(client, payload);
@@ -198,7 +207,7 @@ describe("registered node desktop availability events", () => {
   });
 
   it("rejects an event whose connection is replaced while pairing validation is pending", async () => {
-    const h = createDesktopEventHarness();
+    const h = createNodeEventHarness();
     const client = h.register("conn-first");
     const pending = createDeferred<typeof h.binding>();
     h.resolvePairing.mockReturnValueOnce(pending.promise);
@@ -219,7 +228,7 @@ describe("registered node desktop availability events", () => {
   });
 
   it("rejects a late event while the closed transport is retained for lifecycle draining", async () => {
-    const h = createDesktopEventHarness();
+    const h = createNodeEventHarness();
     const client = h.register("conn-closing");
     const pending = createDeferred<typeof h.binding>();
     h.resolvePairing.mockReturnValueOnce(pending.promise);
@@ -235,4 +244,68 @@ describe("registered node desktop availability events", () => {
     expect(h.changes()).toEqual([]);
     h.nodeRegistry.unregister(client.connId);
   });
+});
+
+describe("registered node presence activity events", () => {
+  it("preserves app presence on Accessibility revocation and replaces system activity on fallback", async () => {
+    const h = createNodeEventHarness();
+    const client = h.register("conn-1");
+    const node = h.nodeRegistry.get("node-1")!;
+    node.declaredPermissions = { accessibility: true };
+    h.nodeRegistry.updateSurface("node-1", { commands: [], permissions: { accessibility: true } });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(100_000);
+    try {
+      await h.send(client, { idleSeconds: 0 }, "node.presence.activity");
+      expect(h.nodeRegistry.getActiveNode()?.lastActiveAtMs).toBe(100_000);
+      clock.mockReturnValue(105_000);
+      await h.send(client, { idleSeconds: 20, source: "app" }, "node.presence.activity");
+      expect(h.nodeRegistry.getActiveNode()?.lastActiveAtMs).toBe(85_000);
+      clock.mockReturnValue(106_000);
+      await h.send(client, { idleSeconds: 30, source: "app" }, "node.presence.activity");
+      expect(h.nodeRegistry.getActiveNode()?.lastActiveAtMs).toBe(85_000);
+      h.nodeRegistry.updateSurface("node-1", {
+        commands: [],
+        permissions: { accessibility: false },
+      });
+      expect(h.nodeRegistry.getActiveNode()?.lastActiveAtMs).toBe(85_000);
+    } finally {
+      clock.mockRestore();
+      h.nodeRegistry.unregister(client.connId);
+    }
+  });
+
+  it.each([
+    { source: "app", clientId: "openclaw-macos", platform: "darwin", accepted: true },
+    { source: "app", clientId: "openclaw-macos", platform: "macOS 26.0.1", accepted: true },
+    { source: "system", clientId: "openclaw-macos", platform: "darwin", accepted: false },
+    { source: undefined, clientId: "openclaw-macos", platform: "darwin", accepted: false },
+    { source: "app", clientId: "node-host", platform: "darwin", accepted: false },
+    { source: "app", clientId: "openclaw-macos", platform: "linux", accepted: false },
+  ])(
+    "accepts only native Mac app activity without Accessibility ($source, $clientId, $platform)",
+    async ({ source, clientId, platform, accepted }) => {
+      const h = createNodeEventHarness();
+      const client = h.register("conn-1", "node-1", clientId, platform);
+      try {
+        const respond = await h.send(client, { idleSeconds: 0, source }, "node.presence.activity");
+        expect(respond.mock.calls[0]?.[1]).toMatchObject({ handled: accepted });
+        expect(h.nodeRegistry.getActiveNode()?.nodeId).toBe(accepted ? "node-1" : undefined);
+        if (accepted) {
+          const replacement = h.register("conn-2");
+          expect(h.nodeRegistry.getActiveNode()).toBeUndefined();
+          expect(
+            (await h.send(client, { idleSeconds: 0, source }, "node.presence.activity")).mock
+              .calls[0]?.[0],
+          ).toBe(false);
+          await h.send(replacement, { idleSeconds: 0, source }, "node.presence.activity");
+          expect(h.nodeRegistry.getActiveNode()?.nodeId).toBe("node-1");
+          await h.send(replacement, { action: "clear" }, "node.presence.activity");
+          expect(h.nodeRegistry.getActiveNode()).toBeUndefined();
+          h.nodeRegistry.unregister(replacement.connId);
+        }
+      } finally {
+        h.nodeRegistry.unregister(client.connId);
+      }
+    },
+  );
 });

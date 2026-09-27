@@ -1,15 +1,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import type { TasksHistoryResult } from "../../../packages/gateway-protocol/src/index.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import { tasksHandlers } from "./tasks.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
-type TaskResponsePayload = {
-  messages?: unknown[];
+type TaskResponsePayload = Partial<TasksHistoryResult> & {
   tasks?: Array<Record<string, unknown>>;
   task?: Record<string, unknown>;
   found?: boolean;
   cancelled?: boolean;
-  nextCursor?: string;
   results?: Array<{ taskId?: string; ok?: boolean; reason?: string }>;
 };
 

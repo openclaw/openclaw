@@ -84,6 +84,8 @@ export async function installCandidate(params: {
   records: Record<string, PluginInstallRecord>;
   env: NodeJS.ProcessEnv;
   updateChannel?: UpdateChannel;
+  timeoutMs?: number;
+  workTimeoutMs?: number | null;
   mode?: "install" | "update";
   preferNpm?: boolean;
   repairReason?: InstallCandidateRepairReason;
@@ -167,6 +169,7 @@ async function installCandidatePackage(
   const npmSpecs = candidate.npmSpec
     ? await resolveNpmInstallSpecsForUpdateChannel({
         spec: candidate.npmSpec,
+        timeoutMs: params.timeoutMs,
         updateChannel: params.updateChannel,
         officialPackageName: candidate.trustedSourceLinkedOfficialInstall
           ? parseRegistryNpmSpec(candidate.npmSpec)?.name
@@ -256,6 +259,8 @@ async function installCandidatePackage(
           const options = copyPluginInstallTransactionRequest(params, {
             spec,
             config: params.config,
+            timeoutMs: params.timeoutMs,
+            workTimeoutMs: params.workTimeoutMs,
             extensionsDir,
             expectedPluginId: candidate.pluginId,
             expectedIntegrity: source.expectedIntegrity,

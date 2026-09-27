@@ -1,17 +1,8 @@
 import { createHash } from "node:crypto";
-import {
-  chmod,
-  link,
-  lstat,
-  mkdir,
-  mkdtemp,
-  readFile,
-  rm,
-  stat,
-  writeFile,
-} from "node:fs/promises";
+import { link, lstat, mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import * as tar from "tar";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import {
@@ -20,7 +11,6 @@ import {
   validateClawProject,
 } from "./project.js";
 import { readClawManifestFile } from "./reader.js";
-import { isSafeClawRelativePath } from "./schema-portability.js";
 import { MAX_MANAGED_FILE_BYTES } from "./source-limits.js";
 
 export const CLAW_BUILD_RESULT_SCHEMA_VERSION = "openclaw.clawBuild.v1" as const;
@@ -38,25 +28,6 @@ type ClawBuildResult = {
   excludedPaths: string[];
   claw: { name: string; version: string };
 };
-
-async function writeStagedFile(stagingRoot: string, path: string, content: Buffer | string) {
-  const target = resolve(stagingRoot, path);
-  const targetRelative = relative(stagingRoot, target);
-  if (
-    !isSafeClawRelativePath(path) ||
-    targetRelative === ".." ||
-    targetRelative.startsWith(`..${sep}`) ||
-    isAbsolute(targetRelative)
-  ) {
-    throw new ClawProjectError(
-      "unsafe_build_path",
-      `Cannot package unsafe path ${JSON.stringify(path)}.`,
-    );
-  }
-  await mkdir(dirname(target), { recursive: true, mode: 0o755 });
-  await writeFile(target, content, { flag: "wx", mode: 0o644 });
-  await chmod(target, 0o644);
-}
 
 async function readSelectedProjectFile(projectRoot: string, path: string): Promise<Buffer> {
   const sourceRoot = await fsSafeRoot(projectRoot);
@@ -83,26 +54,20 @@ function assertValidatedBytes(
   }
 }
 
-export async function extractBuiltClawArtifact(artifact: string): Promise<{
-  temporaryDirectory: string;
-  packageRoot: string;
-  dispose: () => Promise<void>;
-}> {
-  const temporaryDirectory = await mkdtemp(join(tmpdir(), "openclaw-claw-artifact-"));
+export async function extractBuiltClawArtifact(
+  artifact: string,
+): Promise<AsyncDisposable & { packageRoot: string }> {
+  const workspace = await tempWorkspace({ rootDir: tmpdir(), prefix: "openclaw-claw-artifact-" });
   try {
-    await tar.x({ cwd: temporaryDirectory, file: resolve(artifact), strict: true });
-    const packageRoot = join(temporaryDirectory, "package");
+    await tar.x({ cwd: workspace.dir, file: resolve(artifact), strict: true });
+    const packageRoot = workspace.path("package");
     const packageStat = await lstat(packageRoot);
     if (!packageStat.isDirectory()) {
       throw new Error("artifact does not contain a package directory");
     }
-    return {
-      temporaryDirectory,
-      packageRoot,
-      dispose: () => rm(temporaryDirectory, { recursive: true, force: true }),
-    };
+    return { packageRoot, [Symbol.asyncDispose]: workspace[Symbol.asyncDispose] };
   } catch (error) {
-    await rm(temporaryDirectory, { recursive: true, force: true });
+    await workspace[Symbol.asyncDispose]();
     throw new ClawProjectError(
       "artifact_verification_failed",
       `Could not extract built Claw artifact: ${(error as Error).message}`,
@@ -145,6 +110,7 @@ export async function buildClawProject(
   const temporaryArtifact = join(temporaryDirectory, "claw.tgz");
   try {
     await mkdir(stagingRoot, { mode: 0o755 });
+    const staging = await fsSafeRoot(stagingRoot, { mkdir: false, mode: 0o644, durable: false });
     const files = new Map<string, Buffer | string>();
     files.set("package.json", `${JSON.stringify(project.packageJson, null, 2)}\n`);
     const clawMarkdown = await readSelectedProjectFile(project.root, "CLAW.md");
@@ -177,7 +143,8 @@ export async function buildClawProject(
       Buffer.compare(Buffer.from(left), Buffer.from(right)),
     );
     for (const fileName of fileNames) {
-      await writeStagedFile(stagingRoot, fileName, files.get(fileName) as Buffer | string);
+      await mkdir(join(stagingRoot, dirname(fileName)), { recursive: true, mode: 0o755 });
+      await staging.create(fileName, files.get(fileName) as Buffer | string);
     }
     const tarInputNames = fileNames.map((fileName) =>
       fileName.startsWith("@") ? `./${fileName}` : fileName,
@@ -211,8 +178,8 @@ export async function buildClawProject(
 
     const packed = await readFile(temporaryArtifact);
     const integrity = `sha256:${createHash("sha256").update(packed).digest("hex")}`;
-    const extracted = await extractBuiltClawArtifact(temporaryArtifact);
-    try {
+    {
+      await using extracted = await extractBuiltClawArtifact(temporaryArtifact);
       const reread = await readClawManifestFile(extracted.packageRoot);
       if (!reread.ok) {
         throw new ClawProjectError(
@@ -229,8 +196,6 @@ export async function buildClawProject(
           "Built artifact identity differs from the validated project.",
         );
       }
-    } finally {
-      await extracted.dispose();
     }
 
     try {

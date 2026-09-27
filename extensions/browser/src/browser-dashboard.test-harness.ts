@@ -1,4 +1,5 @@
 import {
+  createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -42,6 +43,7 @@ export function useBrowserDashboardTestHarness(
   function installRuntime() {
     initializeBrowserSessionTabStore({
       state: {
+        openKeyedStore: (options) => createPluginStateKeyedStoreForTests("browser", options),
         openSyncKeyedStore: (options) =>
           createPluginStateSyncKeyedStoreForTests("browser", options),
       },

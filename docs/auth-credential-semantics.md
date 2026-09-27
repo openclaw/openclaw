@@ -93,10 +93,68 @@ writing.
 OAuth upserts recheck the current local or inherited credential after admission,
 before applying the existing generation-replacement rules.
 
+Inline API-key failure bookkeeping reads and updates the selected agent's auth
+state through its existing SQLite worker. It preserves credential bytes and
+other profiles' health state. Runtime snapshot publication reads canonical local
+and shared rows off-thread, then retains the current host's resolved secrets and
+external profile overlays. A publication failure does not replay a committed
+health update. The synchronous SDK store APIs retain their existing contracts.
+
 Gateway model metadata refreshes when credentials, profile ordering or ownership,
 or model availability changes, including cooldown and blocked-state transitions.
 Usage timestamps, success history, and failure counters remain recorded without
 invalidating chat metadata or broadcasting a change to connected clients.
+
+Gateway model-auth status reads share provider preparation across clients for the
+same agent and published config/auth generation. Credential warning and expiry
+boundaries also invalidate preparation; explicit refresh bypasses it. Each reply
+still computes current expiry durations, reads auxiliary usage from its existing
+cache, and applies the requesting client's profile-identity visibility.
+File-backed external CLI bootstrap health stays with its reader's freshness
+lifecycle because external login can change without a Gateway publication.
+
+Repeated model resolution reuses persisted auth rows while the owning database's
+write generation and file identity remain unchanged. Committed auth writes and
+runtime snapshot reloads invalidate those rows immediately. Database, WAL, and
+journal identities are probed at most once per 100 ms on warm cache hits; the
+first read at or after that interval detects changes from other processes.
+Hits do not extend this freshness window. Cache misses still check identity
+before and after reading rows. Scoped overlays, migration refusals,
+and personal-account selection still run on each request. Isolated agent scopes
+and private database snapshots do not share this cache. Gateway cache misses reuse
+a read-only child whose lifetime ends at shutdown; each read reacquires its source
+admission and closes its SQLite handles before returning.
+Detached connection, cron, heartbeat, and hook callbacks retain that Gateway's
+read-only worker scope without inheriting startup or request authority. Shutdown
+refuses late callbacks before they can create another reader.
+Usage bookkeeping invalidates later cache reuse while admitted reads can finish
+their snapshots. Credential, selection, ownership, and lifecycle changes still
+invalidate in-flight preparation.
+Model selection retries that stale read once after its readers finish cleanup,
+preserving the selected agent and any explicit profile pin. If an in-process OAuth
+refresh invalidated the read, selection first observes that owner's durable
+settlement, including inherited credentials and fenced peers. This wait uses the
+existing refresh timeout and neither reads credentials nor starts another refresh.
+Reconnects release waits for the replaced claim; readers of still-fenced peers
+continue to wait for the owner's cleanup.
+Pending refresh profiles remain candidates for model id/mode selection; the OAuth
+owner still settles the refresh before credentials can be used. A caller timeout
+does not retire its durable settlement from observation, and a waiting model read
+cannot cancel it. Canceling a model request ends only its settlement wait; the
+refresh owner and other waiting requests continue independently. Continued changes,
+admission refusals, and cleanup failures remain errors.
+
+Credential lookups through `resolveApiKeyForProvider` and
+`resolveApiKeyForProfile` also accept an optional abort signal. Cancellation
+ends the caller's wait for queued admission, a profile lock, or refresh. Queued
+tasks recheck cancellation before claiming credentials. Started lock acquisition
+retains its cleanup owner, and claimed refreshes keep their independent durable
+settlement.
+Canceled callers cannot start a later queued refresh or return its credentials.
+Callers that omit the signal retain the existing wait behavior.
+
+Workers certify committed SQLite visibility before rows enter the cache. Reads
+with unpublished or trailing WAL frames return normally without being retained.
 
 Explicit copy flows, such as `openclaw agents add`, use this portability policy:
 
@@ -209,6 +267,16 @@ Codex home, and no other managed OpenAI OAuth profile exists, import preserves
 the profile ID and its existing model and session pins. The configured model
 and native credential file stay unchanged. An explicitly isolated agent home
 continues to use the imported OpenClaw profile through its isolated runtime.
+
+Since 2026.9.5, native Codex login no longer supplies the runtime-only
+`openai:default` profile. If that OAuth profile is still declared but absent from
+an agent's canonical credential store, `openclaw doctor --fix`, Doctor lint, and
+Gateway startup warn with the import command above. The warning does not copy
+credentials or block the update. Missing-profile errors identify local store
+absence without reporting a provider HTTP 401; the error records a local lookup
+failure, not a provider rejection.
+For multiple agents, add `--agent <id>` to the login command to select the
+affected agent.
 
 Fresh imports keep account-scoped profile IDs. A matching existing account and
 user reuse their stored profile. Import from another home, missing account/user

@@ -2199,12 +2199,13 @@ describe("fetchWithSsrFGuard hardening", () => {
   it("rejects timed-out fetches even when dispatcher close stalls", async () => {
     const close = vi.fn(() => new Promise<void>(() => {}));
     const destroy = vi.fn();
-    agentCtor.mockImplementationOnce(
-      function MockAgent(this: { close: typeof close; destroy: typeof destroy }) {
-        this.close = close;
-        this.destroy = destroy;
-      },
-    );
+    agentCtor.mockImplementationOnce(function MockAgent(this: {
+      close: typeof close;
+      destroy: typeof destroy;
+    }) {
+      this.close = close;
+      this.destroy = destroy;
+    });
     (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
       Agent: agentCtor,
       EnvHttpProxyAgent: envHttpProxyAgentCtor,

@@ -29,11 +29,7 @@ import type {
   PluginAgentToolResultMiddlewareRegistration,
   PluginRecord,
 } from "./registry-types.js";
-import {
-  findUndeclaredPluginToolNames,
-  normalizePluginToolContractNames,
-  normalizePluginToolNames,
-} from "./tool-contracts.js";
+import { normalizePluginToolContractNames, normalizePluginToolNames } from "./tool-contracts.js";
 import { normalizePluginToolMatcher } from "./tool-hook-matcher.js";
 import {
   isConversationHookName,
@@ -78,6 +74,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     reportRegistrationError,
     reportRegistrationWarning,
   } = state;
+  const declaredToolNames = new WeakMap<PluginRecord, ReadonlySet<string>>();
 
   const registerCodexAppServerExtensionFactory = (
     record: PluginRecord,
@@ -138,7 +135,10 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       reportRegistrationError(record, "agent tool result middleware must be a function");
       return;
     }
-    const runtimes = normalizeAgentToolResultMiddlewareRuntimes(options);
+    const declared = normalizeAgentToolResultMiddlewareRuntimeIds(
+      record.contracts?.agentToolResultMiddleware,
+    );
+    const runtimes = normalizeAgentToolResultMiddlewareRuntimes(options, declared);
     const matcher = normalizePluginToolMatcher(options?.matcher);
     if (runtimes.length === 0) {
       reportRegistrationError(
@@ -147,9 +147,6 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       );
       return;
     }
-    const declared = normalizeAgentToolResultMiddlewareRuntimeIds(
-      record.contracts?.agentToolResultMiddleware,
-    );
     const missing = runtimes.filter((runtime) => !declared.includes(runtime));
     if (missing.length > 0) {
       reportRegistrationError(
@@ -206,14 +203,18 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
 
   const registerTool = (
     record: PluginRecord,
-    tool: AnyAgentTool | OpenClawPluginToolFactory,
+    tool: AnyAgentTool | OpenClawPluginToolFactory | OpenClawPluginToolFactory<2>,
     opts?: OpenClawPluginToolOptions,
   ) => {
     if (pluginsWithChannelRegistrationConflict.has(record.id)) {
       return;
     }
-    const declaredNames = normalizePluginToolContractNames(record.contracts);
-    if (declaredNames.length === 0) {
+    let declaredNames = declaredToolNames.get(record);
+    if (!declaredNames) {
+      declaredNames = new Set(normalizePluginToolContractNames(record.contracts));
+      declaredToolNames.set(record, declaredNames);
+    }
+    if (declaredNames.size === 0) {
       reportRegistrationError(
         record,
         "plugin must declare contracts.tools before registering agent tools",
@@ -222,13 +223,33 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     }
     const names = [...(opts?.names ?? []), ...(opts?.name ? [opts.name] : [])];
     const optional = opts?.optional === true;
+    const versioned = typeof tool !== "function" && "contextVersion" in tool;
+    if (versioned && (tool.contextVersion !== 2 || typeof tool.create !== "function")) {
+      reportRegistrationError(record, "unsupported plugin tool context version");
+      return;
+    }
     const factory: OpenClawPluginToolFactory =
-      typeof tool === "function" ? tool : (_ctx: OpenClawPluginToolContext) => tool;
-    if (typeof tool !== "function") {
+      typeof tool === "function"
+        ? tool
+        : versioned
+          ? (ctx) => {
+              if (!ctx.assertInvocationCurrent) {
+                throw new Error("Version 2 tool factories require host invocation authority");
+              }
+              return tool.create({
+                ...ctx,
+                get senderIsOwner() {
+                  return ctx.senderIsOwner;
+                },
+                assertInvocationCurrent: ctx.assertInvocationCurrent,
+              });
+            }
+          : (_ctx: OpenClawPluginToolContext) => tool;
+    if (typeof tool !== "function" && !versioned) {
       names.push(tool.name);
     }
     const normalized = normalizePluginToolNames(names);
-    const undeclared = findUndeclaredPluginToolNames({ declaredNames, toolNames: normalized });
+    const undeclared = normalized.filter((name) => !declaredNames.has(name));
     if (undeclared.length > 0) {
       reportRegistrationError(
         record,
@@ -239,15 +260,17 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     if (normalized.length > 0) {
       record.toolNames.push(...normalized);
     }
-    registry.tools.push(
-      createRegistration(record, {
+    registry.tools.push({
+      ...createRegistration(record, {
         factory,
+        ...(versioned ? { contextVersion: 2 as const } : {}),
         names: normalized,
-        declaredNames,
         optional,
         origin: record.origin,
       }),
-    );
+      // Host-owned membership must not re-enter the callable wrapper's graph walk.
+      declaredNames,
+    });
   };
 
   const registerHook = (

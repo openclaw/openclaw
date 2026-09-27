@@ -1,6 +1,11 @@
-// Child process adapter wraps spawned child processes for the supervisor.
-import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptions } from "node:child_process";
 import type { Writable } from "node:stream";
+import {
+  spawnWindowsJobChild,
+  WindowsJobSetupError,
+  type ManagedWindowsJob,
+  type WindowsJobExtinction,
+} from "../../../../scripts/lib/managed-windows-job.mts";
 import { toErrorObject } from "../../../infra/errors.js";
 import {
   resolveWindowsExecutablePath,
@@ -128,7 +133,7 @@ export async function createChildAdapter(
   params: ChildAdapterInput,
 ): Promise<ProcessAdapterStartup<WorkerChildAdapter>> {
   if (params.anchoredShellCommand !== undefined) {
-    const startup = await createServiceChildRelayAdapter({
+    return await createServiceChildRelayAdapter({
       assertCurrent: params.assertCurrent,
       beforeSpawn: params.beforeSpawn,
       command: process.platform === "win32" ? params.anchoredShellCommand : "/bin/sh",
@@ -142,7 +147,6 @@ export async function createChildAdapter(
       onSpawnCleanup: params.onSpawnCleanup,
       stderrDestination: params.stderrDestination,
     });
-    return startup;
   }
 
   const baseEnv = params.env ? toStringEnv(params.env) : undefined;
@@ -170,7 +174,7 @@ export async function createChildAdapter(
     params.ownedWorker === undefined &&
     (params.ownProcessTree === true || process.env.OPENCLAW_SERVICE_MARKER?.trim())
   ) {
-    const startup = await createServiceChildRelayAdapter({
+    return await createServiceChildRelayAdapter({
       assertCurrent: params.assertCurrent,
       beforeSpawn: params.beforeSpawn,
       command: preparedSpawn.command,
@@ -187,7 +191,6 @@ export async function createChildAdapter(
       stderrDestination: params.stderrDestination,
       stdoutConsumption: params.stdoutConsumption,
     });
-    return startup;
   }
 
   // A detached POSIX child is still a descendant in the service cgroup/job, but
@@ -217,22 +220,77 @@ export async function createChildAdapter(
       throw new Error("child construction aborted");
     }
   };
-  const spawned = await spawnWithFallback({
-    assertCurrent: () => {
-      assertCurrent();
-      params.beforeSpawn?.();
-    },
-    argv: [preparedSpawn.command, ...preparedSpawn.args],
-    options,
-    fallbacks: useDetached && params.ownedWorker === undefined ? [{ detached: false }] : [],
-  });
+  let windowsJob: ManagedWindowsJob | undefined;
+  let windowsCleanup: Promise<WindowsJobExtinction> | undefined;
+  const launchGate = createDeferredCore();
+  let windowsFallback: WindowsJobExtinction = { status: "uncertain", reason: "job-unavailable" };
+  let tryWindowsJob = true;
+  const spawnChild = () =>
+    spawnWithFallback({
+      ...(process.platform === "win32"
+        ? {
+            spawnImpl: (command, args, spawnOptions) => {
+              if (!tryWindowsJob) {
+                return spawn(command, args, spawnOptions);
+              }
+              const owned = spawnWindowsJobChild(
+                command,
+                args,
+                { ...spawnOptions, signal: params.abortSignal },
+                async (launch) => {
+                  await launchGate.promise;
+                  assertCurrent();
+                  params.beforeSpawn?.();
+                  launch();
+                },
+              );
+              if (!owned) {
+                return spawn(command, args, spawnOptions);
+              }
+              windowsJob = owned.job;
+              windowsCleanup = owned.job.certify();
+              void windowsCleanup.catch(() => {});
+              params.onSpawnCleanup?.(windowsCleanup);
+              return owned.child;
+            },
+          }
+        : {}),
+      assertCurrent: () => {
+        assertCurrent();
+        params.beforeSpawn?.();
+      },
+      argv: [preparedSpawn.command, ...preparedSpawn.args],
+      options,
+      fallbacks: useDetached && params.ownedWorker === undefined ? [{ detached: false }] : [],
+    });
+
+  let spawned: Awaited<ReturnType<typeof spawnChild>>;
+  try {
+    spawned = await spawnChild();
+    if (windowsJob) {
+      await windowsJob.admission;
+    }
+  } catch (error) {
+    if (!(error instanceof WindowsJobSetupError)) {
+      throw error;
+    }
+    // No command has been admitted. Retire the launcher before the ordinary spawn.
+    await windowsJob?.certify();
+    windowsFallback = { status: "uncertain", reason: error.reason, cause: error.cause };
+    windowsJob = undefined;
+    windowsCleanup = undefined;
+    tryWindowsJob = false;
+    spawned = await spawnChild();
+  }
 
   const child = spawned.child as ChildProcessWithoutNullStreams;
   const events = createProcessAdapterEvents();
   if (params.onWorkerMessage) {
     child.on("message", (message) => {
       try {
-        params.onWorkerMessage?.(message);
+        if (!windowsJob?.isControlMessage(message)) {
+          params.onWorkerMessage?.(message);
+        }
       } catch {
         // Worker diagnostics cannot change child supervision.
       }
@@ -432,22 +490,18 @@ export async function createChildAdapter(
     }
   }
 
-  child.stdout?.once("end", () => {
+  const markStdoutDrained = () => {
     stdoutDrained = true;
     maybeSettleAfterExit();
-  });
-  child.stdout?.once("close", () => {
-    stdoutDrained = true;
-    maybeSettleAfterExit();
-  });
-  child.stderr?.once("end", () => {
+  };
+  const markStderrDrained = () => {
     stderrDrained = true;
     maybeSettleAfterExit();
-  });
-  child.stderr?.once("close", () => {
-    stderrDrained = true;
-    maybeSettleAfterExit();
-  });
+  };
+  child.stdout?.once("end", markStdoutDrained);
+  child.stdout?.once("close", markStdoutDrained);
+  child.stderr?.once("end", markStderrDrained);
+  child.stderr?.once("close", markStderrDrained);
 
   // Worker IPC failures close authority; ordinary post-spawn errors are nonterminal.
   child.on("error", (error) => {
@@ -478,11 +532,7 @@ export async function createChildAdapter(
     return await joinProcessCompletionAndOutput(completion.promise, awaitedStdout.drain());
   };
 
-  // The actual detachment of the spawned child can differ from `useDetached`:
-  // when the detached spawn fails, `spawnWithFallback` retries with the
-  // `no-detach` fallback (detached:false). In that case the child shares the
-  // gateway's process group regardless of intent, so the kill must avoid
-  // group-kill. (#71662 follow-up — caught by Greptile review)
+  // A no-detach fallback shares the Gateway's group and must never group-kill it.
   const childIsDetached = useDetached && !spawned.usedFallback;
   const attachedLinuxFallback = process.platform === "linux" && !childIsDetached;
   let attachedTerminationStarted = false;
@@ -529,6 +579,16 @@ export async function createChildAdapter(
       });
     });
   const kill = (signal?: NodeJS.Signals) => {
+    if (windowsJob) {
+      try {
+        windowsJob.stop();
+      } catch (error) {
+        cleanup.reject(error);
+        rejectPendingWait(error);
+      }
+      scheduleForceKillWaitFallback(signal ?? "SIGKILL");
+      return;
+    }
     // A delayed private-input failure must not signal a PID whose child has closed.
     if (processClosed) {
       if (signal === undefined || signal === "SIGKILL") {
@@ -601,7 +661,9 @@ export async function createChildAdapter(
     // Error handling and Node's child-close bookkeeping must remain attached during destroy.
     child.stdout.destroy();
     child.stderr.destroy();
-    child.removeAllListeners();
+    if (!windowsJob) {
+      child.removeAllListeners();
+    }
     events.clear();
   };
 
@@ -635,7 +697,9 @@ export async function createChildAdapter(
     : undefined;
 
   const adapter: WorkerChildAdapter = {
-    pid: child.pid ?? undefined,
+    get pid() {
+      return windowsJob?.commandPid ?? child.pid;
+    },
     stdin,
     oomScoreWrapperSelected: preparedSpawn.wrapped,
     supportsRawOutput: true,
@@ -645,14 +709,23 @@ export async function createChildAdapter(
     onExit: events.onExit,
     onError: events.onError,
     wait,
+    ...(process.platform === "win32" && {
+      waitForExtinction: () => windowsCleanup ?? cleanup.promise.then(() => windowsFallback),
+    }),
     kill,
     dispose,
     closeStartGate,
     openStartGate,
   };
-  params.onSpawnCleanup?.(cleanup.promise);
+  if (!windowsCleanup) {
+    params.onSpawnCleanup?.(adapter.waitForExtinction?.() ?? cleanup.promise);
+  }
+  launchGate.resolve();
   const ready = (async () => {
     try {
+      if (windowsJob) {
+        await windowsJob.ready;
+      }
       // Construction may outlive admission; publish cleanup before any private input.
       assertCurrent();
       if (params.ownedWorker !== undefined && (!child.connected || !child.channel)) {

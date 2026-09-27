@@ -214,16 +214,18 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
     // oxlint-disable-next-line typescript/unbound-method -- called below with the intercepted string receiver.
     const originalIndexOf = String.prototype.indexOf;
     let searchedSpanUnits = 0;
-    const indexOf = vi
-      .spyOn(String.prototype, "indexOf")
-      .mockImplementation(function (this: string, search, position) {
-        const found = originalIndexOf.call(this, search, position);
-        if (search === "<") {
-          const start = Math.min(this.length, Math.max(0, position ?? 0));
-          searchedSpanUnits += (found < 0 ? this.length : found + 1) - start;
-        }
-        return found;
-      });
+    const indexOf = vi.spyOn(String.prototype, "indexOf").mockImplementation(function (
+      this: string,
+      search,
+      position,
+    ) {
+      const found = originalIndexOf.call(this, search, position);
+      if (search === "<") {
+        const start = Math.min(this.length, Math.max(0, position ?? 0));
+        searchedSpanUnits += (found < 0 ? this.length : found + 1) - start;
+      }
+      return found;
+    });
     let text = "";
     try {
       text = htmlToMarkdown(html).text;

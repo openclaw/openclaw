@@ -1,3 +1,5 @@
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
+import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import {
   ABSOLUTE_DEADLINE_EXPIRED,
   awaitWithinDeadline,
@@ -59,36 +61,47 @@ export function createUpdateOperationDeadline<E extends Error = Error>(
       cancelDeadline = scheduleAbsoluteDeadline(admission.deadlineAtMs, inspectDeadline);
     },
     async run<T>(operation: () => Promise<T>): Promise<T> {
-      assertCurrent();
-      const work = Promise.resolve()
-        .then(operation)
-        .then(
-          (value) => ({ value }),
-          (error: unknown) => ({ error }),
-        );
-      try {
-        const outcome = await Promise.race([work, expired]);
-        inspectDeadline();
-        const timeout = failure;
-        if (timeout) {
-          const joined = await awaitWithinDeadline(
-            () => work,
-            admission!.deadlineAtMs + admission!.timeoutMs,
+      return await withCommandProcessScope(async () => {
+        assertCurrent();
+        const work = Promise.resolve()
+          .then(operation)
+          .then(
+            (value) => ({ value }),
+            (error: unknown) => ({ error }),
           );
-          timeout.message +=
-            joined === ABSOLUTE_DEADLINE_EXPIRED
-              ? " Cancellation did not settle within the same budget; outstanding writers retain update ownership."
-              : " Cancellation settled before recovery.";
-          throw timeout;
+        try {
+          const outcome = await Promise.race([work, expired]);
+          inspectDeadline();
+          const timeout = failure;
+          if (timeout) {
+            const joined = await awaitWithinDeadline(
+              () => work,
+              admission!.deadlineAtMs + admission!.timeoutMs,
+            );
+            timeout.message +=
+              joined === ABSOLUTE_DEADLINE_EXPIRED
+                ? " Cancellation did not settle within the same budget; outstanding writers retain update ownership."
+                : " Cancellation settled before recovery.";
+            if (
+              joined !== ABSOLUTE_DEADLINE_EXPIRED &&
+              "error" in joined &&
+              hasCommandProcessCleanupError(joined.error)
+            ) {
+              throw new AggregateError([timeout, joined.error], "Update operation cleanup failed", {
+                cause: timeout,
+              });
+            }
+            throw timeout;
+          }
+          if ("error" in outcome) {
+            throw outcome.error;
+          }
+          return outcome.value;
+        } finally {
+          closed = true;
+          cancelDeadline?.();
         }
-        if ("error" in outcome) {
-          throw outcome.error;
-        }
-        return outcome.value;
-      } finally {
-        closed = true;
-        cancelDeadline?.();
-      }
+      }, controller.signal);
     },
   };
 }

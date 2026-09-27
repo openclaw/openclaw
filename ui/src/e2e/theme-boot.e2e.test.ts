@@ -1,4 +1,6 @@
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   controlUiBundledGatewayUrl,
   installMockGateway,
@@ -24,13 +26,82 @@ type ThemeFrame = {
   mode: string | undefined;
   html: string;
   body: string;
-  background: string;
 };
 
 declare global {
   interface Window {
     themeBootFrames: ThemeFrame[];
+    themeSiblingStorageObserved: boolean;
   }
+}
+
+// Observe the real document and retain transient frames that a settled DOM assertion misses.
+const themeFrameObserver = `
+window.themeBootFrames = [];
+function sampleThemeFrame() {
+  const root = document.documentElement;
+  if (root && document.body) {
+    const html = getComputedStyle(root);
+    window.themeBootFrames.push({
+      time: performance.now(), theme: root.dataset.theme,
+      mode: root.dataset.themeMode, html: html.backgroundColor,
+      body: getComputedStyle(document.body).backgroundColor
+    });
+  }
+  requestAnimationFrame(sampleThemeFrame);
+}
+requestAnimationFrame(sampleThemeFrame);
+`;
+
+async function settleThemeFrames(page: Page): Promise<void> {
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      }),
+  );
+}
+
+async function assertThemeFrames(
+  page: Page,
+  expected: { theme: string; mode: string },
+): Promise<void> {
+  await settleThemeFrames(page);
+  const { frames, stable, surfaces } = await page.evaluate(() => {
+    const root = document.documentElement;
+    const style = getComputedStyle(root);
+    // The canvas owner uses --bg and, for narrow chat, --bg-content.
+    // Let the browser serialize token colors like computed backgrounds.
+    const sample = document.createElement("span");
+    sample.style.display = "none";
+    document.body.append(sample);
+    const surfaceColors = ["--bg", "--bg-content"]
+      .map((token) => style.getPropertyValue(token).trim())
+      .filter(Boolean)
+      .map((color) => {
+        sample.style.backgroundColor = color;
+        return getComputedStyle(sample).backgroundColor;
+      });
+    sample.remove();
+    return {
+      frames: window.themeBootFrames,
+      stable: { theme: root.dataset.theme, mode: root.dataset.themeMode },
+      surfaces: surfaceColors,
+    };
+  });
+  expect(stable).toEqual(expected);
+  expect(surfaces.length).toBeGreaterThan(0);
+  expect(frames.length).toBeGreaterThan(0);
+  expect(
+    frames.filter(
+      (frame) =>
+        frame.theme !== expected.theme ||
+        frame.mode !== expected.mode ||
+        !surfaces.includes(frame.html) ||
+        !surfaces.includes(frame.body),
+    ),
+    `Every painted frame must use the resolved palette: ${JSON.stringify({ stable, surfaces })}`,
+  ).toEqual([]);
 }
 
 suite.define(() => {
@@ -38,6 +109,7 @@ suite.define(() => {
     it.each(variants)(
       `keeps every painted frame at ${width}px for system=$system mode=$mode saved=$saved`,
       async ({ system, mode, saved }) => {
+        let releaseAppScripts = () => {};
         await suite.withPage(
           {
             colorScheme: system,
@@ -54,25 +126,13 @@ suite.define(() => {
                 ? "rose-light"
                 : "rose"
               : resolvedMode;
-            const background = saved
-              ? resolvedMode === "light"
-                ? "rgb(250, 244, 237)"
-                : "rgb(25, 23, 36)"
-              : resolvedMode === "light"
-                ? "rgb(250, 249, 247)"
-                : "rgb(14, 16, 21)";
-            const contentBackground =
-              resolvedMode === "light"
-                ? saved
-                  ? "rgb(246, 239, 230)"
-                  : "rgb(244, 241, 236)"
-                : background;
-            // Narrow chat chrome uses the selected palette's content surface.
-            const allowedBackgrounds =
-              width === 390 ? [background, contentBackground] : [background];
             const config = saved
               ? { ui: { prefs: { theme: "absolutely", themeMode: system } } }
               : {};
+            const profileResponse = {
+              status: "ok",
+              entries: saved ? { "ui.theme": theme, "ui.themeMode": mode } : {},
+            };
             const gateway = await installMockGateway(page, {
               presenceUsers: saved ? [{ id: profileId, name: "Theme Reader", self: true }] : [],
               sessions: [
@@ -88,6 +148,7 @@ suite.define(() => {
               historyMessages: [{ role: "assistant", content: "Theme continuity is ready." }],
               methodResponses: {
                 "config.get": { config, raw: JSON.stringify(config), hash: "theme-boot" },
+                "users.prefs.get": profileResponse,
               },
             });
             await page.addInitScript(
@@ -117,81 +178,66 @@ suite.define(() => {
                 profileId,
               },
             );
-            // Observe the real boot document before module evaluation and retain
-            // transient frames that a final-state assertion cannot detect.
-            await page.addInitScript({
-              content: `
-                window.themeBootFrames = [];
-                function sampleThemeFrame() {
-                  const root = document.documentElement;
-                  if (root && document.body) {
-                    const html = getComputedStyle(root);
-                    window.themeBootFrames.push({
-                      time: performance.now(), theme: root.dataset.theme,
-                      mode: root.dataset.themeMode, html: html.backgroundColor,
-                      body: getComputedStyle(document.body).backgroundColor,
-                      background: html.getPropertyValue('--bg').trim()
-                    });
-                  }
-                  requestAnimationFrame(sampleThemeFrame);
+            await page.addInitScript({ content: themeFrameObserver });
+            const expectedAppearance = { theme: resolvedTheme, mode: resolvedMode };
+            let appScriptsReady = Promise.resolve();
+            const appAssets = new URL("assets/", suite.server.baseUrl);
+            await page.route(
+              (url) =>
+                url.origin === appAssets.origin &&
+                url.pathname.startsWith(appAssets.pathname) &&
+                url.pathname.endsWith(".js"),
+              async (route) => {
+                if (route.request().resourceType() === "script") {
+                  await appScriptsReady;
                 }
-                requestAnimationFrame(sampleThemeFrame);
-              `,
-            });
-            const settleFrames = () =>
-              page.evaluate(
-                () =>
-                  new Promise<void>((resolve) => {
-                    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-                  }),
-              );
-            const assertFrames = async () => {
-              await settleFrames();
-              const frames = await page.evaluate(() => window.themeBootFrames);
-              expect(frames.length).toBeGreaterThan(0);
-              expect(
-                frames.filter(
-                  (frame) =>
-                    frame.theme !== resolvedTheme ||
-                    frame.mode !== resolvedMode ||
-                    !allowedBackgrounds.includes(frame.html) ||
-                    !allowedBackgrounds.includes(frame.body),
-                ),
-                "No intermediate gateway palette may replace the saved appearance",
-              ).toEqual([]);
-            };
+                await route.fallback();
+              },
+            );
             for (const reload of [false, true]) {
+              appScriptsReady = new Promise<void>((resolve) => {
+                releaseAppScripts = resolve;
+              });
               if (reload) {
-                await page.reload();
+                await page.reload({ waitUntil: "commit" });
               } else {
-                await page.goto(`${suite.server.baseUrl}chat`);
+                await page.goto(`${suite.server.baseUrl}chat`, { waitUntil: "commit" });
               }
+              // Make the pre-module paint observable even on fast runners. A
+              // final DOM assertion misses a wrong canvas repaired by app boot.
+              await page.waitForFunction(() => window.themeBootFrames.length >= 2);
+              releaseAppScripts();
               if (saved) {
                 await gateway.waitForRequest("users.prefs.get");
                 await page.locator(".agent-chat__composer-combobox textarea").waitFor();
-                await settleFrames();
-                await gateway.resolveDeferred("users.prefs.get", {
-                  status: "ok",
-                  entries: { "ui.theme": theme, "ui.themeMode": mode },
-                });
+                await settleThemeFrames(page);
+                await gateway.resolveDeferred("users.prefs.get", profileResponse);
               }
               await page.getByText("Theme continuity is ready.", { exact: true }).waitFor();
-              await assertFrames();
+              await assertThemeFrames(page, expectedAppearance);
             }
-            await page.locator(".shell-skip-link").focus();
-            await page.keyboard.press("ControlOrMeta+Shift+,");
+            if (width !== 1440 || !saved || mode === "system") {
+              return;
+            }
+            await gateway.setOnline(false);
+            await page.locator(".agent-chat__input--offline").waitFor();
+            await assertThemeFrames(page, expectedAppearance);
+            await gateway.setOnline(true);
+            await waitForControlUiGatewayReady(page);
+            await assertThemeFrames(page, expectedAppearance);
+            await page.evaluate((url) => {
+              history.pushState(null, "", url);
+              window.dispatchEvent(new PopStateEvent("popstate"));
+            }, `${suite.server.baseUrl}settings/appearance`);
             await waitForControlUiRoute(page, {
               pathname: "/settings/appearance",
               routeId: "appearance",
             });
-            await assertFrames();
+            await assertThemeFrames(page, expectedAppearance);
             await page.goBack();
             await page.locator(".agent-chat__composer-combobox textarea").waitFor();
-            await assertFrames();
+            await assertThemeFrames(page, expectedAppearance);
             const newThread = page.locator("openclaw-app-sidebar .sidebar-brand__new-thread");
-            if (width === 390) {
-              await page.locator(".chat-pane__nav-toggle").first().click();
-            }
             await page
               .locator(
                 `.sidebar-recent-session[data-session-key="${secondSessionKey}"] a.sidebar-recent-session__link`,
@@ -200,16 +246,101 @@ suite.define(() => {
             await gateway.waitForRequest("chat.startup", {
               match: { sessionKey: secondSessionKey },
             });
-            await assertFrames();
-            if (width === 390) {
-              await page.locator(".chat-pane__nav-toggle").first().click();
-            }
+            await assertThemeFrames(page, expectedAppearance);
             await newThread.click();
             await page.locator(".new-session-page__message").waitFor();
-            await assertFrames();
+            await assertThemeFrames(page, expectedAppearance);
           },
+          async () => releaseAppScripts(),
         );
       },
     );
   }
+
+  it("keeps a ready tab's theme while another tab's profile is pending", async () => {
+    await suite.withPage(
+      {
+        colorScheme: "light",
+        deviceScaleFactor: 2,
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { width: 1440, height: 900 },
+      },
+      async ({ context, page }) => {
+        const profileResponse = {
+          status: "ok",
+          entries: { "ui.theme": "rose", "ui.themeMode": "dark" },
+        };
+        const scenario = {
+          presenceUsers: [{ id: profileId, name: "Theme Reader", self: true }],
+          historyMessages: [{ role: "assistant", content: "Theme continuity is ready." }],
+        };
+        const config = {
+          ui: { prefs: { theme: "claw", themeMode: "light", chatShowThinking: true } },
+        };
+        await installMockGateway(page, {
+          ...scenario,
+          methodResponses: {
+            "config.get": { config, raw: JSON.stringify(config), hash: "ready-tab" },
+            "users.prefs.get": profileResponse,
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.getByText("Theme continuity is ready.", { exact: true }).waitFor();
+        // With no seeded mirror, Rosé proves this tab has applied the resolved profile.
+        await page.waitForFunction(
+          () =>
+            document.documentElement.dataset.theme === "rose" &&
+            document.documentElement.dataset.themeMode === "dark",
+        );
+        await page.evaluate(themeFrameObserver);
+        await page.evaluate(
+          (settingsKey) => {
+            window.themeSiblingStorageObserved = false;
+            window.addEventListener("storage", (event) => {
+              if (event.key === settingsKey && event.newValue) {
+                const settings = JSON.parse(event.newValue);
+                if (settings.chatShowThinking === false) {
+                  window.themeSiblingStorageObserved = true;
+                }
+              }
+            });
+          },
+          `openclaw.control.settings.v1:${controlUiBundledGatewayUrl(suite.server.baseUrl)}`,
+        );
+
+        const pendingPage = await context.newPage();
+        const nextConfig = {
+          ui: { prefs: { ...config.ui.prefs, chatShowThinking: false } },
+        };
+        const pendingGateway = await installMockGateway(pendingPage, {
+          ...scenario,
+          heldMethods: ["users.prefs.get"],
+          methodResponses: {
+            "config.get": {
+              config: nextConfig,
+              raw: JSON.stringify(nextConfig),
+              hash: "pending-tab",
+            },
+            "users.prefs.get": profileResponse,
+          },
+        });
+        // Keep the observed tab foreground so background rAF throttling cannot hide a flash.
+        await page.bringToFront();
+        await pendingPage.goto(`${suite.server.baseUrl}chat`, { waitUntil: "commit" });
+        await pendingGateway.waitForRequest("users.prefs.get");
+        // This native event must come from the sibling's nonappearance reconciliation.
+        await page.waitForFunction(() => window.themeSiblingStorageObserved, undefined, {
+          polling: 25,
+        });
+        await assertThemeFrames(page, { theme: "rose", mode: "dark" });
+
+        await pendingGateway.resolveDeferred("users.prefs.get", profileResponse);
+        await pendingPage.bringToFront();
+        await pendingPage.getByText("Theme continuity is ready.", { exact: true }).waitFor();
+        await page.bringToFront();
+        await assertThemeFrames(page, { theme: "rose", mode: "dark" });
+      },
+    );
+  });
 });

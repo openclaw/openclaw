@@ -1,5 +1,6 @@
 import { NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS } from "../../infra/node-commands.js";
 import { BoundedBuffer } from "../../shared/bounded-buffer.js";
+import { truncateUtf8Prefix } from "../../utils/utf8-truncate.js";
 import type { NodeRegistry, NodeInvokeResult } from "../node-registry.js";
 import type { TerminalBackend, TerminalBackendExit } from "./backend.js";
 import { surrogateSafeTail } from "./output-ring.js";
@@ -32,33 +33,6 @@ function parseExit(result: NodeInvokeResult): TerminalBackendExit {
   } catch {
     return { error: "node terminal returned an invalid exit result" };
   }
-}
-
-function splitInput(data: string): string[] {
-  const chunks: string[] = [];
-  let start = 0;
-  let bytes = 0;
-  for (let index = 0; index < data.length; index += 1) {
-    const codePoint = data.codePointAt(index);
-    if (codePoint === undefined) {
-      break;
-    }
-    const char = String.fromCodePoint(codePoint);
-    const size = Buffer.byteLength(char, "utf8");
-    if (bytes > 0 && bytes + size > DATA_INPUT_CHUNK_BYTES) {
-      chunks.push(data.slice(start, index));
-      start = index;
-      bytes = 0;
-    }
-    bytes += size;
-    if (char.length === 2) {
-      index += 1;
-    }
-  }
-  if (start < data.length) {
-    chunks.push(data.slice(start));
-  }
-  return chunks;
 }
 
 export async function createNodeRelayBackend(params: {
@@ -132,8 +106,12 @@ export async function createNodeRelayBackend(params: {
   const send = (payload: unknown) => params.registry.sendInvokeInput(activeInvokeId, payload);
   return {
     write(data) {
-      for (const chunk of splitInput(data)) {
+      for (let offset = 0; offset < data.length;) {
+        const head = data.slice(offset, offset + DATA_INPUT_CHUNK_BYTES);
+        // Slice the original string because UTF-8 encoding normalizes lone surrogates.
+        const chunk = head.slice(0, truncateUtf8Prefix(head, DATA_INPUT_CHUNK_BYTES).length);
         send({ kind: "data", data: chunk });
+        offset += chunk.length;
       }
     },
     resize(cols, rows) {

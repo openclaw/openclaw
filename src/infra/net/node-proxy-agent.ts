@@ -201,22 +201,7 @@ export function createNodeProxyAgent(options: CreateNodeProxyAgentOptions): Http
       proxyConnect: options.proxyConnect,
     });
   }
-  return createEnvNodeProxyAgentForTarget(options.targetUrl, {
-    protocol: options.protocol,
-    agentOptions: options.agentOptions,
-    proxyConnect: options.proxyConnect,
-  });
-}
-
-function createEnvNodeProxyAgentForTarget(
-  targetUrl: string | URL,
-  options: {
-    protocol?: NodeProxyProtocol;
-    agentOptions?: NodeProxyAgentOptions;
-    proxyConnect?: ProxylineProxyConnectOptions;
-  } = {},
-): HttpAgent | undefined {
-  const target = resolveEnvNodeProxyTarget(targetUrl);
+  const target = resolveEnvNodeProxyTarget(options.targetUrl);
   if (target === undefined) {
     return undefined;
   }

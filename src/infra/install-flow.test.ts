@@ -38,6 +38,56 @@ describe("resolveExistingInstallPath", () => {
 });
 
 describe("withExtractedArchiveRoot", () => {
+  it.each([
+    { workTimeoutMs: null, timeoutMs: 1, succeeds: true },
+    { workTimeoutMs: undefined, timeoutMs: 1, succeeds: false },
+    { workTimeoutMs: 1, timeoutMs: 1000, succeeds: false },
+  ])(
+    "honors work deadline $workTimeoutMs while settling slow extraction",
+    async ({ workTimeoutMs, timeoutMs, succeeds }) => {
+      await withTestDir({ prefix: "openclaw-install-flow-" }, async (fixtureRoot) => {
+        const archivePath = path.join(fixtureRoot, "slow.zip");
+        const zip = new JSZip();
+        zip.file("package/data.txt", "complete");
+        await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
+        const onExtracted = vi.fn(async (rootDir: string) => ({
+          ok: true as const,
+          content: await fs.readFile(path.join(rootDir, "data.txt"), "utf8"),
+        }));
+        const originalOpen = fs.open;
+        let delayed = false;
+        const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+          if (String(args[0]).endsWith(`${path.sep}data.txt`)) {
+            delayed = true;
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, 50);
+            });
+          }
+          return await originalOpen(...args);
+        });
+        try {
+          const result = await withExtractedArchiveRoot({
+            archivePath,
+            tempDirPrefix: "openclaw-install-flow-",
+            timeoutMs,
+            workTimeoutMs,
+            onExtracted,
+          });
+          if (succeeds) {
+            expect(delayed).toBe(true);
+            expect(result).toEqual({ ok: true, content: "complete" });
+            expect(onExtracted).toHaveBeenCalledOnce();
+          } else {
+            expect(result).toEqual({ ok: false, error: expect.stringContaining("timed out") });
+            expect(onExtracted).not.toHaveBeenCalled();
+          }
+        } finally {
+          openSpy.mockRestore();
+        }
+      });
+    },
+  );
+
   it("applies optional extraction limits before the callback and leaves installer defaults unchanged", async () => {
     await withTestDir({ prefix: "openclaw-install-flow-" }, async (fixtureRoot) => {
       const archivePath = path.join(fixtureRoot, "plugin.zip");
@@ -134,6 +184,40 @@ describe("withExtractedArchiveRoot", () => {
         error: `failed to extract archive: Error: unsupported archive: ${archivePath}`,
       });
       expect(onExtracted).not.toHaveBeenCalled();
+    });
+  });
+
+  it("verifies the full extracted tree before selecting a package root or running install work", async () => {
+    await withTestDir({ prefix: "openclaw-install-flow-" }, async (fixtureRoot) => {
+      const archivePath = path.join(fixtureRoot, "plugin.zip");
+      const zip = new JSZip();
+      zip.file("package/package.json", '{"name":"example-plugin"}');
+      zip.file("unexpected.txt", "outside the selected package");
+      await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
+      const failure = { ok: false as const, error: "unexpected archive file", code: "integrity" };
+      const onExtracted = vi.fn(async () => ({ ok: true as const }));
+      let extractionRoot = "";
+      const result = await withExtractedArchiveRoot({
+        archivePath,
+        tempDirPrefix: "openclaw-install-flow-",
+        timeoutMs: 1000,
+        rootMarkers: ["package.json"],
+        verification: {
+          limits: {},
+          onExtractionError: () => failure,
+          verify: async (extractDir) => {
+            extractionRoot = extractDir;
+            expect(await fs.readFile(path.join(extractDir, "unexpected.txt"), "utf8")).toBe(
+              "outside the selected package",
+            );
+            return failure;
+          },
+        },
+        onExtracted,
+      });
+      expect(result).toBe(failure);
+      expect(onExtracted).not.toHaveBeenCalled();
+      await expect(fs.stat(extractionRoot)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 

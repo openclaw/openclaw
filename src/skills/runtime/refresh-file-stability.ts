@@ -20,7 +20,7 @@ function readFileStabilitySnapshot(filePath: string): FileStabilitySnapshot | un
 async function waitForStableSkillFile(
   filePath: string,
   stabilityMs: number,
-  watcher: FSWatcher,
+  watcher: Pick<FSWatcher, "closed">,
   readRevision: () => number,
 ): Promise<void> {
   if (watcher.closed || stabilityMs <= 0) {
@@ -66,7 +66,7 @@ export function createRawSkillFileScheduler({
   schedule,
   onError,
 }: {
-  watcher: FSWatcher;
+  watcher: Pick<FSWatcher, "closed">;
   stabilityMs: number;
   schedule: (filePath: string) => void;
   onError: (filePath: string, error: unknown) => void;

@@ -1,9 +1,11 @@
-import { Buffer } from "node:buffer";
+import { isProxy } from "node:util/types";
 import { responsesPromptObserver } from "@openclaw/ai/internal/openai";
 import { stableStringify } from "@openclaw/normalization-core";
-import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { sha256Hex, sha256StableValue } from "@openclaw/normalization-core/node-crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Model } from "openclaw/plugin-sdk/llm";
+import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
+import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 
 type ProviderPromptSnapshot = {
@@ -34,12 +36,71 @@ export function clearProviderPromptState(runId: string): void {
   providerPromptStates.delete(runId);
 }
 
+const promptHashPool = resolveGlobalSingleton(
+  Symbol.for("openclaw.providerPromptHashPool"),
+  () =>
+    new WorkerTaskPool<unknown, { digest: string; byteWeight: number }>({
+      workerUrl: resolveRuntimeProcessEntrypointUrl("providerPromptState"),
+      maxWorkers: 1,
+      sharedCompute: true,
+    }),
+);
+
+// onPayload accepts arbitrary hook values. Only ordinary data retains exactly the
+// same stable identity across a structured clone; getters and custom objects stay local.
+function providerPromptWorkerBytes(
+  value: unknown,
+  seen = new WeakSet<object>(),
+): number | undefined {
+  if (value === null || typeof value !== "object") {
+    if (typeof value === "function" || typeof value === "symbol" || typeof value === "bigint") {
+      return undefined;
+    }
+    return typeof value === "string" ? value.length * 2 : 8;
+  }
+  if (isProxy(value)) {
+    return undefined;
+  }
+  const array = Array.isArray(value);
+  const prototype = Object.getPrototypeOf(value);
+  if (
+    (array && (prototype !== Array.prototype || Object.hasOwn(value, Symbol.iterator))) ||
+    (!array && prototype !== Object.prototype && prototype !== null)
+  ) {
+    return undefined;
+  }
+  if (seen.has(value)) {
+    return 0;
+  }
+  seen.add(value);
+  const keys = Object.keys(value);
+  if (array && keys.length !== value.length) {
+    return undefined;
+  }
+  let bytes = 64;
+  for (const [index, key] of keys.entries()) {
+    if (array && key !== String(index)) {
+      return undefined;
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
+    const childBytes =
+      "value" in descriptor ? providerPromptWorkerBytes(descriptor.value, seen) : undefined;
+    if (childBytes === undefined) {
+      return undefined;
+    }
+    // Count UTF-16 strings and container overhead without scanning prompt text.
+    bytes += key.length * 2 + 16 + childBytes;
+  }
+  return bytes;
+}
+
 /** Captures the final provider request identity without retaining payload content. */
-function snapshotProviderPrompt(params: {
+async function snapshotProviderPrompt(params: {
   model: Model;
   payload: unknown;
+  signal?: AbortSignal;
   effectiveContextTokenBudget: number;
-}): ProviderPromptSnapshot {
+}): Promise<ProviderPromptSnapshot> {
   const scope = stableStringify({
     provider: params.model.provider,
     api: params.model.api,
@@ -47,11 +108,25 @@ function snapshotProviderPrompt(params: {
     baseUrl: params.model.baseUrl,
     effectiveContextTokenBudget: params.effectiveContextTokenBudget,
   });
-  const serialized = stableStringify(params.payload);
+  // Retry admission needs exact content equality, including hook replacements and
+  // edits to earlier messages. The shared compute pool owns the full traversal.
+  const inputBytes = providerPromptWorkerBytes(params.payload);
+  const payload =
+    inputBytes !== undefined
+      ? await promptHashPool
+          .run(() => params.payload, { inputBytes, signal: params.signal })
+          .catch((error: unknown) => {
+            if (params.signal?.aborted) {
+              throw error;
+            }
+            // Bookkeeping worker failure must not make an otherwise valid model call unavailable.
+            return sha256StableValue(params.payload);
+          })
+      : sha256StableValue(params.payload);
   return {
     scopeDigest: sha256Hex(scope),
-    digest: sha256Hex(serialized),
-    byteWeight: Buffer.byteLength(serialized),
+    digest: payload.digest,
+    byteWeight: payload.byteWeight,
   };
 }
 
@@ -94,9 +169,10 @@ export function wrapStreamFnWithProviderPromptState(params: {
       onPayload: async (payload, payloadModel) => {
         const replacement = await originalOnPayload?.(payload, payloadModel);
         const finalPayload = replacement === undefined ? payload : replacement;
-        const snapshot = snapshotProviderPrompt({
+        const snapshot = await snapshotProviderPrompt({
           model: payloadModel,
           payload: finalPayload,
+          signal: options?.signal,
           effectiveContextTokenBudget: params.effectiveContextTokenBudget,
         });
         assertProviderPromptRetryProgress(params.state, snapshot);

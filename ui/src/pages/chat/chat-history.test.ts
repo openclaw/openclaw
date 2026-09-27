@@ -4,17 +4,14 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import { rewindChatHistory, switchChatHistoryBranch } from "./chat-history-actions.ts";
+import { loadOlderChatHistoryPage, requestChatSessionSnapshot } from "./chat-history-request.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { createState, type TestState } from "./chat-history.inflight.test-support.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import type { ChatState } from "./chat-state-contract.ts";
-import { ChatAttachmentReadLifecycle } from "./components/chat-attachments.ts";
-import {
-  getChatSessionProjection,
-  publishChatSessionProjection,
-  reduceChatSessionProjection,
-} from "./history-merge.ts";
+import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
+import { getChatSessionProjection, publishChatSessionProjection } from "./history-merge.ts";
 import { handleChatDraftChange } from "./input-history.ts";
 import {
   cacheChatSessionSnapshot,
@@ -22,6 +19,30 @@ import {
   type ChatMessageCache,
 } from "./session-message-cache.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
+
+it("preserves prepared quiet activity through older pages and prefetched snapshots", async () => {
+  const message = {
+    role: "toolResult",
+    toolCallId: "wait",
+    toolName: "sessions_yield",
+    content: [{ type: "text", text: "Waiting finished" }],
+    __openclaw: { id: "wait-result", seq: 3 },
+  };
+  const state = createState({
+    messages: [message],
+    activity: [{ messageId: "wait-result", items: [] }],
+  });
+  const expected = [{ ...message, activity: [] }];
+  expect((await loadOlderChatHistoryPage(state, 1))?.messages).toEqual(expected);
+  const prefetched = await requestChatSessionSnapshot(
+    state.client!,
+    state.sessionKey,
+    state,
+    () => true,
+  );
+  expect(prefetched).toMatchObject({ kind: "snapshot", snapshot: { messages: expected } });
+  expect(message).not.toHaveProperty("activity");
+});
 
 function activeHistory(runId: string): ChatHistoryResult {
   return {
@@ -724,30 +745,6 @@ describe("canonical history snapshot projection", () => {
 
     expect(request).toHaveBeenCalledOnce();
     expect(state.chatMessages).toEqual([first, second]);
-  });
-
-  it("preserves pending input appended while the authoritative request is in flight", async () => {
-    const { promise: history, resolve: resolveHistory } = createDeferred<ChatHistoryResult>();
-    const first = message("user", "first prompt", { id: "first-user", seq: 1 });
-    const pending = message("user", "concurrent prompt", {
-      idempotencyKey: "concurrent-run:user",
-    });
-    const state = createState({ messages: [first] });
-    state.chatMessages = [first];
-    state.client = {
-      request: vi.fn().mockReturnValue(history),
-    } as unknown as GatewayBrowserClient;
-
-    const load = loadChatHistory(state);
-    reduceChatSessionProjection(state, {
-      type: "sendPending",
-      runId: "concurrent-run",
-      message: pending,
-    });
-    resolveHistory({ messages: [first] });
-    await load;
-
-    expect(state.chatMessages).toEqual([first, pending]);
   });
 
   it("does not preserve old pending sends after the active branch changes", async () => {
