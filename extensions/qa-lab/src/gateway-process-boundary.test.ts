@@ -28,10 +28,15 @@ describe("gateway process boundary", () => {
       cleanupPaths.push(root);
       const tempRoot = path.join(root, "runtime");
       const evidenceDir = path.join(root, "evidence");
-      const launcherPath = path.join(root, "launcher.sh");
+      const launcherPath = path.join(root, "launcher");
       await fs.mkdir(tempRoot);
       await fs.mkdir(evidenceDir);
-      await fs.writeFile(launcherPath, '#!/bin/sh\ncat "$3.runtime"\n', { mode: 0o755 });
+      // Keep the executable immutable so concurrent forks cannot inherit its writer.
+      await fs.writeFile(`${launcherPath}.sh`, '#!/bin/sh\ncat "$3.runtime"\n');
+      await fs.symlink(
+        new URL("../test-fixtures/mantis-command.sh", import.meta.url),
+        launcherPath,
+      );
       const controller = await createQaGatewayProcessBoundaryController({
         config: {
           kind: "linux-proc-v1",
@@ -130,7 +135,7 @@ describe("gateway process boundary", () => {
       );
       await expect(controller.markReady(identity)).rejects.toThrow("proxy stdout exceeded");
 
-      await fs.writeFile(launcherPath, '#!/bin/sh\ncat "$3.runtime" >&2\nexit 7\n');
+      await fs.writeFile(`${launcherPath}.sh`, '#!/bin/sh\ncat "$3.runtime" >&2\nexit 7\n');
       await expect(controller.markReady(identity)).rejects.toThrow(
         "proxy exited 7 (stderr truncated)",
       );

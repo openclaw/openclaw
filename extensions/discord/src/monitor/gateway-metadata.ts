@@ -1,7 +1,7 @@
 import type { APIGatewayBotInfo } from "discord-api-types/v10";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { captureHttpExchangeAsync } from "openclaw/plugin-sdk/proxy-capture";
+import * as proxyCaptureSdk from "openclaw/plugin-sdk/proxy-capture";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -9,6 +9,10 @@ import { Type } from "typebox";
 import { Check, Errors } from "typebox/value";
 import { isDiscordRateLimitResponseBody, summarizeDiscordResponseBody } from "../error-body.js";
 import { withAbortTimeout } from "./timeouts.js";
+
+// The shipped 2026.9.6 host omits async capture; retire this check when the minimum advances.
+const captureSdk: Partial<Pick<typeof proxyCaptureSdk, "captureHttpExchangeAsync">> =
+  proxyCaptureSdk;
 
 const DISCORD_GATEWAY_BOT_URL = "https://discord.com/api/v10/gateway/bot";
 const DISCORD_API_HOST = "discord.com";
@@ -293,15 +297,17 @@ export async function fetchDiscordGatewayMetadataGuarded(
   }
   if (options?.capture) {
     // Finalization retains capture failures; observe the Promise returned by the SDK view.
-    void captureHttpExchangeAsync({
-      url: input,
-      method: (init?.method as string | undefined) ?? "GET",
-      requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
-      requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
-      response,
-      flowId: options.capture.flowId,
-      meta: options.capture.meta,
-    }).catch(() => {});
+    void captureSdk
+      .captureHttpExchangeAsync?.({
+        url: input,
+        method: (init?.method as string | undefined) ?? "GET",
+        requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
+        requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
+        response,
+        flowId: options.capture.flowId,
+        meta: options.capture.meta,
+      })
+      .catch(() => {});
   }
   return response;
 }

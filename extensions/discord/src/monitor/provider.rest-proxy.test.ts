@@ -75,6 +75,18 @@ const {
   };
 });
 
+const captureHost = vi.hoisted(() => ({
+  available: true,
+  capture: vi.fn<typeof import("openclaw/plugin-sdk/proxy-capture").captureHttpExchangeAsync>(),
+}));
+
+vi.mock("openclaw/plugin-sdk/proxy-capture", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/proxy-capture")>()),
+  get captureHttpExchangeAsync() {
+    return captureHost.available ? captureHost.capture : undefined;
+  },
+}));
+
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 
 vi.mock("undici", async (importOriginal) => ({
@@ -164,6 +176,8 @@ describe("resolveDiscordRestFetch", () => {
     for (const key of proxyEnvKeys) {
       vi.stubEnv(key, undefined);
     }
+    captureHost.available = true;
+    captureHost.capture.mockReset().mockResolvedValue(undefined);
     undiciFetchMock.mockReset();
     agentSpy.mockReset();
     envHttpProxyAgentSpy.mockReset();
@@ -173,6 +187,7 @@ describe("resolveDiscordRestFetch", () => {
   });
 
   afterEach(() => {
+    captureHost.available = true;
     Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
     for (const dir of tempDirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
@@ -186,6 +201,39 @@ describe("resolveDiscordRestFetch", () => {
     writeFileSync(caFile, contents, "utf8");
     return caFile;
   }
+
+  it.each(["absent", "present", "rejected"] as const)(
+    "delivers REST responses with %s optional async capture",
+    async (capability) => {
+      captureHost.available = capability !== "absent";
+      if (capability === "rejected") {
+        captureHost.capture.mockRejectedValue(new Error("capture write failed"));
+      }
+      const response = new Response("delivered");
+      undiciFetchMock.mockResolvedValue(response);
+      const fetcher = resolveDiscordRestFetch("http://127.0.0.1:8080", createRuntimeSpies());
+      const url = "https://discord.com/api/v10/channels/channel-1/messages";
+
+      const delivered = await fetcher(url, { method: "POST", body: "message" });
+
+      expect(delivered).toBe(response);
+      await expect(delivered.text()).resolves.toBe("delivered");
+      expect(objectArgAt(proxyAgentSpy, 0, 0).uri).toBe("http://127.0.0.1:8080");
+      if (capability === "absent") {
+        expect(captureHost.capture).not.toHaveBeenCalled();
+      } else {
+        expect(captureHost.capture).toHaveBeenCalledWith(
+          expect.objectContaining({
+            url,
+            method: "POST",
+            requestBody: "message",
+            response,
+            meta: { subsystem: "discord-rest" },
+          }),
+        );
+      }
+    },
+  );
 
   it("uses undici proxy fetch when a proxy URL is configured", async () => {
     const runtime = createRuntimeSpies();

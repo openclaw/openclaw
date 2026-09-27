@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements shared parity comparison helpers.
 import { createHash } from "node:crypto";
 
 type ParityToolCallShape = {

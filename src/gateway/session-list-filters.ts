@@ -58,6 +58,7 @@ export type SessionListFilterParams = {
   cfg: OpenClawConfig;
   entries: Iterable<SessionEntryPair>;
   candidatesPrepared?: boolean;
+  entriesSorted?: boolean;
   getTarget: SessionListTargetLookup;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   opts: SessionsListParams;
@@ -243,13 +244,16 @@ export function* filterSessionEntries(
   const involvingActorId = normalizeOptionalString(params.involvingActorId);
 
   // The caller owns these resident entries and their prepared visibility filter.
+  const filterCandidates = params.candidatesPrepared && !opts.involvingProfileId;
   const visibleEntries: SessionEntryPair[] = [];
-  for (const pair of params.entries) {
-    if (params.entryFilter?.(pair[0], pair[1]) ?? true) {
-      visibleEntries.push(pair);
-    }
-    if (shouldYield?.()) {
-      yield;
+  if (!filterCandidates) {
+    for (const pair of params.entries) {
+      if (params.entryFilter?.(pair[0], pair[1]) ?? true) {
+        visibleEntries.push(pair);
+      }
+      if (shouldYield?.()) {
+        yield;
+      }
     }
   }
   const allowedProfileIds =
@@ -279,14 +283,16 @@ export function* filterSessionEntries(
   }
   const selectedProfileId = profileReference?.value;
 
-  const candidateEntries = params.candidatesPrepared
-    ? visibleEntries
-    : yield* filterSessionCandidateEntries({
-        ...params,
-        opts: projectSessionListCandidateOptions(opts),
-        entries: visibleEntries,
-        getRowContext,
-      });
+  const candidateEntries = filterCandidates
+    ? params.entries
+    : params.candidatesPrepared
+      ? visibleEntries
+      : yield* filterSessionCandidateEntries({
+          ...params,
+          opts: projectSessionListCandidateOptions(opts),
+          entries: visibleEntries,
+          getRowContext,
+        });
   // Excluded rows must not participate in search or ownership resolution.
   const matchesSearch = search
     ? createSessionListSearchMatcher({
@@ -324,6 +330,9 @@ export function* filterSessionEntries(
     }
     const key = pair[0];
     const entry = pair[1];
+    if (filterCandidates && params.entryFilter?.(key, entry) === false) {
+      continue;
+    }
     if (matchesSearch && !matchesSearch(key, entry)) {
       continue;
     }

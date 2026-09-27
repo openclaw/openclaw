@@ -135,6 +135,8 @@ export type TelegramAccountConfig = CommonChannelMessagingConfig<
 
 export type TelegramTopicConfig = {
   requireMention?: boolean;
+  /** Override mention gating in forum topics created by this bot; omitted preserves existing policy. */
+  requireMentionInBotThreads?: boolean;
   /** Emit internal message hooks for mention-skipped topic messages. */
   ingest?: boolean;
   /** Per-topic override for group message policy (open|disabled|allowlist). */
@@ -181,7 +183,7 @@ export type TelegramDirectConfig = {
   /** If specified, only load these skills for this DM (when no topic). Omit = all skills; empty = no skills. */
   skills?: string[];
   /** Per-topic configuration for DM topics (key is message_thread_id as string, or "*" for topic defaults). */
-  topics?: Record<string, TelegramTopicConfig>;
+  topics?: Record<string, Omit<TelegramTopicConfig, "requireMentionInBotThreads">>;
   /** If false, disable the bot for this DM (and its topics). */
   enabled?: boolean;
   /** If true, require messages to be from a topic when topics are enabled. */

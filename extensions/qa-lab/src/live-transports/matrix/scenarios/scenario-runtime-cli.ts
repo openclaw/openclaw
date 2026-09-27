@@ -4,6 +4,7 @@ import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { createQaPosixCommandSettlement } from "../../../posix-command-settlement.js";
@@ -67,19 +68,6 @@ export function formatMatrixQaCliCommand(args: string[]) {
   return `openclaw ${redactMatrixQaCliArgs(args).join(" ")}`;
 }
 
-function buildMatrixQaCliResult(params: {
-  args: string[];
-  exitCode: number;
-  output: { stderr: string; stdout: string };
-}): MatrixQaCliRunResult {
-  return {
-    args: params.args,
-    exitCode: params.exitCode,
-    stderr: params.output.stderr,
-    stdout: params.output.stdout,
-  };
-}
-
 function formatMatrixQaCliFailure(result: MatrixQaCliRunResult, reason: string) {
   return [
     `${formatMatrixQaCliCommand(result.args)} ${reason}`,
@@ -103,14 +91,7 @@ export function startMatrixQaOpenClawCli(params: {
   const stdout: Buffer[] = [];
   const stderr: Buffer[] = [];
   let closed = false;
-  let closeError: Error | undefined;
-  let closeResult: MatrixQaCliRunResult | undefined;
-  let settleWait:
-    | {
-        reject: (error: Error) => void;
-        resolve: (result: MatrixQaCliRunResult) => void;
-      }
-    | undefined;
+  const completion = createDeferred<{ result: MatrixQaCliRunResult; error?: Error }>();
 
   const child = startOpenClawCliProcess(process.execPath, [distEntryPath, ...params.args], {
     cwd,
@@ -127,16 +108,7 @@ export function startMatrixQaOpenClawCli(params: {
       return;
     }
     closed = true;
-    closeError = error;
-    closeResult = result;
-    if (!settleWait) {
-      return;
-    }
-    if (error) {
-      settleWait.reject(error);
-    } else {
-      settleWait.resolve(result);
-    }
+    completion.resolve({ result, error });
   };
   const isWindows = process.platform === "win32";
   const settlement = createQaPosixCommandSettlement({
@@ -162,11 +134,11 @@ export function startMatrixQaOpenClawCli(params: {
     executionTimeoutMs: params.timeoutMs,
     onSettled: (outcome) => {
       const primary = outcome.primary;
-      const result = buildMatrixQaCliResult({
+      const result = {
         args: params.args,
         exitCode: primary.type === "exit" ? (primary.exitCode ?? 1) : 1,
-        output: readOutput(),
-      });
+        ...readOutput(),
+      };
       const primaryError =
         primary.type === "spawn-error"
           ? primary.error
@@ -208,26 +180,19 @@ export function startMatrixQaOpenClawCli(params: {
     },
     output: readOutput,
     wait: async () =>
-      await new Promise<MatrixQaCliRunResult>((resolve, reject) => {
-        if (closed && closeResult) {
-          if (closeError) {
-            reject(closeError);
-          } else if (closeResult.exitCode === 0 || params.allowNonZero === true) {
-            resolve(closeResult);
-          } else {
-            reject(
-              new Error(formatMatrixQaCliFailure(closeResult, `exited ${closeResult.exitCode}`)),
-            );
+      await completion.promise
+        .then(({ result, error }) => {
+          if (error) {
+            throw error;
           }
-          return;
-        }
-        settleWait = { reject, resolve };
-      }).catch((error: unknown) => {
-        throw new Error(
-          `Matrix QA CLI command failed (${formatMatrixQaCliCommand(params.args)}): ${redactMatrixQaCliOutput(formatErrorMessage(error))}`,
-          { cause: error },
-        );
-      }),
+          return result;
+        })
+        .catch((error: unknown) => {
+          throw new Error(
+            `Matrix QA CLI command failed (${formatMatrixQaCliCommand(params.args)}): ${redactMatrixQaCliOutput(formatErrorMessage(error))}`,
+            { cause: error },
+          );
+        }),
     waitForOutput: async (predicate, label, timeoutMs) => {
       const startedAt = Date.now();
       while (Date.now() - startedAt < timeoutMs) {
@@ -261,14 +226,9 @@ export function startMatrixQaOpenClawCli(params: {
   };
 }
 
-export async function runMatrixQaOpenClawCli(params: {
-  allowNonZero?: boolean;
-  args: string[];
-  cwd?: string;
-  env: NodeJS.ProcessEnv;
-  stdin?: string;
-  timeoutMs: number;
-}): Promise<MatrixQaCliRunResult> {
+export async function runMatrixQaOpenClawCli(
+  params: Parameters<typeof startMatrixQaOpenClawCli>[0],
+): Promise<MatrixQaCliRunResult> {
   return await startMatrixQaOpenClawCli(params).wait();
 }
 

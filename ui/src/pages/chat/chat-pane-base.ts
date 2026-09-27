@@ -59,6 +59,7 @@ import { ChatStateController } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
+import type { ChatTypingActorState } from "./chat-typing-presence.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
@@ -501,10 +502,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected sessionSuggestionTargetSignature = "";
   protected sessionSuggestionAddOperation: symbol | undefined;
   protected sessionSuggestionEditOperation: symbol | undefined;
-  protected readonly typingActors = new Map<
-    string,
-    { label: string; expiresAt: number; preview?: string }
-  >();
+  protected readonly typingActors = new Map<string, ChatTypingActorState>();
   protected readonly typingTimers = new Map<string, number>();
   protected sessionPullRequests: ControlUiSessionPullRequest[] = [];
   protected sessionPullRequestsBranch: ControlUiSessionBranch | undefined;

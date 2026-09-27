@@ -44,20 +44,24 @@ async function fixture(hardlink = false, beforePlan?: (source: string) => Promis
   };
 }
 
-function atCopyMutation(mutate: () => void) {
+function atCopyBoundary(mutate: () => void, phase: "admission" | "mutation" = "mutation") {
   const openRoot = fsSafe.root;
   vi.spyOn(fsSafe, "root").mockImplementation(async (...args) => {
     const root = await openRoot(...args);
     const copyIn = root.copyIn.bind(root);
-    vi.spyOn(root, "copyIn").mockImplementation((relative, source, options) =>
-      copyIn(relative, source, {
+    vi.spyOn(root, "copyIn").mockImplementation((relative, source, options) => {
+      if (phase === "admission") {
+        mutate();
+        return copyIn(relative, source, options);
+      }
+      return copyIn(relative, source, {
         ...options,
         assertBeforeMutation: () => {
           mutate();
           options?.assertBeforeMutation?.();
         },
-      }),
-    );
+      });
+    });
     return root;
   });
 }
@@ -101,7 +105,7 @@ it.each(["directory", "invalid YAML"])("rejects a listed .modules.yaml %s", asyn
   ).rejects.toThrow();
 });
 
-it("copies a plugin portably without repeated recursive parent creation or shared inodes", async () => {
+it("copies a plugin portably without repeated parent creation or shared inodes", async () => {
   const metadataStat = vi.spyOn(fsSync, "lstatSync");
   const metadataRead = vi.spyOn(fs, "readFile");
   const f = await fixture(true, async (source) => {
@@ -128,10 +132,7 @@ it("copies a plugin portably without repeated recursive parent creation or share
   } finally {
     vi.unstubAllEnvs();
   }
-  const recursiveMkdirCalls = mkdir.mock.calls.filter(
-    ([, options]) => typeof options === "object" && options?.recursive,
-  );
-  expect(recursiveMkdirCalls.length).toBeLessThanOrEqual(
+  expect(mkdir.mock.calls.length).toBeLessThanOrEqual(
     f.plan.entries.filter((entry) => entry.kind === "directory").length + 1,
   );
   for (let index = 0; index < 8; index++) {
@@ -160,12 +161,12 @@ it("copies a plugin portably without repeated recursive parent creation or share
 });
 
 it.each(["file", "symlink"] as const)(
-  "preserves a %s that appears after missing-entry planning and cleans copy staging",
+  "preserves a %s that appears after planning before copy admission",
   async (kind) => {
     const f = await fixture();
     const target = path.join(f.destination, "payload.txt");
     let inserted = false;
-    atCopyMutation(() => {
+    atCopyBoundary(() => {
       if (inserted) {
         return;
       }
@@ -175,7 +176,7 @@ it.each(["file", "symlink"] as const)(
       } else {
         fsSync.symlinkSync(f.file, target);
       }
-    });
+    }, "admission");
     await expect(f.copy()).rejects.toThrow();
     expect(inserted).toBe(true);
     expect(await fs.readdir(f.destination)).toEqual(["payload.txt"]);
@@ -193,7 +194,7 @@ it.each(["mode", "same-size content with changed mtime", "identity"] as const)(
   async (change) => {
     const f = await fixture();
     let mutated = false;
-    atCopyMutation(() => {
+    atCopyBoundary(() => {
       if (mutated) {
         return;
       }

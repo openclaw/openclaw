@@ -10,6 +10,7 @@ import { captureNativeSessionGenerationAuthority } from "openclaw/plugin-sdk/age
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { runAgentsApiAttempt } from "./agentsapi-attempt.js";
 import { createAgentsApiBindings } from "./agentsapi-bindings.js";
+import { runAgentsApiIsolatedCompletion } from "./agentsapi-isolated-completion.js";
 
 const AGENTS_API_NATIVE_TOOL_REQUIREMENTS = [
   "exec",
@@ -26,6 +27,7 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
   let disposed = false;
   let closing = false;
   const runningSessions = new Map<string, number>();
+  const isolatedRuns = new Map<AbortController, Promise<unknown>>();
   let bindings: ReturnType<typeof createAgentsApiBindings> | undefined;
   const getBindings = () => (bindings ??= createAgentsApiBindings(runtime));
   const assertCurrent = () => {
@@ -73,6 +75,24 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
         return { supported: false, reason: "Agents API MVP requires the official API-key route" };
       }
       return { supported: true };
+    },
+    runIsolatedCompletionV2: (params) => {
+      assertCurrent();
+      if (closing) {
+        throw new Error("Agents API harness is closing");
+      }
+      const controller = new AbortController();
+      const pending = runAgentsApiIsolatedCompletion(
+        {
+          ...params,
+          abortSignal: params.abortSignal
+            ? AbortSignal.any([params.abortSignal, controller.signal])
+            : controller.signal,
+        },
+        assertCurrent,
+      );
+      isolatedRuns.set(controller, pending);
+      return pending.finally(() => isolatedRuns.delete(controller));
     },
     runAttempt: async (params) => {
       assertCurrent();
@@ -147,6 +167,10 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
       ),
     dispose: async () => {
       closing = true;
+      for (const controller of isolatedRuns.keys()) {
+        controller.abort();
+      }
+      await Promise.allSettled(isolatedRuns.values());
       await Promise.all(
         [...runningSessions.keys()].map((sessionId) =>
           abortAndDrainAgentHarnessRun({ sessionId, settleMs: 95_000 }),

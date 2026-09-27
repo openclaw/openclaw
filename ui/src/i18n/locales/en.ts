@@ -3237,8 +3237,8 @@ export const en: TranslationMap & {
       dismiss: "Dismiss {author}'s suggestion",
       typing: "{name} is typing…",
       typingMany: "{names} are typing…",
-      typingDraftState: "Typing · not sent",
-      pausedDraftState: "Paused · not sent",
+      typingDraftState: "is typing...",
+      pausedDraftState: "Draft",
       state: {
         pending: "Pending",
         accepted: "Accepted",

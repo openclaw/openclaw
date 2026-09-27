@@ -15,7 +15,11 @@ import {
   type MantisCrabboxLeaseOptions,
   runCommand,
 } from "./crabbox-runtime.js";
-import { renderMantisCrabboxReport, type MantisCrabboxReportSummary } from "./report.js";
+import {
+  renderMantisCrabboxReport,
+  type MantisCrabboxReportSummary,
+  type MantisCrabboxRunResult,
+} from "./report.js";
 
 type MantisVisualTaskVisionMode = "image-describe" | "metadata";
 
@@ -40,15 +44,6 @@ export type MantisVisualDriverOptions = {
   visionModel?: string;
   visionPrompt?: string;
   visionTimeoutMs?: number;
-};
-
-type MantisVisualTaskResult = {
-  outputDir: string;
-  reportPath: string;
-  screenshotPath?: string;
-  status: "pass" | "fail";
-  summaryPath: string;
-  videoPath?: string;
 };
 
 type MantisVisualDriverResult = {
@@ -540,7 +535,7 @@ export async function runMantisVisualDriver(
 
 export async function runMantisVisualTask(
   opts: MantisVisualTaskOptions = {},
-): Promise<MantisVisualTaskResult> {
+): Promise<MantisCrabboxRunResult> {
   const env = opts.env ?? process.env;
   const startedAt = (opts.now ?? (() => new Date()))();
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());

@@ -1,6 +1,3 @@
-/**
- * Normalizes and delivers agent command results to outbound channels.
- */
 import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
@@ -342,7 +339,6 @@ async function filterAlreadyDeliveredReplyPayloads(params: {
   return filteredPayloads;
 }
 
-/** Normalizes reply payloads and media paths before delivery. */
 function normalizeAgentCommandReplyPayloads(params: {
   cfg: OpenClawConfig;
   opts: AgentCommandOpts;
@@ -429,7 +425,6 @@ function normalizeAgentCommandReplyPayloads(params: {
     : { kind: "suppress", reason: suppressionReason ?? "empty" };
 }
 
-/** Delivers an agent command result or records why delivery was skipped. */
 export async function deliverAgentCommandResult(
   params: DeliverAgentCommandResultParams,
 ): Promise<AgentCommandDeliveryResult> {

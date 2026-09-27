@@ -329,20 +329,15 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
       ),
     );
     if (!options.readOnly && !sandboxRoot) {
-      const edit = createHostWorkspaceEditTool(options.codingRoot, {
-        containmentRoot: options.containmentRoot,
-        workspaceOnly: options.workspaceOnly,
-        memoryWriteProvenance: options.memoryWriteProvenance,
-        abortSignal: options.abortSignal,
-      });
-      base.push(options.workspaceOnly ? guardHostWorkspaceTool(edit, options) : edit);
-      const write = createHostWorkspaceWriteTool(options.codingRoot, {
-        containmentRoot: options.containmentRoot,
-        workspaceOnly: options.workspaceOnly,
-        memoryWriteProvenance: options.memoryWriteProvenance,
-        abortSignal: options.abortSignal,
-      });
-      base.push(options.workspaceOnly ? guardHostWorkspaceTool(write, options) : write);
+      for (const createTool of [createHostWorkspaceEditTool, createHostWorkspaceWriteTool]) {
+        const tool = createTool(options.codingRoot, {
+          containmentRoot: options.containmentRoot,
+          workspaceOnly: options.workspaceOnly,
+          memoryWriteProvenance: options.memoryWriteProvenance,
+          abortSignal: options.abortSignal,
+        });
+        base.push(options.workspaceOnly ? guardHostWorkspaceTool(tool, options) : tool);
+      }
     }
   }
 
@@ -353,26 +348,21 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
       memoryWriteProvenance: options.memoryWriteProvenance,
       abortSignal: options.abortSignal,
     };
-    const edit = createSandboxedEditTool(toolOptions);
-    const write = createSandboxedWriteTool(toolOptions);
-    base.push(
-      options.workspaceOnly
-        ? wrapToolWorkspaceRootGuardWithOptions(edit, sandboxRoot, {
-            containerMounts: sandboxWorkspaceMounts,
-            containerWorkdir: sandbox.containerWorkdir,
-            bridge: sandboxFsBridge,
-            normalizeGuardedPathParams: true,
-          })
-        : edit,
-      options.workspaceOnly
-        ? wrapToolWorkspaceRootGuardWithOptions(write, sandboxRoot, {
-            containerMounts: sandboxWorkspaceMounts,
-            containerWorkdir: sandbox.containerWorkdir,
-            bridge: sandboxFsBridge,
-            normalizeGuardedPathParams: true,
-          })
-        : write,
-    );
+    for (const tool of [
+      createSandboxedEditTool(toolOptions),
+      createSandboxedWriteTool(toolOptions),
+    ]) {
+      base.push(
+        options.workspaceOnly
+          ? wrapToolWorkspaceRootGuardWithOptions(tool, sandboxRoot, {
+              containerMounts: sandboxWorkspaceMounts,
+              containerWorkdir: sandbox.containerWorkdir,
+              bridge: sandboxFsBridge,
+              normalizeGuardedPathParams: true,
+            })
+          : tool,
+      );
+    }
   }
   options.recordToolPrepStage?.("base-coding-tools");
 

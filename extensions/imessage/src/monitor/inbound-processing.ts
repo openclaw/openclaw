@@ -23,11 +23,7 @@ import {
   type ChannelIngressIdentityDescriptor,
   type ResolvedChannelMessageIngress,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
-import {
-  buildChannelGroupsScopeTree,
-  resolveChannelGroupPolicy,
-  resolveScopeRequireMention,
-} from "openclaw/plugin-sdk/channel-policy";
+import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/channel-policy";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth-native";
 import type { DmPolicy, GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
@@ -43,6 +39,7 @@ import { resolveIMessageConversationRoute } from "../conversation-route.js";
 import { resolveIMessageGroupSystemPrompt } from "../group-policy.js";
 import {
   isKnownFromMeIMessageMessageId,
+  isKnownFromMeIMessageTarget,
   rememberIMessageReplyCache,
 } from "../monitor-reply-cache.js";
 import { getIMessageRuntime } from "../runtime.js";
@@ -54,6 +51,7 @@ import {
   type IMessageService,
 } from "../targets.js";
 import type { IMessageDmHistoryContext } from "./dm-history.js";
+import { resolveIMessageInboundMentionPolicy } from "./mention-policy.js";
 import {
   type IMessageReactionContext,
   resolveIMessageReactionContext,
@@ -300,32 +298,6 @@ async function hasIMessageEchoMatch(params: {
         },
       )
     ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-async function isKnownFromMeIMessageReactionTarget(params: {
-  messageIds: string[];
-  accountId: string;
-  chatId?: number;
-  chatGuid?: string;
-  chatIdentifier?: string;
-  isKnownFromMeMessageId?: (
-    ...args: Parameters<typeof isKnownFromMeIMessageMessageId>
-  ) => boolean | Promise<boolean>;
-}): Promise<boolean> {
-  const { accountId, chatId, chatGuid, chatIdentifier } = params;
-  const ctx = {
-    accountId,
-    chatId,
-    chatGuid,
-    chatIdentifier,
-  };
-  const isKnownFromMe = params.isKnownFromMeMessageId ?? isKnownFromMeIMessageMessageId;
-  for (const messageId of params.messageIds) {
-    if (await isKnownFromMe(messageId, ctx)) {
       return true;
     }
   }
@@ -617,7 +589,7 @@ export async function resolveIMessageInboundDecision(params: {
           }),
           messageIds: targetGuids,
         }))) ||
-        (await isKnownFromMeIMessageReactionTarget({
+        (await isKnownFromMeIMessageTarget({
           messageIds: targetGuids,
           accountId: params.accountId,
           chatId,
@@ -766,13 +738,18 @@ export async function resolveIMessageInboundDecision(params: {
     : undefined;
 
   const mentioned = isGroup ? matchesMentionPatterns(messageText, mentionRegexes) : true;
-  const requireMention = resolveScopeRequireMention({
-    tree: buildChannelGroupsScopeTree(params.cfg, "imessage", params.accountId),
-    path: groupId ? [groupId] : [],
-    requireMentionOverride: params.opts?.requireMention,
-    overrideOrder: "before-config",
-  });
-  const canDetectMention = mentionRegexes.length > 0;
+  const { requireMention, implicitMentionKinds, enforceMentionRequirement } =
+    await resolveIMessageInboundMentionPolicy({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      groupId,
+      isGroup,
+      message: params.message,
+      requireMentionOverride: params.opts?.requireMention,
+      isKnownFromMeMessageId: params.isKnownFromMeMessageId,
+    });
+  // An explicit bot-thread requirement remains enforced when patterns are disabled.
+  const canDetectMention = mentionRegexes.length > 0 || enforceMentionRequirement;
 
   const commandAuthorized = commandAccess.authorized;
   if (commandAccess.shouldBlockControlCommand) {
@@ -792,7 +769,7 @@ export async function resolveIMessageInboundDecision(params: {
       canDetectMention,
       wasMentioned: mentioned,
       hasAnyMention: false,
-      implicitMentionKinds: [],
+      implicitMentionKinds,
     },
     policy: {
       isGroup,

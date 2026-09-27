@@ -119,7 +119,13 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
         modelFactsDirty = true;
         return false;
       }
+      if (typeof change.scope === "object" && change.scope.topology && !change.factsInvalidated) {
+        return true;
+      }
       switch (change.scope) {
+        case "config-presentation":
+          return true;
+        case "config-profiles":
         case "profiles":
           current.userProfileIdentityById.clear();
           identityProjection.invalidate();
