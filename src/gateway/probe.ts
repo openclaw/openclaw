@@ -34,7 +34,6 @@ import {
   type EdgeAuthHeadersConfig,
 } from "./edge-auth.js";
 import { READ_SCOPE } from "./method-scopes.js";
-import { isLoopbackHost } from "./net.js";
 
 export type GatewayProbeAuth = {
   token?: string;
@@ -135,7 +134,10 @@ function hasProbeAuth(auth: GatewayProbeAuth | undefined): boolean {
 
 function resolveProbeDeviceAuthScope(url: string): string | undefined {
   try {
-    return isLoopbackHost(new URL(url).hostname) ? undefined : gatewayOriginScope(url);
+    // Schema v13 stores operator tokens in gateway_origin_device_tokens keyed by
+    // origin (including loopback). Looking up the legacy device_auth_tokens table
+    // for loopback skips the cached identity and leaves PROBE clients connect-only.
+    return gatewayOriginScope(url);
   } catch {
     return undefined;
   }
