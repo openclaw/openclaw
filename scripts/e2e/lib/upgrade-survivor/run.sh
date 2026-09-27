@@ -1870,6 +1870,7 @@ repair_update_restart_auth() {
     phase recovery-update-restart update_candidate 1 "file:$restart_fixture_package" "$restart_fixture_version"
     local recovery_status=$?
     [ "$recovery_status" -eq 0 ] || return "$recovery_status"
+    phase recovery-membership-warning assert_managed_membership_warning || return "$?"
     if [ "$SCENARIO" != "watchos-direct-node" ] && [ "$SCENARIO" != "mobile-pairing-reconnect" ]; then
       phase assert-restart-serving-turn node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
         assert-restart-serving-turn "$ARTIFACT_ROOT/restart-serving-turn.json" || return "$?"
@@ -1881,6 +1882,29 @@ repair_update_restart_auth() {
         assert-recovered-plugin-installs "$UPDATE_JSON" "$candidate_version" "$initial_update_observation_root" "$baseline_version"
     fi
   fi
+}
+
+assert_managed_membership_warning() {
+  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw update status --json \
+    >"$ARTIFACT_ROOT/recovery-update-status.json" 2>"$ARTIFACT_ROOT/recovery-update-status.err" || return "$?"
+  node --input-type=module - "$ARTIFACT_ROOT/recovery-update.json" "$ARTIFACT_ROOT/recovery-update-status.json" <<'NODE'
+import assert from "node:assert/strict";
+import fs from "node:fs";
+const read = (file) => {
+  const text = fs.readFileSync(file, "utf8");
+  return JSON.parse(text.slice(text.indexOf("{")));
+};
+const result = read(process.argv[2]);
+const status = read(process.argv[3]);
+const message = "Service membership unverifiable on this host; using managed stop/update/start.";
+assert.equal(result.status, "ok");
+assert(result.steps.some((step) => step.name === "managed-service-membership" &&
+  step.exitCode === 0 && step.advisory?.kind === "recoverable-maintenance" && step.advisory.message === message));
+assert.equal(status.lastRun?.runId, result.runId);
+assert(status.lastRun.steps.some((step) => step.step === "warning:managed-service-membership" &&
+  step.status === "completed" && step.detail === message));
+console.log(JSON.stringify({ runId: result.runId, status: result.status, membershipWarning: message }));
+NODE
 }
 
 repair_fixture_plugin_consent() {

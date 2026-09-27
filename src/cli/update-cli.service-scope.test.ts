@@ -40,6 +40,7 @@ import {
   invokeUpdateCli,
   makeOkUpdateResult,
   mockGitUpdateAfterMutation,
+  resolveGatewayInstallEntrypoint,
   resolveOpenClawPackageRoot,
   runCommandWithTimeout,
   runUpdateFailureTriage,
@@ -56,6 +57,7 @@ describe("update-cli", () => {
   const {
     createCaseDir,
     mockFileBackedPathExists,
+    mockGatewayHealth,
     mockPackageInstallAtCaseDir,
     mockRunningManagedGateway,
     primeServiceCommand,
@@ -204,8 +206,9 @@ describe("update-cli", () => {
     primeServiceCommand(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
     serviceLoaded.mockResolvedValue(true);
     mockGetSelfAndAncestorPidsSync.mockReturnValue(
-      new Set<number>([process.pid, gatewayFixturePid]),
+      new Set<number>([process.pid, gatewayFixturePid, 1]),
     );
+    vi.spyOn(serviceMembership, "inspectServiceProcessMembershipSync").mockReturnValue("absent");
 
     await expect(
       withEnvAsync({ OPENCLAW_UPDATE_RUN_HANDOFF: "1" }, () => invokeUpdateCli({ yes: true })),
@@ -227,6 +230,65 @@ describe("update-cli", () => {
     });
     expect(doctorCommandCall()).toBeUndefined();
   });
+
+  it.each(["absent", "inside"] as const)(
+    "runs an owned managed update only when native membership permits it (%s)",
+    async (membership) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      const root = await mockPackageInstallAtCaseDir();
+      mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
+      mockGatewayHealth("1.0.0", "before-update");
+      vi.spyOn(serviceMembership, "inspectServiceProcessMembershipSync").mockReturnValue(
+        membership,
+      );
+      mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set([process.pid, 1]));
+      if (membership === "inside") {
+        await expect(invokeUpdateCli({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
+        expect(lastWriteJsonCall()).toMatchObject({
+          reason: "managed-service-preflight",
+          steps: expect.arrayContaining([
+            expect.objectContaining({
+              failureFacts: [expect.objectContaining({ code: "inside-gateway-service" })],
+            }),
+          ]),
+        });
+        expectNoSideEffects(serviceStop, serviceStart, serviceRestart);
+        expect(packageInstallCommandCall()).toBeUndefined();
+        return;
+      }
+      vi.mocked(resolveGatewayInstallEntrypoint)
+        .mockReset()
+        .mockResolvedValue(path.join(root, "dist", "index.js"));
+
+      await invokeUpdateCli({ yes: true, json: true });
+
+      expect(serviceStop).toHaveBeenCalledOnce();
+      await expect(serviceReadRuntime()).resolves.toMatchObject({ status: "running" });
+      expectPackageInstallSpec("openclaw@9999.0.0");
+      const message =
+        "Service membership unverifiable on this host; using managed stop/update/start.";
+      expect(lastWriteJsonCall()).toMatchObject({
+        status: "ok",
+        after: { version: "9999.0.0" },
+        steps: expect.arrayContaining([
+          expect.objectContaining({ advisory: { kind: "recoverable-maintenance", message } }),
+        ]),
+      });
+      await updateStatusCommand({ json: true });
+      expect(lastWriteJsonCall()).toMatchObject({
+        lastRun: {
+          status: "succeeded",
+          steps: expect.arrayContaining([
+            expect.objectContaining({
+              step: "warning:managed-service-membership",
+              status: "completed",
+              detail: message,
+            }),
+          ]),
+        },
+      });
+    },
+  );
 
   it.each(["linux", "darwin"] as const)(
     "names an external-terminal recovery path when native membership is unverified on %s",

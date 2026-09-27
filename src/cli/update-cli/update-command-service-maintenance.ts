@@ -271,7 +271,10 @@ async function stopManagedServiceBeforeMutableUpdate(
   // Only a verified live handoff lease admits a helper that retains Gateway ancestry.
   // Inspection uses the inherited run ID; a missing run ID is refused.
   const resolveAncestryBlock = async (state: GatewayServiceState) => {
-    const block = gatewayMaintenanceBlock(state, params.root);
+    delete inspected.serviceMembershipSourceAbsent;
+    const block = gatewayMaintenanceBlock(state, params.root, "stop", () => {
+      inspected.serviceMembershipSourceAbsent = true;
+    });
     if (
       !block ||
       (await isCurrentManagedServiceUpdateHandoffProcess({
@@ -591,6 +594,16 @@ async function stopManagedServiceBeforeMutableUpdate(
             undefined,
             undefined,
             "service-process-changed",
+          );
+        }
+        const membershipBlock = await resolveAncestryBlock(beforeStop);
+        if (membershipBlock) {
+          throw new UpdatePreMutationError(
+            "managed-service-preflight",
+            membershipBlock.blockMessage,
+            {
+              failureFacts: membershipBlock.blockFailureFacts,
+            },
           );
         }
       }

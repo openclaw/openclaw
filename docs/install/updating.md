@@ -110,18 +110,25 @@ cannot be verified as external, it completes with `already-current` and a warnin
 that plugin, runtime, and service maintenance was deferred, before that maintenance
 can change files or stop the Gateway. An explicit channel change is also left
 unapplied and named in the warning so it can be retried. Real updates retain the containment checks.
-Unreadable native membership refuses with `service-membership-unverified`;
+Present but unreadable native membership refuses with `service-membership-unverified`;
 confirmed native membership uses `inside-gateway-service`. Windows currently uses
 verified ancestry and the inherited-marker fallback because job-object membership
 is not available to the runtime. A genuine Gateway descendant must use the managed
 update handoff or an independent terminal.
 
-Missing containment facts mean unverified, not inside. Linux supports both cgroup v2
-and the named systemd v1 hierarchy. An emulated service can still kill its process
-group without a cgroup, and launchd can retain a reparented macOS process in its job,
-so complete external ancestry alone does not authorize a real update. When native
-inspection is unavailable, run this sequence from an interactive external shell not started
-by the Gateway service, under the installation's owning account:
+Linux supports both cgroup v2 and the named systemd v1 hierarchy. When readable
+native observations establish that this host has no service containment tree or
+launchd job, a complete external ancestry walk and a distinct process group allow
+the updater to stop, update, and start the managed service itself. The service
+definition must still belong to this installation. The report and
+`openclaw update status --json` record a warning: `Service membership unverifiable
+on this host; using managed stop/update/start.`
+
+Permission failures, conflicting, incomplete or malformed observations, and known service
+members do not use this fallback. Reparented callers in the Gateway's process
+group remain inside even when there is no native unit tree. When native facts
+exist but cannot be read, run this sequence from an interactive external shell
+not started by the Gateway service, under the installation's owning account:
 
 ```bash
 openclaw gateway stop && openclaw update --yes && openclaw gateway start

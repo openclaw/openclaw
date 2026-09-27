@@ -105,6 +105,9 @@ describe("update-cli", () => {
     async ({ restart, running, failure, platform }) => {
       if (platform) {
         vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+        vi.spyOn(serviceMembership, "inspectServiceProcessMembershipSync").mockReturnValue(
+          "absent",
+        );
       }
       const root = await mockPackageInstallAtCaseDir();
       await writeOpenClawPackageFixture(root, VERSION);
@@ -222,6 +225,24 @@ describe("update-cli", () => {
       expect(freshRestartCalls()).toHaveLength(restart && running ? 1 : 0);
       expect(packageInstallCommandCall()).toBeUndefined();
       expect(candidateValidation).not.toHaveBeenCalled();
+      if (platform === "linux") {
+        const message =
+          "Service membership unverifiable on this host; using managed stop/update/start.";
+        expect(lastWriteJsonCall()).toMatchObject({
+          steps: expect.arrayContaining([
+            expect.objectContaining({ advisory: { kind: "recoverable-maintenance", message } }),
+          ]),
+        });
+        expect(listUpdateRuns({ limit: 1 })[0]).toMatchObject({
+          steps: expect.arrayContaining([
+            expect.objectContaining({
+              step: "warning:managed-service-membership",
+              status: "completed",
+              detail: message,
+            }),
+          ]),
+        });
+      }
       if (failure === "doctor") {
         expect(listUpdateRuns({ limit: 1 })[0]).toMatchObject({
           status: "succeeded",
@@ -405,10 +426,12 @@ describe("update-cli", () => {
 
   it.each(
     [true, false].flatMap((restart) =>
-      (["outside", "unknown", "inside", "descendant"] as const).map((membership) => ({
-        restart,
-        membership,
-      })),
+      (["outside", "unknown", "inside", "descendant", "foreign descendant"] as const).map(
+        (membership) => ({
+          restart,
+          membership,
+        }),
+      ),
     ),
   )(
     "never stages or stops an unchanged managed gateway under auto admission (restart=$restart, membership=$membership)",
@@ -417,10 +440,23 @@ describe("update-cli", () => {
       readPackageVersion.mockResolvedValue(VERSION);
       primeNpmChannelTag("latest", VERSION);
       mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
+      if (membership === "foreign descendant") {
+        mockFileBackedPathExists();
+        await writeOpenClawPackageFixture(root, VERSION);
+        const foreignRoot = createCaseDir("foreign-service");
+        const entry = await writeOpenClawPackageFixture(foreignRoot, VERSION, { git: true });
+        await fs.mkdir(path.join(foreignRoot, "src"));
+        await fs.mkdir(path.join(foreignRoot, "extensions"));
+        // Another packaged root is eligible for reconciliation; a source checkout is foreign.
+        vi.mocked(resolveNpmChannelTag).mockImplementationOnce(async () => {
+          mockRunningManagedGateway(["node", entry, "gateway", "run"]);
+          return { tag: "latest", version: VERSION };
+        });
+      }
       vi.spyOn(serviceMembership, "inspectServiceProcessMembershipSync").mockReturnValue(
-        membership === "descendant" ? "inside" : membership,
+        membership === "descendant" || membership === "foreign descendant" ? "inside" : membership,
       );
-      if (membership === "descendant") {
+      if (membership === "descendant" || membership === "foreign descendant") {
         mockGetSelfAndAncestorPidsSync.mockReturnValue(
           new Set([process.pid, gatewayFixturePid, 1]),
         );

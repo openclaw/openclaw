@@ -76,7 +76,8 @@ export async function finishAlreadyCurrentUpdate(
     const service = admission.service;
     const context = admission.foreground ? admission.contexts[0]! : admission.contexts.at(-1)!;
     const membership = await mutableUpdateGatewayServiceBlock({
-      preManagedServiceStop: service,
+      preManagedServiceStop:
+        service ?? admission.services.get(params.managedServiceRoot ?? params.root),
       root: params.root,
       runId: params.opts.run?.runId,
     });
