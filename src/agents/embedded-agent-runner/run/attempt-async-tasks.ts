@@ -172,12 +172,6 @@ export function shouldWaitForCompletionRequiredAsyncTasks(params: {
   });
 }
 
-/**
- * Polls completion-required async tasks until they reach terminal state, time
- * out at the run deadline, or abort. Newly discovered task run ids are folded
- * into later poll rounds so task metadata and registry state can arrive in any
- * order.
- */
 export async function waitForCompletionRequiredAsyncTasks(params: {
   getToolMetas: () => readonly AsyncStartedToolMeta[];
   sessionKey?: string;
