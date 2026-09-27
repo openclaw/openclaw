@@ -2,6 +2,8 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentRouteBinding } from "../config/types.agents.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { setSessionMcpRuntimeScheduler } from "./agent-bundle-mcp-manager-api.js";
 import {
   getOrCreateSessionMcpRuntime,
   unopenedMcpConfig,
@@ -172,8 +174,12 @@ async function waitForRunCleanup(childSessionKey: string) {
 }
 
 describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
+  let scheduler: ReturnType<typeof createTestGatewayScheduler>;
+
   beforeEach(async () => {
     await bundleMcpRuntimeTesting.resetSessionMcpRuntimeManager();
+    scheduler = createTestGatewayScheduler();
+    await setSessionMcpRuntimeScheduler(scheduler);
     resetSessionsSpawnAnnounceFlowOverride();
     resetSessionsSpawnHookRunnerOverride();
     resetSessionsSpawnConfigOverride();
@@ -215,6 +221,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     resetSessionsSpawnConfigOverride();
     resetSubagentRegistryForTests({ persist: false });
     await bundleMcpRuntimeTesting.resetSessionMcpRuntimeManager();
+    await scheduler.stop();
   });
 
   afterAll(() => {

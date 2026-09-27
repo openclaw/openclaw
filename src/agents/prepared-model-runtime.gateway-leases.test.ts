@@ -193,9 +193,10 @@ describe("prepared model runtime Gateway leases", () => {
       runtimePluginSelections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "codex" }],
     };
     const configured = getPreparedModelRuntimeSnapshot(configuredInput);
-    const configuredLease = await acquireAgentRunPreparedModelRuntime(configuredInput);
-    expect(configuredLease.snapshot).toBe(configured);
-    await configuredLease[Symbol.asyncDispose]();
+    {
+      await using configuredLease = await acquireAgentRunPreparedModelRuntime(configuredInput);
+      expect(configuredLease.snapshot).toBe(configured);
+    }
 
     for (let index = 0; index < 9; index += 1) {
       const lease = await acquireAgentRunPreparedModelRuntime({

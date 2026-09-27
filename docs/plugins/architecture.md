@@ -600,7 +600,7 @@ That means:
 
 <AccordionGroup>
   <Accordion title="Vendor multi-capability">
-    `google` owns text inference, CLI backend, embeddings, speech, realtime voice, media understanding, image/music/video generation, and web search. `openai` owns text inference, embeddings, speech, realtime transcription, realtime voice, media understanding, image/video generation. `minimax` owns text inference plus media understanding, speech, image/music/video generation, and web search.
+    `google` owns text inference, CLI backend, embeddings, speech, realtime voice, media understanding, image/music/video generation, and web search. `openai` owns text inference, embeddings, speech, realtime transcription, realtime voice, media understanding, image generation. `minimax` owns text inference plus media understanding, speech, image/music/video generation, and web search.
   </Accordion>
   <Accordion title="Vendor single-capability">
     `arcee` and `chutes` own text inference only; `microsoft` owns speech only. A vendor plugin can stay this narrow until it needs to cover more of that vendor's surface.

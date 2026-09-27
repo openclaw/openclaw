@@ -17,7 +17,6 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import * as allocation from "./allocation.js";
-import { WorktreeGcProgress } from "./gc-progress.js";
 import { formatWorktreeGcResult } from "./gc-result.js";
 import { requireGit } from "./git.js";
 import {
@@ -224,10 +223,8 @@ it("finishes CLI cleanup with moved HEADs, missing gitdirs, and 600 mixed regist
     return collected;
   });
   const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
-  const protections = vi.spyOn(WorktreeGcProgress.prototype, "protect");
   const program = new Command().name("openclaw");
   registerWorktreesCli(program);
-  const started = performance.now();
   let exitCode = 0;
   try {
     await program.parseAsync(["worktrees", "gc", "--json"], { from: "user" });
@@ -237,20 +234,6 @@ it("finishes CLI cleanup with moved HEADs, missing gitdirs, and 600 mixed regist
     }
     exitCode = error.code;
   }
-  const distribution: Record<string, number> = {};
-  for (const call of protections.mock.calls) {
-    const reason = call[2];
-    distribution[reason] = (distribution[reason] ?? 0) + 1;
-  }
-  console.log(
-    JSON.stringify({
-      records: 600,
-      exitCode,
-      elapsedMs: performance.now() - started,
-      rssBytes: process.memoryUsage().rss,
-      distribution,
-    }),
-  );
   expect(exitCode).toBe(0);
   expect(output).toHaveBeenCalledWith(
     expect.objectContaining({

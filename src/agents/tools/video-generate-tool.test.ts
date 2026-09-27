@@ -309,13 +309,13 @@ describe("createVideoGenerateTool", () => {
     expect(emptyConfigTool).toBeNull();
   });
 
-  it("treats legacy OpenAI-Codex auth profiles as canonical OpenAI video auth", () => {
+  it("exposes video generation for an auth-backed video provider", () => {
     vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([]);
 
     expectVideoGenerateTool(
       createVideoGenerateTool({
         config: asConfig({}),
-        authProfileStore: createAuthStore(["openai"]),
+        authProfileStore: createAuthStore(["runway"]),
       }),
     );
   });
@@ -341,7 +341,7 @@ describe("createVideoGenerateTool", () => {
     const properties = toolParameterProperties(
       createVideoGenerateTool({
         config: configWithDefaults({
-          videoGenerationModel: { primary: "openai/sora-2" },
+          videoGenerationModel: { primary: "runway/gen4.5" },
         }),
       }),
     );
@@ -428,7 +428,7 @@ describe("createVideoGenerateTool", () => {
     const properties = toolParameterProperties(
       createVideoGenerateTool({
         config: configWithDefaults({
-          videoGenerationModel: { primary: "openai/sora-2" },
+          videoGenerationModel: { primary: "runway/gen4.5" },
         }),
       }),
     );
@@ -449,7 +449,7 @@ describe("createVideoGenerateTool", () => {
           },
           agents: {
             defaults: {
-              videoGenerationModel: { primary: "openai/sora-2" },
+              videoGenerationModel: { primary: "runway/gen4.5" },
             },
           },
         }),
