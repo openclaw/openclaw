@@ -12,7 +12,6 @@ import ai.openclaw.app.SessionCatalogHost
 import ai.openclaw.app.SessionCatalogState
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.closeNodeRuntimeTestFixture
-import ai.openclaw.app.defaultSidebarPageOrder
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import android.content.Context
 import android.provider.Settings
@@ -329,7 +328,7 @@ class SidebarCatalogGroupingTest {
 
     try {
       Settings.Global.putFloat(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
-      prefs.setSidebarPageOrder(defaultSidebarPageOrder)
+      prefs.setSidebarPageOrder(listOf("settings", "work", "home", "skills", "threads"))
       prefs.setSidebarVisiblePages(listOf("settings", "home", "skills", "threads"))
       ReflectionHelpers.getField<MutableStateFlow<NodeRuntime?>>(viewModel, "runtimeRef").value = runtime
       composeRule.setContent {
