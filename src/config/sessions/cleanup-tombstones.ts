@@ -5,7 +5,12 @@ import fs from "node:fs";
  * Eligibility follows `cron.sessionRetention`. Transcript state is archived
  * before deletion; archive lifetime remains owned by existing archive policy.
  */
-import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  sqliteStringSet,
+} from "../../infra/kysely-sync.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
@@ -38,6 +43,8 @@ import { collectAdmissionProtectedCandidateSessionIds } from "./session-history-
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import type { SessionStoreTarget } from "./targets-collision.js";
 
+const log = createSubsystemLogger("cleanup-tombstones");
+
 export type SessionTombstoneSweepResult = {
   /** Canonical expired cron-run placeholders at scan time. */
   candidates: number;
@@ -56,6 +63,18 @@ export type SessionTombstoneSweepResult = {
  * is already amortized away from the per-candidate cost.
  */
 const TOMBSTONE_REFERENCE_BATCH_SIZE = 32;
+
+/**
+ * Candidates reclaimed before each unbatched post-delete verification pass.
+ *
+ * The batched fast path above trades a rare miss window (see
+ * session-accessor.sqlite-reference-batch.ts) for amortized cost; this bounds
+ * that window's blast radius instead of trusting the fast path for the whole
+ * outer batch. Kept at or under readReferencedSessionIds' own narrowed-query
+ * threshold (16 ids) so each verification stays a cheap indexed lookup, not a
+ * full scan.
+ */
+const TOMBSTONE_VERIFICATION_GROUP_SIZE = 8;
 
 type TombstoneCandidate = {
   currentSessionId: string;
@@ -206,6 +225,73 @@ function readProtectedSessionIds(params: {
 }
 
 /**
+ * A candidate's full `session_nodes` row and every `session_windows` row it
+ * owns, captured before a reclaim touches either. `selectAll()` rather than a
+ * named column list deliberately: a snapshot that only knew the columns this
+ * file cares about would restore an incomplete row if the schema has grown
+ * columns since, silently dropping data on the one path meant to put it back
+ * exactly as found.
+ */
+type ReclaimedRowSnapshot = {
+  sessionKey: string;
+  node: Record<string, unknown>;
+  windows: Record<string, unknown>[];
+};
+
+function captureReclaimedRowSnapshot(
+  database: OpenClawAgentDatabase,
+  sessionKey: string,
+): ReclaimedRowSnapshot | undefined {
+  const db = getSessionKysely(database.db);
+  const node = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db.selectFrom("session_nodes").selectAll().where("session_key", "=", sessionKey),
+  );
+  if (!node) {
+    return undefined;
+  }
+  const windows = executeSqliteQuerySync(
+    database.db,
+    db.selectFrom("session_windows").selectAll().where("session_key", "=", sessionKey),
+  ).rows;
+  return { sessionKey, node, windows };
+}
+
+/**
+ * Re-inserts a snapshot taken before a reclaim, undoing that reclaim's delete.
+ *
+ * Only ever called immediately after a post-delete verification proves the
+ * candidate was live at the moment it was removed -- the row did not change in
+ * between (nothing else could have written a `session_nodes` row back under
+ * the same primary key without first recreating the placeholder, which the
+ * verification query would itself have counted as a live reference), so
+ * replaying the exact captured columns reproduces the pre-delete state, not an
+ * approximation of it.
+ */
+function restoreReclaimedRowSnapshot(
+  database: OpenClawAgentDatabase,
+  snapshot: ReclaimedRowSnapshot,
+): void {
+  const db = getSessionKysely(database.db);
+  executeSqliteQuerySync(
+    database.db,
+    db
+      .insertInto("session_nodes")
+      .values(snapshot.node as never)
+      .onConflict((oc) => oc.column("session_key").doNothing()),
+  );
+  for (const window of snapshot.windows) {
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .insertInto("session_windows")
+        .values(window as never)
+        .onConflict((oc) => oc.column("session_id").doNothing()),
+    );
+  }
+}
+
+/**
  * Archives and removes expired canonical cron-run placeholders and their
  * unshared state.
  *
@@ -243,7 +329,7 @@ async function sweepTombstonedCronRunRemnants(params: {
 
   let removedNodes = 0;
   let sweptTranscriptStates = 0;
-  const reclaim = async (candidate: TombstoneCandidate): Promise<void> => {
+  const reclaim = async (candidate: TombstoneCandidate): Promise<boolean> => {
     const result = await runExclusiveSessionLifecycleMutation({
       scope: params.storePath,
       identities: [candidate.sessionKey, ...candidate.generationIds],
@@ -380,7 +466,7 @@ async function sweepTombstonedCronRunRemnants(params: {
       },
     });
     if (!result) {
-      return;
+      return false;
     }
     // The lifecycle and SQLite writer lanes are released before file I/O;
     // publication reacquires the writer only for its short status commit.
@@ -388,6 +474,7 @@ async function sweepTombstonedCronRunRemnants(params: {
     removedNodes += 1;
     sweptTranscriptStates += result.sweptTranscriptStates;
     emitArchivedTranscriptUpdates(publishedArchives);
+    return true;
   };
 
   // Reference analysis is the only unindexable part of a reclaim, so it is
@@ -397,16 +484,113 @@ async function sweepTombstonedCronRunRemnants(params: {
   // and its own write transaction, so a batch never widens the exclusion held
   // over unrelated sessions and a busy placeholder still only skips itself.
   const batchDatabase = openOpenClawAgentDatabase(toDatabaseOptions(scope));
+  const repairedCandidates: { candidate: TombstoneCandidate; liveGenerationIds: string[] }[] = [];
+  const unrepairableFailures: { candidate: TombstoneCandidate; liveGenerationIds: string[] }[] = [];
   for (let offset = 0; offset < candidates.length; offset += TOMBSTONE_REFERENCE_BATCH_SIZE) {
     const batch = candidates.slice(offset, offset + TOMBSTONE_REFERENCE_BATCH_SIZE);
     await withBatchedSessionReferenceAnalysis(
       batchDatabase,
       batch.flatMap((candidate) => candidate.generationIds),
       async () => {
-        for (const candidate of batch) {
-          await reclaim(candidate);
+        // The batched reference check above is a probabilistic fast path (see
+        // session-accessor.sqlite-reference-batch.ts): it amortizes cost across
+        // the whole outer batch, but nothing proves it stayed correct for the
+        // full window between priming and this exact candidate's delete. So it
+        // is never trusted alone -- reclaim a SMALL sub-group at a time, then
+        // immediately re-verify with a real, unbatched, unconditionally correct
+        // read (readReferencedSessionIds with an explicit diskBudget bypasses
+        // the memo entirely) scoped to just that sub-group's ids. Verifying in
+        // small groups rather than once per outer batch bounds both how long a
+        // wrongly-reclaimed session stays gone before detection and how many
+        // candidates one incident could ever involve.
+        for (
+          let subOffset = 0;
+          subOffset < batch.length;
+          subOffset += TOMBSTONE_VERIFICATION_GROUP_SIZE
+        ) {
+          const group = batch.slice(subOffset, subOffset + TOMBSTONE_VERIFICATION_GROUP_SIZE);
+          // Snapshotted before the delete, not after: once a candidate is
+          // reclaimed there is nothing left in session_nodes/session_windows
+          // to read back. Capturing every candidate in the group costs one
+          // extra indexed lookup each even though only a rare one will ever
+          // need it, but there is no "decide afterward" option here.
+          const snapshotsByKey = new Map<string, ReclaimedRowSnapshot>();
+          for (const candidate of group) {
+            const snapshot = captureReclaimedRowSnapshot(batchDatabase, candidate.sessionKey);
+            if (snapshot) {
+              snapshotsByKey.set(candidate.sessionKey, snapshot);
+            }
+          }
+          // Only candidates this sub-group actually removed need verifying --
+          // one `reclaim()` legitimately skips a candidate for reasons that
+          // have nothing to do with references (a live work admission, a
+          // stale scan no longer matching the current row), and a skipped
+          // candidate is trivially still "referenced": it was never deleted.
+          const reclaimed: TombstoneCandidate[] = [];
+          for (const candidate of group) {
+            if (await reclaim(candidate)) {
+              reclaimed.push(candidate);
+            }
+          }
+          const reclaimedGenerationIds = reclaimed.flatMap((candidate) => candidate.generationIds);
+          if (reclaimedGenerationIds.length === 0) {
+            continue;
+          }
+          const liveReferences = readReferencedSessionIds(
+            batchDatabase,
+            new Set(),
+            reclaimedGenerationIds,
+            {},
+          );
+          if (liveReferences.size === 0) {
+            continue;
+          }
+          for (const candidate of reclaimed) {
+            const liveGenerationIds = candidate.generationIds.filter((sessionId) =>
+              liveReferences.has(sessionId),
+            );
+            if (liveGenerationIds.length === 0) {
+              continue;
+            }
+            const snapshot = snapshotsByKey.get(candidate.sessionKey);
+            if (!snapshot) {
+              // Should be unreachable -- every reclaimed candidate was live
+              // (and therefore captured) immediately beforehand. Treated as
+              // unrepairable rather than silently accepted either way.
+              unrepairableFailures.push({ candidate, liveGenerationIds });
+              continue;
+            }
+            restoreReclaimedRowSnapshot(batchDatabase, snapshot);
+            removedNodes -= 1;
+            sweptTranscriptStates -= candidate.generationIds.length;
+            repairedCandidates.push({ candidate, liveGenerationIds });
+          }
         }
       },
+    );
+  }
+  if (unrepairableFailures.length > 0) {
+    // Surfacing this loudly rather than silently is deliberate -- it should
+    // never be quiet if a wrongly-reclaimed candidate could not be repaired.
+    throw new Error(
+      `Tombstone sweep reclaimed ${unrepairableFailures.length} candidate(s) that a post-delete ` +
+        `verification found still referenced, and could not restore: ${unrepairableFailures
+          .map(
+            (failure) =>
+              `${failure.candidate.sessionKey} (${failure.liveGenerationIds.join(", ")})`,
+          )
+          .join("; ")}`,
+    );
+  }
+  if (repairedCandidates.length > 0) {
+    log.warn(
+      `Tombstone sweep reclaimed and then restored ${repairedCandidates.length} candidate(s) that a ` +
+        `post-delete verification found still referenced: ${repairedCandidates
+          .map(
+            (failure) =>
+              `${failure.candidate.sessionKey} (${failure.liveGenerationIds.join(", ")})`,
+          )
+          .join("; ")}`,
     );
   }
   return {
