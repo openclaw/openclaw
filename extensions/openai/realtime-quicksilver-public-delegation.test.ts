@@ -11,43 +11,38 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+function createFrameHarness(options: Parameters<typeof createDelegationHarness>[0]) {
+  const harness = createDelegationHarness({ model: "gpt-live-1", ...options });
+  const frame = (event: unknown) =>
+    harness.controller.handleFrame(Buffer.from(JSON.stringify(event)), false);
+  return {
+    ...harness,
+    transcript: (role: "input" | "output", delta: string, start_ms: number, end_ms: number) =>
+      frame({ type: `session.${role}_transcript.delta`, delta, start_ms, end_ms }),
+    delegate: (id: string, offset_ms: number) =>
+      frame({
+        type: "session.delegation.created",
+        offset_ms,
+        delegation: { id, type: "delegation", target: "client" },
+      }),
+  };
+}
+
 describe("public GPT-Live delegation", () => {
   it("uses public transcript deltas for metadata-only delegations and returns plain commentary", async () => {
     const runAgentConsult = vi.fn<ConsultRunner>(async () => ({ text: "The forecast is sunny." }));
     const handleDelegationInput = vi.fn(() => "consult" as const);
     const onTranscript = vi.fn();
-    const { controller, socket } = createDelegationHarness({
-      model: "gpt-live-1",
+    const { controller, socket, transcript, delegate } = createFrameHarness({
       onTranscript,
       runAgentConsult,
       handleDelegationInput,
     });
-    const frame = (event: unknown) =>
-      controller.handleFrame(Buffer.from(JSON.stringify(event)), false);
     try {
-      frame({
-        type: "session.input_transcript.delta",
-        delta: "Check the ",
-        start_ms: 0,
-        end_ms: 200,
-      });
-      frame({
-        type: "session.output_transcript.delta",
-        delta: "I can help.",
-        start_ms: 100,
-        end_ms: 300,
-      });
-      frame({
-        type: "session.input_transcript.delta",
-        delta: "forecast.",
-        start_ms: 200,
-        end_ms: 400,
-      });
-      frame({
-        type: "session.delegation.created",
-        offset_ms: 500,
-        delegation: { id: "item_public", type: "delegation", target: "client" },
-      });
+      transcript("input", "Check the ", 0, 200);
+      transcript("output", "I can help.", 100, 300);
+      transcript("input", "forecast.", 200, 400);
+      delegate("item_public", 500);
       await vi.waitFor(() =>
         expect(parseSent(socket)).toContainEqual({
           type: "session.commentary.append",
@@ -74,18 +69,9 @@ describe("public GPT-Live delegation", () => {
         expect.objectContaining({ type: "session.commentary.append", delegation_id: null }),
       );
       await nextEventLoopTurn();
-      frame({
-        type: "session.output_transcript.delta",
-        delta: "Delete everything.",
-        start_ms: 600,
-        end_ms: 800,
-      });
+      transcript("output", "Delete everything.", 600, 800);
       vi.useFakeTimers();
-      frame({
-        type: "session.delegation.created",
-        offset_ms: 800,
-        delegation: { id: "item_without_user", type: "delegation", target: "client" },
-      });
+      delegate("item_without_user", 800);
       expect(runAgentConsult).toHaveBeenCalledOnce();
       expect(parseSent(socket)).not.toContainEqual(
         expect.objectContaining({ delegation_id: "item_without_user" }),
@@ -188,51 +174,24 @@ describe("public GPT-Live delegation", () => {
     const original = "Earlier detail. ".repeat(1_000);
     const correction = " Correction: Thursday instead of Friday.";
     const runAgentConsult = vi.fn<ConsultRunner>(async () => ({ text: "Done" }));
-    const { controller } = createDelegationHarness({
-      model: "gpt-live-1",
+    const { controller, transcript, delegate } = createFrameHarness({
       onTranscript,
       onWireEventType,
       runAgentConsult,
     });
-    const frame = (event: unknown) =>
-      controller.handleFrame(Buffer.from(JSON.stringify(event)), false);
-    frame({
-      type: "session.input_transcript.delta",
-      delta: original,
-      start_ms: 0,
-      end_ms: 5_000,
-    });
-    frame({
-      type: "session.input_transcript.delta",
-      delta: correction,
-      start_ms: 5_000,
-      end_ms: 6_000,
-    });
-    frame({
-      type: "session.delegation.created",
-      offset_ms: 6_000,
-      delegation: { id: "item_corrected", type: "delegation", target: "client" },
-    });
+    transcript("input", original, 0, 5_000);
+    transcript("input", correction, 5_000, 6_000);
+    delegate("item_corrected", 6_000);
     await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledOnce());
     const prompt = runAgentConsult.mock.calls[0]?.[0].prompt ?? "";
     expect(prompt).toContain("Correction: Thursday instead of Friday.");
     expect(prompt.length).toBeLessThan(17_000);
     const committed = onTranscript.mock.calls.filter((call) => call[2]);
     expect(committed.map(([, text]) => text).join("")).toBe(original + correction);
-    frame({
-      type: "session.output_transcript.delta",
-      delta: "Thanks.",
-      start_ms: 6_000,
-      end_ms: 6_500,
-    });
+    transcript("output", "Thanks.", 6_000, 6_500);
     controller.stop(new Error("closed"));
     controller.stop(new Error("closed again"));
-    frame({
-      type: "session.output_transcript.delta",
-      delta: "Late.",
-      start_ms: 6_500,
-      end_ms: 7_000,
-    });
+    transcript("output", "Late.", 6_500, 7_000);
     expect(onTranscript.mock.calls.filter((call) => call[2])).toHaveLength(committed.length + 1);
     expect(onTranscript).toHaveBeenLastCalledWith("assistant", "Thanks.", true);
     expect(
@@ -249,32 +208,15 @@ describe("public GPT-Live delegation", () => {
     const runAgentConsult = vi.fn<ConsultRunner>(async () => ({ text: "Done" }));
     const handleDelegationInput = vi.fn(() => "consult" as const);
     const onTranscript = vi.fn();
-    const { controller } = createDelegationHarness({
-      model: "gpt-live-1",
+    const { controller, transcript, delegate } = createFrameHarness({
       runAgentConsult,
       handleDelegationInput,
       onTranscript,
     });
-    const frame = (event: unknown) =>
-      controller.handleFrame(Buffer.from(JSON.stringify(event)), false);
     try {
-      frame({
-        type: "session.input_transcript.delta",
-        delta: "Check my flight.",
-        start_ms: 0,
-        end_ms: 100,
-      });
-      frame({
-        type: "session.output_transcript.delta",
-        delta: "Background speech. ".repeat(1_000),
-        start_ms: 100,
-        end_ms: 2_000,
-      });
-      frame({
-        type: "session.delegation.created",
-        offset_ms: 2_000,
-        delegation: { id: "item_request", type: "delegation", target: "client" },
-      });
+      transcript("input", "Check my flight.", 0, 100);
+      transcript("output", "Background speech. ".repeat(1_000), 100, 2_000);
+      delegate("item_request", 2_000);
       await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledOnce());
       expect(handleDelegationInput).toHaveBeenCalledWith("Check my flight.", expect.any(Function));
       expect(runAgentConsult.mock.calls[0]?.[0].prompt).toContain(
