@@ -64,7 +64,7 @@ export async function withSlackIngressIdentityTestHarness(
   setSlackRuntime(params.runtime);
   ctx.resolveChannelName = async () => ({ name: "direct", type: "im" });
   ctx.resolveUserName = async () => ({ name: "Slack label" });
-  ctx.resolveUserAvatar = async () => undefined;
+  ctx.resolveUserAvatar = () => undefined;
   const contexts: FinalizedMsgContext[] = [];
   let onPrepared: (() => void) | undefined;
   const handleSlackMessage: SlackMessageHandler = async (inbound, opts) => {
@@ -83,8 +83,6 @@ export async function withSlackIngressIdentityTestHarness(
   ingress.attachRelayDispatch(async (inbound) => {
     await handleSlackMessage(inbound as unknown as SlackMessageEvent, { source: "message" });
   });
-  // The fixture invokes the SDK's authenticated-Socket callback without opening a socket.
-  const receive = receiver.client.listeners("slack_event")[0]!;
   const http = new HTTPReceiver({ signingSecret: "synthetic-signing-secret" });
   ingress.wrapReceiver(http).init(app);
   let sequence = 0;
@@ -101,8 +99,16 @@ export async function withSlackIngressIdentityTestHarness(
     await run({
       contexts,
       receiveSocket: async (user) => {
-        await receive({ body: envelope(user), ack: async () => {} });
-        await ingress.waitForIdle();
+        const prepared = createDeferred<void>();
+        onPrepared = prepared.resolve;
+        try {
+          // The SDK emits socket events synchronously; completion belongs to preparation.
+          receiver.client.emit("slack_event", { body: envelope(user), ack: async () => {} });
+          await prepared.promise;
+          await ingress.waitForIdle();
+        } finally {
+          onPrepared = undefined;
+        }
       },
       receiveHttp: async (validSignature) => {
         const body = JSON.stringify(envelope("U123"));

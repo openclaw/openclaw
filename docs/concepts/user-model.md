@@ -198,7 +198,8 @@ signature-verified HTTP delivery authenticate that sender; relay delivery does
 not. Discord's verified native senders use the same profile resolution.
 
 The next verified message turn includes the canonical profile ID and current display
-label in OpenClaw's trusted requester metadata. For example, a linked person
+label as host-generated fields in the per-turn conversation info. The system
+prompt stays stable across requesters. For example, a linked person
 whose effective role includes `operator.admin` can ask, "Assign this session to
 me." The agent can call `sessions` with `action: "assign_owner"`,
 `ownerType: "human"`, and `ownerId` set to that trusted profile ID. Names, emails,

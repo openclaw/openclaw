@@ -1,6 +1,7 @@
 import { bindCommandOwnerAuthority } from "../../auto-reply/command-owner-authority.js";
 import { bindRequesterProfile } from "../../auto-reply/requester-profile.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import { DEFAULT_ACCOUNT_ID } from "../../routing/account-id.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import { takeChannelParticipantInput } from "./admission-evidence.js";
 import type { ChannelIngressHostOwner } from "./ingress-host-owner.js";
@@ -62,7 +63,7 @@ export function bindChannelParticipantInput(params: {
   if (
     requester &&
     params.context.SenderId === principal.senderId &&
-    (params.context.AccountId ?? "default") === principal.accountId &&
+    (params.context.AccountId ?? DEFAULT_ACCOUNT_ID) === principal.accountId &&
     params.context.OriginatingChannel === principal.channelId &&
     batch.every(
       (input) => input?.requesterProfile?.id === requester.id && input.requesterProfile.isCurrent(),

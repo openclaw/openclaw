@@ -1,5 +1,4 @@
-import { expect, it } from "vitest";
-import { withSlackIngressIdentityTestHarness } from "../../../extensions/slack/ingress.test-api.js";
+import { expect, it, vi } from "vitest";
 import { resolveAdmittedRunActiveAssertion } from "../../agents/admitted-run-context.js";
 import { buildExecAutoReviewTranscript } from "../../agents/exec-auto-review-transcript.js";
 import { castAgentMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
@@ -10,7 +9,11 @@ import {
   getCommandOwnerAuthority,
 } from "../../auto-reply/command-owner-authority.js";
 import { prepareChannelRunAdmission } from "../../auto-reply/reply/channel-run-admission.js";
-import { buildInboundMetaSystemPrompt } from "../../auto-reply/reply/inbound-meta.js";
+import {
+  buildInboundMetaSystemPrompt,
+  buildInboundUserContextPrefix,
+} from "../../auto-reply/reply/inbound-meta.js";
+import type { MsgContext } from "../../auto-reply/templating.js";
 import { installDiscordRegistryHooks } from "../../auto-reply/test-helpers/command-auth-registry-fixture.js";
 import {
   loadSessionEntry,
@@ -26,6 +29,7 @@ import {
 import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import { stageActivePluginRegistry } from "../../plugins/runtime.js";
 import { readConfigMachineState } from "../../state/config-machine-state.js";
+import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -36,7 +40,13 @@ import {
   resolveUserChannelAuthorizationPolicy,
 } from "../../state/user-channel-identities.js";
 import { linkEmail, setDisplayName, setUserProfileRole } from "../../state/user-profiles.js";
-import { buildChannelInboundEventContext } from "../inbound-event/context.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
+import {
+  buildChannelInboundEventContext,
+  type BuildChannelInboundEventContextAsyncParams,
+  type BuildChannelInboundEventContextParams,
+  type BuiltChannelInboundEventContext,
+} from "../inbound-event/context.js";
 import { createHostChannelInboundEventContextBuilder } from "../inbound-event/host-context-builder.js";
 import {
   createCommandOwnerTestGateway,
@@ -45,6 +55,25 @@ import {
 import { createHostChannelIngressRuntime } from "./runtime.js";
 
 installDiscordRegistryHooks();
+
+it("reads linked identity once per admitted sender, including unlinked senders", async () => {
+  await withAdminIngress(async ({ admins, context }) => {
+    const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+    try {
+      for (const sender of [admins[0]!.identity.senderId, "unlinked"]) {
+        reads.mockClear();
+        await context(sender);
+        expect(
+          reads.mock.calls.filter(
+            ([, command]) => command.type === "userProfiles.channelIdentity.resolve",
+          ),
+        ).toHaveLength(1);
+      }
+    } finally {
+      reads.mockRestore();
+    }
+  });
+});
 
 it("exposes a verified linked requester in trusted metadata without widening owner tools", async () => {
   await withAdminIngress(async ({ cfg, state, admins, context }) => {
@@ -70,7 +99,7 @@ it("exposes a verified linked requester in trusted metadata without widening own
     ]) {
       setUserProfileRole(admin.profile.id, scenario.role);
       const ctx = await context(scenario.sender, scenario.verified);
-      const prompt = buildInboundMetaSystemPrompt({ ...ctx }, cfg);
+      const prompt = buildInboundUserContextPrefix({ ...ctx });
       const metadata = JSON.parse(prompt.match(/```json\n([\s\S]*?)\n```/)![1]!);
       expect(metadata.requester_profile).toEqual(
         scenario.linked ? { id: admin.profile.id, display_name: "Ada Lovelace" } : undefined,
@@ -128,13 +157,18 @@ it("refreshes requester facts on later turns and rejects unlinked or forged cont
   await withAdminIngress(async ({ cfg, admins, context, retire }) => {
     const admin = admins[0]!;
     const original = await context(admin.identity.senderId);
-    expect(buildInboundMetaSystemPrompt(original, cfg)).toContain(admin.profile.id);
+    const stablePrompt = buildInboundMetaSystemPrompt(original, cfg);
+    for (const sender of [admins[1]!.identity.senderId, "unlinked"]) {
+      expect(buildInboundMetaSystemPrompt(await context(sender), cfg)).toBe(stablePrompt);
+    }
+    expect(stablePrompt).not.toContain("requester_profile");
+    expect(buildInboundUserContextPrefix(original)).toContain(admin.profile.id);
     setDisplayName(admin.profile.id, "Current label");
-    expect(buildInboundMetaSystemPrompt(await context(admin.identity.senderId), cfg)).toContain(
-      '"display_name": "Current label"',
+    expect(buildInboundUserContextPrefix(await context(admin.identity.senderId))).toContain(
+      '"display_name":"Current label"',
     );
     for (const forged of [
-      JSON.parse(JSON.stringify(original)),
+      structuredClone(original),
       { ...original, SenderId: admins[1]!.identity.senderId },
       { ...original, AccountId: "different-account" },
       { ...original, Provider: "slack" },
@@ -155,18 +189,18 @@ it("refreshes requester facts on later turns and rejects unlinked or forged cont
         RequesterProfile: { id: admin.profile.id },
       },
     ]) {
-      expect(buildInboundMetaSystemPrompt(forged, cfg)).not.toContain("requester_profile");
+      expect(buildInboundUserContextPrefix(forged)).not.toContain("requester_profile");
     }
     unlinkUserChannelIdentity(admin.profile.id, admin.identity);
-    expect(buildInboundMetaSystemPrompt(original, cfg)).not.toContain("requester_profile");
-    expect(buildInboundMetaSystemPrompt(await context(admin.identity.senderId), cfg)).not.toContain(
+    expect(buildInboundUserContextPrefix(original)).not.toContain("requester_profile");
+    expect(buildInboundUserContextPrefix(await context(admin.identity.senderId))).not.toContain(
       "requester_profile",
     );
     linkUserChannelIdentity(admins[1]!.profile.id, admin.identity);
     const relinked = await context(admin.identity.senderId);
-    expect(buildInboundMetaSystemPrompt(relinked, cfg)).toContain(admins[1]!.profile.id);
+    expect(buildInboundUserContextPrefix(relinked)).toContain(admins[1]!.profile.id);
     retire();
-    expect(buildInboundMetaSystemPrompt(relinked, cfg)).not.toContain("requester_profile");
+    expect(buildInboundUserContextPrefix(relinked)).not.toContain("requester_profile");
   });
 });
 
@@ -606,24 +640,44 @@ it("carries native Slack requester authority through preparation and keeps repla
       isLive: () => true,
       resolveGatewayContext: () => gateway,
     };
+    const buildHostContext = createHostChannelInboundEventContextBuilder(
+      buildChannelInboundEventContext,
+      owner,
+    );
+    function buildContext(
+      input: BuildChannelInboundEventContextAsyncParams,
+    ): Promise<BuiltChannelInboundEventContext>;
+    function buildContext(
+      input: BuildChannelInboundEventContextParams,
+    ): BuiltChannelInboundEventContext;
+    function buildContext(input: BuildChannelInboundEventContextParams) {
+      return buildHostContext(input);
+    }
     const runtime = createPluginRuntimeMock({
       channel: {
         inbound: {
           ingress: createHostChannelIngressRuntime(owner),
-          buildContext: createHostChannelInboundEventContextBuilder(
-            buildChannelInboundEventContext,
-            owner,
-          ),
+          buildContext,
         },
       },
     });
+    const { withSlackIngressIdentityTestHarness } = await loadBundledPluginFacade<{
+      withSlackIngressIdentityTestHarness: (
+        params: { cfg: typeof cfg; runtime: typeof runtime; stateDir: string },
+        run: (harness: {
+          contexts: MsgContext[];
+          receiveSocket: (user: string) => Promise<void>;
+          receiveHttp: (validSignature: boolean) => Promise<number>;
+        }) => Promise<void>,
+      ) => Promise<void>;
+    }>({ pluginId: "slack", artifactBasename: "ingress.test-api.js" });
     await withSlackIngressIdentityTestHarness(
       { cfg, runtime, stateDir: state.stateDir },
       async ({ contexts, receiveSocket, receiveHttp }) => {
         expect(contexts).toHaveLength(1);
         const check = (index: number, linked: boolean, isOwner: boolean) => {
           const turn = contexts[index]!;
-          const prompt = buildInboundMetaSystemPrompt(turn, cfg);
+          const prompt = buildInboundUserContextPrefix(turn);
           const metadata = JSON.parse(prompt.match(/```json\n([\s\S]*?)\n```/)![1]!);
           expect
             .soft(metadata.requester_profile)

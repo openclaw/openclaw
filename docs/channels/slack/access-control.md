@@ -21,7 +21,7 @@ metadata remain asserted.
 
 For ordinary messages and app mentions from a verified Slack sender linked to an
 active user profile, OpenClaw includes that profile's canonical ID and current
-display name in trusted requester metadata. A linked profile with `operator.admin` authority can ask
+display name in host-generated, per-turn conversation info. A linked profile with `operator.admin` authority can ask
 "Assign this session to me"; the agent uses that profile ID with the `sessions`
 tool's `assign_owner` action. The tool remains owner-only: linking an ordinary
 member identifies the requester without granting assignment access. Unlinked or
