@@ -16,6 +16,9 @@ import UIKit
 #endif
 
 extension OpenClawChatViewModel {
+    /// Bound memory for resize input independently of the encoded upload budget.
+    private static let maxImageSourceBytes = 64 * 1024 * 1024
+
     public func addAttachments(urls: [URL]) {
         self.beginAttachmentStaging()
         Task {
@@ -253,9 +256,7 @@ extension OpenClawChatViewModel {
             errorText = String(format: String(localized: "Could not attach: %@"), fileName)
             return .unreadable
         }
-        // Source photos can exceed the upload image ceiling before resizing;
-        // bound the read by the general file budget, then check processed bytes.
-        if data.count > limits.maxBytes {
+        if data.count > Self.maxImageSourceBytes {
             errorText = String(format: String(localized: "Too large to send: %@"), fileName)
             return .tooLarge
         }
@@ -349,9 +350,11 @@ extension OpenClawChatViewModel {
         defer {
             if hasSecurityScope { url.stopAccessingSecurityScopedResource() }
         }
-        let data = try await Self.readAttachmentData(from: url, maximumBytes: limits.maxBytes)
+        let isImage = mimeType.hasPrefix("image/")
+        let maximumSourceBytes = isImage ? Self.maxImageSourceBytes : limits.maxBytes
+        let data = try await Self.readAttachmentData(from: url, maximumBytes: maximumSourceBytes)
         guard self.ownsAttachmentSession(expectedSession) else { return }
-        if mimeType.hasPrefix("image/") {
+        if isImage {
             if let error = await self.stageImageAttachment(
                 url: url,
                 data: data,
@@ -403,8 +406,8 @@ extension OpenClawChatViewModel {
             }
             let handle = try FileHandle(forReadingFrom: url)
             defer { try? handle.close() }
-            // Recheck bytes after reading: a file can grow after the metadata
-            // check. An oversized base64 frame would disconnect the Gateway.
+            // A file can grow after the metadata check; enforce the source
+            // budget on the bytes actually read, before resizing or encoding.
             let data = try handle.read(upToCount: maximumBytes + 1) ?? Data()
             if data.count > maximumBytes {
                 throw ChatAttachmentReadError.tooLarge
