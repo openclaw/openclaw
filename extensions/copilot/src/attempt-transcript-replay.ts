@@ -81,8 +81,8 @@ export function isCompleteToolGroup(
 }
 
 export function isSameUserTurn(
-  candidate: AgentMessage | undefined,
-  current: Extract<AgentMessage, { role: "user" }> | undefined,
+  candidate: Exclude<AgentMessage, { role: "user" }> | TranscriptRecorder["message"],
+  current: TranscriptRecorder["message"],
   currentRunUserKey: string,
 ): boolean {
   if (candidate?.role !== "user" || !current) {
@@ -91,8 +91,8 @@ export function isSameUserTurn(
   if (candidate === current) {
     return true;
   }
-  const candidateKey = (candidate as { idempotencyKey?: unknown }).idempotencyKey;
-  const currentKey = (current as { idempotencyKey?: unknown }).idempotencyKey;
+  const candidateKey = candidate.idempotencyKey;
+  const currentKey = current.idempotencyKey;
   if (typeof candidateKey === "string" || typeof currentKey === "string") {
     if (typeof candidateKey === "string" && typeof currentKey === "string") {
       return candidateKey === currentKey;
