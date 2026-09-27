@@ -35,6 +35,8 @@ export const identity = {
   name: "Display name",
   namePlaceholder: "Agent name",
   emoji: "Emoji",
+  emojiPicker: "Pick emoji",
+  emojiPickerPlaceholder: "Choose an emoji…",
   chooseImage: "Choose image…",
   replaceImage: "Replace image…",
   imageUnusable: "That image can't be used. Pick an image file up to 2 MB.",
