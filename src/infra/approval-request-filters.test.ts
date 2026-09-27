@@ -44,4 +44,23 @@ describe("approval request filters", () => {
       }),
     ).toBe(false);
   });
+
+  it("rejects grouped start anchors that only match mid-key on oversize keys", () => {
+    expect(
+      matchesApprovalRequestFilters({
+        request: {
+          sessionKey: `${"E".repeat(2048)}agent:ops:leak${"Z".repeat(2500)}`,
+        },
+        sessionFilter: ["(?:^agent:ops:)"],
+      }),
+    ).toBe(false);
+    expect(
+      matchesApprovalRequestFilters({
+        request: {
+          sessionKey: `agent:ops:ghost${"y".repeat(5000)}`,
+        },
+        sessionFilter: ["(?:^agent:ops:)"],
+      }),
+    ).toBe(true);
+  });
 });

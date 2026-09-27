@@ -305,22 +305,50 @@ function testRegexFromStart(regex: RegExp, value: string): boolean {
 // windows, so oversize inputs cannot cause unbounded synchronous work.
 const SAFE_REGEX_MAX_MIDDLE_WINDOWS = 6;
 
-function hasStartAnchor(source: string): boolean {
-  return source.startsWith("^");
-}
-
-function hasEndAnchor(source: string): boolean {
-  let i = source.length - 1;
-  if (i < 0 || source[i] !== "$") {
-    return false;
+function scanPatternAssertions(source: string): {
+  hasCaret: boolean;
+  hasDollar: boolean;
+  hasBoundaryOrLookaround: boolean;
+} {
+  let hasCaret = false;
+  let hasDollar = false;
+  let hasBoundaryOrLookaround = false;
+  let inCharClass = false;
+  for (let i = 0; i < source.length; i += 1) {
+    const ch = source[i];
+    if (ch === "\\") {
+      const next = source[i + 1];
+      if (!inCharClass && (next === "b" || next === "B")) {
+        hasBoundaryOrLookaround = true;
+      }
+      i += 1;
+      continue;
+    }
+    if (inCharClass) {
+      if (ch === "]") {
+        inCharClass = false;
+      }
+      continue;
+    }
+    if (ch === "[") {
+      inCharClass = true;
+      continue;
+    }
+    if (ch === "^") {
+      hasCaret = true;
+    } else if (ch === "$") {
+      hasDollar = true;
+    } else if (
+      ch === "(" &&
+      source[i + 1] === "?" &&
+      (source[i + 2] === "=" ||
+        source[i + 2] === "!" ||
+        (source[i + 2] === "<" && (source[i + 3] === "=" || source[i + 3] === "!")))
+    ) {
+      hasBoundaryOrLookaround = true;
+    }
   }
-  let backslashes = 0;
-  i -= 1;
-  while (i >= 0 && source[i] === "\\") {
-    backslashes += 1;
-    i -= 1;
-  }
-  return backslashes % 2 === 0;
+  return { hasCaret, hasDollar, hasBoundaryOrLookaround };
 }
 
 export function testRegexWithBoundedInput(
@@ -334,15 +362,29 @@ export function testRegexWithBoundedInput(
   if (input.length <= maxWindow) {
     return testRegexFromStart(regex, input);
   }
-  // Anchored patterns keep full-key anchor meaning: a leading ^ can only
-  // match at the start of the key (head), a trailing $ only at its end
-  // (tail). Testing them against middle slices would treat a slice boundary
-  // as input start/end and forward excluded sessions.
-  if (hasStartAnchor(regex.source)) {
+  // Assertion-bearing patterns keep whole-key semantics. Any ^ (leading or
+  // grouped, e.g. (?:^agent:ops:)) can only match at key position 0, which
+  // coincides with slice position 0 solely in the head slice; testing one
+  // against a middle or tail slice would treat a slice boundary as input
+  // start and forward excluded sessions. A trailing $ is symmetric for the
+  // tail. Fully-anchored (^...$) patterns cannot witness both ends on
+  // slices, and \b/lookarounds depend on neighbor context, so those fail
+  // closed past the short-input path exactly as before this change.
+  const assertions = scanPatternAssertions(regex.source);
+  if (assertions.hasCaret && assertions.hasDollar) {
+    return false;
+  }
+  if (assertions.hasCaret) {
     return testRegexFromStart(regex, input.slice(0, maxWindow));
   }
   const tailStart = input.length - maxWindow;
-  if (hasEndAnchor(regex.source)) {
+  if (assertions.hasDollar) {
+    return testRegexFromStart(regex, input.slice(tailStart));
+  }
+  if (assertions.hasBoundaryOrLookaround) {
+    if (testRegexFromStart(regex, input.slice(0, maxWindow))) {
+      return true;
+    }
     return testRegexFromStart(regex, input.slice(tailStart));
   }
   const head = input.slice(0, maxWindow);
