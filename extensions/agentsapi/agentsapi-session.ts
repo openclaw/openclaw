@@ -50,7 +50,7 @@ export function createAgentsApiSession(options: {
   let admittedMessageCount = submitted ? 1 : 0;
   let baselineTurnId: string | undefined;
   let baselineCaptured = submitted;
-  const observedInputItems = new Set<string>();
+  let observedInputItems = new Set<string>();
   const coordinatorTurnIds = new Set<string>();
   const excludedTurnIds = new Set<string>();
   const itemTurnIds = new Map<string, string>();
@@ -166,10 +166,7 @@ export function createAgentsApiSession(options: {
       }
       entries.push({ turn, items });
     }
-    observedInputItems.clear();
-    for (const id of inputItems) {
-      observedInputItems.add(id);
-    }
+    observedInputItems = inputItems;
     return { turns, entries, itemsByTurn };
   };
   const projectSavedState = async (
@@ -535,10 +532,7 @@ export function createAgentsApiSession(options: {
           // Creation can finish inference before this non-replaying stream opens.
           await settleFromSavedState(true);
         }
-        while (true) {
-          if (settled) {
-            break;
-          }
+        while (!settled) {
           let chunk: IteratorResult<AgentsApiEvent> | undefined;
           try {
             if (options.initialInputSubmitted) {
@@ -640,9 +634,6 @@ export function createAgentsApiSession(options: {
           }
           if (event.type === "agent.session.requires_action") {
             await relayFunctions();
-            if (settled) {
-              break;
-            }
             continue;
           }
           if (["agent.session.failed", "agent.session.environment.failed"].includes(event.type)) {
