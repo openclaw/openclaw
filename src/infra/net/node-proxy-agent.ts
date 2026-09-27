@@ -232,7 +232,16 @@ function createPerRequestEnvProxyAgent(
   }
   const router = agents.at(-1);
   if (!router) {
-    throw initializationError;
+    // This agent never opens a socket. Accept either Node request protocol so
+    // the configured proxy error, not protocol validation, rejects each request.
+    class RejectedProxyAgent extends HttpsAgent {
+      protocol = undefined;
+
+      override addRequest = () => {
+        throw initializationError;
+      };
+    }
+    return new RejectedProxyAgent(options.agentOptions);
   }
   const direct = {
     http: new HttpAgent(options.agentOptions),

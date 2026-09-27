@@ -332,11 +332,10 @@ describe("WhatsApp session media upload", () => {
     },
   );
 
-  it("rejects an invalid-only proxy before media can reach the origin directly", async () => {
+  it("keeps the session available but rejects media with an invalid-only proxy", async () => {
     vi.stubEnv("HTTPS_PROXY", "socks5://127.0.0.1:1");
-    await expect(
-      createUploadSession().then((session) => upload(session, "127.0.0.1")),
-    ).rejects.toThrow("Unsupported proxy protocol");
+    const session = await createUploadSession();
+    await expect(upload(session, "127.0.0.1")).rejects.toThrow("Unsupported proxy protocol");
     expect(received).toEqual([]);
     expect(proxyRequests).toEqual([]);
   });
