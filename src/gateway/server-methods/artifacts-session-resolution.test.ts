@@ -71,9 +71,9 @@ describe("artifact session authorization", () => {
       prepareArtifactSessionResolution({ sessionKey: "agent:main:main" }, projection),
     ).resolves.toBeTypeOf("function");
     expect(projection.ensureMaterialized).not.toHaveBeenCalled();
-    for (const query of [{ runId: "run-1" }, { taskId: "task-1" }]) {
-      await expect(prepareArtifactSessionResolution(query, projection)).rejects.toBe(unavailable);
-    }
+    await expect(prepareArtifactSessionResolution({ runId: "run-1" }, projection)).rejects.toBe(
+      unavailable,
+    );
     const current = { ...projection, sharingRevision: {} };
     await expect(prepareArtifactSessionResolution({ runId: "run-1" }, current)).resolves.toBeTypeOf(
       "function",

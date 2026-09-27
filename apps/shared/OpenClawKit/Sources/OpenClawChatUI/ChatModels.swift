@@ -463,6 +463,42 @@ public struct OpenClawChatStreamFallback: Codable, Hashable, Sendable {
 }
 
 public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
+    struct MediaFact: Codable, Hashable, Sendable {
+        let path: String?
+        let url: String?
+        let contentType: String?
+        let kind: String?
+        let fileName: String?
+        let sizeBytes: Int?
+        let durationMs: Double?
+        let width: Int?
+        let height: Int?
+
+        var attachment: OpenClawChatMessageContent? {
+            guard let source = self.path ?? self.url, !source.isEmpty else { return nil }
+            return OpenClawChatMessageContent(
+                type: ["image", "audio", "video"].contains(self.kind ?? "") ? self.kind : "file",
+                text: nil,
+                mimeType: self.contentType,
+                fileName: self.fileName ?? URL(string: source)?.lastPathComponent,
+                url: source,
+                width: self.width,
+                height: self.height,
+                sizeBytes: self.sizeBytes,
+                durationSeconds: self.durationMs.map { $0 / 1000 },
+                content: nil)
+        }
+    }
+
+    struct MediaImageLayout: Codable, Hashable, Sendable {
+        struct Slot: Codable, Hashable, Sendable {
+            let kind: String
+            let factIndex: Int?
+        }
+
+        let slots: [Slot]
+    }
+
     struct OpenClawMetadata: Codable, Hashable, Sendable {
         let kind: String?
         let id: String?
@@ -479,6 +515,8 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         var senderUsername: String?
         var senderProfileAvatarUrl: String?
         var transport: AnyCodable?
+        var media: [MediaFact?]?
+        var mediaImageLayout: MediaImageLayout?
     }
 
     var sourceMetadata: OpenClawMetadata?
@@ -685,7 +723,21 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
             (try? container.decode([String].self, forKey: .mediaTypes))
             ?? (try? container.decode(String.self, forKey: .mediaType)).map { [$0] }
             ?? []
-        let alreadyContainsAudio = decodedContent.contains { content in
+        let representedSources = Set(decodedContent.compactMap(\.url))
+        let inlineImageCount = decodedContent.filter { $0.mediaKind == .image && $0.url == nil }.count
+        // Inline image blocks and media facts describe the same uploads. Their
+        // persisted slots identify which facts already have a content row.
+        let inlineFactIndexes = Set((decodedOpenClaw?.mediaImageLayout?.slots ?? [])
+            .filter { $0.kind == "inline" }.prefix(inlineImageCount).compactMap(\.factIndex))
+        let mediaAttachments: [OpenClawChatMessageContent] = (decodedOpenClaw?.media ?? []).enumerated()
+            .compactMap { index, fact in
+                guard !inlineFactIndexes.contains(index),
+                      let attachment = fact?.attachment,
+                      !representedSources.contains(attachment.url ?? "")
+                else { return nil }
+                return attachment
+            }
+        let alreadyContainsAudio = (decodedContent + mediaAttachments).contains { content in
             content.mimeType?.lowercased().hasPrefix("audio/") == true
         }
         let audioAttachments: [OpenClawChatMessageContent] = alreadyContainsAudio ? [] : mediaPaths
@@ -701,7 +753,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
                     fileName: (mediaPath as NSString).lastPathComponent,
                     content: nil)
             }
-        self.content = decodedContent + audioAttachments
+        self.content = decodedContent + mediaAttachments + audioAttachments
         self.isTruncated = decodedOpenClaw?.truncated == true || decodedContent.contains { content in
             content.text?.contains(Self.transcriptTruncationMarker) == true
         }
@@ -807,6 +859,14 @@ extension OpenClawChatMessage.OpenClawMetadata {
         self.senderUsername = try? container.decode(String.self, forKey: .senderUsername)
         self.senderProfileAvatarUrl = try? container.decode(String.self, forKey: .senderProfileAvatarUrl)
         self.transport = try container.decodeIfPresent(AnyCodable.self, forKey: .transport)
+        // Optional media must not invalidate a history/cache row. Keep nil holes
+        // so inline-image layout indices still identify the original media facts.
+        self.media = (try? container.decode([AnyCodable].self, forKey: .media))?.map {
+            try? ChatPayloadDecoding.decode($0, as: OpenClawChatMessage.MediaFact.self)
+        }
+        self.mediaImageLayout = try? container.decode(
+            OpenClawChatMessage.MediaImageLayout.self,
+            forKey: .mediaImageLayout)
     }
 }
 
