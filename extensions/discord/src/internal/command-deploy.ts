@@ -85,13 +85,14 @@ export class DiscordCommandDeployer {
   }
 
   private async reconcileGlobalCommands(desired: SerializedCommand[]) {
+    // SAFETY: Discord's global-command list endpoint returns APIApplicationCommand[].
     const existing = (await this.rest.get(
       Routes.applicationCommands(this.params.clientId),
     )) as APIApplicationCommand[];
     const existingByKey = new Map(existing.map((command) => [stableCommandKey(command), command]));
     const desiredCommands = desired.map((command) => ({
       command,
-      key: stableCommandKey(command as APIApplicationCommand),
+      key: stableCommandKey(command),
     }));
     const desiredKeys = new Set(desiredCommands.map(({ key }) => key));
     for (const { command, key } of desiredCommands) {
@@ -177,7 +178,7 @@ function groupGuildCommands(commands: BaseCommand[]): Map<string, SerializedComm
   return guildCommands;
 }
 
-function stableCommandKey(command: Pick<APIApplicationCommand, "name" | "type">) {
+function stableCommandKey(command: Pick<SerializedCommand, "name" | "type">) {
   return `${command.type ?? ApplicationCommandType.ChatInput}:${command.name}`;
 }
 
