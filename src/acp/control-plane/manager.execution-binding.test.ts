@@ -10,30 +10,19 @@ import {
   hoisted,
   installAcpSessionManagerTestLifecycle,
   mockParentedAcpSessionEntries,
-  readySessionMeta,
 } from "./manager.test-helpers.js";
 
 describe("ACP execution binding authority", () => {
   installAcpSessionManagerTestLifecycle();
 
-  function setupPromptStartedRuntime() {
-    const runtimeState = createRuntime();
-    const sessionKey = "agent:codex:acp:session-1";
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    hoisted.readAcpSessionEntryMock.mockReturnValue({
-      sessionKey,
-      storeSessionKey: sessionKey,
-      acp: readySessionMeta(),
-    });
-    return { runtimeState, sessionKey };
-  }
-
   it("does not notify prompt submission after admitted authority closes during binding", async () => {
     await withAcpManagerTaskStateDir(async () => {
-      const { runtimeState, sessionKey } = setupPromptStartedRuntime();
+      const runtimeState = createRuntime();
+      const sessionKey = "agent:codex:acp:session-1";
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
       mockParentedAcpSessionEntries({
         childSessionKey: sessionKey,
         parentSessionKey: "agent:main:main",

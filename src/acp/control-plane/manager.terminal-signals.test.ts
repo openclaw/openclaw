@@ -21,45 +21,48 @@ import {
 describe("ACP terminal state signals", () => {
   installAcpSessionManagerTestLifecycle();
 
-  it("records parented ACP turns only for human provenance", async () => {
-    await withAcpManagerTaskStateDir(async () => {
-      const runtimeState = createRuntime();
-      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-        id: "acpx",
-        runtime: runtimeState.runtime,
-      });
-      const childSessionKey = "agent:main:acp:child-state";
-      mockParentedAcpSessionEntries({
-        childSessionKey,
-        parentSessionKey: "agent:main:main",
-      });
-      const manager = new AcpSessionManager();
-
-      await manager.runTurn({
-        provenance: "human",
+  function setupParentedTurn(childSessionKey: string) {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    mockParentedAcpSessionEntries({ childSessionKey, parentSessionKey: "agent:main:main" });
+    return {
+      runtimeState,
+      manager: new AcpSessionManager(),
+      input: {
+        provenance: "system" as const,
         cfg: baseCfg,
         sessionKey: childSessionKey,
+        text: "complete the task",
+        mode: "prompt" as const,
+      },
+    };
+  }
+
+  it("records parented ACP turns only for human provenance", async () => {
+    await withAcpManagerTaskStateDir(async () => {
+      const childSessionKey = "agent:main:acp:child-state";
+      const { runtimeState, manager, input } = setupParentedTurn(childSessionKey);
+
+      await manager.runTurn({
+        ...input,
+        provenance: "human",
         text: "human turn",
-        mode: "prompt",
         requestId: "human-state-turn",
       });
       await manager.runTurn({
-        provenance: "system",
-        cfg: baseCfg,
-        sessionKey: childSessionKey,
+        ...input,
         text: "system turn",
-        mode: "prompt",
         requestId: "system-state-turn",
       });
       runtimeState.runTurn.mockImplementationOnce(async function* () {
         yield { type: "done" as const, status: "cancelled" as const };
       });
       await manager.runTurn({
-        provenance: "system",
-        cfg: baseCfg,
-        sessionKey: childSessionKey,
+        ...input,
         text: "cancelled turn",
-        mode: "prompt",
         requestId: "cancelled-state-turn",
       });
 
@@ -79,24 +82,8 @@ describe("ACP terminal state signals", () => {
 
   it("keeps ACP completion joined without blocking the event loop on terminal signal contention", async () => {
     await withAcpManagerTaskStateDir(async () => {
-      const runtimeState = createRuntime();
-      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-        id: "acpx",
-        runtime: runtimeState.runtime,
-      });
       const childSessionKey = "agent:main:acp:contended-terminal";
-      mockParentedAcpSessionEntries({
-        childSessionKey,
-        parentSessionKey: "agent:main:main",
-      });
-      const manager = new AcpSessionManager();
-      const input = {
-        provenance: "system" as const,
-        cfg: baseCfg,
-        sessionKey: childSessionKey,
-        text: "complete the task",
-        mode: "prompt" as const,
-      };
+      const { manager, input } = setupParentedTurn(childSessionKey);
       await manager.runTurn({ ...input, requestId: "warm-terminal-worker" });
       const databasePath = resolveOpenClawStateSqlitePath();
       let holder: ReturnType<typeof holdStateDatabaseWriteTransaction> | undefined;

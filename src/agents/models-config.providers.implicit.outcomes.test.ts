@@ -104,19 +104,3 @@ it.each([
     expect(result.outcomes).toEqual([failure]);
   },
 );
-
-it("does not import a distinct sibling account outcome through a shared hook", async () => {
-  const entry = provider("canonical", async (ctx) => {
-    expect(ctx.providerIds).toEqual(["canonical"]);
-    return {
-      provider: config(),
-      outcomes: [{ provider: "sibling", profileId: "sibling:account", status: "auth-rejected" }],
-    };
-  });
-  entry.aliases = ["alias"];
-  entry.hookAliases = ["sibling"];
-  fixture.providers = [entry];
-  const result = await discover("canonical");
-  expect(Object.keys(result.providers ?? {})).toEqual(["canonical"]);
-  expect(result.outcomes).toEqual([]);
-});

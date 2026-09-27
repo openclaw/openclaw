@@ -666,7 +666,6 @@ function toPlainTextElement(value: string, options: MarkdownRenderEnv): HTMLDivE
   return createAssistantTranscriptPlainTextFallback(
     restoreMarkdownHumanMentions(normalizeMarkdownLineBreaks(value), options.humanMentionTokens),
     options.assistantTranscriptRoleHeaders,
-    () => t("sessionsView.assistant"),
   );
 }
 

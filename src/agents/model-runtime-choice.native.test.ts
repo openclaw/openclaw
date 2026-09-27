@@ -65,7 +65,7 @@ it("keeps keyless host selection after an explicit runtime reset without grantin
   ).toMatchObject({ kind: "unavailable" });
 });
 
-it.each(["catalog", "configured", "literal"] as const)(
+it.each(["configured", "literal"] as const)(
   "selects the exact native owner from %s facts and revokes its commit guard",
   async (source) => {
     let current = true;

@@ -604,7 +604,7 @@ internal fun OpenClawSidebar(
         Text(
           text = "OpenClaw",
           modifier = Modifier.weight(1f),
-          style = ClawTheme.type.title.copy(fontSize = 18.sp, lineHeight = 22.sp),
+          style = ClawTheme.type.title,
           color = palette.text,
           maxLines = 1,
         )
@@ -957,7 +957,7 @@ private fun SidebarPagesHeader(
       )
       Text(
         text = nativeString("Pages"),
-        style = ClawTheme.type.caption.copy(fontWeight = FontWeight.Medium, fontSize = 12.sp),
+        style = ClawTheme.type.caption.copy(fontWeight = FontWeight.Medium),
         color = palette.muted,
         maxLines = 1,
       )

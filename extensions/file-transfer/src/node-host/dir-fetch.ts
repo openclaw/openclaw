@@ -1,9 +1,10 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import { root as fsRoot } from "@openclaw/fs-safe/root";
+import path from "node:path";
 import { ArchiveLimitError } from "openclaw/plugin-sdk/archive";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
+import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import { inspectDirFetchArchive } from "../shared/dir-fetch-archive.js";
 import {
   DIR_FETCH_DEFAULT_MAX_BYTES,
@@ -111,23 +112,24 @@ async function listTreeEntries(
       code: "CANONICAL_PATH_CHANGED",
     });
   }
-  for await (const entry of rootHandle.walk("", { symlinkPolicy: "include", maxEntries })) {
-    if (entry.kind === "truncated") {
-      return "TOO_MANY";
-    }
-    results.push(entry.relativePath);
-  }
-  return results.toSorted((left, right) => {
-    const a = left.split("/");
-    const b = right.split("/");
-    for (const [index, part] of a.entries()) {
-      const other = b[index];
-      if (other === undefined || part !== other) {
-        return other === undefined ? 1 : part.localeCompare(other) || (part < other ? -1 : 1);
+  // Root.walk is core-only; plugins enumerate through the rooted list contract.
+  async function visit(relativeDir: string): Promise<boolean> {
+    const entries = await rootHandle.list(relativeDir, { withFileTypes: true });
+    for (const entry of entries.toSorted(
+      (left, right) => left.name.localeCompare(right.name) || (left.name < right.name ? -1 : 1),
+    )) {
+      const relativePath = path.posix.join(relativeDir, entry.name);
+      results.push(relativePath);
+      if (results.length > maxEntries) {
+        return false;
+      }
+      if (entry.isDirectory && !(await visit(relativePath))) {
+        return false;
       }
     }
-    return a.length - b.length;
-  });
+    return true;
+  }
+  return (await visit(".")) ? results : "TOO_MANY";
 }
 
 export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchResult> {

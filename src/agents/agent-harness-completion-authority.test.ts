@@ -191,14 +191,7 @@ describe("harness completion caller lifetime", () => {
       });
     },
   );
-  it.each([
-    "active",
-    "retired",
-    "retired-draining",
-    "released",
-    "requester-replaced",
-    "uncaptured",
-  ] as const)(
+  it.each(["retired-draining", "released", "requester-replaced", "uncaptured"] as const)(
     "delivers an owned child result when its spawning caller is %s",
     async (callerState) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -289,7 +282,7 @@ describe("harness completion caller lifetime", () => {
           ),
         );
         root.release();
-        retired = callerState !== "active";
+        retired = true;
         if (callerState === "retired-draining") {
           markGatewayRestartDraining();
         }

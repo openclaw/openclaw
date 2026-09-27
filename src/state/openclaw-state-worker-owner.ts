@@ -17,6 +17,7 @@ import {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { isStateDatabaseReadAdmissionInvalidatedError } from "./openclaw-state-db-async-lifecycle.js";
 import {
   publishOpenClawStateDatabaseWorkerAdmission,
   registerOpenClawStateDatabaseAsyncResource,
@@ -383,10 +384,27 @@ function createSharedStateWorkerOwner() {
       let entry: Entry | undefined;
       for (;;) {
         for (const candidate of stores) {
+          if (!matches(candidate, admission.identity)) {
+            continue;
+          }
+          try {
+            // Other scopes can share this actor; an inode match cannot renew its original admission.
+            candidate.context.admission.assertCurrent();
+          } catch (error) {
+            if (
+              !isStateDatabaseReadAdmissionInvalidatedError(error) ||
+              hasActiveActorOperations(candidate)
+            ) {
+              throw error;
+            }
+            await (candidate.actor
+              ? retireActor(candidate.actor, candidate.context.admission.identity)
+              : retire(candidate));
+            return this.open(context, options);
+          }
           if (
-            matches(candidate, admission.identity) &&
-            (candidate.context.existingSchemaPath !== context.existingSchemaPath ||
-              candidate.source.moduleUrl.href !== source.moduleUrl.href)
+            candidate.context.existingSchemaPath !== context.existingSchemaPath ||
+            candidate.source.moduleUrl.href !== source.moduleUrl.href
           ) {
             await retire(candidate);
             assertAdmission();

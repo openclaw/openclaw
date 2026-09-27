@@ -6,8 +6,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pluginDoctorContractRegistryLoaderState } from "../plugins/doctor-contract-registry-loader-state.js";
 import { clearPluginDoctorContractRegistryCache } from "../plugins/doctor-contract-registry.test-fixtures.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
@@ -61,7 +64,8 @@ async function makeFixture() {
 afterEach(async () => {
   pluginDoctorContractRegistryLoaderState.moduleLoaderFactory = undefined;
   resetAutoMigrateLegacyStateDirForTest();
-  closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   await tempDirs.cleanup();
   vi.restoreAllMocks();
@@ -539,11 +543,10 @@ module.exports = { stateMigrations: [{
             legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
           });
 
-      expect(
-        result.stepReceipts.find(
-          (receipt) => receipt.id === (legacyRoot ? "state-dir" : "plugin-install-index"),
-        ),
-      ).toMatchObject({ outcome: "completed" });
+      const stateReceipt = result.stepReceipts.find(
+        (receipt) => receipt.id === (legacyRoot ? "state-dir" : "plugin-install-index"),
+      );
+      expect(stateReceipt, JSON.stringify(stateReceipt)).toMatchObject({ outcome: "completed" });
       expect(fs.realpathSync(legacyStateDir)).toBe(fs.realpathSync(stateDir));
       expect(result.warnings).toEqual([]);
       if (legacySchema) {

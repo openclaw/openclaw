@@ -568,7 +568,7 @@ struct ChatSessionSidebar: View {
     }
 
     private func isGroupCollapsed(_ name: String) -> Bool {
-        Set(self.collapsedSessionGroups.split(separator: "\u{1F}").map(String.init)).contains(name)
+        self.collapsedSessionGroups.split(separator: "\u{1F}").contains(Substring(name))
     }
 
     private func toggleGroupCollapsed(_ name: String) {

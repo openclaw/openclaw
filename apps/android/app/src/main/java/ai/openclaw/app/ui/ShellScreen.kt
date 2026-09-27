@@ -103,7 +103,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.window.layout.DisplayFeature
 import kotlinx.coroutines.launch
 import java.util.Locale
@@ -1116,7 +1115,7 @@ private fun HomeAttentionPanel(
 ) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-      Text(text = nativeString("Needs attention"), style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.warning)
+      Text(text = nativeString("Needs attention"), style = ClawTheme.type.caption, color = ClawTheme.colors.warning)
       rows.forEach { row ->
         HomeAttentionListRow(
           row = row,
@@ -1147,7 +1146,7 @@ private fun SectionLabel(
   ) {
     Text(
       text = localizedUppercase(localizedTitle, currentAppLanguage().languageTag),
-      style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
+      style = ClawTheme.type.caption,
       color = ClawTheme.colors.textMuted,
     )
     action?.invoke()
@@ -1181,7 +1180,7 @@ private fun HomeAttentionListRow(
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )
-        Text(text = nativeString(row.subtitle), style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textSubtle, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text = nativeString(row.subtitle), style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
       Icon(
         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
@@ -1285,9 +1284,9 @@ private fun RecentSessionRowContent(
       }
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
         Text(text = title, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(text = source, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textSubtle, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text = source, style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
-      Text(text = metadata, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted)
+      Text(text = metadata, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
       Icon(
         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
         contentDescription = nativeString("Open thread"),

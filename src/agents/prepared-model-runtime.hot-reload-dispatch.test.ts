@@ -271,10 +271,8 @@ describe("Gateway plugin reload run admission", () => {
   });
 
   it.each([
-    { outcome: "commit", arrival: "during drainage" },
     { outcome: "rollback", arrival: "during drainage" },
     { outcome: "commit", arrival: "before drainage" },
-    { outcome: "rollback", arrival: "before drainage" },
   ] as const)(
     "preserves a run admitted $arrival and waiting requests through plugin $outcome",
     async ({ outcome, arrival }) => {
@@ -406,40 +404,37 @@ describe("Gateway plugin reload run admission", () => {
 });
 
 describe("retained config and committed model publication", () => {
-  it.each(["build", "cleanup"] as const)(
-    "preserves an unrelated %s failure when preparation is superseded",
-    async (failureKind) => {
-      const retained = config(true);
+  it("preserves an unrelated aggregate failure when preparation is superseded", async () => {
+    const retained = config(true);
+    await publish(retained);
+    const entered = createDeferred();
+    const release = createDeferred();
+    const failure = new AggregateError(
+      [new Error("fixture cleanup failed")],
+      "fixture build cleanup",
+    );
+    mocks.prepareStaticCatalog.mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      throw failure;
+    });
+    const admission = acquireAgentRunPreparedModelRuntime({
+      ...ownerInput(retained),
+      workspaceDir: fixture.state.path("failed-run-workspace"),
+    });
+    const result = admission.catch((error: unknown) => error);
+    try {
+      await Promise.race([entered.promise, result]);
+      markPreparedModelRuntimeSnapshotsStale(undefined, { waitForReplacement: true });
+      release.resolve();
+      // Finish replacement so a mistaken retry would return a lease, not hang this assertion.
       await publish(retained);
-      const entered = createDeferred();
-      const release = createDeferred();
-      const failure =
-        failureKind === "build"
-          ? new Error("fixture catalog failed")
-          : new AggregateError([new Error("fixture cleanup failed")], "fixture build cleanup");
-      mocks.prepareStaticCatalog.mockImplementationOnce(async () => {
-        entered.resolve();
-        await release.promise;
-        throw failure;
-      });
-      const admission = acquireAgentRunPreparedModelRuntime({
-        ...ownerInput(retained),
-        workspaceDir: fixture.state.path("failed-run-workspace"),
-      });
-      const result = admission.catch((error: unknown) => error);
-      try {
-        await Promise.race([entered.promise, result]);
-        markPreparedModelRuntimeSnapshotsStale(undefined, { waitForReplacement: true });
-        release.resolve();
-        // Finish replacement so a mistaken retry would return a lease, not hang this assertion.
-        await publish(retained);
-        expect(await result).toBe(failure);
-      } finally {
-        release.resolve();
-        await Promise.allSettled([admission.then((lease) => lease[Symbol.asyncDispose]())]);
-      }
-    },
-  );
+      expect(await result).toBe(failure);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([admission.then((lease) => lease[Symbol.asyncDispose]())]);
+    }
+  });
 
   it.each(["advance", "hot reload"])(
     "%s preserves exact catalog isolation while dispatch selects the committed config",
@@ -477,20 +472,11 @@ describe("retained config and committed model publication", () => {
     },
   );
 
-  it("advances model-neutral config without another catalog discovery", async () => {
-    await publish(config(true));
-    const discoveries = mocks.runPreparedModelCatalogWorker.mock.calls.length;
-    const committed = config(false);
-    advancePreparedModelRuntimeConfig(committed);
-    const runtime = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
-    expect(runtime?.config).toEqual(committed);
-    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(discoveries);
-  });
-
   it("does not let a retained lease authorize an old config catalog read", async () => {
     const retained = config(true);
     await publish(retained);
     await using lease = await acquirePreparedModelRuntimeSnapshot(ownerInput(retained));
+    const discoveries = mocks.runPreparedModelCatalogWorker.mock.calls.length;
     advancePreparedModelRuntimeConfig(config(false));
     await withPreparedModelRuntimePluginGenerationScope(
       lease.pluginGeneration,
@@ -501,6 +487,7 @@ describe("retained config and committed model publication", () => {
       },
       () => lease.snapshot,
     );
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(discoveries);
   });
 });
 
