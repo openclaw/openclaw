@@ -421,6 +421,7 @@ export function createSlackCommandHandler(params: {
           }
         : createSlackResponseUrlBudget(respondWithoutBudget);
     const respond = responseBudget.respond;
+    const respondEphemeral = (text: string) => respond({ text, response_type: "ephemeral" });
     let cfg = monitor.cfg;
     try {
       if (monitor.shouldDropMismatchedSlackEvent?.(body)) {
@@ -465,10 +466,7 @@ export function createSlackCommandHandler(params: {
           channelType,
         })
       ) {
-        await respond({
-          text: "This channel is not allowed.",
-          response_type: "ephemeral",
-        });
+        await respondEphemeral("This channel is not allowed.");
         return false;
       }
 
@@ -489,25 +487,16 @@ export function createSlackCommandHandler(params: {
           allowFromLower: effectiveAllowFromLower,
           resolveSenderName: (userId) => ctx.resolveUserName(userId, eventScope),
           sendPairingReply: async (text) => {
-            await respond({
-              text,
-              response_type: "ephemeral",
-            });
+            await respondEphemeral(text);
           },
           onDisabled: async () => {
-            await respond({
-              text: "Slack DMs are disabled.",
-              response_type: "ephemeral",
-            });
+            await respondEphemeral("Slack DMs are disabled.");
           },
           onUnauthorized: async ({ allowMatchMeta }) => {
             logVerbose(
               `slack: blocked slash sender ${command.user_id} (dmPolicy=${ctx.dmPolicy}, ${allowMatchMeta})`,
             );
-            await respond({
-              text: "You are not authorized to use this command.",
-              response_type: "ephemeral",
-            });
+            await respondEphemeral("You are not authorized to use this command.");
           },
           log: logVerbose,
         });
@@ -537,10 +526,7 @@ export function createSlackCommandHandler(params: {
               channelAllowed,
             })
           ) {
-            await respond({
-              text: "This channel is not allowed.",
-              response_type: "ephemeral",
-            });
+            await respondEphemeral("This channel is not allowed.");
             return false;
           }
           // When groupPolicy is "open", only block channels that are EXPLICITLY denied
@@ -548,10 +534,7 @@ export function createSlackCommandHandler(params: {
           // config (matchSource undefined) should be allowed under open policy.
           const hasExplicitConfig = Boolean(channelConfig?.matchSource);
           if (!channelAllowed && (ctx.groupPolicy !== "open" || hasExplicitConfig)) {
-            await respond({
-              text: "This channel is not allowed.",
-              response_type: "ephemeral",
-            });
+            await respondEphemeral("This channel is not allowed.");
             return false;
           }
         }
@@ -576,10 +559,7 @@ export function createSlackCommandHandler(params: {
       });
       const senderGate = slashIngress.senderAccess.gate;
       if (isRoomish && senderGate?.allowed === false) {
-        await respond({
-          text: "You are not authorized to use this command here.",
-          response_type: "ephemeral",
-        });
+        await respondEphemeral("You are not authorized to use this command here.");
         return false;
       }
 
@@ -587,10 +567,7 @@ export function createSlackCommandHandler(params: {
       // CommandAuthorized based on allowlists/access-groups (downstream decides which commands need it).
       const commandAuthorized = slashIngress.commandAccess.authorized;
       if (isRoomish && ctx.useAccessGroups && !commandAuthorized) {
-        await respond({
-          text: "You are not authorized to use this command.",
-          response_type: "ephemeral",
-        });
+        await respondEphemeral("You are not authorized to use this command.");
         return false;
       }
 
@@ -840,10 +817,7 @@ export function createSlackCommandHandler(params: {
         : undefined;
       if (commandAuthorized) {
         if (isCurrentSession?.() === false || p.onAdmitted?.() === false) {
-          await respond({
-            text: "The selected run has already finished.",
-            response_type: "ephemeral",
-          });
+          await respondEphemeral("The selected run has already finished.");
           return false;
         }
       }
@@ -933,10 +907,7 @@ export function createSlackCommandHandler(params: {
     } catch (err) {
       runtime.error?.(danger(`slack slash handler failed: ${formatErrorMessage(err)}`));
       if (!isSlackResponseAlreadyReportedError(err) && responseBudget.remaining() !== 0) {
-        await respond({
-          text: "Sorry, something went wrong handling that command.",
-          response_type: "ephemeral",
-        });
+        await respondEphemeral("Sorry, something went wrong handling that command.");
       }
     }
     return false;

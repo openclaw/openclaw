@@ -1,14 +1,6 @@
 import { createHash } from "node:crypto";
-import { ApplicationCommandType, type APIApplicationCommand } from "discord-api-types/v10";
+import { ApplicationCommandType, Routes, type APIApplicationCommand } from "discord-api-types/v10";
 import type { DiscordCommandDeployHashStore } from "../command-deploy-store.js";
-import {
-  createApplicationCommand,
-  deleteApplicationCommand,
-  editApplicationCommand,
-  listApplicationCommands,
-  overwriteApplicationCommands,
-  overwriteGuildApplicationCommands,
-} from "./api.commands.js";
 import { commandsEqual, stableComparableObject } from "./command-comparison.js";
 import type { BaseCommand } from "./commands.js";
 import type { RequestClient } from "./rest.js";
@@ -36,10 +28,6 @@ export class DiscordCommandDeployer {
     },
   ) {}
 
-  async getCommands(): Promise<APIApplicationCommand[]> {
-    return await listApplicationCommands(this.rest, this.params.clientId);
-  }
-
   async deploy(options: DeployCommandOptions = {}) {
     const commands = this.params.commands.filter((command) => command.name !== "*");
     const globalCommands = commands.filter((command) => !command.guildIds);
@@ -48,14 +36,10 @@ export class DiscordCommandDeployer {
       await this.putCommandSetIfChanged(
         this.scopedCacheKey(`guild:${guildId}`),
         entries,
-        async () => {
-          await overwriteGuildApplicationCommands(
-            this.rest,
-            this.params.clientId,
-            guildId,
-            entries,
-          );
-        },
+        () =>
+          this.rest.put(Routes.applicationGuildCommands(this.params.clientId, guildId), {
+            body: entries,
+          }),
         options,
       );
     }
@@ -65,14 +49,10 @@ export class DiscordCommandDeployer {
         await this.putCommandSetIfChanged(
           this.scopedCacheKey(`dev-guild:${guildId}`),
           entries,
-          async () => {
-            await overwriteGuildApplicationCommands(
-              this.rest,
-              this.params.clientId,
-              guildId,
-              entries,
-            );
-          },
+          () =>
+            this.rest.put(Routes.applicationGuildCommands(this.params.clientId, guildId), {
+              body: entries,
+            }),
           options,
         );
       }
@@ -84,7 +64,9 @@ export class DiscordCommandDeployer {
       serializedGlobal,
       () =>
         mode === "overwrite"
-          ? overwriteApplicationCommands(this.rest, this.params.clientId, serializedGlobal)
+          ? this.rest.put(Routes.applicationCommands(this.params.clientId), {
+              body: serializedGlobal,
+            })
           : this.reconcileGlobalCommands(serializedGlobal),
       options,
     );
@@ -103,7 +85,9 @@ export class DiscordCommandDeployer {
   }
 
   private async reconcileGlobalCommands(desired: SerializedCommand[]) {
-    const existing = await this.getCommands();
+    const existing = (await this.rest.get(
+      Routes.applicationCommands(this.params.clientId),
+    )) as APIApplicationCommand[];
     const existingByKey = new Map(existing.map((command) => [stableCommandKey(command), command]));
     const desiredCommands = desired.map((command) => ({
       command,
@@ -113,7 +97,9 @@ export class DiscordCommandDeployer {
     for (const { command, key } of desiredCommands) {
       const current = existingByKey.get(key);
       if (current && !commandsEqual(current, command)) {
-        await editApplicationCommand(this.rest, this.params.clientId, current.id, command);
+        await this.rest.patch(Routes.applicationCommand(this.params.clientId, current.id), {
+          body: command,
+        });
       }
     }
     for (const { command, key } of desiredCommands) {
@@ -121,20 +107,20 @@ export class DiscordCommandDeployer {
         continue;
       }
       try {
-        await createApplicationCommand(this.rest, this.params.clientId, command);
+        await this.rest.post(Routes.applicationCommands(this.params.clientId), { body: command });
       } catch (error) {
         if (!isApplicationCommandLimitError(error)) {
           throw error;
         }
         // Reconcile cannot create before deleting at Discord's hard cap. Bulk
         // overwrite replaces the complete set without an unsafe delete gap.
-        await overwriteApplicationCommands(this.rest, this.params.clientId, desired);
+        await this.rest.put(Routes.applicationCommands(this.params.clientId), { body: desired });
         return;
       }
     }
     for (const command of existing) {
       if (!desiredKeys.has(stableCommandKey(command))) {
-        await deleteApplicationCommand(this.rest, this.params.clientId, command.id);
+        await this.rest.delete(Routes.applicationCommand(this.params.clientId, command.id));
       }
     }
   }
@@ -142,7 +128,7 @@ export class DiscordCommandDeployer {
   private async putCommandSetIfChanged(
     key: string,
     commands: SerializedCommand[],
-    deploy: () => Promise<void>,
+    deploy: () => Promise<unknown>,
     options: { force?: boolean },
   ): Promise<void> {
     const hash = stableCommandSetHash(commands);

@@ -1,4 +1,5 @@
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createSetupTranslator,
   parseMentionOrPrefixedId,
@@ -7,7 +8,6 @@ import {
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { isSlackSetupAccountConfigured } from "./account-configured.js";
 import type { ResolvedSlackAccount } from "./accounts.js";
-import type { OpenClawConfig } from "./channel-api.js";
 
 export const SLACK_CHANNEL = "slack" as const;
 

@@ -805,20 +805,8 @@ async function scanSlackConversationForDelivery(params: {
       deliveryParts.set(match.partIndex, match);
     }
     if (expectedPartCount !== undefined && deliveryParts.size === expectedPartCount) {
-      const orderedParts = Array.from({ length: expectedPartCount }, (_, index) =>
-        deliveryParts.get(index),
-      );
-      if (orderedParts.some((part) => !part)) {
-        return {
-          reconciliation: {
-            status: "unresolved",
-            error: "Slack history contains an invalid durable delivery marker set",
-            retryable: false,
-          },
-          evidence: "conflict",
-        };
-      }
-      const completeParts = orderedParts as SlackDeliveryPart[];
+      // Matching counts cover every validated index in [0, expectedPartCount).
+      const completeParts = [...deliveryParts.values()].sort((a, b) => a.partIndex - b.partIndex);
       const reconciledThreadTs = completeParts[0]?.threadTs ?? params.threadTs;
       const platformMessageIds = completeParts.map((part) => part.messageId);
       return {
