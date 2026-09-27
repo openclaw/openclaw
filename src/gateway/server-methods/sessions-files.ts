@@ -258,18 +258,16 @@ function loadSessionFileRoot(params: { sessionKey: string; agentId?: string }) {
   if (!loaded.entry?.sessionId) {
     return { ...loaded, agentId: undefined, root: undefined, fileRoot: undefined };
   }
-  const { agentId } = loaded;
   if (loaded.entry.repositoryWorkspaceId) {
-    return { ...loaded, agentId, root: undefined, fileRoot: undefined, diffCwd: undefined };
+    return { ...loaded, root: undefined, fileRoot: undefined, diffCwd: undefined };
   }
   const { spawnedCwd, root, diffCwd } = resolveSessionWorkspaceRoots(
     loaded.cfg,
-    agentId,
+    loaded.agentId,
     loaded.entry,
   );
   return {
     ...loaded,
-    agentId,
     root,
     fileRoot: resolveFileRoot({ root, spawnedCwd }),
     diffCwd,

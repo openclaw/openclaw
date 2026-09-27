@@ -73,8 +73,7 @@ const SEARCH_SKIP_DIRS = new Set([
 ]);
 
 function toDisplayPath(root: string, resolved: string): string {
-  const relative = path.relative(root, resolved);
-  return relative.split(path.sep).join("/");
+  return path.relative(root, resolved).split(path.sep).join("/");
 }
 
 function resolveTouchedFilePath(params: {
