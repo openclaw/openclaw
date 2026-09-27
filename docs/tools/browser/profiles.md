@@ -41,6 +41,9 @@ outside OpenClaw stay hidden. The Browser dock outside a chat session lists
 every tab. Tabs opened from a session's panel belong to that session and follow
 the existing session tab cleanup: they close when the session is reset or
 deleted, with idle and per-session limits controlled by `browser.tabCleanup`.
+Tabs opened from a panel before this ownership existed have no recorded
+session, so they stay open but appear only in the Browser dock outside a chat
+session.
 
 The panel streams the active tab live as the page repaints. It falls back to
 screenshots for node-routed browsers, Chrome MCP existing-session profiles,
