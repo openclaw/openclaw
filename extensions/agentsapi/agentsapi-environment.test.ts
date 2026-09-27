@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
+import type { AgentToolParam } from "openai/resources/beta/agents/agents";
 import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runAgentsApiAttempt } from "./agentsapi-attempt.js";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
-import type { AgentsApiFunctionDeclaration, AgentsApiInputFile } from "./agentsapi-client.js";
+import type { AgentsApiInputFile } from "./agentsapi-client.js";
 
 const mocks = vi.hoisted(() => ({
   fetch: vi.fn<typeof import("openclaw/plugin-sdk/ssrf-runtime").fetchWithSsrFGuard>(),
@@ -409,7 +410,7 @@ async function attempt(
 
 function savedBinding(
   environment: string | undefined,
-  legacyTools?: AgentsApiFunctionDeclaration[],
+  legacyTools?: AgentToolParam.AgentToolConfigParamFunction[],
 ) {
   const identity: unknown[] = ["fixture-model", "fixture-not-a-real-api-key"];
   if (environment === "self_hosted") {
