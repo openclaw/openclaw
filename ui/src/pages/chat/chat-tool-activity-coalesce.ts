@@ -81,7 +81,7 @@ function readProjections(item: MessageItem, index: number): Projection[] {
     cached.content !== content ||
     (Array.isArray(content) &&
       (cachedBlocks?.length !== content.length ||
-        content.some((block, index) => block !== cachedBlocks?.[index])))
+        content.some((block, blockIndex) => block !== cachedBlocks?.[blockIndex])))
   ) {
     cached = {
       content,

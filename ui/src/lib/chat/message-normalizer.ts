@@ -621,15 +621,14 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     normalizedContent.set(m, cached);
   }
   // Attribution can be refreshed in place; retain only content derivations.
-  const { content, audioAsVoice } = cached.value;
-  let { replyTarget } = cached.value;
+  const { content, audioAsVoice, replyTarget: contentReplyTarget } = cached.value;
   const timestamp = asFiniteNumber(m.timestamp) ?? Date.now();
   const id = readStringField(m, "id");
   const openClawMeta = asOptionalRecord(m["__openclaw"]);
   const structuredReplyToId = readStringField(openClawMeta, "replyToId")?.trim() ?? "";
-  if (structuredReplyToId) {
-    replyTarget = { kind: "id", id: structuredReplyToId };
-  }
+  const replyTarget: NormalizedMessage["replyTarget"] = structuredReplyToId
+    ? { kind: "id", id: structuredReplyToId }
+    : contentReplyTarget;
   const replyPreviewRecord = asOptionalRecord(openClawMeta?.replyToPreview);
   const replyPreviewText = readStringField(replyPreviewRecord, "text")?.trim() ?? "";
   const replyPreviewSender = readStringField(replyPreviewRecord, "senderLabel")?.trim() ?? "";
