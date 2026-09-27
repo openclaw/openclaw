@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -25,6 +26,25 @@ export class LegacyPluginSdkResourceHost {
   private readonly pending = new Set<Promise<void>>();
   private readonly failures: unknown[] = [];
   private closing?: Promise<void>;
+  private gatewayScheduler?: GatewayScheduler;
+
+  get scheduler(): GatewayScheduler {
+    this.assertOpen();
+    if (!this.gatewayScheduler) {
+      throw new Error("Plugin SDK resource host has no Gateway scheduler");
+    }
+    this.gatewayScheduler.signal.throwIfAborted();
+    return this.gatewayScheduler;
+  }
+
+  bindScheduler(scheduler: GatewayScheduler): void {
+    this.assertOpen();
+    scheduler.signal.throwIfAborted();
+    if (this.gatewayScheduler && this.gatewayScheduler !== scheduler) {
+      throw new Error("Plugin SDK resource host already belongs to another Gateway scheduler");
+    }
+    this.gatewayScheduler = scheduler;
+  }
 
   assertOpen(): void {
     if (this.closing || this.work.isClosing) {
@@ -157,6 +177,7 @@ const { hostContext, gatewayHosts } = resolveGlobalSingleton(
     gatewayHosts: new WeakMap<object, LegacyPluginSdkResourceHost>(),
   }),
 );
+const STANDALONE_HOST_KEY = Symbol.for("openclaw.legacyPluginSdkStandaloneResourceHost");
 
 /** Associate exact host resolvers without calling them after their authority closes. */
 export function bindLegacyPluginSdkResourceHost(
@@ -166,7 +187,7 @@ export function bindLegacyPluginSdkResourceHost(
   gatewayHosts.set(resolver, host);
 }
 
-function getBoundLegacyPluginSdkResourceHost(): LegacyPluginSdkResourceHost | undefined {
+export function getBoundLegacyPluginSdkResourceHost(): LegacyPluginSdkResourceHost | undefined {
   const scope = getPluginRuntimeGatewayRequestScope();
   const resolver = scope?.resolveGatewayContext ?? scope?.context?.resolveGatewayContext;
   if (resolver) {
@@ -177,16 +198,16 @@ function getBoundLegacyPluginSdkResourceHost(): LegacyPluginSdkResourceHost | un
     }
     return host;
   }
-  return hostContext.getStore();
+  const host = hostContext.getStore();
+  // Process-retained SDK results are not a command or Gateway scheduling owner.
+  const standaloneHost = (globalThis as Record<PropertyKey, unknown>)[STANDALONE_HOST_KEY];
+  return host === standaloneHost ? undefined : host;
 }
 
 /** Standalone callers of the shipped bare-result SDK retain their process lifetime. */
 export function getLegacyPluginSdkResourceHost(): LegacyPluginSdkResourceHost {
   return (
     getBoundLegacyPluginSdkResourceHost() ??
-    resolveGlobalSingleton(
-      Symbol.for("openclaw.legacyPluginSdkStandaloneResourceHost"),
-      () => new LegacyPluginSdkResourceHost(),
-    )
+    resolveGlobalSingleton(STANDALONE_HOST_KEY, () => new LegacyPluginSdkResourceHost())
   );
 }

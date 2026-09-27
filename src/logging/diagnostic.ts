@@ -9,6 +9,7 @@ import {
   type DiagnosticEventPayload,
   type DiagnosticPhaseSnapshot,
 } from "../infra/diagnostic-events.js";
+import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { emitChildProcessSpawnSample } from "../process/spawn-diagnostics.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { reconcileDiagnosticGcObserver, stopDiagnosticGcObserver } from "./diagnostic-gc.js";
@@ -828,10 +829,12 @@ function logSessionAttention(
   return recovery;
 }
 
-let heartbeatInterval: NodeJS.Timeout | null = null;
+let heartbeatJob: GatewayScheduledJob | undefined;
+let detachHeartbeatOwner: (() => void) | undefined;
 let lastDiagnosticHeartbeatTickAt: number | undefined;
 
-export function startDiagnosticHeartbeat(
+export function startGatewayDiagnosticHeartbeat(
+  scheduler: GatewayScheduler,
   config?: OpenClawConfig,
   opts?: StartDiagnosticHeartbeatOptions,
 ) {
@@ -844,7 +847,7 @@ export function startDiagnosticHeartbeat(
   startDiagnosticStabilityRecorder();
   installDiagnosticStabilityFatalHook();
   reconcileDiagnosticGcObserver();
-  if (heartbeatInterval) {
+  if (heartbeatJob) {
     return;
   }
   // Gateway supplies its lifecycle-owned monitor; other runtimes retain the
@@ -853,9 +856,11 @@ export function startDiagnosticHeartbeat(
     startDiagnosticLivenessSampler();
   }
   const livenessGraceUntil =
-    opts?.startupGraceMs != null && opts.startupGraceMs > 0 ? Date.now() + opts.startupGraceMs : 0;
-  lastDiagnosticHeartbeatTickAt = Date.now();
-  heartbeatInterval = setInterval(() => {
+    opts?.startupGraceMs != null && opts.startupGraceMs > 0
+      ? scheduler.now() + opts.startupGraceMs
+      : 0;
+  lastDiagnosticHeartbeatTickAt = scheduler.now();
+  const tick = () => {
     // Reuse this tick for exporter demand changes; GC collection never adds a timer.
     reconcileDiagnosticGcObserver();
     emitChildProcessSpawnSample();
@@ -871,7 +876,7 @@ export function startDiagnosticHeartbeat(
     const stuckSessionAbortMs =
       opts?.testTimings?.stuckSessionAbortMs ?? resolveStuckSessionAbortMs(stuckSessionWarnMs);
     const compactionSafetyTimeoutMs = resolveCompactionTimeoutMs(heartbeatConfig);
-    const now = Date.now();
+    const now = scheduler.now();
     const heartbeatElapsedMs =
       lastDiagnosticHeartbeatTickAt === undefined ? 0 : now - lastDiagnosticHeartbeatTickAt;
     lastDiagnosticHeartbeatTickAt = now;
@@ -917,7 +922,7 @@ export function startDiagnosticHeartbeat(
     }
 
     diag.debug(
-      `heartbeat: webhooks=${webhookStats.received}/${webhookStats.processed}/${webhookStats.errors} active=${work.activeCount} waiting=${work.waitingCount} queued=${work.queuedCount}`,
+      `heartbeat: webhooks=${webhookStats.received}/${webhookStats.processed}/${webhookStats.errors} active=${work.activeCount} waiting=${work.waitingCount} queued=${work.queuedCount} nextWakeAtMs=${scheduler.nextWakeAtMs ?? "none"}`,
     );
     emitDiagnosticEvent({
       type: "diagnostic.heartbeat",
@@ -1009,17 +1014,33 @@ export function startDiagnosticHeartbeat(
         });
       }
     }
-  }, DIAGNOSTIC_HEARTBEAT_INTERVAL_MS);
-  heartbeatInterval.unref?.();
+  };
+  const job = scheduler.schedule({
+    id: "diagnostic-heartbeat",
+    atMs: scheduler.now() + DIAGNOSTIC_HEARTBEAT_INTERVAL_MS,
+    everyMs: DIAGNOSTIC_HEARTBEAT_INTERVAL_MS,
+    run: tick,
+  });
+  heartbeatJob = job;
+  const stopOwnedHeartbeat = () => {
+    if (heartbeatJob === job) {
+      stopGatewayDiagnosticHeartbeat();
+    }
+  };
+  scheduler.signal.addEventListener("abort", stopOwnedHeartbeat, { once: true });
+  detachHeartbeatOwner = () => scheduler.signal.removeEventListener("abort", stopOwnedHeartbeat);
+  if (scheduler.signal.aborted) {
+    stopOwnedHeartbeat();
+  }
 }
 
-export function stopDiagnosticHeartbeat() {
+export function stopGatewayDiagnosticHeartbeat() {
+  detachHeartbeatOwner?.();
+  detachHeartbeatOwner = undefined;
   retireSessionDiagnosticLogs();
   stopDiagnosticGcObserver();
-  if (heartbeatInterval) {
-    clearInterval(heartbeatInterval);
-    heartbeatInterval = null;
-  }
+  heartbeatJob?.cancel();
+  heartbeatJob = undefined;
   lastDiagnosticHeartbeatTickAt = undefined;
   stopDiagnosticRunActivityTracking();
   retireDiagnosticSessionObservations();
@@ -1029,7 +1050,7 @@ export function stopDiagnosticHeartbeat() {
 }
 
 function resetDiagnosticStateForTest(): void {
-  stopDiagnosticHeartbeat();
+  stopGatewayDiagnosticHeartbeat();
   resetDiagnosticSessionRecoveryCoordinatorForTest();
   resetDiagnosticSessionStateForTest();
   resetDiagnosticActivityForTest();
