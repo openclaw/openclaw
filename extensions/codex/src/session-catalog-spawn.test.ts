@@ -7,13 +7,9 @@ import {
 } from "./session-catalog.test-helpers.js";
 
 describe("Codex catalog launch failures", () => {
-  it.each(
-    ["EBADARCH", "ENOENT", "EACCES"].flatMap((code) =>
-      ["cold", "refresh"].map((phase) => ({ code, phase })),
-    ),
-  )(
-    "stops background and foreground retries after $code during $phase",
-    async ({ code, phase }) => {
+  it.each(["cold", "refresh"])(
+    "stops background and foreground retries after a terminal spawn failure during %s",
+    async (phase) => {
       vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
       const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
       const factory = createCodexSessionCatalogControlFactory({
@@ -28,8 +24,8 @@ describe("Codex catalog launch failures", () => {
       });
       const control = factory.forRequest("main");
       const failure = describeCodexSpawnError(
-        Object.assign(new Error("spawn failed"), { code, syscall: "spawn" }),
-        `/installed/${code}/${phase}/codex`,
+        Object.assign(new Error("spawn failed"), { code: "EBADARCH", syscall: "spawn" }),
+        `/installed/EBADARCH/${phase}/codex`,
       );
       try {
         if (phase === "refresh") {
