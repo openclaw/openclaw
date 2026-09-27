@@ -249,6 +249,7 @@ describe("check-assertion-safety-ratchet", () => {
     );
     git(root, ["add", "."]);
     git(root, ["commit", "-m", "upstream update"]);
+    const preparedBase = gitOutput(root, ["rev-parse", "upstream"]);
 
     git(root, ["checkout", "release"]);
     git(root, [
@@ -258,6 +259,14 @@ describe("check-assertion-safety-ratchet", () => {
       "-m",
       "Merge branch 'main' into main",
     ]);
+
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    expect(main(root, ["--base", preparedBase])).toBe(1);
+    expect(errors).toHaveBeenCalledWith(
+      expect.stringContaining("The assertion SAFETY baseline may only shrink:"),
+    );
+
     git(root, ["checkout", "--orphan", "unrelated"]);
     fs.rmSync(path.join(root, "src"), { recursive: true, force: true });
     fs.rmSync(path.join(root, "config"), { recursive: true, force: true });
@@ -267,12 +276,11 @@ describe("check-assertion-safety-ratchet", () => {
     const disconnectedBase = gitOutput(root, ["rev-parse", "HEAD"]);
     git(root, ["checkout", "release"]);
 
-    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.spyOn(console, "log").mockImplementation(() => {});
+    errors.mockClear();
     expect(main(root, ["--base", disconnectedBase])).toBe(1);
     expect(errors).toHaveBeenCalledWith(
       expect.stringContaining(
-        "is disconnected from HEAD; no verified sync merge was found",
+        "is disconnected from HEAD; no verified CI or Git merge base was found",
       ),
     );
   });
