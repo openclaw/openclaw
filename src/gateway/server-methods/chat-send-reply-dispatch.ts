@@ -470,10 +470,14 @@ export function createChatSendReplyDispatch(params: {
       }
       // The harness row is the canonical final assistant. Replace that exact
       // identity so media materialization cannot append a parallel reply.
+      // TTS adds audio to its display without replacing the model's text.
       rewritten = await rewriteAssistantTranscriptMessageByIdempotencyKey({
-        content: persistedContentForAppend,
+        content: ttsSupplementMarker
+          ? persistedContentForAppend.filter((block) => block.type !== "text")
+          : persistedContentForAppend,
         idempotencyKey: ownedTranscriptIdempotencyKey,
         managedMediaUrls: sourceMediaUrls,
+        preserveModelContent: ttsSupplementMarker ? true : undefined,
         scope: transcriptScope,
       });
       if (!rewritten) {

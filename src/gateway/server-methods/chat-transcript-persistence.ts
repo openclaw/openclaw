@@ -545,6 +545,7 @@ export async function rewriteAssistantTranscriptMessageByIdempotencyKey(params: 
   content: AssistantDisplayContentBlock[];
   idempotencyKey: string;
   managedMediaUrls?: readonly string[];
+  preserveModelContent?: true;
   scope: SessionTranscriptWriteScope;
 }): Promise<{ messageId: string } | null> {
   const idempotencyKey = params.idempotencyKey.trim();
@@ -557,17 +558,22 @@ export async function rewriteAssistantTranscriptMessageByIdempotencyKey(params: 
     if (!target) {
       return null;
     }
-    const rewrittenEvents = events.map((event) =>
-      transcriptEventId(event) === target.messageId
-        ? Object.assign({}, event as Record<string, unknown>, {
-            message: buildAssistantDisplayRewrite({
-              message: target.message,
-              displayContent: params.content,
-              managedMediaUrls: params.managedMediaUrls,
-            }),
-          })
-        : event,
-    );
+    const rewrittenEvents = events.map((event) => {
+      if (transcriptEventId(event) !== target.messageId) {
+        return event;
+      }
+      const rewritten = buildAssistantDisplayRewrite({
+        message: target.message,
+        displayContent: params.content,
+        managedMediaUrls: params.managedMediaUrls,
+        retainOriginalText: params.preserveModelContent,
+      });
+      return Object.assign({}, event as Record<string, unknown>, {
+        message: params.preserveModelContent
+          ? { ...rewritten, content: target.message.content }
+          : rewritten,
+      });
+    });
     await transcript.replaceEvents(rewrittenEvents);
     return { messageId: target.messageId };
   });
