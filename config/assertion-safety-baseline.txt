@@ -1154,7 +1154,7 @@ extensions/whatsapp/src/quoted-message.ts	1
 extensions/whatsapp/src/reconnect.ts	1
 extensions/whatsapp/src/security-fix.ts	2
 extensions/whatsapp/src/session-errors.ts	15
-extensions/whatsapp/src/session.ts	4
+extensions/whatsapp/src/session.ts	1
 extensions/whatsapp/src/setup-finalize.ts	2
 extensions/whatsapp/src/targets-runtime.ts	2
 extensions/workboard/browser/lib/workboard/metadata-contract-normalization.ts	1
@@ -2565,7 +2565,7 @@ src/infra/kysely-sync-cache-state.ts	1
 src/infra/kysely-sync.ts	7
 src/infra/net/fetch-guard.ts	3
 src/infra/net/form-data.ts	2
-src/infra/net/node-proxy-agent.ts	4
+src/infra/net/node-proxy-agent.ts	2
 src/infra/net/proxy-fetch.ts	2
 src/infra/net/proxy/proxy-validation.ts	1
 src/infra/net/runtime-fetch.ts	5

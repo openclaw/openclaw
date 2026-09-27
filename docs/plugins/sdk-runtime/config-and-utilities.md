@@ -72,6 +72,15 @@ retain restart behavior under a broader no-op prefix.
 
 ## Reusable runtime utilities
 
+For libraries that accept a Node HTTP agent, use `createNodeProxyAgent` from
+`openclaw/plugin-sdk/fetch-runtime`. With `mode: "env"`, supply `targetUrl` for
+a fixed destination, or omit it when the library selects destinations itself
+(for example, media upload hosts). The reusable form snapshots the proxy
+environment and evaluates `NO_PROXY` for every request, including redirects.
+Managed proxy CA trust applies only to the matching proxy connection. Call
+`agent?.destroy()` when the owning connection closes. Undici dispatchers from
+the same SDK entrypoint belong in fetch's `dispatcher` option, not Node's `agent`.
+
 Import `execPolicy` from `openclaw/plugin-sdk/agent-harness-runtime` for the
 host's exec mode algebra. `execPolicy.resolveExecModePolicy({ mode, security, ask })`
 returns the mode, security, ask, and auto-review settings. An explicit mode
