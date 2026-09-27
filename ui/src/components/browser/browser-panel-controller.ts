@@ -666,13 +666,13 @@ export class BrowserPanelController implements ReactiveController {
     }
   }
 
-  exitCaptureModes(): void {
+  exitCaptureModes(preserveStageClick = false): void {
     this.native.cancelCapture();
     if (this.native.activeTab) {
       this.setState("view", null);
     }
     this.operations.invalidateInspection();
-    this.input.resetCaptureState();
+    this.input.resetCaptureState(preserveStageClick);
     this.setState("mode", "interact");
     this.setState("strokes", []);
     this.setState("inspected", null);

@@ -3,6 +3,7 @@ import { nothing, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
+import { BROWSER_ANNOTATION_EVENT } from "./browser-annotation.ts";
 import {
   createBrowserClient,
   createBrowserPanelTestController,
@@ -23,6 +24,51 @@ import { renderBrowserPanelChrome } from "./browser-panel-render.ts";
 setupBrowserPanelTestCleanup();
 
 describe("BrowserPanelController capture and input ownership", () => {
+  it("suppresses the click after inspect pointerdown submits its annotation", async () => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+      drawImage: vi.fn(),
+      beginPath: vi.fn(),
+      moveTo: vi.fn(),
+      lineTo: vi.fn(),
+      stroke: vi.fn(),
+      strokeRect: vi.fn(),
+    } as unknown as CanvasRenderingContext2D);
+    vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue(
+      "data:image/png;base64,annotated",
+    );
+    const { client, request } = createBrowserClient(async (envelope) => {
+      if (envelope.path === "/act") {
+        return { result: true };
+      }
+      throw new Error(`Unexpected browser route: ${envelope.path}`);
+    });
+    const controller = createBrowserPanelTestController(client, "tab-a");
+    controller.setMode("inspect");
+    controller.inspected = createInspectedNode("inspected");
+    const acceptAnnotation = vi.fn((event: Event) => event.preventDefault());
+    window.addEventListener(BROWSER_ANNOTATION_EVENT, acceptAnnotation);
+
+    try {
+      controller.input.handleOverlayPointerDown(
+        new MouseEvent("pointerdown", { clientX: 20, clientY: 20 }) as PointerEvent,
+      );
+      expect(controller.mode).toBe("interact");
+      controller.handleStageClick(new MouseEvent("click", { clientX: 20, clientY: 20 }));
+      controller.handleStageClick(new MouseEvent("click", { clientX: 40, clientY: 50 }));
+      await flushBrowserResponses();
+    } finally {
+      window.removeEventListener(BROWSER_ANNOTATION_EVENT, acceptAnnotation);
+    }
+
+    expect(acceptAnnotation).toHaveBeenCalledTimes(1);
+    expect(
+      request.mock.calls
+        .map(([, envelope]) => envelope as BrowserRequestEnvelope)
+        .filter((envelope) => envelope.body?.kind === "clickCoords")
+        .map((envelope) => envelope.body),
+    ).toEqual([{ kind: "clickCoords", targetId: "tab-a", x: 40, y: 50 }]);
+  });
+
   it("restores the prior selected screenshot when tab focus is rejected", async () => {
     const previousCapture = createDeferred<unknown>();
     const focus = createDeferred<unknown>();
