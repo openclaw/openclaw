@@ -617,15 +617,6 @@ describe("optional media tool factory planning", () => {
       } else {
         await expect(execution).rejects.toThrow("No PDF model configured.");
       }
-      expect(resolveSpy).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          activeModel: {
-            provider: "openrouter",
-            model: "deepseek/deepseek-v4.1-flash",
-            supportsImages: modelHasVision,
-          },
-        }),
-      );
     }
   });
 

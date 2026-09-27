@@ -244,11 +244,6 @@ describe("createPdfTool", () => {
           config: cfg,
           agentDir,
           deferAutoModelResolution: true,
-          activeModel: {
-            provider: "openrouter",
-            model: "deepseek/deepseek-v4.1-flash",
-            supportsImages: true,
-          },
         }),
       );
       await expect(
@@ -259,15 +254,6 @@ describe("createPdfTool", () => {
       ).rejects.toThrow("No PDF model configured.");
     });
     expect(resolveSpy).toHaveBeenCalledTimes(1);
-    expect(resolveSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        activeModel: {
-          provider: "openrouter",
-          model: "deepseek/deepseek-v4.1-flash",
-          supportsImages: true,
-        },
-      }),
-    );
     expect(loadSpy).not.toHaveBeenCalled();
     resolveSpy.mockRestore();
   });

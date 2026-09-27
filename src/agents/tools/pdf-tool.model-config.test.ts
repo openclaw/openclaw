@@ -2,6 +2,9 @@
 // for PDF understanding tools.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { finalizePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
 
 const PINNED_ANTHROPIC_PDF_MODEL = "anthropic/claude-opus-5";
@@ -137,6 +140,49 @@ describe("resolvePdfModelConfigForTool", () => {
         },
       }),
     ).toEqual({ primary: "openrouter/deepseek/deepseek-v4.1-flash" });
+  });
+
+  it("does not select an active provider that disables PDF image extraction", () => {
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          restricted: {
+            baseUrl: "https://example.com/v1",
+            apiKey: "test-only-key", // pragma: allowlist secret
+            models: [],
+          },
+        },
+      },
+    };
+    const snapshot = finalizePluginMetadataSnapshot(
+      createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "restricted",
+            contracts: { mediaUnderstandingProviders: ["restricted"] },
+            mediaUnderstandingProviderMetadata: {
+              restricted: {
+                capabilities: ["image"],
+                documentModels: { pdf: { image: false } },
+              },
+            },
+          },
+        ],
+      }),
+    );
+    withPluginMetadataSnapshotScope(
+      snapshot,
+      () => {
+        expect(
+          resolvePdfModelConfigForTool({
+            cfg,
+            agentDir: TEST_AGENT_DIR,
+            activeModel: { provider: "restricted", model: "vision", supportsImages: true },
+          }),
+        ).toBeNull();
+      },
+      { config: cfg, trustConfigIdentity: true },
+    );
   });
 
   it("keeps an existing native PDF candidate ahead of the admitted active model", () => {

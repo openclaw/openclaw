@@ -239,6 +239,13 @@ export function resolvePdfModelConfigForTool(params: {
     params.activeModel?.supportsImages === true &&
     activeProvider &&
     activeModel &&
+    resolveDocumentMediaModel({
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
+      providerId: activeProvider,
+      document: "pdf",
+      mode: "image",
+    }) !== false &&
     hasProviderAuthForTool({
       provider: activeProvider,
       cfg: params.cfg,
