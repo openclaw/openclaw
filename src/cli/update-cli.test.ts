@@ -91,7 +91,10 @@ import {
   packageTargetStatus,
 } from "./update-cli/update-cli-package.test-support.js";
 import { registerAlreadyCurrentAdmissionTests } from "./update-cli/update-command-current-admission.test-support.js";
-import { registerUpdatePreflightTests } from "./update-cli/update-command-preflight.test-support.js";
+import {
+  expectPackageSchemaPreflight,
+  registerUpdatePreflightTests,
+} from "./update-cli/update-command-preflight.test-support.js";
 import * as runtimeRecovery from "./update-cli/update-command-runtime-recovery.test-support.js";
 import { createGlobalUserServiceCommand } from "./update-cli/update-command-service-state.test-support.js";
 import { isLegacyUpdateDoctorCommand } from "./update-cli/update-command-transport.test-support.js";
@@ -5535,16 +5538,10 @@ describe("update-cli", () => {
 
     await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
 
-    expect(databasePreflightMocks.preflightOpenClawDatabaseSchemas).toHaveBeenCalledWith({
-      // The inspection snapshot retains the scoped marker after the updater
-      // restores process.env on refusal.
-      env: { ...process.env, OPENCLAW_UPDATE_IN_PROGRESS: "1" },
-      supportedVersions: { state: 3, agent: 9 },
-      configuredAgentDatabaseTargets: [],
-      configuredAgentDatabaseCandidatePaths: [
-        path.join(profileStateDir(), "agents", "main", "agent", "openclaw-agent.sqlite"),
-      ],
-    });
+    expectPackageSchemaPreflight(
+      databasePreflightMocks.preflightOpenClawDatabaseSchemas,
+      profileStateDir(),
+    );
     expect(serviceStop).not.toHaveBeenCalled();
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();
     expect(listUpdateRuns({ limit: 1 })[0]?.origin.nextAction).toContain(
@@ -5990,7 +5987,7 @@ describe("update-cli", () => {
 
     const logs = getLogOutput();
     expect(logs).toContain(
-      "could not inspect state database /tmp/openclaw/state/openclaw.sqlite: database busy; retry once the gateway releases it",
+      "could not inspect state database /tmp/openclaw/state/openclaw.sqlite: database busy; check database access and free disk space, then retry the update",
     );
   });
 

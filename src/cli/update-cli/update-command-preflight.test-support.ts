@@ -1,7 +1,26 @@
 import fsSync from "node:fs";
+import path from "node:path";
 import { expect, it, vi, type Mock } from "vitest";
 import type { RetainUpdateRuntime } from "../../infra/update-retained-runtime.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
+
+export function expectPackageSchemaPreflight(
+  preflight: Mock<
+    typeof import("../../state/openclaw-database-preflight.js").preflightOpenClawDatabaseSchemas
+  >,
+  stateDir: string,
+) {
+  expect(preflight).toHaveBeenCalledWith({
+    // The updater restores process.env on refusal; inspection retains its scoped marker.
+    env: { ...process.env, OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+    supportedVersions: { state: 3, agent: 9 },
+    preserveSourceArtifacts: false,
+    configuredAgentDatabaseTargets: [],
+    configuredAgentDatabaseCandidatePaths: [
+      path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
+    ],
+  });
+}
 
 type UpdatePreflightFixture = {
   mockPackageInstallAtCaseDir: () => Promise<string>;
