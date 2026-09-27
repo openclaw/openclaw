@@ -1718,12 +1718,21 @@ async function prepareCliRunContextWithinReadFence(
         sessionId: candidateClaudeCliSessionId,
         workspaceDir: cwd,
       }));
-    const claudeCliInvalidatedReason: "missing-transcript" | "orphaned-tool-use" | undefined =
+    const claudeCliInvalidatedReason:
+      | "missing-transcript"
+      | "orphaned-tool-use"
+      | "system-prompt"
+      | undefined =
       claudeCliTranscriptMissing && !hasManagedClaudeLiveSession
         ? "missing-transcript"
-        : claudeCliTranscriptOrphanedToolUse
-          ? "orphaned-tool-use"
-          : undefined;
+        : // A pinned live child fixes its prompt and tool bytes at initialization,
+          // so content drift can never reuse that process; reset now rather than
+          // failing the turn at the process fingerprint guard.
+          hasManagedClaudeLiveSession && backendReusableCliSession.mode === "reuse-with-drift"
+          ? "system-prompt"
+          : claudeCliTranscriptOrphanedToolUse
+            ? "orphaned-tool-use"
+            : undefined;
     const reusableCliSession: CliReusableSession = claudeCliInvalidatedReason
       ? { mode: "invalidate", invalidatedReason: claudeCliInvalidatedReason }
       : backendReusableCliSession;
