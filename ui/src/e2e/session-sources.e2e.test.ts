@@ -184,7 +184,7 @@ suite.define(() => {
 
       for (const source of ["Claude", "Codex", "OpenCode", "Pi"]) {
         await search.fill(`${source} sessions`);
-        await sidebar.getByRole("menuitem", { name: /Session sources/ }).click();
+        await sidebar.getByRole("link", { name: /Session sources/ }).click();
         await expect.poll(() => new URL(page.url()).hash).toBe("#settings-session-sources");
       }
     });
