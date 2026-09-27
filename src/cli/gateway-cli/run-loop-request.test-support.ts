@@ -21,7 +21,6 @@ export function registerGatewayRequestTests({
   createGatewayActiveWorkSnapshot,
   abortActiveCronTaskRuns,
   acquireGatewayLock,
-  reloadTaskRuntimeStateFromStore,
   runLoopWithStart,
   waitForGatewayActiveWork,
   restartGatewayProcessWithFreshPid,
@@ -323,7 +322,6 @@ export function registerGatewayRequestTests({
 
   it.each([
     { phase: "lock", pendingStop: false },
-    { phase: "restart-cleanup", pendingStop: false },
     { phase: "lock", pendingStop: true },
     { phase: "beginBoot", pendingStop: true },
   ] as const)(
@@ -360,11 +358,6 @@ export function registerGatewayRequestTests({
             reached.resolve();
             await resume.promise;
             return { release: vi.fn(async () => {}) };
-          });
-        } else if (phase === "restart-cleanup") {
-          reloadTaskRuntimeStateFromStore.mockImplementationOnce(async () => {
-            reached.resolve();
-            await resume.promise;
           });
         }
         const failures: unknown[] = [];

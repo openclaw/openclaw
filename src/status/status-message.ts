@@ -122,7 +122,6 @@ type StatusArgs = {
   queue?: QueueStatus;
   mediaDecisions?: ReadonlyArray<MediaUnderstandingDecision>;
   subagentsLine?: string;
-  taskLine?: string;
   pluginHealthLine?: string;
   channelFeatureLine?: string;
   includeTranscriptUsage?: boolean;
@@ -1011,7 +1010,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
       mediaLine,
       args.usageLine,
     ],
-    [`🧵 Session: ${sessionValue}`, args.subagentsLine, args.taskLine],
+    [`🧵 Session: ${sessionValue}`, args.subagentsLine],
     [
       `⚙️ Execution: ${execution.label}`,
       `🤖 Runtime: ${agentRuntimeLabel}`,
@@ -1090,7 +1089,6 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
       ...contextBlock(mediaLine),
       ...contextBlock(args.usageLine),
       ...contextBlock(args.subagentsLine),
-      ...contextBlock(args.taskLine),
       ...contextBlock(args.pluginHealthLine),
       ...contextBlock(pluginStatusLine ? `🧩 ${pluginStatusLine}` : null),
       ...contextBlock(voiceLine),

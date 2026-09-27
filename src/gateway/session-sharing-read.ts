@@ -204,22 +204,6 @@ export function prepareProjectedSessionSharing(params: {
   });
 }
 
-/** Deleted metadata cannot establish a profile's child-session entitlement. */
-export function canReadSessionWithoutSharingMetadata(params: {
-  cfg: OpenClawConfig;
-  client: GatewayClient | null;
-  sessionKey: string;
-}): boolean {
-  const sharing = prepareProjectedSessionSharing({ ...params, isMember: () => false });
-  // Match the existing missing-row event policy: no creator and draft visibility.
-  return (
-    sharing.entryFilter?.(params.sessionKey, {
-      visibility: "draft",
-      incognito: isIncognitoSessionKey(params.sessionKey) ? true : undefined,
-    }) ?? true
-  );
-}
-
 export function createSessionListEntryFilter(
   params: Pick<SessionSharingRoleParams, "cfg" | "client">,
   isCreator?: ReturnType<typeof prepareSessionCreatorProfile>,

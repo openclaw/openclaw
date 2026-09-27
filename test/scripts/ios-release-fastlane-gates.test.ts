@@ -1013,11 +1013,13 @@ require "shellwords"
 module UI
   def self.important(*); end
   def self.message(*); end
+  def self.user_error!(message); raise message; end
 end
 SNAPSHOT_STATUS_BAR_ARGUMENTS = "fixture"
 APP_STORE_APP_IDENTIFIER = "fixture.app"
 ${screenshotArguments}
 ${[
+  "bundle_identifier_for_product",
   "archive_snapshot_test_result!",
   "write_release_ios_screenshot_attempts!",
   "record_release_ios_screenshot_attempt!",
@@ -1032,11 +1034,17 @@ end
 def repo_root
   "/fixture"
 end
+module Open3
+  def self.capture3(command, *args)
+    raise "unexpected external command: #{command}" unless command == "/usr/libexec/PlistBuddy"
+    [File.read(args.last), "", Struct.new(:success?).new(true)]
+  end
+end
 def sh(*arguments, **options)
   command = arguments.last
-  return JSON.generate({ APP_STORE_APP_IDENTIFIER => {} }) if command.include?("simctl listapps")
+  return JSON.generate({ APP_STORE_APP_IDENTIFIER => {}, "fixture.capture.debug" => {} }) if command.include?("simctl listapps")
   if arguments[0, 3] == ["xcrun", "simctl", "uninstall"]
-    @uninstalls += 1
+    @uninstalls << arguments.drop(3)
     return
   end
   @calls += 1
@@ -1060,7 +1068,10 @@ def verify_snapshot_test_result!(*)
 end
 rows = %w[capture result success].map do |scenario|
   Dir.mktmpdir("openclaw-capture-") do |root|
-    @scenario, @calls, @checks, @uninstalls = scenario, 0, 0, 0
+    @scenario, @calls, @checks, @uninstalls = scenario, 0, 0, []
+    app = File.join(root, "Build", "Products", "Debug-iphonesimulator", "OpenClaw.app")
+    FileUtils.mkdir_p(app)
+    File.write(File.join(app, "Info.plist"), "fixture.capture.debug")
     @result_path = File.join(root, "current.xcresult")
     archive = File.join(root, "archive")
     logs = File.join(root, "logs")
@@ -1099,7 +1110,7 @@ puts JSON.generate(rows)
       scenario: string;
       calls: number;
       checks: number;
-      uninstalls: number;
+      uninstalls: string[][];
       error: string | null;
       xcodeArguments: string[];
       attempts: { attempt: number; captureOutcome: string }[];
@@ -1120,7 +1131,7 @@ puts JSON.generate(rows)
         "-collect-test-diagnostics",
         "never",
       ]);
-      expect(row.uninstalls).toBe(1);
+      expect(row.uninstalls).toEqual([["fixture-udid", "fixture.capture.debug"]]);
       expect(row.attempts).toEqual([
         expect.objectContaining({
           attempt: 1,

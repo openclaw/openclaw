@@ -73,7 +73,7 @@ export async function readSessionHistoryRequest(
   if (request.kind === "transcript-binding") {
     return {
       kind: "transcript-binding",
-      binding: options.readers.readTranscriptBinding(request.params.run),
+      binding: options.readers.readTranscriptBinding(),
     };
   }
   if (request.kind === "message-by-id") {

@@ -81,7 +81,7 @@ const resolveSharedSecretHttpOperatorScopesMock = vi.fn();
 const resolveOpenAiCompatibleHttpSenderIsOwnerMock = vi.fn();
 const loadSessionEntryMock = vi.fn();
 const readSessionMessagesMock = vi.fn();
-const getRuntimeConfigMock = vi.fn(() => ({}));
+const getRuntimeConfigMock = vi.hoisted(() => vi.fn(() => ({})));
 const resolvePlaybackMetadataForSourceMock = vi.fn<PlaybackMetadataForSourceResolver>();
 const resolvePlaybackTranscodeMock = vi.fn(async (): Promise<PlaybackTranscodeResolution> => ({
   kind: "passthrough",

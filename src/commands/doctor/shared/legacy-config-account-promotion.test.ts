@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { widenOfficialExternalChannelSecretSchema } from "../../../config/official-external-channel-secret-schema.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { waitForPluginCacheRetirement } from "../../../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../../../plugins/plugin-metadata-lifecycle.js";
 import { resetPluginRuntimeStateForTest } from "../../../plugins/runtime.js";
 import { validateJsonSchemaValue } from "../../../plugins/schema-validator.js";
@@ -18,6 +19,8 @@ let state: OpenClawTestState | undefined;
 afterEach(async () => {
   clearPluginMetadataLifecycleCaches();
   resetPluginRuntimeStateForTest();
+  const { failures } = await waitForPluginCacheRetirement();
+  expect(failures).toEqual([]);
   vi.unstubAllEnvs();
   await state?.cleanup();
   state = undefined;

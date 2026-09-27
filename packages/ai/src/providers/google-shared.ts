@@ -11,7 +11,7 @@ import { clampThinkingLevel } from "../model-utils.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 import { googleFlashSupportsMinimalThinking } from "../transports/google-thinking-level.js";
 import {
-  assignTransportErrorDetails,
+  failTransportStream,
   notifyProviderStreamOpened,
   transportAbortError,
 } from "../transports/transport-stream-shared.js";
@@ -132,13 +132,7 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
       }
     }
     const failure = options?.signal?.aborted ? transportAbortError(options.signal) : error;
-    assignTransportErrorDetails(output, failure, options?.signal);
-    stream.push({
-      type: "error",
-      reason: output.stopReason === "aborted" ? "aborted" : "error",
-      error: output,
-    });
-    stream.end();
+    failTransportStream({ stream, output, error: failure, signal: options?.signal });
   }
 }
 

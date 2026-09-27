@@ -1,16 +1,16 @@
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeIdentifier,
+  readNativeSubagentThreadIds,
+  readThreadParentThreadId,
+  readThreadSpawnSource,
+} from "./native-subagent-assignment.js";
 import type {
   ChildState,
   DirectSpawnEvidence,
   ParentOwner,
   ParentState,
 } from "./native-subagent-monitor-types.js";
-import {
-  normalizeIdentifier,
-  readNativeSubagentThreadIds,
-  readThreadParentThreadId,
-  readThreadSpawnSource,
-} from "./native-subagent-task-ids.js";
 import { isJsonObject, type CodexServerNotification, type JsonObject } from "./protocol.js";
 
 type NotificationRoutingDependencies = {
@@ -25,24 +25,21 @@ type NotificationRoutingDependencies = {
   registerChildThread: (
     state: ParentState,
     childThreadId: string,
-    options?: Pick<DirectSpawnEvidence, "agentPath" | "nativeParentThreadId"> & {
-      onRegistered?: () => void;
-    },
-  ) => Promise<ChildState | undefined>;
+    options?: Pick<DirectSpawnEvidence, "agentPath" | "nativeParentThreadId">,
+  ) => ChildState | undefined;
   registerDirectSpawnChild: (
     state: ParentState,
     turnId: string | undefined,
     evidence: DirectSpawnEvidence,
     owner: ParentOwner | undefined,
-    onRegistered?: () => void,
-  ) => Promise<ChildState | undefined>;
+  ) => ChildState | undefined;
   observeParentInteraction: (
     state: ParentState,
     owner: ParentOwner | undefined,
     childThreadId: string,
     agentPath: string | undefined,
     interaction: { parentTurnId?: string; itemId?: string; modelOwner?: ParentOwner },
-  ) => Promise<void>;
+  ) => void;
   acceptInteraction: (
     state: ParentState,
     turnId: string | undefined,
@@ -50,16 +47,13 @@ type NotificationRoutingDependencies = {
     childThreadId: string,
     accept: (owner: ParentOwner) => void,
   ) => boolean;
-  observeCall: (state: ParentState, turnId: string | undefined, item: JsonObject) => Promise<void>;
+  observeCall: (state: ParentState, turnId: string | undefined, item: JsonObject) => void;
 };
 
 export function createCodexNativeSubagentNotificationRouter(
   deps: NotificationRoutingDependencies,
-): (
-  notification: CodexServerNotification,
-  queueAdmission: (state: ParentState, childThreadId: string) => void,
-) => Promise<ParentState | undefined> {
-  return async (notification, queueAdmission) => {
+): (notification: CodexServerNotification) => ParentState | undefined {
+  return (notification) => {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
     if (!params) {
       return undefined;
@@ -74,11 +68,10 @@ export function createCodexNativeSubagentNotificationRouter(
         return undefined;
       }
       if (state && childThreadId && parentThreadId) {
-        return (await deps.registerChildThread(state, childThreadId, {
+        return deps.registerChildThread(state, childThreadId, {
           ...(agentPath === undefined ? {} : { agentPath }),
           nativeParentThreadId: parentThreadId,
-          onRegistered: () => queueAdmission(state, childThreadId),
-        }))
+        })
           ? state
           : undefined;
       }
@@ -115,9 +108,8 @@ export function createCodexNativeSubagentNotificationRouter(
           ) {
             const childThreadId = readString(item, "agentThreadId");
             if (childThreadId) {
-              let preparation: Promise<void> | undefined;
-              const accept = (admittedOwner: ParentOwner | undefined) => {
-                preparation = deps.observeParentInteraction(
+              const accept = (admittedOwner: ParentOwner | undefined) =>
+                deps.observeParentInteraction(
                   state,
                   owner,
                   childThreadId,
@@ -128,7 +120,6 @@ export function createCodexNativeSubagentNotificationRouter(
                     modelOwner: admittedOwner,
                   },
                 );
-              };
               if (
                 !deps.acceptInteraction(
                   state,
@@ -140,7 +131,6 @@ export function createCodexNativeSubagentNotificationRouter(
               ) {
                 accept(owner);
               }
-              await preparation;
             }
             return state;
           }
@@ -149,7 +139,7 @@ export function createCodexNativeSubagentNotificationRouter(
             readString(item, "tool") === "sendInput" &&
             readString(item, "status") === "completed"
           ) {
-            await deps.observeCall(state, turnId, item!);
+            deps.observeCall(state, turnId, item!);
             return undefined;
           }
         }
@@ -163,7 +153,7 @@ export function createCodexNativeSubagentNotificationRouter(
           const childThreadId = readString(item, "agentThreadId")?.trim();
           const agentPath = readString(item, "agentPath");
           if (childThreadId) {
-            await deps.registerDirectSpawnChild(
+            deps.registerDirectSpawnChild(
               state,
               turnId,
               {
@@ -173,7 +163,6 @@ export function createCodexNativeSubagentNotificationRouter(
                 ...(agentPath === undefined ? {} : { agentPath }),
               },
               owner,
-              () => queueAdmission(state, childThreadId),
             );
           }
           return state;
@@ -196,24 +185,25 @@ export function createCodexNativeSubagentNotificationRouter(
         // observational status metadata. Only receiverThreadIds is authoritative
         // direct-spawn evidence and may mint retained child authority.
         const childThreadIds = new Set(readNativeSubagentThreadIds(item?.receiverThreadIds));
-        const pending = [...childThreadIds].map((childThreadId) =>
-          isCompletedSpawnAgentTool
-            ? deps.registerDirectSpawnChild(
-                state,
-                turnId,
-                {
-                  parentThreadId: state.parentThreadId,
-                  nativeParentThreadId: parentThreadId,
-                  childThreadId,
-                },
-                owner,
-                () => queueAdmission(state, childThreadId),
-              )
-            : deps.registerChildThread(state, childThreadId, {
-                onRegistered: () => queueAdmission(state, childThreadId),
-              }),
-        );
-        if (!(await Promise.all(pending)).every(Boolean)) {
+        let accepted = true;
+        for (const childThreadId of childThreadIds) {
+          accepted =
+            Boolean(
+              isCompletedSpawnAgentTool
+                ? deps.registerDirectSpawnChild(
+                    state,
+                    turnId,
+                    {
+                      parentThreadId: state.parentThreadId,
+                      nativeParentThreadId: parentThreadId,
+                      childThreadId,
+                    },
+                    owner,
+                  )
+                : deps.registerChildThread(state, childThreadId),
+            ) && accepted;
+        }
+        if (!accepted) {
           return undefined;
         }
       }

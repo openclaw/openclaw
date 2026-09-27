@@ -14,8 +14,7 @@ sidebarTitle: "ACP agents"
 [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) sessions let
 OpenClaw run external coding harnesses (Claude Code, Cursor, Copilot, Droid,
 OpenClaw ACP, OpenCode, Gemini CLI, and other supported acpx harnesses)
-through an ACP backend plugin. Each spawn is tracked as a
-[background task](/automation/tasks).
+through an ACP backend plugin. The ACP runtime owns each session and its cancellation.
 
 <Note>
 **ACP is the external-harness path, not the default Codex path.** The native

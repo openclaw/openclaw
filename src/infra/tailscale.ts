@@ -13,6 +13,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { runExec } from "../process/exec.js";
 import { signalProcessTree } from "../process/kill-tree.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { extractTailscaleServeGatewayUrls } from "../shared/tailscale-status.js";
 import { isVitestRuntimeEnv } from "./env.js";
 import { toErrorObject } from "./errors.js";
@@ -238,10 +239,7 @@ async function startTailscaleRouteOwner(
   let active = false;
   let stopping = false;
   let failure: Error | undefined;
-  let resolveExit!: () => void;
-  const exited = new Promise<void>((resolve) => {
-    resolveExit = resolve;
-  });
+  const { promise: exited, resolve: resolveExit } = createDeferredCore();
 
   const startup = new Promise<void>((resolve, reject) => {
     const settle = (error?: Error) => {

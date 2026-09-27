@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { shouldIncludeAgentHarnessRuntimeContext } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   buildWatchedSessionsHarnessContext,
   embeddedAgentLog,
@@ -22,7 +23,6 @@ import {
   isNonEmptyString,
   normalizeCodexContextFilePath,
   normalizeCodexDynamicToolName,
-  shouldInjectCodexOpenClawPromptContext,
   type CodexBootstrapFile,
   type CodexWorkspaceBootstrapContext,
 } from "./attempt-workspace-context.js";
@@ -348,7 +348,7 @@ export function buildCodexOpenClawPromptContext(params: {
   workspacePromptContext?: string;
   watchedSessionsContext?: string;
 }): string | undefined {
-  if (!shouldInjectCodexOpenClawPromptContext(params.params)) {
+  if (!shouldIncludeAgentHarnessRuntimeContext(params.params)) {
     return undefined;
   }
   const sections = [
@@ -380,7 +380,7 @@ export function buildCodexWatchedSessionsContext(params: {
   sessionKey?: string;
   sandboxed?: boolean;
 }): string | undefined {
-  if (!shouldInjectCodexOpenClawPromptContext(params.attempt)) {
+  if (!shouldIncludeAgentHarnessRuntimeContext(params.attempt)) {
     return undefined;
   }
   return buildWatchedSessionsHarnessContext({
@@ -397,7 +397,7 @@ export function renderCodexSkillsInstructions(params: {
   attempt: EmbeddedRunAttemptParams;
   skillsPrompt?: string;
 }): string | undefined {
-  if (!shouldInjectCodexOpenClawPromptContext(params.attempt)) {
+  if (!shouldIncludeAgentHarnessRuntimeContext(params.attempt)) {
     return undefined;
   }
   return params.skillsPrompt?.trim()

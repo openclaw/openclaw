@@ -1,4 +1,4 @@
-import type { AgentHarnessCompletionCustody } from "openclaw/plugin-sdk/agent-harness-task-runtime";
+import type { AgentHarnessCompletionCustody } from "openclaw/plugin-sdk/agent-harness-completion";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readNativeTurnEnd } from "./native-subagent-history-recovery.js";
 import { assertNativeModelInputCompatible } from "./native-subagent-model-input.js";
@@ -14,7 +14,6 @@ import type {
   NativeModelSourceRequest,
   ParentOwner,
   ParentState,
-  PreparedNativeReceiver,
 } from "./native-subagent-monitor-types.js";
 import type { CodexNativeSubagentSubmission } from "./native-subagent-submission.js";
 import type { JsonObject } from "./protocol.js";
@@ -26,9 +25,7 @@ type Predecessor =
 export type NativeSubagentSubmissionCall = {
   parentTurnId: string;
   callId: string;
-  targets: Array<{ childThreadId: string; predecessor?: Predecessor }>;
-  preparing?: true;
-  preparation?: Promise<void>;
+  targets: Array<{ childThreadId: string; predecessor: Predecessor }>;
   owner?: ParentOwner;
   submissionId?: string;
   closed?: true;
@@ -45,11 +42,7 @@ export type NativeSubmissionCallDependencies = {
   knownChildren: ReadonlyMap<string, KnownChild>;
   currentChild: (threadId: string) => ChildState | undefined;
   currentModelExecution: (threadId: string) => ParentOwner | undefined;
-  prepareReceiver: (
-    state: ParentState,
-    threadId: string,
-    assertCurrent?: () => void,
-  ) => Promise<PreparedNativeReceiver | undefined>;
+  prepareReceiver: (state: ParentState, threadId: string) => boolean;
 };
 type SubmissionCalls = Map<ParentState, Map<string, NativeSubagentSubmissionCall>>;
 
@@ -100,7 +93,6 @@ export function admitSubmissionModelInput(params: {
     calls,
     dependencies,
     isCurrent,
-    true,
   );
   const call = calls.get(state)?.get(key);
   if (
@@ -180,34 +172,26 @@ export function observeSubmissionCall(
   allCalls: Map<ParentState, Map<string, NativeSubagentSubmissionCall>>,
   dependencies: NativeSubmissionCallDependencies,
   isCurrent: () => boolean,
-  receiverPrepared = false,
-): NativeSubagentSubmissionCall | undefined {
+): void {
   const callId = readString(item, "id");
   if (!turnId || !callId || !isCurrent()) {
-    return undefined;
+    return;
   }
   const owner = dependencies.parentOwner(state, turnId);
   if (!owner && ![...state.owners.values()].some((candidate) => !candidate.turnId)) {
-    return undefined;
+    return;
   }
   const calls = allCalls.get(state) ?? new Map<string, NativeSubagentSubmissionCall>();
   const key = `${turnId}\0${callId}`;
   if (calls.has(key) || (!owner && calls.size >= 32)) {
-    return undefined;
+    return;
   }
   const receivers = Array.isArray(item.receiverThreadIds) ? item.receiverThreadIds : [];
-  const unresolved: string[] = [];
   const targets = receivers.flatMap((id) => {
     if (typeof id !== "string") {
       return [];
     }
-    if (dependencies.knownChildren.get(id)?.parent !== state) {
-      if (receiverPrepared) {
-        return [];
-      }
-      unresolved.push(id);
-      return [{ childThreadId: id }];
-    }
+    dependencies.prepareReceiver(state, id);
     const predecessor = captureSubmissionPredecessor({
       state,
       known: dependencies.knownChildren.get(id),
@@ -218,9 +202,9 @@ export function observeSubmissionCall(
   const receiver = receivers.length === 1 ? receivers[0] : undefined;
   const source = typeof receiver === "string" ? retainNativeModelSource(owner) : undefined;
   if (!targets.length && !source) {
-    return undefined;
+    return;
   }
-  const call: NativeSubagentSubmissionCall = {
+  calls.set(key, {
     parentTurnId: turnId,
     callId,
     targets,
@@ -228,32 +212,8 @@ export function observeSubmissionCall(
     ...(source && typeof receiver === "string"
       ? { modelInput: { threadId: receiver, source } }
       : {}),
-  };
-  calls.set(key, call);
+  });
   allCalls.set(state, calls);
-  if (unresolved.length) {
-    call.preparing = true;
-    call.preparation = Promise.all(
-      unresolved.map(async (id) => {
-        const prepared = await dependencies.prepareReceiver(state, id);
-        if (!prepared?.isCurrent() || !isCurrent() || allCalls.get(state)?.get(key) !== call) {
-          return;
-        }
-        const predecessor = captureSubmissionPredecessor({
-          state,
-          known: prepared.known,
-          child: dependencies.currentChild(id),
-        });
-        const target = call.targets.find((candidate) => candidate.childThreadId === id);
-        if (target && predecessor) {
-          target.predecessor = predecessor;
-        }
-      }),
-    ).then(() => {
-      call.targets = call.targets.filter((target) => target.predecessor !== undefined);
-    });
-  }
-  return call;
 }
 
 export function assertSubmissionModelInputsCurrent(
@@ -317,11 +277,10 @@ export function hasSubmissionCallCustody(
 ): boolean {
   return Boolean(
     call.accepted &&
-    (call.preparing ||
-      call.targets.some(
-        ({ childThreadId }) =>
-          state.owners.size > 0 || hasObservationBacking?.(state.parentThreadId, childThreadId),
-      )),
+    call.targets.some(
+      ({ childThreadId }) =>
+        state.owners.size > 0 || hasObservationBacking?.(state.parentThreadId, childThreadId),
+    ),
   );
 }
 
@@ -371,7 +330,7 @@ export function observeSubmissionPredecessor(params: {
     return;
   }
   call.targets = call.targets.filter(({ childThreadId, predecessor }) => {
-    if (childThreadId !== threadId || !predecessor || !("child" in predecessor)) {
+    if (childThreadId !== threadId || !("child" in predecessor)) {
       return true;
     }
     const child = predecessor.child;
@@ -434,7 +393,7 @@ export function pruneSubmissionCalls(
   const hasUnboundOwner = [...state.owners.values()].some((owner) => !owner.turnId);
   for (const [key, call] of calls ?? []) {
     if (hasSubmissionCallCustody(state, call, dependencies.hasObservationBacking)) {
-      if (!call.preparing && (!call.owner || ![...state.owners.values()].includes(call.owner))) {
+      if (!call.owner || ![...state.owners.values()].includes(call.owner)) {
         call.owner = undefined;
       }
       continue;
@@ -496,7 +455,7 @@ export function acceptNativeSubmission(
     observeKnownChild: (threadId: string) => void;
   },
 ): void {
-  const owner = call.accepted ? call.owner : dependencies.parentOwner(state, call.parentTurnId);
+  const owner = dependencies.parentOwner(state, call.parentTurnId);
   if (
     call.closed ||
     !owner ||
@@ -504,18 +463,6 @@ export function acceptNativeSubmission(
     !call.submissionId ||
     !dependencies.isCurrent(state)
   ) {
-    return;
-  }
-  if (call.preparing) {
-    call.accepted = true;
-    call.owner = owner;
-    call.completionCustody ??= owner.completionCustody?.retain();
-    if (!call.modelInput && call.targets.length === 1) {
-      const source = retainNativeModelSource(owner);
-      if (source) {
-        call.modelInput = { threadId: call.targets[0]!.childThreadId, source };
-      }
-    }
     return;
   }
   call.closed = true;
@@ -529,9 +476,6 @@ export function acceptNativeSubmission(
     call.targets = [];
     for (const target of targets) {
       const { childThreadId, predecessor } = target;
-      if (!predecessor) {
-        continue;
-      }
       const modelOwner = modelSource?.owner ?? owner;
       if (modelOwner.modelSource && ("child" in predecessor || predecessor.terminal)) {
         dependencies.acceptContinuation(

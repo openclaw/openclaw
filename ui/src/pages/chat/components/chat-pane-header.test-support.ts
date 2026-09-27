@@ -46,7 +46,6 @@ export function mountChatPaneHeader(
     panelLayoutActions: nothing,
     discussionAction: nothing,
     diffAction: nothing,
-    backgroundTasksAction: nothing,
     workspaceAction: nothing,
     sessionRailAction: nothing,
     sessionMenuAction: nothing,
