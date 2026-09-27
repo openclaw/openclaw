@@ -6,6 +6,7 @@ import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type { WorkerExecutionMode } from "../../plugins/types.js";
 import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { workerBootstrapOperationTimeoutMs } from "./bootstrap.js";
 import { createWorkerEnvironmentBuildPreparation } from "./build-preparation.js";
@@ -121,10 +122,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     run: () => Promise<T>,
     timeoutMs?: number,
   ): Promise<T> => {
-    let signalStarted!: () => void;
-    const started = new Promise<void>((resolve) => {
-      signalStarted = resolve;
-    });
+    const { promise: started, resolve: signalStarted } = createDeferredCore();
     const operation = trackOperation(
       providerOperations.enqueue(environmentId, async () => {
         signalStarted();

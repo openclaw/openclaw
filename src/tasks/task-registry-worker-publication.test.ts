@@ -9,6 +9,7 @@ import { updateTask } from "./task-registry-mutation.js";
 import { createProjectionTransactionDatabase } from "./task-registry-projection.test-support.js";
 import { publishTaskRecordAfterAtomicStore } from "./task-registry-publication.js";
 import { resetTaskRegistryForTests } from "./task-registry-query.js";
+import { prepareTaskRegistryRead, prepareTaskRegistryReadOwner } from "./task-registry-read.js";
 import { markTaskTerminalById } from "./task-registry-record-api.js";
 import { captureTaskRetentionSelection } from "./task-registry-retention.operation.js";
 import {
@@ -388,6 +389,10 @@ describe("worker publication scope", () => {
     async ({ phase, change }) => {
       const other = { ...task, taskId: "other-task", runId: "other-run" };
       const { store, context, events } = await prepare([task, other]);
+      const retainedRead =
+        phase === "read"
+          ? await prepareTaskRegistryRead(await prepareTaskRegistryReadOwner(context, store))
+          : undefined;
       const receipt = { ...task, task: "Ready" };
       const started = createDeferred();
       const release = createDeferred();
@@ -495,6 +500,21 @@ describe("worker publication scope", () => {
               ? ["upserted:other-task:other-run", "upserted:existing-task:original-run"]
               : ["upserted:existing-task:original-run", "upserted:existing-task:original-run"],
         );
+        if (
+          phase === "read" &&
+          (change === "no-op refresh" || change === "row ABA" || change === "delivery")
+        ) {
+          if (!retainedRead) {
+            throw new Error("Expected a prepared task reader before worker publication");
+          }
+          if (change === "delivery") {
+            expect(() => retainedRead.getTaskById(task.taskId)).toThrow(
+              "Task registry read identity requires preparation",
+            );
+          } else {
+            expect(retainedRead.getTaskById(task.taskId)).toEqual(receipt);
+          }
+        }
       } finally {
         release.resolve();
         await Promise.all([predecessor, pending]);

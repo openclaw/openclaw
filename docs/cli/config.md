@@ -450,6 +450,8 @@ openclaw config patch --file ./discord.patch.json5 --replace-path 'channels.disc
 
 `--dry-run` simulates a change without writing `openclaw.json`. Available on `config set`, `config patch`, and `config unset`. Which checks run depends on the input mode. Value mode (`config set <path> <value>` without `--strict-json`) skips the full schema pass and the ordinary SecretRef resolvability scan. Policy, provider, and model-reference checks can still run. When no checks apply, value mode reports `Dry run successful` even for a value the real write rejects. Use `--strict-json` (or `config patch --file --dry-run`) when you need schema validation.
 
+For `config patch` and `config unset`, `--json` requires `--dry-run`. Using `--json` without `--dry-run` returns the standard [CLI JSON failure envelope](/cli#json-failures) on stdout, keeps diagnostics on stderr, and exits with status 1.
+
 ```bash
 openclaw config set channels.discord.token \
   --ref-provider default \

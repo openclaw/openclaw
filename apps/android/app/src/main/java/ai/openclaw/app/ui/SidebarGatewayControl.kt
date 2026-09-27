@@ -62,6 +62,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.dismiss
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
@@ -196,11 +197,23 @@ private fun GatewayPickerSheet(
       modifier = Modifier.foldAwareSheet(geometry),
       onDismissRequest = onDismiss,
       sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+      sheetGesturesEnabled = false,
       containerColor = palette.background,
       tonalElevation = 0.dp,
       contentColor = palette.text,
       contentWindowInsets = { WindowInsets.safeDrawing },
-      dragHandle = { BottomSheetDefaults.DragHandle(color = palette.muted) },
+      dragHandle = {
+        BottomSheetDefaults.DragHandle(
+          color = palette.muted,
+          modifier =
+            Modifier.semantics {
+              dismiss {
+                onDismiss()
+                true
+              }
+            },
+        )
+      },
     ) {
       CompositionLocalProvider(LocalDensity provides density) {
         // Keep one bounded viewport as search and registry updates change the rows.

@@ -56,6 +56,7 @@ import {
   type ConfigSetDryRunResult,
 } from "./config-set-dryrun.js";
 import type { ConfigSetCurrentExpectation } from "./config-set-input.js";
+import { formatCliJsonFailure } from "./failure-output.js";
 import { exitCliAfterOutput } from "./one-shot-exit.js";
 
 const GATEWAY_AUTH_MODE_PATH: PathSegment[] = ["gateway", "auth", "mode"];
@@ -577,6 +578,7 @@ export function handleConfigMutationError(params: {
   err: unknown;
   runtime: RuntimeEnv;
   options: ConfigMutationOptions;
+  jsonOutput: boolean;
 }) {
   if (params.err instanceof ExitError) {
     throw params.err;
@@ -607,6 +609,9 @@ export function handleConfigMutationError(params: {
     writeRuntimeJson(params.runtime, result);
     params.runtime.error(danger(message));
     exitCliAfterOutput(params.runtime, 1);
+  }
+  if (params.jsonOutput) {
+    writeRuntimeJson(params.runtime, formatCliJsonFailure(message));
   }
   if (isConfigValidationFailedError(params.err)) {
     params.runtime.error("Config change declined. No settings were saved.");

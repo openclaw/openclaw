@@ -3,6 +3,7 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { BrokerChild } from "../process/spawn-broker/child.js";
 import type { SpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { recordChildProcessSpawn } from "../process/spawn-diagnostics.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createSqliteAuthTransferReceiver } from "./sqlite-readonly-auth-transfer.js";
 import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
 import {
@@ -96,11 +97,9 @@ export function createSqliteReadOnlyWorkerSession(
         auth?: ReturnType<typeof createSqliteAuthTransferReceiver>;
       }
     | undefined;
-  let resolveClosed: () => void;
+  const { promise: closeSignal, resolve: resolveClosed } = createDeferredCore();
   // Broker loss retains group cleanup later in the same turn as proxy close.
-  const closed = new Promise<void>((resolve) => {
-    resolveClosed = resolve;
-  }).then(() => {
+  const closed = closeSignal.then(() => {
     if (
       transport.kind === "broker" &&
       child instanceof BrokerChild &&

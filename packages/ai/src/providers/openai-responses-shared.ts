@@ -19,6 +19,7 @@ import {
 } from "../transports/openai-responses-replay-internal.js";
 import { hasOnlyResponsesFunctionTools } from "../transports/openai-responses-stream-errors.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
+import type { ResponsesStreamOptions } from "../transports/openai-responses-stream-types-internal.js";
 import { createOpenAIProviderAcceptanceHook } from "../transports/openai-transport-shared.js";
 import {
   failTransportStream,
@@ -42,17 +43,10 @@ import {
 } from "./openai-request-reasoning.js";
 import { convertResponsesToolPayload } from "./openai-responses-tools.js";
 
-interface OpenAIResponsesStreamOptions {
-  serviceTier?: ResponseCreateParamsStreaming["service_tier"];
-  resolveServiceTier?: (
-    responseServiceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
-    requestServiceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
-  ) => ResponseCreateParamsStreaming["service_tier"] | undefined;
-  applyServiceTierPricing?: (
-    usage: Usage,
-    serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
-  ) => void;
-}
+type OpenAIResponsesStreamOptions = Pick<
+  ResponsesStreamOptions,
+  "serviceTier" | "resolveServiceTier" | "applyServiceTierPricing"
+>;
 
 export { convertResponsesToolPayload };
 
