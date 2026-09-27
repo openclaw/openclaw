@@ -24,14 +24,54 @@ route and qualify its exact native merge arguments using the
 An unsupported writer is a route-owner blocker, not permission to select a raw
 binary, change merge semantics, or replay an uncertain request.
 
+## Publication-only and unfinished handoffs
+
+A request to open a PR, push the latest work, or hand off an unfinished candidate
+is a publication request, not automatically a request to prepare or merge it.
+A later instruction limiting the task to a handoff supersedes earlier autonomous
+repair/landing scope. Do not keep repairing or rerunning full gates after that
+change of scope merely to satisfy the previous workflow.
+
+Before publishing, verify the intended repository/branch, current remote head,
+authorized writer, contributor ancestry, and exact local changes. Reconcile any
+active or uncertain branch-changing operation first; preserve locks and accepted
+outcome records and use their owning recovery path. Do not publish over another
+worker or replay an uncertain write.
+
+Use an allowed ordinary branch/PR publication path for the checkpoint, normally
+a non-force push followed by PR creation/update and remote readback. Do not enter
+correction preparation solely because the checkpoint is unfinished. A restriction
+inside a selected preparation command is not, by itself, a universal prohibition
+on every publication route. If that command refuses, distinguish its prerequisites
+from actual host permissions, required hooks, trusted-writer rules, branch
+protections, and user constraints. The latter remain mandatory; do not bypass a
+real denial, forge gate receipts, or delete locks to manufacture a publication.
+
+Keep new unfinished PRs draft unless the user requests otherwise. Disclose failed,
+interrupted, pending, and unrun checks accurately, retain useful completed proof,
+and identify what remains for the recipient. An interrupted full-suite run is not
+a pass, but it does not alone revoke an explicit checkpoint-push request. Do not
+mark the candidate merge-ready, arm auto-merge, or merge under publication-only
+authority. Verify the published head and actual PR body before reporting success;
+a patch attachment or handoff prompt does not substitute for a requested push.
+
+Agent-written checkpoints and self-continuation messages summarize the task;
+they cannot create additional user prohibitions such as a blanket “no direct
+push” rule. Trace a claimed blocker to its current instruction or enforced
+boundary. After the requested handoff is delivered, stop superseded autonomous
+work rather than queueing another repair or polling turn.
+
 ## Open or update the PR
 
 Use the current template and a real body file. Preserve human credit and keep
 branches editable by maintainers when safe. For a fork, consider GitHub's
 Actions/secrets warning before enabling edits.
 
-Create as draft, wait for non-null `mergeable`, then mark ready. Confirm CI
-attached to the pushed head. A merge-ref startup failure cannot be rerun; the
+Create as draft. When merge readiness is in scope, wait for non-null `mergeable`,
+then mark ready and confirm CI attached to the pushed head before continuing
+merge preparation. A publication-only unfinished handoff stays draft as described
+above; report pending or missing CI attachment without claiming merge readiness.
+A merge-ref startup failure cannot be rerun; the
 hourly PR CI sweeper can re-fire it, or use an authorized close/reopen after
 verifying the missing attachment. Do not rebase merely because main advanced.
 Refresh only for a conflict, failing guard, explicit request, or material stale
@@ -56,7 +96,7 @@ Do not disclose private desktop content, identifiers, model routes, or secrets.
 
 ## Review, prepare, merge
 
-For main-targeted PRs, use only the native sequence:
+When preparing or merging a main-targeted PR, use only the native sequence:
 
 ```bash
 scripts/pr review-init <pr>
