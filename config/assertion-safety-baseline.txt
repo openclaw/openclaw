@@ -2770,7 +2770,7 @@ src/plugin-sdk/approval-auth-helpers.ts	1
 src/plugin-sdk/approval-handler-runtime.ts	1
 src/plugin-sdk/approval-native-helpers.ts	1
 src/plugin-sdk/approval-reaction-binding.ts	2
-src/plugin-sdk/channel-config-helpers.ts	17
+src/plugin-sdk/channel-config-helpers.ts	15
 src/plugin-sdk/channel-config-ui-hints.ts	1
 src/plugin-sdk/channel-entry-contract.ts	6
 src/plugin-sdk/channel-inbound.ts	2
@@ -2779,7 +2779,6 @@ src/plugin-sdk/channel-outbound.ts	1
 src/plugin-sdk/channel-replay-guard.ts	2
 src/plugin-sdk/core.ts	4
 src/plugin-sdk/dedupe-runtime.ts	1
-src/plugin-sdk/discord.ts	3
 src/plugin-sdk/extension-shared.ts	6
 src/plugin-sdk/facade-activation-check.runtime.ts	2
 src/plugin-sdk/facade-loader.ts	2
@@ -2797,12 +2796,11 @@ src/plugin-sdk/provider-auth-result.ts	3
 src/plugin-sdk/provider-auth-runtime.ts	1
 src/plugin-sdk/provider-auth.ts	1
 src/plugin-sdk/provider-catalog-shared.ts	1
-src/plugin-sdk/provider-enable-config.ts	2
 src/plugin-sdk/provider-entry.ts	3
 src/plugin-sdk/provider-onboard.ts	5
 src/plugin-sdk/provider-stream-shared.ts	14
 src/plugin-sdk/provider-stream.ts	1
-src/plugin-sdk/provider-tools.ts	8
+src/plugin-sdk/provider-tools.ts	5
 src/plugin-sdk/qa-channel-protocol.ts	1
 src/plugin-sdk/qa-channel.ts	15
 src/plugin-sdk/qa-lab.ts	2
@@ -2814,7 +2812,6 @@ src/plugin-sdk/secret-ref-runtime.ts	2
 src/plugin-sdk/session-store-runtime-internal.ts	1
 src/plugin-sdk/session-store-runtime.ts	5
 src/plugin-sdk/session-transcript-runtime.ts	6
-src/plugin-sdk/session-visibility.ts	1
 src/plugin-sdk/setup-credential.ts	1
 src/plugin-sdk/ssrf-policy.ts	1
 src/plugin-sdk/status-helpers.ts	7
@@ -3043,7 +3040,6 @@ src/snapshot/git-backup-codec.ts	7
 src/snapshot/git-backup.ts	2
 src/snapshot/local-repository.ts	6
 src/snapshot/manifest.ts	1
-src/state/agent-deletion-journal.ts	15
 src/state/config-machine-state.ts	1
 src/state/local-onboarding-state.ts	1
 src/state/openclaw-agent-board-schema.ts	1
@@ -3066,7 +3062,6 @@ src/state/openclaw-state-db-schema-additive.ts	1
 src/state/openclaw-state-db-schema-helpers.ts	3
 src/state/openclaw-state-db-schema-repair.ts	2
 src/state/openclaw-state-ownership.ts	1
-src/state/user-profiles-tailscale-avatar.ts	2
 src/state/user-profiles.ts	1
 src/status/summary.runtime.ts	1
 src/system-agent/agent-turn.ts	2
