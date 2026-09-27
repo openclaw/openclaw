@@ -42,7 +42,6 @@ vi.mock("../state/openclaw-state-worker-context.js", () => ({
       assertCurrent() {},
     },
     environment: { OPENCLAW_STATE_DIR: "/synthetic" },
-    coordinatorRuntime: { directory: "/synthetic/coordinators", keepAlive: false },
   }),
 }));
 
@@ -83,7 +82,7 @@ it.each(
       sourceProcess: "fixture",
     };
     initializeDebugProxyCapture("fixture", settings, deps);
-    control.scope = createOpenClawDatabaseMaintenanceScope(() => undefined);
+    control.scope = createOpenClawDatabaseMaintenanceScope();
     vi.spyOn(control.scope, "assertAdmission").mockImplementation(() => {
       if (refuse) {
         throw admissionFailure;

@@ -534,8 +534,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       } else {
         if (row && dirty.has(records.identity(row))) {
           // Keyed reads refresh only their owner; unrelated bulk work never gates a response.
-          const id = records.identity(row);
-          refresh([id]);
+          refresh([records.identity(row)]);
           row = lookup(query);
         }
         row = archive.describe(row);

@@ -142,7 +142,7 @@ it("recovers the exact complete child answer without preventing host event progr
     };
     const latest = await read("latest-run");
     expect(latest.prepared.text).toBe("newest unrelated answer");
-    const hostSql = observeHostDataSql(state.env);
+    const hostSql = observeHostDataSql();
     const old = await read("completed-run").finally(() => hostSql.restore());
     for (const call of hostSql.calls) {
       expect(call).not.toHaveBeenCalled();

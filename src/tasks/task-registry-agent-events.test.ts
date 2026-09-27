@@ -21,7 +21,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { holdStateDatabaseCoordinator as holdCoordinator } from "../test-utils/state-database-contention.js";
+import { holdStateDatabaseWriteTransaction } from "../test-utils/state-database-contention.js";
 import { createTaskFlowForTask, readResidentTaskFlow } from "./task-flow-registry.js";
 import { getTaskFlowRegistryStore } from "./task-flow-registry.store.js";
 import { captureTaskDeliveryWork } from "./task-registry-delivery.test-support.js";
@@ -597,11 +597,7 @@ describe("task agent event persistence", () => {
       });
       const terminal = taskPublication(task.taskId, (current) => current.status === "succeeded");
       const context = captureOpenClawStateWorkerContext();
-      const holder = holdCoordinator(
-        context.admission.databasePath,
-        context.coordinatorRuntime,
-        10_000,
-      );
+      const holder = holdStateDatabaseWriteTransaction(context.admission.databasePath, 10_000);
       try {
         await holder.ready;
         emitAgentEvent({
@@ -677,9 +673,8 @@ describe("task agent event persistence", () => {
           (current) => current.status === (phase === "end" ? "succeeded" : "failed"),
         );
         const context = captureOpenClawStateWorkerContext();
-        const { ready, released, joined, release } = holdCoordinator(
+        const { ready, released, joined, release } = holdStateDatabaseWriteTransaction(
           context.admission.databasePath,
-          context.coordinatorRuntime,
           300,
         );
         try {
@@ -729,11 +724,7 @@ describe("task agent event persistence", () => {
       });
       const terminal = taskPublication(task.taskId, (current) => current.status === "succeeded");
       const context = captureOpenClawStateWorkerContext();
-      const holder = holdCoordinator(
-        context.admission.databasePath,
-        context.coordinatorRuntime,
-        10_000,
-      );
+      const holder = holdStateDatabaseWriteTransaction(context.admission.databasePath, 10_000);
       try {
         await holder.ready;
         emitTool(task.runId!, "accepted");

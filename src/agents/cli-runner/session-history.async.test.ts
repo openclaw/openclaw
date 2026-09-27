@@ -304,7 +304,7 @@ it.each(["main", "worker"] as const)(
         true,
       );
       await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
-      const sql = observeHostDataSql(state.env);
+      const sql = observeHostDataSql();
       try {
         const history = await runWithSessionTranscriptReadFence(admitted, () =>
           loadCliSessionContextEngineMessages({ sessionTarget: target }),

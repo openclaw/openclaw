@@ -1,8 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
-import { captureStateDatabaseCoordinatorRuntime } from "../infra/state-database-coordinator.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -56,7 +56,6 @@ async function withWorker(
           runWithSqliteWorkerStateContext(
             {
               environment: { OPENCLAW_STATE_DIR: state.stateDir },
-              coordinatorRuntime: captureStateDatabaseCoordinatorRuntime(),
             },
             () =>
               executeTaskRegistryCommand(
@@ -119,6 +118,45 @@ it("updates the selected managed flow once and rereads each later command", asyn
       stateJson: flow.stateJson,
       waitJson: flow.waitJson,
     });
+  });
+});
+
+it("returns the managed flow revalidated after a peer commits before task admission", async () => {
+  await withWorker(({ database, execute }) => {
+    upsertTaskFlowRowInDatabase(database.db, bindTaskFlowRecord(flow));
+    using peer = openNodeSqliteDatabase(database.path);
+    const current = { ...flow, revision: flow.revision + 1, goal: "Changed before admission" };
+    const exec = database.db.exec.bind(database.db);
+    let changed = false;
+    const admissionBoundary = vi.spyOn(database.db, "exec").mockImplementation((sql) => {
+      if (sql === "BEGIN IMMEDIATE" && !changed) {
+        expect(database.db.isTransaction).toBe(false);
+        upsertTaskFlowRowInDatabase(peer, bindTaskFlowRecord(current));
+        changed = true;
+      }
+      return exec(sql);
+    });
+    try {
+      expect(
+        execute({
+          type: "flows.runTask",
+          input: {
+            callerOwnerKey: flow.ownerKey,
+            taskId: "current-flow-task",
+            now: 400,
+            params: { flowId: flow.flowId, runtime: "cli", task: "New child task" },
+          },
+        }),
+      ).toMatchObject({
+        found: true,
+        created: true,
+        flow: { revision: current.revision, goal: current.goal },
+      });
+      expect(changed).toBe(true);
+      expect(readTaskFlowRecord(database.db, flow.flowId)).toMatchObject(current);
+    } finally {
+      admissionBoundary.mockRestore();
+    }
   });
 });
 

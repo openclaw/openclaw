@@ -37,11 +37,11 @@ import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { ReplyDispatchRun } from "../get-reply-options.types.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
-import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveAgentTurnAttachments } from "./agent-turn-attachments.js";
 import { tryDispatchAcpReplyCore } from "./dispatch-acp.js";
 import { expectAcpSessionParticipantInput } from "./dispatch-acp.participant.test-support.js";
+import { runDispatch } from "./dispatch-acp.test-support.js";
 import { createAbortAwareDispatcher } from "./dispatch-from-config.abort.js";
 import { expectedNoQueuedReplyResult } from "./dispatch-result-expectations.test-support.js";
 import { resolveRecentInboundHistoryImages } from "./history-media.js";
@@ -56,7 +56,7 @@ import {
 } from "./test-fixtures/acp-runtime.js";
 
 const managerMocks = vi.hoisted(() => ({
-  resolveSession: vi.fn<() => AcpSessionResolution>(),
+  resolveSessionAsync: vi.fn<() => Promise<AcpSessionResolution>>(),
   runTurn: vi.fn(),
   getObservabilitySnapshot: vi.fn(() => ({
     turns: { queueDepth: 0 },
@@ -158,7 +158,8 @@ vi.mock("../../infra/outbound/session-binding-service.js", () => bindingServiceM
 vi.mock("./dispatch-acp-manager.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./dispatch-acp-manager.runtime.js")>()),
   getAcpSessionManager: () => managerMocks,
-  readAcpSessionEntry: sessionMetaMocks.readAcpSessionEntry,
+  readAcpSessionEntryAsync: async (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
+    sessionMetaMocks.readAcpSessionEntry(params),
 }));
 
 vi.mock("../../agents/command/acp-lifecycle.js", async (importOriginal) => {
@@ -319,7 +320,7 @@ function dispatcherCall(
 }
 
 function setReadyAcpResolution() {
-  managerMocks.resolveSession.mockReturnValue({
+  managerMocks.resolveSessionAsync.mockResolvedValue({
     kind: "ready",
     sessionKey,
     agentId: "codex-acp",
@@ -338,78 +339,6 @@ function createAcpConfigWithVisibleToolTags(): OpenClawConfig {
         },
       },
     },
-  });
-}
-
-async function runDispatch(params: {
-  bodyForAgent: string;
-  runId?: string;
-  onAgentRunStart?: Parameters<typeof tryDispatchAcpReplyCore>[0]["onAgentRunStart"];
-  userTurnTranscriptRecorder?: Parameters<
-    typeof tryDispatchAcpReplyCore
-  >[0]["userTurnTranscriptRecorder"];
-  prepareAssistantTranscriptMessage?: Parameters<
-    typeof tryDispatchAcpReplyCore
-  >[0]["prepareAssistantTranscriptMessage"];
-  cfg?: OpenClawConfig;
-  dispatcher?: ReplyDispatcher;
-  shouldRouteToOriginating?: boolean;
-  originatingChannel?: string;
-  originatingTo?: string;
-  onReplyStart?: () => void;
-  images?: Array<{ data: string; mimeType: string }>;
-  abortSignal?: AbortSignal;
-  ctxOverrides?: Record<string, unknown>;
-  sessionKeyOverride?: string;
-  suppressUserDelivery?: boolean;
-  suppressReplyLifecycle?: boolean;
-  sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
-  toolsAllow?: string[];
-  recordProcessed?: (
-    outcome: "completed" | "skipped" | "error",
-    opts?: { reason?: string; error?: string },
-  ) => void;
-  markIdle?: (reason: string) => void;
-  ctx?: FinalizedRuntimeMsgContext;
-}) {
-  const targetSessionKey = params.sessionKeyOverride ?? sessionKey;
-  return tryDispatchAcpReplyCore({
-    ctx:
-      params.ctx ??
-      buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        SessionKey: targetSessionKey,
-        BodyForAgent: params.bodyForAgent,
-        ...params.ctxOverrides,
-      }),
-    cfg: params.cfg ?? createAcpTestConfig(),
-    dispatcher: params.dispatcher ?? createDispatcher().dispatcher,
-    ...(params.runId ? { runId: params.runId } : {}),
-    onAgentRunStart: params.onAgentRunStart,
-    userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
-    prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
-    sessionKey: targetSessionKey,
-    images: params.images,
-    abortSignal: params.abortSignal,
-    inboundAudio: false,
-    suppressUserDelivery: params.suppressUserDelivery,
-    suppressReplyLifecycle: params.suppressReplyLifecycle,
-    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-    shouldRouteToOriginating: params.shouldRouteToOriginating ?? false,
-    ...(params.shouldRouteToOriginating
-      ? {
-          originatingChannel: params.originatingChannel ?? "telegram",
-          originatingTo: params.originatingTo ?? "telegram:thread-1",
-        }
-      : {}),
-    shouldSendToolSummaries: true,
-    shouldSendFullToolDetails: false,
-    bypassForCommand: false,
-    toolsAllow: params.toolsAllow,
-    ...(params.onReplyStart ? { onReplyStart: params.onReplyStart } : {}),
-    recordProcessed: params.recordProcessed ?? vi.fn(),
-    markIdle: params.markIdle ?? vi.fn(),
   });
 }
 
@@ -489,7 +418,7 @@ describe("tryDispatchAcpReplyCore", () => {
     auditMocks.emitAcpLifecycleEnd.mockReset();
     auditMocks.emitAcpLifecycleError.mockReset();
     auditMocks.emitAcpLifecycleError.mockReturnValue({ reason: "failed", status: "error" });
-    managerMocks.resolveSession.mockReset();
+    managerMocks.resolveSessionAsync.mockReset();
     managerMocks.runTurn.mockReset();
     managerMocks.runTurn.mockImplementation(
       async ({ onEvent }: { onEvent?: (event: unknown) => Promise<void> }) => {
@@ -647,7 +576,7 @@ describe("tryDispatchAcpReplyCore", () => {
         receipts.push(receipt);
         return true;
       });
-      managerMocks.resolveSession.mockReturnValue({
+      managerMocks.resolveSessionAsync.mockResolvedValue({
         kind: "ready",
         sessionKey: resolvedSessionKey,
         agentId: "codex-acp",
@@ -2958,7 +2887,7 @@ describe("tryDispatchAcpReplyCore", () => {
   });
 
   it("does not unbind stale bindings when ACP dispatch is disabled by policy", async () => {
-    managerMocks.resolveSession.mockReturnValue({
+    managerMocks.resolveSessionAsync.mockResolvedValue({
       kind: "stale",
       sessionKey,
       agentId: "codex-acp",
@@ -2985,7 +2914,7 @@ describe("tryDispatchAcpReplyCore", () => {
   it("unbinds stale bound conversations before surfacing stale ACP resolution errors", async () => {
     const aliasSessionKey = "main";
     const canonicalSessionKey = "agent:main:main";
-    managerMocks.resolveSession.mockReturnValue({
+    managerMocks.resolveSessionAsync.mockResolvedValue({
       kind: "stale",
       sessionKey: canonicalSessionKey,
       agentId: "main",
@@ -3046,7 +2975,7 @@ describe("tryDispatchAcpReplyCore", () => {
   it("unbinds stale bindings on ACP runTurn missing-metadata failures", async () => {
     const aliasSessionKey = "main";
     const canonicalSessionKey = "agent:main:main";
-    managerMocks.resolveSession.mockReturnValue({
+    managerMocks.resolveSessionAsync.mockResolvedValue({
       kind: "ready",
       sessionKey: canonicalSessionKey,
       agentId: "main",
@@ -3092,7 +3021,7 @@ describe("tryDispatchAcpReplyCore", () => {
   it("uses canonical session keys for bound-session identity notices", async () => {
     const aliasSessionKey = "main";
     const canonicalSessionKey = "agent:main:main";
-    managerMocks.resolveSession.mockReturnValue({
+    managerMocks.resolveSessionAsync.mockResolvedValue({
       kind: "ready",
       sessionKey: canonicalSessionKey,
       agentId: "main",
@@ -3160,7 +3089,7 @@ describe("tryDispatchAcpReplyCore", () => {
 
   it("honors the configured default account when checking bound-session identity notices", async () => {
     const canonicalSessionKey = "agent:main:main";
-    managerMocks.resolveSession.mockReturnValue({
+    managerMocks.resolveSessionAsync.mockResolvedValue({
       kind: "ready",
       sessionKey: canonicalSessionKey,
       agentId: "main",

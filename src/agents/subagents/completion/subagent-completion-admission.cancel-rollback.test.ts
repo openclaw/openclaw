@@ -149,7 +149,7 @@ describe("requester wake cancellation rollback", () => {
       try {
         await driver.run();
         driver.controller.resumeRequesterSettleWake(sibling.subagent.runId, sibling.subagent);
-        const retryAt = driver.controller.getRequesterSettleWakeTimer(
+        const retryAt = driver.controller.scheduledRequesterSettleWakeTimers.get(
           input.subagent.runId,
         )!.deadline;
         expect(driver.wake).toHaveBeenCalledOnce();

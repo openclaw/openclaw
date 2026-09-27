@@ -124,31 +124,12 @@ export function createGrepToolDefinition(
     promptSnippet: "Search file contents for patterns (respects .gitignore)",
     parameters: grepSchema,
     async execute(
-      toolCallId,
-      {
-        pattern,
-        path: searchDir,
-        glob,
-        ignoreCase,
-        literal,
-        context,
-        limit,
-      }: {
-        pattern: string;
-        path?: string;
-        glob?: string;
-        ignoreCase?: boolean;
-        literal?: boolean;
-        context?: number;
-        limit?: number;
-      },
-      signal?: AbortSignal,
-      onUpdate?,
-      ctx?,
+      _toolCallId,
+      { pattern, path: searchDir, glob, ignoreCase, literal, context, limit },
+      signal,
+      _onUpdate,
+      _ctx,
     ) {
-      void toolCallId;
-      void onUpdate;
-      void ctx;
       return new Promise((resolve, reject) => {
         // Keep cancellation live from the first await through async result formatting.
         // Settlement owns listener cleanup; spawned children stop without waiting for close.

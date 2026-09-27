@@ -410,7 +410,7 @@ export async function executeDownloadAction(params: {
   profile?: string;
   proxyRequest: BrowserProxyRequest | null;
   signal?: AbortSignal;
-  onTabActivity?: (targetId: string | undefined) => void;
+  onTabActivity?: (targetId: string | undefined) => void | Promise<void>;
 }): Promise<AgentToolResult<unknown>> {
   const { action, input, baseUrl, profile, proxyRequest } = params;
   const targetId = normalizeOptionalString(input.targetId);
@@ -427,7 +427,9 @@ export async function executeDownloadAction(params: {
           ...options,
           path: readStringParam(input, "path"),
         });
-  params.onTabActivity?.(readStringValue((result as { targetId?: unknown }).targetId) ?? targetId);
+  await params.onTabActivity?.(
+    readStringValue((result as { targetId?: unknown }).targetId) ?? targetId,
+  );
   return formatBrowserExternalToolResult({ kind: "download", payload: result });
 }
 
@@ -439,8 +441,8 @@ export async function executeActAction(params: {
   usesChromeMcp: boolean;
   proxyRequest: BrowserProxyRequest | null;
   signal?: AbortSignal;
-  onTabActivity?: (targetId: string | undefined) => void;
-  onTabClose?: (targetId: string | undefined) => void;
+  onTabActivity?: (targetId: string | undefined) => void | Promise<void>;
+  onTabClose?: (targetId: string | undefined) => void | Promise<void>;
 }): Promise<AgentToolResult<unknown>> {
   const { request, baseUrl, profile, proxyRequest } = params;
   if ("timeoutMs" in request && request.timeoutMs !== undefined) {
@@ -457,7 +459,7 @@ export async function executeActAction(params: {
       effectiveRequest.kind === "close" || aborted?.reason === "closed"
         ? params.onTabClose
         : params.onTabActivity;
-    onTabResult?.(resolvedTargetId);
+    await onTabResult?.(resolvedTargetId);
     const formatted = formatActToolResult(result, aborted);
     if (!actObservedNavigation(result, aborted)) {
       return formatted;
@@ -473,19 +475,21 @@ export async function executeActAction(params: {
       signal: params.signal,
     });
   };
-  const dispatchAndFinishAct = async (actionRequest: BrowserActRequest) => {
+  const dispatchAct = async (actionRequest: BrowserActRequest) => {
     const result = await browserAct(proxyRequest ?? baseUrl, actionRequest, {
       profile,
       signal: params.signal,
     });
-    return await finishActResult(
+    return {
       result,
-      readStringValue((result as { targetId?: unknown }).targetId) ??
+      targetId:
+        readStringValue((result as { targetId?: unknown }).targetId) ??
         readStringValue(actionRequest.targetId),
-    );
+    };
   };
+  let dispatched: Awaited<ReturnType<typeof dispatchAct>>;
   try {
-    return await dispatchAndFinishAct(effectiveRequest);
+    dispatched = await dispatchAct(effectiveRequest);
   } catch (err) {
     const proxyRoute = proxyRequest?.route();
     const usesChromeMcp = proxyRequest
@@ -519,7 +523,8 @@ export async function executeActAction(params: {
         canRetryChromeActAfterSoleTargetRefresh(effectiveRequest) &&
         tabs.length === 1
       ) {
-        return await dispatchAndFinishAct(retryRequest);
+        const retried = await dispatchAct(retryRequest);
+        return await finishActResult(retried.result, retried.targetId);
       }
       if (tabRefreshError) {
         throw new Error(
@@ -546,6 +551,7 @@ export async function executeActAction(params: {
     }
     throw err;
   }
+  return await finishActResult(dispatched.result, dispatched.targetId);
 }
 
 function formatActToolResult(

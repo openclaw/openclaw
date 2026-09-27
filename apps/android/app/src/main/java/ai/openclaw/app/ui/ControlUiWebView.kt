@@ -49,6 +49,7 @@ import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import okio.ByteString.Companion.toByteString
 
 @Composable
 internal fun ControlUiScreenFrame(
@@ -290,12 +291,7 @@ internal fun shouldProceedForPinnedControlUiSslError(
       ?: return false
   val certificate = encodedCertificate ?: return false
   if (!sameHttpsOrigin(pageBaseUrl, errorUrl)) return false
-  return java.security.MessageDigest
-    .getInstance("SHA-256")
-    .digest(certificate)
-    .joinToString(separator = "") { byte ->
-      "%02x".format(java.util.Locale.US, byte.toInt() and 0xff)
-    } == expected
+  return certificate.toByteString().sha256().hex() == expected
 }
 
 private fun sameHttpsOrigin(

@@ -1,4 +1,5 @@
 // Tracks task process state transitions used to reconcile running work.
+import type { DatabaseSync } from "node:sqlite";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentActivityItem } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { TaskSummary } from "../../packages/gateway-protocol/src/schema/tasks.js";
@@ -154,6 +155,7 @@ type TaskRegistryProcessState = {
     epoch: number;
     dirty: boolean;
     mutationDepth: number;
+    nativeMutationDatabase?: DatabaseSync;
     pending: Set<PendingTaskRegistryMutation>;
     readTail?: Promise<void>;
     mutationTail?: Promise<void>;

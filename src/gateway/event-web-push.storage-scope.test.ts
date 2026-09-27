@@ -98,7 +98,6 @@ function mockCapturedContext() {
   const databasePath = `${stateDir}/openclaw.sqlite`;
   const context: OpenClawStateWorkerContext = {
     environment: { OPENCLAW_STATE_DIR: stateDir },
-    coordinatorRuntime: { directory: "/synthetic/webpush-coordinator", keepAlive: false },
     admission: {
       coordinationKey: `path:${databasePath}`,
       databasePath,
@@ -395,7 +394,6 @@ it("canonical close seals retained and new admissions and joins the held binding
   const databasePath = path.join(stateDir, "state.sqlite");
   mocks.captureContext.mockImplementation((): OpenClawStateWorkerContext => ({
     environment: { OPENCLAW_STATE_DIR: stateDir },
-    coordinatorRuntime: { directory: stateDir, keepAlive: false },
     admission: captureOpenClawStateDatabaseReadAdmission(databasePath),
   }));
   const start = vi.fn();

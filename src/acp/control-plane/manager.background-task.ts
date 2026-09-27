@@ -19,6 +19,7 @@ import {
 import { resolveRequiredCompletionTerminalResult } from "../../tasks/task-completion-contract.js";
 import { bindTaskFlowExecution } from "../../tasks/task-flow-registry.store.sqlite.js";
 import { listTasksForRelatedSessionKey } from "../../tasks/task-registry-query.js";
+import { prepareTaskRegistryRead } from "../../tasks/task-registry-read.js";
 import { bindTaskRunExecution } from "../../tasks/task-registry.store.sqlite.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
@@ -118,26 +119,38 @@ export function resolveBackgroundTaskTerminalResult(completionText: string): {
 }
 
 /** Resolves the requester task context for a spawned child ACP session. */
-export function resolveBackgroundTaskContext(params: {
+export async function resolveBackgroundTaskContext(params: {
+  assertCurrent: () => void;
   deps: AcpSessionManagerDeps;
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
   requestId: string;
   text: string;
-}): BackgroundTaskContext | null {
-  const childEntry = params.deps.loadSessionEntry({
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-  })?.entry;
+}): Promise<BackgroundTaskContext | null> {
+  params.assertCurrent();
+  const childEntry = (
+    await params.deps.loadSessionEntryAsync({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      assertCurrent: params.assertCurrent,
+    })
+  )?.entry;
+  params.assertCurrent();
   const requesterSessionKey =
     normalizeText(childEntry?.spawnedBy) ?? normalizeText(childEntry?.parentSessionKey);
   if (!requesterSessionKey) {
     return null;
   }
+  const read = await prepareTaskRegistryRead();
+  params.assertCurrent();
+  if (!read) {
+    throw new Error("ACP requester task context is not available");
+  }
   const requesterOwners = new Set(
-    listTasksForRelatedSessionKey(params.sessionKey)
+    read
+      .listTasksForRelatedSessionKey(params.sessionKey)
       .filter(
         (task) =>
           task.runtime === "acp" &&
@@ -168,7 +181,15 @@ export function resolveBackgroundTaskContext(params: {
     sessionKey: requesterSessionKey,
     agentId: requesterOwners.values().next().value,
   });
-  const parentEntry = params.deps.loadSessionEntry({ cfg: params.cfg, ...parentTarget })?.entry;
+  const parentEntry = (
+    await params.deps.loadSessionEntryAsync({
+      cfg: params.cfg,
+      ...parentTarget,
+      assertCurrent: params.assertCurrent,
+    })
+  )?.entry;
+  params.assertCurrent();
+  read.assertCurrent();
   return {
     agentId: params.agentId,
     requesterAgentId: parentTarget.agentId,
@@ -241,6 +262,13 @@ export async function recordQueuedBackgroundTaskCancellation(params: {
   }
   const { input, sessionKey, agentId } = params;
   const instanceId = input.admittedRunContext.operationalRunInstance.instanceId;
+  const context = await resolveBackgroundTaskContext({
+    ...params,
+    cfg: input.cfg,
+    requestId: input.requestId,
+    text: input.text,
+  });
+  params.assertCurrent();
   const existing = listTasksForRelatedSessionKey(sessionKey, agentId).filter(
     (task) =>
       task.runtime === "acp" &&
@@ -258,12 +286,6 @@ export async function recordQueuedBackgroundTaskCancellation(params: {
   ) {
     return;
   }
-  const context = resolveBackgroundTaskContext({
-    ...params,
-    cfg: input.cfg,
-    requestId: input.requestId,
-    text: input.text,
-  });
   const record = context
     ? createBackgroundTaskRecord(context, params.startedAt, instanceId)
     : undefined;

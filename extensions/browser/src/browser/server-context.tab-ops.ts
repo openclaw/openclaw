@@ -48,7 +48,11 @@ import type {
   ProfileRuntimeState,
   ProfileContext,
 } from "./server-context.types.js";
-import { findRetainedBrowserDashboardTab, readBrowserDashboardTabs } from "./session-tab-store.js";
+import {
+  dispatchBrowserTabClose,
+  findRetainedBrowserDashboardTab,
+  readBrowserDashboardTabs,
+} from "./session-tab-store.js";
 import {
   assignTabAlias,
   assignTabAliases,
@@ -254,7 +258,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
       return;
     }
 
-    const retained = readBrowserDashboardTabs();
+    const retained = await readBrowserDashboardTabs();
     const candidates = pageTabs.filter(
       (tab) =>
         tab.targetId !== keepTargetId &&
@@ -263,14 +267,19 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
     const excessCount = pageTabs.length - MANAGED_BROWSER_PAGE_TAB_LIMIT;
     for (const tab of candidates.slice(0, excessCount)) {
       options?.signal?.throwIfAborted();
-      if (findRetainedBrowserDashboardTab(tab.targetId, profile.name)) {
-        continue;
-      }
-      await fetchOk(
-        appendCdpPath(cdpHttpBase, `/json/close/${tab.targetId}`),
-        undefined,
-        undefined,
-        getCdpControlPolicy(),
+      await dispatchBrowserTabClose(
+        tab.targetId,
+        profile.name,
+        () => {
+          options?.signal?.throwIfAborted();
+          return fetchOk(
+            appendCdpPath(cdpHttpBase, `/json/close/${tab.targetId}`),
+            undefined,
+            undefined,
+            getCdpControlPolicy(),
+          );
+        },
+        { skipRetained: true },
       ).catch(() => {
         // best-effort cleanup only
       });

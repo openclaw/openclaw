@@ -630,14 +630,7 @@ type AgentHarnessTaskHistoryCapability = {
   };
 };
 
-/**
- * @deprecated Implement AgentHarnessV2. This registration contract remains
- * source-compatible for existing plugins through 2026-10-12.
- */
-export type AgentHarness = AgentHarnessRunCapability &
-  AgentHarnessSideQuestionCapability &
-  AgentHarnessClassificationCapability &
-  AgentHarnessCompactionCapability &
+type AgentHarnessSharedCapabilities = AgentHarnessCompactionCapability &
   AgentHarnessRuntimeArtifactCapability &
   AgentHarnessAuthBindingCapability &
   AgentHarnessProviderUsageCapability &
@@ -647,19 +640,20 @@ export type AgentHarness = AgentHarnessRunCapability &
   AgentHarnessTaskHistoryCapability &
   AgentHarnessSessionLifecycleCapability;
 
+/**
+ * @deprecated Implement AgentHarnessV2. This registration contract remains
+ * source-compatible for existing plugins through 2026-10-12.
+ */
+export type AgentHarness = AgentHarnessRunCapability &
+  AgentHarnessSideQuestionCapability &
+  AgentHarnessClassificationCapability &
+  AgentHarnessSharedCapabilities;
+
 /** Current harness contract for hosts that always supply versioned capabilities. */
 export type AgentHarnessV2 = AgentHarnessRunCapability<AgentHarnessAttemptParamsV2> &
   AgentHarnessSideQuestionCapability<AgentHarnessSideQuestionParamsV2> &
   AgentHarnessClassificationCapability<AgentHarnessAttemptParamsV2> &
-  AgentHarnessCompactionCapability &
-  AgentHarnessRuntimeArtifactCapability &
-  AgentHarnessAuthBindingCapability &
-  AgentHarnessProviderUsageCapability &
-  AgentHarnessModelCatalogCapability &
-  AgentHarnessMcpCatalogCapability &
-  AgentHarnessSessionForkCapability &
-  AgentHarnessTaskHistoryCapability &
-  AgentHarnessSessionLifecycleCapability;
+  AgentHarnessSharedCapabilities;
 
 export type RegisteredAgentHarness = {
   harness: AgentHarness;
