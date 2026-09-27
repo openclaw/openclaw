@@ -1,5 +1,6 @@
 /** Shared CLI formatting for gateway health failures, channels, and delivery queues. */
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatChannelStatusState } from "../channels/plugins/status-state.js";
@@ -135,10 +136,11 @@ const formatAccountProbeTiming = (summary: ChannelAccountHealthSummary): string 
 
 function formatPluginDiagnostic(text: string, maxChars: number): string {
   // Terminal cleanup can join fragments into a secret; mask both complete forms before truncating.
-  return redactToolPayloadText(sanitizeTerminalText(redactToolPayloadText(text))).slice(
-    0,
-    maxChars,
+  const normalized = sanitizeTerminalText(redactToolPayloadText(text)).replace(
+    /[\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/gu,
+    "",
   );
+  return truncateUtf16Safe(redactToolPayloadText(normalized), maxChars);
 }
 
 /** Formats terse channel and actionable plugin health lines for shared CLI surfaces. */

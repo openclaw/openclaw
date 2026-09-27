@@ -450,10 +450,11 @@ describe("formatHealthChannelLines", () => {
         loaded: [],
         errors: [
           {
-            id: "plug\u001b[31min9X",
+            id: "\u202eplug\u200b\u001b[31min9X\u2069",
             origin: "config",
             activated: true,
-            error: "lineA9\nlineB7 password=mockPass7X deploymentMarker7 visible context",
+            error:
+              "lineA9\nlineB7 pass\u200bword=mockPass7X deploymentMark\u200ber7 vis\u{E0061}ible\u2028 context\u2029\ufeff\uD800",
           },
         ],
       };
@@ -465,6 +466,25 @@ describe("formatHealthChannelLines", () => {
       resetSecretRedactionRegistryForTest();
       configSpy.mockRestore();
     }
+  });
+
+  it("bounds plugin diagnostics without splitting Unicode characters", () => {
+    const summary = createHealthSummary();
+    summary.plugins = {
+      loaded: [],
+      errors: [
+        {
+          id: `x${"📦".repeat(60)}`,
+          origin: "config",
+          activated: true,
+          error: `y${"🦀".repeat(250)}`,
+        },
+      ],
+    };
+
+    expect(formatHealthChannelLines(summary)).toEqual([
+      `Plugin x${"📦".repeat(59)}: failed - y${"🦀".repeat(249)}; run openclaw doctor`,
+    ]);
   });
 
   it.each([20, 21])(
