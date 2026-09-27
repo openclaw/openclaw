@@ -10,13 +10,14 @@ import {
   requireRecord,
   requireString,
 } from "./chat-flow.test-support.ts";
-import { installNativeEmbed } from "./native-nav.test-support.ts";
+import { installNativeEmbed, installNativeWebChrome } from "./native-nav.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const viewport = { width: 1180, height: 820 };
 type ConversationTestWindow = Window &
   typeof globalThis & {
     conversationMessages: Record<string, unknown>[];
+    windowDragMessages: { type: "window-drag" }[];
     dashboardResponse?: "rejected" | "throw";
     __OPENCLAW_NATIVE_CONVERSATION_DOCUMENT__: { documentId: string };
   };
@@ -75,8 +76,14 @@ suite.define(() => {
           },
           __OPENCLAW_NATIVE_CONVERSATION__: { contract: 1 },
           conversationMessages: [],
+          windowDragMessages: [],
           webkit: {
             messageHandlers: {
+              openclawWindowDrag: {
+                postMessage(message: { type: "window-drag" }) {
+                  (window as ConversationTestWindow).windowDragMessages.push(message);
+                },
+              },
               openclawConversation: {
                 postMessage(message: Record<string, unknown>) {
                   const host = window as ConversationTestWindow;
@@ -94,6 +101,9 @@ suite.define(() => {
               },
             },
           },
+        });
+        document.addEventListener("DOMContentLoaded", () => {
+          document.documentElement.style.setProperty("--openclaw-native-titlebar-height", "52px");
         });
       });
       const linkedUrl = controlUiSessionUrl(suite.server.baseUrl, "agent:main:linked");
@@ -168,9 +178,44 @@ suite.define(() => {
           .count(),
       ).toBe(0);
       expect(await page.locator(".chat-split-view__cell").count()).toBe(1);
-      expect(await pane.locator(".chat-pane__header").isVisible()).toBe(true);
+      const header = pane.locator(".chat-pane__header");
+      expect(await header.isVisible()).toBe(true);
       expect(await pane.locator(".chat-thread").isVisible()).toBe(true);
       expect(await headerLeadingInset(page)).toBe(12);
+      expect(await header.boundingBox()).toMatchObject({ y: 0, height: 52 });
+      expect(await pane.locator(".chat-thread").boundingBox()).toMatchObject({ y: 52 });
+      const leadingBox = await header.locator(".chat-pane__header-leading").boundingBox();
+      expect(leadingBox!.y + leadingBox!.height / 2).toBe(26);
+      if (captureUiProofEnabled) {
+        await mkdir(".artifacts/pr-proof", { recursive: true });
+        await page.screenshot({ path: ".artifacts/pr-proof/conversation-titlebar.png" });
+      }
+      const dragMessages = () =>
+        page.evaluate(() => (window as ConversationTestWindow).windowDragMessages);
+      await header.hover({ position: { x: viewport.width / 2, y: 26 } });
+      await page.mouse.down();
+      expect(await dragMessages()).toEqual([{ type: "window-drag" }]);
+      await page.mouse.up();
+      const sessionMenu = header.locator(".chat-header-session-menu__trigger");
+      await sessionMenu.click();
+      await expect.poll(() => sessionMenu.getAttribute("aria-expanded")).toBe("true");
+      expect(await dragMessages()).toEqual([{ type: "window-drag" }]);
+      await page.keyboard.press("Escape");
+      await page.setViewportSize({ width: 700, height: viewport.height });
+      for (const [height, expected] of [
+        ["64px", 64],
+        ["", 52],
+      ] as const) {
+        await page.evaluate((value) => {
+          document.documentElement.style.setProperty("--openclaw-native-titlebar-height", value);
+        }, height);
+        await expect.poll(() => header.boundingBox()).toMatchObject({ y: 0, height: expected });
+        expect(await pane.locator(".chat-thread").boundingBox()).toMatchObject({ y: expected });
+      }
+      await page.setViewportSize(viewport);
+      await page.evaluate(() => {
+        document.documentElement.style.setProperty("--openclaw-native-titlebar-height", "52px");
+      });
       const first = (await messages(page))[0];
       expect(first).toMatchObject({ type: "ready", contract: 1, surface: "conversation" });
       const documentId = first?.documentId;
@@ -299,12 +344,14 @@ suite.define(() => {
     });
   });
 
-  it.each(["browser", "ios"] as const)(
+  it.each(["browser", "dashboard", "ios"] as const)(
     "preserves %s chat and settings presentation",
     async (mode) => {
       await suite.withPage({ viewport, serviceWorkers: "block" }, async ({ page }) => {
         if (mode === "ios") {
           await installNativeEmbed(page, { platform: "ios", formFactor: "pad" });
+        } else if (mode === "dashboard") {
+          await installNativeWebChrome(page);
         }
         await installMockGateway(page, {
           historyMessages: [
@@ -328,6 +375,10 @@ suite.define(() => {
           expect(new URL(page.url()).pathname).toBe("/settings");
         } else {
           expect(await headerLeadingInset(page)).toBe(12);
+          expect(await page.locator(".chat-pane__header").boundingBox()).toMatchObject({
+            y: 0,
+            height: mode === "dashboard" ? 52 : 48,
+          });
           expect(await page.locator("openclaw-app-sidebar").isVisible()).toBe(true);
         }
       });
