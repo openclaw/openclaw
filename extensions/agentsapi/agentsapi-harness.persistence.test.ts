@@ -118,7 +118,9 @@ it("reopens an existing hosted binding and requires reset before persisting a fr
     };
     let harness = register();
     try {
-      expect((await harness.runAttempt(params)).terminal).toEqual({ kind: "ok" });
+      expect(await harness.runAttempt(params)).toEqual(
+        expect.objectContaining({ terminal: { kind: "ok" } }),
+      );
       expect(await openStore().lookup(params.sessionId)).toEqual(hosted);
       expect(message).toHaveBeenCalledExactlyOnceWith(
         hosted.sessionId,
@@ -129,12 +131,14 @@ it("reopens an existing hosted binding and requires reset before persisting a fr
 
       config = { plugins: { entries: { agentsapi: { config: { environment: "self_hosted" } } } } };
       const rejected = await harness.runAttempt({ ...params, runId: "switched-run" });
-      expect(rejected.terminal).toMatchObject({
-        kind: "failed",
-        error: expect.objectContaining({
-          message:
-            "Agents API model, credential, or environment changed; reset the OpenClaw session before continuing",
-        }),
+      expect(rejected).toMatchObject({
+        terminal: {
+          kind: "failed",
+          error: expect.objectContaining({
+            message:
+              "Agents API model, credential, or environment changed; reset the OpenClaw session before continuing",
+          }),
+        },
       });
       expect([
         create.mock.calls.length,
@@ -147,9 +151,9 @@ it("reopens an existing hosted binding and requires reset before persisting a fr
       await harness.dispose();
       await reopenState();
       harness = register();
-      expect((await harness.runAttempt({ ...params, runId: "reset-run" })).terminal).toEqual({
-        kind: "ok",
-      });
+      expect(await harness.runAttempt({ ...params, runId: "reset-run" })).toEqual(
+        expect.objectContaining({ terminal: { kind: "ok" } }),
+      );
       expect(create).toHaveBeenCalledExactlyOnceWith(
         expect.any(AbortSignal),
         "Fixture instructions",
@@ -167,9 +171,9 @@ it("reopens an existing hosted binding and requires reset before persisting a fr
       await reopenState();
       expect(await openStore().lookup(params.sessionId)).toEqual(fresh);
       harness = register();
-      expect(
-        (await harness.runAttempt({ ...params, runId: "reopened-self-hosted-run" })).terminal,
-      ).toEqual({ kind: "ok" });
+      expect(await harness.runAttempt({ ...params, runId: "reopened-self-hosted-run" })).toEqual(
+        expect.objectContaining({ terminal: { kind: "ok" } }),
+      );
       expect(create).toHaveBeenCalledTimes(1);
       expect(message.mock.calls.map(([sessionId]) => sessionId)).toEqual([
         hosted.sessionId,
