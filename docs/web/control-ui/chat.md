@@ -471,6 +471,7 @@ Markdown tables wrap headings and cell text to fit the conversation. On wide des
 panes, top-level assistant tables stay at the reading width when their content fits
 and use extra space only as needed, without widening the surrounding prose. Long
 cells wrap within the pane limit; genuinely dense tables still scroll horizontally.
+Short values such as byte counts stay intact beside long filenames or hashes, including on mobile.
 Wide desktop tables use compact icon-only controls above the header. Mobile and
 phone-landscape views retain larger touch controls and a visible **Expand table** label.
 Ordinary inline tables grow vertically instead of adding a vertical scrollbar.
