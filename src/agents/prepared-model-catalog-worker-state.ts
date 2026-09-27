@@ -7,13 +7,16 @@ import type { PreparedModelCatalogWorkerInput } from "./prepared-model-catalog-w
 export async function prepareCatalogWorkerAuthStore(
   input: PreparedModelCatalogWorkerInput["input"],
 ) {
-  return await withAuthProfileStoreAgentDir(input.agentDir, resolveStateDir(input.env), () =>
-    loadAuthProfileStoreForRuntimeAsync(input.agentDir, {
-      allowKeychainPrompt: false,
-      config: input.config,
-      externalCli: { mode: "none" },
-      ...(input.inheritedAuthDir ? { inheritedAuthDir: input.inheritedAuthDir } : {}),
-      readOnly: true,
-    }),
+  return await withAuthProfileStoreAgentDir(
+    input.agentDir,
+    resolveStateDir(input.env),
+    () =>
+      loadAuthProfileStoreForRuntimeAsync(input.agentDir, {
+        allowKeychainPrompt: false,
+        config: input.config,
+        externalCli: { mode: "none" },
+        readOnly: true,
+      }),
+    input.inheritedAuthDir ? { inheritedAuthDir: input.inheritedAuthDir } : undefined,
   );
 }

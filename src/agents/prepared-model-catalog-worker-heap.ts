@@ -5,7 +5,7 @@ export const CATALOG_WORKER_HEAP_LIMIT_MB = 512;
 
 function processOverridesWorkerOldGenerationLimit(): boolean {
   const argv = [...process.execArgv, process.env.NODE_OPTIONS ?? ""].join(" ");
-  return /(?:^|\s)--max-old-space-size(?:=|\s+)\d+(?=\s|$)/u.test(argv);
+  return /(?:^|\s)--max[-_]old[-_]space[-_]size(?:=|\s+)\d+(?=\s|$)/u.test(argv);
 }
 
 /** Node's process-wide V8 flag overrides Worker resourceLimits; reject retained overflow. */

@@ -157,7 +157,13 @@ type SaveAuthProfileStoreOptions = {
 
 type AuthProfileRuntimeMode =
   | { kind: "env-only" }
-  | { kind: "agent-dir"; agentDir: string; sharedStore?: AuthProfileStore; env: NodeJS.ProcessEnv };
+  | {
+      kind: "agent-dir";
+      agentDir: string;
+      inheritedAuthDir?: string;
+      sharedStore?: AuthProfileStore;
+      env: NodeJS.ProcessEnv;
+    };
 
 const authProfileRuntimeMode = new AsyncLocalStorage<AuthProfileRuntimeMode>();
 
@@ -171,14 +177,24 @@ export async function withAuthProfileStoreAgentDir<T>(
   agentDir: string,
   sharedStateDir: string,
   run: () => T | Promise<T>,
+  options?: { inheritedAuthDir?: string },
 ): Promise<T> {
   const env = { ...process.env, OPENCLAW_STATE_DIR: sharedStateDir };
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const resolvedAgentDir = resolveUserPath(agentDir, env);
+  const inheritedAuthDir = options?.inheritedAuthDir
+    ? resolveUserPath(options.inheritedAuthDir, env)
+    : undefined;
   const { sharedStore, assertCurrent } = await prepareScopedSharedAuthProfileStore(env);
   assertCurrent();
   return await authProfileRuntimeMode.run(
-    { kind: "agent-dir", agentDir: resolvedAgentDir, sharedStore, env },
+    {
+      kind: "agent-dir",
+      agentDir: resolvedAgentDir,
+      ...(inheritedAuthDir ? { inheritedAuthDir } : {}),
+      sharedStore,
+      env,
+    },
     run,
   );
 }
@@ -222,7 +238,7 @@ function resolveRuntimeAuthProfileLoadOptions(
   if (mode?.kind !== "agent-dir") {
     return options;
   }
-  return { ...options, inheritedAuthDir: mode.agentDir };
+  return { ...options, inheritedAuthDir: mode.inheritedAuthDir ?? mode.agentDir };
 }
 
 let runtimeSnapshotPublisherForTest: ((publish: () => void) => void) | undefined;

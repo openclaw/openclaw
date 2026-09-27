@@ -63,6 +63,69 @@ it("waits for shared facts and reads fresh credentials for each bounded scope", 
   }
 });
 
+it("preserves an explicit inherited auth directory inside a bounded scope", async () => {
+  const owner = root("legacy-main");
+  const inheritedAuthDir = path.join(owner.stateDir, "agents", "main", "agent");
+  vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockImplementation((options) => ({
+    read: async () =>
+      options.databasePath.includes(`${path.sep}main${path.sep}`)
+        ? {
+            store: {
+              status: "readable",
+              raw: {
+                version: 1,
+                profiles: {
+                  inherited: {
+                    type: "api_key",
+                    provider: "custom",
+                    key: "fixture-inherited",
+                  },
+                },
+              },
+            },
+            state: { status: "missing", reason: "row" },
+            cacheable: false,
+          }
+        : {
+            store: {
+              status: "readable",
+              raw: {
+                version: 1,
+                profiles: {
+                  local: { type: "api_key", provider: "custom", key: "fixture-local" },
+                },
+              },
+            },
+            state: { status: "missing", reason: "row" },
+            cacheable: false,
+          },
+    assertCurrent: () => {},
+    dispose: async () => {},
+  }));
+  const runtime = createAuthProfileStoreRuntime({
+    listRuntimeExternalAuthProfiles: () => [],
+    overlayExternalAuthProfiles: (store) => store,
+  });
+
+  await withAuthProfileStoreAgentDir(
+    owner.agentDir,
+    owner.stateDir,
+    async () => {
+      await expect(
+        runtime.loadAuthProfileStoreForRuntimeAsync(owner.agentDir, {
+          externalCli: { mode: "none" },
+        }),
+      ).resolves.toMatchObject({
+        profiles: {
+          inherited: { key: "fixture-inherited" },
+          local: { key: "fixture-local" },
+        },
+      });
+    },
+    { inheritedAuthDir },
+  );
+});
+
 it.each(["database-close", "owner-change"] as const)(
   "does not enter a scope whose shared preparation lost authority through %s",
   async (invalidatedBy) => {
