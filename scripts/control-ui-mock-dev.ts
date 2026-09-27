@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import qrcode from "qrcode";
 import { createServer, type Plugin, type ViteDevServer } from "vite";
 import type {
+  Question,
   SystemAgentChatHistoryResult,
   SystemChangesListResult,
   UserProfile,
@@ -51,10 +52,6 @@ import {
   buildChatAttachmentHistory,
   createChatAttachmentFixturePlugin,
 } from "./control-ui-mock-attachments.ts";
-import {
-  backgroundTasksMockInitScript,
-  buildBackgroundTasksMock,
-} from "./control-ui-mock-background-tasks.ts";
 import {
   buildChannelsPairingMock,
   buildChannelsStatusMock,
@@ -2120,7 +2117,6 @@ async function createChatPickerScenario(
       ],
     },
   };
-  const backgroundTasks = buildBackgroundTasksMock(baseTime);
   const custodianHistory = {
     turns: [
       {
@@ -2193,6 +2189,7 @@ async function createChatPickerScenario(
       "cron.remove",
       "cron.run",
       "cron.runs",
+      "cron.history",
       "cron.status",
       "cron.update",
       "chat.metadata",
@@ -2235,9 +2232,6 @@ async function createChatPickerScenario(
       "skills.library.read",
       "skills.library.save",
       "skills.library.upload",
-      "tasks.cancel",
-      "tasks.get",
-      "tasks.list",
       "sessions.catalog.list",
       "sessions.catalog.read",
       "sessions.create",
@@ -2283,7 +2277,6 @@ async function createChatPickerScenario(
     historyMessages,
     sessionGroups: ["Research"],
     sessionTranscripts: {
-      ...backgroundTasks.sessionTranscripts,
       "agent:main:main": {
         messages:
           fixtureSessionKey === "agent:main:main"
@@ -2743,14 +2736,14 @@ async function createChatPickerScenario(
             sessionKey: "agent:main:tax-research",
             questions: [
               {
-                id: "filing_status",
+                questionId: "filing_status",
                 header: "Tax filing",
                 question: "Should I submit the draft return?",
                 options: [
                   { label: "Submit", description: "File the prepared return." },
                   { label: "Review", description: "Keep the draft open for review." },
                 ],
-              },
+              } satisfies Question,
             ],
             createdAtMs: baseTime - 60_000,
             expiresAtMs: ATTENTION_FIXTURE_EXPIRES_AT,
@@ -3370,7 +3363,6 @@ async function createChatPickerScenario(
     sessionArchiveFiltering: true,
     sessions: [
       ...sessions,
-      ...backgroundTasks.sessions,
       ...archivedSessions,
       ...telegramSessions,
       ...claudeSessions,
@@ -3381,34 +3373,9 @@ async function createChatPickerScenario(
     workspaceGit: true,
   };
   if (fixture === "sidebar-roster") {
-    const teamTasks = backgroundTasks.tasks.slice(0, 2).map((task, index) => {
-      const agent = expectDefined(rosterAgents[index], "team task agent");
-      return Object.assign({}, task, {
-        agentId: agent.id,
-        title: agent.sessionLabels[0],
-        sessionKey: `agent:${agent.id}:main`,
-        ownerKey: `agent:${agent.id}:main`,
-        childSessionKey: `agent:${agent.id}:sample-1`,
-      });
-    });
     scenario.methodResponses = {
       ...scenario.methodResponses,
       "sessions.catalog.list": { catalogs: [] },
-      "tasks.list": {
-        cases: [
-          ...rosterAgents.map(({ id }) => ({
-            match: { agentId: id },
-            response: { tasks: teamTasks.filter((task) => task.agentId === id) },
-          })),
-          { response: { tasks: teamTasks } },
-        ],
-      },
-      "tasks.get": {
-        cases: teamTasks.map((task) => ({
-          match: { taskId: task.id },
-          response: { task },
-        })),
-      },
       "cron.list": {
         cases: [
           ...rosterAgents.flatMap(({ id }) =>
@@ -3473,7 +3440,6 @@ async function createMockGatewayPlugin(
       skillLibraryMockInitScript(prepared.scenario.models) +
       pluginLifecycleMockInitScript() +
       skillWorkshopMockInitScript(Date.now()) +
-      (fixture === "sidebar-roster" ? "" : backgroundTasksMockInitScript(Date.now())) +
       approvalMockInitScript(fixture === "approval") +
       (fixture === "workboard" || fixture === "workboard-states"
         ? `(() => { const __name = (target) => target; (${installWorkboardBoardMock.toString()})(${JSON.stringify(buildWorkboardMocks(Date.now(), MOCK_ACTOR_PETER, fixture === "workboard-states"))}); })();`

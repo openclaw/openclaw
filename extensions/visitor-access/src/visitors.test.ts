@@ -42,13 +42,13 @@ describe("VisitorAccessService", () => {
       expiresAt: NOW + 14 * DAY_MS,
     });
     expect(fixture.fetcher.mock.calls[0]?.[0]).toBe("https://api.github.com/users/visitor");
-    expect(result).toContain("@visitor");
-    expect(result).toContain("visitor@example.com");
-    expect(result).toContain("2026-09-11T12:00:00.000Z");
-    expect(result).toContain("https://team.openclaw.ai");
-    expect(result).toContain("Team's existing login");
-    expect(result).toContain("restricted guest");
-    expect(result).toContain("first sign-in pending");
+    expect(result.text).toContain("@visitor");
+    expect(result.text).toContain("visitor@example.com");
+    expect(result.text).toContain("2026-09-11T12:00:00.000Z");
+    expect(result.text).toContain("https://team.openclaw.ai");
+    expect(result.text).toContain("Team's existing login");
+    expect(result.text).toContain("restricted guest");
+    expect(result.text).toContain("first sign-in pending");
     expect(fixture.gatewayRequest).toHaveBeenCalledWith(
       "users.list",
       {},
@@ -160,8 +160,8 @@ describe("VisitorAccessService", () => {
         fixture.authority,
       );
 
-      expect(result).toContain(access);
-      expect(result).toContain("Visitor grant expires: 2026-08-29T12:00:00.000Z");
+      expect(result.text).toContain(access);
+      expect(result.text).toContain("Visitor grant expires: 2026-08-29T12:00:00.000Z");
       expect(fixture.emails()).toEqual(["alias@example.com"]);
       expect(fixture.grants.get("alias@example.com")).toMatchObject({
         githubLogin: "unrelated-login",
@@ -174,10 +174,13 @@ describe("VisitorAccessService", () => {
       ).toBe(true);
       vi.setSystemTime(NOW + DAY_MS);
       const list = await fixture.service.list(fixture.authority.assertCurrent);
-      expect(list).toContain(
+      expect(list.text).toContain(
         "grant expires 2026-08-29T12:00:00.000Z | EXPIRED; provider cleanup pending",
       );
-      expect(list).toContain(access);
+      expect(list.text).toContain(access);
+      expect(list.details.grants).toEqual([
+        expect.objectContaining({ githubLogin: "unrelated-login", state: "expired" }),
+      ]);
       expect(fixture.gatewayRequest.mock.calls.every(([method]) => method === "users.list")).toBe(
         true,
       );
@@ -283,9 +286,11 @@ describe("VisitorAccessService", () => {
         operation === "revoke"
           ? fixture.service.revoke({ email: previous.email }, fixture.authority.assertCurrent)
           : fixture.service.invite({ email: previous.email, days: 2 }, fixture.authority);
-      await expect(result).resolves.toContain(
-        operation === "invite" ? "Invited" : operation === "renew" ? "Renewed" : "Revoked",
-      );
+      await expect(result).resolves.toMatchObject({
+        text: expect.stringContaining(
+          operation === "invite" ? "Invited" : operation === "renew" ? "Renewed" : "Revoked",
+        ),
+      });
 
       expect(current).toBe(false);
       if (operation === "revoke") {
@@ -333,7 +338,7 @@ describe("VisitorAccessService", () => {
         fixture.authority,
       );
       expect(fixture.grants.get("visitor@example.com")?.expiresAt).toBeNull();
-      expect(result).toContain("never");
+      expect(result.text).toContain("never");
       await expect(
         fixture.service.invite(
           { email: "visitor@example.com", forever: true, days: 1 },
@@ -368,8 +373,8 @@ describe("VisitorAccessService", () => {
     });
     expect(fixture.emails()).toEqual([previous.email, "manual@example.com"]);
     expect(fixture.grants.size).toBe(1);
-    expect(renewed).toContain("Renewed");
-    expect(renewed).toContain("restricted guest");
+    expect(renewed.text).toContain("Renewed");
+    expect(renewed.text).toContain("restricted guest");
 
     fixture.gatewayRequest.mockResolvedValueOnce({
       profiles: [{ id: "promoted-person", emails: [previous.email], role: "staff" }],
@@ -378,7 +383,7 @@ describe("VisitorAccessService", () => {
       { email: previous.email, days: 7 },
       fixture.authority,
     );
-    expect(promoted).toContain('existing role "staff" retained');
+    expect(promoted.text).toContain('existing role "staff" retained');
     expect(fixture.grants.get(previous.email)).toMatchObject({
       createdAt: previous.createdAt,
       expiresAt: NOW + 8 * DAY_MS,
@@ -402,7 +407,7 @@ describe("VisitorAccessService", () => {
 
     expect(fixture.emails()).toEqual(["manual@example.com"]);
     expect(fixture.grants.size).toBe(0);
-    expect(result).toContain("@visitor (2 recorded emails)");
+    expect(result.text).toContain("@visitor (2 recorded emails)");
     expect(
       fixture.fetcher.mock.calls.every(
         ([url]) => requestUrl(url).origin !== "https://api.github.com",
@@ -414,7 +419,7 @@ describe("VisitorAccessService", () => {
     const fixture = visitorFixture({ emails: ["manual@example.com"] });
     await expect(
       fixture.service.revoke({ email: "manual@example.com" }, fixture.authority.assertCurrent),
-    ).resolves.toContain("Revoked");
+    ).resolves.toMatchObject({ text: expect.stringContaining("Revoked") });
     expect(fixture.emails()).toEqual([]);
     expect(fixture.cloudflare.policy).toBeUndefined();
     expect(fixture.grants.size).toBe(0);
@@ -422,7 +427,7 @@ describe("VisitorAccessService", () => {
 
     await expect(
       fixture.service.revoke({ email: "manual@example.com" }, fixture.authority.assertCurrent),
-    ).resolves.toMatch(/nothing to revoke/);
+    ).resolves.toMatchObject({ text: expect.stringMatching(/nothing to revoke/) });
     expect(fixture.mutations()).toHaveLength(writes);
   });
 
@@ -465,11 +470,14 @@ describe("VisitorAccessService", () => {
     const result = await fixture.service.list(fixture.authority.assertCurrent);
     await fixture.service.sweep();
 
-    expect(result).toContain("1 unmanaged, 1 missing from policy");
-    expect(result).toMatch(
+    expect(result.text).toContain("1 unmanaged, 1 missing from policy");
+    expect(result.text).toMatch(
       /missing@example.com.*@visitor.*2026-08-27T12:00:00.000Z.*2026-08-29T12:00:00.000Z.*MISSING FROM POLICY/,
     );
-    expect(result).toMatch(/manual@example.com.*UNMANAGED/);
+    expect(result.text).toMatch(/manual@example.com.*UNMANAGED/);
+    expect(result.details.grants).toEqual([
+      expect.objectContaining({ email: missing.email, state: "missing_from_policy" }),
+    ]);
     expect(fixture.emails()).toEqual(["manual@example.com"]);
     expect(fixture.grants.get(missing.email)).toEqual(missing);
     expect(fixture.mutations()).toEqual([]);
@@ -486,9 +494,13 @@ describe("VisitorAccessService", () => {
 
     const result = await fixture.service.list(fixture.authority.assertCurrent);
 
-    expect(result).toContain("3 unmanaged");
-    expect(result.match(/UNMANAGED/g)).toHaveLength(2);
-    expect(result).toContain("1 entries omitted");
+    expect(result.text).toContain("3 unmanaged");
+    expect(result.text.match(/UNMANAGED/g)).toHaveLength(2);
+    expect(result.text).toContain("1 entries omitted");
+    expect(result.details.omitted).toBe(1);
+    expect(result.details.grants.length + result.details.unmanaged.length).toBe(
+      result.text.split("\n").length - 2,
+    );
     expect(fixture.emails()).toHaveLength(3);
     expect(fixture.mutations()).toEqual([]);
   });
@@ -533,8 +545,8 @@ describe("VisitorAccessService", () => {
       expect(fixture.emails()).toEqual(committed ? ["visitor@example.com"] : []);
       expect(fixture.grants.get("visitor@example.com")?.expiresAt).toBe(NOW);
       const list = await fixture.service.list(fixture.authority.assertCurrent);
-      expect(list).toContain(committed ? "0 missing from policy" : "1 missing from policy");
-      expect(list).toContain(
+      expect(list.text).toContain(committed ? "0 missing from policy" : "1 missing from policy");
+      expect(list.text).toContain(
         committed ? "EXPIRED; provider cleanup pending" : "MISSING FROM POLICY",
       );
       fixture.service.close();
@@ -548,7 +560,7 @@ describe("VisitorAccessService", () => {
       );
       await expect(
         restarted.service.invite({ email: "visitor@example.com", days: 1 }, restarted.authority),
-      ).resolves.toContain("Renewed");
+      ).resolves.toMatchObject({ text: expect.stringContaining("Renewed") });
       expect(restarted.emails()).toEqual(["visitor@example.com"]);
       expect(restarted.grants.get("visitor@example.com")?.createdAt).toBe(NOW);
       expect(() =>

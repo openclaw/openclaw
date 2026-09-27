@@ -786,7 +786,11 @@ describe("session sources needed by deferred plugin migrations", () => {
         expect(() => assertSessionStoreMigrationComplete({ cfg, env: state.env })).toThrow(
           kind === "unindexed history"
             ? SessionStoreMigrationRequiredError
-            : expect.objectContaining({ code: "ENOENT", syscall: "lstat", path: sqlitePath }),
+            : expect.objectContaining({
+                message: expect.stringContaining(
+                  `The imported session database is missing or no longer a regular file: ${sqlitePath}. Run openclaw doctor --session-sqlite recover --session-sqlite-all-agents`,
+                ),
+              }),
         );
         if (kind === "unindexed history") {
           const report = await run();

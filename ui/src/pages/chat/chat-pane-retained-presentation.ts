@@ -38,7 +38,6 @@ import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.t
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
 import { clearSessionWorkspacePreviews } from "./components/chat-session-workspace-state.ts";
-import { resetTaskDetail } from "./components/chat-task-detail-state.ts";
 import {
   dismissThreadPortals,
   isThreadPresentationFocused,
@@ -457,7 +456,6 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     if (state) {
       stopChatRealtimeTalk(state);
       invalidateImageLightbox(state);
-      resetTaskDetail(state);
       state.sidebarContent = null;
       clearSessionWorkspacePreviews(state);
       state.requestUpdate?.();

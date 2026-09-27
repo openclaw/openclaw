@@ -291,6 +291,7 @@ struct ChatMessageBubble: View {
     @Environment(\.openClawAssistantRunContent) private var isRunContent
     let message: OpenClawChatMessage
     var liveToolCalls: [OpenClawChatPendingToolCall] = []
+    var metadata: ChatMessageMetadata?
     var sourcePreviews: [ChatSourcePreview] = []
     var sourceContextRevision = UUID()
     var sourceFaviconsEnabled = false
@@ -355,6 +356,7 @@ struct ChatMessageBubble: View {
         ChatMessageBody(
             message: self.message,
             liveToolCalls: self.liveToolCalls,
+            metadata: self.metadata,
             sourcePreviews: self.sourcePreviews,
             sourceContextRevision: self.sourceContextRevision,
             sourceFaviconsEnabled: self.sourceFaviconsEnabled,
@@ -417,6 +419,7 @@ private struct ChatMessageBody: View {
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     let message: OpenClawChatMessage
     var liveToolCalls: [OpenClawChatPendingToolCall] = []
+    var metadata: ChatMessageMetadata?
     var sourcePreviews: [ChatSourcePreview] = []
     var sourceContextRevision = UUID()
     var sourceFaviconsEnabled = false
@@ -474,8 +477,8 @@ private struct ChatMessageBody: View {
                     .padding(.horizontal, 4)
             }
 
-            if !shouldRenderBubble, let usagePresentation = self.usagePresentation {
-                self.usageLine(usagePresentation)
+            if !shouldRenderBubble {
+                self.footer
                     .padding(.horizontal, 4)
             }
         }
@@ -541,9 +544,7 @@ private struct ChatMessageBody: View {
                     resolveResource: self.inlineWidgetResourceResolver)
             }
 
-            if let usagePresentation = self.usagePresentation {
-                self.usageLine(usagePresentation)
-            }
+            self.footer
         }
         .textSelection(.enabled)
         .foregroundStyle(textColor)
@@ -593,6 +594,21 @@ private struct ChatMessageBody: View {
             context: .user,
             variant: self.markdownVariant,
             textColor: textColor)
+    }
+
+    @ViewBuilder
+    private var footer: some View {
+        if self.metadata != nil || self.usagePresentation != nil {
+            HStack(spacing: 8) {
+                if let metadata = self.metadata {
+                    ChatMessageMetadataView(metadata: metadata)
+                }
+                if let usage = self.usagePresentation {
+                    self.usageLine(usage)
+                }
+            }
+            .lineLimit(1)
+        }
     }
 
     private func usageLine(_ presentation: ChatMessageUsagePresentation) -> some View {

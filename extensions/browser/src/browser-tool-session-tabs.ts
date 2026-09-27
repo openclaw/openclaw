@@ -59,7 +59,7 @@ async function trackOpenedBrowserTab(params: {
   const opened = readOpenedTab(params.result);
   const profile = opened.profile ?? params.fallbackProfile;
   try {
-    params.track({
+    await params.track({
       sessionKey: params.sessionKey,
       targetId: opened.targetId,
       route: params.route,
@@ -126,14 +126,14 @@ export function createBrowserToolSessionTabs(params: {
     };
   };
   return {
-    touch: (targetId: string | undefined): void => {
+    touch: async (targetId: string | undefined): Promise<void> => {
       if (targetId) {
-        params.registry.touchSessionBrowserTab(identity(targetId));
+        await params.registry.touchSessionBrowserTab(identity(targetId));
       }
     },
-    untrack: (targetId: string | undefined): void => {
+    untrack: async (targetId: string | undefined): Promise<void> => {
       if (targetId) {
-        params.registry.untrackSessionBrowserTab(identity(targetId));
+        await params.registry.untrackSessionBrowserTab(identity(targetId));
       }
     },
     trackOpened: async (

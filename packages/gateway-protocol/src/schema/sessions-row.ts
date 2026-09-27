@@ -30,6 +30,7 @@ export const SessionRunStatusSchema = Type.Union([
   Type.Literal("running"),
   Type.Literal("done"),
   Type.Literal("failed"),
+  Type.Literal("interrupted"),
   Type.Literal("killed"),
   Type.Literal("timeout"),
 ]);

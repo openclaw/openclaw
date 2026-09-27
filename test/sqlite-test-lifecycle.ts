@@ -6,7 +6,6 @@ const source = (name: string) => normalizeModuleId(path.resolve(import.meta.dirn
 const agentSource = source("src/state/openclaw-agent-db-lifecycle.ts");
 const agentKey = Symbol.for("openclaw.agentDatabaseLifecycle");
 const brokerKey = Symbol.for("openclaw.sqliteWorkerBroker");
-const coordinatorPoolKey = Symbol.for("openclaw.sqliteCoordinatorPool");
 const resetKey = Symbol.for("openclaw.globalSingletonLifecycleResets");
 const retainedCustodyKey = Symbol.for("openclaw.sqliteTestRetainedCustody");
 
@@ -18,7 +17,6 @@ export const sqliteTestSingletonPublications: ReadonlyMap<string, symbol> = new 
     Symbol.for("openclaw.sharedStateWorkerOwner"),
   ],
   [source("src/infra/sqlite-worker-store.ts"), brokerKey],
-  [source("src/infra/sqlite-coordinator.ts"), coordinatorPoolKey],
   [source("src/state/openclaw-state-db-cache.ts"), Symbol.for("openclaw.stateDatabaseLifecycle")],
   [
     source("src/state/openclaw-state-db-snapshot-owner.ts"),
@@ -82,8 +80,8 @@ export async function drainSqliteTestSingletons(
         }
       }),
   );
-  // Native and broker retirement can return a coordinator to the idle pool.
-  const closeOrder = (key: symbol) => (key === coordinatorPoolKey ? 2 : Number(key === brokerKey));
+  // Native resources finish their accepted work before the shared broker closes.
+  const closeOrder = (key: symbol) => Number(key === brokerKey);
   const sqlite = entries
     .filter(([key]) => sqliteKeys.has(key))
     .toSorted(([left], [right]) => closeOrder(left) - closeOrder(right));

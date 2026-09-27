@@ -2,13 +2,7 @@ import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { isRecord, truncateUtf16Safe } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { requestSessionCreate } from "../sessions/index.ts";
-import { normalizeTaskSummary } from "../tasks/task-summary.ts";
-import {
-  normalizeString,
-  replaceCard,
-  workboardCardRunId,
-  workboardCardSessionKey,
-} from "./card-state.ts";
+import { replaceCard, workboardCardRunId, workboardCardSessionKey } from "./card-state.ts";
 import { formatError } from "./normalization-utils.ts";
 import { normalizeCardPayload } from "./normalization.ts";
 import {
@@ -18,20 +12,12 @@ import {
   type WorkboardHost,
 } from "./runtime.ts";
 import { workboardCardSessionTarget } from "./session-resolution.ts";
-import {
-  isMissingTaskLookupError,
-  listWorkboardTasks,
-  taskMatchesCard,
-  taskUpdatedAtValue,
-  WORKBOARD_TASK_LOOKUP_RETRY_DELAYS_MS,
-} from "./task-links.ts";
 import type {
   WorkboardCard,
   WorkboardExecution,
   WorkboardExecutionEngine,
   WorkboardExecutionMode,
   WorkboardExecutionStatus,
-  WorkboardTaskSummary,
   WorkboardUiState,
 } from "./types.ts";
 
@@ -41,13 +27,8 @@ const WORKBOARD_ENGINE_MODELS = {
 } as const;
 const WORKBOARD_SESSION_LABEL_MAX_CHARS = 512;
 
-export function canStartWorkboardCard(state: WorkboardUiState, card: WorkboardCard): boolean {
-  const task = state.tasksByCardId.get(card.id);
-  return (
-    !workboardCardSessionKey(card) &&
-    !taskIsActive(task) &&
-    !(card.taskId && !task && !state.missingTaskIds.has(card.taskId))
-  );
+export function canStartWorkboardCard(card: WorkboardCard): boolean {
+  return !workboardCardSessionKey(card);
 }
 
 function assertCurrentCard(state: WorkboardUiState, card: WorkboardCard): void {
@@ -109,41 +90,6 @@ function buildWorkboardExecution(params: {
   };
 }
 
-async function findTaskForStartedRun(params: {
-  client: GatewayBrowserClient;
-  card: WorkboardCard;
-  sessionKey: string;
-  runId?: string;
-}): Promise<WorkboardTaskSummary | null> {
-  const probeCard = {
-    ...params.card,
-    taskId: undefined,
-    sessionKey: params.sessionKey,
-    ...(params.runId ? { runId: params.runId } : {}),
-  };
-  for (const delayMs of [0, ...WORKBOARD_TASK_LOOKUP_RETRY_DELAYS_MS]) {
-    if (delayMs > 0) {
-      await new Promise((resolve) => {
-        setTimeout(resolve, delayMs);
-      });
-    }
-    let task: WorkboardTaskSummary | null = null;
-    try {
-      task =
-        (await listWorkboardTasks(params.client))
-          .filter((candidate) => taskMatchesCard(candidate, probeCard))
-          .toSorted((left, right) => taskUpdatedAtValue(right) - taskUpdatedAtValue(left))[0] ??
-        null;
-    } catch {
-      // Task registration/linkage is best effort after the run already started.
-    }
-    if (task) {
-      return task;
-    }
-  }
-  return null;
-}
-
 function workboardRunWasAborted(result: unknown): boolean {
   return (
     isRecord(result) &&
@@ -169,25 +115,6 @@ async function abortWorkboardSessionRun(params: {
   // A card run id that no longer names the live run aborts nothing, so retry
   // session-wide before reporting failure; otherwise Stop strands an active run.
   return workboardRunWasAborted(await params.client.request("chat.abort", params.session));
-}
-
-function taskIsActive(task: WorkboardTaskSummary | undefined): task is WorkboardTaskSummary {
-  return task?.status === "queued" || task?.status === "running";
-}
-
-async function cancelWorkboardTaskRun(params: {
-  client: GatewayBrowserClient;
-  taskId: string;
-}): Promise<{ cancelled: boolean; missing: boolean; task: WorkboardTaskSummary | null }> {
-  const result = await params.client.request("tasks.cancel", {
-    taskId: params.taskId,
-    reason: "Stopped from Workboard.",
-  });
-  return {
-    cancelled: isRecord(result) && result.cancelled === true,
-    missing: isRecord(result) && result.found === false,
-    task: isRecord(result) ? normalizeTaskSummary(result.task) : null,
-  };
 }
 
 export async function startWorkboardCard(params: {
@@ -221,7 +148,7 @@ export async function startWorkboardCard(params: {
   params.requestUpdate?.();
   try {
     assertCurrentCard(state, params.card);
-    if (!canStartWorkboardCard(state, params.card)) {
+    if (!canStartWorkboardCard(params.card)) {
       throw new Error(
         "This card already has an execution. Refresh its details or use Edit to clear its session link before starting another.",
       );
@@ -238,16 +165,6 @@ export async function startWorkboardCard(params: {
       const card = normalizeCardPayload(payload);
       replaceCard(state, card);
       const sessionKey = workboardCardSessionKey(card);
-      const runId = workboardCardRunId(card);
-      const task = sessionKey
-        ? await findTaskForStartedRun({ client: params.client, card, sessionKey, runId })
-        : null;
-      assertCurrentCard(state, card);
-      if (task) {
-        state.tasksByCardId.set(card.id, task);
-      } else {
-        state.tasksByCardId.delete(card.id);
-      }
       return sessionKey ?? null;
     }
     const shouldClearManualSchedule = params.card.metadata?.automation?.scheduledAt !== undefined;
@@ -268,7 +185,6 @@ export async function startWorkboardCard(params: {
         ...(shouldClearManualSchedule ? { scheduledAt: null } : {}),
         ...(sessionKey ? { sessionKey } : {}),
         runId: null,
-        taskId: null,
         ...(engine
           ? {
               execution: buildWorkboardExecution({
@@ -284,7 +200,6 @@ export async function startWorkboardCard(params: {
     });
     assertCurrentCard(state, params.card);
     replaceCard(state, normalizeCardPayload(payload));
-    state.tasksByCardId.delete(params.card.id);
     return sessionKey;
   } catch (error) {
     state.error = formatError(error);
@@ -305,15 +220,12 @@ export async function stopWorkboardCard(params: {
   const state = getWorkboardState(params.host);
   const linkedSessionKey = workboardCardSessionKey(params.card);
   const session = workboardCardSessionTarget(params.card, params.session);
-  const task = state.tasksByCardId.get(params.card.id);
-  const cardTaskId = normalizeString(params.card.taskId);
-  const taskId = cardTaskId && !state.missingTaskIds.has(cardTaskId) ? cardTaskId : task?.taskId;
   if (
     !params.client ||
     !workboardMutationsReady(state) ||
     state.dispatching ||
     state.busyCardIds.has(params.card.id) ||
-    (!linkedSessionKey && !taskId)
+    !linkedSessionKey
   ) {
     return;
   }
@@ -324,60 +236,16 @@ export async function stopWorkboardCard(params: {
   const assertCurrent = () => assertCurrentCard(state, params.card);
   try {
     assertCurrent();
-    let taskStopped = false;
-    if (taskId && (!task || taskIsActive(task))) {
-      try {
-        const cancelled = await cancelWorkboardTaskRun({
-          client: params.client,
-          taskId,
-        });
-        assertCurrent();
-        if (cancelled.missing) {
-          state.missingTaskIds.add(taskId);
-          if (task?.taskId === taskId || task?.id === taskId) {
-            state.tasksByCardId.delete(params.card.id);
-          }
-          taskStopped = !linkedSessionKey;
-        } else if (cancelled.cancelled) {
-          taskStopped = true;
-          state.tasksByCardId.set(
-            params.card.id,
-            cancelled.task ?? {
-              ...(task ?? { id: taskId, taskId }),
-              status: "cancelled",
-              updatedAt: Date.now(),
-            },
-          );
-        }
-      } catch (error) {
-        assertCurrent();
-        if (!isMissingTaskLookupError(error, taskId)) {
-          throw error;
-        }
-        state.missingTaskIds.add(taskId);
-        if (task?.taskId === taskId || task?.id === taskId) {
-          state.tasksByCardId.delete(params.card.id);
-        }
-        taskStopped = !linkedSessionKey;
-      }
-    }
-    let sessionAborted = false;
-    if (session) {
-      try {
-        sessionAborted = await abortWorkboardSessionRun({
+    const sessionAborted = session
+      ? await abortWorkboardSessionRun({
           client: params.client,
           session,
           runId: workboardCardRunId(params.card),
           assertCurrent,
-        });
-      } catch (error) {
-        if (!taskStopped) {
-          throw error;
-        }
-      }
-    }
+        })
+      : false;
     assertCurrent();
-    if (!taskStopped && !sessionAborted) {
+    if (!sessionAborted) {
       if (linkedSessionKey && !session) {
         throw new Error(
           "Refresh this card's session details before stopping it, or use Edit to choose its session.",

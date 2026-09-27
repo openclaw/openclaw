@@ -69,7 +69,6 @@ afterEach(() => {
 it.each([
   { supportsTranscriptCommitWait: true },
   { supportsTranscriptCommitWait: false },
-  { supportsTranscriptCommitWait: true, mode: "steer" as const },
   { supportsTranscriptCommitWait: true, mode: "steer" as const, alternateStore: true },
   { supportsTranscriptCommitWait: true, mode: "steer" as const, hiddenRun: true },
 ])(

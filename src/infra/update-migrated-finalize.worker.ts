@@ -26,7 +26,7 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contra
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveEnvironmentValue } from "./process-env.js";
-import { createSqliteLifecycleAggregateError } from "./sqlite-coordinator.js";
+import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import {
   adoptCandidateManagedServiceStop,
   stopSupervisedPredecessorGateway,

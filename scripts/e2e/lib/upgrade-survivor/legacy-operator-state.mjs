@@ -316,10 +316,17 @@ export function assertLegacyOperatorExternalPlugin(expectedVersion) {
 function seedLegacyOperatorApprovals() {
   const approvals = approvalsCommand();
   const policyInput = artifact("legacy-operator-policy-input.json");
+  const nativeEligibility = artifact("native-assignment-eligibility.json");
+  const nativeAssignmentsRequired =
+    fs.existsSync(nativeEligibility) && readJson(nativeEligibility).status === "required";
   writeJson(policyInput, {
     version: 1,
     defaults: { security: "allowlist", ask: "off", askFallback: "deny" },
-    agents: {},
+    // The synthetic native peer needs Codex execution admission; the operator
+    // defaults and main/ops allowlists remain the separate migration specimen.
+    agents: nativeAssignmentsRequired
+      ? { "native-proof": { security: "full", ask: "off", askFallback: "deny" } }
+      : {},
   });
   cli([approvals, "set", "--file", policyInput, "--json"], "legacy-operator-approvals-set", {
     privateOutput: true,

@@ -11,6 +11,7 @@ import {
 } from "../../../../extensions/qa-lab/api.js";
 import { writeOpenAiResponsesSse as writeSse } from "../../../helpers/openai-responses-sse.js";
 import { createDeferred, withTestTimeout } from "../../../helpers/promise.js";
+import { readQaSubagentRuns } from "../../../helpers/qa-subagent-runs.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../../..");
 const MODEL = "mock-openai/gpt-5.6-luna";
@@ -406,12 +407,10 @@ describe("Gateway timeout recovery subagent delivery", () => {
       mutateConfig: withTimeoutConfig,
     });
     await transport.waitReady({ gateway });
-    const readChildTasks = async () => {
-      const listing = (await gateway.call("tasks.list", { agentId: "qa", limit: 100 })) as {
-        tasks?: Array<Record<string, unknown>>;
-      };
-      return listing.tasks?.filter((entry) => entry.title === "qa-timeout-recovery-child");
-    };
+    const readChildRuns = () =>
+      readQaSubagentRuns(gateway.runtimeEnv).filter(
+        (entry) => entry.label === "qa-timeout-recovery-child",
+      );
     const sendInbound = (text: string) =>
       transport.sendInbound({
         accountId: "default",
@@ -451,9 +450,11 @@ describe("Gateway timeout recovery subagent delivery", () => {
         await provider.compactionStarted;
         // Capture the child's terminal result inside recovery before the retry
         // successor can start. All barriers share the original completion budget.
-        await expect
-          .poll(readChildTasks, { timeout: remainingMs() })
-          .toEqual([expect.objectContaining({ status: "completed" })]);
+        await expect.poll(readChildRuns, { timeout: remainingMs() }).toEqual([
+          expect.objectContaining({
+            execution: expect.objectContaining({ status: "terminal", outcome: { status: "ok" } }),
+          }),
+        ]);
         provider.releaseCompaction();
         return await transport.waitForOutbound({
           conversation: CONVERSATION,
@@ -474,24 +475,17 @@ describe("Gateway timeout recovery subagent delivery", () => {
     expect(provider.proof.childReleasedAt!).toBeLessThan(provider.proof.compactionReleasedAt!);
     expect(gateway.logs()).toContain("attempting compaction before retry");
     expect(gateway.logs()).toContain("compaction succeeded");
-    const tasks = await readChildTasks();
-    expect(tasks).toHaveLength(1);
-    const task = tasks?.[0];
-    expect(task?.runId).toBeTypeOf("string");
-    expect(task?.taskId).toBeTypeOf("string");
-    // Read completion through the serving Gateway's durable task projection.
-    // The terminal reply can precede its delivery-state commit.
-    await expect
-      .poll(
-        async () => {
-          const result = (await gateway.call("tasks.get", { taskId: task?.taskId })) as {
-            task: Record<string, unknown>;
-          };
-          return result.task;
-        },
-        { timeout: 10_000 },
-      )
-      .toMatchObject({ status: "completed", deliveryStatus: "delivered" });
+    const runs = readChildRuns();
+    expect(runs).toHaveLength(1);
+    const run = runs[0]!;
+    expect(run.runId).toBeTypeOf("string");
+    // The terminal reply may precede the native outbox delivery commit.
+    await expect.poll(readChildRuns, { timeout: 10_000 }).toEqual([
+      expect.objectContaining({
+        execution: expect.objectContaining({ status: "terminal", outcome: { status: "ok" } }),
+        delivery: expect.objectContaining({ status: "delivered" }),
+      }),
+    ]);
     const matching = state
       .getSnapshot()
       .messages.filter(
@@ -505,7 +499,7 @@ describe("Gateway timeout recovery subagent delivery", () => {
       JSON.stringify({
         phase: "gateway-timeout-recovery-subagent",
         stateDir: gateway.runtimeEnv.OPENCLAW_STATE_DIR,
-        childRunId: task?.runId,
+        childRunId: run.runId,
         outboundCompletionCount: matching.length,
         childReleasedAt: provider.proof.childReleasedAt,
         compactionReleasedAt: provider.proof.compactionReleasedAt,

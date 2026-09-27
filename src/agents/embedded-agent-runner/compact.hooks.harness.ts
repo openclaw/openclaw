@@ -623,7 +623,6 @@ export function resetCompactHooksHarnessMocks(workspaceDir: string, sessionId = 
 export async function loadCompactHooksHarness(options: { durableSession?: boolean } = {}): Promise<{
   compactEmbeddedAgentSessionDirect: typeof import("./compact.js").compactEmbeddedAgentSessionDirect;
   compactEmbeddedAgentSession: CompactHooksQueuedCompaction;
-  testing: typeof import("./compact.js").testing;
   onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
   onInternalSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onInternalSessionTranscriptUpdate;
 }> {
@@ -814,21 +813,6 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     isGatewayDraining: vi.fn(() => false),
     isCommandLaneTaskTimeoutError: vi.fn(() => false),
   }));
-
-  vi.doMock("../../tasks/detached-task-runtime.js", async () => {
-    const actual = await vi.importActual<typeof import("../../tasks/detached-task-runtime.js")>(
-      "../../tasks/detached-task-runtime.js",
-    );
-    return {
-      ...actual,
-      // Deferred-maintenance lifecycle tests isolate queue ownership from the
-      // file-backed task registry, which has separate integration coverage.
-      createQueuedTaskRun: vi.fn((params: { runId?: string }) => ({
-        taskId: `test-task:${params.runId ?? "deferred"}`,
-        runId: params.runId,
-      })),
-    };
-  });
 
   vi.doMock("./lanes.js", () => ({
     resolveSessionLane: vi.fn(() => "test-session-lane"),

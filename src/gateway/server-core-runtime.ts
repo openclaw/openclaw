@@ -109,7 +109,6 @@ export async function startGatewayCoreRuntime(input: {
     sessionEventSubscribers,
     toolEventRecipients,
     broadcastToConnIds,
-    terminalSessions,
     controlUiBasePath,
     workerEnvironmentService,
     workerPlacementDispatchAvailable,
@@ -202,7 +201,14 @@ export async function startGatewayCoreRuntime(input: {
             chatRunState,
             removeChatRun,
             agentRunSeq,
-            nodeSendToSession,
+            nodeSendToSession: (
+              sessionKey,
+              event,
+              payload,
+              opts?: Parameters<typeof nodeSendToSession>[3],
+            ) => {
+              void nodeSendToSession(sessionKey, event, payload, opts);
+            },
             skillsRefreshDelayMs: runtimeState.skillsRefreshDelayMs,
             getSkillsRefreshTimer: () => runtimeState.skillsRefreshTimer,
             setSkillsRefreshTimer: (timer) => {
@@ -240,7 +246,14 @@ export async function startGatewayCoreRuntime(input: {
       broadcast,
       broadcastToConnIds,
       nodeHasSessionSubscribers,
-      nodeSendToSession,
+      nodeSendToSession: (
+        sessionKey,
+        event,
+        payload,
+        opts?: Parameters<typeof nodeSendToSession>[3],
+      ) => {
+        void nodeSendToSession(sessionKey, event, payload, opts);
+      },
       agentRunSeq,
       chatRunState,
       toolEventRecipients,
@@ -248,7 +261,6 @@ export async function startGatewayCoreRuntime(input: {
       sessionMessageSubscribers,
       chatAbortControllers,
       restartRecoveryCandidates,
-      terminalSessions,
       refreshConnectedUserProfiles: () =>
         runtime.resolvePluginGatewayContext()?.refreshConnectedUserProfile?.(),
     }),

@@ -55,7 +55,7 @@ it.each([
       }),
     );
     vi.mocked(updateCheck.resolveNpmChannelTag).mockResolvedValue({ tag: channel, version });
-    vi.mocked(shared.resolveTargetVersion).mockResolvedValue(version);
+    vi.mocked(shared.resolveTargetVersion).mockResolvedValue({ version });
     const runtime = vi.spyOn(runtimePaths, "resolveNodeRuntimeInfo");
     runtime.mockResolvedValue(unsupportedServiceRuntimeFixture);
     const preflight = vi.spyOn(servicePlan, "resolvePackageRuntimePreflight");

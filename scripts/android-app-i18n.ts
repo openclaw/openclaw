@@ -310,16 +310,17 @@ async function readStrings(
 
 async function readAndroidSource(
   root = SOURCE_ROOT,
+  extensionPattern = /\.kt$/u,
 ): Promise<Array<{ path: string; source: string }>> {
   const entries = await readdir(root, { withFileTypes: true });
   const sources: Array<{ path: string; source: string }> = [];
   for (const entry of entries) {
     const fullPath = path.join(root, entry.name);
     if (entry.isDirectory()) {
-      sources.push(...(await readAndroidSource(fullPath)));
+      sources.push(...(await readAndroidSource(fullPath, extensionPattern)));
       continue;
     }
-    if (entry.isFile() && entry.name.endsWith(".kt")) {
+    if (entry.isFile() && extensionPattern.test(entry.name)) {
       sources.push({
         path: path.relative(ROOT, fullPath).split(path.sep).join("/"),
         source: await readFile(fullPath, "utf8"),
@@ -338,26 +339,11 @@ type AndroidResourceReferenceSource = {
   source: string;
 };
 
-async function readAndroidResourceReferences(
+function readAndroidResourceReferences(
   root = ANDROID_MAIN_ROOT,
 ): Promise<AndroidResourceReferenceSource[]> {
-  const entries = await readdir(root, { withFileTypes: true });
-  const sources: AndroidResourceReferenceSource[] = [];
-  for (const entry of entries) {
-    const fullPath = path.join(root, entry.name);
-    if (entry.isDirectory()) {
-      // Source-set roots exclude Gradle build output.
-      sources.push(...(await readAndroidResourceReferences(fullPath)));
-      continue;
-    }
-    if (entry.isFile() && /\.(?:kt|kts|xml)$/u.test(entry.name)) {
-      sources.push({
-        path: path.relative(ROOT, fullPath).split(path.sep).join("/"),
-        source: await readFile(fullPath, "utf8"),
-      });
-    }
-  }
-  return sources;
+  // Source-set roots exclude Gradle build output.
+  return readAndroidSource(root, /\.(?:kt|kts|xml)$/u);
 }
 
 export function findUnusedAndroidResourceKeys(
@@ -862,21 +848,11 @@ function collectTypedModelLiteralFindings(
     if (!className) {
       continue;
     }
-    let openingParen = (declaration.index ?? 0) + declaration[0].length;
-    while (/\s/u.test(source[openingParen] ?? "")) {
-      openingParen += 1;
-    }
-    if (source[openingParen] === "<") {
-      const closingTypeArguments = findClosingDelimiter(source, openingParen, "<", ">");
-      if (closingTypeArguments === null) {
-        continue;
-      }
-      openingParen = closingTypeArguments + 1;
-      while (/\s/u.test(source[openingParen] ?? "")) {
-        openingParen += 1;
-      }
-    }
-    if (source[openingParen] !== "(") {
+    const openingParen = findParameterOpening(
+      source,
+      (declaration.index ?? 0) + declaration[0].length,
+    );
+    if (openingParen === null) {
       continue;
     }
     const closingParen = findClosingDelimiter(source, openingParen, "(", ")");
@@ -901,24 +877,8 @@ function collectTypedModelLiteralFindings(
     }
     const callPattern = new RegExp(`\\b${className}\\b`, "gu");
     for (const call of source.matchAll(callPattern)) {
-      let callOpening = (call.index ?? 0) + call[0].length;
-      while (/\s/u.test(source[callOpening] ?? "")) {
-        callOpening += 1;
-      }
-      if (source[callOpening] === "<") {
-        const closingTypeArguments = findClosingDelimiter(source, callOpening, "<", ">");
-        if (closingTypeArguments === null) {
-          continue;
-        }
-        callOpening = closingTypeArguments + 1;
-        while (/\s/u.test(source[callOpening] ?? "")) {
-          callOpening += 1;
-        }
-      }
-      if (source[callOpening] !== "(") {
-        continue;
-      }
-      if (callOpening === openingParen) {
+      const callOpening = findParameterOpening(source, (call.index ?? 0) + call[0].length);
+      if (callOpening === null || callOpening === openingParen) {
         continue;
       }
       const callClosing = findClosingDelimiter(source, callOpening, "(", ")");
@@ -962,6 +922,24 @@ function collectTypedModelLiteralFindings(
     }
   }
   return findings;
+}
+
+function findParameterOpening(source: string, startOffset: number): number | null {
+  let offset = startOffset;
+  while (/\s/u.test(source[offset] ?? "")) {
+    offset += 1;
+  }
+  if (source[offset] === "<") {
+    const closingTypeArguments = findClosingDelimiter(source, offset, "<", ">");
+    if (closingTypeArguments === null) {
+      return null;
+    }
+    offset = closingTypeArguments + 1;
+    while (/\s/u.test(source[offset] ?? "")) {
+      offset += 1;
+    }
+  }
+  return source[offset] === "(" ? offset : null;
 }
 
 export function findUnlocalizedAndroidUiLiterals(
@@ -1211,7 +1189,7 @@ export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
     (entry) => !entry.key.startsWith(MANAGED_PREFIX),
   );
   const manualSourceToKey = new Map(manualBase.map((entry) => [entry.value, entry.key]));
-  const entriesBySource = new Map<string, NativeInventoryEntry[]>();
+  const sources = new Set<string>();
   for (const entry of inventory) {
     if (
       entry.surface !== "android" ||
@@ -1219,22 +1197,16 @@ export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
     ) {
       continue;
     }
-    const group = entriesBySource.get(entry.source) ?? [];
-    group.push(entry);
-    entriesBySource.set(entry.source, group);
+    sources.add(entry.source);
   }
   for (const source of collectExplicitRuntimeSources(sourceFiles)) {
-    if (!entriesBySource.has(source)) {
-      entriesBySource.set(source, []);
-    }
+    sources.add(source);
   }
   for (const source of toolDisplaySources) {
-    if (!entriesBySource.has(source)) {
-      entriesBySource.set(source, []);
-    }
+    sources.add(source);
   }
   const sourceToKey = new Map<string, string>();
-  for (const source of entriesBySource.keys()) {
+  for (const source of sources) {
     sourceToKey.set(source, manualSourceToKey.get(source) ?? resourceKey(source));
   }
   const resources = new Map<string, string>();
@@ -1244,7 +1216,7 @@ export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
     const localeTranslations = artifacts.get(locale) ?? {};
     const artifactTranslationsBySource = translationsBySource(inventory, localeTranslations);
     const generated = new Map<string, { source: string; value: string }>();
-    for (const source of entriesBySource.keys()) {
+    for (const source of sources) {
       const key = sourceToKey.get(source);
       if (!key || !key.startsWith(MANAGED_PREFIX)) {
         continue;
@@ -1343,7 +1315,7 @@ export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
     contradictions,
     kotlin: renderKotlin(sourceToKey),
     resources,
-    sources: new Set(sourceToKey.keys()),
+    sources,
   };
 }
 

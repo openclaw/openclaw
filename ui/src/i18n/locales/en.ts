@@ -14,7 +14,6 @@ export const en: TranslationMap & {
     commands: TranslationMap;
     detailPanel: TranslationMap;
     welcome: TranslationMap & { suggestions: TranslationMap & { whatCanYouDo: string } };
-    backgroundTasks: TranslationMap;
     goals: TranslationMap;
     messages: TranslationMap &
       Record<
@@ -177,6 +176,9 @@ export const en: TranslationMap & {
     unknown: "Unknown",
     configured: "Configured",
     running: "Running",
+    queued: "Queued",
+    completed: "Completed",
+    cancelled: "Cancelled",
     linked: "Linked",
     mode: "Mode",
     system: "System",
@@ -231,6 +233,9 @@ export const en: TranslationMap & {
   optionCard: {
     recommended: "Recommended",
     skip: "Skip for now",
+  },
+  nativeConversation: {
+    openDashboardFailed: "Couldn't open that page in the Dashboard",
   },
   nativeLinkMenu: {
     label: "Link actions",
@@ -1077,6 +1082,7 @@ export const en: TranslationMap & {
     statusRunning: "Running",
     statusDone: "Done",
     statusFailed: "Failed",
+    statusInterrupted: "Interrupted",
     statusKilled: "Killed",
     statusTimeout: "Timed out",
     waitingForAnswer: "Waiting for your answer",
@@ -2398,6 +2404,9 @@ export const en: TranslationMap & {
       hint: "Connected with the Gateway token or over a tunnel, not a personal sign-in.",
     },
     rosterTitle: "Online",
+    active: "Active",
+    onlineActive: "Online · Active",
+    onlineIdle: "Online · Idle",
     idle: "Idle",
     offline: "Offline",
     card: {
@@ -2408,8 +2417,8 @@ export const en: TranslationMap & {
       onlineFor: "Online for",
       where: "Where",
       reportedTimeZone: "Reported time zone: {zone}",
-      lastActivity: "Last activity",
-      notObserved: "Not observed yet",
+      lastActivity: "Last interaction",
+      notObserved: "Activity unavailable",
       viewingNow: "Viewing now",
       recentSessions: "Recent sessions",
       noVisibleSessions: "No visible sessions being viewed.",
@@ -2567,31 +2576,6 @@ export const en: TranslationMap & {
       linkedEmails: "Linked emails",
     },
     modelAccounts: {},
-  },
-  tasksPage: {
-    loading: "Loading tasks…",
-    disconnected: "Connect to the gateway to load and manage tasks.",
-    loadFailed: "Could not load tasks.",
-    cancelFailed: "Could not cancel the task.",
-    invalidResponse: "The gateway returned an invalid task list.",
-    untitled: "Background task",
-    viewTranscript: "View transcript",
-    transcript: "Task transcript",
-    status: {
-      queued: "Queued",
-      running: "Running",
-      completed: "Completed",
-      failed: "Failed",
-      cancelled: "Cancelled",
-      timedOut: "Timed out",
-    },
-    runtime: {
-      subagent: "Subagent",
-      cron: "Automation",
-      acp: "ACP",
-      cli: "CLI",
-      unknown: "Task",
-    },
   },
   skillWorkshop: {},
   // Chat swarm summaries render before the lazy Activity catalog loads.
@@ -3564,6 +3548,7 @@ export const en: TranslationMap & {
       splitRight: "Split right",
       splitDown: "Split down",
       closePane: "Close pane",
+      panePosition: "Column {column}, row {row} ({pane})",
       dropSplit: "Split",
       dropOpenHere: "Open here",
     },
@@ -3840,8 +3825,6 @@ export const en: TranslationMap & {
       filesEmpty: "Browse files, artifacts, and changes from this session.",
       companion: "Side chat",
       companionEmpty: "Ask a focused question about this session.",
-      tasks: "Tasks",
-      tasksEmpty: "Follow active and recently completed background tasks.",
       desktop: "Desktop",
       desktopEmpty: "Connect to an available remote desktop.",
       portal: "Portal",
@@ -4213,7 +4196,6 @@ export const en: TranslationMap & {
       workedFor: "Worked for {duration}",
       worked: "Worked",
     },
-    backgroundTasks: {},
     sessionDiff: {
       title: "Changes",
       show: "Show session changes",
@@ -4259,9 +4241,9 @@ export const en: TranslationMap & {
       expandAllLines: "Show all {count} unmodified lines",
       binaryFile: "Binary file",
       untracked: "untracked",
-      tooLarge: "Diff too large to display.",
+      previewUnavailable: "Diff preview is unavailable.",
       truncatedFile: "Diff truncated.",
-      truncatedResult: "Some changes were omitted because the diff is very large.",
+      truncatedResult: "Some changes could not be displayed.",
       statusAdded: "Added",
       statusDeleted: "Deleted",
       statusRenamed: "Renamed",

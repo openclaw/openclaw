@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { GatewayChatStreamProjection } from "../../packages/gateway-client/src/chat-stream-projection.js";
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import { startGatewayClientWhenEventLoopReady } from "../../packages/gateway-client/src/readiness.js";
 import {
@@ -169,6 +170,7 @@ type HandoffSessionResolveParams = Required<
 
 export class GatewayChatClient implements TuiBackend {
   private client: GatewayClient;
+  private readonly chatStream = new GatewayChatStreamProjection();
   private readonly historyLifetime = new AbortController();
   private readyPromise: Promise<void>;
   private resolveReady?: () => void;
@@ -222,13 +224,15 @@ export class GatewayChatClient implements TuiBackend {
       },
       onEvent: (evt) => {
         this.refreshModelsForEvent(evt);
-        this.onEvent?.({
+        const projected = this.chatStream.project({
           event: evt.event,
           payload: evt.payload,
           seq: evt.seq,
         });
+        this.onEvent?.(projected.event);
       },
       onClose: (_code, reason) => {
+        this.chatStream.clear();
         this.modelCatalogs.clear();
         // Reset so waitForReady() blocks again until the next successful reconnect.
         this.readyPromise = new Promise((resolve) => {
@@ -308,6 +312,7 @@ export class GatewayChatClient implements TuiBackend {
   }
 
   stop() {
+    this.chatStream.clear();
     this.historyLifetime.abort();
     this.modelCatalogs.clear();
     // Keep TUI teardown ordered after the transport closes. Otherwise the

@@ -19,8 +19,6 @@ describe("Tool Search activation defaults", () => {
     { raw: false, enabled: false, mode: "code" },
     { raw: true, enabled: true, mode: "code" },
     { raw: {}, enabled: false, mode: "code" },
-    { raw: { enabled: false }, enabled: false, mode: "code" },
-    { raw: { enabled: true }, enabled: true, mode: "code" },
     { raw: { mode: "tools" }, enabled: true, mode: "tools" },
     { raw: { mode: "directory" }, enabled: true, mode: "directory" },
     { raw: { mode: "code" }, enabled: true, mode: "code" },

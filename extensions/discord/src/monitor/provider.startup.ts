@@ -192,14 +192,9 @@ export async function fetchDiscordBotIdentity(params: {
     throw new Error("Failed to resolve Discord bot identity", { cause: err });
   }
 
-  const botUserRecord = botUser as
-    | { id?: unknown; username?: unknown; globalName?: unknown }
-    | null
-    | undefined;
-  const botUserId = normalizeOptionalString(botUserRecord?.id);
+  const botUserId = normalizeOptionalString(botUser?.id);
   const botUserName =
-    normalizeOptionalString(botUserRecord?.username) ??
-    normalizeOptionalString(botUserRecord?.globalName);
+    normalizeOptionalString(botUser?.username) ?? normalizeOptionalString(botUser?.globalName);
   if (!botUserId) {
     const details = 'fetchUser("@me") returned no usable id';
     params.runtime.error?.(danger(`discord: failed to fetch bot identity: ${details}`));

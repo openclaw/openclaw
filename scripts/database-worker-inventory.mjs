@@ -63,22 +63,6 @@ const reviewed = new Map([
     },
   ],
   [
-    "src/tasks/task-registry.store.sqlite.ts",
-    { priority: 5, evidence: "Mixed native mutations and worker-backed read facade" },
-  ],
-  [
-    "src/tasks/task-registry.store.kernel.ts",
-    { priority: 5, evidence: "Kernel shared by native and worker callers" },
-  ],
-  [
-    "src/tasks/task-flow-registry.store.sqlite.ts",
-    { priority: 5, evidence: "Mixed native mutations and worker-backed read facade" },
-  ],
-  [
-    "src/tasks/task-flow-registry.store.kernel.ts",
-    { priority: 5, evidence: "Kernel shared by native and worker callers" },
-  ],
-  [
     "src/agents/plugin-model-catalog.ts",
     {
       priority: 6,
@@ -114,7 +98,7 @@ const workerModules = new Set([
   "src/infra/session-cost-usage-worker.ts",
 ]);
 const exceptionModules = new Set([
-  "src/state/openclaw-state-db-write-coordination.ts",
+  "src/state/openclaw-state-db-transaction.ts",
   "src/state/openclaw-state-lease-store.ts",
   "src/state/openclaw-state-lease-storage.ts",
   "src/state/openclaw-agent-db-lease.ts",

@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { installedPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { installedPluginRoot } from "../plugin-sdk/test-helpers/bundled-plugin-paths.js";
 import { recordInstalledPluginIndexInstallOwner } from "../plugins/installed-plugin-index-install-owner.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {

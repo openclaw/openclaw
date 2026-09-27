@@ -25,7 +25,6 @@ import { workboardCardSessionTarget } from "../../lib/workboard/session-resoluti
 import { openEditModal } from "./view-card-modal.ts";
 import {
   canMutate,
-  cardHasActiveOrRunningUnresolvedTask,
   cardHasUnresolvedStartedRun,
   engineBlockedByRuntime,
   formatStatusLabel,
@@ -125,7 +124,6 @@ export function renderCardMoveControl(
 
 export function getCardActionState(props: WorkboardProps, card: WorkboardCard) {
   const state = getWorkboardState(props.host);
-  const task = state.tasksByCardId.get(card.id);
   const session = findWorkboardSession(card, props.sessions, props.sessionResolution);
   const linkedSessionKey = workboardCardSessionKey(card);
   const sessionTarget = workboardCardSessionTarget(
@@ -135,23 +133,19 @@ export function getCardActionState(props: WorkboardProps, card: WorkboardCard) {
       : undefined,
   );
   const busy = state.busyCardIds.has(card.id) || state.dispatching;
-  const activeTask = cardHasActiveOrRunningUnresolvedTask(card, task, state.missingTaskIds);
   const writable = canMutate(props);
   const live =
-    activeTask ||
     cardHasUnresolvedStartedRun(card) ||
     session?.hasActiveRun === true ||
     (session?.hasActiveRun !== false && session?.status === "running");
   return {
     state,
-    task,
     busy,
-    activeTask,
     live,
     linkedSessionKey,
     sessionTarget,
     writable,
-    showStartControls: writable && canStartWorkboardCard(state, card),
+    showStartControls: writable && canStartWorkboardCard(card),
     archived: Boolean(card.metadata?.archivedAt),
   };
 }

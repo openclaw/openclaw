@@ -201,6 +201,7 @@ function sessionRunStatus(value: unknown): SessionRunStatus | null {
     value === "queued" ||
     value === "done" ||
     value === "failed" ||
+    value === "interrupted" ||
     value === "killed" ||
     value === "timeout"
     ? value

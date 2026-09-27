@@ -12,6 +12,7 @@ import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withTimeout } from "../utils/with-timeout.js";
 import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -570,12 +571,15 @@ describe("gateway plugin node capability auth", () => {
 
   test("does not charge a stale bearer when a valid node capability succeeds", async () => {
     await withLoopbackTrustedProxy(async () => {
-      const rateLimiter = createGatewayAuthRateLimiter({
-        maxAttempts: 1,
-        windowMs: 60_000,
-        lockoutMs: 60_000,
-        pruneIntervalMs: 0,
-      });
+      const rateLimiter = createGatewayAuthRateLimiter(
+        {
+          maxAttempts: 1,
+          windowMs: 60_000,
+          lockoutMs: 60_000,
+          pruneIntervalMs: 0,
+        },
+        { scheduler: createTestGatewayScheduler() },
+      );
       await withCanvasGatewayHarness({
         resolvedAuth: tokenResolvedAuth,
         rateLimiter,
@@ -624,13 +628,16 @@ describe("gateway plugin node capability auth", () => {
 
   test("revalidates a node capability after awaited bearer auth", async () => {
     const capability = "active-node";
-    const rateLimiter = createGatewayAuthRateLimiter({
-      maxAttempts: 1,
-      windowMs: 60_000,
-      lockoutMs: 60_000,
-      exemptLoopback: false,
-      pruneIntervalMs: 0,
-    });
+    const rateLimiter = createGatewayAuthRateLimiter(
+      {
+        maxAttempts: 1,
+        windowMs: 60_000,
+        lockoutMs: 60_000,
+        exemptLoopback: false,
+        pruneIntervalMs: 0,
+      },
+      { scheduler: createTestGatewayScheduler() },
+    );
     const client = makeWsClient({
       connId: "c-active-node",
       clientIp: "203.0.113.99",
@@ -844,12 +851,15 @@ describe("gateway plugin node capability auth", () => {
 
   test("returns 429 for repeated failed canvas auth attempts (HTTP + WS upgrade)", async () => {
     await withLoopbackTrustedProxy(async () => {
-      const rateLimiter = createGatewayAuthRateLimiter({
-        maxAttempts: 1,
-        windowMs: 60_000,
-        lockoutMs: 60_000,
-        exemptLoopback: false,
-      });
+      const rateLimiter = createGatewayAuthRateLimiter(
+        {
+          maxAttempts: 1,
+          windowMs: 60_000,
+          lockoutMs: 60_000,
+          exemptLoopback: false,
+        },
+        { scheduler: createTestGatewayScheduler() },
+      );
       await withCanvasGatewayHarness({
         resolvedAuth: tokenResolvedAuth,
         rateLimiter,
@@ -893,12 +903,15 @@ describe("gateway plugin node capability auth", () => {
         },
       },
       run: async () => {
-        const rateLimiter = createGatewayAuthRateLimiter({
-          maxAttempts: 1,
-          windowMs: 60_000,
-          lockoutMs: 60_000,
-          exemptLoopback: true,
-        });
+        const rateLimiter = createGatewayAuthRateLimiter(
+          {
+            maxAttempts: 1,
+            windowMs: 60_000,
+            lockoutMs: 60_000,
+            exemptLoopback: true,
+          },
+          { scheduler: createTestGatewayScheduler() },
+        );
         await withCanvasGatewayHarness({
           resolvedAuth: tokenResolvedAuth,
           listenHost: "0.0.0.0",

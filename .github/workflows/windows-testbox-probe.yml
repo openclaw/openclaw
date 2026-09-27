@@ -38,7 +38,7 @@ on:
         default: false
         type: boolean
       run_windows_ci:
-        description: "Run the focused Windows CI shard and native Scheduled Task proof"
+        description: "Run Windows CI and native Tasks, or installed native proof with a package binding"
         required: false
         default: false
         type: boolean
@@ -82,6 +82,10 @@ env:
 jobs:
   probe:
     name: Windows probe
+    outputs:
+      native_package_id: ${{ steps.native_package_upload.outputs.artifact-id }}
+      native_package_digest: ${{ steps.native_package_upload.outputs.artifact-digest }}
+      native_manifest_sha256: ${{ steps.installed_package.outputs.native_manifest_sha256 }}
     runs-on: ${{ inputs.runner_label }}
     timeout-minutes: 75
     permissions:
@@ -288,7 +292,10 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           if ([string]::IsNullOrEmpty($env:STARTUP_PACKAGE)) { throw "CPU diagnostics require an installed package binding." }
-          if ($env:RUN_WINDOWS_CI -eq "true") { throw "Installed startup and Windows CI are separate runs." }
+          $nativePackage = $env:RUN_WINDOWS_CI -eq "true"
+          if ($nativePackage -and ($env:REPAIR_WORKER -eq "true" -or $env:CPU_DIAGNOSTIC -eq "true" -or $env:REPAIR_MIXED_PROOF -eq "true" -or $env:RUNNER_LABEL -ne "windows-2025" -or $env:KEEPALIVE_MINUTES -ne "0")) {
+            throw "Native package handoff requires windows-2025, keepalive 0, and no other proof mode."
+          }
           if ($env:TARGET_REF -cnotmatch '^[0-9a-f]{40}$') { throw "Installed startup requires an exact tooling target_ref." }
           if ($env:STARTUP_NODE_VERSION -notmatch '^\d+\.\d+\.\d+$') { throw "Installed startup requires an exact Node version." }
           $toolingSha = (git rev-parse HEAD).Trim()
@@ -300,6 +307,9 @@ jobs:
               throw "Repair worker proof requires one package, windows-2025, keepalive 0, and no other proof mode."
             }
             if ($env:WORKFLOW_SHA -cne $toolingSha) { throw "Repair worker proof requires the reviewed tooling and workflow revision to match." }
+          }
+          if ($nativePackage -and ($paired -or $env:WORKFLOW_SHA -cne $toolingSha)) {
+            throw "Native package handoff requires one candidate and identical workflow/tooling revisions."
           }
           if ($paired -and $env:CPU_DIAGNOSTIC -eq "true") { throw "CPU diagnostics require one package, not a comparison." }
           $packages = [ordered]@{ baseline = $selection }
@@ -372,7 +382,7 @@ jobs:
 
       - name: Probe WSL2
         id: wsl2
-        if: ${{ !inputs.run_private_node_provisioning && !inputs.installed_repair_worker && inputs.windows_ci_replay == '' }}
+        if: ${{ !inputs.run_private_node_provisioning && !inputs.installed_repair_worker && inputs.windows_ci_replay == '' && !(inputs.run_windows_ci && inputs.installed_startup_package != '') }}
         env:
           ENABLE_WSL2_FEATURES: ${{ inputs.enable_wsl2_features }}
           IMPORT_UBUNTU_WSL2: ${{ inputs.import_ubuntu_wsl2 }}
@@ -589,16 +599,18 @@ jobs:
           node scripts/run-vitest.mjs src/cli/update-cli/update-command-executor-auxiliary.test.ts -t 'preserves direct preflight release through a healthy installer child and active drain|never starts Node provisioning without released authorization input|refuses Node provisioning after|preserves native-gate environment precedence|preserves absent or empty native payload options'
 
       - name: Prove installed benchmark lifecycle
-        if: ${{ inputs.installed_startup_package != '' && !inputs.installed_repair_worker }}
+        if: ${{ inputs.installed_startup_package != '' && !inputs.installed_repair_worker && !inputs.run_windows_ci }}
         run: |
           $ErrorActionPreference = "Stop"
           node scripts/run-vitest.mjs test/scripts/bench-gateway-installed.test.ts
           if ($LASTEXITCODE -ne 0) { throw "Installed benchmark lifecycle proof failed." }
 
-      - name: Install and bind startup candidate
+      - name: Resolve package and install only for local consumers
+        id: installed_package
         if: ${{ inputs.installed_startup_package != '' }}
         env:
           TOOLING_SHA: ${{ steps.startup_input.outputs.tooling_sha }}
+          NATIVE_PACKAGE: ${{ inputs.run_windows_ci }}
           STARTUP_NODE_VERSION: ${{ inputs.startup_node_version }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
@@ -622,6 +634,45 @@ jobs:
             if ($candidate.packageSourceSha -cne $binding.sourceSha -or $candidate.sha256 -cne $binding.packageSha256) { throw "Resolved source or package bytes differ." }
             Copy-Item -LiteralPath (Join-Path $candidateDir "package-candidate.json") -Destination (Join-Path $evidence "${prefix}package-candidate.json")
             $tarball = (Resolve-Path -LiteralPath $candidate.tarball).Path
+            if ($env:NATIVE_PACKAGE -eq "true") {
+              # New current-run transport; no installed graph or state crosses jobs.
+              $handoff = Join-Path $env:RUNNER_TEMP "native-package-handoff"
+              New-Item -ItemType Directory -Path $handoff | Out-Null
+              Copy-Item -LiteralPath $tarball -Destination (Join-Path $handoff "candidate.tgz")
+              $published = @()
+              foreach ($version in @("2026.9.3", "2026.9.4")) {
+                $metadataPath = Join-Path $handoff "registry-$version.json"
+                $baselinePath = Join-Path $handoff "openclaw-$version.tgz"
+                Invoke-WebRequest -Uri "https://registry.npmjs.org/openclaw/$version" -OutFile $metadataPath -MaximumRedirection 0
+                $registry = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
+                $url = "https://registry.npmjs.org/openclaw/-/openclaw-$version.tgz"
+                $pin = if ($version -eq "2026.9.3") {
+                  @{ commit = "1391f7cd2d40ab5bbcf2f5f831d3a64f520e72d7"; sha256 = "d1c63366833f8ae4a6ab4f3b60b1aa84ca82d03dba13d3d3eba989aa159e2449"; integrity = "sha512-CzDHMeHdnjlIZ76ZyBb1lvLO4H/yBIMYXupFGGBN87x0853y3hg5nLAnKfxSKqLzqhbUKqy9ebDRAWWV4t8aew==" }
+                } else {
+                  @{ commit = "3a9d69db306cd7f081e06254cb89c4bcc14a7107"; sha256 = "4f1f656770461d4677dea755b1899cba12b912b06798c89a59e2f0c18688b761"; integrity = "sha512-lTQpEEe1Xm3u2PCHaPEr+vP8paGk1vLdHuzdItsNToaLI6hAqRVvgJYg+GxukJhETJp4tPy/S1Gftl4KuB8n7A==" }
+                }
+                if ($registry.name -cne "openclaw" -or $registry.version -cne $version -or $registry.dist.tarball -cne $url -or $registry.dist.integrity -cne $pin.integrity) { throw "Published registry identity differs from its immutable pin." }
+                Invoke-WebRequest -Uri $url -OutFile $baselinePath -MaximumRedirection 0
+                $sha256 = (Get-FileHash -LiteralPath $baselinePath -Algorithm SHA256).Hash.ToLowerInvariant()
+                $sha512 = [Convert]::ToBase64String([Convert]::FromHexString((Get-FileHash -LiteralPath $baselinePath -Algorithm SHA512).Hash))
+                if ($sha256 -cne $pin.sha256 -or "sha512-$sha512" -cne $pin.integrity) { throw "Published archive bytes differ from the registry pin." }
+                $published += @{ source = "npm-registry"; version = $version; commit = $pin.commit; sha256 = $pin.sha256; integrity = $pin.integrity; metadataSha256 = (Get-FileHash -LiteralPath $metadataPath -Algorithm SHA256).Hash.ToLowerInvariant() }
+              }
+              $manifest = [ordered]@{
+                schema = "openclaw.native-schtasks-handoff/v1"
+                repository = $env:GITHUB_REPOSITORY; runId = $env:GITHUB_RUN_ID
+                runAttempt = $env:GITHUB_RUN_ATTEMPT; workflowSha = $env:WORKFLOW_SHA
+                toolingSha = $env:TOOLING_SHA; producerJob = "probe"
+                origin = @{ runId = [string]$binding.runId; runAttempt = [string]$binding.runAttempt; artifactId = [string]$binding.artifactId; sourceSha = $binding.sourceSha; workflowSha = $binding.workflowSha; packageSha256 = $binding.packageSha256; artifactDigest = $binding.artifactDigest }
+                published = $published
+                candidate = @{ name = $candidate.name; version = $candidate.version; packageSourceSha = $candidate.packageSourceSha; sha256 = $candidate.sha256 }
+                runtime = @{ version = $nodeVersion; sha256 = (Get-FileHash -LiteralPath $nodePath -Algorithm SHA256).Hash.ToLowerInvariant() }
+              }
+              $manifestPath = Join-Path $handoff "handoff.json"
+              $manifest | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $manifestPath
+              "native_manifest_sha256=$((Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+              continue
+            }
             $installRoot = Join-Path $armRoot "startup-package-installed"
             New-Item -ItemType Directory -Path $installRoot | Out-Null
             npm install --prefix $installRoot --no-audit --no-fund --ignore-scripts=false $tarball
@@ -644,12 +695,26 @@ jobs:
             }
             @{ workflowSha = $env:WORKFLOW_SHA; toolingSha = $env:TOOLING_SHA; packageSourceSha = $binding.sourceSha; installedPackageLockSha256 = $packageLockHash; runner = $env:RUNNER_NAME; node = $nodeVersion; nodePath = $nodePath } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $evidence "${prefix}execution.json")
           }
-          $inputRecord = $records.baseline
-          if ($paired) { $inputRecord.comparison = $records.candidate }
-          $inputRecord | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $evidence "input.json")
+          if ($env:NATIVE_PACKAGE -ne "true") {
+            $inputRecord = $records.baseline
+            if ($paired) { $inputRecord.comparison = $records.candidate }
+            $inputRecord | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $evidence "input.json")
+          }
+
+      - name: Upload verified package for the current native run
+        id: native_package_upload
+        if: ${{ inputs.run_windows_ci && inputs.installed_startup_package != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: native-schtasks-package-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/native-package-handoff
+          compression-level: 0
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 7
 
       - name: Measure installed startup cohort
-        if: ${{ inputs.installed_startup_package != '' && !inputs.installed_repair_worker }}
+        if: ${{ inputs.installed_startup_package != '' && !inputs.installed_repair_worker && !inputs.run_windows_ci }}
         env:
           CPU_DIAGNOSTIC: ${{ inputs.installed_startup_cpu_diagnostic }}
         run: |
@@ -804,7 +869,7 @@ jobs:
           retention-days: 7
 
       - name: Run Windows CI tests
-        if: ${{ inputs.run_windows_ci }}
+        if: ${{ inputs.run_windows_ci && inputs.installed_startup_package == '' }}
         shell: bash
         env:
           CI: true
@@ -848,10 +913,14 @@ jobs:
   # Native session qualification must not depend on headless CI or WSL results.
   native-schtasks:
     name: Native Scheduled Task proof
-    if: ${{ inputs.run_windows_ci && !inputs.run_private_node_provisioning && !inputs.installed_repair_worker && inputs.windows_ci_replay == '' }}
+    if: ${{ inputs.run_windows_ci && inputs.installed_startup_package == '' && !inputs.run_private_node_provisioning && !inputs.installed_repair_worker && inputs.windows_ci_replay == '' }}
     runs-on: windows-2025
     timeout-minutes: 75
-    steps:
+    env:
+      NATIVE_PACKAGE_ID: ""
+      NATIVE_PACKAGE_DIGEST: ""
+      NATIVE_MANIFEST_SHA256: ""
+    steps: &native_schtasks_steps
       - name: Qualify fresh native runner isolation
         id: native_isolation
         shell: pwsh
@@ -888,17 +957,90 @@ jobs:
       - *windows_node_path
       - *windows_install
 
+      - name: Download this run's verified native package
+        if: ${{ inputs.installed_startup_package != '' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ env.NATIVE_PACKAGE_ID }}
+          path: ${{ runner.temp }}/native-package-archive
+          skip-decompress: true
+          digest-mismatch: error
+          # No github-token/repository/run-id: the pinned action uses current-run scope.
+
+      - name: Verify current-run handoff and retain origin identity
+        if: ${{ inputs.installed_startup_package != '' }}
+        shell: pwsh
+        env:
+          HANDOFF_ID: ${{ env.NATIVE_PACKAGE_ID }}
+          HANDOFF_DIGEST: ${{ env.NATIVE_PACKAGE_DIGEST }}
+          MANIFEST_SHA256: ${{ env.NATIVE_MANIFEST_SHA256 }}
+          PACKAGE_BINDING: ${{ inputs.installed_startup_package }}
+          TARGET_REF: ${{ inputs.target_ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          NODE_VERSION: ${{ inputs.startup_node_version }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($env:HANDOFF_ID -cnotmatch '^[1-9][0-9]*$' -or $env:HANDOFF_DIGEST -cnotmatch '^[0-9a-f]{64}$' -or $env:MANIFEST_SHA256 -cnotmatch '^[0-9a-f]{64}$') { throw "Missing exact current-run handoff outputs." }
+          $checkoutSha = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $checkoutSha -cne $env:TARGET_REF) { throw "Native tooling checkout differs from the handoff target." }
+          $archiveRoot = Join-Path $env:RUNNER_TEMP "native-package-archive"
+          $archives = @(Get-ChildItem -LiteralPath $archiveRoot -File)
+          if ($archives.Count -ne 1 -or @(Get-ChildItem -LiteralPath $archiveRoot -Directory).Count -ne 0) { throw "Expected exactly one current-run artifact archive." }
+          if ((Get-FileHash -LiteralPath $archives[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant() -cne $env:HANDOFF_DIGEST) { throw "Archive differs from the producer's upload digest." }
+          $handoff = Join-Path $env:RUNNER_TEMP "native-package-verified"
+          if (Test-Path -LiteralPath $handoff) { throw "Native handoff destination must be fresh." }
+          [IO.Compression.ZipFile]::ExtractToDirectory($archives[0].FullName, $handoff)
+          $files = @(Get-ChildItem -LiteralPath $handoff -File | Sort-Object Name)
+          if (($files.Name -join ',') -cne 'candidate.tgz,handoff.json,openclaw-2026.9.3.tgz,openclaw-2026.9.4.tgz,registry-2026.9.3.json,registry-2026.9.4.json' -or @(Get-ChildItem -LiteralPath $handoff -Directory).Count -ne 0) { throw "Unexpected native handoff members." }
+          $manifestPath = Join-Path $handoff "handoff.json"
+          if ((Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $env:MANIFEST_SHA256) { throw "Handoff manifest changed." }
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          $binding = $env:PACKAGE_BINDING | ConvertFrom-Json
+          if ($manifest.schema -cne "openclaw.native-schtasks-handoff/v1" -or $manifest.producerJob -cne "probe" -or $manifest.repository -cne $env:GITHUB_REPOSITORY -or $manifest.runId -cne $env:GITHUB_RUN_ID -or $manifest.runAttempt -cne $env:GITHUB_RUN_ATTEMPT -or $manifest.workflowSha -cne $env:WORKFLOW_SHA -or $manifest.toolingSha -cne $env:TARGET_REF -or $env:WORKFLOW_SHA -cne $env:TARGET_REF) { throw "Handoff origin differs from this exact workflow run." }
+          foreach ($field in @("runId", "runAttempt", "artifactId", "sourceSha", "workflowSha", "packageSha256", "artifactDigest")) {
+            if ([string]$manifest.origin.$field -cne [string]$binding.$field) { throw "Original Package Acceptance binding changed: $field" }
+          }
+          $tarball = Join-Path $handoff "candidate.tgz"
+          if ($manifest.candidate.name -cne "openclaw" -or [string]::IsNullOrWhiteSpace($manifest.candidate.version) -or $manifest.candidate.packageSourceSha -cne $binding.sourceSha -or $manifest.candidate.sha256 -cne $binding.packageSha256 -or (Get-FileHash -LiteralPath $tarball -Algorithm SHA256).Hash.ToLowerInvariant() -cne $binding.packageSha256) { throw "Candidate package identity changed in transit." }
+          $nodePath = (node -p 'process.execPath').Trim()
+          if ($LASTEXITCODE -ne 0 -or $manifest.runtime.version -cne "v$env:NODE_VERSION" -or (node --version).Trim() -cne $manifest.runtime.version -or (Get-FileHash -LiteralPath $nodePath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $manifest.runtime.sha256) { throw "Native runtime differs from the producer's pinned runtime." }
+          $record = @{ status = "transport-verified-only"; artifactId = $env:HANDOFF_ID; artifactDigest = $env:HANDOFF_DIGEST; manifestSha256 = $env:MANIFEST_SHA256; origin = $manifest.origin; candidate = $manifest.candidate; plannedCells = @("fresh", "published-2026.9.3-to-candidate", "published-2026.9.4-to-candidate"); productProof = "not-run" }
+          New-Item -ItemType Directory -Force -Path .artifacts/windows-schtasks | Out-Null
+          $record | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath .artifacts/windows-schtasks/package-handoff.json
+          $published = @()
+          if (@($manifest.published).Count -ne 2) { throw "Both fixed registry baselines are required." }
+          foreach ($version in @("2026.9.3", "2026.9.4")) {
+            $rows = @($manifest.published | Where-Object { $_.version -ceq $version })
+            if ($rows.Count -ne 1 -or $rows[0].source -cne "npm-registry") { throw "Missing fixed registry origin." }
+            $row = $rows[0]
+            $metadata = Join-Path $handoff "registry-$version.json"
+            $publishedTarball = Join-Path $handoff "openclaw-$version.tgz"
+            if ((Get-FileHash -LiteralPath $metadata -Algorithm SHA256).Hash.ToLowerInvariant() -cne $row.metadataSha256 -or (Get-FileHash -LiteralPath $publishedTarball -Algorithm SHA256).Hash.ToLowerInvariant() -cne $row.sha256) { throw "Registry baseline changed in transit." }
+            $published += @{ source = "npm-registry"; version = $version; commit = $row.commit; integrity = $row.integrity; sha256 = $row.sha256; metadata = $metadata; tarball = $publishedTarball }
+          }
+          $inputRecord = @{
+            published = $published
+            sourceSha = $manifest.candidate.packageSourceSha; toolingSha = $manifest.toolingSha
+            tarball = $tarball; candidate = $manifest.candidate
+            installRoot = (Join-Path $env:RUNNER_TEMP "native-package-installed")
+            stateRoot = (Join-Path $env:RUNNER_TEMP "openclaw-schtasks-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT")
+            runtime = $manifest.runtime
+            artifact = @{ id = [long]$manifest.origin.artifactId; runId = [long]$manifest.origin.runId; runAttempt = [long]$manifest.origin.runAttempt; workflowSha = $manifest.origin.workflowSha; digest = $manifest.origin.artifactDigest }
+          }
+          $inputRecord | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath .artifacts/windows-schtasks/installed-input.json
+
       - name: Run native Scheduled Task lifecycle proof
         id: native_schtasks
-        if: ${{ inputs.run_windows_ci }}
+        if: ${{ inputs.run_windows_ci && inputs.installed_startup_package == '' }}
         timeout-minutes: 5
         shell: bash
         env:
           CI_WINDOWS_SCHTASKS_PROOF_PATH: ${{ github.workspace }}\.artifacts\windows-schtasks\proof.json
+          CI_WINDOWS_SCHTASKS_INSTALLED_INPUT: ${{ inputs.installed_startup_package != '' && format('{0}/.artifacts/windows-schtasks/installed-input.json', github.workspace) || '' }}
           CI_WINDOWS_SCHTASKS_ROOT: ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}
           CI_WINDOWS_SCHTASKS_TEST_ID: ${{ github.run_id }}-${{ github.run_attempt }}
           EXPECTED_HEAD: ${{ inputs.target_ref }}
-        run: |
+        run: &native_schtasks_run |
           set -euo pipefail
           export PATH="$NODE_BIN:$PATH"
           if [[ ! "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]; then
@@ -914,20 +1056,120 @@ jobs:
           mkdir -p .artifacts/windows-schtasks
           pnpm test:windows:schtasks:integration
 
-      # Qualification/setup failures cannot have created this run's native task.
-      - name: Clean native Scheduled Task residue
-        id: native_cleanup
-        if: ${{ always() && inputs.run_windows_ci && steps.native_isolation.outcome == 'success' && contains(fromJSON('["success","failure","cancelled"]'), steps.native_schtasks.outcome) }}
+      - name: Prepare installed Scheduled Task cell fresh
+        id: native_prepare_fresh
+        if: ${{ inputs.run_windows_ci && inputs.installed_startup_package != '' }}
+        shell: bash
+        env:
+          OPENCLAW_VITEST_WORKER_CACHE: "1"
+          CI_WINDOWS_SCHTASKS_INSTALLED_CELL: "fresh"
+          CI_WINDOWS_SCHTASKS_TEST_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          export PATH="$NODE_BIN:$PATH"
+          node --import ./scripts/tsx.mjs src/daemon/schtasks.installed-package.test-support.ts prepare .artifacts/windows-schtasks/installed-input.json
+          # Compile native test workers before the cell's action deadline starts.
+          CI_WINDOWS_SCHTASKS_INTEGRATION=1 node scripts/prepare-vitest-worker-cache.mts
+
+      - name: Run installed Scheduled Task cell fresh
+        id: native_schtasks_fresh
+        if: ${{ inputs.run_windows_ci && inputs.installed_startup_package != '' && steps.native_prepare_fresh.outcome == 'success' }}
+        # 6-minute installed body, three-minute teardown hook, one-minute runner margin.
+        timeout-minutes: 10
+        shell: bash
+        env:
+          OPENCLAW_VITEST_WORKER_CACHE: "1"
+          CI_WINDOWS_SCHTASKS_PROOF_PATH: ${{ github.workspace }}\.artifacts\windows-schtasks\cells\fresh\proof.json
+          CI_WINDOWS_SCHTASKS_INSTALLED_INPUT: ${{ github.workspace }}/.artifacts/windows-schtasks/installed-input.json
+          CI_WINDOWS_SCHTASKS_INSTALLED_CELL: "fresh"
+          CI_WINDOWS_SCHTASKS_ROOT: ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}\fresh
+          CI_WINDOWS_SCHTASKS_TEST_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          EXPECTED_HEAD: ${{ inputs.target_ref }}
+        run: *native_schtasks_run
+
+      - name: Join native Scheduled Task cell fresh
+        id: native_cleanup_fresh
+        if: ${{ always() && inputs.run_windows_ci && inputs.installed_startup_package != '' && steps.native_isolation.outcome == 'success' && contains(fromJSON('["success","failure","cancelled"]'), steps.native_schtasks_fresh.outcome) }}
         shell: pwsh
         env:
           TEST_ID: ${{ github.run_id }}-${{ github.run_attempt }}
           TEST_ROOT: ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}
-        run: |
+          INSTALLED_PACKAGE_MODE: "true"
+          CI_WINDOWS_SCHTASKS_INSTALLED_CELL: "fresh"
+        run: &native_schtasks_cleanup_run |
           $ErrorActionPreference = "Continue"
           $cleanupErrors = @()
           $profile = "schtasks-int-$env:TEST_ID"
           $taskName = "OpenClaw Gateway ($profile)"
           $stateDir = Join-Path $env:USERPROFILE ".openclaw-$profile"
+          "owned_package_cleanup=false" >> $env:GITHUB_OUTPUT
+          if ($env:INSTALLED_PACKAGE_MODE -eq "true") {
+            $requestedCells = @("fresh", "2026.9.3", "2026.9.4")
+            if (-not [string]::IsNullOrEmpty($env:CI_WINDOWS_SCHTASKS_INSTALLED_CELL)) {
+              if ($env:CI_WINDOWS_SCHTASKS_INSTALLED_CELL -cnotin $requestedCells) { throw "Unknown fixed cleanup cell." }
+              $requestedCells = @($env:CI_WINDOWS_SCHTASKS_INSTALLED_CELL)
+            }
+            $records = @()
+            foreach ($cell in $requestedCells) {
+              $recordPath = Join-Path $env:GITHUB_WORKSPACE ".artifacts/windows-schtasks/cells/$cell/installed-cleanup.json"
+              if (-not (Test-Path -LiteralPath $recordPath)) { continue }
+              $cellRecords = @(Get-Content -LiteralPath $recordPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop)
+              if ($cellRecords.Count -eq 0) { throw "An existing admission file has no records." }
+              foreach ($record in $cellRecords) {
+                if ($record.cell -cne $cell) { throw "Admission record belongs to a different cell." }
+                $records += $record
+              }
+            }
+            if ($records.Count -eq 0) { Write-Host "No installed task mutation was admitted."; exit 0 }
+            $seen = @{}
+            # Validate the entire finite authority set before performing any cleanup.
+            foreach ($record in $records) {
+              $index = [array]::IndexOf(@("fresh", "2026.9.3", "2026.9.4"), [string]$record.cell)
+              if ($index -lt 0 -or $record.role -cnotin @("selected", "peer", "non-gateway", "missing", "direct", "extra")) { throw "Unexpected installed cell identity." }
+              $discovery = $record.role -cin @("non-gateway", "missing", "direct", "extra")
+              if ($discovery -and $record.cell -cne "fresh") { throw "Discovery tasks belong only to the fresh cell." }
+              $expectedProfile = "schtasks-int-$env:TEST_ID-$index-$($record.role)"
+              $expectedTask = if ($record.role -ceq "extra") { "NativeExtra-$env:TEST_ID-$index" } elseif ($record.role -ceq "non-gateway") { "OpenClaw Helper ($expectedProfile)" } else { "OpenClaw Gateway ($expectedProfile)" }
+              $expectedState = Join-Path $env:USERPROFILE ".openclaw-$expectedProfile"
+              $expectedRoot = Join-Path $env:TEST_ROOT $record.cell
+              if ($discovery) { $expectedRoot = Join-Path $expectedRoot $record.role }
+              $prefixName = if ($record.role -ceq "peer") { "$($record.cell)-peer" } else { $record.cell }
+              $expectedInstall = Join-Path (Join-Path $env:RUNNER_TEMP "native-package-installed") $prefixName
+              if ($record.taskInitiallyAbsent -ne $true -or $record.profile -cne $expectedProfile -or $record.taskName -cne $expectedTask -or $seen.ContainsKey($expectedTask)) { throw "No unique admitted installed task authority." }
+              foreach ($pair in @(@($record.stateDir, $expectedState), @($record.rootDir, $expectedRoot), @($record.installRoot, $expectedInstall), @($record.entry, (Join-Path $expectedInstall "node_modules/openclaw/openclaw.mjs")))) {
+                if ([IO.Path]::GetFullPath($pair[0]) -ine [IO.Path]::GetFullPath($pair[1])) { throw "Installed cleanup path differs from its exact run." }
+              }
+              if ($discovery -and [IO.Path]::GetFullPath($record.scriptPath) -ine [IO.Path]::GetFullPath((Join-Path $expectedRoot "$($record.role).cmd"))) { throw "Discovery launcher path differs from its fixture." }
+              if ($record.role -cin @("direct", "extra") -and $record.cleanupNeedle -cne $expectedProfile) { throw "Diagnostic task cleanup token differs from its exact profile." }
+              $seen[$expectedTask] = $true
+            }
+            foreach ($record in $records) { schtasks.exe /End /TN $record.taskName 2>$null }
+            foreach ($record in $records) {
+              schtasks.exe /Delete /F /TN $record.taskName 2>$null
+              try {
+                $scheduler = New-Object -ComObject "Schedule.Service"; $scheduler.Connect()
+                $null = $scheduler.GetFolder("\").GetTask($record.taskName)
+                $cleanupErrors += "Installed task remains: $($record.taskName)"
+              } catch {
+                $exception = $_.Exception
+                while ($null -ne $exception.InnerException) { $exception = $exception.InnerException }
+                if ($exception.HResult -ne -2147024894 -and $exception.HResult -ne -2147024893) { $cleanupErrors += "Task absence is unverified: $($record.taskName)" }
+              }
+            }
+            try {
+              $processes = @(Get-CimInstance Win32_Process -ErrorAction Stop)
+              foreach ($record in $records) {
+                $processNeedle = if ($record.role -cin @("direct", "extra")) { $record.cleanupNeedle } else { Join-Path $record.installRoot "node_modules/openclaw" }
+                $remaining = @($processes | Where-Object { $_.CommandLine -and ($_.CommandLine.IndexOf($processNeedle, [StringComparison]::OrdinalIgnoreCase) -ge 0 -or $_.CommandLine.IndexOf($record.stateDir, [StringComparison]::OrdinalIgnoreCase) -ge 0) })
+                if ($remaining.Count -gt 0) { $cleanupErrors += "Installed processes remain; preserve evidence for runner teardown." }
+              }
+            } catch { $cleanupErrors += "Installed process absence is unverified." }
+            $summaryRoot = if ([string]::IsNullOrEmpty($env:CI_WINDOWS_SCHTASKS_INSTALLED_CELL)) { $env:TEST_ROOT } else { Join-Path $env:TEST_ROOT $env:CI_WINDOWS_SCHTASKS_INSTALLED_CELL }
+            $cleanupErrors | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $summaryRoot "cleanup-summary.txt")
+            if ($cleanupErrors.Count -gt 0) { throw ($cleanupErrors -join " ") }
+            "owned_package_cleanup=true" >> $env:GITHUB_OUTPUT
+            exit 0
+          }
           New-Item -ItemType Directory -Force -Path $env:TEST_ROOT | Out-Null
           schtasks.exe /End /TN $taskName 2>$null
           Start-Sleep -Milliseconds 200
@@ -1006,6 +1248,235 @@ jobs:
           }
           exit 0
 
+      - name: Retain installed cell proof fresh
+        id: native_cell_proof_fresh
+        if: ${{ always() && inputs.run_windows_ci && inputs.installed_startup_package != '' && contains(fromJSON('["success","failure","cancelled"]'), steps.native_prepare_fresh.outcome) }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: windows-schtasks-cell-${{ github.run_id }}-${{ github.run_attempt }}-fresh
+          path: |
+            .artifacts/windows-schtasks/cells/fresh/*.json*
+            ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}\fresh\commands.json
+            ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}\fresh\cleanup-summary.txt
+            ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}\fresh\**\failure-diagnostics.json
+          if-no-files-found: warn
+          overwrite: false
+          retention-days: 7
+
+      - name: Retire successful installed cell fresh
+        id: native_retire_fresh
+        if: ${{ inputs.run_windows_ci && inputs.installed_startup_package != '' && steps.native_schtasks_fresh.outcome == 'success' && steps.native_cleanup_fresh.outcome == 'success' && steps.native_cleanup_fresh.outputs.owned_package_cleanup == 'true' && steps.native_cell_proof_fresh.outcome == 'success' }}
+        shell: bash
+        env:
+          CI_WINDOWS_SCHTASKS_INSTALLED_CELL: "fresh"
+          CI_WINDOWS_SCHTASKS_TEST_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          CI_WINDOWS_SCHTASKS_CELL_CLEANUP: ${{ steps.native_cleanup_fresh.outcome }}
+          CI_WINDOWS_SCHTASKS_CELL_ARTIFACT_ID: ${{ steps.native_cell_proof_fresh.outputs.artifact-id }}
+          CI_WINDOWS_SCHTASKS_CELL_ARTIFACT_DIGEST: ${{ steps.native_cell_proof_fresh.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          export PATH="$NODE_BIN:$PATH"
+          node --import ./scripts/tsx.mjs src/daemon/schtasks.installed-package.test-support.ts retire .artifacts/windows-schtasks/installed-input.json
+
+      - name: Prepare installed Scheduled Task cell 2026.9.3
+        id: native_prepare_9_3
+        if: ${{ inputs.run_windows_ci && inputs.installed_startup_package != '' && steps.native_retire_fresh.outcome == 'success' }}
+        shell: bash
+        env:
+          CI_WINDOWS_SCHTASKS_INSTALLED_CELL: "2026.9.3"
+          CI_WINDOWS_SCHTASKS_TEST_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          export PATH="$NODE_BIN:$PATH"
+          node --import ./scripts/tsx.mjs src/daemon/schtasks.installed-package.test-support.ts prepare .artifacts/windows-schtasks/installed-input.json
+
+      - name: Run installed Scheduled Task cell 2026.9.3
+        id: native_schtasks_9_3
+        if: ${{ inputs.run_windows_ci && inputs.installed_startup_package != '' && steps.native_prepare_9_3.outcome == 'success' }}
+        # 18-minute installed body, three-minute teardown hook, one-minute runner margin.
+        timeout-minutes: 22
+        shell: bash
+        env:
+          OPENCLAW_VITEST_WORKER_CACHE: "1"
+          CI_WINDOWS_SCHTASKS_PROOF_PATH: ${{ github.workspace }}\.artifacts\windows-schtasks\cells\2026.9.3\proof.json
+          CI_WINDOWS_SCHTASKS_INSTALLED_INPUT: ${{ github.workspace }}/.artifacts/windows-schtasks/installed-input.json
+          CI_WINDOWS_SCHTASKS_INSTALLED_CELL: "2026.9.3"
+          CI_WINDOWS_SCHTASKS_ROOT: ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}\2026.9.3
+          CI_WINDOWS_SCHTASKS_TEST_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          EXPECTED_HEAD: ${{ inputs.target_ref }}
+        run: *native_schtasks_run
+
+      - name: Join native Scheduled Task cell 2026.9.3
+        id: native_cleanup_9_3
+        if: ${{ always() && inputs.run_windows_ci && inputs.installed_startup_package != '' && steps.native_isolation.outcome == 'success' && contains(fromJSON('["success","failure","cancelled"]'), steps.native_schtasks_9_3.outcome) }}
+        shell: pwsh
+        env:
+          TEST_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          TEST_ROOT: ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}
+          INSTALLED_PACKAGE_MODE: "true"
+          CI_WINDOWS_SCHTASKS_INSTALLED_CELL: "2026.9.3"
+        run: *native_schtasks_cleanup_run
+
+      - name: Retain installed cell proof 2026.9.3
+        id: native_cell_proof_9_3
+        if: ${{ always() && inputs.run_windows_ci && inputs.installed_startup_package != '' && contains(fromJSON('["success","failure","cancelled"]'), steps.native_prepare_9_3.outcome) }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: windows-schtasks-cell-${{ github.run_id }}-${{ github.run_attempt }}-2026.9.3
+          path: |
+            .artifacts/windows-schtasks/cells/2026.9.3/*.json*
+            ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}\2026.9.3\commands.json
+            ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}\2026.9.3\cleanup-summary.txt
+            ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}\2026.9.3\**\failure-diagnostics.json
+          if-no-files-found: warn
+          overwrite: false
+          retention-days: 7
+
+      - name: Retire successful installed cell 2026.9.3
+        id: native_retire_9_3
+        if: ${{ inputs.run_windows_ci && inputs.installed_startup_package != '' && steps.native_schtasks_9_3.outcome == 'success' && steps.native_cleanup_9_3.outcome == 'success' && steps.native_cleanup_9_3.outputs.owned_package_cleanup == 'true' && steps.native_cell_proof_9_3.outcome == 'success' }}
+        shell: bash
+        env:
+          CI_WINDOWS_SCHTASKS_INSTALLED_CELL: "2026.9.3"
+          CI_WINDOWS_SCHTASKS_TEST_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          CI_WINDOWS_SCHTASKS_CELL_CLEANUP: ${{ steps.native_cleanup_9_3.outcome }}
+          CI_WINDOWS_SCHTASKS_CELL_ARTIFACT_ID: ${{ steps.native_cell_proof_9_3.outputs.artifact-id }}
+          CI_WINDOWS_SCHTASKS_CELL_ARTIFACT_DIGEST: ${{ steps.native_cell_proof_9_3.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          export PATH="$NODE_BIN:$PATH"
+          node --import ./scripts/tsx.mjs src/daemon/schtasks.installed-package.test-support.ts retire .artifacts/windows-schtasks/installed-input.json
+
+      - name: Prepare installed Scheduled Task cell 2026.9.4
+        id: native_prepare_9_4
+        if: ${{ inputs.run_windows_ci && inputs.installed_startup_package != '' && steps.native_retire_9_3.outcome == 'success' }}
+        shell: bash
+        env:
+          CI_WINDOWS_SCHTASKS_INSTALLED_CELL: "2026.9.4"
+          CI_WINDOWS_SCHTASKS_TEST_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          export PATH="$NODE_BIN:$PATH"
+          node --import ./scripts/tsx.mjs src/daemon/schtasks.installed-package.test-support.ts prepare .artifacts/windows-schtasks/installed-input.json
+
+      - name: Run installed Scheduled Task cell 2026.9.4
+        id: native_schtasks_9_4
+        if: ${{ inputs.run_windows_ci && inputs.installed_startup_package != '' && steps.native_prepare_9_4.outcome == 'success' }}
+        # 18-minute installed body, three-minute teardown hook, one-minute runner margin.
+        timeout-minutes: 22
+        shell: bash
+        env:
+          OPENCLAW_VITEST_WORKER_CACHE: "1"
+          CI_WINDOWS_SCHTASKS_PROOF_PATH: ${{ github.workspace }}\.artifacts\windows-schtasks\cells\2026.9.4\proof.json
+          CI_WINDOWS_SCHTASKS_INSTALLED_INPUT: ${{ github.workspace }}/.artifacts/windows-schtasks/installed-input.json
+          CI_WINDOWS_SCHTASKS_INSTALLED_CELL: "2026.9.4"
+          CI_WINDOWS_SCHTASKS_ROOT: ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}\2026.9.4
+          CI_WINDOWS_SCHTASKS_TEST_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          EXPECTED_HEAD: ${{ inputs.target_ref }}
+        run: *native_schtasks_run
+
+      - name: Join native Scheduled Task cell 2026.9.4
+        id: native_cleanup_9_4
+        if: ${{ always() && inputs.run_windows_ci && inputs.installed_startup_package != '' && steps.native_isolation.outcome == 'success' && contains(fromJSON('["success","failure","cancelled"]'), steps.native_schtasks_9_4.outcome) }}
+        shell: pwsh
+        env:
+          TEST_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          TEST_ROOT: ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}
+          INSTALLED_PACKAGE_MODE: "true"
+          CI_WINDOWS_SCHTASKS_INSTALLED_CELL: "2026.9.4"
+        run: *native_schtasks_cleanup_run
+
+      - name: Retain installed cell proof 2026.9.4
+        id: native_cell_proof_9_4
+        if: ${{ always() && inputs.run_windows_ci && inputs.installed_startup_package != '' && contains(fromJSON('["success","failure","cancelled"]'), steps.native_prepare_9_4.outcome) }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: windows-schtasks-cell-${{ github.run_id }}-${{ github.run_attempt }}-2026.9.4
+          path: |
+            .artifacts/windows-schtasks/cells/2026.9.4/*.json*
+            ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}\2026.9.4\commands.json
+            ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}\2026.9.4\cleanup-summary.txt
+            ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}\2026.9.4\**\failure-diagnostics.json
+          if-no-files-found: warn
+          overwrite: false
+          retention-days: 7
+
+      - name: Retire successful installed cell 2026.9.4
+        id: native_retire_9_4
+        if: ${{ inputs.run_windows_ci && inputs.installed_startup_package != '' && steps.native_schtasks_9_4.outcome == 'success' && steps.native_cleanup_9_4.outcome == 'success' && steps.native_cleanup_9_4.outputs.owned_package_cleanup == 'true' && steps.native_cell_proof_9_4.outcome == 'success' }}
+        shell: bash
+        env:
+          CI_WINDOWS_SCHTASKS_INSTALLED_CELL: "2026.9.4"
+          CI_WINDOWS_SCHTASKS_TEST_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          CI_WINDOWS_SCHTASKS_CELL_CLEANUP: ${{ steps.native_cleanup_9_4.outcome }}
+          CI_WINDOWS_SCHTASKS_CELL_ARTIFACT_ID: ${{ steps.native_cell_proof_9_4.outputs.artifact-id }}
+          CI_WINDOWS_SCHTASKS_CELL_ARTIFACT_DIGEST: ${{ steps.native_cell_proof_9_4.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          export PATH="$NODE_BIN:$PATH"
+          node --import ./scripts/tsx.mjs src/daemon/schtasks.installed-package.test-support.ts retire .artifacts/windows-schtasks/installed-input.json
+
+      # Qualification/setup failures cannot have created this run's native task.
+      - name: Clean native Scheduled Task residue
+        id: native_cleanup
+        if: ${{ always() && inputs.run_windows_ci && steps.native_isolation.outcome == 'success' && (contains(fromJSON('["success","failure","cancelled"]'), steps.native_schtasks.outcome) || contains(fromJSON('["success","failure","cancelled"]'), steps.native_schtasks_fresh.outcome) || contains(fromJSON('["success","failure","cancelled"]'), steps.native_schtasks_9_3.outcome) || contains(fromJSON('["success","failure","cancelled"]'), steps.native_schtasks_9_4.outcome)) }}
+        shell: pwsh
+        env:
+          TEST_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          TEST_ROOT: ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}
+          INSTALLED_PACKAGE_MODE: ${{ inputs.installed_startup_package != '' }}
+        run: *native_schtasks_cleanup_run
+
+      - name: Require all three installed cell results and cleanup
+        id: native_schtasks_installed_result
+        if: ${{ always() && inputs.run_windows_ci && inputs.installed_startup_package != '' }}
+        shell: pwsh
+        env:
+          FRESH_OUTCOME: ${{ steps.native_schtasks_fresh.outcome }}
+          PUBLISHED_9_3_OUTCOME: ${{ steps.native_schtasks_9_3.outcome }}
+          PUBLISHED_9_4_OUTCOME: ${{ steps.native_schtasks_9_4.outcome }}
+          CLEANUP_OUTCOME: ${{ steps.native_cleanup.outcome }}
+          CELL_CLEANUP_FRESH: ${{ steps.native_cleanup_fresh.outcome }}
+          CELL_UPLOAD_FRESH: ${{ steps.native_cell_proof_fresh.outcome }}
+          CELL_RETIRE_FRESH: ${{ steps.native_retire_fresh.outcome }}
+          CELL_CLEANUP_9_3: ${{ steps.native_cleanup_9_3.outcome }}
+          CELL_UPLOAD_9_3: ${{ steps.native_cell_proof_9_3.outcome }}
+          CELL_RETIRE_9_3: ${{ steps.native_retire_9_3.outcome }}
+          CELL_CLEANUP_9_4: ${{ steps.native_cleanup_9_4.outcome }}
+          CELL_UPLOAD_9_4: ${{ steps.native_cell_proof_9_4.outcome }}
+          CELL_RETIRE_9_4: ${{ steps.native_retire_9_4.outcome }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $evidence = Join-Path $env:GITHUB_WORKSPACE ".artifacts/windows-schtasks"
+          New-Item -ItemType Directory -Force -Path $evidence | Out-Null
+          $expected = Get-Content -LiteralPath (Join-Path $evidence "installed-input.json") -Raw | ConvertFrom-Json
+          $outcomes = @{ fresh = $env:FRESH_OUTCOME; "2026.9.3" = $env:PUBLISHED_9_3_OUTCOME; "2026.9.4" = $env:PUBLISHED_9_4_OUTCOME }
+          $cleanupOutcomes = @{ fresh = $env:CELL_CLEANUP_FRESH; "2026.9.3" = $env:CELL_CLEANUP_9_3; "2026.9.4" = $env:CELL_CLEANUP_9_4 }
+          $uploadOutcomes = @{ fresh = $env:CELL_UPLOAD_FRESH; "2026.9.3" = $env:CELL_UPLOAD_9_3; "2026.9.4" = $env:CELL_UPLOAD_9_4 }
+          $retireOutcomes = @{ fresh = $env:CELL_RETIRE_FRESH; "2026.9.3" = $env:CELL_RETIRE_9_3; "2026.9.4" = $env:CELL_RETIRE_9_4 }
+          $cells = @()
+          $complete = $env:CLEANUP_OUTCOME -ceq "success"
+          foreach ($cell in @("fresh", "2026.9.3", "2026.9.4")) {
+            $file = Join-Path $evidence "cells/$cell/proof.json"
+            $proof = $null
+            $problem = $null
+            $retirement = $null
+            try {
+              $proof = Get-Content -LiteralPath $file -Raw | ConvertFrom-Json
+              $admissionPath = Join-Path $evidence "cells/$cell/installed-cleanup.json"
+              $admissions = @(Get-Content -LiteralPath $admissionPath -Raw | ConvertFrom-Json)
+              if ($admissions.Count -eq 0) { throw "Successful cell admission evidence is missing." }
+              $retirement = Get-Content -LiteralPath (Join-Path $evidence "cells/$cell/retirement.json") -Raw | ConvertFrom-Json
+              if ($retirement.result -cne "pass" -or $retirement.cell -cne $cell -or $retirement.proofSha256 -cne (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant() -or $cleanupOutcomes[$cell] -cne "success" -or $uploadOutcomes[$cell] -cne "success" -or $retireOutcomes[$cell] -cne "success") { throw "Cell cleanup, durable proof or retirement is incomplete." }
+              if ($outcomes[$cell] -cne "success" -or $proof.result -cne "pass" -or $proof.cell -cne $cell -or @($proof.cells).Count -ne 1 -or $proof.cells[0].key -cne $cell -or $proof.cells[0].result -cne "passed" -or $proof.head -cne $expected.toolingSha -or $proof.candidate.sha256 -cne $expected.candidate.sha256 -or $proof.candidate.packageSourceSha -cne $expected.sourceSha) {
+                throw "Cell step/result/source identity is incomplete or failed."
+              }
+            } catch { $problem = $_.Exception.Message; $complete = $false }
+            $cells += @{ cell = $cell; stepOutcome = $outcomes[$cell]; cleanupOutcome = $cleanupOutcomes[$cell]; uploadOutcome = $uploadOutcomes[$cell]; retirementOutcome = $retireOutcomes[$cell]; problem = $problem; proof = $proof; retirement = $retirement }
+          }
+          @{ result = $(if ($complete) { "pass" } else { "failed" }); head = $expected.toolingSha; candidate = $expected.candidate; cleanupOutcome = $env:CLEANUP_OUTCOME; cells = $cells } | ConvertTo-Json -Depth 40 | Set-Content -LiteralPath (Join-Path $evidence "proof.json")
+          if (-not $complete) { throw "All three installed cells and native cleanup must pass." }
+
       - name: Upload native Scheduled Task proof
         id: native_proof_upload
         if: ${{ always() && inputs.run_windows_ci }}
@@ -1014,15 +1485,20 @@ jobs:
           name: windows-schtasks-proof-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             .artifacts/windows-schtasks/proof.json
+            .artifacts/windows-schtasks/package-handoff.json
+            .artifacts/windows-schtasks/installed-input.json*
+            .artifacts/windows-schtasks/cells/*/*.json*
             ${{ runner.temp }}\windows-schtasks-isolation.json
             ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}\runs.txt.hosted-stop
             ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}\failure-diagnostics.json
+            ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}\**\commands.json
+            ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}\**\failure-diagnostics.json
             ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}\cleanup-summary.txt
           if-no-files-found: warn
           retention-days: 7
 
       - name: Remove retained native Scheduled Task evidence
-        if: ${{ always() && inputs.run_windows_ci && steps.native_cleanup.outcome == 'success' && steps.native_proof_upload.outcome == 'success' }}
+        if: ${{ always() && inputs.run_windows_ci && inputs.installed_startup_package == '' && steps.native_cleanup.outcome == 'success' && steps.native_proof_upload.outcome == 'success' }}
         shell: pwsh
         env:
           TEST_ID: ${{ github.run_id }}-${{ github.run_attempt }}
@@ -1031,3 +1507,19 @@ jobs:
           $profile = "schtasks-int-$env:TEST_ID"
           Remove-Item -LiteralPath (Join-Path $env:USERPROFILE ".openclaw-$profile") -Recurse -Force -ErrorAction SilentlyContinue
           Remove-Item -LiteralPath $env:TEST_ROOT -Recurse -Force -ErrorAction SilentlyContinue
+
+  # A second invocation of the same native step owner keeps source-only proof
+  # independent while package mode explicitly waits for its current-run producer.
+  native-schtasks-package:
+    name: Native Scheduled Task installed proof
+    if: ${{ inputs.run_windows_ci && inputs.installed_startup_package != '' && !inputs.run_private_node_provisioning && !inputs.installed_repair_worker && !inputs.installed_startup_cpu_diagnostic && inputs.windows_ci_replay == '' }}
+    needs: probe
+    permissions:
+      contents: read
+    runs-on: windows-2025
+    timeout-minutes: 75
+    env:
+      NATIVE_PACKAGE_ID: ${{ needs.probe.outputs.native_package_id }}
+      NATIVE_PACKAGE_DIGEST: ${{ needs.probe.outputs.native_package_digest }}
+      NATIVE_MANIFEST_SHA256: ${{ needs.probe.outputs.native_manifest_sha256 }}
+    steps: *native_schtasks_steps

@@ -3,41 +3,20 @@ import { parseDateStringTimestampMs as parseGoogleMeetTimestamp } from "openclaw
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { exportGoogleDriveDocumentText, extractGoogleDriveDocumentId } from "./drive.js";
 import {
-  createGoogleMeetSpace,
-  endGoogleMeetActiveConference,
-  fetchGoogleMeetSpace,
-  fetchLatestGoogleMeetConferenceRecord,
   listGoogleMeetConferenceResources,
   listGoogleMeetParticipantSessions,
   listGoogleMeetTranscriptEntries,
   resolveConferenceRecordQuery,
-  type GoogleMeetAccessType,
   type GoogleMeetArtifactsResult,
   type GoogleMeetAttendanceResult,
   type GoogleMeetAttendanceRow,
   type GoogleMeetConferenceRecord,
-  type GoogleMeetEntryPointAccess,
-  type GoogleMeetLatestConferenceRecordResult,
   type GoogleMeetParticipant,
   type GoogleMeetParticipantSession,
   type GoogleMeetPreflightReport,
   type GoogleMeetSmartNotesListResult,
   type GoogleMeetSpace,
-  type GoogleMeetSpaceConfig,
 } from "./meet-api.js";
-
-export {
-  createGoogleMeetSpace,
-  endGoogleMeetActiveConference,
-  fetchGoogleMeetSpace,
-  fetchLatestGoogleMeetConferenceRecord,
-  type GoogleMeetAccessType,
-  type GoogleMeetArtifactsResult,
-  type GoogleMeetAttendanceResult,
-  type GoogleMeetEntryPointAccess,
-  type GoogleMeetLatestConferenceRecordResult,
-  type GoogleMeetSpaceConfig,
-};
 
 function getParticipantDisplayName(participant: GoogleMeetParticipant): string | undefined {
   return (

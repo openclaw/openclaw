@@ -10,8 +10,8 @@ import {
   type Symbol as CompilerSymbol,
 } from "typescript/unstable/sync";
 import { CompilerInputSnapshot } from "../../scripts/lib/compiler-input-snapshot.mts";
-import { emitNativeDeclarations } from "../../scripts/lib/native-declaration-emitter.mts";
 import { createDeclarationFileSystem } from "../../scripts/lib/native-declaration-filesystem.mts";
+import { emitNativeDeclarationsInSubprocess } from "../../scripts/lib/native-declaration-subprocess.mts";
 import {
   createNativeTypeScriptProject,
   resolveInstalledNativeTypeScriptCompiler,
@@ -125,6 +125,8 @@ async function createCompilerContext(
     noEmit: false,
     // Declaration diagnostics are checked explicitly; unrelated untyped external JS stays valid.
     noEmitOnError: false,
+    // Parallel emit can copy readonly flags from unrelated inferred union properties.
+    singleThreaded: true,
     removeComments: true,
     sourceMap: false,
   };
@@ -146,7 +148,7 @@ async function createCompilerContext(
       fs: view.filesystem,
     });
     view.assertValid();
-    const emitted = await emitNativeDeclarations({
+    const emitted = await emitNativeDeclarationsInSubprocess({
       cwd: repoRoot,
       configFile: configPath,
       roots: fileNames,

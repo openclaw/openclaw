@@ -2,7 +2,7 @@ import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtim
 
 installDiscordIngressTestRuntime();
 import { testing as sessionBindingTesting } from "openclaw/plugin-sdk/conversation-runtime";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DiscordConfigSchema } from "../config-schema.js";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
 import {
@@ -13,6 +13,15 @@ import {
   createThreadClient,
   DEFAULT_PREFLIGHT_CFG,
 } from "./message-handler.preflight.test-helpers.js";
+
+vi.mock("openclaw/plugin-sdk/channel-mention-gating", async (importOriginal) => {
+  const sdk = {
+    ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-mention-gating")>()),
+  };
+  // The published 2026.9.6 host has the evaluator, but not the bot-thread helper.
+  Reflect.deleteProperty(sdk, "resolveBotThreadMentionPolicy");
+  return sdk;
+});
 
 beforeEach(() => sessionBindingTesting.resetSessionBindingAdaptersForTests());
 afterEach(() => sessionBindingTesting.resetSessionBindingAdaptersForTests());

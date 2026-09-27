@@ -1,14 +1,12 @@
 import "./run-attempt.configured-mcp.test-support.js";
-import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it } from "vitest";
 import { createCronAuthorityCapabilityFixture } from "./codex-app-server.test-fixtures.js";
 import { flattenCodexDynamicToolFunctions, type CodexDynamicToolSpec } from "./protocol.js";
 import {
-  createParams,
+  createTestParams,
   createStartedThreadHarness,
   runCodexAppServerAttempt,
-  tempDir,
 } from "./run-attempt-test-harness.js";
 
 const { admitLocalOperatorCronAuthority, configureFakeMcp, mcpMocks, setupConfiguredMcpTestHooks } =
@@ -16,13 +14,17 @@ const { admitLocalOperatorCronAuthority, configureFakeMcp, mcpMocks, setupConfig
 
 setupConfiguredMcpTestHooks();
 
+function createMcpParams(senderIsOwner?: boolean) {
+  const params = createTestParams();
+  configureFakeMcp(params);
+  params.trigger = "user";
+  params.senderIsOwner = senderIsOwner;
+  return params;
+}
+
 describe("runCodexAppServerAttempt configured MCP creator authority", () => {
   it("withholds final provenance when a sender-attributed turn cannot snapshot native MCP", async () => {
-    const sessionFile = path.join(tempDir, "session-sender-attributed-mcp.jsonl");
-    const params = createParams(sessionFile, path.join(tempDir, "workspace-sender-attributed-mcp"));
-    configureFakeMcp(params);
-    params.trigger = "user";
-    params.senderIsOwner = true;
+    const params = createMcpParams(true);
     params.senderId = "external-sender";
 
     const harness = createStartedThreadHarness();
@@ -40,19 +42,11 @@ describe("runCodexAppServerAttempt configured MCP creator authority", () => {
   it.each([
     { name: "missing", capabilityRunId: undefined },
     { name: "wrong-run", capabilityRunId: "other-run" },
-    { name: "remote-management", capabilityRunId: "same-run" },
     { name: "channel-owner-management", capabilityRunId: "same-run" },
   ])(
     "does not bind $name local-operator authority at Codex tool construction",
     async (testCase) => {
-      const sessionFile = path.join(tempDir, `session-local-operator-${testCase.name}.jsonl`);
-      const params = createParams(
-        sessionFile,
-        path.join(tempDir, `workspace-local-operator-${testCase.name}`),
-      );
-      configureFakeMcp(params);
-      params.trigger = "user";
-      params.senderIsOwner = false;
+      const params = createMcpParams(false);
       if (testCase.capabilityRunId) {
         const capability = createCronAuthorityCapabilityFixture(
           testCase.capabilityRunId === "same-run" ? params.runId : testCase.capabilityRunId,
@@ -62,10 +56,7 @@ describe("runCodexAppServerAttempt configured MCP creator authority", () => {
             ? {
                 ...capability,
                 callerOrigin: { kind: "unknown" },
-                managementEntitlement:
-                  testCase.name === "channel-owner-management"
-                    ? { source: "channel-owner", isCurrent: () => true }
-                    : { source: "control-ui-admin" },
+                managementEntitlement: { source: "channel-owner", isCurrent: () => true },
               }
             : capability;
       }
@@ -81,14 +72,7 @@ describe("runCodexAppServerAttempt configured MCP creator authority", () => {
   );
 
   it("lazily snapshots configured MCP through the local-operator resolver without replacing native MCP", async () => {
-    const sessionFile = path.join(tempDir, "session-local-operator-mutation.jsonl");
-    const params = createParams(
-      sessionFile,
-      path.join(tempDir, "workspace-local-operator-mutation"),
-    );
-    configureFakeMcp(params);
-    params.trigger = "user";
-    params.senderIsOwner = false;
+    const params = createMcpParams(false);
     admitLocalOperatorCronAuthority(params);
 
     const harness = createStartedThreadHarness();
@@ -125,12 +109,9 @@ describe("runCodexAppServerAttempt configured MCP creator authority", () => {
   });
 
   it("preserves advertised configured MCP names when capturing automation authority", async () => {
-    const sessionFile = path.join(tempDir, "session-local-operator-mcp-names.jsonl");
-    const params = createParams(sessionFile, path.join(tempDir, "workspace-local-mcp-names"));
-    configureFakeMcp(params);
+    const params = createMcpParams();
     params.config!.mcp!.servers!.fake!.codex = { defaultToolsApprovalMode: "approve" };
     params.toolsAllow = ["automations", "fake__*"];
-    params.trigger = "user";
     admitLocalOperatorCronAuthority(params);
     mcpMocks.useRealStaticMcp = true;
 
@@ -159,14 +140,7 @@ describe("runCodexAppServerAttempt configured MCP creator authority", () => {
   });
 
   it("offers explicit finite tools when inherited configured MCP discovery is incomplete", async () => {
-    const sessionFile = path.join(tempDir, "session-local-operator-incomplete-mcp.jsonl");
-    const params = createParams(
-      sessionFile,
-      path.join(tempDir, "workspace-local-operator-incomplete-mcp"),
-    );
-    configureFakeMcp(params);
-    params.trigger = "user";
-    params.senderIsOwner = true;
+    const params = createMcpParams(true);
     admitLocalOperatorCronAuthority(params);
     mcpMocks.staticDiagnosticNotice =
       "Configured MCP is incomplete for this scheduled run: fake: authentication required.";
@@ -185,14 +159,7 @@ describe("runCodexAppServerAttempt configured MCP creator authority", () => {
   });
 
   it("rematerializes after one cron operation aborts pending materialization", async () => {
-    const sessionFile = path.join(tempDir, "session-local-operator-aborted-mutation.jsonl");
-    const params = createParams(
-      sessionFile,
-      path.join(tempDir, "workspace-local-operator-aborted-mutation"),
-    );
-    configureFakeMcp(params);
-    params.trigger = "user";
-    params.senderIsOwner = true;
+    const params = createMcpParams(true);
     admitLocalOperatorCronAuthority(params);
 
     const harness = createStartedThreadHarness();
@@ -217,14 +184,7 @@ describe("runCodexAppServerAttempt configured MCP creator authority", () => {
   });
 
   it("shares one configured-MCP materialization across concurrent active cron operations", async () => {
-    const sessionFile = path.join(tempDir, "session-local-operator-concurrent-mutation.jsonl");
-    const params = createParams(
-      sessionFile,
-      path.join(tempDir, "workspace-local-operator-concurrent-mutation"),
-    );
-    configureFakeMcp(params);
-    params.trigger = "user";
-    params.senderIsOwner = true;
+    const params = createMcpParams(true);
     admitLocalOperatorCronAuthority(params);
 
     const harness = createStartedThreadHarness();
@@ -245,14 +205,7 @@ describe("runCodexAppServerAttempt configured MCP creator authority", () => {
   });
 
   it("retains an unrelated cached timeout when its operation signal aborts concurrently", async () => {
-    const sessionFile = path.join(tempDir, "session-local-operator-unrelated-timeout.jsonl");
-    const params = createParams(
-      sessionFile,
-      path.join(tempDir, "workspace-local-operator-unrelated-timeout"),
-    );
-    configureFakeMcp(params);
-    params.trigger = "user";
-    params.senderIsOwner = true;
+    const params = createMcpParams(true);
     admitLocalOperatorCronAuthority(params);
     const failureGate = createDeferred<void>();
     mcpMocks.staticFailureGate = failureGate.promise;

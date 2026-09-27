@@ -12,7 +12,6 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import { cleanupSnapshotOperations } from "./sqlite-readonly-location-cleanup.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
-import { acquireStateDatabaseHandleExclusion } from "./state-database-coordinator.js";
 import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
 import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
 
@@ -279,7 +278,6 @@ it.each(["timeout", "cancel", "read-failure", "close-failure"] as const)(
       }
       const { pid } = JSON.parse(fs.readFileSync(marker, "utf8")) as { pid: number };
       expect(() => process.kill(pid, 0)).toThrow();
-      acquireStateDatabaseHandleExclusion({ databasePath: file, busyTimeoutMs: 0 }).release();
       expect(fs.readdirSync(cache)).toEqual(["openclaw", "unrelated.txt"]);
       expect(fs.readdirSync(path.join(cache, "openclaw"))).toEqual([]);
       expect(fs.readFileSync(sentinel, "utf8")).toBe("preserved");

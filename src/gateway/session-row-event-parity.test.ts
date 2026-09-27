@@ -16,6 +16,7 @@ import {
 import { createLifecycleEventBroadcastHandler } from "./server-session-events.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
+import { beginSessionPermissionChange } from "./session-permission-change.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
 
@@ -28,6 +29,7 @@ it("delivers nested event rows identical to the full list for each viewer and cl
     const profiles = [
       ensureProfileForEmail("owner@row-parity.test"),
       ensureProfileForEmail("viewer@row-parity.test"),
+      ensureProfileForEmail("other-viewer@row-parity.test"),
     ];
     const cfg = {
       ...rolePolicyConfig(),
@@ -174,7 +176,11 @@ it("delivers nested event rows identical to the full list for each viewer and cl
           activeRunIds: null,
           label: null,
         };
+        const presentations = vi.spyOn(projection, "present");
         connection.broadcast(event, source);
+        // Three independently authorized recipients need only the owner and viewer rows.
+        expect(presentations).toHaveBeenCalledTimes(2);
+        presentations.mockRestore();
         for (const [index, peer] of peers.entries()) {
           expect(peer.send).toHaveBeenCalled();
           const frame = JSON.parse(peer.send.mock.lastCall![0]);
@@ -290,6 +296,20 @@ it("delivers nested event rows identical to the full list for each viewer and cl
               .toEqual({ presence: 1 });
           }
         }
+      }
+      let finishPermissionChange: (() => void) | undefined;
+      peers[1]!.send.mockImplementationOnce(() => {
+        finishPermissionChange = beginSessionPermissionChange("parent-session");
+      });
+      try {
+        connection.broadcast("sessions.changed", { sessionKey: key, agentId: "main" });
+        for (const [index, peer] of peers.entries()) {
+          expect(
+            JSON.parse(peer.send.mock.lastCall![0]).payload.session.permissionModePending,
+          ).toBe(index === 2);
+        }
+      } finally {
+        finishPermissionChange?.();
       }
       expect(prepares).not.toHaveBeenCalled();
       expect(exec).not.toHaveBeenCalled();

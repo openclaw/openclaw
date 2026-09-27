@@ -4,7 +4,6 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import {
@@ -14,7 +13,7 @@ import {
 
 export const EXECUTION_OWNER_LIFECYCLE_BINDING_TABLE =
   "execution_owner_lifecycle_bindings" as const;
-type ExecutionOwnerLifecycleKind = "cron" | "task" | "flow";
+type ExecutionOwnerLifecycleKind = "cron";
 
 type ExecutionOwnerLifecycleDatabase = Pick<
   OpenClawStateDatabase,
@@ -28,11 +27,8 @@ function lifecycleDb(db: DatabaseSync) {
   return getNodeSqliteKysely<ExecutionOwnerLifecycleDatabase>(db);
 }
 
-/** Creates only the canonical additive metadata table at first admitted owner use. */
-function ensureExecutionOwnerLifecycleBindingSchema(db: DatabaseSync): void {
-  if (tableExists(db, EXECUTION_OWNER_LIFECYCLE_BINDING_TABLE)) {
-    return;
-  }
+/** The write-admission owner calls this only for the first enabled binding write. */
+export function ensureExecutionOwnerLifecycleBindingSchema(db: DatabaseSync): void {
   const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(SCHEMA_START);
   const end = start < 0 ? -1 : OPENCLAW_STATE_SCHEMA_SQL.indexOf(SCHEMA_END, start);
   if (start < 0 || end < start) {
@@ -53,14 +49,13 @@ function classifyRetainedBinding(
   return state === "unbound" ? "mismatch" : state;
 }
 
-/** Stores one exact admission identity after its canonical owner row has been revalidated. */
+/** Stores one exact identity after write admission prepared storage and revalidated the owner. */
 export function bindExecutionOwnerLifecycleMetadata(params: {
   db: DatabaseSync;
   ownerKind: ExecutionOwnerLifecycleKind;
   ownerId: string;
   binding: { contextId: string; executionId: string };
 }): Exclude<ExecutionOwnerBindingResult, "disabled" | "missing"> {
-  ensureExecutionOwnerLifecycleBindingSchema(params.db);
   const database = lifecycleDb(params.db);
   const current = executeSqliteQueryTakeFirstSync(
     params.db,
@@ -104,11 +99,10 @@ export function deleteExecutionOwnerLifecycleMetadata(params: {
   db: DatabaseSync;
   ownerKind: ExecutionOwnerLifecycleKind;
   ownerIds: readonly string[];
+  /** Connection-owned schema fact; deletion never allocates opt-in metadata. */
+  executionOwnerLifecycleBindings: boolean;
 }): void {
-  if (
-    params.ownerIds.length === 0 ||
-    !tableExists(params.db, EXECUTION_OWNER_LIFECYCLE_BINDING_TABLE)
-  ) {
+  if (params.ownerIds.length === 0 || !params.executionOwnerLifecycleBindings) {
     return;
   }
   executeSqliteQuerySync(

@@ -119,7 +119,7 @@ export async function runXaiSearchProviderSetup(
   return next;
 }
 
-function runXaiWebSearch(params: {
+async function runXaiWebSearch(params: {
   query: string;
   model: string;
   endpoint: string;
@@ -135,35 +135,21 @@ function runXaiWebSearch(params: {
   );
   const cached = readCache(XAI_WEB_SEARCH_CACHE, cacheKey, params.cacheTtlMs);
   if (cached) {
-    return Promise.resolve({ ...cached.value, cached: true });
+    return { ...cached.value, cached: true };
   }
 
-  return (async () => {
-    const startedAt = Date.now();
-    const result = await requestXaiWebSearch({
-      query: params.query,
-      model: params.model,
-      apiKey: params.apiKey,
-      endpoint: params.endpoint,
-      timeoutSeconds: params.timeoutSeconds,
-      inlineCitations: params.inlineCitations,
-      ...(params.signal ? { signal: params.signal } : {}),
-    });
-    params.signal?.throwIfAborted();
-    const payload = buildXaiWebSearchPayload({
-      query: params.query,
-      provider: "grok",
-      model: params.model,
-      tookMs: Date.now() - startedAt,
-      content: result.content,
-      citations: result.citations,
-      inlineCitations: result.inlineCitations,
-      truncated: result.truncated,
-    });
-
-    writeCache(XAI_WEB_SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
-    return payload;
-  })();
+  const startedAt = Date.now();
+  const result = await requestXaiWebSearch(params);
+  params.signal?.throwIfAborted();
+  const payload = buildXaiWebSearchPayload({
+    query: params.query,
+    provider: "grok",
+    model: params.model,
+    tookMs: Date.now() - startedAt,
+    ...result,
+  });
+  writeCache(XAI_WEB_SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+  return payload;
 }
 
 function resolveXaiToolSearchConfig(ctx: {

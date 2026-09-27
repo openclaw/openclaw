@@ -534,8 +534,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       } else {
         if (row && dirty.has(records.identity(row))) {
           // Keyed reads refresh only their owner; unrelated bulk work never gates a response.
-          const id = records.identity(row);
-          refresh([id]);
+          refresh([records.identity(row)]);
           row = lookup(query);
         }
         row = archive.describe(row);
@@ -637,7 +636,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
         : row;
     },
     findBySessionId(query: Parameters<typeof findSessionRowById>[0]) {
-      return findSessionRowById(query, { disposed, lookup, matching });
+      return findSessionRowById(query, { disposed, lookup, matching, scope });
     },
     describe,
     ...createSessionRowAncestorReads({

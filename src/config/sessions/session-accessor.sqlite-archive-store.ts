@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-coordinator.js";
+import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import {
   isOpenClawAgentDatabasePathCurrent,
   readOpenClawAgentDatabaseIdentity,

@@ -33,7 +33,6 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
 
 let deliverReplies: typeof import("./replies.js").deliverReplies;
 let createSlackReplyDeliveryPlan: typeof import("./replies.js").createSlackReplyDeliveryPlan;
-let resolveSlackThreadTs: typeof import("./replies.js").resolveSlackThreadTs;
 import { prepareSlackReply } from "../reply-blocks.js";
 import { deliverSlackSlashReplies, sanitizeSlackMonitorReplyPayload } from "./replies.js";
 
@@ -141,8 +140,7 @@ function readPlainSectionTexts(message: SlashTestMessage): string[] {
 
 describe("deliverReplies identity passthrough", () => {
   beforeAll(async () => {
-    ({ createSlackReplyDeliveryPlan, deliverReplies, resolveSlackThreadTs } =
-      await import("./replies.js"));
+    ({ createSlackReplyDeliveryPlan, deliverReplies } = await import("./replies.js"));
   });
 
   beforeEach(() => {
@@ -445,47 +443,47 @@ describe("deliverReplies identity passthrough", () => {
   });
 });
 
-describe("resolveSlackThreadTs fallback classification", () => {
+describe("createSlackReplyDeliveryPlan fallback classification", () => {
   const threadTs = "1234567890.123456";
   const messageTs = "9999999999.999999";
 
   it("keeps legacy thread-stickiness for genuine replies when callers omit isThreadReply", () => {
     expect(
-      resolveSlackThreadTs({
+      createSlackReplyDeliveryPlan({
         replyToMode: "off",
         incomingThreadTs: threadTs,
         messageTs,
-        hasReplied: false,
-      }),
+        hasRepliedRef: { value: false },
+      }).peekThreadTs(),
     ).toBe(threadTs);
   });
 
   it("respects replyToMode for auto-created top-level thread_ts when callers omit isThreadReply", () => {
     expect(
-      resolveSlackThreadTs({
+      createSlackReplyDeliveryPlan({
         replyToMode: "off",
         incomingThreadTs: messageTs,
         messageTs,
-        hasReplied: false,
-      }),
+        hasRepliedRef: { value: false },
+      }).peekThreadTs(),
     ).toBeUndefined();
 
     expect(
-      resolveSlackThreadTs({
+      createSlackReplyDeliveryPlan({
         replyToMode: "first",
         incomingThreadTs: messageTs,
         messageTs,
-        hasReplied: false,
-      }),
+        hasRepliedRef: { value: false },
+      }).peekThreadTs(),
     ).toBe(messageTs);
 
     expect(
-      resolveSlackThreadTs({
+      createSlackReplyDeliveryPlan({
         replyToMode: "batched",
         incomingThreadTs: messageTs,
         messageTs,
-        hasReplied: true,
-      }),
+        hasRepliedRef: { value: true },
+      }).peekThreadTs(),
     ).toBeUndefined();
   });
 });

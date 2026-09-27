@@ -295,6 +295,12 @@ describe("runDoctorSessionSqlite", () => {
       const fixture = createSharedRecoveryFixture({ separateIndexes, reverse });
       const { cfg, env, transcriptPath, indexes, independent } = fixture;
       const original = fs.readFileSync(transcriptPath);
+      const supportOriginals = new Map(
+        [independent.trajectoryPath, independent.unreferencedJsonlPath].map((source) => [
+          source,
+          fs.readFileSync(source),
+        ]),
+      );
       const snapshot = sqliteReaders.readOnlySqliteValidationSnapshot;
       let injected = false;
       const spy = vi
@@ -373,11 +379,30 @@ describe("runDoctorSessionSqlite", () => {
         confirm: async () => true,
       });
       const latest = readMigrationManifest(retried.migrationRun?.manifestPath);
+      const protectedSources = new Set<string>();
       for (const move of latest.targets.flatMap((target) => target.completedMoves)) {
+        const supportBytes = supportOriginals.get(move.sourcePath);
+        if (supportBytes) {
+          expect(move).toMatchObject({
+            kind: "unreferenced-jsonl",
+            artifact: {
+              classification: "protected",
+              reason: "unreferenced-history",
+              disposal: { state: "retained" },
+            },
+          });
+          expect(retired.artifacts.find((item) => item.path === move.archivePath)?.outcome).toBe(
+            "protected",
+          );
+          expect(fs.readFileSync(move.archivePath)).toEqual(supportBytes);
+          protectedSources.add(move.sourcePath);
+          continue;
+        }
         expect(retired.artifacts.find((item) => item.path === move.archivePath)?.outcome).toBe(
           "removed",
         );
       }
+      expect([...protectedSources].toSorted()).toEqual([...supportOriginals.keys()].toSorted());
     },
   );
 

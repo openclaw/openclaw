@@ -6,6 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import * as sqliteWal from "../infra/sqlite-wal.js";
 import * as admission from "../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -29,6 +30,7 @@ import type {
   AgentWorkerFixtureOperations,
   bindSqliteWorkerBackend,
 } from "./openclaw-agent-worker-store.test-support.js";
+import { retainOpenClawStateDatabaseForIdle } from "./openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -88,6 +90,54 @@ async function waitForMarker(marker: string, work: Promise<unknown>) {
     await nextTurn();
   }
 }
+
+it("retains an idle agent executor for thirty minutes and renews the window after reborrowing", async () => {
+  const { db, worker } = await setup();
+  const shared = openOpenClawStateDatabase();
+  const releaseState = retainOpenClawStateDatabaseForIdle(shared);
+  const readLeases = () =>
+    shared.db
+      .prepare("SELECT lease_id FROM agent_database_leases WHERE path = ? ORDER BY lease_id")
+      .all(options.path);
+  const hostLeases = readLeases();
+  const append = (value: string) =>
+    worker.run(
+      (scope) => scope.execute({ type: "append", input: { value } }),
+      () => undefined,
+    );
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    await append("first");
+    const retainedLeases = readLeases();
+    expect(retainedLeases).toHaveLength(hostLeases.length + 1);
+
+    await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS - 1);
+    const borrowed = captureOpenClawAgentDatabaseExecution(options);
+    executions.add(borrowed);
+    await append("reborrowed");
+    expect(readLeases()).toEqual(retainedLeases);
+    await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS);
+    expect(readLeases()).toEqual(retainedLeases);
+    await borrowed.release();
+    executions.delete(borrowed);
+
+    await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS - 1);
+    expect(readLeases()).toEqual(retainedLeases);
+    await vi.advanceTimersByTimeAsync(1);
+    // A new request joins the expired generation's cleanup before reopening it.
+    await append("after idle");
+    expect(readLeases()).toHaveLength(retainedLeases.length);
+    expect(readLeases()).not.toEqual(retainedLeases);
+    expect(db.prepare("SELECT value FROM worker_proof ORDER BY rowid").all()).toEqual([
+      { value: "first" },
+      { value: "reborrowed" },
+      { value: "after idle" },
+    ]);
+  } finally {
+    vi.useRealTimers();
+    releaseState();
+  }
+});
 
 describe.each(["borrowed", "captured"] as const)(
   "pooled agent publication owner (%s source)",
@@ -334,6 +384,69 @@ describe.each(["borrowed", "captured"] as const)(
         { value: "follower" },
       ]);
     });
+
+    it.each(["ordinary", "admission"] as const)(
+      "preserves a single-command %s error after cleanup admission is refused",
+      async (failure) => {
+        const { db, worker } = await setup({ cleanupAdmission: true });
+        db.exec(`
+        CREATE TRIGGER fail_command BEFORE INSERT ON worker_proof
+        WHEN NEW.value = 'failed'
+        BEGIN
+          SELECT RAISE(ABORT, 'controlled command failure');
+        END
+      `);
+        const create = admission.createSqliteWorkerOperationAdmission;
+        const commandRefusal = new Error("controlled command admission refusal");
+        let commandRefusals = 0;
+        let refusals = 0;
+        const interception = vi
+          .spyOn(admission, "createSqliteWorkerOperationAdmission")
+          .mockImplementation((admit, attachment) =>
+            create((request, grant) => {
+              if (failure === "admission" && request.stage === "transaction") {
+                commandRefusals++;
+                throw commandRefusal;
+              }
+              if (isRecord(request.facts) && request.facts.kind === "fixture-cleanup") {
+                refusals++;
+                throw new Error("controlled publication cleanup admission refusal");
+              }
+              admit(request, grant);
+            }, attachment),
+          );
+        const result = worker.execute(
+          { type: "append", input: { value: "failed" } },
+          () => undefined,
+        );
+        if (failure === "admission") {
+          await expect(result).rejects.toBe(commandRefusal);
+        } else {
+          await expect(result).rejects.toThrow("controlled command failure");
+        }
+        expect(commandRefusals).toBe(failure === "admission" ? 1 : 0);
+        expect(refusals).toBe(1);
+        expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([]);
+        interception.mockRestore();
+
+        const following = await openOpenClawAgentSqliteWorkerStore<AgentWorkerFixtureOperations>(
+          options,
+          db,
+          {
+            moduleUrl: resolveRuntimeWorkerUrl(agentWorkerStoreFixtureEntrypoint),
+            input: undefined,
+          },
+        );
+        workers.add(following);
+        expect(
+          await following.execute(
+            { type: "append", input: { value: "follower" } },
+            () => undefined,
+          ),
+        ).toBeGreaterThan(0);
+        expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([{ value: "follower" }]);
+      },
+    );
 
     it("does not grant a cleanup transaction after a single read", async () => {
       const { db, worker } = await setup({ closeWriteValue: "must not commit" });

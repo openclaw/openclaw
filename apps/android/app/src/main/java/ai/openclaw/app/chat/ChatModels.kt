@@ -261,21 +261,6 @@ data class ChatDiffStat(
   val files: Int? = null,
 )
 
-data class ChatSubagentActivity(
-  val id: String,
-  val status: String,
-  val snippet: String?,
-  val diffStat: ChatDiffStat?,
-  val terminalSummary: String?,
-  val error: String?,
-  val startedAtMs: Long,
-  val endedAtMs: Long?,
-  val childSessionKey: String?,
-) {
-  val isWorking: Boolean
-    get() = status == "queued" || status == "running"
-}
-
 enum class ChatPlanStepStatus {
   Pending,
   InProgress,
@@ -304,46 +289,29 @@ internal fun parseChatPlanSteps(element: JsonElement?): List<ChatPlanStep> {
   val entries = element as? JsonArray ?: return emptyList()
   var hasInProgressStep = false
   return entries.mapNotNull { entry ->
-    val parsed =
-      when (entry) {
-        is JsonObject -> {
-          val step =
-            (entry["step"] as? JsonPrimitive)
-              ?.takeIf { it.isString }
-              ?.content
-              ?.trim()
-              ?.takeIf { it.isNotEmpty() }
-              ?: return@mapNotNull null
-          val status =
-            when ((entry["status"] as? JsonPrimitive)?.takeIf { it.isString }?.content) {
-              "pending" -> ChatPlanStepStatus.Pending
-              "in_progress" -> ChatPlanStepStatus.InProgress
-              "completed" -> ChatPlanStepStatus.Completed
-              else -> return@mapNotNull null
-            }
-          ChatPlanStep(step = step, status = status)
+    val step =
+      ((if (entry is JsonObject) entry["step"] else entry) as? JsonPrimitive)
+        ?.takeIf { it.isString }
+        ?.content
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+        ?: return@mapNotNull null
+    val status =
+      if (entry is JsonObject) {
+        when ((entry["status"] as? JsonPrimitive)?.takeIf { it.isString }?.content) {
+          "pending" -> ChatPlanStepStatus.Pending
+          "in_progress" -> ChatPlanStepStatus.InProgress
+          "completed" -> ChatPlanStepStatus.Completed
+          else -> return@mapNotNull null
         }
-
-        is JsonPrimitive -> {
-          val step =
-            entry
-              .takeIf { it.isString }
-              ?.content
-              ?.trim()
-              ?.takeIf { it.isNotEmpty() }
-              ?: return@mapNotNull null
-          ChatPlanStep(step = step, status = ChatPlanStepStatus.Pending)
-        }
-
-        else -> {
-          return@mapNotNull null
-        }
+      } else {
+        ChatPlanStepStatus.Pending
       }
-    if (parsed.status == ChatPlanStepStatus.InProgress) {
+    if (status == ChatPlanStepStatus.InProgress) {
       if (hasInProgressStep) return@mapNotNull null
       hasInProgressStep = true
     }
-    parsed
+    ChatPlanStep(step = step, status = status)
   }
 }
 

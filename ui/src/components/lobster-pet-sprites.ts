@@ -1,8 +1,5 @@
-// The lobster pet's art locker: every static SVG sprite the look renderer
-// and scene composer draw from - accessories, rare-palette geometry, retro
-// homage parts, ledge visitors, and the bottle. Pure presentation; all
-// selection logic stays in lobster-pet-look.ts.
 import { svg, type TemplateResult } from "lit";
+import { LOBSTER_HAT_SPRITES } from "./lobster-hat-sprites.ts";
 import type {
   LobsterPetAccessory,
   LobsterPetAntennae,
@@ -16,12 +13,7 @@ import {
 } from "./lobster-pet-sprites-wild.ts";
 
 export const ACCESSORY_SPRITES: Record<Exclude<LobsterPetAccessory, "none">, TemplateResult> = {
-  crown: svg`
-    <path
-      d="M46 12 L46 2 L53 8 L60 0 L67 8 L74 2 L74 12 Q60 8 46 12 Z"
-      fill="#f6c945"
-    />
-  `,
+  crown: LOBSTER_HAT_SPRITES.crown,
   sprout: svg`
     <g>
       <path d="M60 12 Q58 4 63 1" stroke="#3f9d63" stroke-width="3" stroke-linecap="round" fill="none" />
@@ -34,28 +26,9 @@ export const ACCESSORY_SPRITES: Record<Exclude<LobsterPetAccessory, "none">, Tem
       <circle cx="75" cy="32" r="9" fill="#101820" />
     </g>
   `,
-  santa: svg`
-    <g>
-      <path d="M47 10 Q54 1 68 3 L72 9 Z" fill="#e0312f" />
-      <circle cx="71" cy="3.5" r="3.5" fill="#f5f7fa" />
-      <ellipse cx="59" cy="10.5" rx="15" ry="3.5" fill="#f5f7fa" />
-    </g>
-  `,
-  pumpkin: svg`
-    <g>
-      <ellipse cx="60" cy="6.5" rx="8.5" ry="5.5" fill="#e8871e" />
-      <path d="M56 2.5 Q56 6.5 56 10.5 M64 2.5 Q64 6.5 64 10.5" stroke="#c96a10" stroke-width="1.5" fill="none" />
-      <path d="M60 1.5 Q60.5 0 63 0.5" stroke="#4c9a4c" stroke-width="2.5" stroke-linecap="round" fill="none" />
-    </g>
-  `,
-  party: svg`
-    <g>
-      <path d="M52 11 L60 0.5 L68 11 Z" fill="#7c5cff" />
-      <path d="M55.5 6.5 L64.5 6.5" stroke="#ffd166" stroke-width="2" />
-      <circle cx="60" cy="1" r="2.4" fill="#ff5c8a" />
-    </g>
-  `,
-  // Elder wear: a patient little colony riding the shell's shoulder.
+  santa: LOBSTER_HAT_SPRITES.santa,
+  pumpkin: LOBSTER_HAT_SPRITES.pumpkin,
+  party: LOBSTER_HAT_SPRITES.party,
   barnacle: svg`
     <g class="lob-barnacles">
       <path d="M32 22 L36.5 13 L41 22 Z" fill="#cfd8de" />
@@ -65,7 +38,6 @@ export const ACCESSORY_SPRITES: Record<Exclude<LobsterPetAccessory, "none">, Tem
       <circle cx="45.5" cy="15" r="0.9" fill="#8a949d" />
     </g>
   `,
-  // National Lobster Day formal wear: gold rim, chain, no further questions.
   monocle: svg`
     <g class="lob-monocle" fill="none" stroke="#f4b840">
       <circle cx="75" cy="32" r="8.5" stroke-width="2.5" />
@@ -74,8 +46,6 @@ export const ACCESSORY_SPRITES: Record<Exclude<LobsterPetAccessory, "none">, Tem
   `,
 };
 
-// Light speckle trait; skipped on palettes whose identity is already
-// pattern-driven (see renderLobsterSvg).
 export const FRECKLE_SPOTS = svg`
   <g class="lob-freckles" fill="#ffffff" opacity="0.3">
     <circle cx="42" cy="45" r="1.6" />
@@ -432,8 +402,6 @@ export const TAIL_FAN = svg`
   </g>
 `;
 
-// Moving-day bindle: a stick over the shoulder with a polka-dot bundle,
-// carried for the whole first load after a gateway upgrade.
 export const BINDLE = svg`
   <g class="lob-bindle">
     <path d="M70 62 L99 30" stroke="#8a5a2b" stroke-width="3.5" stroke-linecap="round" />
@@ -463,7 +431,6 @@ export const SAILOR_CAP = svg`
   </g>
 `;
 
-// Shown while grumpy (poked too much): angry brows and a frown.
 export const GRUMPY_FACE = svg`
   <g stroke="#0a1014" stroke-linecap="round" fill="none">
     <path d="M37 24 L51 28" stroke-width="3.5" />
@@ -487,8 +454,6 @@ export const ANTENNAE_SPRITES: Record<LobsterPetAntennae, TemplateResult> = {
   `,
 };
 
-// Not a lobster. Wide shell, eye stalks, walks sideways across the ledge,
-// and the Lobsterdex refuses to acknowledge it.
 const CRAB_SPRITE = svg`
   <svg
     class="lobster-pet__svg"
@@ -524,8 +489,6 @@ const CRAB_SPRITE = svg`
   </svg>
 `;
 
-// Also not a lobster. Crosses the ledge on its own schedule, which is to
-// say: eventually.
 const SNAIL_SPRITE = svg`
   <svg
     class="lobster-pet__svg"
@@ -556,8 +519,6 @@ const SNAIL_SPRITE = svg`
   </svg>
 `;
 
-// The rubber duck: patron saint of debugging. It floats through, listens,
-// and leaves without judging anyone's architecture.
 const DUCK_SPRITE = svg`
   <svg
     class="lobster-pet__svg"
@@ -575,8 +536,6 @@ const DUCK_SPRITE = svg`
   </svg>
 `;
 
-// A jellyfish drifting past above the ledge, pulsing gently, thinking about
-// nothing at all.
 const JELLYFISH_SPRITE = svg`
   <svg
     class="lobster-pet__svg"

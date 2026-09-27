@@ -172,8 +172,8 @@ describe("update command admission with fresh state", () => {
     });
     if (cleanup.includes("coordinator")) {
       vi.spyOn(initialization, "acquireLegacyUpdateInitializationFence").mockReturnValue({
-        path: path.join(fixture.root, "fixture-coordinator"),
-        closed: false,
+        assertCurrent() {},
+        run: (operation) => operation(),
         release: legacyRelease,
       });
     }
@@ -257,8 +257,8 @@ describe("update command admission with fresh state", () => {
       throw releaseError;
     });
     vi.spyOn(initialization, "acquireLegacyUpdateInitializationFence").mockReturnValue({
-      path: path.join(fixture.root, "fixture-coordinator"),
-      closed: false,
+      assertCurrent() {},
+      run: (operation) => operation(),
       release,
     });
     await expect(updateCommand({ yes: true, json: true, restart: false })).rejects.toBe(
@@ -490,7 +490,7 @@ describe("update command admission with fresh state", () => {
   it.each([{ channel: "stable" }, { tag: "latest" }])(
     "refuses unresolved registry metadata for %j before creating runtime state",
     async (target) => {
-      vi.mocked(shared.resolveTargetVersion).mockResolvedValue(null);
+      vi.mocked(shared.resolveTargetVersion).mockResolvedValue({ version: null });
       vi.mocked(updateCheck.resolveNpmChannelTag).mockResolvedValue({
         tag: "latest",
         version: null,
@@ -742,7 +742,7 @@ it("fresh local artifact reaches compatible target staging without creating pare
   );
   const artifact = path.join(source, "candidate.tgz");
   execFileSync("tar", ["-czf", artifact, "-C", source, "package"]);
-  vi.mocked(shared.resolveTargetVersion).mockResolvedValue(null);
+  vi.mocked(shared.resolveTargetVersion).mockResolvedValue({ version: null });
   vi.mocked(packageUpdate.stagePackageInstallUpdate).mockRejectedValue(
     new Error("artifact-staged"),
   );
@@ -784,7 +784,7 @@ it.each([
           : { openclaw: { schemaVersions: { state: schema, agent: 19 } } }),
       }),
     );
-    vi.mocked(shared.resolveTargetVersion).mockResolvedValue(null);
+    vi.mocked(shared.resolveTargetVersion).mockResolvedValue({ version: null });
     const staged = { root: candidate, run: vi.fn(), close: vi.fn().mockResolvedValue(undefined) };
     let privateState: string | undefined;
     vi.mocked(packageUpdate.stagePackageInstallUpdate).mockImplementation(async (params) => {
@@ -880,7 +880,7 @@ it.each(["node", "concurrent-state"] as const)(
         openclaw: { schemaVersions: { state: 16, agent: 19 } },
       }),
     );
-    vi.mocked(shared.resolveTargetVersion).mockResolvedValue(null);
+    vi.mocked(shared.resolveTargetVersion).mockResolvedValue({ version: null });
     let previous: Buffer | undefined;
     const stage = { root: candidate, run: vi.fn(), close: vi.fn().mockResolvedValue(undefined) };
     vi.mocked(packageUpdate.stagePackageInstallUpdate).mockImplementation(async () => {
@@ -930,7 +930,7 @@ it("requires confirmation for an inspected older artifact without a TTY", async 
       openclaw: { schemaVersions: { state: 16, agent: 19 } },
     }),
   );
-  vi.mocked(shared.resolveTargetVersion).mockResolvedValue(null);
+  vi.mocked(shared.resolveTargetVersion).mockResolvedValue({ version: null });
   const stage = { root: candidate, run: vi.fn(), close: vi.fn().mockResolvedValue(undefined) };
   vi.mocked(packageUpdate.stagePackageInstallUpdate).mockResolvedValue(stage);
   vi.spyOn(servicePlan, "resolvePackageRuntimePreflight").mockResolvedValue({
@@ -966,7 +966,7 @@ it.each([OPENCLAW_STATE_SCHEMA_VERSION, OPENCLAW_STATE_SCHEMA_VERSION + 1])(
         openclaw: { schemaVersions: { state: schema, agent: 19 } },
       }),
     );
-    vi.mocked(shared.resolveTargetVersion).mockResolvedValue(null);
+    vi.mocked(shared.resolveTargetVersion).mockResolvedValue({ version: null });
     const stage = { root: candidate, run: vi.fn(), close: vi.fn().mockResolvedValue(undefined) };
     vi.mocked(packageUpdate.stagePackageInstallUpdate).mockResolvedValue(stage);
     vi.spyOn(servicePlan, "resolvePackageRuntimePreflight").mockResolvedValue({

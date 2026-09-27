@@ -215,6 +215,7 @@ describe("SQLite session branches", () => {
     };
     await closeOpenClawAgentDatabaseByPathAsync(database.path, agentId);
     const counters: Array<{ loads: number; watermarks: number }> = [];
+    const rowCounters: Array<{ loads: number }> = [];
     const openSqlite = sqliteRuntime.openNodeSqliteDatabase;
     vi.spyOn(sqliteRuntime, "openNodeSqliteDatabase").mockImplementation((pathname, options) => {
       const connection = openSqlite(pathname, options);
@@ -236,6 +237,7 @@ describe("SQLite session branches", () => {
           },
         );
         counters.push(tracked.counts);
+        rowCounters.push(tracked.rowCounts);
         diagnosticCleanups.push(tracked.restore);
       }
       return connection;
@@ -269,6 +271,7 @@ describe("SQLite session branches", () => {
     expect(readSessionBranchSummariesInWorker(request)).toEqual(original);
     expect(rawLoads()).toBe(1);
 
+    const rowsBeforeAppend = rowCounters.reduce((total, counter) => total + counter.loads, 0);
     await appendTranscriptMessage(scope, {
       eventId: "assistant-3",
       parentId: "assistant-2",
@@ -287,6 +290,9 @@ describe("SQLite session branches", () => {
       ]),
     });
     expect(rawLoads()).toBe(2);
+    expect(
+      rowCounters.reduce((total, counter) => total + counter.loads, 0) - rowsBeforeAppend,
+    ).toBeLessThanOrEqual(2);
     const events = await loadTranscriptEvents(scope);
     await replaceTranscriptEvents(
       scope,

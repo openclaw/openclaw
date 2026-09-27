@@ -1,4 +1,4 @@
-/** Runs ACP turns, failover, timeout cleanup, and detached-task progress mirroring. */
+/** Runs ACP turns, failover, terminal delivery, and timeout cleanup. */
 import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -22,16 +22,6 @@ import {
   shouldAttemptBackendFailover,
   type BackendAttempt,
 } from "./manager.backend-failover.js";
-import {
-  appendBackgroundTaskProgressSummary,
-  bindBackgroundTaskExecution,
-  createBackgroundTaskRecord,
-  markBackgroundTaskRunning,
-  markBackgroundTaskTerminal,
-  resolveBackgroundTaskContext,
-  resolveBackgroundTaskFailureStatus,
-  resolveBackgroundTaskTerminalResult,
-} from "./manager.background-task.js";
 import { cancelManagerActiveTurn } from "./manager.cancel-session.js";
 import { applyManagerRuntimeControls } from "./manager.runtime-controls.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
@@ -40,6 +30,7 @@ import { isAcpOwnerRepairRequired } from "./manager.runtime-owner.js";
 import { prepareFreshManagerRuntimeHandleRetry } from "./manager.runtime-resume-state.js";
 import { consumeAcpTurnStream } from "./manager.turn-stream.js";
 import {
+  ACP_TURN_TIMEOUT_DETAIL_CODE,
   awaitTurnWithTimeout,
   cleanupTimedOutTurn,
   resolveTurnTimeoutMs,
@@ -50,15 +41,14 @@ import type {
   ActiveTurnState,
   EnsureManagerRuntimeHandle,
   ReconcileManagerRuntimeSessionIdentifiers,
-  ResolveManagerSession,
-  SetManagerSessionState,
+  ResolveManagerSessionAsync,
   SessionAcpMeta,
+  SetManagerSessionState,
   WriteManagerSessionMeta,
 } from "./manager.types.js";
 import { acpSessionActorKey, requireReadySessionMeta } from "./manager.utils.js";
 
 const ACP_TURN_TIMEOUT_GRACE_MS = 1_000;
-const ACP_COMPLETION_EVIDENCE_MAX_BYTES = 100 * 1024;
 
 /** Executes one ACP prompt turn against the selected backend and records terminal state. */
 export async function runManagerTurn(params: {
@@ -69,7 +59,7 @@ export async function runManagerTurn(params: {
   deps: AcpSessionManagerDeps;
   runtimeHandles: ManagerRuntimeHandleCache;
   activeTurnBySession: Map<string, ActiveTurnState>;
-  resolveSession: ResolveManagerSession;
+  resolveSession: ResolveManagerSessionAsync;
   ensureRuntimeHandle: EnsureManagerRuntimeHandle;
   setSessionState: SetManagerSessionState;
   recordTurnCompletion: (params: {
@@ -99,32 +89,6 @@ export async function runManagerTurn(params: {
   }
   const turnStartedAt = Date.now();
   const actorKey = acpSessionActorKey(params);
-  const taskContext =
-    input.mode === "prompt"
-      ? resolveBackgroundTaskContext({
-          deps: params.deps,
-          cfg: input.cfg,
-          sessionKey,
-          agentId,
-          requestId: input.requestId,
-          text: input.text,
-        })
-      : null;
-  const taskRecord = taskContext
-    ? createBackgroundTaskRecord(
-        taskContext,
-        turnStartedAt,
-        input.admittedRunContext.operationalRunInstance.instanceId,
-      )
-    : undefined;
-  let taskExecutionBinding: Promise<void> | undefined;
-  let taskProgressSummary = "";
-  const initialResolution = params.resolveSession({
-    cfg: input.cfg,
-    sessionKey,
-    agentId,
-  });
-  const initialMeta = requireReadySessionMeta(initialResolution);
   const assertSignalAdmission = resolveAdmittedRunActiveAssertion(
     input.admittedRunContext,
     input.signal,
@@ -139,91 +103,122 @@ export async function runManagerTurn(params: {
     input.signal?.throwIfAborted();
     assertSignalAdmission?.();
   };
-  await recordSessionHumanDirectMessage(
-    {
-      sessionKey,
-      agentId,
-      entry: initialResolution.kind === "ready" ? initialResolution.entry : undefined,
-      actor: { actorType: input.provenance },
-      channel: "acp",
-      runId: input.requestId,
-    },
-    { assertCurrent: assertSignalCurrent },
-  );
   assertSignalCurrent();
-  // ACP children bypass the subagent registry; terminal outcomes are projected into
-  // the signal log here so changesSince histories are not spawn-only for ACP runs.
-  const spawnedByWatcher =
-    initialResolution.kind === "ready"
-      ? (initialResolution.entry?.spawnedBy ?? initialResolution.entry?.parentSessionKey)
-      : undefined;
-  const { candidateBackends, describeBackendCandidate } = resolveBackendCandidatePlan({
-    configuredPrimaryBackend: input.cfg.acp?.backend,
-    resolvedPrimaryBackend: initialMeta.backend,
-    fallbackBackends: input.cfg.acp?.fallbacks,
-  });
-  const backendAttempts: BackendAttempt[] = [];
-  const recordBackendFailure = async (error: AcpRuntimeError) => {
-    await taskExecutionBinding;
-    if (!params.isCurrentActor()) {
-      throw createSupersededActorError(sessionKey);
-    }
-    const failedBackends = backendAttempts
-      .map((attempt) => `${attempt.backend}: ${attempt.error}`)
-      .join(" | ");
-    const errorToRecord =
-      backendAttempts.length > 1
-        ? new AcpRuntimeError(
-            error.code,
-            `All ACP backends failed (${backendAttempts.length}): ${failedBackends}`,
-            { detailCode: error.detailCode },
-          )
-        : error;
-    params.recordTurnCompletion({
-      startedAt: turnStartedAt,
-      errorCode: errorToRecord.code,
-    });
-    if (taskContext) {
-      const failureStatus = resolveBackgroundTaskFailureStatus(errorToRecord);
-      if (taskRecord) {
-        markBackgroundTaskTerminal(taskRecord, {
-          status: failureStatus,
-          endedAt: Date.now(),
-          lastEventAt: Date.now(),
-          error: formatAcpErrorChain(errorToRecord),
-          progressSummary: taskProgressSummary || null,
-          terminalSummary: failureStatus === "timed_out" ? taskProgressSummary || null : null,
-        });
+  // Metadata reads and signal preparation also hold restart-drain custody.
+  // Each release is fenced so a retired actor cannot erase its successor.
+  let releaseActiveTurn = markAcpTurnActive(params);
+  let spawnedByWatcher: string | undefined;
+
+  try {
+    let initialResolution: Awaited<ReturnType<ResolveManagerSessionAsync>>;
+    let initialMeta: SessionAcpMeta;
+    try {
+      initialResolution = await params.resolveSession({
+        cfg: input.cfg,
+        sessionKey,
+        agentId,
+        assertCurrent: assertSignalCurrent,
+      });
+      assertSignalCurrent();
+      initialMeta = requireReadySessionMeta(initialResolution);
+      // ACP children bypass the subagent registry; retain their requester for
+      // terminal signals and admission once the native metadata read completes.
+      spawnedByWatcher =
+        initialResolution.kind === "ready"
+          ? (initialResolution.entry?.spawnedBy ?? initialResolution.entry?.parentSessionKey)
+          : undefined;
+      if (spawnedByWatcher) {
+        releaseActiveTurn = markAcpTurnActive({ ...params, ownerSessionKey: spawnedByWatcher });
       }
+      await recordSessionHumanDirectMessage(
+        {
+          sessionKey,
+          agentId,
+          entry: initialResolution.kind === "ready" ? initialResolution.entry : undefined,
+          actor: { actorType: input.provenance },
+          channel: "acp",
+          runId: input.requestId,
+        },
+        { assertCurrent: assertSignalCurrent },
+      );
+      assertSignalCurrent();
+    } catch (error) {
+      const cancelled = input.signal?.aborted === true;
+      const acpError = toAcpRuntimeError({
+        error,
+        fallbackCode: cancelled ? "ACP_TURN_FAILED" : "ACP_SESSION_INIT_FAILED",
+        fallbackMessage: cancelled
+          ? "ACP operation aborted."
+          : "Could not prepare ACP session runtime.",
+      });
+      params.recordTurnCompletion({
+        startedAt: turnStartedAt,
+        ...(cancelled ? {} : { errorCode: acpError.code }),
+      });
+      if (spawnedByWatcher && params.isCurrentActor()) {
+        await recordSubagentTerminalState(
+          {
+            childSessionKey: sessionKey,
+            runId: input.requestId,
+            requesterSessionKey: spawnedByWatcher,
+            outcomeStatus: cancelled
+              ? "cancelled"
+              : acpError.detailCode === ACP_TURN_TIMEOUT_DETAIL_CODE
+                ? "timeout"
+                : "error",
+          },
+          assertActorCurrent,
+        );
+      }
+      throw acpError;
+    }
+    const { candidateBackends, describeBackendCandidate } = resolveBackendCandidatePlan({
+      configuredPrimaryBackend: input.cfg.acp?.backend,
+      resolvedPrimaryBackend: initialMeta.backend,
+      fallbackBackends: input.cfg.acp?.fallbacks,
+    });
+    const backendAttempts: BackendAttempt[] = [];
+    const recordBackendFailure = async (error: AcpRuntimeError) => {
+      assertActorCurrent();
+      const failedBackends = backendAttempts
+        .map((attempt) => `${attempt.backend}: ${attempt.error}`)
+        .join(" | ");
+      const errorToRecord =
+        backendAttempts.length > 1
+          ? new AcpRuntimeError(
+              error.code,
+              `All ACP backends failed (${backendAttempts.length}): ${failedBackends}`,
+              { detailCode: error.detailCode },
+            )
+          : error;
+      params.recordTurnCompletion({
+        startedAt: turnStartedAt,
+        errorCode: errorToRecord.code,
+      });
       if (spawnedByWatcher) {
         await recordSubagentTerminalState(
           {
             childSessionKey: sessionKey,
-            runId: taskContext.runId,
+            runId: input.requestId,
             requesterSessionKey: spawnedByWatcher,
-            outcomeStatus: failureStatus === "timed_out" ? "timeout" : "error",
+            outcomeStatus:
+              errorToRecord.detailCode === ACP_TURN_TIMEOUT_DETAIL_CODE ? "timeout" : "error",
           },
           assertActorCurrent,
         );
         assertActorCurrent();
       }
-    }
-    await params.setSessionState({
-      cfg: input.cfg,
-      sessionKey,
-      agentId,
-      isCurrentActor: params.isCurrentActor,
-      state: "error",
-      lastError: formatAcpErrorChain(errorToRecord),
-    });
-    throw errorToRecord;
-  };
+      await params.setSessionState({
+        cfg: input.cfg,
+        sessionKey,
+        agentId,
+        isCurrentActor: params.isCurrentActor,
+        state: "error",
+        lastError: formatAcpErrorChain(errorToRecord),
+      });
+      throw errorToRecord;
+    };
 
-  // Liveness spans the whole task, not one backend attempt. The release belongs to
-  // this turn so a retired actor cannot erase a successor after reset overlap.
-  const releaseActiveTurn = taskContext ? markAcpTurnActive(params) : undefined;
-
-  try {
     for (const [backendIdx, currentBackend] of candidateBackends.entries()) {
       if (backendIdx > 0) {
         await params.runtimeHandles.close({
@@ -245,11 +240,13 @@ export async function runManagerTurn(params: {
         const resolution =
           backendIdx === 0 && attempt === 0
             ? initialResolution
-            : params.resolveSession({
+            : await params.resolveSession({
                 cfg: input.cfg,
                 sessionKey,
                 agentId,
+                assertCurrent: assertSignalCurrent,
               });
+        assertSignalCurrent();
         const resolvedMeta = requireReadySessionMeta(resolution);
         assertModelAllowed(resolvedMeta.runtimeOptions?.model);
         let runtime: AcpRuntime | undefined;
@@ -261,9 +258,6 @@ export async function runManagerTurn(params: {
         let sawTurnOutput = false;
         let retryFreshHandle = false;
         let skipPostTurnCleanup = false;
-        let completionEvidenceText = "";
-        let completionEvidenceBytes = 0;
-        let completionEvidenceOverflowed = false;
         let modelExecution: ReturnType<typeof bindOperatorModelExecution>;
         const onModelRevoked = () =>
           params.acceptedTurn.abortController.abort(modelExecution?.signal.reason);
@@ -276,9 +270,7 @@ export async function runManagerTurn(params: {
             selectedBackend: currentBackend,
             isCurrentActor: params.isCurrentActor,
           });
-          if (!params.isCurrentActor()) {
-            throw createSupersededActorError(sessionKey);
-          }
+          assertActorCurrent();
           runtime = ensured.runtime;
           handle = ensured.handle;
           meta = ensured.meta;
@@ -343,9 +335,7 @@ export async function runManagerTurn(params: {
             });
           }
 
-          if (!params.isCurrentActor()) {
-            throw createSupersededActorError(sessionKey);
-          }
+          assertActorCurrent();
           activeTurnStarted = true;
           const turnToCancel = activeTurn;
           const eventGate = { open: true };
@@ -376,27 +366,10 @@ export async function runManagerTurn(params: {
                 return;
               }
               promptStarted = authoritative;
-              if (authoritative && taskRecord) {
+              if (authoritative) {
                 const assertAdmitted = resolveAdmittedRunActiveAssertion(input.admittedRunContext);
-                taskExecutionBinding ??= bindBackgroundTaskExecution(
-                  taskRecord,
-                  input.admittedRunContext,
-                  () => {
-                    if (!params.isCurrentActor()) {
-                      throw createSupersededActorError(sessionKey);
-                    }
-                    if (!assertAdmitted) {
-                      throw new Error("ACP execution authority closed before owner binding");
-                    }
-                    assertAdmitted();
-                  },
-                );
-                await taskExecutionBinding;
-                if (!params.isCurrentActor()) {
-                  return;
-                }
                 if (!assertAdmitted) {
-                  throw new Error("ACP execution authority closed before owner binding");
+                  throw new Error("ACP execution authority closed before prompt submission");
                 }
                 assertAdmitted();
               }
@@ -411,33 +384,12 @@ export async function runManagerTurn(params: {
                 );
               }
             },
-            onOutputEvent: (event) => {
+            onOutputEvent: () => {
               modelExecution?.signal.throwIfAborted();
               if (!params.isCurrentActor()) {
                 return;
               }
               sawTurnOutput = true;
-              if (event.type === "text_delta" && event.stream !== "thought" && event.text) {
-                taskProgressSummary = appendBackgroundTaskProgressSummary(
-                  taskProgressSummary,
-                  event.text,
-                );
-                // Keep semantic evidence attempt-local; only the bounded display summary is persisted.
-                if (taskContext && !completionEvidenceOverflowed) {
-                  completionEvidenceText += event.text;
-                  completionEvidenceBytes = Buffer.byteLength(completionEvidenceText, "utf8");
-                  if (completionEvidenceBytes > ACP_COMPLETION_EVIDENCE_MAX_BYTES) {
-                    completionEvidenceOverflowed = true;
-                    completionEvidenceText = "";
-                  }
-                }
-              }
-              if (taskRecord) {
-                markBackgroundTaskRunning(taskRecord, {
-                  lastEventAt: Date.now(),
-                  progressSummary: taskProgressSummary || null,
-                });
-              }
             },
             onEvent: async (event) => {
               modelExecution?.signal.throwIfAborted();
@@ -479,9 +431,7 @@ export async function runManagerTurn(params: {
               });
             },
           });
-          if (!params.isCurrentActor()) {
-            throw createSupersededActorError(sessionKey);
-          }
+          assertActorCurrent();
           modelExecution?.assertCurrent();
           if (!turnOutcome.terminalStatus) {
             throw new AcpRuntimeError(
@@ -492,40 +442,17 @@ export async function runManagerTurn(params: {
           params.recordTurnCompletion({
             startedAt: turnStartedAt,
           });
-          if (taskContext) {
-            const terminalResult =
-              turnOutcome.terminalStatus === "cancelled"
-                ? {}
-                : completionEvidenceOverflowed
-                  ? {
-                      terminalOutcome: "blocked" as const,
-                      terminalSummary:
-                        "Required completion output exceeded the 100 KB verification limit; inspect the child session for the final deliverable.",
-                    }
-                  : resolveBackgroundTaskTerminalResult(completionEvidenceText);
-            if (taskRecord) {
-              markBackgroundTaskTerminal(taskRecord, {
-                status: turnOutcome.terminalStatus === "cancelled" ? "cancelled" : "succeeded",
-                endedAt: Date.now(),
-                lastEventAt: Date.now(),
-                error: undefined,
-                progressSummary: taskProgressSummary || null,
-                terminalSummary: terminalResult.terminalSummary ?? null,
-                terminalOutcome: terminalResult.terminalOutcome,
-              });
-            }
-            if (spawnedByWatcher) {
-              await recordSubagentTerminalState(
-                {
-                  childSessionKey: sessionKey,
-                  runId: taskContext.runId,
-                  requesterSessionKey: spawnedByWatcher,
-                  outcomeStatus: turnOutcome.terminalStatus === "cancelled" ? "cancelled" : "ok",
-                },
-                assertActorCurrent,
-              );
-              assertActorCurrent();
-            }
+          if (spawnedByWatcher) {
+            await recordSubagentTerminalState(
+              {
+                childSessionKey: sessionKey,
+                runId: input.requestId,
+                requesterSessionKey: spawnedByWatcher,
+                outcomeStatus: turnOutcome.terminalStatus === "cancelled" ? "cancelled" : "ok",
+              },
+              assertActorCurrent,
+            );
+            assertActorCurrent();
           }
           await params.setSessionState({
             cfg: input.cfg,
@@ -544,9 +471,7 @@ export async function runManagerTurn(params: {
               ? "ACP turn failed before completion."
               : "Could not initialize ACP session runtime.",
           });
-          if (!params.isCurrentActor()) {
-            throw createSupersededActorError(sessionKey);
-          }
+          assertActorCurrent();
           retryFreshHandle = await prepareFreshManagerRuntimeHandleRetry({
             attempt,
             cfg: input.cfg,
@@ -561,9 +486,7 @@ export async function runManagerTurn(params: {
             writeSessionMeta: params.writeSessionMeta,
             isCurrentActor: params.isCurrentActor,
           });
-          if (!params.isCurrentActor()) {
-            throw createSupersededActorError(sessionKey);
-          }
+          assertActorCurrent();
           if (retryFreshHandle) {
             continue;
           }
@@ -646,10 +569,6 @@ export async function runManagerTurn(params: {
       }
     }
   } finally {
-    try {
-      await taskExecutionBinding;
-    } finally {
-      releaseActiveTurn?.();
-    }
+    releaseActiveTurn?.();
   }
 }

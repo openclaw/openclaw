@@ -5,7 +5,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta-readonly.js";
 import { AgentSelectionRequiredError, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { assertWorkspaceStateMigrationReady } from "../agents/workspace-legacy-state.js";
@@ -62,6 +61,7 @@ import {
   detectLegacyStateMigrations as detectLegacyStateMigrationsWithSurfaces,
   runLegacyStateMigrations as runLegacyStateMigrationsWithSurfaces,
 } from "./state-migrations.doctor.js";
+import { expectRecoveryPredicateRefusedAfterRepair } from "./state-migrations.ingress-lifecycle.test-support.js";
 import * as sessionStore from "./state-migrations.legacy-session-store.js";
 import { throwIfDoctorStateMigrationRefused } from "./state-migrations.messages.js";
 import { autoMigrateLegacyPluginDoctorState } from "./state-migrations.plugin-doctor.js";
@@ -69,7 +69,10 @@ import {
   migrateLegacyCurrentConversationBindings,
   migrateLegacyPluginBindingApprovals,
 } from "./state-migrations.runtime-state.js";
-import { createLegacyAcpSessionEntry } from "./state-migrations.session-store.test-support.js";
+import {
+  createConfig,
+  createLegacyAcpSessionEntry,
+} from "./state-migrations.session-store.test-support.js";
 import { resetAutoMigrateLegacyStateDirForTest } from "./state-migrations.state-dir.js";
 import { loadVoiceWakeRoutingConfig } from "./voicewake-routing.js";
 import { loadVoiceWakeConfig, setVoiceWakeTriggers } from "./voicewake.js";
@@ -412,26 +415,6 @@ function insertCurrentConversationBindingRow(
       updated_at: 1,
     }),
   );
-}
-
-function createConfig(): OpenClawConfig {
-  return {
-    agents: {
-      list: [{ id: "worker-1", default: true }],
-    },
-    session: {
-      mainKey: "desk",
-    },
-    channels: {
-      chatapp: {
-        defaultAccount: "alpha",
-        accounts: {
-          beta: {},
-          alpha: {},
-        },
-      },
-    },
-  } as OpenClawConfig;
 }
 
 function createEnv(stateDir: string): NodeJS.ProcessEnv {
@@ -1708,12 +1691,11 @@ describe("state migrations", () => {
     // The write the locked section DID make is on disk, so the file is a live witness.
     expect(beforeIds).toContain("inside-section");
 
-    // Both retained handles are now outside the section that owned the state, and the
-    // guard refuses before any promise is created, so no write ever starts.
+    // The factory rejects synchronously; the retained queue rejects through its async API.
     expect(() => retainedOpen?.({ accountId: "default" })).toThrow(
       /ingress queue access has expired/i,
     );
-    expect(() => retainedQueue?.enqueue("after-section", { note: "leaked" })).toThrow(
+    await expect(retainedQueue?.enqueue("after-section", { note: "leaked" })).rejects.toThrow(
       /ingress queue access has expired/i,
     );
 
@@ -1766,78 +1748,21 @@ describe("state migrations", () => {
 
   it("rejects a recovery predicate that resolves after the repair section returns", async () => {
     const { root, stateDir, env } = createMigrationContext(await createTempDir());
-    // The latch keeps the predicate pending until the migration has returned and the
-    // section has closed, which is the exact window the guard has to cover.
-    const { promise: predicateGate, resolve: releasePredicate } = createDeferred();
-    let recoveryOutcome: string | undefined;
-    const { promise: recoveryDone, resolve: recoverySettled } = createDeferred();
-
-    const seeded = createChannelIngressQueue<{ note: string }>({
-      channelId: "line",
-      accountId: "default",
+    await expectRecoveryPredicateRefusedAfterRepair({
       stateDir,
-    });
-    await seeded.enqueue("latch-evt", { note: "seeded" });
-    const claimed = await seeded.claimNext({ ownerId: "retired-owner" });
-    expect(claimed?.id).toBe("latch-evt");
-
-    pluginDoctorStateMigrationEntries.entries = [
-      {
-        pluginId: "line",
-        channelIds: ["line"],
-        migration: {
-          id: "line-ingress-latch-test",
-          label: "LINE ingress latch test",
-          detectLegacyState: () => ({ preview: ["ingress latch preview"] }),
-          migrateLegacyState({ context }) {
-            const line = (context.channelIngressQueues ?? []).find(
-              (entry) => entry.channelId === "line",
-            );
-            const open = line?.openChannelIngressQueue;
-            if (open) {
-              const queue = open<{ note: string }>({ accountId: "default" });
-              // Started but deliberately not awaited: the migration returns first.
-              void queue
-                .recoverStaleClaims({
-                  staleMs: 0,
-                  shouldRecover: async () => {
-                    await predicateGate;
-                    return true;
-                  },
-                })
-                .then(() => {
-                  recoveryOutcome = "completed";
-                })
-                .catch((error: unknown) => {
-                  recoveryOutcome = String(error);
-                })
-                .finally(() => recoverySettled());
-            }
-            return { changes: ["ingress latch test migrated"], warnings: [] };
-          },
-        },
+      runMigration: async (migration) => {
+        pluginDoctorStateMigrationEntries.entries = [
+          { pluginId: "line", channelIds: ["line"], migration },
+        ];
+        const detected = await detectLegacyStateMigrations({
+          cfg: createConfig(),
+          env,
+          homedir: () => root,
+        });
+        const result = await runLegacyStateMigrations({ detected, config: createConfig(), env });
+        expect(result.changes).toContain("ingress latch test migrated");
       },
-    ];
-
-    const detected = await detectLegacyStateMigrations({
-      cfg: createConfig(),
-      env,
-      homedir: () => root,
     });
-    await runLegacyStateMigrations({ detected, config: createConfig(), env });
-
-    // Only now, with the section closed, does the predicate resolve.
-    releasePredicate();
-    await recoveryDone;
-
-    expect(recoveryOutcome).toMatch(/ingress queue access has expired/i);
-    // The claim is still held: the post-await write never reached SQLite.
-    const claims = await createChannelIngressQueue<{ note: string }>({
-      channelId: "line",
-      accountId: "default",
-      stateDir,
-    }).listClaims();
-    expect(claims.map((claim) => claim.id)).toStrictEqual(["latch-evt"]);
   });
 
   it("runs doctor-only plugin file imports only during explicit Doctor repair", async () => {

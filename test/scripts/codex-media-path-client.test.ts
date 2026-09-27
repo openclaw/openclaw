@@ -115,7 +115,7 @@ describe("codex media path limits", () => {
 });
 
 describe("codex media path fake app-server", () => {
-  it("advertises the managed Codex version across initialization and thread creation", async () => {
+  it("advertises the managed Codex version and image-capable catalog over stdio", async () => {
     const requestLog = path.join(tempRoots.make("openclaw-codex-media-path-"), "requests.jsonl");
     const version = JSON.parse(readFileSync("extensions/codex/package.json", "utf8")).dependencies[
       "@openai/codex"
@@ -130,6 +130,36 @@ describe("codex media path fake app-server", () => {
       expect(JSON.parse(await initialized).result).toMatchObject({
         serverInfo: { version },
         userAgent: expect.stringContaining(`/${version} `),
+      });
+
+      const models = readStdoutLine(child);
+      child.stdin.write(jsonl({ id: "models", method: "model/list", params: {} }));
+      expect.soft(JSON.parse(await models)).toMatchObject({
+        id: "models",
+        result: {
+          data: [
+            {
+              id: "gpt-5.6-luna",
+              model: "gpt-5.6-luna",
+              displayName: expect.any(String),
+              description: expect.any(String),
+              hidden: false,
+              isDefault: true,
+              inputModalities: ["text", "image"],
+              defaultReasoningEffort: "low",
+              supportedReasoningEfforts: [
+                { reasoningEffort: "low", description: expect.any(String) },
+              ],
+            },
+          ],
+          nextCursor: null,
+        },
+      });
+      const threads = readStdoutLine(child);
+      child.stdin.write(jsonl({ id: "threads", method: "thread/list", params: { limit: 64 } }));
+      expect.soft(JSON.parse(await threads)).toEqual({
+        id: "threads",
+        result: { data: [], nextCursor: null, backwardsCursor: null },
       });
 
       const started = readStdoutLine(child);

@@ -21,14 +21,7 @@ function createSlackDirectoryClient(params: DirectoryConfigParams) {
 }
 
 function buildUserRank(user: SlackUser): number {
-  let rank = 0;
-  if (!user.deleted) {
-    rank += 2;
-  }
-  if (!user.is_bot && !user.is_app_user) {
-    rank += 1;
-  }
-  return rank;
+  return (user.deleted ? 0 : 2) + (user.is_bot || user.is_app_user ? 0 : 1);
 }
 
 function slackUserToDirectoryEntry(

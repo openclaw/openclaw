@@ -16,17 +16,26 @@ import {
   openWarmImageStore,
 } from "./crabbox-worker-warm-image.test-support.js";
 
+type Preparation = NonNullable<Parameters<typeof projectOptions>[2]>;
+
+function createPreparation(purpose: Preparation["purpose"], demandAtMs = Date.now()): Preparation {
+  return { key: "c".repeat(64), cacheKey: "d".repeat(64), purpose, demandAtMs };
+}
+
+function maintain(provider: ReturnType<typeof createWarmProvider>["provider"]) {
+  return provider.maintain!({
+    profiles: [PROFILE],
+    signal: new AbortController().signal,
+    assertCurrent() {},
+  });
+}
+
 describe("Crabbox prepared image demand and custody", () => {
   it.each([0, 1] as const)(
     "keeps demand on its own generation with keepPrevious=%s",
     async (keepPrevious) => {
       const now = Date.now();
-      const preparation = {
-        key: "c".repeat(64),
-        cacheKey: "d".repeat(64),
-        purpose: "reserve" as const,
-        demandAtMs: now,
-      };
+      const preparation = createPreparation("reserve", now);
       let captures = 0;
       const { provider, calls } = createWarmProvider(
         ({ argv }) =>
@@ -106,12 +115,7 @@ describe("Crabbox prepared image demand and custody", () => {
   it("starts a changed-commit session before refreshing its image in a reserve", async () => {
     const events: string[] = [];
     const now = Date.now();
-    const preparation = {
-      key: "c".repeat(64),
-      cacheKey: "d".repeat(64),
-      purpose: "session" as const,
-      demandAtMs: now,
-    };
+    const preparation = createPreparation("session", now);
     const profile = { ...PROFILE, setup: "synthetic-profile-setup" };
     let current = projectOptions(events, new AbortController(), preparation);
     let captures = 0;
@@ -212,12 +216,7 @@ describe("Crabbox prepared image demand and custody", () => {
   ])("preserves capture policy for a changed commit after $reason", async (scenario) => {
     const now = Date.now();
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-    const preparation = {
-      key: "c".repeat(64),
-      cacheKey: "d".repeat(64),
-      purpose: "reserve" as const,
-      demandAtMs: now,
-    };
+    const preparation = createPreparation("reserve", now);
     let captures = 0;
     const { provider } = createWarmProvider(({ argv }) =>
       argv[2] === "create"
@@ -273,12 +272,7 @@ describe("Crabbox prepared image demand and custody", () => {
     async (kind) => {
       const now = Date.now();
       const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-      const preparation = {
-        key: "c".repeat(64),
-        cacheKey: "d".repeat(64),
-        purpose: "session" as const,
-        demandAtMs: now,
-      };
+      const preparation = createPreparation("session", now);
       const { provider, calls } = createWarmProvider();
       if (kind === "warm") {
         const seed = projectOptions([], new AbortController(), {
@@ -323,12 +317,7 @@ describe("Crabbox prepared image demand and custody", () => {
     "keeps an unactivated producer protected through %s",
     async (outcome) => {
       const now = Date.now();
-      const preparation = {
-        key: "c".repeat(64),
-        cacheKey: "d".repeat(64),
-        purpose: "session" as const,
-        demandAtMs: now,
-      };
+      const preparation = createPreparation("session", now);
       let failing = outcome !== "activation";
       const { provider, calls } = createWarmProvider(({ argv }) => {
         if (
@@ -362,11 +351,7 @@ describe("Crabbox prepared image demand and custody", () => {
       } else {
         expect(image.allocations[leaseId]?.imageGeneration?.checkpointId).toBe(CHECKPOINT_ID);
         calls.length = 0;
-        await provider.maintain!({
-          profiles: [PROFILE],
-          signal: new AbortController().signal,
-          assertCurrent() {},
-        });
+        await maintain(provider);
         expect(calls.some(({ argv }) => argv[2] === "delete")).toBe(false);
       }
       failing = false;
@@ -384,11 +369,7 @@ describe("Crabbox prepared image demand and custody", () => {
         if (outcome === "stop failure") {
           await provider.destroy({ leaseId, profile: PROFILE });
         } else {
-          await provider.maintain!({
-            profiles: [PROFILE],
-            signal: new AbortController().signal,
-            assertCurrent() {},
-          });
+          await maintain(provider);
         }
         expect(await listCrabboxWarmImages(crabboxState)).toEqual([]);
       }
@@ -400,12 +381,7 @@ describe("Crabbox prepared image demand and custody", () => {
     async (elapsed) => {
       const now = Date.now();
       const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-      const preparation = {
-        key: "c".repeat(64),
-        cacheKey: "d".repeat(64),
-        purpose: "reserve" as const,
-        demandAtMs: now,
-      };
+      const preparation = createPreparation("reserve", now);
       let captures = 0;
       const { provider, calls } = createWarmProvider(({ argv }) => {
         if (argv[2] === "create") {
@@ -451,11 +427,7 @@ describe("Crabbox prepared image demand and custody", () => {
           lastDemandAtMs: null,
           retirement: { checkpointId: "chk_unactivated" },
         });
-        await provider.maintain!({
-          profiles: [PROFILE],
-          signal: new AbortController().signal,
-          assertCurrent() {},
-        });
+        await maintain(provider);
         expect(await listCrabboxWarmImages(crabboxState)).toEqual([]);
       }
     },
@@ -468,12 +440,7 @@ describe("Crabbox prepared image demand and custody", () => {
       const now = Date.now();
       const clock = vi.spyOn(Date, "now").mockReturnValue(now);
       const expiresAtMs = now + 60_000;
-      const preparation = {
-        key: "c".repeat(64),
-        cacheKey: "d".repeat(64),
-        purpose: "session" as const,
-        demandAtMs: now,
-      };
+      const preparation = createPreparation("session", now);
       const profile = { ...PROFILE, idleTimeout: "1m" };
       let current = projectOptions(events, new AbortController(), preparation);
       current.options.project.baseCommit = "a".repeat(40);
@@ -589,12 +556,7 @@ describe("Crabbox prepared image demand and custody", () => {
     ]) {
       expect(provider.resolvePreparedIdleTimeoutMs?.(profile)).toBeUndefined();
     }
-    const { options } = projectOptions([], new AbortController(), {
-      key: "c".repeat(64),
-      cacheKey: "d".repeat(64),
-      purpose: "reserve",
-      demandAtMs: Date.now(),
-    });
+    const { options } = projectOptions([], new AbortController(), createPreparation("reserve"));
     await expect(
       provider.provision({ ...PROFILE, warmImage: false }, "disabled", options),
     ).rejects.toThrow("prepared workers require warm images");
@@ -603,12 +565,7 @@ describe("Crabbox prepared image demand and custody", () => {
 
   it("fully prepares a cold reserve after cache identity changes without claiming a replacement image", async () => {
     const events: string[] = [];
-    const preparation = {
-      key: "c".repeat(64),
-      cacheKey: "d".repeat(64),
-      purpose: "reserve" as const,
-      demandAtMs: Date.now(),
-    };
+    const preparation = createPreparation("reserve");
     const profile = { ...PROFILE, setup: "synthetic-profile-setup" };
     let current = projectOptions(events, new AbortController(), preparation);
     const { provider, calls } = createWarmProvider((call) => current.observe(call));

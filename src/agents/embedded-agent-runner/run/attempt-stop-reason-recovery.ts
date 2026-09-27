@@ -10,10 +10,6 @@ import { buildStreamErrorAssistantMessage } from "../../stream-message-shared.js
 
 const UNHANDLED_STOP_REASON_RE = /^Unhandled stop reason:\s*(.+)$/i;
 
-function formatUnhandledStopReasonErrorMessage(stopReason: string): string {
-  return `The model stopped because the provider returned an unhandled stop reason: ${stopReason}. Please rephrase and try again.`;
-}
-
 function normalizeUnhandledStopReasonMessage(message: unknown): string | undefined {
   if (typeof message !== "string") {
     return undefined;
@@ -23,7 +19,7 @@ function normalizeUnhandledStopReasonMessage(message: unknown): string | undefin
   if (!stopReason) {
     return undefined;
   }
-  return formatUnhandledStopReasonErrorMessage(stopReason);
+  return `The model stopped because the provider returned an unhandled stop reason: ${stopReason}. Please rephrase and try again.`;
 }
 
 function patchUnhandledStopReasonInAssistantMessage(message: unknown): void {
@@ -51,11 +47,7 @@ function buildUnhandledStopReasonErrorStream(
       type: "error",
       reason: "error",
       error: buildStreamErrorAssistantMessage({
-        model: {
-          api: model.api,
-          provider: model.provider,
-          id: model.id,
-        },
+        model,
         errorMessage,
       }),
     });
@@ -80,11 +72,7 @@ function wrapStreamHandleUnhandledStopReason(
         throw err;
       }
       return buildStreamErrorAssistantMessage({
-        model: {
-          api: model.api,
-          provider: model.provider,
-          id: model.id,
-        },
+        model,
         errorMessage: normalizedMessage,
       });
     }
@@ -124,11 +112,7 @@ function wrapStreamHandleUnhandledStopReason(
                 type: "error" as const,
                 reason: "error" as const,
                 error: buildStreamErrorAssistantMessage({
-                  model: {
-                    api: model.api,
-                    provider: model.provider,
-                    id: model.id,
-                  },
+                  model,
                   errorMessage: normalizedMessage,
                 }),
               },
