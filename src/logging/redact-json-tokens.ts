@@ -62,6 +62,18 @@ type JsonContainer = {
 
 const JSON_TOKEN_RE = /"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null|[{}[\]]/g;
 
+function skipWhitespace(text: string, offset: number): number {
+  while (
+    text[offset] === " " ||
+    text[offset] === "\t" ||
+    text[offset] === "\r" ||
+    text[offset] === "\n"
+  ) {
+    offset += 1;
+  }
+  return offset;
+}
+
 export function readScalarTokens(text: string, origins: RedactionOrigins): ScalarToken[] {
   const tokens: ScalarToken[] = [];
   const containers: JsonContainer[] = [];
@@ -123,15 +135,7 @@ export function readScalarTokens(text: string, origins: RedactionOrigins): Scala
     const end = start + raw.length;
     const string = raw.startsWith('"');
     const value: string = string ? JSON.parse(raw) : raw;
-    let next = end;
-    while (
-      text[next] === " " ||
-      text[next] === "\t" ||
-      text[next] === "\r" ||
-      text[next] === "\n"
-    ) {
-      next += 1;
-    }
+    const next = skipWhitespace(text, end);
     const isKey = string && text[next] === ":";
     let context: FieldContext;
     if (isKey) {
@@ -145,15 +149,7 @@ export function readScalarTokens(text: string, origins: RedactionOrigins): Scala
         rootKey: inherited.rootKey,
         rootValueStart: inherited.rootValueStart,
       };
-      let valueStart = next + 1;
-      while (
-        text[valueStart] === " " ||
-        text[valueStart] === "\t" ||
-        text[valueStart] === "\r" ||
-        text[valueStart] === "\n"
-      ) {
-        valueStart += 1;
-      }
+      const valueStart = skipWhitespace(text, next + 1);
       container.field = {
         key: value,
         path: [...inherited.path, value],

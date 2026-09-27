@@ -254,10 +254,7 @@ export class AcpTranslatorSessionLifecycle {
   }
 
   async closeSession(params: CloseSessionRequest): Promise<CloseSessionResponse> {
-    const session = this.sessionStore.getSession(params.sessionId);
-    if (!session) {
-      throw new Error(`Session ${params.sessionId} not found`);
-    }
+    const session = this.requireSession(params.sessionId);
     await this.cancelSessionWork(session);
     this.sessionStore.deleteSession(params.sessionId);
     this.log(`closeSession: ${params.sessionId}`);
@@ -269,10 +266,7 @@ export class AcpTranslatorSessionLifecycle {
   }
 
   async setSessionMode(params: SetSessionModeRequest): Promise<SetSessionModeResponse> {
-    const session = this.sessionStore.getSession(params.sessionId);
-    if (!session) {
-      throw new Error(`Session ${params.sessionId} not found`);
-    }
+    const session = this.requireSession(params.sessionId);
     if (!params.modeId) {
       return {};
     }
@@ -299,10 +293,7 @@ export class AcpTranslatorSessionLifecycle {
   async setSessionConfigOption(
     params: SetSessionConfigOptionRequest,
   ): Promise<SetSessionConfigOptionResponse> {
-    const session = this.sessionStore.getSession(params.sessionId);
-    if (!session) {
-      throw new Error(`Session ${params.sessionId} not found`);
-    }
+    const session = this.requireSession(params.sessionId);
     const sessionPatch = this.sessionState.resolveConfigPatch(params.configId, params.value);
 
     try {
@@ -330,6 +321,14 @@ export class AcpTranslatorSessionLifecycle {
       this.log(`setSessionConfigOption error: ${String(err)}`);
       throw err instanceof Error ? err : new Error(String(err));
     }
+  }
+
+  private requireSession(sessionId: string) {
+    const session = this.sessionStore.getSession(sessionId);
+    if (!session) {
+      throw new Error(`Session ${sessionId} not found`);
+    }
+    return session;
   }
 
   private async resolveSessionKeyFromMeta(params: {

@@ -57,13 +57,6 @@ export function resolveReactionLevel(params: {
       return { level: "off", ackEnabled: false, agentReactionsEnabled: false };
     case "ack":
       return { level: "ack", ackEnabled: true, agentReactionsEnabled: false };
-    case "minimal":
-      return {
-        level: "minimal",
-        ackEnabled: false,
-        agentReactionsEnabled: true,
-        agentReactionGuidance: "minimal",
-      };
     case "extensive":
       return {
         level: "extensive",
@@ -71,6 +64,7 @@ export function resolveReactionLevel(params: {
         agentReactionsEnabled: true,
         agentReactionGuidance: "extensive",
       };
+    case "minimal":
     default:
       return {
         level: "minimal",
