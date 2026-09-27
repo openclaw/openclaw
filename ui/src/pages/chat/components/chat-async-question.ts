@@ -64,7 +64,7 @@ function terminalOutcome(message: unknown): "successful" | "settled" | null {
 }
 
 /** Reminders age out of the dock, not out of the conversation or the user's authority. */
-function questionHistory(messages: readonly unknown[]) {
+function readQuestionHistory(messages: readonly unknown[]) {
   const runs = new Map<string, { first: number; last: number; settled?: number }>();
   const userTurns = new Map<string, number>();
   const recoveryStarts = new Map<string, number>();
@@ -212,6 +212,14 @@ function questionHistory(messages: readonly unknown[]) {
     return { question, boundary: boundary?.key };
   });
   return { history, resolved };
+}
+
+// History arrays are replaced, never mutated; scan each once, not per scroll render.
+const questionHistories = new WeakMap<readonly unknown[], ReturnType<typeof readQuestionHistory>>();
+function questionHistory(messages: readonly unknown[]) {
+  const history = questionHistories.get(messages) ?? readQuestionHistory(messages);
+  questionHistories.set(messages, history);
+  return history;
 }
 
 export function createAsyncQuestionPresentation(
