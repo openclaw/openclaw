@@ -5,6 +5,72 @@ import Testing
 struct CloudflareAccessLoginTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+    @Test(arguments: [
+        (301, "https://identity.example.org/sign-in"),
+        (302, "//identity.example.org/sign-in?state=synthetic-private-state"),
+        (303, "https://gateway.example.net:8443/sign-in"),
+        (307, "http://gateway.example.net/sign-in"),
+        (308, "https://identity.example.org/sign-in"),
+    ])
+    func `off-origin redirects without Access metadata explain the unsupported route`(
+        status: Int, location: String) throws
+    {
+        let gateway = try #require(URL(string: "https://gateway.example.net/dashboard/"))
+        let response = try #require(HTTPURLResponse(
+            url: gateway, statusCode: status, httpVersion: nil, headerFields: ["Location": location]))
+        do {
+            _ = try CloudflareAccessLogin.application(gatewayURL: gateway, response: response, now: self.now)
+            Issue.record("Discovery accepted an unsupported off-origin redirect")
+        } catch CloudflareAccessLogin.LoginError.unsupportedRedirect {
+            let message = CloudflareAccessLogin.LoginError.unsupportedRedirect.localizedDescription
+            #expect(message.contains("redirects to another website"))
+            #expect(message.contains("Cloudflare Access"))
+            #expect(message.contains("Open the Gateway in your browser"))
+            #expect(message.contains("administrator"))
+            #expect(!message.contains(location))
+            #expect(!message.contains("synthetic-private-state"))
+            #expect(!message.contains("TLS"))
+        }
+    }
+
+    @Test(arguments: [
+        (200, nil), (401, nil), (403, nil), (405, nil),
+        (302, nil), (302, "/dashboard/"), (302, "../login"),
+        (308, "https://GATEWAY.example.net:443/dashboard/"),
+        (200, "https://identity.example.org/sign-in"),
+        (304, "https://identity.example.org/sign-in"),
+    ] as [(Int, String?)])
+    func `direct responses and same-origin redirects remain non-Access gateways`(
+        status: Int, location: String?) throws
+    {
+        let gateway = try #require(URL(string: "https://gateway.example.net/dashboard/"))
+        let response = try #require(HTTPURLResponse(
+            url: gateway, statusCode: status, httpVersion: nil,
+            headerFields: location.map { ["Location": $0] }))
+        #expect(try CloudflareAccessLogin.application(gatewayURL: gateway, response: response, now: self.now) == nil)
+    }
+
+    @Test(arguments: [false, true])
+    func `Access metadata keeps precedence over redirect classification`(malformed: Bool) throws {
+        let gateway = try #require(URL(string: "https://gateway.example.net/"))
+        let metadata = try malformed ? "invalid-metadata" : self.metadata()
+        let response = try #require(HTTPURLResponse(
+            url: gateway, statusCode: 302, httpVersion: nil, headerFields: [
+                "Location": "https://tenant.cloudflareaccess.com/cdn-cgi/access/login",
+                "Cf-Access-Metadata": metadata,
+            ]))
+        if malformed {
+            do {
+                _ = try CloudflareAccessLogin.application(gatewayURL: gateway, response: response, now: self.now)
+                Issue.record("Malformed Access metadata must not fall through to a direct connection")
+            } catch CloudflareAccessLogin.LoginError.invalidApplication {}
+        } else {
+            let application = try #require(CloudflareAccessLogin.application(
+                gatewayURL: gateway, response: response, now: self.now))
+            #expect(application.gatewayURL == gateway)
+        }
+    }
+
     @Test func `discovery supports configured hosts and dashboard mounts`() throws {
         let gateway = try #require(URL(string: "https://gateway.example.net:8443/dashboard/"))
         let application = try CloudflareAccessLogin.application(

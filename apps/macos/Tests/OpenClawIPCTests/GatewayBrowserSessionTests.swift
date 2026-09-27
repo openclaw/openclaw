@@ -236,6 +236,114 @@ struct GatewayConnectionBrowserSessionTests {
 @Suite(.serialized)
 struct MacGatewayBrowserSessionStoreTests {
     @Test @MainActor
+    func `unsupported Add Gateway redirect leaves the local gateway intact and allows retry`() async throws {
+        try await self.withIsolatedStore { store in
+            let suffix = UUID().uuidString.lowercased()
+            let localURL = try #require(URL(string: "ws://localhost:18789/\(suffix)/"))
+            let cloudURL = try #require(URL(string: "wss://cloud-\(suffix).example.test:443/"))
+            let local = try await GatewayBrowserSignInCoordinator.connect(
+                name: "Local", address: localURL.absoluteString, token: "synthetic-local-token", password: "",
+                progress: GatewayBrowserSignInProgress(), discover: { _ in
+                    Issue.record("Local token authentication must not start browser discovery")
+                    return nil
+                })
+            let before = try await store.profiles()
+            let result: Result<Void, Error>
+            do {
+                do {
+                    _ = try await GatewayBrowserSignInCoordinator.connect(
+                        name: "Cloud", address: cloudURL.absoluteString, token: "", password: "",
+                        progress: GatewayBrowserSignInProgress(), discover: { url in
+                            #expect(url.scheme == "https")
+                            #expect(url.host == cloudURL.host)
+                            #expect(url.user == nil && url.password == nil && url.query == nil)
+                            let response = try #require(HTTPURLResponse(
+                                url: url, statusCode: 302, httpVersion: nil,
+                                headerFields: ["Location": "https://identity.example.test/sign-in"]))
+                            return try CloudflareAccessLogin.application(gatewayURL: url, response: response)
+                        })
+                    Issue.record("Unsupported browser sign-in must not save a cloud profile")
+                } catch CloudflareAccessLogin.LoginError.unsupportedRedirect {}
+                #expect(try await store.profiles() == before)
+                #expect(try await store.endpoint(profileID: local.id).config.token == "synthetic-local-token")
+                await #expect(throws: MacGatewayProfileError.profileNotFound) {
+                    try await store.endpoint(profileID: MacGatewayProfileStore.profileID(url: cloudURL))
+                }
+
+                // A corrected direct endpoint can be retried without inheriting the local credential.
+                let direct = try await GatewayBrowserSignInCoordinator.connect(
+                    name: "Cloud", address: cloudURL.absoluteString, token: "", password: "",
+                    progress: GatewayBrowserSignInProgress(), discover: { url in
+                        let response = try #require(HTTPURLResponse(
+                            url: url, statusCode: 200, httpVersion: nil, headerFields: nil))
+                        return try CloudflareAccessLogin.application(gatewayURL: url, response: response)
+                    })
+                let endpoint = try await store.endpoint(profileID: direct.id)
+                #expect(endpoint.config.token == nil && endpoint.config.password == nil)
+                #expect(endpoint.browserSession == nil)
+                #expect(try await store.endpoint(profileID: local.id).config.token == "synthetic-local-token")
+                result = .success(())
+            } catch {
+                result = .failure(error)
+            }
+            for profile in try await store.profiles() where profile.url == localURL || profile.url == cloudURL {
+                try await store.remove(profileID: profile.id)
+            }
+            try result.get()
+        }
+    }
+
+    @Test @MainActor
+    func `cancelled Add Gateway discovery cannot save a late direct result`() async throws {
+        try await self.withIsolatedStore { store in
+            let address = "https://cancelled-\(UUID().uuidString.lowercased()).example.test/"
+            let before = try await store.profiles()
+            let gate = GatewayConnectionSuspensionGate()
+            let pending = Task {
+                try await GatewayBrowserSignInCoordinator.connect(
+                    name: "Cancelled", address: address, token: "", password: "",
+                    progress: GatewayBrowserSignInProgress(), discover: { _ in
+                        await gate.suspend()
+                        return nil
+                    })
+            }
+            await gate.waitUntilStarted()
+            pending.cancel()
+            await gate.open()
+            await #expect(throws: CancellationError.self) { try await pending.value }
+            #expect(try await store.profiles() == before)
+        }
+    }
+
+    @Test(arguments: ["token", "password"])
+    @MainActor
+    func `explicit HTTPS credentials bypass browser discovery`(_ kind: String) async throws {
+        try await self.withIsolatedStore { store in
+            let address = "https://credential-\(UUID().uuidString.lowercased()).example.test/"
+            let profile = try await GatewayBrowserSignInCoordinator.connect(
+                name: "Explicit", address: address,
+                token: kind == "token" ? "synthetic-token" : "",
+                password: kind == "password" ? "synthetic-password" : "",
+                progress: GatewayBrowserSignInProgress(), discover: { _ in
+                    Issue.record("Explicit credentials must not start browser discovery")
+                    throw CloudflareAccessLogin.LoginError.unsupportedRedirect
+                })
+            let result: Result<Void, Error>
+            do {
+                let endpoint = try await store.endpoint(profileID: profile.id)
+                #expect(endpoint.config.token == (kind == "token" ? "synthetic-token" : nil))
+                #expect(endpoint.config.password == (kind == "password" ? "synthetic-password" : nil))
+                #expect(endpoint.browserSession == nil)
+                result = .success(())
+            } catch {
+                result = .failure(error)
+            }
+            try await store.remove(profileID: profile.id)
+            try result.get()
+        }
+    }
+
+    @Test @MainActor
     func `cancelled admission leaves an existing sign in current`() async throws {
         try await self.withIsolatedStore { store in
             let url = try #require(URL(string: "wss://cancelled-admission-\(UUID().uuidString).example.test/"))
