@@ -8,6 +8,10 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
+import android.os.ParcelUuid
+import android.os.PowerManager
+import android.telecom.CallAudioState
+import android.telecom.CallEndpoint
 import android.telecom.PhoneAccountHandle
 import android.telecom.TelecomManager
 import kotlinx.coroutines.Dispatchers
@@ -39,6 +43,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.Implementation
 import org.robolectric.annotation.Implements
+import org.robolectric.shadows.ShadowPowerManager
 import org.robolectric.shadows.ShadowTelecomManager
 import java.util.UUID
 
@@ -55,6 +60,7 @@ class IncomingCallTelecomShadow : ShadowTelecomManager() {
 class IncomingCallControllerTest {
   private class Fixture(
     scope: TestScope,
+    proximitySupported: Boolean = true,
     start: suspend () -> Unit = {},
   ) {
     val app = RuntimeEnvironment.getApplication()
@@ -76,6 +82,7 @@ class IncomingCallControllerTest {
     val controller: IncomingCallController
 
     init {
+      shadowOf(app.getSystemService(PowerManager::class.java)).setIsWakeLockLevelSupported(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK, proximitySupported)
       shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS, Manifest.permission.MANAGE_OWN_CALLS)
       prefs.gatewayRegistry.upsert(GatewayRegistryEntry("synthetic-gateway", GatewayRegistryEntryKind.MANUAL, "Synthetic Gateway"))
       prefs.gatewayRegistry.setActive("synthetic-gateway")
@@ -119,6 +126,173 @@ class IncomingCallControllerTest {
       put("status", status)
       put("expiresAtMs", fixture.expiresAtMs)
       if (detail != null) put("detail", detail)
+    }
+
+  private fun setEndpoint(
+    fixture: Fixture,
+    type: Int,
+    name: String = "Earpiece",
+    id: String = fixture.id,
+  ) {
+    fixture.controller.currentEndpointChanged(id, CallEndpoint(name, type, ParcelUuid(UUID.randomUUID())))
+  }
+
+  private fun proximityHeld(): Boolean = ShadowPowerManager.getLatestWakeLock()?.isHeld == true
+
+  @Test
+  fun `proximity begins only after answer and follows native endpoint type not display name`() =
+    runTest {
+      Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+      try {
+        val f = Fixture(this)
+        assertTrue(f.controller.invoke("talk.incoming", f.payload).ok)
+        setEndpoint(f, CallEndpoint.TYPE_EARPIECE, "Auricular")
+        assertFalse(proximityHeld())
+        assertEquals(0, f.starts)
+
+        f.controller.answer(f.id)
+        assertTrue(proximityHeld())
+        assertEquals(0, f.starts)
+        val service = Robolectric.buildService(IncomingCallForegroundService::class.java).create().get()
+        assertTrue(f.controller.foregroundServiceReady(f.id, service))
+        assertTrue(proximityHeld())
+        assertEquals(1, f.starts)
+        setEndpoint(f, CallEndpoint.TYPE_EARPIECE, "Auricular")
+        assertEquals(1, shadowOf(requireNotNull(ShadowPowerManager.getLatestWakeLock())).timesHeld)
+
+        for (type in listOf(CallEndpoint.TYPE_SPEAKER, CallEndpoint.TYPE_BLUETOOTH, CallEndpoint.TYPE_WIRED_HEADSET, CallEndpoint.TYPE_STREAMING, CallEndpoint.TYPE_UNKNOWN)) {
+          setEndpoint(f, type)
+          assertFalse("Non-earpiece endpoint $type must not blank the screen", proximityHeld())
+          setEndpoint(f, CallEndpoint.TYPE_EARPIECE, "Auricular")
+          assertTrue(proximityHeld())
+        }
+        f.controller.end(f.id)
+        assertFalse(proximityHeld())
+        setEndpoint(f, CallEndpoint.TYPE_EARPIECE)
+        assertFalse(proximityHeld())
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  @Config(sdk = [33])
+  @Suppress("DEPRECATION")
+  fun `legacy native earpiece route blanks only answered call and releases for speaker bluetooth and headset`() =
+    runTest {
+      Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+      try {
+        val f = Fixture(this)
+        val routes = CallAudioState.ROUTE_EARPIECE or CallAudioState.ROUTE_SPEAKER or CallAudioState.ROUTE_BLUETOOTH or CallAudioState.ROUTE_WIRED_HEADSET
+        assertTrue(f.controller.invoke("talk.incoming", f.payload).ok)
+        f.controller.legacyAudioStateChanged(f.id, CallAudioState(false, CallAudioState.ROUTE_EARPIECE, routes))
+        assertFalse(proximityHeld())
+        f.controller.answer(f.id)
+        assertTrue(proximityHeld())
+        assertEquals(0, f.starts)
+        for (route in listOf(CallAudioState.ROUTE_SPEAKER, CallAudioState.ROUTE_BLUETOOTH, CallAudioState.ROUTE_WIRED_HEADSET)) {
+          f.controller.legacyAudioStateChanged(f.id, CallAudioState(false, route, routes))
+          assertFalse(proximityHeld())
+          f.controller.legacyAudioStateChanged(f.id, CallAudioState(false, CallAudioState.ROUTE_EARPIECE, routes))
+          assertTrue(proximityHeld())
+        }
+        f.controller.end(f.id)
+        assertFalse(proximityHeld())
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  fun `service destruction and Gateway loss release proximity without Activity involvement`() =
+    runTest {
+      Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+      try {
+        for (gatewayLost in listOf(false, true)) {
+          val f = Fixture(this)
+          assertTrue(f.controller.invoke("talk.incoming", f.payload).ok)
+          f.controller.answer(f.id)
+          assertFalse(proximityHeld())
+          val service = Robolectric.buildService(IncomingCallForegroundService::class.java).create().get()
+          assertTrue(f.controller.foregroundServiceReady(f.id, service))
+          setEndpoint(f, CallEndpoint.TYPE_EARPIECE)
+          assertTrue(proximityHeld())
+          if (gatewayLost) {
+            f.gateway = null
+            f.authority = false
+            f.controller.invalidate()
+          } else {
+            f.controller.foregroundServiceDestroyed(service)
+          }
+          assertFalse(proximityHeld())
+          assertEquals(
+            IncomingCallStatus.Ended,
+            f.controller.state.value
+              ?.status,
+          )
+          assertEquals(1, f.stops)
+          setEndpoint(f, CallEndpoint.TYPE_EARPIECE)
+          assertFalse(proximityHeld())
+        }
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  fun `a completed call cannot supply an earpiece route for a later answered call`() =
+    runTest {
+      Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+      try {
+        val f = Fixture(this)
+        assertTrue(f.controller.invoke("talk.incoming", f.payload).ok)
+        setEndpoint(f, CallEndpoint.TYPE_EARPIECE)
+        f.controller.answer(f.id)
+        assertTrue(proximityHeld())
+        f.controller.end(f.id)
+        assertFalse(proximityHeld())
+        val nextId = UUID.randomUUID().toString()
+        val nextPayload =
+          buildJsonObject {
+            Json.parseToJsonElement(f.payload).jsonObject.forEach { (key, value) -> put(key, value) }
+            put("callId", nextId)
+          }.toString()
+        assertTrue(f.controller.invoke("talk.incoming", nextPayload).ok)
+        setEndpoint(f, CallEndpoint.TYPE_EARPIECE)
+        f.controller.answer(nextId)
+        assertFalse(proximityHeld())
+        setEndpoint(f, CallEndpoint.TYPE_EARPIECE, id = nextId)
+        assertTrue(proximityHeld())
+        f.controller.end(nextId)
+        assertFalse(proximityHeld())
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  fun `device without proximity support still accepts and completes an earpiece call`() =
+    runTest {
+      Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+      try {
+        val f = Fixture(this, proximitySupported = false)
+        assertTrue(f.controller.invoke("talk.incoming", f.payload).ok)
+        setEndpoint(f, CallEndpoint.TYPE_EARPIECE)
+        f.controller.answer(f.id)
+        val service = Robolectric.buildService(IncomingCallForegroundService::class.java).create().get()
+        assertTrue(f.controller.foregroundServiceReady(f.id, service))
+        assertEquals(
+          IncomingCallStatus.Active,
+          f.controller.state.value
+            ?.status,
+        )
+        assertEquals(1, f.starts)
+        assertFalse(proximityHeld())
+        f.controller.end(f.id)
+        assertEquals(1, f.stops)
+      } finally {
+        Dispatchers.resetMain()
+      }
     }
 
   @Test
@@ -308,7 +482,9 @@ class IncomingCallControllerTest {
       try {
         val f = Fixture(this) { withTimeout(10) { delay(1000) } }
         assertTrue(f.controller.invoke("talk.incoming", f.payload).ok)
+        setEndpoint(f, CallEndpoint.TYPE_EARPIECE)
         f.controller.answer(f.id)
+        assertTrue(proximityHeld())
         assertEquals(
           IncomingCallStatus.Connecting,
           f.controller.state.value
@@ -325,6 +501,7 @@ class IncomingCallControllerTest {
             ?.status,
         )
         assertEquals(1, f.stops)
+        assertFalse(proximityHeld())
         f.controller.answer(f.id)
         assertEquals(1, f.starts)
       } finally {
@@ -362,7 +539,9 @@ class IncomingCallControllerTest {
       try {
         val f = Fixture(this)
         assertTrue(f.controller.invoke("talk.incoming", f.payload).ok)
+        setEndpoint(f, CallEndpoint.TYPE_EARPIECE)
         f.controller.answer(f.id)
+        assertTrue(proximityHeld())
         advanceTimeBy(5_001)
         runCurrent()
         assertEquals(
@@ -371,6 +550,7 @@ class IncomingCallControllerTest {
             ?.status,
         )
         assertEquals(0, f.starts)
+        assertFalse(proximityHeld())
       } finally {
         Dispatchers.resetMain()
       }

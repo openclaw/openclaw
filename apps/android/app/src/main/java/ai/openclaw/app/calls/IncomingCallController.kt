@@ -95,6 +95,8 @@ internal class IncomingCallController(
   private val _audioOutput = MutableStateFlow("System audio")
   val audioOutput: StateFlow<String> = _audioOutput
   private var endpoints: List<CallEndpoint> = emptyList()
+  private var currentRouteIsEarpiece = false
+  private val proximity = IncomingCallProximity(context)
   private val completed = LinkedHashMap<String, IncomingCallState>()
   private val notificationManager = context.getSystemService(NotificationManager::class.java)
 
@@ -235,7 +237,10 @@ internal class IncomingCallController(
     id: String,
     endpoint: CallEndpoint,
   ) {
-    if (isCurrent(id)) _audioOutput.value = endpoint.endpointName.toString()
+    if (!isCurrent(id)) return
+    _audioOutput.value = endpoint.endpointName.toString()
+    currentRouteIsEarpiece = endpoint.endpointType == CallEndpoint.TYPE_EARPIECE
+    updateProximity()
   }
 
   @Suppress("DEPRECATION") // CallAudioState is the supported route surface on API 31–33.
@@ -253,6 +258,17 @@ internal class IncomingCallController(
         CallAudioState.ROUTE_WIRED_HEADSET to "Wired headset",
       ).filter { (route, _) -> audio.supportedRouteMask and route != 0 }.map { it.first.toString() to it.second }
     _audioOutput.value = _audioRoutes.value.firstOrNull { it.first == audio.route.toString() }?.second ?: "System audio"
+    currentRouteIsEarpiece = audio.route == CallAudioState.ROUTE_EARPIECE
+    updateProximity()
+  }
+
+  private fun updateProximity() {
+    val call = _state.value
+    proximity.setEarpieceCallActive(
+      currentRouteIsEarpiece && call != null &&
+        (call.status == IncomingCallStatus.Connecting || call.status == IncomingCallStatus.Active) &&
+        isCurrent(call.invite.callId),
+    )
   }
 
   @Suppress("DEPRECATION") // Legacy devices route through Connection.setAudioRoute.
@@ -293,6 +309,7 @@ internal class IncomingCallController(
     }
     expiryJob?.cancel()
     _state.value = transitionIncomingCall(call, IncomingCallStatus.Connecting)
+    updateProximity()
     // Stop the repeating alert at Answer, before asynchronous microphone-service startup.
     notificationManager.cancel(NOTIFICATION_ID)
     connection?.setActive()
@@ -334,6 +351,7 @@ internal class IncomingCallController(
             return@launch
           }
           _state.value = transitionIncomingCall(_state.value ?: return@launch, IncomingCallStatus.Active)
+          updateProximity()
           connection?.setActive()
           showNotification()
         } catch (error: TimeoutCancellationException) {
@@ -381,6 +399,8 @@ internal class IncomingCallController(
   ) {
     val call = _state.value ?: return
     if (call.status.isTerminal) return
+    currentRouteIsEarpiece = false
+    proximity.setEarpieceCallActive(false)
     expiryJob?.cancel()
     audioJob?.cancel()
     stopAudio(call.invite.callId)
