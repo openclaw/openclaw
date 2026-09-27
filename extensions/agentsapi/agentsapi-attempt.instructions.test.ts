@@ -168,9 +168,14 @@ describe("Agents API agent workspace instructions", () => {
     expect(fixture.requests[2]?.agent.instructions).toContain("Plugin system guidance two.");
   });
 
-  it.each([false, true])(
-    "rejects a restrictive plugin tool policy before native dispatch (resumed: %s)",
-    async (resumed) => {
+  it.each([
+    { resumed: false, toolsAllow: [] },
+    { resumed: true, toolsAllow: [] },
+    { resumed: false, toolsAllow: ["memory_search"] },
+    { resumed: true, toolsAllow: ["memory_search"] },
+  ])(
+    "continues with plugin context when tool restrictions cannot be enforced ($resumed, $toolsAllow)",
+    async ({ resumed, toolsAllow }) => {
       const fixture = await createFixture({ toolAuthorityFingerprint: "fixture-prompt-authority" });
       const binding = resumed ? await fixture.run() : undefined;
       const requestCount = fixture.requests.length;
@@ -178,16 +183,20 @@ describe("Agents API agent workspace instructions", () => {
       const recall = vi.fn().mockReturnValue({ prependContext: "Authorized recall context." });
       initializeGlobalHookRunner(
         createMockPluginRegistry([
-          { hookName: "before_prompt_build", handler: () => ({ toolsAllow: ["memory_search"] }) },
+          {
+            hookName: "before_prompt_build",
+            handler: () => ({ toolsAllow, prependContext: "Ordinary plugin context." }),
+          },
           { hookName: "before_prompt_build", handler: recall, requiresToolAuthority: true },
         ]),
       );
-      await expect(fixture.run(binding)).rejects.toThrow(
-        "Agents API cannot enforce before_prompt_build toolsAllow.",
+      await fixture.run(binding);
+      expect(fixture.requests).toHaveLength(requestCount + 1);
+      expect(promptFixture.turnInputs).toHaveLength(inputCount + 1);
+      expect(promptFixture.turnInputs[inputCount]).toContain(
+        "Ordinary plugin context.\n\nAuthorized recall context.\n\nFixture prompt",
       );
-      expect(fixture.requests).toHaveLength(requestCount);
-      expect(promptFixture.turnInputs).toHaveLength(inputCount);
-      expect(recall).not.toHaveBeenCalled();
+      expect(recall).toHaveBeenCalledOnce();
     },
   );
 

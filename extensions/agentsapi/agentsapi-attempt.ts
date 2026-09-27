@@ -260,15 +260,8 @@ export async function runAgentsApiAttempt(
       prompt: params.prompt,
       currentInboundContext: params.currentInboundContext,
       currentUserMessage: admittedMessage ?? params.prompt,
-      developerInstructions: {
-        build: ({ hasToolRestrictions }) => {
-          assertCurrent();
-          if (hasToolRestrictions) {
-            throw new Error("Agents API cannot enforce before_prompt_build toolsAllow.");
-          }
-          return instructions;
-        },
-      },
+      // Agents API cannot narrow native tools per turn; hook toolsAllow is advisory here.
+      developerInstructions: instructions,
       messages: history.buildSessionContext().messages,
       ctx: hookContext,
       bootstrapContextRunKind: params.bootstrapContextRunKind,

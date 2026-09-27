@@ -12,10 +12,13 @@ including tool-authorized recall and heartbeat prompt contributions. Per-turn
 System-prompt additions and overrides are captured only when the native session
 is created. Updating system instructions on an existing native session is an MVP
 implementation gap; reset the OpenClaw session to adopt those changes. The harness
-does not move system instructions into user messages. Restrictive hook `toolsAllow`
-results are rejected before native dispatch because the harness cannot enforce
-turn-scoped restrictions across Gateway and native tools. Steering messages and
-isolated completions do not run these conversation prompt hooks.
+does not move system instructions into user messages. Hook `toolsAllow` restrictions
+are ignored because the harness cannot enforce turn-scoped restrictions across
+Gateway and native tools. Turns continue with the hook's prompt context even for
+an empty tool list; other available tools remain usable. Existing configured Gateway
+tool policies still apply. Use a runtime that supports per-turn restrictions when a
+hook's tool list must be enforced. Steering messages and isolated completions do not
+run these conversation prompt hooks.
 
 Memory Core dreaming can generate its diary narrative in a fresh Agents API
 session without an executor, supplied functions, native web search, vaults, or
