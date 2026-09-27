@@ -94,13 +94,13 @@ vi.mock("./agentsapi-files.js", () => ({
 }));
 vi.mock("./agentsapi-transcript.js", () => ({ recordAgentsApiNativeToolTranscript: vi.fn() }));
 vi.mock("./agentsapi-messages.js", () => ({
-  createAgentsApiMessageProjection: () => ({
-    reply: {},
-    toolMetas: [],
-    itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
-    recordUsage: vi.fn(),
-    commit: mocks.commit,
-  }),
+  AgentsApiMessageProjection: class {
+    reply = {};
+    toolMetas = [];
+    itemLifecycle = { startedCount: 0, completedCount: 0, activeCount: 0 };
+    recordUsage = vi.fn();
+    commit = mocks.commit;
+  },
 }));
 vi.mock("./agentsapi-session.js", () => ({
   createAgentsApiSession: (
