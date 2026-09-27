@@ -387,7 +387,8 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
       }
     },
     continuationMessages: params.continuationMessages ?? params.pluginRuntimeRefreshMessages,
-    captureContinuationMessages: params.reviewSettledDraft ? true : undefined,
+    // Plugin refresh can interrupt any turn after its tools have completed.
+    captureContinuationMessages: true,
     pluginRuntimeRefreshMessages:
       params.continuationMessages ?? params.pluginRuntimeRefreshMessages,
     permissionChange: input.permissionChange,
