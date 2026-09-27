@@ -438,6 +438,33 @@ describe("config write source preparation", () => {
   );
 });
 
+describe("config.patch unsafe integers", () => {
+  it("rejects a patch whose bare id parsing has already rounded", async () => {
+    const harness = createConfigHandlerHarness({
+      method: "config.patch",
+      params: {
+        raw: "{ channels: { zalo: { allowFrom: [1471383327500481391] } } }",
+        baseHash: "base-hash",
+      },
+    });
+    await expectDefined(
+      configHandlers["config.patch"],
+      'configHandlers["config.patch"] test invariant',
+    )(harness.options);
+
+    expect(harness.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining(
+          "1471383327500481391 would be saved as a different number",
+        ),
+      }),
+    );
+    expect(configWriteMocks.commitGatewayConfigWrite).not.toHaveBeenCalled();
+  });
+});
+
 describe("config.patch hash-free ui.prefs LWW", () => {
   it("rejects a mixed hash-free patch and names the guarded path", async () => {
     const { respond } = await invokeConfigPatch({

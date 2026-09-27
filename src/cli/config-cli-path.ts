@@ -1,7 +1,10 @@
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import JSON5 from "json5";
 import { normalizeConfigModelSelectionParent } from "../config/model-input-normalization.js";
-import { rejectConfigNonFiniteNumbers } from "../config/value-tree.js";
+import {
+  rejectConfigLostIntegerDigits,
+  rejectConfigNonFiniteNumbers,
+} from "../config/value-tree.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import {
   formatConcreteConfigPath,
@@ -78,6 +81,7 @@ export function parseConfigSetValue(raw: string, strictJson: boolean): unknown {
     return raw;
   }
   rejectConfigNonFiniteNumbers(parsed);
+  rejectConfigLostIntegerDigits(trimmed);
   return parsed;
 }
 
