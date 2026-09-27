@@ -427,27 +427,28 @@ export function createHarness(
       log.push("teardown:stop");
       await options.afterStopTunnel?.();
     }),
-    destroy: vi.fn(async () => {
-      log.push("teardown:destroy");
-      if (options.destroyFails || remainingDestroyFailures > 0) {
-        if (remainingDestroyFailures > 0) {
-          remainingDestroyFailures -= 1;
+    destroy: vi.fn<WorkerDispatchEnvironmentService["destroy"]>(
+      async (_environmentId, _abandonment, forceAbandon) => {
+        await forceAbandon?.();
+        log.push("teardown:destroy");
+        if (options.destroyFails || remainingDestroyFailures > 0) {
+          remainingDestroyFailures = Math.max(0, remainingDestroyFailures - 1);
+          if (options.destroyFailureState) {
+            setEnvironment({
+              ...attached,
+              state: options.destroyFailureState,
+              attachedSessionIds: [],
+              tunnelStatus: "stopped",
+            });
+          }
+          throw new Error("destroy pending");
         }
-        if (options.destroyFailureState) {
-          setEnvironment({
-            ...attached,
-            state: options.destroyFailureState,
-            attachedSessionIds: [],
-            tunnelStatus: "stopped",
-          });
-        }
-        throw new Error("destroy pending");
-      }
-      const destroyed = destroyedEnvironment((currentEnvironment?.ownerEpoch ?? 1) + 1);
-      setEnvironment(destroyed);
-      await options.afterDestroy?.();
-      return destroyed;
-    }),
+        const destroyed = destroyedEnvironment((currentEnvironment?.ownerEpoch ?? 1) + 1);
+        setEnvironment(destroyed);
+        await options.afterDestroy?.();
+        return destroyed;
+      },
+    ),
     requestDestroy: (requestedEnvironmentId) => environments.destroy(requestedEnvironmentId),
     reconcileOnce: vi.fn(async () => {
       log.push("environment:reconcile");

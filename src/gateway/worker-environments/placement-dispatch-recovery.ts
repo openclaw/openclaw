@@ -14,9 +14,11 @@ import {
   cleanupPendingWorkspaceResultOrphans,
   type PlacementRecoveryDeps,
 } from "./placement-dispatch-pending-results.js";
+import { forceAbandonWorkerEnvironment } from "./placement-force-abandon.js";
 import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
 import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import {
+  FORCED_WORKER_ABANDONMENT_ERROR,
   placementTurnOwner,
   projectWorkerSessionTurnClaim,
   serializeWorkerSessionTurnClaim,
@@ -278,11 +280,34 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
       for (const { sessionId } of await placements.readRecoveryCandidates()) {
         const facts = await placements.readProjection([sessionId], { current: true });
         const placement = facts.placements.get(sessionId);
+        if (!placement || facts.moves.has(sessionId)) {
+          continue;
+        }
+        const environment = placement.environmentId
+          ? environments.get(placement.environmentId)
+          : undefined;
         if (
-          placement?.state !== "draining" ||
+          (placement.state === "active" ||
+            placement.state === "draining" ||
+            placement.state === "reconciling") &&
+          environment &&
+          environment.destroyRequestedAtMs !== null &&
+          environment.lastError === FORCED_WORKER_ABANDONMENT_ERROR &&
+          environment.ownerEpoch === placement.activeOwnerEpoch
+        ) {
+          await deps.workspaceOperations.run(environment.environmentId, async () => {
+            await forceAbandonWorkerEnvironment({
+              ...deps,
+              environmentId: environment.environmentId,
+            });
+            await environments.reconcileEnvironment(environment.environmentId);
+          });
+          continue;
+        }
+        if (
+          placement.state !== "draining" ||
           placement.turnClaim ||
-          facts.pendingResults.has(sessionId) ||
-          facts.moves.has(sessionId)
+          facts.pendingResults.has(sessionId)
         ) {
           continue;
         }

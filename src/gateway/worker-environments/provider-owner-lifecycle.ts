@@ -327,6 +327,7 @@ export function createWorkerProviderOwnerLifecycle(
     destroyOptions: {
       requireUnattached?: boolean;
       abandonment?: WorkerEnvironmentAbandonment;
+      forceAbandon?: () => Promise<void>;
       retryRequested?: boolean;
     } = {},
   ) => {
@@ -340,6 +341,7 @@ export function createWorkerProviderOwnerLifecycle(
       abandonment?.authorize?.();
       let record = store.get(environmentId);
       if (!record) {
+        await destroyOptions.forceAbandon?.();
         throw serviceError("environment_not_found", `Unknown worker environment: ${environmentId}`);
       }
       if (
@@ -348,6 +350,7 @@ export function createWorkerProviderOwnerLifecycle(
           record.state === "destroyed" ||
           (record.state === "failed" && !record.leaseId))
       ) {
+        await destroyOptions.forceAbandon?.();
         return record;
       }
       if (
@@ -379,23 +382,35 @@ export function createWorkerProviderOwnerLifecycle(
         );
       }
       const destroyOwner = record;
+      const assertDestroyOwner = () => {
+        abandonment?.authorize?.();
+        const current = requireCurrentOwner(destroyOwner);
+        if (destroyOptions.requireUnattached && current.attachedSessionIds.length > 0) {
+          throw serviceError(
+            "invalid_state",
+            "Attached cloud workers must be stopped through sessions.reclaim",
+          );
+        }
+      };
       record = await store.requestDestroy({
         environmentId,
         state: record.state,
-        assertCurrent: () => {
-          abandonment?.authorize?.();
-          const current = requireCurrentOwner(destroyOwner);
-          if (destroyOptions.requireUnattached && current.attachedSessionIds.length > 0) {
-            throw serviceError(
-              "invalid_state",
-              "Attached cloud workers must be stopped through sessions.reclaim",
-            );
-          }
-        },
-        ...(abandonment
-          ? { terminalState: "failed", lastError: FORCED_WORKER_ABANDONMENT_ERROR }
+        assertCurrent: assertDestroyOwner,
+        ...(abandonment ? { terminalState: "failed" } : {}),
+        ...(abandonment || destroyOptions.forceAbandon
+          ? { lastError: FORCED_WORKER_ABANDONMENT_ERROR }
           : {}),
       });
+      if (destroyOptions.forceAbandon && record.lastError !== FORCED_WORKER_ABANDONMENT_ERROR) {
+        record = await store.recordError({
+          environmentId,
+          state: record.state,
+          error: FORCED_WORKER_ABANDONMENT_ERROR,
+          assertCurrent: assertDestroyOwner,
+        });
+      }
+      // Persist the operator's discard decision before placement draining can survive a crash.
+      await destroyOptions.forceAbandon?.();
       try {
         const destroyed = await finishDestroy(record);
         abandonment?.authorize?.();

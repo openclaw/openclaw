@@ -9,9 +9,16 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
-import { type PlacementStore, REQUEST } from "./placement-dispatch-test-fixtures.js";
+import {
+  type PlacementStore,
+  REQUEST,
+  seedActivePlacement,
+} from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
+import { FORCED_WORKER_ABANDONMENT_ERROR } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
+import * as support from "./service.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
 describe("forced worker environment destruction", () => {
@@ -164,4 +171,92 @@ describe("forced worker environment destruction", () => {
 
     expect(harness.environments.destroy).toHaveBeenCalledExactlyOnceWith(active.environmentId);
   });
+});
+
+describe("forced destruction across Gateway restart", () => {
+  support.setupWorkerEnvironmentServiceSuite();
+
+  it.each([false, true])(
+    "resumes forced abandonment after a crash between draining and placement failure (destroy already requested: %s)",
+    async (alreadyRequested) => {
+      const environmentId = "worker-forced-restart";
+      await support.seedReady(environmentId);
+      const attached = await support.testState.store.transition({
+        environmentId,
+        from: "ready",
+        to: "attached",
+        patch: support.attachedPatch(environmentId, REQUEST.sessionId),
+      });
+      let placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
+      const active = await seedActivePlacement(placements, {
+        environmentId,
+        ownerEpoch: attached.ownerEpoch,
+        executionMode: "remote-exec",
+      });
+      if (alreadyRequested) {
+        await support.testState.store.requestDestroy({ environmentId, state: "attached" });
+      }
+      const destroy = vi.fn(async () => {});
+      const createService = () =>
+        support.createService(support.createProvider({ destroy }), {
+          placementStore: createWorkerSessionPlacementGate(placements, {
+            rejectExistingWorkerClaims: true,
+          }),
+        });
+      const service = createService();
+      const harness = createHarness(support.testState.stateDb, placements, {
+        environmentService: service,
+        workspacePath: support.testState.root,
+      });
+      const crash = new Error("Gateway exits before recording placement failure");
+      const reconcile = vi.spyOn(placements, "startReconcile").mockImplementationOnce(() => {
+        throw crash;
+      });
+      await expect(harness.service.forceDestroyEnvironment(environmentId)).rejects.toBe(crash);
+      reconcile.mockRestore();
+      expect(placements.get(REQUEST.sessionId)).toMatchObject({
+        state: "draining",
+        turnClaim: null,
+      });
+      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(placements.getPlacementMove(REQUEST.sessionId)).toBeUndefined();
+      expect.soft(support.testState.store.get(environmentId)).toMatchObject({
+        destroyRequestedAtMs: support.testState.nowMs,
+        lastError: FORCED_WORKER_ABANDONMENT_ERROR,
+      });
+      expect(destroy).not.toHaveBeenCalled();
+      const pendingEnvironment = support.testState.store.get(environmentId);
+      if (!pendingEnvironment) {
+        throw new Error("forced teardown lost its environment");
+      }
+      await service.recordError(
+        pendingEnvironment,
+        new Error("transient provider inspection failure"),
+      );
+
+      await support.reopenWorkerEnvironmentStore();
+      placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
+      const claimStop = vi.spyOn(placements, "claimReclaimWorkspaceResult");
+      const restartedService = createService();
+      const tunnel = vi.spyOn(restartedService, "startTunnel");
+      const restarted = createHarness(support.testState.stateDb, placements, {
+        environmentService: restartedService,
+        workspacePath: support.testState.root,
+      });
+      await restarted.service.reconcile("startup");
+
+      expect(claimStop).not.toHaveBeenCalled();
+      expect(tunnel).not.toHaveBeenCalled();
+      expect(restarted.log).not.toContain("workspace");
+      expect(placements.get(REQUEST.sessionId)).toMatchObject({
+        state: "failed",
+        turnClaim: null,
+        recoveryError: FORCED_WORKER_ABANDONMENT_ERROR,
+        workspaceBaseManifestRef: active.workspaceBaseManifestRef,
+      });
+      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(destroy).toHaveBeenCalledOnce();
+      expect(restartedService.get(environmentId)?.state).toBe("destroyed");
+    },
+  );
 });

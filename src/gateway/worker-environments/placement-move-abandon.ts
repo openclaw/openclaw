@@ -47,16 +47,15 @@ export function createWorkerPlacementMoveAbandonment(
         sessionId
           ? { sessionId, ownerEpoch: environment.ownerEpoch }
           : undefined;
-      await forceAbandonWorkerEnvironment({
-        placements,
-        environmentId,
-        resolveWorkspace: options.resolveWorkspace,
-        onCleanupError,
-      });
       try {
-        return await (abandonment
-          ? environments.destroy(environmentId, abandonment)
-          : environments.destroy(environmentId));
+        return await environments.destroy(environmentId, abandonment, () =>
+          forceAbandonWorkerEnvironment({
+            placements,
+            environmentId,
+            resolveWorkspace: options.resolveWorkspace,
+            onCleanupError,
+          }),
+        );
       } catch (error) {
         const current = environments.get(environmentId);
         if (!current || !isUnavailableEnvironment(current)) {
