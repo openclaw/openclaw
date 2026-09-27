@@ -159,7 +159,9 @@ function readCodexModel(value: CodexModel): CodexAppServerModel {
     hidden: value.hidden,
     isDefault: value.isDefault,
     inputModalities: value.inputModalities,
-    serviceTiers: normalizeUniqueTrimmedStringList(value.serviceTiers.map((tier) => tier.id)),
+    serviceTiers: normalizeUniqueTrimmedStringList(
+      (value.serviceTiers ?? []).map((tier) => tier.id),
+    ),
     supportedReasoningEfforts: normalizeUniqueTrimmedStringList(
       value.supportedReasoningEfforts.map((entry) => entry.reasoningEffort),
     ),
