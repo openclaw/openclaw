@@ -2,6 +2,7 @@ import { bindOperatorModelExecution } from "../agents/admitted-run-context.js";
 import { resolveDecisionModelSetting } from "../agents/decision-model-setting.js";
 import { normalizeModelRef } from "../agents/model-ref-shared.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureAmbientGatewayOperatorAuthority } from "../gateway/operator-invocation-authority.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
@@ -55,7 +56,8 @@ export async function evaluateDecisionInRegistry(
     options.rubricVersion.length > 128 ||
     !Number.isFinite(options.timeoutMs) ||
     options.timeoutMs <= 0 ||
-    !(options.signal instanceof AbortSignal)
+    !(options.signal instanceof AbortSignal) ||
+    (options.isEligible !== undefined && typeof options.isEligible !== "function")
   ) {
     throw new DecisionContractError();
   }
@@ -90,6 +92,8 @@ export async function evaluateDecisionInRegistry(
   } catch {
     throw new DecisionContractError();
   }
+  // Bind the config owner before operator preparation can publish a replacement.
+  const readConfig = createRuntimeConfigReader(config);
   const model = normalizeModelRef(selected.provider, selected.model, {
     allowPluginNormalization: false,
     manifestPlugins: getProcessGatewayPluginMetadataSnapshot() ?? [],
@@ -136,6 +140,7 @@ export async function evaluateDecisionInRegistry(
         config,
         registry,
         consumerId,
+        readConfig,
       );
       assertCurrent();
       return result;
@@ -151,6 +156,7 @@ export async function evaluateDecisionInRegistry(
       config,
       registry,
       consumerId,
+      readConfig,
     );
     signal.throwIfAborted();
     assertCurrent();

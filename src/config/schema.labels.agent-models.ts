@@ -1,4 +1,9 @@
 export const AGENT_MODEL_FIELD_LABELS: Record<string, string> = {
+  "agents.defaults.turnContextCuration": "Turn Context Curation",
+  "agents.defaults.turnContextCuration.mode": "Turn Context Curation Mode",
+  "agents.defaults.turnContextCuration.minEstimatedTokens": "Turn Context Minimum Estimated Tokens",
+  "agents.defaults.turnContextCuration.recentMessages": "Turn Context Protected Recent Messages",
+  "agents.defaults.turnContextCuration.timeoutMs": "Turn Context Decision Timeout (ms)",
   "agents.defaults.models": "Models",
   "agents.defaults.modelSelectionScope": "Model Selection Scope",
   "agents.defaults.modelPolicy": "Model Policy",

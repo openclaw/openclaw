@@ -81,6 +81,16 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Optional lower-cost model (provider/model or alias) for short internal tasks such as generated titles and progress narration. Unset derives the primary provider's declared small model when available (otherwise the primary model); set to an empty string to disable utility routing.",
   "agents.entries.*.utilityModel":
     "Optional per-agent utility model override for short internal tasks. Overrides agents.defaults.utilityModel.",
+  "agents.defaults.turnContextCuration":
+    "Optional observation of oversized per-turn context using the configured Decision model. Off by default; shadow leaves model input and the transcript unchanged.",
+  "agents.defaults.turnContextCuration.mode":
+    "off disables evaluation; shadow records potential selection without applying it.",
+  "agents.defaults.turnContextCuration.minEstimatedTokens":
+    "Minimum estimated context tokens before evaluation (default: 16000). Estimates are not measured model usage.",
+  "agents.defaults.turnContextCuration.recentMessages":
+    "Recent messages always retained, including their complete tool groups (default: 4; minimum: 2).",
+  "agents.defaults.turnContextCuration.timeoutMs":
+    "Decision request deadline in milliseconds (default: 750; maximum: 5000). Caller cancellation wins.",
   "agents.defaults.decisionModel":
     "Optional provider/model for typed choices, scores, and boolean probabilities. Unset or empty disables decision calls. Supporting plugins send bounded task evidence to this provider; chat and utility models are unchanged.",
   "agents.entries.*.decisionModel":
@@ -152,6 +162,12 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Enables summary quality audits and regeneration retries for safeguard compaction. Default: true in safeguard mode.",
   "agents.defaults.compaction.qualityGuard.maxRetries":
     "Maximum number of regeneration retries after a failed safeguard summary quality audit. Use small values to bound extra latency and token cost.",
+  "agents.defaults.compaction.semanticCuration":
+    "Optional typed-judgment semantic observation for safeguard compaction. Use shadow mode to measure a conservative relevance-selected view without changing summarizer input.",
+  "agents.defaults.compaction.semanticCuration.mode":
+    'Semantic curation observation mode: "off" disables judgment calls and "shadow" measures a projected curated input while preserving existing compaction behavior.',
+  "agents.defaults.compaction.semanticCuration.timeoutMs":
+    "Per-judgment semantic compaction deadline in milliseconds, capped at 5000. Keep this small so observation does not dominate compaction latency.",
   "agents.defaults.compaction.midTurnPrecheck":
     "Optional embedded OpenClaw tool-loop precheck that detects context pressure after a tool result is appended and before the next model call. When enabled, OpenClaw reuses existing precheck recovery to truncate tool results or compact before retrying.",
   "agents.defaults.compaction.midTurnPrecheck.enabled":

@@ -1323,10 +1323,21 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(section).not.toContain("[non-text content]");
   });
 
-  it("caps preserved tail when user turns are below preserve target", () => {
+  it("preserves the whole user turn when turns are below the preserve target", () => {
     const messages: AgentMessage[] = [
       { role: "user", content: "single user prompt", timestamp: 1 },
-      castAgentMessage(timestampedTextAssistant("assistant-1", 2)),
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "first_call", name: "read", arguments: {} }],
+        timestamp: 2,
+      }),
+      castAgentMessage({
+        role: "toolResult",
+        toolCallId: "first_call",
+        toolName: "read",
+        content: [{ type: "text", text: "first tool result" }],
+        timestamp: 2,
+      }),
       castAgentMessage(timestampedTextAssistant("assistant-2", 3)),
       castAgentMessage(timestampedTextAssistant("assistant-3", 4)),
       castAgentMessage(timestampedTextAssistant("assistant-4", 5)),
@@ -1341,8 +1352,8 @@ describe("compaction-safeguard recent-turn preservation", () => {
       recentTurnsPreserve: 3,
     });
 
-    // preserve target is 3 turns -> fallback should cap at 6 role messages
-    expect(split.preservedMessages).toHaveLength(6);
+    expect(split.preservedMessages).toHaveLength(messages.length);
+    expect(split.summarizableMessages).toHaveLength(0);
     expect(
       split.preservedMessages.some(
         (msg: AgentMessage) =>
@@ -1350,7 +1361,8 @@ describe("compaction-safeguard recent-turn preservation", () => {
       ),
     ).toBe(true);
     expect(preservedTurnsText(split.preservedMessages)).toContain("assistant-8");
-    expect(preservedTurnsText(split.preservedMessages)).not.toContain("assistant-2");
+    expect(preservedTurnsText(split.preservedMessages)).toContain("assistant-2");
+    expect(preservedTurnsText(split.preservedMessages)).toContain("first tool result");
   });
 
   it("trim-starts preserved section when history summary is empty", () => {
@@ -2996,7 +3008,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(finalSummary).toContain(
       `## Pending user asks\nLatest user request context: ${JSON.stringify(latestAsk)}`,
     );
-    expect(mockSummarizeInStages).not.toHaveBeenCalled();
+    expect(mockSummarizeInStages).toHaveBeenCalledOnce();
   });
 
   it("does not treat a terminal assistant response as proof that the latest task is complete", async () => {
@@ -3435,6 +3447,109 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
   });
 
+  it("summarizes earlier decisions when an all-preserved turn exceeds its suffix budget", async () => {
+    mockSummarizeInStages.mockReset();
+    const decision = "Keep the staging deployment pending until the owner approves it.";
+    const messagesToSummarize: AgentMessage[] = [
+      { role: "user", content: "Inspect the staging deployment.", timestamp: 1 },
+      castAgentMessage(timestampedTextAssistant(`${decision} ${"x".repeat(700)}`, 2)),
+      ...Array.from({ length: 16 }, (_, index) =>
+        castAgentMessage(
+          timestampedTextAssistant(`Later status ${index} ${"y".repeat(700)}`, 3 + index),
+        ),
+      ),
+    ];
+    const preservedSection = buildPreservedTurnsSection(messagesToSummarize);
+    expect(preservedSection.truncatedLoss).toBe("preserved-turn-head");
+    expect(preservedSection.text).not.toContain(decision);
+    mockSummarizeInStages.mockImplementation(async (params) =>
+      summaryResult(
+        [
+          "## Decisions",
+          JSON.stringify(params.messages).includes(decision) ? decision : "No decision captured.",
+          "## Open TODOs",
+          "None.",
+          "## Constraints/Rules",
+          "None.",
+          "## Pending user asks",
+          "None.",
+          "## Exact identifiers",
+          "None.",
+        ].join("\n"),
+      ),
+    );
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 12,
+      qualityGuardEnabled: false,
+    });
+    const event = createCompactionEvent({
+      messageText: "Inspect the staging deployment.",
+      tokensBefore: 1_500,
+    });
+    event.preparation.messagesToSummarize = messagesToSummarize;
+    (event.preparation as { settings?: { reserveTokens: number } }).settings = {
+      reserveTokens: 4_000,
+    };
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: "test-key" });
+
+    expect(mockSummarizeInStages).toHaveBeenCalledOnce();
+    expect(requireRecord(mockCallArg(mockSummarizeInStages)).messages).toEqual(messagesToSummarize);
+    expect(expectCompactionResult(result).summary).toContain(decision);
+  });
+
+  it("summarizes a decision clipped inside a preserved message even when the section fits", async () => {
+    mockSummarizeInStages.mockReset();
+    const decision = "Keep the deployment pending until owner approval.";
+    const messagesToSummarize: AgentMessage[] = [
+      { role: "user", content: "Inspect staging status.", timestamp: 1 },
+      castAgentMessage(timestampedTextAssistant(`${"x".repeat(650)} ${decision}`, 2)),
+      castAgentMessage(timestampedTextAssistant("Later short update.", 3)),
+    ];
+    const preservedSection = buildPreservedTurnsSection(messagesToSummarize);
+    expect(preservedSection.truncatedLoss).toBeUndefined();
+    expect(preservedSection.messageTruncated).toBe(true);
+    expect(preservedSection.text).not.toContain(decision);
+    mockSummarizeInStages.mockImplementation(async (params) =>
+      summaryResult(
+        [
+          "## Decisions",
+          JSON.stringify(params.messages).includes(decision) ? decision : "No decision captured.",
+          "## Open TODOs",
+          "None.",
+          "## Constraints/Rules",
+          "None.",
+          "## Pending user asks",
+          "None.",
+          "## Exact identifiers",
+          "None.",
+        ].join("\n"),
+      ),
+    );
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 12,
+      qualityGuardEnabled: false,
+    });
+    const event = createCompactionEvent({
+      messageText: "Inspect staging status.",
+      tokensBefore: 1_500,
+    });
+    event.preparation.messagesToSummarize = messagesToSummarize;
+    (event.preparation as { settings?: { reserveTokens: number } }).settings = {
+      reserveTokens: 4_000,
+    };
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: "test-key" });
+
+    expect(mockSummarizeInStages).toHaveBeenCalledOnce();
+    expect(requireRecord(mockCallArg(mockSummarizeInStages)).messages).toEqual(messagesToSummarize);
+    expect(expectCompactionResult(result).summary).toContain(decision);
+  });
+
   it("audits all-preserved fallback output against pre-partition source facts", async () => {
     mockSummarizeInStages.mockReset();
     const latestAsk = "report deployment status";
@@ -3531,7 +3646,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(auditInput.identifiers).toEqual([]);
   });
 
-  it("retains owner facts without summarizing an all-preserved turn", async () => {
+  it("retains owner facts while summarizing a clipped user message", async () => {
     mockSummarizeInStages.mockReset();
     const latestAsk = "report deployment status";
     const identifier = "/tmp/all-preserved-truncated.log";
@@ -3577,7 +3692,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const summary = expectCompactionResult(result).summary;
     expect(summary).toContain(latestAsk);
     expect(summary).toContain(identifier);
-    expect(mockSummarizeInStages).not.toHaveBeenCalled();
+    expect(mockSummarizeInStages).toHaveBeenCalledOnce();
     expect(mockAuditSummaryQuality).toHaveBeenCalledTimes(1);
     const auditInput = requireRecord(mockCallArg(mockAuditSummaryQuality));
     expect(auditInput.latestAsk).toBe(sourceText);

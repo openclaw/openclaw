@@ -7,6 +7,8 @@ export type CompactionSafeguardCancellation = { reason: string; error?: unknown 
 
 /** Runtime knobs consumed by the compaction safeguard extension. */
 type CompactionSafeguardRuntimeValue = {
+  /** Prepared owner for agent-scoped decisions when no persisted session target exists. */
+  agentId?: string;
   maxHistoryShare?: number;
   contextWindowTokens?: number;
   identifierPolicy?: AgentCompactionIdentifierPolicy | "custom";
@@ -23,6 +25,12 @@ type CompactionSafeguardRuntimeValue = {
   postCompactionSections?: string[];
   qualityGuardEnabled?: boolean;
   qualityGuardMaxRetries?: number;
+  semanticCurationMode?: "off" | "shadow";
+  /** Resolve the current saved mode, including changes during awaited work. */
+  semanticCurationModeReader?: () => "off" | "shadow";
+  /** Recheck prepared Decision assistance consent before and after awaited work. */
+  semanticCurationEligible?: () => boolean;
+  semanticCurationTimeoutMs?: number;
   /**
    * Id of a registered compaction provider plugin.
    * When set and found in the compaction provider registry, the provider's
@@ -38,6 +46,20 @@ const registry = createSessionManagerRuntimeRegistry<CompactionSafeguardRuntimeV
 export const setCompactionSafeguardRuntime = registry.set;
 
 export const getCompactionSafeguardRuntime = registry.get;
+
+function isCompactionSemanticCurationEligible(sessionManager: unknown): boolean {
+  return getCompactionSafeguardRuntime(sessionManager)?.semanticCurationEligible?.() !== false;
+}
+
+export function getCurrentCompactionSemanticMode(sessionManager: unknown): "off" | "shadow" {
+  const runtime = getCompactionSafeguardRuntime(sessionManager);
+  const preparedMode = runtime?.semanticCurationMode ?? "off";
+  const savedMode = runtime?.semanticCurationModeReader?.() ?? preparedMode;
+  // A saved change may revoke this turn's authority, never expand it mid-turn.
+  return isCompactionSemanticCurationEligible(sessionManager) && savedMode === preparedMode
+    ? preparedMode
+    : "off";
+}
 
 /** Records cancellation atomically; intentional declines carry no provider error. */
 export function setCompactionSafeguardCancellation(
