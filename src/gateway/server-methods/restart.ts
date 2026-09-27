@@ -1,8 +1,10 @@
-// Gateway RPC handlers for safe gateway restart requests and preflight state.
+// Gateway RPC handlers for targeted stop and coordinated restart.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
+import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../../infra/gateway-shutdown-budget.js";
 import {
   createSafeGatewayRestartPreflight,
   scheduleSafeGatewayRestart,
@@ -12,6 +14,7 @@ import {
   parseTargetedGatewayRestart,
   parseTargetedGatewayRestartIntent,
 } from "./restart-request.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 function normalizeReason(value: unknown): string | undefined {
@@ -22,8 +25,62 @@ function normalizeReason(value: unknown): string | undefined {
     : undefined;
 }
 
-/** Gateway request handlers for safe restart coordination. */
+/** Gateway request handlers for process lifecycle control. */
 export const restartHandlers: GatewayRequestHandlers = {
+  "gateway.stop.request": async (options) => {
+    const { params, respond, context } = options;
+    const target = isRecord(params) ? parseTargetedGatewayRestart(params.target) : null;
+    if (!target) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid targeted gateway stop"),
+      );
+      return;
+    }
+    const host = context.hostLifecycle;
+    if (!host) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, "gateway host does not own process exit"),
+      );
+      return;
+    }
+    const { assertCurrent } = readGatewayRequestMutationAuthority(options);
+    try {
+      assertCurrent();
+      const activeLock = await readActiveGatewayLockIdentity();
+      assertCurrent();
+      if (
+        !activeLock ||
+        activeLock.pid !== process.pid ||
+        activeLock.pid !== target.pid ||
+        activeLock.ownerId !== target.ownerId ||
+        activeLock.port !== target.port
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "target gateway no longer owns the active lock"),
+        );
+        return;
+      }
+      const result = await host.request("stop", assertCurrent);
+      if (!result.ok) {
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, result.error));
+        return;
+      }
+      respond(true, {
+        ok: true,
+        pid: process.pid,
+        status: "scheduled",
+        timeoutMs: GATEWAY_SERVICE_STOP_TIMEOUT_MS,
+      });
+    } catch (error) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+    }
+  },
   "gateway.restart.request": async ({ respond, params }) => {
     if (!isRecord(params)) {
       respond(

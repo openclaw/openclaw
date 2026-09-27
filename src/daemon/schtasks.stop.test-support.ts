@@ -18,6 +18,7 @@ const findVerifiedGatewayListenerPidsOnPortSync = vi.hoisted(() =>
   vi.fn<(port: number) => number[]>(() => []),
 );
 const timeState = vi.hoisted(() => ({ now: 0 }));
+const callGatewayCli = vi.hoisted(() => vi.fn());
 const readGatewayOwnerLease = vi.hoisted(() =>
   vi.fn<typeof import("../infra/gateway-owner-lease.js").readGatewayOwnerLease>(),
 );
@@ -70,6 +71,7 @@ vi.mock("../infra/gateway-processes.js", () => ({
     findVerifiedGatewayListenerPidsOnPortSync(port),
 }));
 vi.mock("../infra/gateway-owner-lease.js", () => ({ readGatewayOwnerLease }));
+vi.mock("../gateway/call.js", () => ({ callGatewayCli }));
 vi.mock("../infra/windows-process-start.js", () => ({ readWindowsProcessStartTimeSync }));
 vi.mock("../utils.js", async () => {
   const actual = await vi.importActual<typeof import("../utils.js")>("../utils.js");
@@ -222,6 +224,7 @@ async function withPreparedGatewayTask(
 
 beforeEach(() => {
   resetSchtasksBaseMocks();
+  callGatewayCli.mockReset().mockRejectedValue(new Error("unsupported method"));
   readGatewayOwnerLease.mockReset();
   readWindowsProcessStartTimeSync.mockReset();
   readWindowsProcessStartTimeSync.mockReturnValue(GATEWAY_OWNER.startedAt);
@@ -251,6 +254,7 @@ afterEach(() => {
 });
 
 export {
+  callGatewayCli,
   GATEWAY_OWNER,
   GATEWAY_PORT,
   INSTALLED_GATEWAY_COMMAND_LINE,

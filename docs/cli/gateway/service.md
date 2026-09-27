@@ -24,6 +24,12 @@ openclaw gateway uninstall
 It still validates core configuration and refuses configuration written by a newer
 OpenClaw binary. Start and restart continue to validate plugin configuration.
 
+On Windows, Scheduled Task stop and restart first ask the verified Gateway to drain
+and exit, then wait for its task supervisor to finish. Older or unresponsive
+Gateways fall back to Task Scheduler termination. Transient SQLite sharing errors
+after termination are retried; if inspection remains unavailable, the command
+warns and checks that the Gateway port is free before continuing with restart.
+
 If `gateway start` reaches its readiness deadline while the managed Gateway is
 still starting, it reports `still-starting` and exits with code `2`. The service
 keeps running; check `openclaw gateway status --deep` again before restarting it.
