@@ -143,16 +143,20 @@ describe("TUI PTY harness", { concurrent: false }, () => {
           STARTUP_TIMEOUT_MS,
         );
 
-        const targetOutputOffset = modeFixture.run.visibleOutput().length;
         await modeFixture.run.write("/session agent:main:mode-target\r", { delay: false });
         await modeFixture.waitForLogEntry(
           (entry) =>
             entry.method === "loadHistory" &&
             objectFieldEquals(entry, "sessionKey", "agent:main:mode-target"),
         );
-        await modeFixture.run.waitForOutput("session mode-target", STARTUP_TIMEOUT_MS);
-        const targetOutput = modeFixture.run.visibleOutput().slice(targetOutputOffset);
+        const targetRows = await waitForSynchronizedFrameRows(
+          modeFixture.run,
+          (rows) => rows.some((row) => row.includes("session mode-target | fixture-model")),
+          STARTUP_TIMEOUT_MS,
+        );
+        const targetOutput = targetRows.join("\n");
         expect(targetOutput).toContain("deliver:on");
+        expect(targetOutput).not.toContain(" | fast | ");
         expect(targetOutput).not.toContain("fast:auto");
         expect(targetOutput).not.toContain("verbose full");
         expect(targetOutput).not.toContain("trace:raw");
