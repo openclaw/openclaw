@@ -162,6 +162,8 @@ export class SelectPicker<
       if (focus) {
         this.querySelector<HTMLElement>(target)?.focus({ preventScroll: true });
       }
+      // The popup sizes its list after this render.
+      requestAnimationFrame(this.syncScrollFade);
     });
     return this.mode;
   }
@@ -184,8 +186,21 @@ export class SelectPicker<
     }
   }
 
+  // Fades mark the edges of a list that scrolls past them.
+  private readonly syncScrollFade = () => {
+    const list = this.querySelector<HTMLElement>(".picker-select__options");
+    if (list) {
+      list.toggleAttribute("data-fade-start", list.scrollTop > 0);
+      list.toggleAttribute(
+        "data-fade-end",
+        list.scrollTop + list.clientHeight < list.scrollHeight - 1,
+      );
+    }
+  };
+
   protected override updated(changed: PropertyValues) {
     this.configurePopup();
+    this.syncScrollFade();
     if (this.mode === "closed" || (!changed.has("activeValue") && !changed.has("query"))) {
       return;
     }
@@ -490,6 +505,7 @@ export class SelectPicker<
       <div
         class="picker-select__options"
         role=${this.params.groupBy ? nothing : "listbox"}
+        @scroll=${this.syncScrollFade}
         id=${this.params.groupBy ? nothing : this.listboxId}
         aria-label=${this.params.groupBy ? nothing : this.params.label}
         ?data-picker-focus=${this.mode === "compact"}

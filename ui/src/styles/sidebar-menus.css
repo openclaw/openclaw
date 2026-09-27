@@ -407,6 +407,19 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
   margin-inline: auto;
 }
 
+/* Long choice lists fade at an edge they scroll past. */
+.sidebar-session-filter-panel .picker-select__options[data-fade-start] {
+  mask-image: linear-gradient(to bottom, transparent, black 16px);
+}
+
+.sidebar-session-filter-panel .picker-select__options[data-fade-end] {
+  mask-image: linear-gradient(to top, transparent, black 16px);
+}
+
+.sidebar-session-filter-panel .picker-select__options[data-fade-start][data-fade-end] {
+  mask-image: linear-gradient(transparent, black 16px, black calc(100% - 16px), transparent);
+}
+
 @media (max-width: 400px) {
   .sidebar-session-sort-menu .sidebar-session-filter-panel {
     width: calc(100dvw - var(--space-6));
