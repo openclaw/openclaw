@@ -305,50 +305,6 @@ function testRegexFromStart(regex: RegExp, value: string): boolean {
 // windows, so oversize inputs cannot cause unbounded synchronous work.
 const SAFE_REGEX_MAX_MIDDLE_WINDOWS = 6;
 
-function splitTopLevelAlternatives(source: string): string[] | null {
-  const parts: string[] = [];
-  let depth = 0;
-  let inCharClass = false;
-  let start = 0;
-  for (let i = 0; i < source.length; i += 1) {
-    const ch = source[i];
-    if (ch === "\\") {
-      i += 1;
-      continue;
-    }
-    if (inCharClass) {
-      if (ch === "]") {
-        inCharClass = false;
-      }
-      continue;
-    }
-    if (ch === "[") {
-      inCharClass = true;
-      continue;
-    }
-    if (ch === "(") {
-      depth += 1;
-      continue;
-    }
-    if (ch === ")") {
-      if (depth === 0) {
-        return null;
-      }
-      depth -= 1;
-      continue;
-    }
-    if (ch === "|" && depth === 0) {
-      parts.push(source.slice(start, i));
-      start = i + 1;
-    }
-  }
-  if (inCharClass || depth !== 0) {
-    return null;
-  }
-  parts.push(source.slice(start));
-  return parts;
-}
-
 function scanPatternAssertions(source: string): {
   hasCaret: boolean;
   hasDollar: boolean;
@@ -406,75 +362,39 @@ export function testRegexWithBoundedInput(
   if (input.length <= maxWindow) {
     return testRegexFromStart(regex, input);
   }
-  // Assertion handling is local to each top-level alternative: an
-  // alternative bearing ^ (leading or grouped, e.g. (?:^agent:ops:)) can
-  // only match at key position 0, which coincides with slice position 0
-  // solely in the head slice, while a plain alternative such as
-  // discord:tail in ^agent:ops:|discord:tail keeps its bounded search.
-  // Testing an assertion-bearing alternative against a middle or tail slice
-  // would treat a slice boundary as input start/end and forward excluded
-  // sessions. Alternatives asserting both ends, or carrying \b/lookarounds
-  // whose context spans slices, fail closed past the short-input path
-  // exactly as before this change.
+  // Head and tail slices are tested with the complete pattern, exactly as
+  // before: every match the previous matcher found is still found. Middle
+  // windows additionally cover unanchored matches the old windows missed,
+  // but only for patterns provably free of edge-sensitive assertions
+  // (^ $ \b \B lookarounds anywhere in the source): for those, a match
+  // fully contained in a slice means the same match in the complete key, so
+  // the extra windows add true positives only, never slice-boundary
+  // artifacts. Assertion-bearing patterns keep the previous head+tail
+  // behavior verbatim (middle matches fail closed, as before), and the
+  // middle scan is capped so oversize keys cost a fixed number of bounded
+  // tests. Sticky (y) patterns are positional and test the head only.
   const head = input.slice(0, maxWindow);
+  if (testRegexFromStart(regex, head)) {
+    return true;
+  }
   const tailStart = input.length - maxWindow;
   const tail = input.slice(tailStart);
-  const alternativeSources = splitTopLevelAlternatives(regex.source);
-  const alternatives: RegExp[] = [];
-  if (alternativeSources) {
-    try {
-      for (const alt of alternativeSources) {
-        alternatives.push(new RegExp(alt, regex.flags));
-      }
-    } catch {
-      alternatives.length = 0;
-    }
+  if (regex.flags.includes("y")) {
+    return false;
   }
-  if (alternatives.length !== (alternativeSources?.length ?? -1)) {
-    if (testRegexFromStart(regex, head)) {
-      return true;
-    }
+  const assertions = scanPatternAssertions(regex.source);
+  if (assertions.hasCaret || assertions.hasDollar || assertions.hasBoundaryOrLookaround) {
     return testRegexFromStart(regex, tail);
   }
   const stride = Math.max(1, Math.floor(maxWindow / 2));
   let middleBudget = SAFE_REGEX_MAX_MIDDLE_WINDOWS;
-  for (const altRegex of alternatives) {
-    const assertions = scanPatternAssertions(altRegex.source);
-    if (assertions.hasCaret && assertions.hasDollar) {
-      continue;
-    }
-    if (assertions.hasCaret) {
-      if (testRegexFromStart(altRegex, head)) {
-        return true;
-      }
-      continue;
-    }
-    if (assertions.hasDollar) {
-      if (testRegexFromStart(altRegex, tail)) {
-        return true;
-      }
-      continue;
-    }
-    if (assertions.hasBoundaryOrLookaround) {
-      if (testRegexFromStart(altRegex, head) || testRegexFromStart(altRegex, tail)) {
-        return true;
-      }
-      continue;
-    }
-    if (testRegexFromStart(altRegex, head)) {
-      return true;
-    }
-    for (let start = stride; start < tailStart && middleBudget > 0; start += stride) {
-      middleBudget -= 1;
-      if (testRegexFromStart(altRegex, input.slice(start, start + maxWindow))) {
-        return true;
-      }
-    }
-    if (testRegexFromStart(altRegex, tail)) {
+  for (let start = stride; start < tailStart && middleBudget > 0; start += stride) {
+    middleBudget -= 1;
+    if (testRegexFromStart(regex, input.slice(start, start + maxWindow))) {
       return true;
     }
   }
-  return false;
+  return testRegexFromStart(regex, tail);
 }
 
 function hasNestedRepetition(source: string): boolean {

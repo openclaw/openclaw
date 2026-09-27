@@ -82,4 +82,23 @@ describe("approval request filters", () => {
       }),
     ).toBe(false);
   });
+
+  it("keeps nested-alternative tail matches on oversize keys", () => {
+    expect(
+      matchesApprovalRequestFilters({
+        request: {
+          sessionKey: `${"q".repeat(5000)}discord:tail`,
+        },
+        sessionFilter: ["(?:^agent:ops:|discord:tail)"],
+      }),
+    ).toBe(true);
+    expect(
+      matchesApprovalRequestFilters({
+        request: {
+          sessionKey: `${"q".repeat(2500)}other${"q".repeat(2500)}`,
+        },
+        sessionFilter: ["(?:^agent:ops:|discord:tail)"],
+      }),
+    ).toBe(false);
+  });
 });
