@@ -6976,44 +6976,82 @@ describe("runCodexAppServerAttempt", () => {
     },
   );
 
-  it("keeps standalone Ultrafast on consecutive warm turns", async () => {
-    const { sessionFile, workspaceDir } = createRunPaths();
-    await writeExistingBinding(sessionFile, workspaceDir, { model: "gpt-5.2" });
-    const harness = createResumeHarness("thread-existing", async (method) => {
-      if (method === "model/list") {
-        return {
-          data: [
-            {
-              id: "catalog-alias",
-              model: "gpt-5.4-codex",
-              displayName: "Test model",
-              description: "Test model",
-              hidden: false,
-              isDefault: false,
-              supportedReasoningEfforts: [],
-              defaultReasoningEffort: "medium",
-              serviceTiers: [{ id: "ultrafast", name: "Ultrafast", description: "Faster" }],
-            },
-          ],
-        };
-      }
-      return undefined;
-    });
-    for (let turn = 0; turn < 2; turn += 1) {
-      const params = createParams(sessionFile, workspaceDir);
-      const run = runCodexAppServerAttempt(params, {
-        pluginConfig: { appServer: { enableUltrafast: true } },
+  it.each([
+    {
+      name: "standalone enablement",
+      fastMode: undefined,
+      supported: true,
+      baseline: undefined,
+      expected: "ultrafast",
+    },
+    { name: "Fast off", fastMode: false, supported: true, baseline: undefined, expected: null },
+    {
+      name: "inactive auto",
+      fastMode: () => false,
+      supported: true,
+      baseline: undefined,
+      expected: null,
+    },
+    {
+      name: "unsupported priority baseline",
+      fastMode: undefined,
+      supported: false,
+      baseline: "priority" as const,
+      expected: "priority",
+    },
+    {
+      name: "unsupported default baseline",
+      fastMode: undefined,
+      supported: false,
+      baseline: undefined,
+      expected: null,
+    },
+  ])(
+    "selects optional Ultrafast for $name across warm turns",
+    async ({ fastMode, supported, baseline, expected }) => {
+      const { sessionFile, workspaceDir } = createRunPaths();
+      await writeExistingBinding(sessionFile, workspaceDir, { model: "gpt-5.2" });
+      let catalogSupported = true;
+      const harness = createResumeHarness("thread-existing", async (method) => {
+        if (method === "model/list") {
+          return {
+            data: [
+              {
+                id: "catalog-alias",
+                model: "gpt-5.4-codex",
+                displayName: "Test model",
+                description: "Test model",
+                hidden: false,
+                isDefault: false,
+                supportedReasoningEfforts: [],
+                defaultReasoningEffort: "medium",
+                serviceTiers: catalogSupported
+                  ? [{ id: "ultrafast", name: "Ultrafast", description: "Faster" }]
+                  : [],
+              },
+            ],
+          };
+        }
+        return undefined;
       });
-      await run.waitForTurnAccepted();
-      await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
-      await run;
-    }
-    expect(
-      harness.requests
-        .filter((request) => request.method === "turn/start")
-        .map((request) => (request.params as { serviceTier?: string | null }).serviceTier),
-    ).toEqual(["ultrafast", "ultrafast"]);
-  });
+      for (let turn = 0; turn < 2; turn += 1) {
+        catalogSupported = turn === 0 || supported;
+        const params = createParams(sessionFile, workspaceDir);
+        params.fastMode = turn === 0 ? undefined : fastMode;
+        const run = runCodexAppServerAttempt(params, {
+          pluginConfig: { appServer: { enableUltrafast: true, serviceTier: baseline } },
+        });
+        await run.waitForTurnAccepted();
+        await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+        await run;
+      }
+      expect(
+        harness.requests
+          .filter((request) => request.method === "turn/start")
+          .map((request) => (request.params as { serviceTier?: string | null }).serviceTier),
+      ).toEqual(["ultrafast", expected]);
+    },
+  );
 
   it("reuses the bound auth profile for app-server startup when params omit it", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
