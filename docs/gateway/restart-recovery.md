@@ -215,6 +215,11 @@ Service-child cleanup uses the remaining Gateway shutdown budget, leaving time
 for final exit bookkeeping. A forced restart drains admitted work within the same
 budget. When the restart scheduler has already exhausted its deferral budget,
 cleanup retains the 10-second reserve without starting a second drain.
+For a supervisor's SIGTERM restart, a shorter requested drain limits when active
+runs are interrupted, not when database cleanup must finish: cleanup can use the
+remaining native stop budget. The Gateway still exits before the supervisor's
+deadline. Clean database restart proof is published only after writer leases,
+checkpointing, and native connection closure settle.
 A restart without a supervisor handoff uses the existing shutdown
 deadline for cleanup. This includes foreground Gateways inside another service's
 cgroup, restarts with `OPENCLAW_NO_RESPAWN=1`, and standalone updates that must
