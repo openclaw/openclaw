@@ -293,50 +293,44 @@ export async function applyStagedWorkerWorkspaceResult(params: {
     conflictPaths: string[];
   }) => Promise<void>;
 }): Promise<WorkerWorkspaceApplyResult & { changed: boolean }> {
-  return await withWorkspaceHashContext(
-    async () => await applyStagedWorkerWorkspaceResultWithMemo(params),
-  );
-}
-
-async function applyStagedWorkerWorkspaceResultWithMemo(
-  params: Parameters<typeof applyStagedWorkerWorkspaceResult>[0],
-): Promise<WorkerWorkspaceApplyResult & { changed: boolean }> {
-  const root = await fs.realpath(params.root);
-  const staged = await readStagedWorkerWorkspaceResult(root, params.stagedResultRef);
-  if (params.alreadyAccepted || staged.baseManifestRef !== params.expectedBaseManifestRef) {
-    // An acceptance marker proves the mutations already ran even when omitted
-    // local nodes left the manifest ref unchanged. Re-snapshot; never replay.
-    // A base advance proves the same commit-before-acceptance crash window.
-    const accepted = await inspectAcceptedWorkerWorkspace({
-      root,
-      expectedManifestRef: params.expectedBaseManifestRef,
-      allowAdvancedLocalState: true,
-      base: staged.base,
-      current: staged.current,
-    });
-    if (!accepted) {
-      throw new Error("Cloud workspace staged result does not match the placement base");
+  return await withWorkspaceHashContext(async () => {
+    const root = await fs.realpath(params.root);
+    const staged = await readStagedWorkerWorkspaceResult(root, params.stagedResultRef);
+    if (params.alreadyAccepted || staged.baseManifestRef !== params.expectedBaseManifestRef) {
+      // An acceptance marker proves the mutations already ran even when omitted
+      // local nodes left the manifest ref unchanged. Re-snapshot; never replay.
+      // A base advance proves the same commit-before-acceptance crash window.
+      const accepted = await inspectAcceptedWorkerWorkspace({
+        root,
+        expectedManifestRef: params.expectedBaseManifestRef,
+        allowAdvancedLocalState: true,
+        base: staged.base,
+        current: staged.current,
+      });
+      if (!accepted) {
+        throw new Error("Cloud workspace staged result does not match the placement base");
+      }
+      params.assertCurrent?.();
+      params.journal.commit(accepted.manifestRef);
+      return {
+        ...accepted,
+        changed: staged.changed,
+      };
     }
-    params.assertCurrent?.();
-    params.journal.commit(accepted.manifestRef);
-    return {
-      ...accepted,
-      changed: staged.changed,
-    };
-  }
-  return await withMaterializedWorkerWorkspaceResult(staged, async ({ stagingRoot }) => {
-    const applied = await applyStagedWorkerWorkspace({
-      root,
-      stagingRoot,
-      baseManifestRef: staged.baseManifestRef,
-      currentManifestRef: staged.currentManifestRef,
-      base: staged.base,
-      current: staged.current,
-      journal: params.journal,
-      assertCurrent: params.assertCurrent,
-      acceptance: { kind: "reconcile", publish: params.publishAcceptedManifest },
+    return await withMaterializedWorkerWorkspaceResult(staged, async ({ stagingRoot }) => {
+      const applied = await applyStagedWorkerWorkspace({
+        root,
+        stagingRoot,
+        baseManifestRef: staged.baseManifestRef,
+        currentManifestRef: staged.currentManifestRef,
+        base: staged.base,
+        current: staged.current,
+        journal: params.journal,
+        assertCurrent: params.assertCurrent,
+        acceptance: { kind: "reconcile", publish: params.publishAcceptedManifest },
+      });
+      return { ...applied, changed: staged.changed };
     });
-    return { ...applied, changed: staged.changed };
   });
 }
 

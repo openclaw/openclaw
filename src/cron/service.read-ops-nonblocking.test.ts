@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import * as stateCoordinator from "../infra/state-database-coordinator.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import {
@@ -143,18 +142,15 @@ describe("CronService read ops while job is running", () => {
       await cron.start();
       sqliteTransactionLabels.length = 0;
       maintenance.mockClear();
-      const coordinator = vi.spyOn(stateCoordinator, "acquireStateDatabaseCoordinator");
       const worker = vi.spyOn(stateWorker, "executeOpenClawStateWorker");
       try {
         await cron.status();
         await cron.list({ includeDisabled: true });
         await cron.listPage({ limit: 25 });
         await cron.readJob(jobs[0]!.id);
-        expect(coordinator.mock.calls.length).toBe(0);
         expect(worker.mock.calls.length).toBe(0);
         expect(sqliteTransactionLabels).toEqual([]);
       } finally {
-        coordinator.mockRestore();
         worker.mockRestore();
       }
       expect(maintenance).not.toHaveBeenCalled();

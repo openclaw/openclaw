@@ -34,7 +34,7 @@ import {
 } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { resolveMcpLoopbackScopedTools as resolveLoopbackTools } from "../../gateway/mcp-http.runtime.js";
-import { setActiveNodeContext } from "../../infra/active-node-context.js";
+import { setActiveNodeContexts } from "../../infra/active-node-context.js";
 import {
   claimHeartbeatOutcomeForRun,
   persistHeartbeatOutcome,
@@ -706,7 +706,7 @@ describe("prepareCliRunContext", () => {
   });
 
   afterEach(async () => {
-    setActiveNodeContext(null);
+    setActiveNodeContexts([]);
     cliBackendsTesting.resetDepsForTest();
     resetCliRunnerPrepareTestDeps();
     resetCliAuthEpochTestDeps();
@@ -1945,7 +1945,7 @@ describe("prepareCliRunContext", () => {
   });
 
   it("prepares side questions without agent-turn context, tools, hooks, or reusable sessions", async () => {
-    setActiveNodeContext({ nodeId: "active-mac" });
+    setActiveNodeContexts([{ nodeId: "active-mac" }]);
     fixture.appendTranscript({
       id: "msg-1",
       parentId: null,
@@ -2381,7 +2381,7 @@ describe("prepareCliRunContext", () => {
 
       expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
       expect(context.params.prompt).toBe(
-        "Current event:\nBob: yes\n\n[OpenClaw room event]\n\nCurrent active computer (latest physical input, not message origin): active_node=unknown",
+        "Current event:\nBob: yes\n\n[OpenClaw room event]\n\nCurrent active computer (latest reported app/system input, not message origin): active_node=unknown active_node_identity=unknown",
       );
       expect(context.openClawHistoryPrompt).toContain("Room context:\nAlice: lunch?");
       expect(context.openClawHistoryPrompt).toContain("Current event:\nBob: yes");
@@ -5715,7 +5715,7 @@ describe("prepareCliRunContext", () => {
   });
 
   it("preserves a Claude native-control resume when the local transcript is absent", async () => {
-    setActiveNodeContext({ nodeId: "active-mac" });
+    setActiveNodeContexts([{ nodeId: "active-mac" }]);
     setCliBackendForPrepareTest();
     const transcriptCheck = vi.fn(async () => false);
     const orphanCheck = vi.fn(async () => true);

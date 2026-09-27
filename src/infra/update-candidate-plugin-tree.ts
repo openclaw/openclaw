@@ -638,6 +638,7 @@ export async function copyUpdateCandidatePluginTrees(
           mkdir: false,
           // Rehearsal payloads are disposable and never serve as recovery backups.
           durable: false,
+          clone: "auto",
           maxBytes: entry.size,
           mode: entry.mode | 0o600,
           sourceHardlinks: "allow",

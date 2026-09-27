@@ -118,6 +118,32 @@ function controllerFor(panel: Panel): BrowserPanelController {
 }
 
 describe("browser panel route handoff", () => {
+  it("refreshes referenced tabs and preserves a still-listed active tab", async () => {
+    const gateway = browserGateway();
+    const panel = await mountPanel(gateway.client, false);
+    panel.sessionTabs = [hostTab];
+    const controller = controllerFor(panel);
+    const select = vi.spyOn(controller, "selectTab");
+    panel.presented = true;
+    await panel.updateComplete;
+    await select.mock.results[0]?.value;
+    expect(controller.activeTargetId).toBe("t1");
+
+    const refresh = vi.spyOn(controller, "refreshAll");
+    gateway.request.mockClear();
+    panel.sessionTabs = [hostTab, { ...hostTab, targetId: "t2" }];
+    await panel.updateComplete;
+    await refresh.mock.results[0]?.value;
+    expect(gateway.request).toHaveBeenCalledWith("browser.request", {
+      method: "GET",
+      path: "/tabs",
+      target: "host",
+      query: { profile: "managed" },
+      tabScope: { sessionKey: panel.sessionKey, referencedTabs: panel.sessionTabs },
+    });
+    expect(controller.activeTargetId).toBe("t1");
+  });
+
   it("follows session results once on presentation, keeps card choices, and clears session/gateway ownership", async () => {
     const gateway = browserGateway();
     const focusCount = () =>

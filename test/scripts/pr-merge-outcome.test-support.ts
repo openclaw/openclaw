@@ -227,6 +227,23 @@ export function createMergeOutcomeFixtureHarness() {
       crash: "",
       comment: "success",
       admin: false,
+      priorCi: {
+        enabled: false,
+        head: sourceCommits[0]!,
+        runHead: sourceCommits[0]!,
+        event: "workflow_dispatch",
+        branch: "topic",
+        workflowPath: ".github/workflows/ci.yml",
+        missingCheck: "",
+        reviewDecision: "APPROVED" as string | null,
+        reviewCount: 1,
+        requireThreads: false,
+        resolved: true,
+        membership: "admin",
+        evidencePath: "",
+        mutateEvidence: false,
+        otherCheck: "",
+      },
       audit: false,
       gates: "pass",
       requiredCheckName: "CI",
@@ -332,14 +349,16 @@ const restCheckRuns=()=>{
   const check={id:1,head_sha:s.pr.headRefOid,name:s.restContexts[0],status:"completed",conclusion:s.gates==="pass"?"success":"failure",
     started_at:"2026-09-20T00:00:00Z",check_suite:{id:10},app:{id:s.restCheckApp,slug:s.restCheckApp===15368?"github-actions":"custom-ci"}};
   if(s.restUnseenSuite==="partial-pending") return [check,{...check,id:2,name:"detect-changes",check_suite:{id:2}}];
-  if(!s.restDuplicate) return s.restContexts.map((name,index)=>({...check,id:index+1,name,check_suite:{id:10+index},
-    conclusion:name===s.restFailedContext?"failure":check.conclusion}));
+  if(!s.restDuplicate) return s.restContexts.filter(name=>name!==s.priorCi.missingCheck).map((name,index)=>({...check,id:index+1,name,check_suite:{id:10+index},
+    ...(s.priorCi.enabled?{status:name===s.requiredCheckName&&s.gates==="pending"?"in_progress":"completed",
+      conclusion:name===s.restFailedContext?"failure":name!==s.requiredCheckName?"success":s.gates==="pending"?null:s.gates==="pass"?"success":"failure"}:
+      {conclusion:name===s.restFailedContext?"failure":check.conclusion})}));
   return [{...check,conclusion:"failure"},{...check,id:2,check_suite:{id:20},
     started_at:s.restDuplicate==="missing-time"?null:s.restDuplicate==="same-time"?check.started_at:"2026-09-20T00:01:00Z"}];
 };
 const restCheckSuites=()=>{
   const suites=restCheckRuns().map(check=>{
-    const running=s.restSuite==="rerunning"||(s.restUnseenSuite==="partial-pending"&&check.check_suite.id===2);
+    const running=check.status!=="completed"||s.restSuite==="rerunning"||(s.restUnseenSuite==="partial-pending"&&check.check_suite.id===2);
     return {id:check.check_suite.id,head_sha:s.pr.headRefOid,app:check.app,
       status:running?"in_progress":"completed",conclusion:running?null:check.conclusion};
   });
@@ -380,6 +399,17 @@ else if(args[0]==="api"&&args.some(arg=>new RegExp("^repos/[^/]+/[^/]+$").test(a
     }
   }
   out(args.includes("--include")?"HTTP/2.0 200 OK\\n\\n"+JSON.stringify(s.repoAuthority):s.repoAuthority);
+}
+else if(args[0]==="api"&&args.some(arg=>arg.startsWith("orgs/fixture/memberships/"))) {
+  out("HTTP/2.0 200 OK\\n\\n"+JSON.stringify({state:"active",role:s.priorCi.membership,user:{login:s.operator}}));
+}
+else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/actions/runs/501/attempts/2"))) {
+  if(args.some(arg=>arg.includes("/jobs?"))) out([{total_count:1,jobs:[{name:"openclaw/ci-gate",status:"completed",conclusion:"success",head_sha:s.priorCi.runHead,run_id:501}]}]);
+  else out({id:501,run_attempt:2,head_sha:s.priorCi.runHead,repository:{full_name:s.repo.nameWithOwner},path:s.priorCi.workflowPath,event:s.priorCi.event,head_branch:s.priorCi.branch,head_repository:{full_name:s.repo.nameWithOwner},status:"completed",conclusion:"success",pull_requests:s.priorCi.event==="pull_request"?[{number:123,head:{sha:s.priorCi.runHead},base:{repo:{id:s.repoAuthority.id}}}]:[]});
+}
+else if(args.includes("graphql")&&args.some(arg=>arg.includes("reviewThreads("))) {
+  out({data:{repository:{pullRequest:{headRefOid:s.pr.headRefOid,reviewDecision:s.priorCi.reviewDecision,reviewThreads:{nodes:[{isResolved:s.priorCi.resolved}],pageInfo:{hasNextPage:false}}}}}});
+  if(s.priorCi.mutateEvidence) fs.appendFileSync(s.priorCi.evidencePath," ");
 }
 else if(args[0]==="api"&&args.includes("user")) {
   if(route==="direct"&&JSON.stringify(args)===JSON.stringify(["api","--hostname","github.com","user","--include"])) out("HTTP/2.0 200 OK\\n\\n"+JSON.stringify({login:s.operator}));
@@ -434,6 +464,7 @@ else if(args[0]==="api"&&args.includes("repos/fixture/repo/branches/main/protect
 else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/rules/branches/main?"))) {
   out(s.restPolicy==="missing"?[null]:[[
     {type:"required_status_checks",parameters:{required_status_checks:s.restContexts.map(context=>({context,integration_id:s.restRequiredApp}))}},
+    ...(s.priorCi.enabled?[{type:"pull_request",parameters:{required_approving_review_count:s.priorCi.reviewCount,require_code_owner_review:false,require_last_push_approval:false,required_review_thread_resolution:s.priorCi.requireThreads}}]:[]),
     ...(s.restPolicy==="queue"?[{type:"merge_queue"}]:s.restPolicy==="unsupported"?[{type:"workflows"}]:[])
   ]]);
 }
@@ -481,7 +512,7 @@ else if(args[0]==="pr"&&args[1]==="checks") {
     else fs.appendFileSync(path,"\\n# changed during checks\\n");
   }
   if(s.duringChecks?.receiptField) { const receipt=process.env.FIXTURE_REPO+"/.worktrees/pr-123/.local/prep.env"; fs.writeFileSync(receipt,fs.readFileSync(receipt,"utf8").replace(new RegExp("^"+s.duringChecks.receiptField+"=.*$","m"),s.duringChecks.receiptField+"="+main())); }
-  out([{name:s.requiredCheckName,bucket:s.gates,state:s.gates==="pass"?"SUCCESS":"FAILURE"}]);}
+  out([{name:s.requiredCheckName,bucket:s.gates,state:s.gates==="pass"?"SUCCESS":s.gates==="pending"?"PENDING":"FAILURE"},...(s.priorCi.otherCheck?[{name:s.priorCi.otherCheck,bucket:"fail",state:"FAILURE"}]:[])]);}
 else if(args[0]==="pr"&&args[1]==="view") {
   const fields=args[args.indexOf("--json")+1].split(",");
   if(fields.includes("headRefName")&&!fields.includes("headRefOid")) fail("missing live cleanup metadata");
@@ -681,7 +712,7 @@ if [ "\${9:-}" = verify ]; then
 elif [ -n "\${5:-}" ]; then
   merge_complete 123 "$5"
 else
-  merge_run 123 "\${1:-false}" "\${2:-}" "\${3:-}" "\${4:-}" "\${6:-}" "\${7:-false}" "\${8:-}"
+  merge_run 123 "\${1:-false}" "\${2:-}" "\${3:-}" "\${4:-}" "\${6:-}" "\${7:-false}" "\${8:-}" "\${10:-}" "\${11:-false}"
 fi
 `,
       true,
@@ -726,6 +757,8 @@ fi
       cancelAuto = false,
       refusalDirectory = "",
       verifyOnly = false,
+      adminEvidence = "",
+      confirmedAdmin = false,
     ) => {
       const result = spawnSync(
         nodeExecutable,
@@ -743,6 +776,8 @@ fi
           String(cancelAuto),
           refusalDirectory,
           verifyOnly ? "verify" : "",
+          adminEvidence,
+          String(confirmedAdmin),
         ],
         {
           cwd,
@@ -851,6 +886,25 @@ fi
       state,
       save,
       run,
+      verifyPriorCi: (path: string) => {
+        const result = spawnSync(
+          nodeExecutable,
+          [
+            ...nodeArgs,
+            join(scripts, "pr-lib/merge-prior-ci.mjs"),
+            "verify",
+            path,
+            "fixture/repo",
+            "123",
+            head,
+            state().operator,
+          ],
+          { cwd: worktree, env, encoding: "utf8" },
+        );
+        return { ...result, output: result.stdout + result.stderr };
+      },
+      adminPriorCi: (path: string) =>
+        run(false, repo, "squash", "", "", "", "", "", false, "", false, path, true),
       complete: (oid: string) => run(false, repo, "squash", "", "", "", oid),
       verify: () => run(false, repo, "squash", "", "", "", "", "", false, "", true),
       cancel: (oid: string) => run(false, repo, "squash", oid, "", "", "", "", true),

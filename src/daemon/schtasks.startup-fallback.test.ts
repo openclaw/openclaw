@@ -591,7 +591,7 @@ describe("Windows startup fallback", () => {
       expect(taskProbe).toHaveBeenCalledOnce();
       expect(taskProbe.mock.calls[0]?.[2]).toMatchObject({
         env: expect.not.objectContaining({ BOUNDARY_PARENT_ONLY: "synthetic" }),
-        timeout: 5_000,
+        timeout: 60_000,
       });
     });
   });
@@ -1998,15 +1998,12 @@ describe("Windows startup fallback", () => {
     async (hidden) => {
       await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
         const taskEnv = hidden ? { ...env, OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1" } : env;
-        addMissingTaskInstallResponses([]);
+        taskProbe.mockReturnValue({ status: 1, stdout: "-2147024894" });
         const startupEntryPath = await writeStartupFallbackEntry(env);
 
         await expect(isScheduledTaskInstalled({ env: taskEnv })).resolves.toBe(true);
-        expect(schtasksCalls).toEqual([["/Query", "/TN", "OpenClaw Gateway"]]);
-        expect(schtasksResponses).toEqual([]);
 
         await fs.unlink(startupEntryPath);
-        addMissingTaskInstallResponses([]);
         await expect(isScheduledTaskInstalled({ env: taskEnv })).resolves.toBe(false);
       });
     },

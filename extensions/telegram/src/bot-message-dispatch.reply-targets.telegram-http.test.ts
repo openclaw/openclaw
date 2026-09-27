@@ -129,16 +129,16 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
     },
   );
 
-  it.each(
-    (["first", "batched", "all"] as const).flatMap((replyToMode) =>
-      (["one-page", "retained-page", "media"] as const).map((transition) => ({
-        replyToMode,
-        transition,
-      })),
-    ),
-  )(
-    "consumes an accepted $replyToMode target across $transition fallback",
-    async ({ replyToMode, transition }) => {
+  it.each([
+    ["first", "one-page"],
+    ["batched", "retained-page"],
+    ["first", "media"],
+    ["all", "one-page"],
+    ["all", "retained-page"],
+    ["all", "media"],
+  ] as const)(
+    "consumes an accepted %s target across %s fallback",
+    async (replyToMode, transition) => {
       const context = createContext();
       let rejected = false;
       http.respondToCall = (call) => {

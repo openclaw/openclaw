@@ -1,9 +1,8 @@
 import { resolveStateDir } from "../../config/paths.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  acquireGatewayMaintenanceCoordinator,
-  hasGatewayLifecycleCoordinator,
-} from "../../infra/state-database-coordinator.js";
+import { acquireGatewayLock } from "../../infra/gateway-lock.js";
+import { hasActiveGatewayStateOwner } from "../../infra/gateway-state-owner.js";
+import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import {
   createUpdateDatabaseBackup,
   type UpdateDatabaseBackup,
@@ -11,6 +10,7 @@ import {
 import { restoreUpdateDatabaseBackup } from "../../infra/update-database-restore.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
 import {
@@ -33,33 +33,66 @@ export async function captureUpdateDatabases(params: {
   params.assertCurrent();
   const source = await readUpdateCandidateSource(env, execution.legacyConfigPlan);
   params.assertCurrent();
-  const coordinator = { databasePath: resolveOpenClawStateSqlitePath(env), busyTimeoutMs: 0 };
-  let maintenance: ReturnType<typeof acquireGatewayMaintenanceCoordinator> | undefined;
+  let maintenance: Awaited<ReturnType<typeof acquireGatewayLock>> = null;
   let unavailable: string | undefined;
   try {
-    if (hasGatewayLifecycleCoordinator(coordinator)) {
+    if (hasActiveGatewayStateOwner(resolveOpenClawStateSqlitePath(env))) {
       throw new Error("This process still owns a running Gateway");
     }
-    maintenance = acquireGatewayMaintenanceCoordinator(coordinator);
+    maintenance = await acquireGatewayLock({
+      env,
+      role: "sqlite-maintenance",
+      allowInTests: true,
+      timeoutMs: 0,
+    });
+    if (!maintenance) {
+      throw new Error("Exclusive state ownership is unavailable");
+    }
   } catch (error) {
     unavailable = formatErrorMessage(error);
   }
-  let backup: UpdateDatabaseBackup;
+  let outcome: { value: UpdateDatabaseBackup } | { error: unknown };
   try {
-    backup = await createUpdateDatabaseBackup({
-      backupRoot: params.backupRoot,
-      stateDir: resolveStateDir(env),
-      config: source.config,
-      env,
-      timeoutMs: execution.updateStepTimeoutMs,
-      nodeRunner: execution.packageUpdateNodeRunner,
-    });
-  } finally {
-    maintenance?.release();
+    const capture = async () => {
+      params.assertCurrent();
+      const captured = await createUpdateDatabaseBackup({
+        backupRoot: params.backupRoot,
+        stateDir: resolveStateDir(env),
+        config: source.config,
+        env,
+        timeoutMs: execution.updateStepTimeoutMs,
+        nodeRunner: execution.packageUpdateNodeRunner,
+      });
+      params.assertCurrent();
+      maintenance?.assertCurrent();
+      return captured;
+    };
+    outcome = { value: await (maintenance ? maintenance.run(capture) : capture()) };
+  } catch (error) {
+    outcome = { error };
   }
+  if ("error" in outcome && hasCommandProcessCleanupError(outcome.error)) {
+    throw outcome.error;
+  }
+  try {
+    await maintenance?.release();
+  } catch (cleanupError) {
+    if ("error" in outcome) {
+      throw createSqliteLifecycleAggregateError(
+        [outcome.error, cleanupError],
+        "Database backup and ownership cleanup both failed",
+        outcome.error,
+      );
+    }
+    throw cleanupError;
+  }
+  if ("error" in outcome) {
+    throw outcome.error;
+  }
+  const backup = outcome.value;
   params.assertCurrent();
   const restorable =
-    maintenance !== undefined &&
+    maintenance !== null &&
     backup.databases.every((entry) => typeof backup.sourceGenerations[entry.path] === "string");
   if (!restorable) {
     backup.warnings.push(

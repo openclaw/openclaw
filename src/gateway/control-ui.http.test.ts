@@ -24,6 +24,7 @@ import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
@@ -38,12 +39,16 @@ import {
   type ControlUiPluginFrameGrantAck,
 } from "./control-ui-contract.js";
 import {
+  createTrustedProxyHeaders,
+  setupTrustedProxyAuth,
+} from "./control-ui.http.test-support.js";
+import {
   handleControlUiAssistantMediaRequest,
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
 } from "./control-ui.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
-import { makeMockHttpResponse } from "./test-http-response.js";
+import { createAuthRateLimiterSpy, makeMockHttpResponse } from "./test-http-response.js";
 
 type PlaybackTranscodeResolution = Awaited<
   ReturnType<(typeof import("../media/playback-transcode.js"))["resolvePlaybackTranscode"]>
@@ -77,26 +82,6 @@ const REAL_PNG = Buffer.from(
   "base64",
 );
 const testTempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function createAuthRateLimiterSpy() {
-  const check = vi.fn<AuthRateLimiter["check"]>(() => ({
-    allowed: true,
-    remaining: 10,
-    retryAfterMs: 0,
-  }));
-  const recordFailure = vi.fn<AuthRateLimiter["recordFailure"]>(() => {});
-  const recordFailureAndDelay = vi.fn<AuthRateLimiter["recordFailureAndDelay"]>(async () => {});
-  const reset = vi.fn<AuthRateLimiter["reset"]>(() => {});
-  return {
-    check,
-    recordFailure,
-    recordFailureAndDelay,
-    reset,
-    size: () => 0,
-    prune: () => {},
-    dispose: () => {},
-  } satisfies AuthRateLimiter;
-}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -300,28 +285,6 @@ describe("handleControlUiHttpRequest", () => {
     return { res, end, setHeader, handled };
   }
 
-  function createTrustedProxyAuth(): ResolvedGatewayAuth {
-    return {
-      mode: "trusted-proxy",
-      allowTailscale: false,
-      trustedProxy: {
-        userHeader: "x-forwarded-user",
-      },
-    };
-  }
-
-  function createTrustedProxyHeaders(
-    extraHeaders: IncomingMessage["headers"] = {},
-  ): IncomingMessage["headers"] {
-    return {
-      host: "gateway.example.com",
-      "x-forwarded-user": "nick@example.com",
-      "x-forwarded-for": "203.0.113.10",
-      "x-forwarded-proto": "https",
-      ...extraHeaders,
-    };
-  }
-
   async function runTrustedProxyAssistantMediaRequest(params: {
     filePath: string;
     meta?: boolean;
@@ -330,7 +293,7 @@ describe("handleControlUiHttpRequest", () => {
     return await runAssistantMediaRequest({
       url: `/__openclaw__/assistant-media?${params.meta ? "meta=1&" : ""}source=${encodeURIComponent(params.filePath)}`,
       method: "GET",
-      auth: createTrustedProxyAuth(),
+      auth: setupTrustedProxyAuth(),
       trustedProxies: ["10.0.0.1"],
       remoteAddress: "10.0.0.1",
       headers: createTrustedProxyHeaders(params.headers),
@@ -346,7 +309,7 @@ describe("handleControlUiHttpRequest", () => {
     return await runAvatarRequest({
       url: `/avatar/${params.agentId ?? "main"}${params.meta ? "?meta=1" : ""}`,
       method: "GET",
-      auth: createTrustedProxyAuth(),
+      auth: setupTrustedProxyAuth(),
       trustedProxies: ["10.0.0.1"],
       remoteAddress: "10.0.0.1",
       headers: createTrustedProxyHeaders(params.headers),
@@ -2108,12 +2071,15 @@ describe("handleControlUiHttpRequest", () => {
   });
 
   it("rejects unattributable proxy ingress before bootstrap device-token fallback", async () => {
-    const rateLimiter = createGatewayAuthRateLimiter({
-      maxAttempts: 2,
-      windowMs: 60_000,
-      lockoutMs: 60_000,
-      pruneIntervalMs: 0,
-    });
+    const rateLimiter = createGatewayAuthRateLimiter(
+      {
+        maxAttempts: 2,
+        windowMs: 60_000,
+        lockoutMs: 60_000,
+        pruneIntervalMs: 0,
+      },
+      { scheduler: createTestGatewayScheduler() },
+    );
 
     try {
       await withPairedOperatorDeviceToken({

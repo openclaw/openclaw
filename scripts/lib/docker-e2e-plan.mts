@@ -773,7 +773,6 @@ export function requiredPrepublishPluginPackagesForLanes(poolLanes: DockerE2eLan
       scenario === "projects-doctor" ||
       scenario === "channel-owner-policy" ||
       scenario === "projects-startup-migration" ||
-      scenario === "taskflow-restoration" ||
       scenario === "workshop-doctor-recovery" ||
       scenario === "update-report-recovery" ||
       scenario === "dreaming-cron-doctor"
@@ -781,6 +780,7 @@ export function requiredPrepublishPluginPackagesForLanes(poolLanes: DockerE2eLan
       continue;
     }
     if (scenario === "legacy-operator-state") {
+      requiredPackages.add("@openclaw/codex");
       requiredPackages.add("@openclaw/discord");
       requiredPackages.add("@openclaw/duckduckgo-plugin");
       continue;

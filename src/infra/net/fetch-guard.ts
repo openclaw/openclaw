@@ -65,6 +65,8 @@ export type GuardedFetchOptions = {
   fetchImpl?: FetchLike;
   /** Final synchronous check after transport preparation and before each request or redirect. */
   beforeRequest?: () => void | undefined;
+  /** Observes response headers for each hop, including redirects, before cleanup. */
+  onResponse?: (status: number) => void;
   init?: RequestInit;
   capture?:
     | false
@@ -687,6 +689,7 @@ async function fetchWithSsrFGuardInternal(
         void captureAdmission.capture?.({ ...captureParams, error });
         throw error;
       }
+      params.onResponse?.(response.status);
       void captureAdmission.capture?.({ ...captureParams, response });
 
       if (isRedirectStatus(response.status)) {

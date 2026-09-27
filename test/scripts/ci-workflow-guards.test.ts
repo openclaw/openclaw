@@ -37,6 +37,7 @@ import {
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { pnpmLockfileDocuments } from "../../scripts/lib/pnpm-lockfile-documents.mjs";
+import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import { resolveRunVitestSpawnEnv } from "../../scripts/lib/vitest-process-env.mts";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
 import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
@@ -10594,6 +10595,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     for (const sparsePath of sparseCheckoutPaths) {
       expect({ sparsePath, exists: existsSync(sparsePath) }).toEqual({ sparsePath, exists: true });
     }
+    const runtimeFiles = collectRuntimeImportClosure(process.cwd(), [
+      "scripts/ci-run-node-test-shard.mts",
+    ]).filter((file) => file.startsWith("scripts/"));
+    expect(runtimeFiles.toSorted()).toEqual(sparseCheckoutPaths.toSorted());
+    expect(runtimeFiles).not.toContain("scripts/lib/vitest-worker-run.mts");
   });
 
   it("routes admitted RunsOn rows with unique Spot labels and portable cache readers", () => {

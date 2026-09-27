@@ -28,7 +28,6 @@ import ai.openclaw.app.chat.ChatProgressCard
 import ai.openclaw.app.chat.ChatQuestionDraft
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatSessionEntry
-import ai.openclaw.app.chat.ChatSubagentActivity
 import ai.openclaw.app.chat.ChatThinkingLevelOption
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
 import ai.openclaw.app.chat.ChatToolActivity
@@ -82,7 +81,6 @@ import ai.openclaw.app.ui.foldAwareSheet
 import ai.openclaw.app.ui.gatewayDiagnosticsEndpoint
 import ai.openclaw.app.ui.localizedUppercase
 import ai.openclaw.app.ui.relativeSessionTime
-import ai.openclaw.app.ui.rememberSystemAnimationsEnabled
 import ai.openclaw.app.ui.rememberWindowDisplayFeatureState
 import ai.openclaw.app.ui.sessionPresentationTitle
 import ai.openclaw.app.ui.sidebarCatalogHosts
@@ -92,8 +90,6 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -379,7 +375,6 @@ internal fun ChatScreen(
   val thinkingLevelSelection by viewModel.chatThinkingLevelSelection.collectAsState()
   val streamingAssistantText by viewModel.chatStreamingAssistantText.collectAsState()
   val pendingToolCalls by viewModel.chatToolActivities.collectAsState()
-  val subagentActivities by viewModel.chatSubagentActivities.collectAsState()
   val questions by viewModel.chatQuestions.collectAsState()
   val progressCard by viewModel.chatProgressCard.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
@@ -586,7 +581,6 @@ internal fun ChatScreen(
     thinkingLevelSelection.options,
     canAdminSessionSettings,
   ) { mutableStateOf<String?>(null) }
-  val backgroundTasks = rememberChatPicker(viewModel)
   val reviewDiff = rememberChatPicker(viewModel)
   val attachmentPicker = rememberChatPicker(viewModel)
   val branchPicker = rememberChatPicker(viewModel)
@@ -601,7 +595,7 @@ internal fun ChatScreen(
     return true
   }
 
-  val pickers = listOf(modelPicker, contextPicker, effortPicker, backgroundTasks, reviewDiff, branchPicker, attachmentPicker)
+  val pickers = listOf(modelPicker, contextPicker, effortPicker, reviewDiff, branchPicker, attachmentPicker)
   rememberWindowDisplayFeatureState { publication -> pickers.forEach { it.publishFeatures(publication) } }
   SideEffect {
     pickers.forEach { it.refreshTarget() }
@@ -625,9 +619,9 @@ internal fun ChatScreen(
   DisposableEffect(viewModel) {
     onDispose(viewModel::stopChatMessageSpeech)
   }
-  val modelSections =
+  val modelChoices =
     remember(modelCatalog, modelFavorites, modelRecents) {
-      chatModelPickerSections(
+      chatModelPickerChoices(
         catalog = modelCatalog,
         favorites = modelFavorites,
         recents = modelRecents,
@@ -880,6 +874,13 @@ internal fun ChatScreen(
 
   val headerContent: @Composable ((() -> Unit)?, () -> Unit) -> Unit = { onJumpToLatest, dismissDetails ->
     ChatHeader(
+      sessionOwner = composerOwner,
+      contextUsage = contextUsage,
+      contextEnabled = composerOwnerReady && gatewayConnectionDisplay.isConnected && operatorScopesAllowRead(operatorScopes),
+      onOpenContext = {
+        dismissDetails()
+        contextPicker.open(composerOwner, sessionKey)
+      },
       activeAgent = activeAgent,
       projectLabel = activeProjectLabel,
       sessionTitle = activeSessionTitle,
@@ -919,10 +920,6 @@ internal fun ChatScreen(
       onOpenReviewDiff = {
         dismissDetails()
         reviewDiff.open(composerOwner, sessionKey)
-      },
-      onOpenBackgroundTasks = {
-        dismissDetails()
-        backgroundTasks.open(composerOwner, sessionKey)
       },
       onOpenBranchSwitcher = {
         dismissDetails()
@@ -981,7 +978,6 @@ internal fun ChatScreen(
     activeRunClockKey = selectedActiveRun.clockKey,
     activeRunOutputTokens = selectedActiveRun.outputTokens,
     pendingToolCalls = pendingToolCalls,
-    subagentActivities = subagentActivities,
     questions = questionsForSession(questions, sessionKey, mainSessionKey, activeAgentId),
     streamingAssistantText = streamingAssistantText,
     healthOk = healthOk,
@@ -1055,6 +1051,7 @@ internal fun ChatScreen(
   ) { onJumpToLatest, compactHeight, tabletop ->
     ChatComposer(
       onInputPositioned = { composerAnchor = it },
+      agentName = viewModel.chatComposerAgentName(composerOwner),
       ownerReady = composerOwnerReady,
       compactHeight = compactHeight,
       detailsExpanded = detailsExpanded,
@@ -1078,10 +1075,8 @@ internal fun ChatScreen(
       thinkingLevelEnabled = canAdminSessionSettings,
       fastMode = fastMode,
       fastModeEnabled = fastModeEnabled,
-      contextUsage = contextUsage,
       selectedModelLabel = selectedModelLabel,
       modelPickerEnabled = gatewayConnectionDisplay.isConnected && canWriteSessionSettings,
-      contextPickerEnabled = gatewayConnectionDisplay.isConnected && operatorScopesAllowRead(operatorScopes),
       healthOk = healthOk,
       gatewayOffline = gatewayOffline,
       offlineStatus = offlineStatus,
@@ -1098,7 +1093,6 @@ internal fun ChatScreen(
       commands = chatCommands,
       onOpenEffortPicker = { effortPicker.open(composerOwner, sessionKey) },
       onOpenModelPicker = { openComposerPicker(ChatComposerPickerPage.Models) },
-      onOpenContext = { contextPicker.open(composerOwner, sessionKey) },
       onOpenAttachments = { attachmentPicker.open(composerOwner, sessionKey) },
       onRemoveAttachment = { id -> composerState.removeAttachments(composerOwner, setOf(id)) },
       voiceNoteState = voiceNoteState,
@@ -1365,7 +1359,7 @@ internal fun ChatScreen(
           }
         } else {
           ChatModelPickerContent(
-            sections = modelSections,
+            models = modelChoices,
             favorites = modelFavorites.toSet(),
             selectedModelLabel = selectedModelLabel,
             selectedModelRef = selectedModelRef,
@@ -1447,16 +1441,6 @@ internal fun ChatScreen(
       )
     }
   }
-  backgroundTasks.visible?.let { opening ->
-    key(opening) {
-      BackgroundTasksSheet(
-        viewModel = viewModel,
-        opening = opening,
-        admit = { backgroundTasks.admit(opening) },
-        onDismiss = { if (backgroundTasks.admit(opening)) backgroundTasks.retire(opening) },
-      )
-    }
-  }
 }
 
 @Composable
@@ -1499,6 +1483,10 @@ internal fun chatHeaderProjectLabel(
 
 @Composable
 private fun ChatHeader(
+  sessionOwner: ChatComposerOwner,
+  contextUsage: ChatContextUsage,
+  contextEnabled: Boolean,
+  onOpenContext: () -> Unit,
   activeAgent: GatewayAgentSummary?,
   projectLabel: String?,
   sessionTitle: String,
@@ -1517,11 +1505,10 @@ private fun ChatHeader(
   onNewChatInWorktree: () -> Unit,
   onRefresh: () -> Unit,
   onOpenDashboard: () -> Unit,
-  onOpenBackgroundTasks: () -> Unit,
   onOpenReviewDiff: () -> Unit,
   onOpenBranchSwitcher: () -> Unit,
 ) {
-  var actionsMenuExpanded by remember { mutableStateOf(false) }
+  var actionsMenuExpanded by remember(sessionOwner) { mutableStateOf(false) }
   val newChatInWorktreeLabel = stringResource(R.string.new_chat_in_worktree)
   val statusLabel =
     when {
@@ -1649,6 +1636,24 @@ private fun ChatHeader(
           items =
             buildList {
               add(FoldAwareMenuItem("refresh", nativeString("Refresh chat"), onRefresh, Icons.Default.Refresh))
+              add(
+                FoldAwareMenuItem(
+                  "context",
+                  nativeString("Context"),
+                  onOpenContext,
+                  enabled = contextEnabled,
+                  iconContent = {
+                    val summary = chatContextSummary(contextUsage)
+                    CircularProgressIndicator(
+                      progress = { summary?.fraction ?: 0f },
+                      modifier = Modifier.size(18.dp).clearAndSetSemantics { summary?.let { stateDescription = it.detail } },
+                      color = chatContextColor(summary),
+                      trackColor = ClawTheme.colors.borderStrong,
+                      strokeWidth = 2.dp,
+                    )
+                  },
+                ),
+              )
               if (branches.size > 1) {
                 add(
                   FoldAwareMenuItem(
@@ -1664,7 +1669,6 @@ private fun ChatHeader(
                 add(FoldAwareMenuItem("review-diff", nativeString("Review changes"), onOpenReviewDiff, Icons.Default.Difference))
               }
               add(FoldAwareMenuItem("dashboard", nativeString("Dashboard"), onOpenDashboard, Icons.Default.Dashboard))
-              add(FoldAwareMenuItem("background", nativeString("Background tasks"), onOpenBackgroundTasks, Icons.Default.HourglassEmpty))
               if (workspaceGit) {
                 add(FoldAwareMenuItem("worktree", newChatInWorktreeLabel, onNewChatInWorktree, enabled = newChatEnabled))
               }
@@ -1714,7 +1718,6 @@ private fun ChatMessageList(
   activeRunClockKey: String?,
   activeRunOutputTokens: Long?,
   pendingToolCalls: List<ChatPendingToolCall>,
-  subagentActivities: Map<String, ChatSubagentActivity>,
   questions: List<ChatQuestionPrompt>,
   streamingAssistantText: String?,
   healthOk: Boolean,
@@ -1775,13 +1778,12 @@ private fun ChatMessageList(
   val presentedTools = remember(toolBridge, history.toolScope, pendingToolCalls) { toolBridge.update(history.toolScope, pendingToolCalls) }
   var expandedWorkKeys by remember(sessionKey) { mutableStateOf(emptySet<String>()) }
   val timeline =
-    remember(history, turnRecap, expandedWorkKeys, activeRunCount, activeRunId, presentedTools, subagentActivities, questions, streamingAssistantText, outboxItems, recoveryOutboxItems) {
+    remember(history, turnRecap, expandedWorkKeys, activeRunCount, activeRunId, presentedTools, questions, streamingAssistantText, outboxItems, recoveryOutboxItems) {
       history
         .buildTimeline(
           pendingRunCount = activeRunCount,
           pendingToolCalls = presentedTools,
           streamingAssistantText = streamingAssistantText,
-          subagentActivities = subagentActivities,
           outboxItems = outboxItems,
           recoveryOutboxItems = recoveryOutboxItems,
           questions = questions,
@@ -1911,13 +1913,6 @@ private fun ChatMessageList(
 
                     is ChatTimelineItem.ToolActivity -> {
                       key(toolBridge) { ToolActivityDisclosure(item, sessionKey) }
-                    }
-
-                    is ChatTimelineItem.SubagentActivity -> {
-                      SubagentActivityRows(
-                        activities = item.activities,
-                        moreWorkingCount = item.moreWorkingCount,
-                      )
                     }
 
                     is ChatTimelineItem.QuestionPrompt -> {
@@ -2070,7 +2065,7 @@ private fun EmptyChatHint(
           } else {
             nativeString("Chat not ready")
           },
-        style = ClawTheme.type.title.copy(fontSize = 18.sp, lineHeight = 23.sp),
+        style = ClawTheme.type.title.copy(lineHeight = 23.sp),
         color = ClawTheme.colors.text,
       )
       Text(
@@ -2500,7 +2495,7 @@ private fun ToolActivityDisclosure(
   var expanded by rememberSaveable(stableKey) { mutableStateOf(false) }
   var showAll by rememberSaveable(stableKey) { mutableStateOf(false) }
   val summary = completedToolGroupSummary(tools)
-  val hasError = tools.any { it.isError || it.activity?.status == "failed" }
+  val hasError = tools.any { it.hasFailedOutcome }
   val hasBlocked = tools.any { it.activity?.status == "blocked" }
   val running = item.liveTools.values.any { !it.isComplete }
   val state = if (expanded) nativeString("Expanded") else nativeString("Collapsed")
@@ -2640,13 +2635,8 @@ private fun ToolActivityItem(
   var expanded by rememberSaveable(parentStableKey, saveableKey) { mutableStateOf(false) }
   val kind = completedToolKind(tool.name)
   val resultPresentation = completedToolResultPresentation(tool)
-  val liveStatus =
-    when {
-      tool.isError || tool.activity?.status == "failed" -> nativeString("Failed")
-      tool.activity?.status == "blocked" -> nativeString("Blocked")
-      live?.isComplete == false -> nativeString("OpenClaw is working")
-      else -> null
-    }
+  val isError = tool.hasFailedOutcome
+  val outcome = resultPresentation.outcome ?: if (live?.isComplete == false) nativeString("OpenClaw is working") else null
   val preview =
     tool.detail
       ?.lineSequence()
@@ -2685,7 +2675,7 @@ private fun ToolActivityItem(
       ) {
         Icon(
           imageVector =
-            if (tool.isError) {
+            if (isError) {
               Icons.Default.Close
             } else {
               when (kind) {
@@ -2698,10 +2688,10 @@ private fun ToolActivityItem(
             },
           contentDescription = null,
           modifier = Modifier.size(16.dp),
-          tint = if (tool.isError) ClawTheme.colors.danger else ClawTheme.colors.textMuted,
+          tint = if (isError) ClawTheme.colors.danger else ClawTheme.colors.textMuted,
         )
-        (liveStatus ?: resultPresentation.outcome)?.let { outcome ->
-          Text(text = outcome, style = ClawTheme.type.caption, color = if (tool.isError || tool.activity?.status in setOf("failed", "blocked")) ClawTheme.colors.danger else ClawTheme.colors.textMuted)
+        outcome?.let {
+          Text(text = it, style = ClawTheme.type.caption, color = if (isError || tool.activity?.status == "blocked") ClawTheme.colors.danger else ClawTheme.colors.textMuted)
         }
         Row(
           modifier = Modifier.weight(1f),
@@ -2864,87 +2854,6 @@ internal fun readableToolName(name: String): String =
     .ifEmpty { nativeString("Tool") }
 
 @Composable
-private fun SubagentActivityRows(
-  activities: List<ChatSubagentActivity>,
-  moreWorkingCount: Int,
-) {
-  val animationsEnabled = rememberSystemAnimationsEnabled()
-  ClawPanel {
-    Column(
-      modifier = if (animationsEnabled) Modifier.animateContentSize() else Modifier,
-      verticalArrangement = Arrangement.spacedBy(5.dp),
-    ) {
-      activities.forEach { activity -> SubagentActivityRow(activity, animationsEnabled) }
-      if (moreWorkingCount > 0) {
-        Text(
-          text = nativeString("+\${moreWorkingCount} more working", moreWorkingCount),
-          style = ClawTheme.type.caption,
-          color = ClawTheme.colors.textSubtle,
-        )
-      }
-    }
-  }
-}
-
-@Composable
-private fun SubagentActivityRow(
-  activity: ChatSubagentActivity,
-  animationsEnabled: Boolean,
-) {
-  val completed = activity.status == "completed"
-  val summary = if (activity.isWorking) activity.snippet else activity.terminalSummary ?: activity.error ?: activity.snippet
-  Row(
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(8.dp),
-  ) {
-    if (activity.isWorking) {
-      WorkingClawIcon(runKey = activity.id, color = ClawTheme.colors.primary)
-    } else {
-      Icon(
-        imageVector = if (completed) Icons.Default.Check else Icons.Default.Close,
-        contentDescription = null,
-        modifier = Modifier.size(15.dp),
-        tint = if (completed) ClawTheme.colors.success else ClawTheme.colors.danger,
-      )
-    }
-    Text(
-      text = subagentActivityStatusLabel(activity.status),
-      style = ClawTheme.type.label,
-      color = ClawTheme.colors.text,
-      maxLines = 1,
-    )
-    if (summary.isNullOrBlank()) {
-      Box(modifier = Modifier.weight(1f))
-    } else if (animationsEnabled) {
-      AnimatedContent(
-        targetState = summary,
-        modifier = Modifier.weight(1f),
-      ) { text ->
-        SubagentActivitySnippet(text)
-      }
-    } else {
-      SubagentActivitySnippet(summary, Modifier.weight(1f))
-    }
-    activity.diffStat?.takeIf { it.added > 0 || it.removed > 0 }?.let { DiffStatChips(it) }
-  }
-}
-
-@Composable
-private fun SubagentActivitySnippet(
-  text: String,
-  modifier: Modifier = Modifier,
-) {
-  Text(
-    text = text,
-    modifier = modifier,
-    style = ClawTheme.type.caption,
-    color = ClawTheme.colors.textMuted,
-    maxLines = 1,
-    overflow = TextOverflow.Ellipsis,
-  )
-}
-
-@Composable
 private fun DiffStatChips(diff: ChatDiffStat) {
   Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
     if (diff.added > 0) {
@@ -2972,16 +2881,6 @@ private fun DiffStatChip(
     )
   }
 }
-
-@Composable
-private fun subagentActivityStatusLabel(status: String): String =
-  when (status) {
-    "queued", "running" -> nativeString("Subagent working")
-    "completed" -> nativeString("Subagent finished")
-    "failed", "timed_out" -> nativeString("Subagent failed")
-    "cancelled" -> nativeString("Subagent cancelled")
-    else -> nativeString("Subagent finished")
-  }
 
 @Composable
 private fun ChatNotice(
@@ -3087,7 +2986,7 @@ private fun ProgressCardPill(
           )
           Text(
             text = expandedActivityLabel,
-            style = ClawTheme.type.caption.copy(fontSize = 12.sp, fontWeight = FontWeight.Medium),
+            style = ClawTheme.type.caption.copy(fontWeight = FontWeight.Medium),
             color = ClawTheme.colors.textMuted,
             maxLines = 1,
           )
@@ -3206,10 +3105,10 @@ private fun PlanStepMarker(status: ChatPlanStepStatus) {
 private fun chatDraftStyle(): TextStyle = ClawTheme.type.body.copy(fontSize = 16.sp, lineHeight = 22.sp)
 
 @Composable
-private fun chatProjectStyle(): TextStyle = ClawTheme.type.caption.copy(fontSize = 11.sp, lineHeight = 13.sp, fontWeight = FontWeight.Normal)
+private fun chatProjectStyle(): TextStyle = ClawTheme.type.caption.copy(fontSize = ClawTheme.type.captionSmall.fontSize, lineHeight = 13.sp, fontWeight = FontWeight.Normal)
 
 @Composable
-private fun chatTitleStyle(): TextStyle = ClawTheme.type.title.copy(fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium)
+private fun chatTitleStyle(): TextStyle = ClawTheme.type.title.copy(fontSize = ClawTheme.type.section.fontSize, lineHeight = 18.sp, fontWeight = FontWeight.Medium)
 
 @Composable
 private fun minimumChatLineHeight(style: TextStyle): Int {
@@ -3236,6 +3135,7 @@ private fun minimumChatInputHeight(): Dp {
 @Composable
 private fun ChatComposer(
   onInputPositioned: (LayoutCoordinates) -> Unit,
+  agentName: String?,
   ownerReady: Boolean,
   compactHeight: Boolean,
   detailsExpanded: Boolean,
@@ -3252,10 +3152,8 @@ private fun ChatComposer(
   thinkingLevelEnabled: Boolean,
   fastMode: Boolean,
   fastModeEnabled: Boolean,
-  contextUsage: ChatContextUsage,
   selectedModelLabel: String,
   modelPickerEnabled: Boolean,
-  contextPickerEnabled: Boolean,
   healthOk: Boolean,
   gatewayOffline: Boolean,
   offlineStatus: String,
@@ -3268,7 +3166,6 @@ private fun ChatComposer(
   commands: List<ChatCommandEntry>,
   onOpenEffortPicker: () -> Unit,
   onOpenModelPicker: () -> Unit,
-  onOpenContext: () -> Unit,
   onOpenAttachments: () -> Unit,
   onRemoveAttachment: (String) -> Unit,
   voiceNoteState: VoiceNoteRecorderState,
@@ -3413,6 +3310,7 @@ private fun ChatComposer(
         } else {
           ChatInputPill(
             inputEnabled = ownerReady && !detailsExpanded,
+            agentName = agentName,
             onOpenDetails = if (compactHeight) ({ onDetailsExpandedChange(true) }) else null,
             value = value,
             onValueChange = onValueChange,
@@ -3434,9 +3332,7 @@ private fun ChatComposer(
             onSend = onSend,
             selectedModelLabel = selectedModelLabel,
             modelPickerEnabled = ownerReady && modelPickerEnabled,
-            contextPickerEnabled = ownerReady && contextPickerEnabled,
             onOpenModelPicker = onOpenModelPicker,
-            onOpenContext = onOpenContext,
             thinkingLevel = thinkingLevel,
             thinkingOptions = thinkingOptions,
             thinkingSupported = thinkingSupported,
@@ -3444,7 +3340,6 @@ private fun ChatComposer(
             fastMode = fastMode,
             fastModeEnabled = fastModeEnabled,
             onOpenEffortPicker = onOpenEffortPicker,
-            contextUsage = contextUsage,
             modifier = Modifier.weight(1f).onGloballyPositioned(onInputPositioned),
           )
         }
@@ -3928,7 +3823,7 @@ internal fun branchMetadataText(branch: SessionBranch): String {
 
 @Composable
 private fun ChatModelPickerContent(
-  sections: ChatModelPickerSections,
+  models: List<GatewayModelSummary>,
   favorites: Set<String>,
   selectedModelLabel: String,
   selectedModelRef: String?,
@@ -3941,12 +3836,10 @@ private fun ChatModelPickerContent(
 ) {
   var query by remember { mutableStateOf("") }
   var expandedProviders by remember { mutableStateOf(emptySet<String>()) }
-  val models = sections.pinned + sections.recent + sections.remaining
   val defaultModel = models.firstOrNull { it.providerQualifiedRef() == defaultModelRef }
 
-  fun matches(model: GatewayModelSummary): Boolean = query.isBlank() || listOf(model.name, model.id, providerDisplayName(model.provider)).any { it.contains(query.trim(), ignoreCase = true) }
-
-  val matchingModels = models.filter(::matches)
+  val search = remember(models) { ChatModelSearch(models) }
+  val matchingModels = remember(search, query) { search.search(query) }
   LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(bottom = 8.dp)) {
     item {
       if (modelSelectionLocked) {
@@ -3983,7 +3876,7 @@ private fun ChatModelPickerContent(
     }
     if (modelSelectionLocked) return@LazyColumn
 
-    matchingModels.groupBy { it.provider }.entries.sortedBy { if (it.key == defaultModel?.provider) 0 else 1 }.forEach { (provider, entries) ->
+    matchingModels.groupBy { it.provider }.entries.sortedBy { if (query.isBlank() && it.key == defaultModel?.provider) 0 else 1 }.forEach { (provider, entries) ->
       val expanded = query.isNotBlank() || provider in expandedProviders
       item(key = "provider-$provider") {
         Surface(
@@ -4006,7 +3899,7 @@ private fun ChatModelPickerContent(
         }
       }
       if (expanded) {
-        itemsIndexed(entries.sortedBy { if (it.providerQualifiedRef() == defaultModelRef) 0 else 1 }, key = { _, model -> model.providerQualifiedRef() }) { _, model ->
+        itemsIndexed(entries.sortedBy { if (query.isBlank() && it.providerQualifiedRef() == defaultModelRef) 0 else 1 }, key = { _, model -> model.providerQualifiedRef() }) { _, model ->
           val ref = model.providerQualifiedRef()
           val isDefault = ref == defaultModelRef
           ChatModelPickerRow(
@@ -4200,12 +4093,12 @@ private fun ChatOfflineNotice(
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
       Text(
         text = nativeString("Gateway offline"),
-        style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
+        style = ClawTheme.type.caption,
         color = ClawTheme.colors.warning,
       )
       Text(
         text = status,
-        style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
+        style = ClawTheme.type.caption,
         color = ClawTheme.colors.textMuted,
         maxLines = 2,
         overflow = TextOverflow.Ellipsis,
@@ -4259,6 +4152,7 @@ internal fun canSelectChatPermissionMode(
 @Composable
 private fun ChatInputPill(
   inputEnabled: Boolean,
+  agentName: String?,
   onOpenDetails: (() -> Unit)?,
   value: String,
   onValueChange: (String) -> Unit,
@@ -4280,9 +4174,7 @@ private fun ChatInputPill(
   onSend: () -> Unit,
   selectedModelLabel: String,
   modelPickerEnabled: Boolean,
-  contextPickerEnabled: Boolean,
   onOpenModelPicker: () -> Unit,
-  onOpenContext: () -> Unit,
   thinkingLevel: String,
   thinkingOptions: List<ChatThinkingLevelOption>,
   thinkingSupported: Boolean,
@@ -4290,7 +4182,6 @@ private fun ChatInputPill(
   fastMode: Boolean,
   fastModeEnabled: Boolean,
   onOpenEffortPicker: () -> Unit,
-  contextUsage: ChatContextUsage,
   modifier: Modifier = Modifier,
 ) {
   val hardwareEnterHandler = remember { PhysicalChatSendKeyHandler() }
@@ -4348,7 +4239,7 @@ private fun ChatInputPill(
               .fillMaxWidth()
               .heightIn(min = ClawTheme.spacing.touchTarget, max = with(LocalDensity.current) { sixLines.toDp() } + 12.dp)
               .padding(vertical = 6.dp),
-            contentAlignment = Alignment.CenterStart,
+            contentAlignment = Alignment.TopStart,
           ) {
             BasicTextField(
               value = textFieldValue,
@@ -4378,7 +4269,13 @@ private fun ChatInputPill(
                 Box(modifier = Modifier.fillMaxWidth().verticalScroll(scroll, enabled = inputEnabled), contentAlignment = Alignment.CenterStart) {
                   if (value.isEmpty()) {
                     // BasicTextField's line limit does not constrain its decoration.
-                    Text(text = nativeString("Message OpenClaw"), style = draftStyle, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                      text = agentName?.let { nativeString("Message \$agentName", it) } ?: nativeString("Message"),
+                      style = draftStyle,
+                      color = ClawTheme.colors.textMuted,
+                      maxLines = 1,
+                      overflow = TextOverflow.Ellipsis,
+                    )
                   }
                   innerTextField()
                 }
@@ -4427,12 +4324,6 @@ private fun ChatInputPill(
               )
             }
           }
-          ChatComposerContextButton(
-            enabled = inputEnabled && contextPickerEnabled,
-            contextUsage = contextUsage,
-            onClick = onOpenContext,
-            modifier = Modifier.width(iconWidth),
-          )
           Row(verticalAlignment = Alignment.CenterVertically) {
             if (talkActive) {
               LiveTalkButton(active = true, onClick = onToggleTalk)
@@ -4468,33 +4359,6 @@ private fun ChatInputPill(
         }
       }
     }
-  }
-}
-
-@Composable
-private fun ChatComposerContextButton(
-  enabled: Boolean,
-  contextUsage: ChatContextUsage,
-  onClick: () -> Unit,
-  modifier: Modifier = Modifier,
-) {
-  val contextSummary = chatContextSummary(contextUsage)
-  IconButton(
-    onClick = onClick,
-    enabled = enabled,
-    modifier =
-      modifier.height(ClawTheme.spacing.touchTarget).semantics {
-        contentDescription = nativeString("Context")
-        contextSummary?.let { stateDescription = it.detail }
-      },
-  ) {
-    CircularProgressIndicator(
-      progress = { contextSummary?.fraction ?: 0f },
-      modifier = Modifier.size(18.dp).clearAndSetSemantics {},
-      color = chatContextColor(contextSummary),
-      trackColor = ClawTheme.colors.borderStrong,
-      strokeWidth = 2.dp,
-    )
   }
 }
 
@@ -4686,7 +4550,7 @@ private fun ChatComposerModelPicker(
       Row(modifier = Modifier.padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(
           text = label,
-          style = ClawTheme.type.caption.copy(fontSize = 14.sp),
+          style = ClawTheme.type.caption.copy(fontSize = ClawTheme.type.body.fontSize),
           // Android supports middle ellipsis only on one line; keep both ends of the model name visible.
           maxLines = 1,
           overflow = TextOverflow.MiddleEllipsis,

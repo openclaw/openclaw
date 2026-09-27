@@ -233,7 +233,7 @@ export function sanitizeDiscordThreadName(rawName: string, fallbackId: string): 
     .trim();
   const baseSource = cleanedName || `Thread ${fallbackId}`;
   const base = truncateUtf16Safe(baseSource, 80);
-  return truncateUtf16Safe(base, 100) || `Thread ${fallbackId}`;
+  return base || `Thread ${fallbackId}`;
 }
 
 export function resolveDiscordReplyDeliveryPlan(params: {

@@ -4,7 +4,6 @@ import { typeCheckSources } from "../../test/helpers/typescript.js";
 import { addSession, appendOutput, markExited } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
-import { createProcessTool } from "./bash-tools.process.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
   createCodeModeHarness,
@@ -20,48 +19,45 @@ afterEach(async () => {
   resetProcessRegistryForTests();
 });
 
-it.each([createProcessTool, createLazyProcessTool])(
-  "declares process results across listing, input, completion, logs, and failures (%#)",
-  async (createTool) => {
-    const tool = createTool();
-    const session = createProcessSessionFixture({ id: "contract-process", backgrounded: true });
-    session.stdin = { write: vi.fn((_data, done) => done?.(null)), end: vi.fn(), destroyed: false };
-    addSession(session);
-    appendOutput(session, "stdout", "first\nsecond\n");
-    const invoke = async (action: string, extra: Record<string, unknown> = {}) => {
-      const result = await tool.execute(action, { action, sessionId: session.id, ...extra });
-      expect(tool.outputSchema).toBeDefined();
-      expect(Value.Check(tool.outputSchema!, result.details), JSON.stringify(result.details)).toBe(
-        true,
-      );
-      return result;
-    };
-    await invoke("list");
-    await invoke("poll");
-    await invoke("log", { offset: 1, limit: 1 });
-    await invoke("write", { data: "hello" });
-    await invoke("send-keys", { literal: "world" });
-    await invoke("submit");
-    await invoke("paste", { text: "paste" });
-    await invoke("paste");
-    await invoke("kill");
-    markExited(session, null, "SIGTERM", "killed", "manual-cancel");
-    await invoke("list");
-    await invoke("poll");
-    await invoke("log");
-    await invoke("clear");
-    await invoke("poll");
-    const completed = createProcessSessionFixture({ id: "contract-completed", backgrounded: true });
-    addSession(completed);
-    markExited(completed, 0, null, "completed", "exit");
-    await invoke("remove", { sessionId: completed.id });
-    await invoke("invalid");
-    expect(Value.Check(tool.outputSchema!, { status: "failed" })).toBe(false);
-    expect(
-      Value.Check(tool.outputSchema!, { status: "completed", sessions: [{ sessionId: 42 }] }),
-    ).toBe(false);
-  },
-);
+it("declares lazy process results across listing, input, completion, logs, and failures", async () => {
+  const tool = createLazyProcessTool();
+  const session = createProcessSessionFixture({ id: "contract-process", backgrounded: true });
+  session.stdin = { write: vi.fn((_data, done) => done?.(null)), end: vi.fn(), destroyed: false };
+  addSession(session);
+  appendOutput(session, "stdout", "first\nsecond\n");
+  const invoke = async (action: string, extra: Record<string, unknown> = {}) => {
+    const result = await tool.execute(action, { action, sessionId: session.id, ...extra });
+    expect(tool.outputSchema).toBeDefined();
+    expect(Value.Check(tool.outputSchema!, result.details), JSON.stringify(result.details)).toBe(
+      true,
+    );
+    return result;
+  };
+  await invoke("list");
+  await invoke("poll");
+  await invoke("log", { offset: 1, limit: 1 });
+  await invoke("write", { data: "hello" });
+  await invoke("send-keys", { literal: "world" });
+  await invoke("submit");
+  await invoke("paste", { text: "paste" });
+  await invoke("paste");
+  await invoke("kill");
+  markExited(session, null, "SIGTERM", "killed", "manual-cancel");
+  await invoke("list");
+  await invoke("poll");
+  await invoke("log");
+  await invoke("clear");
+  await invoke("poll");
+  const completed = createProcessSessionFixture({ id: "contract-completed", backgrounded: true });
+  addSession(completed);
+  markExited(completed, 0, null, "completed", "exit");
+  await invoke("remove", { sessionId: completed.id });
+  await invoke("invalid");
+  expect(Value.Check(tool.outputSchema!, { status: "failed" })).toBe(false);
+  expect(
+    Value.Check(tool.outputSchema!, { status: "completed", sessions: [{ sessionId: 42 }] }),
+  ).toBe(false);
+});
 
 it("composes lazy process actions through generated declarations and JavaScript", async () => {
   const session = createProcessSessionFixture({ id: "typed-process", backgrounded: true });

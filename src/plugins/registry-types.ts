@@ -4,7 +4,6 @@ import type { GatewayRequestHandlers } from "../gateway/server-methods/types.js"
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
-import type { DetachedTaskLifecycleRuntimeRegistration } from "../tasks/detached-task-runtime-contract.js";
 import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareRuntime,
@@ -443,7 +442,6 @@ export type PluginRegistry = {
     pluginId: string;
     host: import("../decisions/provider-host.js").DecisionProviderHost;
   }>;
-  detachedTaskRuntimes: DetachedTaskLifecycleRuntimeRegistration[];
   legacyInternalHooks: PluginLegacyInternalHookRegistration[];
   memoryCapabilities: MemoryPluginCapabilityRegistration[];
   memoryCorpusSupplements: MemoryCorpusSupplementRegistration[];

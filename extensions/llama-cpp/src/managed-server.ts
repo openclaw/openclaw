@@ -28,13 +28,12 @@ import {
   resolveLlamaCppModelCacheDir,
   resolveLlamaCppModelSource,
 } from "./defaults.js";
+import { resolveManagedLlamaServerPaths, type LlamaServerAsset } from "./llama-server-assets.js";
 import {
   downloadVerifiedFile,
   ensureLlamaServerInstalled,
-  resolveManagedLlamaServerPaths,
   sha256File,
   type LlamaDownloadProgress,
-  type LlamaServerAsset,
 } from "./llama-server-install.js";
 import {
   buildLlamaServerPreset,

@@ -132,7 +132,7 @@ it.each([
         const failure = await runUpdatedInstallGatewayCommand(
           {
             result: { root: targetRoot },
-            opts: { json: true, run: { runId, env: process.env, executorFence: fence } },
+            opts: { run: { runId, env: process.env, executorFence: fence } },
             invocationEnv: process.env,
             timeoutMs: 20_000,
             definitionRecovery: recovery,
@@ -157,7 +157,7 @@ it.each([
       return await runUpdatedInstallGatewayCommand(
         {
           result: { root: targetRoot },
-          opts: { json: true, run: { runId, env: process.env, executorFence: fence } },
+          opts: { run: { runId, env: process.env, executorFence: fence } },
           invocationEnv: process.env,
           timeoutMs: 20_000,
         },
@@ -493,7 +493,7 @@ it.each([
       return await runUpdatedInstallGatewayCommand(
         {
           result: { root },
-          opts: { json: true, run: { runId, env: process.env, executorFence: fence } },
+          opts: { run: { runId, env: process.env, executorFence: fence } },
           invocationEnv: process.env,
         },
         "restart",

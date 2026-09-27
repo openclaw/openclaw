@@ -68,6 +68,7 @@ vi.mock("../cli/signal-exit-barrier.js", () => ({ registerSignalExitFinalizer: v
 vi.mock("../logging/logger.js", () => ({ getChildLogger: () => ({ warn: vi.fn() }) }));
 vi.mock("./openclaw-state-db-cache.js", () => ({
   captureOpenClawStateDatabaseReadAdmission: (databasePath: string) => ({
+    coordinationKey: databasePath,
     databasePath,
     identity: { key: databasePath, canonicalPath: databasePath },
     assertCurrent() {},
@@ -91,18 +92,15 @@ vi.mock("./openclaw-state-worker-context.js", () => ({
     path: string;
   }): OpenClawStateWorkerContext => ({
     admission: {
+      coordinationKey: path,
       databasePath: path,
       identity: { key: path, canonicalPath: path },
       assertCurrent() {},
     },
     environment: { OPENCLAW_STATE_DIR: "/synthetic/state" },
-    coordinatorRuntime: { directory: "/synthetic/coordinator", keepAlive: false },
   }),
 }));
-vi.mock("../infra/state-database-coordinator.js", () => ({
-  hasStateDatabaseSourceExclusion: () => false,
-  acquireStateDatabaseHandleLease: mocks.forbidden,
-}));
+
 vi.mock("../infra/sqlite-snapshot-source.js", () => ({
   prepareSqliteReadOnlyLocation: mocks.prepare,
   prepareSqliteReadOnlyLocationAsync: mocks.prepare,

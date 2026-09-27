@@ -18,7 +18,7 @@ source scripts/e2e/lib/upgrade-survivor/paths.sh
 
 SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}"
 WORKER_CELL=0
-if [ "$SCENARIO" = "projects-doctor" ] || [ "$SCENARIO" = "projects-startup-migration" ] || [ "$SCENARIO" = "taskflow-restoration" ]; then
+if [ "$SCENARIO" = "projects-doctor" ] || [ "$SCENARIO" = "projects-startup-migration" ]; then
   WORKER_CELL=1
 fi
 
@@ -107,6 +107,9 @@ plugin_registry_pid=""
 missing_plugin_registry_pid=""
 clawhub_fixture_pid=""
 mock_openai_pid=""
+native_assignment_pid=""
+native_assignment_tarball=""
+native_assignment_enabled=0
 restart_mock_pid=""
 restart_registry_pid=""
 restart_runtime_evidence=""
@@ -352,6 +355,10 @@ const summary = {
   backupRollback: process.env.SUMMARY_SCENARIO === "legacy-operator-state"
     ? readJsonOrNull(process.env.SUMMARY_BACKUP_ROLLBACK)
     : undefined,
+  nativeAssignmentEligibility: readJsonOrNull(path.join(path.dirname(process.env.SUMMARY_JSON), "native-assignment-eligibility.json")),
+  nativeAssignments: process.env.SUMMARY_SCENARIO === "legacy-operator-state"
+    ? readJsonOrNull(path.join(path.dirname(process.env.SUMMARY_JSON), "native-assignment-proof.json"))
+    : undefined,
   pluginPolicy: process.env.SUMMARY_SCENARIO === "legacy-operator-state"
     ? readJsonOrNull(path.join(path.dirname(process.env.SUMMARY_JSON), "webhooks-only-policy", "result.json"))
     : undefined,
@@ -499,6 +506,7 @@ cleanup() {
   openclaw_e2e_stop_process "${missing_plugin_registry_pid:-}"
   openclaw_e2e_stop_process "${clawhub_fixture_pid:-}"
   openclaw_e2e_stop_process "${mock_openai_pid:-}"
+  openclaw_e2e_stop_process "${native_assignment_pid:-}"
   openclaw_e2e_stop_process "${restart_mock_pid:-}"
   openclaw_e2e_stop_process "${restart_registry_pid:-}"
 }
@@ -775,6 +783,12 @@ NODE
           --registry=https://registry.npmjs.org --pack-destination "$fixture_root/baseline" --silent)"
         baseline_plugin_tarball="$fixture_root/baseline/$baseline_tarball"
       fi
+      if [ "$native_assignment_enabled" = "1" ]; then
+        # Keep the real released Codex writer under a moving selector, so its distinct
+        # candidate cohort is installed by the updater through the existing registry.
+        native_assignment_tarball="$fixture_root/baseline/$(npm pack "@openclaw/codex@$baseline_plugin_version" \
+          --registry=https://registry.npmjs.org --pack-destination "$fixture_root/baseline" --ignore-scripts --silent)"
+      fi
       registry_dist_tags="latest=$baseline_plugin_version,beta=$baseline_plugin_version,alpha=$baseline_plugin_version"
     else
       registry_dist_tags="latest=$candidate_version,beta=$candidate_version,alpha=$candidate_version"
@@ -783,65 +797,16 @@ NODE
     if [ -n "$baseline_plugin_tarball" ]; then
       registry_args+=("@openclaw/$baseline_plugin" "$baseline_plugin_version" "$baseline_plugin_tarball")
     fi
+    if [ -n "$native_assignment_tarball" ]; then
+      registry_args+=("@openclaw/codex" "$baseline_plugin_version" "$native_assignment_tarball")
+    fi
     registry_args+=("openclaw" "$candidate_version" "$CANDIDATE_SPEC")
   fi
 
   if configured_plugin_installs_enabled; then
     mkdir -p "$package_dir"
-    FIXTURE_PACKAGE_DIR="$package_dir" FIXTURE_PACKAGE_VERSION="$candidate_version" node <<'NODE'
-const fs = require("node:fs");
-const path = require("node:path");
-const root = process.env.FIXTURE_PACKAGE_DIR;
-const version = process.env.FIXTURE_PACKAGE_VERSION;
-if (!version) {
-  throw new Error("missing fixture package version");
-}
-fs.mkdirSync(root, { recursive: true });
-fs.writeFileSync(
-  path.join(root, "package.json"),
-  `${JSON.stringify(
-    {
-      name: "@openclaw/brave-plugin",
-      version,
-      openclaw: { extensions: ["./index.js"] },
-    },
-    null,
-    2,
-  )}\n`,
-);
-fs.writeFileSync(
-  path.join(root, "openclaw.plugin.json"),
-  `${JSON.stringify(
-    {
-      id: "brave",
-      activation: { onStartup: false },
-      setup: { providers: [{ id: "brave", envVars: ["BRAVE_API_KEY"] }] },
-      contracts: { webSearchProviders: ["brave"] },
-      configSchema: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          webSearch: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              apiKey: { type: ["string", "object"] },
-              mode: { type: "string", enum: ["web", "llm-context"] },
-              baseUrl: { type: ["string", "object"] },
-            },
-          },
-        },
-      },
-    },
-    null,
-    2,
-  )}\n`,
-);
-fs.writeFileSync(
-  path.join(root, "index.js"),
-  `module.exports = { id: "brave", name: "Brave Fixture", register() {} };\n`,
-);
-NODE
+    FIXTURE_PACKAGE_DIR="$package_dir" FIXTURE_PACKAGE_VERSION="$candidate_version" \
+      node scripts/e2e/lib/fixture.mjs brave-plugin
     tar -czf "$tarball" -C "$fixture_root" package
     registry_args+=("@openclaw/brave-plugin" "$candidate_version" "$tarball")
   fi
@@ -1095,6 +1060,26 @@ start_legacy_operator_mock() {
   export OPENCLAW_UPGRADE_SURVIVOR_MOCK_PORT
 }
 
+prepare_native_assignment_proof() {
+  native_assignment_enabled="$(node scripts/e2e/lib/upgrade-survivor/native-assignments.mjs eligibility "$CANDIDATE_SPEC")"
+}
+
+start_native_assignment_fixture() {
+  openclaw_e2e_fixture_plugin_command openclaw -- plugins install @openclaw/codex@latest --force
+  node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-baseline-plugin "$baseline_version" codex latest
+  rm -f "$ARTIFACT_ROOT/native-assignment-ready.json" "$ARTIFACT_ROOT/native-assignment-messages.jsonl"
+  node scripts/e2e/lib/upgrade-survivor/native-assignment-app-server.mjs \
+    --package-root "$(package_root)" \
+    --ready-file "$ARTIFACT_ROOT/native-assignment-ready.json" \
+    --phase-file "$ARTIFACT_ROOT/native-assignment-phase.json" \
+    --log-file "$ARTIFACT_ROOT/native-assignment-messages.jsonl" \
+    >"$ARTIFACT_ROOT/native-assignment-server.log" 2>&1 &
+  native_assignment_pid="$!"
+  wait_for_fixture_port "$native_assignment_pid" "$ARTIFACT_ROOT/native-assignment-ready.json" \
+    "$ARTIFACT_ROOT/native-assignment-server.log" "native assignment server"
+  node scripts/e2e/lib/upgrade-survivor/native-assignments.mjs configure
+}
+
 seed_legacy_operator_gateway() {
   start_gateway
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed-legacy-operator-default-cron
@@ -1136,6 +1121,7 @@ const result = JSON.parse(text.slice(text.indexOf("{")));
 assert.equal(result.status, "skipped", "second update was not a clean no-op");
 assert.equal(result.reason, "already-current", "second update was not already current");
 // The isolated state directory records a service refusal without running the suggested command.
+assert(Array.isArray(result.steps), "second update did not report its steps");
 const expectedSteps = result.steps.length === 0 ? [] : [{
   name: "managed-service-reconciliation",
   command: "openclaw gateway install --force",
@@ -2275,18 +2261,12 @@ if [ "$WORKER_CELL" = "1" ]; then
     phase assert-project-worktree-import node scripts/e2e/lib/upgrade-survivor/project-worktree-startup.mjs assert-import "$ARTIFACT_ROOT/worktree-import.json"
     phase snapshot-published-worktree node scripts/e2e/lib/upgrade-survivor/project-worktree-startup.mjs snapshot published-import "$(package_root)" -
     phase prepare-independent-worktree-startup prepare_project_worktree_startup_fixture
-  else
-    phase seed-taskflow node scripts/e2e/lib/upgrade-survivor/taskflow-restoration.mjs seed --package-root "$(package_root)"
   fi
   phase validate-baseline-config validate_baseline_config
   phase resolve-worker-candidate resolve_candidate_version
   phase worker-candidate-identity prepare_worker_cell_package
   phase update-worker-candidate update_candidate
   phase assert-worker-installed-identity assert_worker_cell_update
-  if [ "$SCENARIO" = "taskflow-restoration" ]; then
-    phase assert-taskflow-update-migration node scripts/e2e/lib/upgrade-survivor/taskflow-restoration.mjs assert-migrated \
-      --package-root "$(package_root)" --expected-commit "$OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_COMMIT"
-  fi
   if [ "$SCENARIO" = "projects-doctor" ]; then
     phase projects-after-update node scripts/e2e/lib/upgrade-survivor/projects-doctor.mjs snapshot after-update "$(package_root)"
     phase projects-before-doctor node scripts/e2e/lib/upgrade-survivor/projects-doctor.mjs snapshot before-doctor "$(package_root)"
@@ -2328,20 +2308,6 @@ if [ "$WORKER_CELL" = "1" ]; then
         phase snapshot-after-worktree-doctor run_project_worktree_startup_fixture \
           snapshot after-doctor "$(package_root)" "$OPENCLAW_UPGRADE_SURVIVOR_STARTUP_BINDINGS"
       fi
-    done
-  else
-    for startup in first second; do
-      GATEWAY_LOG="$ARTIFACT_ROOT/taskflow-$startup-gateway.log"
-      HEALTHZ_JSON="$ARTIFACT_ROOT/taskflow-$startup-healthz.json"
-      READYZ_JSON="$ARTIFACT_ROOT/taskflow-$startup-readyz.json"
-      phase "$startup-taskflow-gateway-start" start_gateway
-      phase "$startup-taskflow-gateway-probes" check_gateway_probes
-      phase "$startup-taskflow-sdk-and-pages" node scripts/e2e/lib/upgrade-survivor/taskflow-restoration.mjs probe \
-        --package-root "$(package_root)" --url ws://127.0.0.1:18789 --attempt "$startup" \
-        --expected-commit "$OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_COMMIT"
-      phase "$startup-taskflow-gateway-stop" stop_gateway
-      phase "assert-$startup-taskflow-persistence" node scripts/e2e/lib/upgrade-survivor/taskflow-restoration.mjs assert-state \
-        --package-root "$(package_root)" --attempt "$startup" --expected-commit "$OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_COMMIT"
     done
   fi
   run_completed="1"
@@ -2438,6 +2404,10 @@ phase validate-baseline-config validate_baseline_config
 run_missing_load_path_fixture baseline
 phase resolve-candidate resolve_candidate_version
 phase resolve-candidate-install-mode resolve_candidate_install_mode
+if [ "$SCENARIO" = "legacy-operator-state" ] && [ "$baseline_version" = "2026.9.4" ] &&
+  [ "$UPDATE_RESTART_MODE" = "manual" ] && [ "$CANDIDATE_KIND" = "tarball" ]; then
+  phase prepare-native-assignment-proof prepare_native_assignment_proof
+fi
 if [ "$CANDIDATE_KIND" = "tarball" ] && [ -n "${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-}" ] &&
   { [ "$SCENARIO" = "base" ] || [ "$SCENARIO" = "sqlite-volume" ]; }; then
   phase candidate-package-identity node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs \
@@ -2461,6 +2431,9 @@ if [ "$SCENARIO" = "legacy-operator-state" ]; then
   phase configure-baseline-plugin-registry configure_plugin_registry baseline
   phase install-companion-plugin install_companion_plugins
   phase seed-legacy-operator-gateway seed_legacy_operator_gateway
+  if [ "$native_assignment_enabled" = "1" ]; then
+    phase configure-native-assignment-fixture start_native_assignment_fixture
+  fi
   openclaw_e2e_stop_process "$plugin_registry_pid"
   phase configure-candidate-plugin-registry configure_plugin_registry
 fi
@@ -2494,6 +2467,9 @@ if [ "$SCENARIO" = "legacy-operator-state" ]; then
   if [ "$baseline_version" = "2026.9.4" ] && [ "$UPDATE_RESTART_MODE" = "manual" ]; then
     phase seed-restored-index node scripts/e2e/lib/upgrade-survivor/legacy-operator-restored-index.mjs seed "$(package_root)" "$CANDIDATE_SPEC"
     phase start-restored-index-baseline start_gateway
+    if [ "$native_assignment_enabled" = "1" ]; then
+      phase seed-native-assignments node scripts/e2e/lib/upgrade-survivor/native-assignments.mjs seed
+    fi
     phase patch-restored-index node scripts/e2e/lib/upgrade-survivor/legacy-operator-restored-index.mjs patch
     phase stop-restored-index-baseline stop_gateway
     phase restore-baseline-index node scripts/e2e/lib/upgrade-survivor/legacy-operator-restored-index.mjs restore
@@ -2520,7 +2496,13 @@ if [ "$SCENARIO" = "legacy-operator-state" ] && [ "$UPDATE_RESTART_MODE" = "manu
   phase seed-retained-cron-history node scripts/e2e/lib/upgrade-survivor/legacy-operator-cron-history.mjs \
     seed "$(package_root)" "$CANDIDATE_SPEC"
 fi
+if [ "$native_assignment_enabled" = "1" ]; then
+  phase capture-native-assignment-input node scripts/e2e/lib/upgrade-survivor/native-assignments.mjs before-update
+fi
 phase update-candidate update_candidate_for_install_mode
+if [ "$native_assignment_enabled" = "1" ]; then
+  phase assert-native-assignment-first-hop node scripts/e2e/lib/upgrade-survivor/native-assignments.mjs post-update "$candidate_version"
+fi
 if [ "$CANDIDATE_KIND" = "tarball" ] && [ -n "${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-}" ] &&
   { [ "$SCENARIO" = "base" ] || [ "$SCENARIO" = "sqlite-volume" ]; }; then
   phase installed-package-identity node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs \
@@ -2611,6 +2593,9 @@ if [ "$SCENARIO" = "legacy-operator-state" ]; then
   phase legacy-operator-agent-turn node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
     legacy-operator-turn candidate
   phase legacy-operator-plugin assert_prepublish_plugin_install
+  if [ "$native_assignment_enabled" = "1" ]; then
+    phase verify-native-assignment-recovery node scripts/e2e/lib/upgrade-survivor/native-assignments.mjs live "$candidate_version"
+  fi
   if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
     # The restart shim has no native service cgroup. After proving the published
     # managed restart, exercise candidate no-op convergence with a foreground Gateway.

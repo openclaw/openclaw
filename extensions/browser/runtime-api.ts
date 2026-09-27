@@ -91,7 +91,7 @@ export {
   installBrowserAuthMiddleware,
   installBrowserCommonMiddleware,
 } from "./src/browser/server-middleware.js";
-export type { BrowserFormField } from "./src/browser/client-actions-core.js";
+export type { BrowserFormField } from "./src/browser/client-actions.types.js";
 export {
   normalizeBrowserFormField,
   normalizeBrowserFormFieldValue,

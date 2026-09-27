@@ -55,17 +55,15 @@ export function hasRegisteredShowWidgetKinds(): boolean {
 
 function createShowWidgetToolSchema(
   kinds: readonly string[],
-  presenters: readonly WidgetPresenter[],
+  presenters: readonly Exclude<WidgetPresenter, { target: "current_channel" }>[],
   capabilityGuidance: string,
   pinnedOnly: boolean,
   reportAvailable: boolean,
 ) {
-  const presenterTargets = presenters.flatMap((presenter) =>
-    presenter.target === "current_channel" ? [] : [presenter.target],
-  );
+  const presenterTargets = presenters.map((presenter) => presenter.target);
   const targets = ["assistant_message", ...presenterTargets] as const;
-  const presenterDescriptions = presenters.flatMap((presenter) =>
-    presenter.target === "current_channel" ? [] : [`${presenter.target}: ${presenter.description}`],
+  const presenterDescriptions = presenters.map(
+    (presenter) => `${presenter.target}: ${presenter.description}`,
   );
   const widgetCode = Type.String({
     description:
@@ -419,8 +417,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
         }
       }
       const currentPresenterSupportsKind =
-        currentChannelPresenter?.target === "current_channel" &&
-        currentChannelPresenter.capabilities.sourceKinds.includes(kind);
+        currentChannelPresenter?.capabilities.sourceKinds.includes(kind);
       const wantsCurrentChannel =
         requestedTarget === "assistant_message" && currentPresenterSupportsKind;
       const wantsNodePanel = requestedTarget === "node_panel";
@@ -429,7 +426,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
           "inline widget hosting is disabled; set pin=true to place the widget on the session dashboard",
         );
       }
-      if (wantsCurrentChannel && currentChannelPresenter?.target === "current_channel") {
+      if (wantsCurrentChannel && currentChannelPresenter) {
         const { maxSourceBytes } = currentChannelPresenter.capabilities;
         if (maxSourceBytes !== undefined) {
           assertWidgetHtmlSize(rawWidgetCode, maxSourceBytes, { inputName: "widget_code" });

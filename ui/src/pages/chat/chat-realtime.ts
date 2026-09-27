@@ -18,10 +18,7 @@ import {
 } from "./talk/input.ts";
 import { RealtimeTalkLevelSignal } from "./talk/level.ts";
 import { RealtimeTalkSession, type RealtimeTalkStatus } from "./talk/session.ts";
-import {
-  RealtimeTalkVoiceSelection,
-  type RealtimeVoiceSelectionState,
-} from "./talk/voice-selection.ts";
+import { RealtimeTalkVoiceSelection } from "./talk/voice-selection.ts";
 
 export type ChatRealtimeState = {
   client: GatewayBrowserClient | null;
@@ -44,14 +41,12 @@ export type ChatRealtimeState = {
   realtimeTalkCameraError: boolean;
   realtimeTalkSession: RealtimeTalkSession | null;
   realtimeTalkVoiceController: RealtimeTalkVoiceSelection | null;
-  realtimeTalkVoice: RealtimeVoiceSelectionState;
   realtimeTalkConversationState: RealtimeTalkConversationState;
   requestUpdate: () => void;
   resetRealtimeTalkConversation: () => void;
   toggleRealtimeTalk: () => Promise<void>;
   toggleRealtimeTalkCamera: () => Promise<void>;
   switchRealtimeTalkCamera: () => Promise<void>;
-  selectRealtimeTalkVoice: (voice: string) => Promise<void>;
 };
 
 export function createInitialChatRealtimeState(): Pick<
@@ -73,7 +68,6 @@ export function createInitialChatRealtimeState(): Pick<
     realtimeTalkCameraError: false,
     realtimeTalkSession: null,
     realtimeTalkVoiceController: null,
-    realtimeTalkVoice: { selection: null, changing: false, error: null },
     realtimeTalkConversationState: createRealtimeTalkConversationState(),
   };
 }
@@ -90,7 +84,6 @@ export function stopChatRealtimeTalk(
   const session = state.realtimeTalkSession;
   state.realtimeTalkVoiceController?.dispose();
   state.realtimeTalkVoiceController = null;
-  state.realtimeTalkVoice = { selection: null, changing: false, error: null };
   // Retire callback ownership before stop() can synchronously report idle.
   // Otherwise a closing session can still mutate the newly selected route.
   state.realtimeTalkSession = null;
@@ -256,10 +249,6 @@ export function attachChatRealtimeActions(
           stopChatRealtimeTalk(state, { preserveConversation: true });
           state.realtimeTalkStatus = "error";
           state.realtimeTalkDetail = message;
-          state.requestUpdate();
-        },
-        update: (voice) => {
-          state.realtimeTalkVoice = voice;
           state.requestUpdate();
         },
       });
@@ -429,9 +418,6 @@ export function attachChatRealtimeActions(
       state.requestUpdate();
     }
     return undefined;
-  };
-  state.selectRealtimeTalkVoice = async (voice) => {
-    await state.realtimeTalkVoiceController?.set(voice);
   };
   state.toggleRealtimeTalk = async () => {
     if (state.realtimeTalkSession || state.realtimeTalkActive) {

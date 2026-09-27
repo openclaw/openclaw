@@ -4,7 +4,11 @@ import type { Actor } from "../infra/sqlite-worker-broker.types.js";
 import { createSqliteWorkerClient } from "../infra/sqlite-worker-client.js";
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
+import {
+  createOpenClawDatabaseMaintenanceScope,
+  observeOpenClawDatabaseMaintenanceResource,
+  runOutsideOpenClawDatabaseMaintenanceScope,
+} from "./openclaw-state-db-async-lifecycle.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import type { OpenClawStateWorkerOperations } from "./openclaw-state-worker-contract.js";
 import { createOpenClawStateWorkerLease } from "./openclaw-state-worker-store.js";
@@ -16,6 +20,7 @@ const physical = vi.hoisted(() => ({
     | ReturnType<typeof createSqliteWorkerClient<OpenClawStateWorkerOperations>>
     | undefined,
   events: [] as unknown[],
+  beforeDispatch: undefined as (() => void) | undefined,
   openGate: undefined as Promise<void> | undefined,
   ownerKey: Symbol("synthetic-shared-worker-owner"),
 }));
@@ -86,6 +91,7 @@ vi.mock("../infra/sqlite-worker-store.js", async () => {
 afterEach(() => {
   physical.client = undefined;
   physical.events = [];
+  physical.beforeDispatch = undefined;
   physical.openGate = undefined;
 });
 
@@ -107,29 +113,30 @@ function createLeaseFixture() {
     openDispatch: { dispatched: true },
     initialized: true,
     backendClosed: false,
-    pendingStateLifecycles: new Set(),
   };
   physical.client = createSqliteWorkerClient<OpenClawStateWorkerOperations>({
     actor,
     isDraining: () => false,
     isAvailable: () => true,
-    dispatch: async (payload) => {
+    dispatch: async (payload, _signal, _scope, assertCurrent) => {
+      physical.beforeDispatch?.();
+      assertCurrent?.();
       physical.events.push(deserialize(payload));
     },
     release: async () => {
       physical.events.push("physical-close");
     },
   });
-  const maintenance = createOpenClawDatabaseMaintenanceScope(() => undefined);
+  const maintenance = createOpenClawDatabaseMaintenanceScope();
   const context: OpenClawStateWorkerContext = {
     maintenanceScope: maintenance,
     admission: {
+      coordinationKey: "synthetic-state",
       databasePath: "/synthetic/state.sqlite",
       identity: { key: "synthetic-state", canonicalPath: "/synthetic/state.sqlite" },
       assertCurrent: () => {},
     },
     environment: { OPENCLAW_STATE_DIR: "/synthetic" },
-    coordinatorRuntime: { directory: "/synthetic/coordinators", keepAlive: false },
   };
   return { maintenance, context };
 }
@@ -249,3 +256,45 @@ it("drains a command accepted before cold acquisition after its callback returns
   }
   expect(physical.events).toEqual([acceptedCommand, "physical-close"]);
 });
+
+it.each(["removed", "reassigned", "replaced", "revoked"] as const)(
+  "refuses a finite command when its resource claim is %s before dispatch",
+  async (change) => {
+    const { maintenance, context } = createLeaseFixture();
+    const successor = createOpenClawDatabaseMaintenanceScope();
+    const lease = maintenance.run(() => createOpenClawStateWorkerLease(context));
+    await lease.ready;
+    let revoked = false;
+    const assertOwner = vi.spyOn(maintenance, "assertOwnerCurrent").mockImplementation(() => {
+      if (revoked) {
+        throw new Error("Synthetic maintenance owner revoked");
+      }
+    });
+    physical.beforeDispatch = () => {
+      physical.beforeDispatch = undefined;
+      if (change === "revoked") {
+        revoked = true;
+      } else {
+        runOutsideOpenClawDatabaseMaintenanceScope(() =>
+          observeOpenClawDatabaseMaintenanceResource(lease),
+        );
+        if (change !== "removed") {
+          const owner = change === "replaced" ? maintenance : successor;
+          owner.own(lease, "shared-resources", () => lease.release());
+        }
+      }
+    };
+    try {
+      await expect(
+        lease.execute({ type: "capture.endSession", input: { sessionId: "refused", endedAt: 1 } }),
+      ).rejects.toThrow(
+        change === "revoked" ? "Synthetic maintenance owner revoked" : "resource owner changed",
+      );
+      expect(physical.events).toEqual([]);
+    } finally {
+      assertOwner.mockRestore();
+      await lease.release();
+      await Promise.all([maintenance.close(), successor.close()]);
+    }
+  },
+);

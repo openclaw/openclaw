@@ -517,16 +517,38 @@ export async function resolveWorkspaceSkillPromptEntries(
     assertCurrent?: () => void;
   },
 ): Promise<{ eligible: SkillEntry[]; skillFilter: string[] | undefined }> {
-  const preparation = captureWorkspaceSkillPreparation(workspaceDir, opts, opts?.assertCurrent);
+  const { entries, skillFilter } = await prepareWorkspaceSkillSelection(
+    workspaceDir,
+    opts,
+    "prompt",
+    opts?.assertCurrent,
+  );
+  return { eligible: entries, skillFilter };
+}
+
+async function prepareWorkspaceSkillSelection(
+  workspaceDir: string,
+  opts: Parameters<typeof prepareWorkspaceSkillEntries>[1],
+  mode: "prompt" | "runtime",
+  assertCurrent?: () => void,
+): Promise<{ entries: SkillEntry[]; skillFilter: string[] | undefined }> {
+  const preparation = captureWorkspaceSkillPreparation(workspaceDir, opts, assertCurrent);
   for (;;) {
     preparation.assertCurrent();
     const sourceVersion = getSkillsSourceVersion(workspaceDir, opts);
-    const skillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
+    let skillFilter = mode === "prompt" ? resolveEffectiveWorkspaceSkillFilter(opts) : undefined;
     const sources = await prepareCapturedWorkspaceSkillEntries(workspaceDir, opts, preparation);
     preparation.assertCurrent();
-    const skillEntries = sources.entries;
+    const entries = sources.entries;
+    if (mode === "runtime") {
+      const selection = resolveWorkspaceSkillLoad(workspaceDir, opts, entries);
+      skillFilter = selection.effectiveSkillFilter;
+      if (!selection.shouldFilter) {
+        return { entries, skillFilter };
+      }
+    }
     const probe = await prepareSkillBinaryProbe(
-      skillEntries,
+      entries,
       { ...opts, skillFilter },
       preparation.assertCurrent,
       sources.runtime,
@@ -534,12 +556,13 @@ export async function resolveWorkspaceSkillPromptEntries(
     preparation.assertCurrent();
     if (
       probe.needsRetry() ||
-      (!opts?.entries && getSkillsSourceVersion(workspaceDir, opts) !== sourceVersion)
+      ((mode === "runtime" || !opts?.entries) &&
+        getSkillsSourceVersion(workspaceDir, opts) !== sourceVersion)
     ) {
       continue;
     }
     const eligible = filterSkillEntries(
-      skillEntries,
+      entries,
       opts?.config,
       skillFilter,
       opts?.skillOverrides,
@@ -551,7 +574,7 @@ export async function resolveWorkspaceSkillPromptEntries(
     if (probe.needsRetry()) {
       continue;
     }
-    return { eligible, skillFilter };
+    return { entries: eligible, skillFilter };
   }
 }
 
@@ -584,45 +607,8 @@ export async function prepareWorkspaceSkills(
   opts?: WorkspaceSkillLoadOptions,
   assertCurrent?: () => void,
 ): Promise<SkillEntry[]> {
-  const preparation = captureWorkspaceSkillPreparation(workspaceDir, opts, assertCurrent);
-  for (;;) {
-    preparation.assertCurrent();
-    const sourceVersion = getSkillsSourceVersion(workspaceDir, opts);
-    const sources = await prepareCapturedWorkspaceSkillEntries(workspaceDir, opts, preparation);
-    preparation.assertCurrent();
-    const { entries, effectiveSkillFilter, shouldFilter } = resolveWorkspaceSkillLoad(
-      workspaceDir,
-      opts,
-      sources.entries,
-    );
-    if (!shouldFilter) {
-      return entries;
-    }
-    const probe = await prepareSkillBinaryProbe(
-      entries,
-      { ...opts, skillFilter: effectiveSkillFilter },
-      preparation.assertCurrent,
-      sources.runtime,
-    );
-    preparation.assertCurrent();
-    if (probe.needsRetry() || getSkillsSourceVersion(workspaceDir, opts) !== sourceVersion) {
-      continue;
-    }
-    const eligible = filterSkillEntries(
-      entries,
-      opts?.config,
-      effectiveSkillFilter,
-      opts?.skillOverrides,
-      opts?.eligibility,
-      probe.hasBin,
-      sources.runtime?.platform,
-    );
-    preparation.assertCurrent();
-    if (probe.needsRetry()) {
-      continue;
-    }
-    return eligible;
-  }
+  return (await prepareWorkspaceSkillSelection(workspaceDir, opts, "runtime", assertCurrent))
+    .entries;
 }
 
 export function loadWorkspaceSkills(

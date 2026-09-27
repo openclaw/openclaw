@@ -320,6 +320,26 @@ function addNestedOverride(
   overrides[parentSelector] = nested;
 }
 
+function scopedOverrideChildrenForVersion(
+  overrides: OverrideMap,
+  packageName: string,
+  version: string,
+) {
+  let children: OverrideMap = {};
+  for (const [selector, candidate] of Object.entries(overrides)) {
+    const parsed = parsePnpmPackageKey(selector);
+    if (
+      parsed?.name !== packageName ||
+      !isRecord(candidate) ||
+      !semver.satisfies(version, parsed.version, { includePrerelease: true })
+    ) {
+      continue;
+    }
+    children = mergeOverrides(children, candidate, {}) ?? children;
+  }
+  return Object.keys(children).length > 0 ? children : undefined;
+}
+
 function expandScopedOverrideValue(
   overrides: OverrideMap,
   dependencyName: string,
@@ -330,8 +350,8 @@ function expandScopedOverrideValue(
   if (seen.has(childSelector)) {
     return version;
   }
-  const childOverrides = overrides[childSelector];
-  if (!isRecord(childOverrides)) {
+  const childOverrides = scopedOverrideChildrenForVersion(overrides, dependencyName, version);
+  if (!childOverrides) {
     return version;
   }
   const childSeen = new Set(seen);
@@ -355,10 +375,12 @@ function expandScopedOverrideChildren(overrides: OverrideMap): OverrideMap {
       .map<[string, unknown]>(([parentSelector, nestedOverrides]) => {
         if (isRecord(nestedOverrides)) {
           const parentVersion = exactVersionFromOverrideSpec(nestedOverrides["."]);
-          const pinnedChildren = parentVersion && overrides[`${parentSelector}@${parentVersion}`];
+          const pinnedChildren =
+            parentVersion &&
+            scopedOverrideChildrenForVersion(overrides, parentSelector, parentVersion);
           // npm uses the first matching parent rule, so object-form pins must
           // carry the same locked children as scalar pins before shadowing it.
-          const children = isRecord(pinnedChildren)
+          const children = pinnedChildren
             ? (mergeOverrides(nestedOverrides, pinnedChildren, {}) ?? nestedOverrides)
             : nestedOverrides;
           return [
@@ -379,7 +401,10 @@ function expandScopedOverrideChildren(overrides: OverrideMap): OverrideMap {
           return [parentSelector, nestedOverrides];
         }
         const exactVersion = exactVersionFromOverrideSpec(nestedOverrides);
-        if (exactVersion === null || !isRecord(overrides[`${parentSelector}@${exactVersion}`])) {
+        if (
+          exactVersion === null ||
+          !scopedOverrideChildrenForVersion(overrides, parentSelector, exactVersion)
+        ) {
           return [parentSelector, nestedOverrides];
         }
         return [parentSelector, expandScopedOverrideValue(overrides, parentSelector, exactVersion)];
@@ -1300,10 +1325,26 @@ function matchOverridePolicy(
       if (!matches) {
         continue;
       }
+      const scopedPolicies = installedVersion
+        ? policies.flatMap((candidate) => {
+            const children = scopedOverrideChildrenForVersion(
+              candidate,
+              packageName,
+              installedVersion,
+            );
+            return children ? [children] : [];
+          })
+        : [];
+      const nestedPolicies = [...scopedPolicies, isRecord(spec) ? spec : undefined].filter(
+        (candidate): candidate is OverrideMap =>
+          isRecord(candidate) && !policies.includes(candidate),
+      );
       return {
         expectedPackageName: targetPackageName,
         expectedSpec: targetSpec,
-        policies: isRecord(spec) && !policies.includes(spec) ? [spec, ...policies] : policies,
+        // A broad parent range owns its version constraint, while an exact authored
+        // parent selector owns the child policy for that installed parent version.
+        policies: [...new Set(nestedPolicies), ...policies],
       };
     }
   }
@@ -1504,17 +1545,17 @@ function describeOverrideViolations(violations: ReturnType<typeof collectOverrid
 
 function normalizeNpmLockOverrides(
   tempDir: string,
-  npmLockOverrides: OverrideMap,
   npmInstallArgs: string[],
   env: NodeJS.ProcessEnv,
 ) {
   const npmLockPath = path.join(tempDir, "package-lock.json");
-  const overrideRules = validationOverrideRulesFromOverrides(npmLockOverrides);
+  const enforcedOverrides = readWorkspaceOverrides();
+  const overrideRules = validationOverrideRulesFromOverrides(enforcedOverrides);
   const disabledSources = new Set<string>();
   const disabledPaths = new Set<string>();
   while (true) {
     const npmLock = parseJsonObject(readFileSync(npmLockPath, "utf8"));
-    const remaining = collectUnallowedOverrideViolations(npmLock, overrideRules, npmLockOverrides);
+    const remaining = collectUnallowedOverrideViolations(npmLock, overrideRules, enforcedOverrides);
     if (remaining.length === 0) {
       return;
     }
@@ -1523,7 +1564,7 @@ function normalizeNpmLockOverrides(
     const newlyDisabled = disableDependencyShrinkwrapOverrideConflictSources(
       npmLock,
       overrideRules,
-      npmLockOverrides,
+      enforcedOverrides,
     );
     const packages = recordAt(npmLock, "packages") ?? {};
     const newSources = newlyDisabled.filter((source) => {
@@ -1589,10 +1630,10 @@ export function generateNpmPackageLock(packageDir: string, options: NpmLockOptio
     );
     const localPackageArtifacts = options.localPackageArtifacts ?? [];
     validateLocalPackageArtifacts(packageDir, localPackageArtifacts);
-    const npmLockOverrides = readNpmLockOverrides(packageJson, packageDir, localPackageArtifacts);
+    const installOverrides = readNpmLockOverrides(packageJson, packageDir, localPackageArtifacts);
     const normalizedPackageJson = packageJsonForNpmLock(
       packageJson,
-      npmLockOverrides,
+      installOverrides,
       localPackageArtifacts,
     );
     const peerResolutionArgs = shouldUseLegacyPeerDepsForNpmLock(packageJson)
@@ -1613,7 +1654,9 @@ export function generateNpmPackageLock(packageDir: string, options: NpmLockOptio
     );
     copyLocalFileDependencies(normalizedPackageJson, packageDir, tempDir);
     runNpm(npmInstallArgs, tempDir, env);
-    normalizeNpmLockOverrides(tempDir, npmLockOverrides, npmInstallArgs, env);
+    // Lock-derived overrides steer npm placement. Only explicit workspace overrides
+    // are policy that dependency shrinkwraps must not violate.
+    normalizeNpmLockOverrides(tempDir, npmInstallArgs, env);
     const generated = normalizeNpmVersionDrift(
       applyPackageExtensionPeerMetadata(
         parseJsonObject(readFileSync(path.join(tempDir, "package-lock.json"), "utf8")),

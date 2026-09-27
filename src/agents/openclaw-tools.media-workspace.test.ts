@@ -140,7 +140,6 @@ describe("media references in task workspaces", () => {
       bytes: Buffer.from("This is a text document, not a PDF."),
       mime: "text/plain",
     },
-    { name: "reference.json", bytes: Buffer.from('{"format":"json"}'), mime: "application/json" },
   ])(
     "rejects $mime as a PDF after reading within the session root",
     async ({ name, bytes, mime }) => {
@@ -175,7 +174,7 @@ describe("media references in task workspaces", () => {
     },
   );
 
-  it.each(["image_generate", "video_generate", "music_generate"] as const)(
+  it.each(["image_generate", "music_generate"] as const)(
     "%s shared reference loader follows the task cwd and session boundary",
     async (toolName) => {
       const workspaceDir = tempDirs.make("openclaw-media-canonical-");

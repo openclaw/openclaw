@@ -42,6 +42,7 @@ import { appendTranscriptMessageInTransaction } from "./session-accessor.sqlite-
 import { rememberCommittedTranscriptMessageSequencesInTransaction } from "./session-accessor.sqlite-transcript-sequences.js";
 import type { SessionTranscriptTurnPersistOptions } from "./session-accessor.types.js";
 import { readWithCanonicalSessionAdmission } from "./session-canonical-key.js";
+import { completeSessionTranscriptCommit } from "./session-transcript-commit-completion.js";
 import type {
   SessionLifecycleRevisionExpectation,
   SessionTranscriptTurnExpectedState,
@@ -385,9 +386,12 @@ export async function appendExpectedSessionTranscriptTurn(
         return publishIdentity;
       }, toDatabaseOptions(resolved));
       publish?.();
-      // Complete committed custody before cancellation can run at an async return.
-      for (const message of result.appendedMessages) {
-        options.onMessageCommitted?.(message);
+      const completion = completeSessionTranscriptCommit(
+        result.appendedMessages,
+        options.onMessageCommitted,
+      );
+      if (completion) {
+        await completion;
       }
       return result;
     },

@@ -111,7 +111,18 @@ it.each(
         "restart-source-unavailable",
         "cancelled",
       ] as const
-    ).map((boundary) => ({ handoff, boundary })),
+    )
+      // Both callbacks share the guard; retain both timings for restart retention,
+      // source-read rejection, and authority changes inside the recovered adapter.
+      .filter(
+        (boundary) =>
+          handoff === "assertDirectAdapterHandoff" ||
+          boundary === "restart" ||
+          boundary === "restart-invalidated" ||
+          boundary.includes("handoff") ||
+          boundary.endsWith("source-unavailable"),
+      )
+      .map((boundary) => ({ handoff, boundary })),
   ),
 )(
   "fences $boundary at $handoff and leaves only valid recovery custody",

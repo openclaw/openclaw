@@ -11,7 +11,10 @@ import {
 } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginJsonValue } from "openclaw/plugin-sdk/plugin-entry";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getSlackRuntime } from "../runtime.js";
 import { parseSlackMessageEvent } from "../types.js";
 import type { SlackIngressTurnLifecycle } from "./ingress.types.js";
@@ -94,8 +97,7 @@ type SlackDurableIngress = {
 const SlackIngressPayloadError = createChannelIngressError("SlackIngressPayloadError");
 
 function resolveSlackEventId(body: unknown): string | null {
-  const eventId = asOptionalRecord(body)?.event_id;
-  return typeof eventId === "string" && eventId.trim() ? eventId.trim() : null;
+  return normalizeOptionalString(asOptionalRecord(body)?.event_id) ?? null;
 }
 
 function resolveSlackIngressLane(body: unknown, eventId: string): string {
@@ -105,10 +107,8 @@ function resolveSlackIngressLane(body: unknown, eventId: string): string {
   const assistantThread = asOptionalRecord(event?.assistant_thread);
   const team = asOptionalRecord(envelope?.team);
   const teamId =
-    [envelope?.team_id, team?.id, event?.team]
-      .find((value) => typeof value === "string" && value.trim())
-      ?.toString()
-      .trim() || "workspace";
+    [envelope?.team_id, team?.id, event?.team].map(normalizeOptionalString).find(Boolean) ??
+    "workspace";
   // New-channel traffic must stay behind channel_id_changed migration work.
   // The new ID owns the post-change conversation lane, not the retired old ID.
   const channelId = [
@@ -118,16 +118,12 @@ function resolveSlackIngressLane(body: unknown, eventId: string): string {
     item?.channel,
     assistantThread?.channel_id,
   ]
-    .find((value) => typeof value === "string" && value.trim())
-    ?.toString()
-    .trim();
+    .map(normalizeOptionalString)
+    .find(Boolean);
   if (channelId) {
     return `team:${teamId}:conversation:${channelId}`;
   }
-  const userId = [event?.user, event?.user_id]
-    .find((value) => typeof value === "string" && value.trim())
-    ?.toString()
-    .trim();
+  const userId = [event?.user, event?.user_id].map(normalizeOptionalString).find(Boolean);
   return userId ? `team:${teamId}:user:${userId}` : `event:${eventId}`;
 }
 

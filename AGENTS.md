@@ -33,8 +33,9 @@ Update instructions at their owner instead of adding competing rules here.
 - Separate product bugs from tool/fixture failures.
 - Check relevant prerequisites early. Parallelize independent work.
 - New check needs named unknown, risk, or required gate. Reuse valid proof.
-- Repeated failures or 10 min without new evidence: change approach. No blind retries.
+- After two identical tooling failures without new evidence, or 10 min without progress, change approach. Use an already-authorized supported alternative with the reviewed head pinned; reconcile uncertain writes before retrying. No blind retries or guard bypasses.
 - Behavior proven + required gates green: finish/land. No optional proof polish or speculative scope growth.
+- Do not rebase or merge `main` solely because it advanced. Check mergeability first; integrate for actual conflicts or a named failing gate/material base risk. Preserve valid review and validation evidence, rerun checks affected by the resolution, and land promptly once the selected workflow's gates are satisfied. Prior-head CI remains prior-head evidence; an explicit admin exception belongs to the native landing workflow.
 - Time pressure never waives gates. Report concrete blockers.
 - Visual change: inspected before/after screenshots. Behavior-only fix: direct boundary proof. No checkbox demos.
 

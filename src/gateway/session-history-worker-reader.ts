@@ -25,13 +25,13 @@ export async function readSessionHistoryRequest(
   };
   if (request.kind === "artifacts") {
     const { selectSessionArtifacts } = await import("./session-artifact-read.js");
+    const query = request.params.query;
     return {
       kind: "artifacts",
-      result: await selectSessionArtifacts(
-        request.params.target,
-        request.params.query,
-        options.readers,
-      ),
+      result:
+        query.kind === "list" && query.includeDownloadData === false && !query.downloadArtifactIds
+          ? { kind: "list", artifacts: await options.readers.readArtifactSummaries(query) }
+          : await selectSessionArtifacts(request.params.target, query, options.readers),
     };
   }
   if (request.kind === "message-page") {
@@ -73,7 +73,7 @@ export async function readSessionHistoryRequest(
   if (request.kind === "transcript-binding") {
     return {
       kind: "transcript-binding",
-      binding: options.readers.readTranscriptBinding(request.params.run),
+      binding: options.readers.readTranscriptBinding(),
     };
   }
   if (request.kind === "message-by-id") {

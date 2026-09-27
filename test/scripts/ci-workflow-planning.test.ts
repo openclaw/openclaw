@@ -779,6 +779,72 @@ function runControlUiI18nSourceFixture(options: {
     rmSync(root, { force: true, recursive: true });
   }
 }
+describe("changed-path transport", () => {
+  it("plans current PR tests from the complete manifest above the output size limit", () => {
+    const changedPaths = [
+      ...Array.from(
+        { length: 1_000 },
+        (_, index) => `docs/generated/${index}-${"x".repeat(100)}.md`,
+      ),
+      "src/focused.ts",
+    ];
+    const outputs = runCiChangedScopeFixture(changedPaths);
+    const manifestStep = readCiWorkflow().jobs.preflight.steps.find(
+      (step: WorkflowStep) => step.name === "Build CI manifest",
+    );
+    const scopeEnv = Object.fromEntries(
+      Object.entries(manifestStep.env)
+        .filter(([key]) => key.startsWith("OPENCLAW_CI_CHANGED_PATHS_"))
+        .map(([key, value]) => [
+          key,
+          String(
+            evaluateWorkflowExpression(value, {
+              eventName: "pull_request",
+              repository: "openclaw/openclaw",
+              runAttempt: 1,
+              steps: { changed_scope: { outputs } },
+            }),
+          ),
+        ]),
+    );
+    expect(Buffer.byteLength(JSON.stringify(changedPaths))).toBeGreaterThan(64 * 1024);
+    expect(outputs.changed_paths_json).toBe("null");
+    const manifest = runCiManifestFixture({
+      bundledPlanner: true,
+      eventName: "pull_request",
+      scopeEnv,
+    });
+    expect(manifest.status, manifest.output).toBe(0);
+    expect(
+      JSON.parse(expectDefined(manifest.outputs.checks_node_core_nondist_matrix, "Node matrix"))
+        .include,
+    ).toEqual([
+      expect.objectContaining({
+        check_name: "changed-node-plan",
+        targets: ["src/focused.test.ts"],
+      }),
+    ]);
+    expect(
+      JSON.parse(readFileSync(expectDefined(outputs.changed_paths_file, "manifest file"), "utf8")),
+    ).toEqual(changedPaths);
+  });
+
+  it.each([undefined, "{", "[42]"])("rejects an unusable manifest file: %s", (contents) => {
+    const manifestPath = path.join(tempDirs.make("openclaw-ci-paths-"), "paths.json");
+    if (contents !== undefined) {
+      writeFileSync(manifestPath, contents);
+    }
+    const manifest = runCiManifestFixture({
+      bundledPlanner: true,
+      eventName: "pull_request",
+      changedPaths: ["src/focused.ts"],
+      scopeEnv: { OPENCLAW_CI_CHANGED_PATHS_FILE: manifestPath },
+    });
+    expect(manifest.status).not.toBe(0);
+    expect(manifest.output).toContain("Current PR CI requires complete changed paths");
+  });
+});
+
 describe("release fast lane", () => {
   const scopeEnv = {
     OPENCLAW_CI_RELEASE_FAST_LANE_LABEL: "true",
@@ -6121,6 +6187,10 @@ describe("ci workflow guards", () => {
       ),
     ).toEqual(["src/config/config-startup-corpus.test.ts"]);
     expect(manifest.outputs.run_checks_node_core_nondist).toBe("true");
+    expect(
+      JSON.parse(expectDefined(manifest.outputs.checks_fast_core_matrix, "fast checks matrix"))
+        .include,
+    ).not.toContainEqual(expect.objectContaining({ task: "startup-corpus" }));
     const step = readCiWorkflow().jobs["checks-fast-core"].steps.find(
       (entry: WorkflowStep) => entry.name === "Check startup corpus",
     );
@@ -6142,7 +6212,9 @@ describe("ci workflow guards", () => {
     }
   });
 
-  it.each<{ label: string } & Partial<Parameters<typeof runCiManifestFixture>[0]>>([
+  it.each<
+    { label: string; startupRow?: boolean } & Partial<Parameters<typeof runCiManifestFixture>[0]>
+  >([
     { label: "missing planner capability", startupCorpusCoverage: false },
     {
       label: "directly edited state wrapper missing from Node coverage",
@@ -6172,17 +6244,18 @@ describe("ci workflow guards", () => {
       scopeEnv: { OPENCLAW_CI_CHECKOUT_REVISION: "", OPENCLAW_CI_WORKFLOW_REVISION: "" },
     },
     { label: "fast-only PR", nodeFastOnly: true },
-    { label: "Node not admitted", runNode: false },
+    { label: "Node not admitted", runNode: false, startupRow: false },
     { label: "different repository", repository: "fixture/openclaw" },
     { label: "release merge", eventName: "workflow_dispatch", releaseGate: true },
     {
       label: "frozen target",
       eventName: "workflow_dispatch",
       scopeEnv: { OPENCLAW_CI_WORKFLOW_REVISION: "b".repeat(40) },
+      startupRow: false,
     },
   ])(
     "retains the startup corpus without a coverage receipt: $label",
-    ({ label: _label, ...options }) => {
+    ({ label: _label, startupRow = true, ...options }) => {
       const manifest = runCiManifestFixture({
         bundledPlanner: true,
         startupCorpusCoverage: true,
@@ -6211,6 +6284,11 @@ describe("ci workflow guards", () => {
       });
       expect(manifest.status, manifest.output).toBe(0);
       expect(manifest.outputs.startup_corpus_node_revision).toBe("");
+      expect(
+        JSON.parse(
+          expectDefined(manifest.outputs.checks_fast_core_matrix, "fast checks matrix"),
+        ).include.some((row: { task: string }) => row.task === "startup-corpus"),
+      ).toBe(startupRow);
     },
   );
 
@@ -9498,6 +9576,93 @@ describe("ci workflow guards", () => {
         plan.kind === "group" ? plan.plan : plan,
       ),
     ).toEqual(row.groups);
+  });
+
+  it.each([
+    { label: "verified release candidate", releaseCandidateCompatibility: true },
+    { label: "unverified manual target", releaseCandidateCompatibility: false },
+  ])("projects current-only test owners only for $label", ({ releaseCandidateCompatibility }) => {
+    const currentConfig = "test/vitest/vitest.current.config.ts";
+    const currentTest = "src/current.test.ts";
+    const missingConfig = "test/vitest/vitest.future.config.ts";
+    const missingTest = "src/future.test.ts";
+    const result = runCiManifestFixture({
+      bundledPlanner: true,
+      historicalCompatibility: false,
+      missingTargetFiles: [missingConfig],
+      nodeTestGroupsCodec: false,
+      releaseCandidateCompatibility,
+      targetFiles: [currentConfig],
+      nodeTestShards: [
+        {
+          checkName: "mixed-flat",
+          configs: [currentConfig, missingConfig],
+          includePatterns: [currentTest, missingTest, "src/**/*.integration.test.ts"],
+          requiresDist: false,
+          runner: "ubuntu-24.04",
+          shardName: "mixed-flat",
+        },
+        {
+          checkName: "missing-flat",
+          configs: [missingConfig],
+          includePatterns: [missingTest],
+          requiresDist: false,
+          runner: "ubuntu-24.04",
+          shardName: "missing-flat",
+        },
+        {
+          checkName: "mixed-groups",
+          groups: [
+            {
+              configs: [currentConfig, missingConfig],
+              includePatterns: [currentTest, missingTest],
+              shard_name: "current-group",
+            },
+            {
+              configs: [missingConfig],
+              includePatterns: [missingTest],
+              shard_name: "missing-group",
+            },
+          ],
+          requiresDist: false,
+          runner: "ubuntu-24.04",
+          shardName: "mixed-groups",
+        },
+      ],
+    });
+    expect(result.status, result.output).toBe(0);
+    const rows = JSON.parse(
+      expectDefined(result.outputs.checks_node_core_nondist_matrix, "frozen Node matrix"),
+    ).include;
+    expect(rows.map((row: { check_name: string }) => row.check_name)).toEqual(
+      releaseCandidateCompatibility
+        ? ["mixed-flat", "mixed-groups"]
+        : ["mixed-flat", "missing-flat", "mixed-groups"],
+    );
+    expect(rows[0].configs).toEqual(
+      releaseCandidateCompatibility ? [currentConfig] : [currentConfig, missingConfig],
+    );
+    expect(rows[0].includePatterns).toEqual([
+      currentTest,
+      missingTest,
+      "src/**/*.integration.test.ts",
+    ]);
+    const groupedRow = releaseCandidateCompatibility ? rows[1] : rows[2];
+    expect(groupedRow.groups).toEqual([
+      expect.objectContaining({
+        configs: releaseCandidateCompatibility ? [currentConfig] : [currentConfig, missingConfig],
+        includePatterns: [currentTest, missingTest],
+        shard_name: "current-group",
+      }),
+      ...(releaseCandidateCompatibility
+        ? []
+        : [
+            expect.objectContaining({
+              configs: [missingConfig],
+              shard_name: "missing-group",
+            }),
+          ]),
+    ]);
   });
 
   it("provisions ripgrep for real filesystem contract selections", () => {

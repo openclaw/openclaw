@@ -14,7 +14,11 @@ import {
 const seededSessionOwnersForTest: Array<Parameters<typeof deleteSessionEntry>[0]> = [];
 
 /** Models the core owner required for a reusable stable-key Codex binding. */
-export async function seedRunSessionOwnerForTest(sessionId: string, sessionKey: string) {
+export async function seedRunSessionOwnerForTest(
+  sessionId: string,
+  sessionKey: string,
+  options: { lifecycleRevision?: string } = {},
+) {
   const scope = {
     agentId: "main",
     sessionKey,
@@ -22,7 +26,10 @@ export async function seedRunSessionOwnerForTest(sessionId: string, sessionKey: 
     env: { ...process.env },
   };
   await withSessionHistoryBudgetSweepsForTest(async () => {
-    await upsertSessionEntry({ ...scope, entry: { sessionId, updatedAt: Date.now() } });
+    await upsertSessionEntry({
+      ...scope,
+      entry: { sessionId, updatedAt: Date.now(), ...options },
+    });
     seededSessionOwnersForTest.push({ ...scope, expectedSessionId: sessionId });
   });
 }

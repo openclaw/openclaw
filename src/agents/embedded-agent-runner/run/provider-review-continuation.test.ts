@@ -136,14 +136,13 @@ async function fixture(
     assertCurrent,
   });
   const requests: Record<string, unknown>[] = [];
-  const fetchMock = vi.fn<typeof fetch>(async (_url, init) => {
-    const body = init?.body;
+  const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+    const request = new Request(url, init);
+    // Byte buffers also carry plain SDK JSON; the HTTP header owns decompression.
     const raw =
-      typeof body === "string"
-        ? body
-        : body instanceof Uint8Array
-          ? zstdDecompressSync(body).toString()
-          : "null";
+      request.headers.get("content-encoding") === "zstd"
+        ? zstdDecompressSync(new Uint8Array(await request.arrayBuffer())).toString()
+        : await request.text();
     requests.push(JSON.parse(raw));
     return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
       status: 200,

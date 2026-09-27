@@ -144,9 +144,11 @@ export function renderSessionIdleState(session: SidebarRecentSession) {
         ? { icon: icons.stop, label: t("sessionsView.statusKilled") }
         : status === "timeout"
           ? { icon: icons.alertTriangle, label: t("sessionsView.statusTimeout") }
-          : status === "failed"
-            ? { icon: icons.alertTriangle, label: t("sessionsView.statusFailed") }
-            : null;
+          : status === "interrupted"
+            ? { icon: icons.pause, label: t("sessionsView.statusInterrupted") }
+            : status === "failed"
+              ? { icon: icons.alertTriangle, label: t("sessionsView.statusFailed") }
+              : null;
   return statusBadge
     ? html`<span
         class="sidebar-child-session__status sidebar-child-session__status--${status}"

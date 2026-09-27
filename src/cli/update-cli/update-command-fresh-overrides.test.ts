@@ -58,7 +58,7 @@ it.each([false, true])(
     execFileSync("tar", ["-czf", artifact, "-C", base, "package"], {
       env: { ...process.env, COPYFILE_DISABLE: "1" },
     });
-    vi.mocked(shared.resolveTargetVersion).mockResolvedValue(null);
+    vi.mocked(shared.resolveTargetVersion).mockResolvedValue({ version: null });
     vi.mocked(updateGlobal.resolveGlobalInstallTarget).mockResolvedValue(target);
     vi.mocked(updateGlobal.createGlobalInstallEnv).mockResolvedValue({
       ...process.env,

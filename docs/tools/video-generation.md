@@ -70,8 +70,7 @@ Video generation is asynchronous:
 While a job is in flight, duplicate `video_generate` calls in the same
 session return the current task status instead of starting another
 generation. Use `action: "status"` to check without triggering a new
-generation, or `openclaw tasks list` / `openclaw tasks show <lookup>` from the
-CLI (see [Background tasks](/automation/tasks)).
+generation.
 
 Outside of session-backed agent runs (for example, direct tool invocations),
 the tool falls back to inline generation and returns the final media path
@@ -91,14 +90,6 @@ of failing the task if local persistence rejects an oversized file.
 | `running`   | Provider is processing (typically 30 seconds to several minutes depending on provider and resolution). |
 | `succeeded` | Video ready; the agent wakes and posts it to the conversation.                                         |
 | `failed`    | Provider error or timeout; the agent wakes with error details.                                         |
-
-Check status from the CLI:
-
-```bash
-openclaw tasks list
-openclaw tasks show <lookup>
-openclaw tasks cancel <lookup>
-```
 
 ## Supported providers
 
@@ -549,7 +540,6 @@ openclaw config set agents.defaults.mediaModels.video.primary "qwen/wan2.6-t2v"
 ## Related
 
 - [Alibaba Model Studio](/providers/alibaba)
-- [Background tasks](/automation/tasks) - task tracking for async video generation
 - [BytePlus](/concepts/model-providers#byteplus-international)
 - [ComfyUI](/providers/comfy)
 - [Configuration reference](/gateway/config-agents#agent-defaults)

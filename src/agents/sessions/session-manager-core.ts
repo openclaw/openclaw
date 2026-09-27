@@ -351,42 +351,24 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     const previousView = append ? structuredClone(this.captureTranscriptView()) : undefined;
     let reloaded = false;
     try {
-      if (prepared.kind === "bounded") {
-        const bounded = prepared.snapshot;
-        // SAFETY: SQLite transcript readers return the same persisted entry union used by SessionManager.
-        const entries = bounded.events as FileEntry[];
-        if (
-          append &&
-          bounded.transcriptMutationAt !== append.expectedMutationAt &&
-          !entries.some(
-            (entry) => isIndexedSessionEntry(entry) && entry.id === append.expectedEntryId,
-          )
-        ) {
-          throw new Error("SQLite transcript changed before adopting the committed append");
-        }
+      const { events, version } = prepared.snapshot;
+      const bounded = prepared.kind === "bounded" ? prepared.snapshot : undefined;
+      const mutationAt = bounded ? bounded.transcriptMutationAt : version.updatedAt;
+      if (
+        append &&
+        mutationAt !== append.expectedMutationAt &&
+        !events.some((entry) => isIndexedSessionEntry(entry) && entry.id === append.expectedEntryId)
+      ) {
+        throw new Error("SQLite transcript changed before adopting the committed append");
+      }
+      if (bounded) {
         this.boundedContextIncomplete = true;
         this.persistedBoundaryCount = bounded.boundaryCount;
         this.persistedSuffixStartSeq = bounded.persistedSuffixStartSeq;
-        this.transcriptMutationAt = bounded.transcriptMutationAt;
-        this.setLoadedSessionTarget(target, entries, bounded);
-        reloaded = true;
-      } else {
-        const snapshot = prepared.snapshot;
-        // SAFETY: SQLite transcript readers return the same persisted entry union used by SessionManager.
-        const entries = snapshot.events as FileEntry[];
-        if (
-          append &&
-          snapshot.version.updatedAt !== append.expectedMutationAt &&
-          !entries.some(
-            (entry) => isIndexedSessionEntry(entry) && entry.id === append.expectedEntryId,
-          )
-        ) {
-          throw new Error("SQLite transcript changed before adopting the committed append");
-        }
-        this.transcriptMutationAt = snapshot.version.updatedAt;
-        this.setLoadedSessionTarget(target, entries, undefined, snapshot.version);
-        reloaded = true;
       }
+      this.transcriptMutationAt = mutationAt;
+      this.setLoadedSessionTarget(target, events, bounded, version);
+      reloaded = true;
       if (!append) {
         return;
       }
@@ -718,9 +700,6 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     this.appendMode = undefined;
     this.pendingDeliberateAppend = false;
   }
-
-  /** No buffered writes remain here; asynchronous metadata methods own their settlement. */
-  protected flushPendingPersistence(): void {}
 
   protected invalidateTranscriptView(error: Error): void {
     this.transcriptViewFailure = error;

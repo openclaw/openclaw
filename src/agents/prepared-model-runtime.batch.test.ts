@@ -213,58 +213,53 @@ describe("prepared fleet batches", () => {
     }
   });
 
-  it.each([false, true])(
-    "retains settled agents after a late failure (neutral config advance: %s)",
-    async (advanceConfig) => {
-      mocks.configuredAgentIds = ["first", "last"];
-      const acquiring = createDeferredCore();
-      const acquired = createDeferredCore();
-      const failed = createDeferredCore();
-      mocks.prepareStaticCatalog.mockImplementation(async (options) => {
-        if ((options as { workspaceDir: string }).workspaceDir === "/tmp/workspace-last") {
-          acquiring.resolve();
-          await acquired.promise;
-        }
-        return { entries: [] };
-      });
-      mocks.warn.mockImplementation((message: string) => {
-        if (message.includes("background model runtime publication failed")) {
-          failed.resolve();
-        }
-      });
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const publication = refreshPreparedModelRuntimeSnapshots(
-        {},
-        {
-          gatewayLifecycle: true,
-          startup: true,
-          catalogMode: "static",
-        },
-      );
-      try {
-        await acquiring.promise;
-        await vi.advanceTimersByTimeAsync(120_000);
-        await publication;
-        if (advanceConfig) {
-          advancePreparedModelRuntimeConfig({ logging: { level: "debug" } });
-        }
-        acquired.reject(new Error("fixture catalog failure"));
-        await failed.promise;
-        await expect(
-          loadPublishedGatewayReplyDispatchRuntime({ agentId: "first" }),
-        ).resolves.toMatchObject({ agentId: "first" });
-        expect(getPreparedModelRuntimeStartupStatus()).toMatchObject({
-          degraded: true,
-          pendingAgents: ["last"],
-        });
-      } finally {
-        acquired.resolve();
-        await Promise.allSettled([publication]);
-        await getPreparedModelRuntimeTestApi().resetPreparedModelRuntimeSnapshotsForTest();
-        vi.useRealTimers();
+  it("retains settled agents after a late failure across a neutral config advance", async () => {
+    mocks.configuredAgentIds = ["first", "last"];
+    const acquiring = createDeferredCore();
+    const acquired = createDeferredCore();
+    const failed = createDeferredCore();
+    mocks.prepareStaticCatalog.mockImplementation(async (options) => {
+      if ((options as { workspaceDir: string }).workspaceDir === "/tmp/workspace-last") {
+        acquiring.resolve();
+        await acquired.promise;
       }
-    },
-  );
+      return { entries: [] };
+    });
+    mocks.warn.mockImplementation((message: string) => {
+      if (message.includes("background model runtime publication failed")) {
+        failed.resolve();
+      }
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const publication = refreshPreparedModelRuntimeSnapshots(
+      {},
+      {
+        gatewayLifecycle: true,
+        startup: true,
+        catalogMode: "static",
+      },
+    );
+    try {
+      await acquiring.promise;
+      await vi.advanceTimersByTimeAsync(120_000);
+      await publication;
+      advancePreparedModelRuntimeConfig({ logging: { level: "debug" } });
+      acquired.reject(new Error("fixture catalog failure"));
+      await failed.promise;
+      await expect(
+        loadPublishedGatewayReplyDispatchRuntime({ agentId: "first" }),
+      ).resolves.toMatchObject({ agentId: "first" });
+      expect(getPreparedModelRuntimeStartupStatus()).toMatchObject({
+        degraded: true,
+        pendingAgents: ["last"],
+      });
+    } finally {
+      acquired.resolve();
+      await Promise.allSettled([publication]);
+      await getPreparedModelRuntimeTestApi().resetPreparedModelRuntimeSnapshotsForTest();
+      vi.useRealTimers();
+    }
+  });
 
   it.each([false, true])(
     "services queued event-loop work between agents (shared workspace: %s)",

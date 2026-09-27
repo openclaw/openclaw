@@ -285,23 +285,13 @@ describe("GPT-Live sideband protocol", () => {
       parseOpenAIQuicksilverEvent(
         JSON.stringify({ type: "error", error: { message: "call failed" } }),
       ),
-    ).toEqual({ kind: "error", message: "call failed", fatalAuth: false });
-    expect(
-      parseOpenAIQuicksilverEvent(
-        JSON.stringify({
-          type: "error",
-          message: "top-level failure",
-          error: { message: "nested failure" },
-        }),
-      ),
-    ).toEqual({ kind: "error", message: "top-level failure", fatalAuth: false });
+    ).toEqual({ kind: "error", fatalAuth: false });
     expect(
       parseOpenAIQuicksilverEvent(
         JSON.stringify({ type: "error", error: { code: "invalid_token" } }),
       ),
     ).toEqual({
       kind: "error",
-      message: '{"code":"invalid_token"}',
       fatalAuth: true,
     });
     expect(parseOpenAIQuicksilverEvent(JSON.stringify({ type: "future.event" }))).toEqual({
@@ -904,11 +894,18 @@ describe("GPT-Live sideband protocol", () => {
     const sensitiveDetails = ["sensitive-route", "sensitive-session", "sensitive-transcript"];
     const { controller, logger, onFatalError } = createDelegationHarness();
 
-    controller.handleEvent({
-      kind: "error",
-      message: `provider rejected ${model} ${sensitiveDetails.join(" ")}`,
-      fatalAuth: true,
-    });
+    controller.handleFrame(
+      Buffer.from(
+        JSON.stringify({
+          type: "error",
+          error: {
+            code: "invalid_token",
+            message: `provider rejected ${model} ${sensitiveDetails.join(" ")}`,
+          },
+        }),
+      ),
+      false,
+    );
 
     expect(logger.warn).toHaveBeenCalledWith("OpenAI GPT-Live provider error");
     expect(onFatalError).toHaveBeenCalledOnce();

@@ -1,6 +1,3 @@
-/**
- * Steers active embedded sessions and waits for transcript commits when needed.
- */
 import { toErrorObject } from "../../../infra/errors.js";
 import type { ImageContent } from "../../../llm/types.js";
 import type { MediaFact } from "../../../media/media-facts.js";
@@ -13,6 +10,7 @@ import {
 } from "../../harness/gateway-question.js";
 import type { CurrentInboundPromptContext } from "../../internal-runtime-context.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import type { AgentSession } from "../../sessions/index.js";
 import { retireQueuedUserMessage } from "../../sessions/queued-user-message-retirement.js";
 import {
   getSteeringMessageIdentity,
@@ -24,30 +22,16 @@ import type {
   EmbeddedAgentQueueMessageResult,
 } from "../run-state.js";
 
-/**
- * Minimal active-session surface needed to steer a running attempt and observe
- * whether the queued user message reached the transcript.
- */
 type EmbeddedAgentActiveSessionSteerTarget = {
   agent?: {
     cancelSteeringMessage?: (
       predicate: (message: AgentMessage) => boolean,
     ) => AgentMessage | undefined;
   };
-  steer(
-    text: string,
-    images?: ImageContent[],
-    userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
-    media?: MediaFact[],
-    imageOrder?: PromptImageOrderEntry[],
-    queueIdentity?: string,
-    canInject?: () => boolean,
-    currentInboundContext?: CurrentInboundPromptContext,
-  ): Promise<void>;
+  steer: AgentSession["steer"];
   subscribe(listener: (event: unknown) => void): () => void;
 };
 
-/** Default wait for a steered user message to appear in the active transcript. */
 const DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS = 120_000;
 
 class EmbeddedSteeringAcceptedUnconfirmedError extends Error {
@@ -136,7 +120,7 @@ async function cancelQueuedSteeringMessage(
     return false;
   }
   try {
-    if (!retireQueuedUserMessage(message as AgentMessage)) {
+    if (!retireQueuedUserMessage(message)) {
       log.warn("failed to retire queued steering display entry during cancellation");
     }
   } catch (error) {
@@ -321,10 +305,6 @@ function resolveQuestionAuthority(
   );
 }
 
-/**
- * Steers the active session directly or waits for transcript commitment when a
- * caller needs delivery proof before returning.
- */
 export async function steerActiveSessionWithOptionalDeliveryWait(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
@@ -416,11 +396,10 @@ export async function claimEmbeddedPendingUserInputAnswer(
   if (options?.isInboundUserMessage !== true || hasPromptImageInput(options)) {
     return false;
   }
-  const claimed = await claimPendingAgentQuestionAnswer({
+  return await claimPendingAgentQuestionAnswer({
     sessionKey,
     text,
     authority: resolveQuestionAuthority(canInject, authority),
     sourceRecorder: options.userTurnTranscriptRecorder,
   });
-  return claimed;
 }

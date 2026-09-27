@@ -17,6 +17,10 @@ const CI_PARALLEL_MIN_CPUS = 8;
 export const CI_PARALLEL_MIN_MEMORY_BYTES = 24 * GIB;
 
 const EXCLUSIVE_CI_TEST_CONFIGS = new Set([
+  "vitest.config.ts",
+  "test/vitest/vitest.config.ts",
+  "test/vitest/vitest.full-agentic.config.ts",
+  "test/vitest/vitest.gateway.config.ts",
   "test/vitest/vitest.gateway-core.config.ts",
   "test/vitest/vitest.gateway-database-workers.config.ts",
   "test/vitest/vitest.gateway-methods.config.ts",

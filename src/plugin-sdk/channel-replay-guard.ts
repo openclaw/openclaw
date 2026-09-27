@@ -90,6 +90,18 @@ export function createChannelReplayGuardWithDedupe<TEvent>(
     const namespace = params.namespace?.(event);
     return namespace === undefined ? options : { ...options, namespace };
   };
+  const forgetClaimOwnership = (
+    keys: readonly string[],
+    claimId: symbol,
+    options?: PersistentDedupeCheckOptions,
+  ) => {
+    for (const key of keys) {
+      const ownerKey = resolveOwnerKey(key, options);
+      if (claimOwners.get(ownerKey)?.claimId === claimId) {
+        claimOwners.delete(ownerKey);
+      }
+    }
+  };
   const releaseKeys = (
     keys: readonly string[],
     options?: { namespace?: string; error?: unknown },
@@ -142,14 +154,7 @@ export function createChannelReplayGuardWithDedupe<TEvent>(
           options
             ? { ...dedupeOptions, ...options, namespace: dedupeOptions?.namespace }
             : dedupeOptions,
-        ).finally(() => {
-          for (const key of settlingKeys) {
-            const ownerKey = resolveOwnerKey(key, dedupeOptions);
-            if (claimOwners.get(ownerKey)?.claimId === claimId) {
-              claimOwners.delete(ownerKey);
-            }
-          }
-        });
+        ).finally(() => forgetClaimOwnership(settlingKeys, claimId, dedupeOptions));
         settlement = { kind: "committing", pending };
         return pending;
       },
@@ -162,12 +167,7 @@ export function createChannelReplayGuardWithDedupe<TEvent>(
           (key) => claimOwners.get(resolveOwnerKey(key, dedupeOptions))?.claimId === claimId,
         );
         releaseKeys(releasingKeys, { namespace: dedupeOptions?.namespace, error: options?.error });
-        for (const key of releasingKeys) {
-          const ownerKey = resolveOwnerKey(key, dedupeOptions);
-          if (claimOwners.get(ownerKey)?.claimId === claimId) {
-            claimOwners.delete(ownerKey);
-          }
-        }
+        forgetClaimOwnership(releasingKeys, claimId, dedupeOptions);
       },
     };
   };
@@ -193,12 +193,7 @@ export function createChannelReplayGuardWithDedupe<TEvent>(
       }
     } catch (error) {
       releaseKeys(claimedKeys, { namespace: dedupeOptions?.namespace, error });
-      for (const key of claimedKeys) {
-        const ownerKey = resolveOwnerKey(key, dedupeOptions);
-        if (claimOwners.get(ownerKey)?.claimId === claimId) {
-          claimOwners.delete(ownerKey);
-        }
-      }
+      forgetClaimOwnership(claimedKeys, claimId, dedupeOptions);
       throw error;
     }
     if (claimedKeys.length > 0) {

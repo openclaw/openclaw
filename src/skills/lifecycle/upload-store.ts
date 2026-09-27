@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
+import { isValidBase64 } from "@openclaw/media-core/base64";
 import { DEFAULT_MAX_ARCHIVE_BYTES_ZIP } from "../../infra/archive.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -162,22 +163,8 @@ function decodeBase64Chunk(dataBase64: string): Buffer {
   if (normalized.length > MAX_SKILL_UPLOAD_BASE64_LENGTH) {
     throw new SkillUploadRequestError("upload chunk exceeds maximum size");
   }
-  if (!normalized || normalized.length % 4 !== 0) {
+  if (!isValidBase64(normalized)) {
     throw new SkillUploadRequestError("invalid dataBase64");
-  }
-  const paddingLength = normalized.endsWith("==") ? 2 : normalized.endsWith("=") ? 1 : 0;
-  const contentLength = normalized.length - paddingLength;
-  for (let index = 0; index < contentLength; index += 1) {
-    const code = normalized.charCodeAt(index);
-    const isBase64Character =
-      (code >= 0x41 && code <= 0x5a) ||
-      (code >= 0x61 && code <= 0x7a) ||
-      (code >= 0x30 && code <= 0x39) ||
-      code === 0x2b ||
-      code === 0x2f;
-    if (!isBase64Character) {
-      throw new SkillUploadRequestError("invalid dataBase64");
-    }
   }
   const decoded = Buffer.from(normalized, "base64");
   if (decoded.length < 1) {

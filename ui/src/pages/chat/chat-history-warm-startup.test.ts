@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { LitElement } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
@@ -139,6 +140,46 @@ afterEach(() => {
 });
 
 describe("first chat startup snapshot ordering", () => {
+  it("issues startup with the stored cursor before rendering the hydrated snapshot", async () => {
+    const h = mountPane();
+    const order: string[] = [];
+    const network = createDeferred<typeof h.liveResult>();
+    const rendered = createDeferred();
+    class SnapshotHost extends LitElement {
+      override render() {
+        if (h.state.chatMessages.length) {
+          order.push("render");
+          rendered.resolve();
+        }
+        return h.state.chatMessages;
+      }
+    }
+    customElements.define("warm-startup-snapshot-host", SnapshotHost);
+    const host = document.body.appendChild(new SnapshotHost());
+    onTestFinished(() => host.remove());
+    h.state.requestUpdate = () => host.requestUpdate();
+    h.request.mockImplementation(() => {
+      order.push("request");
+      return network.promise;
+    });
+    h.connect();
+    const loading = h.start();
+    await host.updateComplete;
+    expect(h.request).not.toHaveBeenCalled();
+
+    h.read.resolve(stored);
+    await rendered.promise;
+    expect(order).toEqual(["request", "render"]);
+    expect(h.request).toHaveBeenCalledExactlyOnceWith(
+      "chat.startup",
+      expect.objectContaining({ sessionKey, cursor: "stored-cursor" }),
+      { signal: expect.any(AbortSignal) },
+    );
+    expect(h.state.chatMessages).toEqual(stored.messages);
+    network.resolve(h.liveResult);
+    await loading;
+  });
+
   it.each(["unchanged", "refreshed", "deadline", "ordinary-refresh"] as const)(
     "hydrates both splits when the sibling is %s",
     async (ordering) => {

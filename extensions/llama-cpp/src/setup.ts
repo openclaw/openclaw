@@ -29,7 +29,7 @@ import {
   resolveManagedLlamaServerPaths,
   selectLlamaServerAsset,
   type LlamaServerAsset,
-} from "./llama-server-install.js";
+} from "./llama-server-assets.js";
 import type { ManagedLlamaChatModel } from "./llama-server-preset.js";
 import {
   ensureLlamaCppModel,
@@ -109,7 +109,7 @@ async function resolveCachedArtifact(source: string, cacheDir: string, signal?: 
 }
 
 async function resolveCachedCandidate(
-  candidate: { model: ModelDefinitionConfig; provider: ModelProviderConfig },
+  candidate: LlamaCppChatCandidate,
   signal?: AbortSignal,
 ): Promise<string | undefined> {
   const source = resolveLlamaCppModelSource(candidate.model);

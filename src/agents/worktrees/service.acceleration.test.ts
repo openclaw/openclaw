@@ -77,6 +77,19 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     });
   });
 
+  it("creates an empty workspace without retaining or cloning an empty template", async () => {
+    const created = await service.createEmpty({
+      ownerKind: "session",
+      ownerId: "agent:main:empty",
+      name: "empty",
+    });
+
+    expect(await fs.readdir(created.path)).toEqual([".git"]);
+    expect(await git(created.path, "status", "--porcelain")).toBe("");
+    expect(listTemplates(env)).toEqual([]);
+    expect(backend.cloneTemplate).not.toHaveBeenCalled();
+  });
+
   it.each([
     "warm",
     "small",

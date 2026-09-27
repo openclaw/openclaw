@@ -171,7 +171,6 @@ const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
     catch = vi.fn();
     constructor(public token: string) {}
   } as unknown as TelegramBotRuntimeForTest["Bot"],
-  sequentialize: (() => vi.fn()) as TelegramBotRuntimeForTest["sequentialize"],
   apiThrottler: (() => throttlerSpy()) as unknown as TelegramBotRuntimeForTest["apiThrottler"],
 };
 

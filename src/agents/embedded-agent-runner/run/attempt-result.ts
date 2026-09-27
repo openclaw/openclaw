@@ -1,6 +1,3 @@
-/**
- * Projects stream state into the stable embedded-attempt result contract.
- */
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { isTransientNetworkError } from "../../../infra/retryable-network-errors.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
@@ -19,7 +16,6 @@ import { buildEmbeddedAgentHookContext } from "./agent-hook-context.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
 import { finalizeEmbeddedAttempt } from "./attempt-finalize.js";
 import type { EmbeddedAttemptPromptState } from "./attempt-prompt-phase.js";
-import { shouldRunLlmOutputHooksForAttempt } from "./attempt-run-decisions.js";
 import type { PreparedStreamRuntime } from "./attempt-stream-runtime.types.js";
 import type { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 import {
@@ -188,7 +184,6 @@ function hasVisiblePendingToolMediaReply(
   );
 }
 
-/** Runs output hooks, classifies terminal effects, and returns the finalized attempt result. */
 export function completeEmbeddedAttemptResult(
   input: EmbeddedAttemptExecutionPhaseInput & { preparedStreamRuntime: PreparedStreamRuntime },
   settled: Awaited<ReturnType<typeof settleEmbeddedAttemptStream>>,
@@ -265,7 +260,7 @@ export function completeEmbeddedAttemptResult(
   if (
     attempt.operation !== "settled-tool-finalization" &&
     hookRunner?.hasHooks("llm_output") &&
-    shouldRunLlmOutputHooksForAttempt({ promptErrorSource: terminal.promptErrorSource })
+    terminal.promptErrorSource !== "hook:before_agent_run"
   ) {
     const contextWindow = {
       ...(attempt.contextWindowInfo?.tokens
