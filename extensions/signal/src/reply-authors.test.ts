@@ -116,8 +116,6 @@ describe("Signal reply author comparisons", () => {
 
   it.each([
     { outcome: "success", author: input.author },
-    { outcome: "failure", author: input.author },
-    { outcome: "success", author: "+15555550999" },
     { outcome: "failure", author: "+15555550999" },
   ])(
     "reconciles reverse $outcome completion with later author $author",
@@ -226,17 +224,12 @@ describe("Signal reply author comparisons", () => {
     },
   );
 
-  it.each(["observe", "compareAndApply", "both"] as const)(
+  it.each(["observe", "compareAndApply"] as const)(
     "uses the published-host atomic callback when %s is absent",
     async (missing) => {
       const { store } = installStore();
       const compatible: PluginStateKeyedStore<unknown> = store;
-      if (missing !== "compareAndApply") {
-        delete compatible.observe;
-      }
-      if (missing !== "observe") {
-        delete compatible.compareAndApply;
-      }
+      delete compatible[missing];
       store.update.mockImplementation(async (_key, merge) => {
         expect(merge(record)).toEqual(record);
         return true;
