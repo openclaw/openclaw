@@ -39,6 +39,7 @@ type PendingInputView = {
   page: ChatPendingInputsPage;
   /** Live custody receipts keep the queue independent of retained-input pagination. */
   queuedInputs: ChatPendingInputsPage["items"];
+  readonly displayedItems: ChatPendingInputsPage["items"];
   receiptRunIds: string[];
   queuedCount: number;
   queueBefore?: number;
@@ -290,12 +291,30 @@ export function applyChatPendingInputs(
     options.queriedRunIds,
   );
   if (!view) {
+    let displayed:
+      | {
+          page: ChatPendingInputsPage["items"];
+          queued: ChatPendingInputsPage["items"];
+          items: ChatPendingInputsPage["items"];
+        }
+      | undefined;
     view = {
       sessionKey: state.sessionKey,
       sessionId: state.currentSessionId ?? null,
       agentId: resolveUiSelectedSessionAgentId(state),
       page: displayPage,
       queuedInputs,
+      get displayedItems() {
+        // Pane-only updates must retain the transcript builder's structural inputs.
+        if (displayed?.page !== this.page.items || displayed.queued !== this.queuedInputs) {
+          displayed = {
+            page: this.page.items,
+            queued: this.queuedInputs,
+            items: [...this.page.items.filter((input) => !input.queued), ...this.queuedInputs],
+          };
+        }
+        return displayed.items;
+      },
       receiptRunIds: [],
       queuedCount: displayPage.queuedCount ?? 0,
       queueBefore: displayPage.nextBefore,

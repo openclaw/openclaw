@@ -192,5 +192,5 @@ export function isEmptyUserTextOnlyMessage(message: unknown): boolean {
   if (!isTextOnlyContent(entry.content ?? entry.text)) {
     return false;
   }
-  return (extractText(message)?.trim() ?? "") === "";
+  return (extractTextCached(message)?.trim() ?? "") === "";
 }

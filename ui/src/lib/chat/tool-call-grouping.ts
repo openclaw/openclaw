@@ -12,13 +12,31 @@ import {
 import { summarizeAgentActivity } from "../../../../src/agents/agent-activity-presentation.js";
 import { t } from "../../i18n/index.ts";
 
+const preparedActivities = new WeakMap<
+  object,
+  {
+    source: unknown;
+    items: AgentActivityItem[];
+  }
+>();
+
 export function readPreparedActivity(message: unknown): AgentActivityItem[] {
-  const activity = asOptionalRecord(message)?.activity;
-  return Array.isArray(activity)
+  const record = asOptionalRecord(message);
+  const activity = record?.activity;
+  const cached = record && preparedActivities.get(record);
+  if (cached && cached.source === activity) {
+    return cached.items;
+  }
+  const items = Array.isArray(activity)
     ? activity.filter((item): item is AgentActivityItem =>
         Value.Check(AgentActivityItemSchema, item),
       )
     : [];
+  if (record) {
+    // Coalescing builds a message incrementally, replacing its activity array.
+    preparedActivities.set(record, { source: activity, items });
+  }
+  return items;
 }
 
 export function describeToolGroup(items: readonly AgentActivityItem[]) {

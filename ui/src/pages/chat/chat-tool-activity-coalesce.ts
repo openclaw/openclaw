@@ -43,6 +43,10 @@ type Invocation = {
   attachments: unknown[];
   projections: Projection[];
 };
+type PreparedSource = Omit<Source, "item" | "index"> & {
+  projections: Omit<Projection, "source">[];
+};
+const preparedSources = new WeakMap<object, PreparedSource | null>();
 
 function resultBlock(card: ToolCard): Record<string, unknown> {
   return {
@@ -62,10 +66,26 @@ function resultBlock(card: ToolCard): Record<string, unknown> {
 }
 
 function readProjections(item: MessageItem, index: number): Projection[] {
-  let message = asRecord(item.message);
+  const message = asRecord(item.message);
   if (!message) {
     return [];
   }
+  let prepared = preparedSources.get(message);
+  if (prepared === undefined) {
+    prepared = prepareSource(message);
+    preparedSources.set(message, prepared);
+  }
+  if (!prepared) {
+    return [];
+  }
+  const { projections, ...facts } = prepared;
+  const source: Source = { ...facts, item, index };
+  // Run inference and remaining-block consumption belong to this turn, not the memo.
+  return projections.map((projection) => Object.assign({}, projection, { source }));
+}
+
+function prepareSource(originalMessage: Record<string, unknown>): PreparedSource | null {
+  let message = originalMessage;
   let content = Array.isArray(message.content) ? message.content : [];
   const isToolBlock = (block: unknown) => {
     const type = asRecord(block)?.type;
@@ -101,34 +121,31 @@ function readProjections(item: MessageItem, index: number): Projection[] {
       (block) => isToolBlock(block) && resolveToolBlockId(asRecord(block)!, message!),
     );
     if (blocks.length === 0) {
-      return [];
+      return null;
     }
   }
   const standalone = blocks.length === 0;
   if (standalone) {
     const [card] = extractToolCardsCached(message);
     if (!card?.callId) {
-      return [];
+      return null;
     }
     blocks = [resultBlock(card)];
   }
-  const source: Source = {
-    item,
+  const source = {
     message,
-    index,
     standalone,
     remaining: content.filter(
       (block) => !blocks.includes(block) && (!standalone || asRecord(block)?.type !== "text"),
     ),
   };
-  return blocks.map((block) => {
+  const projections = blocks.map((block) => {
     const raw = asRecord(block)!;
     const id = resolveToolBlockId(raw, message)!;
     const call = isToolCallContentType(raw.type);
     const live = message["__openclawToolStreamLive"] === true;
     const [card] = extractToolCardsCached({ ...message, content: [raw] });
     return {
-      source,
       id,
       call,
       runId:
@@ -171,6 +188,7 @@ function readProjections(item: MessageItem, index: number): Projection[] {
       },
     };
   });
+  return { ...source, projections };
 }
 
 function preferProjection(previous: Projection | undefined, next: Projection): Projection {

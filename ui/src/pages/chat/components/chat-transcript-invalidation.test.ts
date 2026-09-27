@@ -9,7 +9,9 @@ import { resolveAvatarHat } from "../../../components/agent-avatar-hat.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
 import * as messageNormalizer from "../../../lib/chat/message-normalizer.ts";
 import * as videoPoster from "../../../lib/media/video-poster.ts";
+import { makeChatHost } from "../chat-host.test-support.ts";
 import { createSessionCapabilityFixture, createTestChatPane } from "../chat-pane.test-support.ts";
+import { applyChatPendingInputs } from "../chat-pending-inputs.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
 import {
   buildCachedChatItems,
@@ -17,7 +19,8 @@ import {
   getExpandedUserMessages,
   getExpansionStateVersion,
 } from "../chat-thread.ts";
-import { createTestTranscript } from "../chat-view.test-helpers.ts";
+import { createChatProps, createTestTranscript } from "../chat-view.test-helpers.ts";
+import { renderChat } from "../chat-view.ts";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
 import * as chatMessage from "./chat-message.ts";
 import {
@@ -528,6 +531,47 @@ describe("chat transcript invalidation", () => {
     expect(buildSpy).toHaveBeenCalledTimes(2);
     expect(restoredItemsA).toBe(itemsA);
     expect(restoredItemsA.every((item, index) => item === itemsA[index])).toBe(true);
+  });
+
+  it("reuses history across pane renders and rebuilds when pending inputs change", () => {
+    const historyState = makeChatHost({ currentSessionId: "cached-history" });
+    applyChatPendingInputs(historyState, { total: 0, queuedCount: 0, items: [] });
+    const props = createChatProps({
+      paneId: "pending-input-cache",
+      sessionKey: historyState.sessionKey,
+      historyState,
+      messages: [{ role: "assistant", content: "Retained reply", timestamp: 1_000 }],
+    });
+    const container = document.body.appendChild(document.createElement("div"));
+    const buildSpy = vi.spyOn(chatThreadBuild, "buildChatItems");
+    try {
+      render(renderChat(props), container);
+      expect(container.textContent).toContain("Retained reply");
+      expect(buildSpy).toHaveBeenCalledOnce();
+      render(renderChat({ ...props, readingHistory: true }), container);
+      expect(buildSpy).toHaveBeenCalledOnce();
+
+      applyChatPendingInputs(historyState, {
+        total: 1,
+        queuedCount: 0,
+        items: [
+          {
+            id: "interrupted-input",
+            acceptedAt: 2_000,
+            state: "interrupted",
+            message: { role: "user", content: "Pending request", timestamp: 2_000 },
+          },
+        ],
+      });
+      render(renderChat(props), container);
+      expect(buildSpy).toHaveBeenCalledTimes(2);
+      expect(container.textContent).toContain("Pending request");
+      render(renderChat(props), container);
+      expect(buildSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      render(nothing, container);
+      props.transcript.hostDisconnected();
+    }
   });
 
   it("keeps history cached during worker setup and clears its notice when placement becomes active", async () => {

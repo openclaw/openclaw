@@ -451,17 +451,26 @@ function expandTextContent(
   };
 }
 
-export function normalizeMessage(message: unknown): NormalizedMessage {
-  const m =
-    asOptionalRecord(projectChatWorkContextForDisplay(projectImportedMessageForDisplay(message))) ??
-    {};
-  const role = resolveMessageRole(m);
-  const contentRaw =
-    typeof m.content === "string" || Array.isArray(m.content)
-      ? m.content
-      : typeof m.text === "string"
-        ? m.text
-        : undefined;
+type MessageContentNormalization = Pick<
+  NormalizedMessage,
+  "content" | "audioAsVoice" | "replyTarget"
+>;
+const normalizedContent = new WeakMap<
+  object,
+  {
+    source: unknown;
+    blocks?: unknown[];
+    role: string;
+    delivery: unknown;
+    value: MessageContentNormalization;
+  }
+>();
+
+function normalizeMessageContent(
+  m: Record<string, unknown>,
+  role: string,
+  contentRaw: unknown,
+): MessageContentNormalization {
   const contentItems = Array.isArray(contentRaw) ? contentRaw : null;
   const isAssistantMessage = role === "assistant";
   const delivery = isAssistantMessage ? readMessageDelivery(m.openclawDelivery) : undefined;
@@ -577,6 +586,43 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     });
   }
 
+  return { content: stripMessageDisplayMetadata(content), audioAsVoice, replyTarget };
+}
+
+export function normalizeMessage(message: unknown): NormalizedMessage {
+  const m =
+    asOptionalRecord(projectChatWorkContextForDisplay(projectImportedMessageForDisplay(message))) ??
+    {};
+  const role = resolveMessageRole(m);
+  const contentRaw =
+    typeof m.content === "string" || Array.isArray(m.content)
+      ? m.content
+      : typeof m.text === "string"
+        ? m.text
+        : undefined;
+  let cached = normalizedContent.get(m);
+  const cachedBlocks = cached?.blocks;
+  if (
+    !cached ||
+    cached.source !== contentRaw ||
+    (Array.isArray(contentRaw) &&
+      (cachedBlocks?.length !== contentRaw.length ||
+        contentRaw.some((block, index) => block !== cachedBlocks?.[index]))) ||
+    cached.role !== role ||
+    cached.delivery !== m.openclawDelivery
+  ) {
+    cached = {
+      source: contentRaw,
+      blocks: Array.isArray(contentRaw) ? [...contentRaw] : undefined,
+      role,
+      delivery: m.openclawDelivery,
+      value: normalizeMessageContent(m, role, contentRaw),
+    };
+    normalizedContent.set(m, cached);
+  }
+  // Attribution can be refreshed in place; retain only content derivations.
+  const { content, audioAsVoice } = cached.value;
+  let { replyTarget } = cached.value;
   const timestamp = asFiniteNumber(m.timestamp) ?? Date.now();
   const id = readStringField(m, "id");
   const openClawMeta = asOptionalRecord(m["__openclaw"]);
@@ -592,7 +638,6 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   const sender = metaSender ?? (senderLabel ? { name: senderLabel } : null);
   const sourceClients = role === "user" ? readMessageClientSources(m) : [];
 
-  content = stripMessageDisplayMetadata(content);
   const senderSession = readMessageSenderSession(m.senderSession);
 
   return {

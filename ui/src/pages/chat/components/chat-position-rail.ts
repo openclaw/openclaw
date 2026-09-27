@@ -51,6 +51,7 @@ class ChatPositionRailDirective extends AsyncDirective {
   private mountedMarkersChanged = true;
   private markerIdsByMessageId: ReadonlyMap<string, string> = new Map();
   private positionMessageIds: string[] = [];
+  private positionMessageIndexes = new Map<string, number>();
   private markersChanged = true;
   private readonly markerElements = new Map<string, HTMLElement>();
   private transcriptElement: HTMLElement | undefined;
@@ -406,7 +407,10 @@ class ChatPositionRailDirective extends AsyncDirective {
       this.followActive = true;
       this.scheduleLayout();
     }
-    const visibleOrder = this.positionMessageIds.filter((id) => visibleMessageIds.has(id));
+    const visibleOrder = [...visibleMessageIds].toSorted(
+      (left, right) =>
+        this.positionMessageIndexes.get(left)! - this.positionMessageIndexes.get(right)!,
+    );
     // A continuation, folded tool row, or virtualized jump still belongs to a transcript position.
     const activeMessageId = this.session?.activeMessageId(
       visibleOrder.length ? visibleOrder : this.positionMessageIds,
@@ -591,6 +595,7 @@ class ChatPositionRailDirective extends AsyncDirective {
   }
 
   render(params: PositionRailParams) {
+    const previousPositions = this.renderParams?.positions;
     this.renderParams = params;
     const { positions, transcript, requestUpdate } = params;
     this.requestUpdate = requestUpdate;
@@ -605,41 +610,48 @@ class ChatPositionRailDirective extends AsyncDirective {
       this.markersChanged = true;
     }
     const markers = positions.markers;
-    if (
-      this.markerIdsByMessageId.size !== positions.markerIdsByMessageId.size ||
-      [...positions.markerIdsByMessageId].some(
-        ([messageId, markerId]) => this.markerIdsByMessageId.get(messageId) !== markerId,
-      )
-    ) {
-      this.targetsChanged = true;
+    // Projection indexes are immutable; rail-only window changes reuse them.
+    if (positions !== previousPositions) {
+      if (
+        this.markerIdsByMessageId.size !== positions.markerIdsByMessageId.size ||
+        [...positions.markerIdsByMessageId].some(
+          ([messageId, markerId]) => this.markerIdsByMessageId.get(messageId) !== markerId,
+        )
+      ) {
+        this.targetsChanged = true;
+      }
+      this.markerIdsByMessageId = positions.markerIdsByMessageId;
+      this.positionMessageIds = [...positions.markerIdsByMessageId.keys()];
+      this.positionMessageIndexes = new Map(
+        this.positionMessageIds.map((id, index) => [id, index]),
+      );
     }
-    this.markerIdsByMessageId = positions.markerIdsByMessageId;
-    this.positionMessageIds = [...positions.markerIdsByMessageId.keys()];
     const count = markers.length;
     if (count === 0) {
       this.disconnected();
       return nothing;
     }
+    if (positions !== previousPositions) {
+      const ids = markers.map((marker) => marker.id);
+      if (
+        ids.length !== this.markerIds.length ||
+        ids.some((id, index) => id !== this.markerIds[index])
+      ) {
+        this.projectionChanged ||= this.markerIds.some((id, index) => id !== ids[index]);
+        this.markerIds = ids;
+        this.markerIndexes = new Map(ids.map((id, index) => [id, index]));
+        if (this.activeId && !this.markerIndexes.has(this.activeId)) {
+          this.activeId = undefined;
+        }
+        this.markersChanged = true;
+      }
+    }
     const interaction = this.interaction;
-    if (!markers.some((candidate) => candidate.id === interaction.focusedId)) {
+    if (!this.markerIndexes.has(interaction.focusedId ?? "")) {
       interaction.focusedId = null;
     }
-    if (!markers.some((candidate) => candidate.id === interaction.hoveredId)) {
+    if (!this.markerIndexes.has(interaction.hoveredId ?? "")) {
       interaction.hoveredId = null;
-    }
-
-    const ids = markers.map((marker) => marker.id);
-    if (
-      ids.length !== this.markerIds.length ||
-      ids.some((id, index) => id !== this.markerIds[index])
-    ) {
-      this.projectionChanged ||= this.markerIds.some((id, index) => id !== ids[index]);
-      this.markerIds = ids;
-      this.markerIndexes = new Map(ids.map((id, index) => [id, index]));
-      if (this.activeId && !this.markerIndexes.has(this.activeId)) {
-        this.activeId = undefined;
-      }
-      this.markersChanged = true;
     }
     const indexes = this.windowIndexes();
     if (

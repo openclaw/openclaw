@@ -88,6 +88,7 @@ describe("conversation position rail", () => {
           vi.spyOn(session, "activeMessageId").mockImplementation(activeMessage);
           return html`<div class="chat-thread" tabindex="0">
             <div class="chat-bubble" data-entry-id="message-79">Latest message</div>
+            <div class="chat-bubble" data-entry-id="message-78">Previous message</div>
             ${renderChatPositionRail({
               positions: {
                 markers,
@@ -109,8 +110,12 @@ describe("conversation position rail", () => {
       const tabStops = () => [...marks.querySelectorAll<HTMLButtonElement>('[tabindex="0"]')];
       try {
         flushFrame();
-        publishVisibility(root.querySelector(".chat-bubble")!);
+        for (const bubble of root.querySelectorAll(".chat-bubble")) {
+          publishVisibility(bubble);
+        }
         flushFrame();
+        // Mounted/observer order must not change the transcript's reader-position ordering.
+        expect(activeMessage).toHaveBeenLastCalledWith(["message-78", "message-79"]);
         root.focus();
         expect(current()).toBe(marker("message-79"));
         expect(tabStops()).toEqual([current()]);

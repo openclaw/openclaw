@@ -9,7 +9,7 @@ import {
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,
 } from "./heartbeat-display.ts";
-import { extractText, extractTextCached, isEmptyUserTextOnlyMessage } from "./message-extract.ts";
+import { extractTextCached, isEmptyUserTextOnlyMessage } from "./message-extract.ts";
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
@@ -54,7 +54,7 @@ function isAssistantSilentReply(message: unknown): boolean {
   if (typeof entry.text === "string") {
     return isSilentReplyStream(entry.text);
   }
-  const text = extractText(message);
+  const text = extractTextCached(message);
   return typeof text === "string" && isSilentReplyStream(text);
 }
 
@@ -67,7 +67,7 @@ function isSyntheticTranscriptRepairToolResult(message: unknown): boolean {
   if (role !== "toolresult") {
     return false;
   }
-  const text = extractText(message);
+  const text = extractTextCached(message);
   return typeof text === "string" && text.trim() === SYNTHETIC_TRANSCRIPT_REPAIR_RESULT;
 }
 
