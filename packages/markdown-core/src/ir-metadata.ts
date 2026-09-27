@@ -79,7 +79,7 @@ export type MarkdownListItemMarker = {
   end?: number;
 };
 
-export type MarkdownListItemMetadata = {
+type MarkdownListItemMetadata = {
   /** Rendered content owned by this item after its native marker. */
   contentStart?: number;
   contentEnd?: number;

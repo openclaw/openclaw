@@ -44,7 +44,6 @@ import {
 } from "../plugin-model-catalog.js";
 import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
 import type { AuthStatus, AuthStorage } from "./auth-storage.js";
-import type { ProviderConfig } from "./extensions/types.js";
 import {
   getModelRegistryRuntime,
   initializeModelRegistryRuntime,
@@ -56,6 +55,7 @@ import {
   type ModelsConfig,
   type ProviderAuthMode,
 } from "./model-registry-schema.js";
+import type { ProviderConfigBase, ProviderModelConfig } from "./provider-config.js";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "./provider-display-names.js";
 import {
   resolveConfigValueOrThrow,
@@ -1067,12 +1067,12 @@ export class ModelRegistry {
 /**
  * Input type for registerProvider API.
  */
-export interface ProviderConfigInput extends Omit<ProviderConfig, "models" | "oauth"> {
+export interface ProviderConfigInput extends ProviderConfigBase {
   auth?: ProviderAuthMode;
   /** OAuth provider for /login support */
   oauth?: Omit<OAuthProviderInterface, "id">;
   models?: Array<
-    NonNullable<ProviderConfig["models"]>[number] & {
+    ProviderModelConfig & {
       contextTokens?: number;
       contextWindows?: ModelCatalogContextWindowOption[];
       contextWindowDefault?: string;

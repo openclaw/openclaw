@@ -5,13 +5,10 @@ import { getOrCreatePromise } from "./lazy-promise.js";
 
 /** Normalizes primitive config values into the truthiness rules used by requirements checks. */
 function isTruthy(value: unknown): boolean {
-  if (typeof value === "number") {
-    return value !== 0;
-  }
   if (typeof value === "string") {
     return value.trim().length > 0;
   }
-  return value !== undefined && value !== null && value !== false;
+  return value !== undefined && value !== null && value !== false && value !== 0;
 }
 
 /** Resolves dotted config paths, tolerating extra dots and missing branches. */
@@ -96,14 +93,11 @@ function evaluateRuntimeRequires(params: RuntimeRequirementEvalParams): boolean 
   }
 
   const requiredAnyBins = requires.anyBins ?? [];
-  if (requiredAnyBins.length > 0) {
-    const anyFound = requiredAnyBins.some((bin) => params.hasBin(bin));
-    if (!anyFound && !params.hasAnyRemoteBin?.(requiredAnyBins)) {
-      return false;
-    }
-  }
-
-  return true;
+  return (
+    requiredAnyBins.length === 0 ||
+    requiredAnyBins.some((bin) => params.hasBin(bin)) ||
+    Boolean(params.hasAnyRemoteBin?.(requiredAnyBins))
+  );
 }
 
 /** Enforces OS compatibility before allowing `always` to bypass runtime requirements. */
