@@ -131,7 +131,7 @@ IDs are rejected. Registration and optional `isReady()` must be local, synchrono
 and network-free. Import types from `openclaw/plugin-sdk/decisions`.
 
 Consumers call `api.runtime.decisions.evaluate(batch, { agentId?, purpose, rubricVersion,
-timeoutMs, signal })`. State and rubric entries are finite JSON. Use plain objects
+timeoutMs, signal, isEligible? })`. State and rubric entries are finite JSON. Use plain objects
 and arrays; custom prototypes, serialization hooks, and getters are rejected on
 both request and response boundaries. Choices preserve
 all offered labels and probabilities; the chosen label is the provider's decision
@@ -146,6 +146,13 @@ The host preserves those values. Consumers that require normalized weights must
 apply their own explicit policy. Provider confidence is a provider-specific metric,
 not calibrated correctness. Results include model, optional token usage, and local
 rubric and runtime-generation provenance.
+
+Optional automatic consumers can supply a synchronous, owner-bound `isEligible`
+callback that rereads their current opt-in. The host checks it immediately before
+provider dispatch, after asynchronous authority preparation and provider readiness.
+Returning `false` produces `unavailable: disabled` without sending the evidence.
+This is an admission check, not cancellation of already-started provider work;
+consumers still supply their lifecycle signal and revalidate before applying results.
 
 Set `agents.defaults.decisionModel` to an explicit `provider/model` reference.
 Unset or empty means off. `agents.entries.<id>.decisionModel` overrides the global

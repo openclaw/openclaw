@@ -16,8 +16,8 @@ import {
   MAX_FILE_OPS_LIST_CHARS,
   MAX_FILE_OPS_SECTION_CHARS,
 } from "../../../packages/agent-core/src/harness/compaction/utils.js";
-import { classifyToolUseResultPairing } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
+import { evaluateDecision } from "../../decisions/runtime.js";
 import { openRootFile } from "../../infra/boundary-file-read.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -46,16 +46,31 @@ import {
   type AgentMessage,
   type SessionTreeEntry as CoreSessionTreeEntry,
 } from "../runtime/index.js";
-import { repairToolUseResultPairing } from "../session-transcript-repair.js";
 import type { SessionModelUsageSink } from "../sessions/compaction/runtime.js";
 import type { ExtensionAPI, ExtensionContext } from "../sessions/index.js";
 import { recordSessionModelUsage } from "../sessions/session-model-usage.js";
-import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 import {
   MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
   readWorkspaceBootstrapFile,
 } from "../workspace-bootstrap-read.js";
 import { resolveCompactionInstructions } from "./compaction-instructions.js";
+import {
+  prepareActiveCompactionCuration,
+  prepareCompactionSummaryInput,
+  resolveCuratedCompactionCandidate,
+} from "./compaction-safeguard-active-curation.js";
+import {
+  buildPreservedTurnsSection,
+  buildSplitTurnContextSection,
+  type CompactionLoss,
+  type ContextSection,
+  extractLatestUserAsk,
+  extractMessageText,
+  formatRequiredAskContext,
+  MAX_SPLIT_TURN_CONTEXT_CHARS,
+  SPLIT_TURN_SECTION_HEADING,
+  splitPreservedRecentTurns,
+} from "./compaction-safeguard-context.js";
 import {
   appendSummarySection,
   auditSummaryQuality,
@@ -64,46 +79,40 @@ import {
   createSummaryQualityRetentionPlan,
   extractOpaqueIdentifiers,
   nestRequiredSummaryHeadings,
-  wrapUntrustedInstructionBlock,
 } from "./compaction-safeguard-quality.js";
 import {
+  getCurrentCompactionSemanticMode,
   getCompactionSafeguardRuntime,
   setCompactionSafeguardCancellation,
 } from "./compaction-safeguard-runtime.js";
+import {
+  evaluateCompactionFidelity,
+  evaluateCompactionShadowCuration,
+} from "./compaction-safeguard-semantic-decisions.js";
+import {
+  buildCompactionSemanticSnapshot,
+  fingerprint,
+  fingerprintCompactionMessages,
+} from "./compaction-safeguard-semantic.js";
+import { createCompactionSummaryAttemptRuntime } from "./compaction-safeguard-summary-attempt.js";
 
 const log = createSubsystemLogger("compaction-safeguard");
 
 // Track session managers that have already logged the missing-model warning to avoid log spam.
 const missedModelWarningSessions = new WeakSet<object>();
-const SPLIT_TURN_SECTION_HEADING = "**Turn Context (split turn):**";
 const MAX_TOOL_FAILURES = 8;
 const MAX_TOOL_FAILURE_CHARS = 240;
 const CONTEXT_TRUNCATED_MARKER = "\n\n[Earlier compaction context truncated to fit budget]\n\n";
-// Split-turn context supplements the generated summary and must not claim its
-// guaranteed half of the final artifact before common finalization runs.
-const MAX_SPLIT_TURN_CONTEXT_CHARS = Math.floor(MAX_COMPACTION_SUMMARY_CHARS / 2);
-const SPLIT_TURN_TRUNCATED_MARKER = "[Earlier split-turn messages truncated]\n";
-const PRESERVED_TURNS_TRUNCATED_MARKER = "[Earlier preserved messages truncated]\n";
 const DEFAULT_RECENT_TURNS_PRESERVE = 3;
 const DEFAULT_QUALITY_GUARD_MAX_RETRIES = 1;
 const MAX_RECENT_TURNS_PRESERVE = 12;
 const MAX_QUALITY_GUARD_MAX_RETRIES = 3;
-const MAX_RECENT_TURN_TEXT_CHARS = 600;
-const MAX_REQUIRED_ASK_CONTEXT_CHARS = 2_000;
-const REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER = "\n[... split-turn ask context truncated ...]\n";
 const PREVIOUS_SUMMARY_REDISTILL_PREFIX =
   "Previous compaction summary to re-distill with the current conversation. " +
   "Prune stale, duplicate, or superseded details instead of preserving it verbatim.";
 const compactionSafeguardDeps = {
   summarizeInStages,
 };
-type CompactionLoss =
-  | "summary-tail"
-  | "suffix-head"
-  | "split-turn-head"
-  | "split-turn-tail"
-  | "preserved-turn-head";
-
 function prependPreviousSummaryForRedistill(params: {
   messages: AgentMessage[];
   previousSummary?: string;
@@ -125,10 +134,6 @@ function prependPreviousSummaryForRedistill(params: {
     } as AgentMessage,
     ...params.messages,
   ];
-}
-
-function nestMarkdownHeadings(text: string): string {
-  return text.replace(/^##(?=[ \t]+\S)/gmu, "###");
 }
 
 function normalizeLegacySplitTurnSummary(summary: string | undefined): string | undefined {
@@ -212,14 +217,6 @@ async function summarizeViaLLM(params: Parameters<typeof summarizeInStages>[0]):
  * Build the reserved suffix that follows the summary body. Both the provider
  * and LLM paths use this so diagnostic sections survive truncation.
  */
-type ContextSection = {
-  text: string;
-  segmentStarts: number[];
-  // Keep producer loss attached to the bounded artifact so every finalizer path
-  // emits the same redacted diagnostic when the section already dropped context.
-  truncatedLoss?: CompactionLoss;
-};
-
 type CompactionSuffix = {
   text: string;
   // Keep producer segment boundaries after later suffix sections are appended;
@@ -286,6 +283,23 @@ type ToolFailure = {
   meta?: string;
 };
 
+type ModelRegistryWithRequestAuthLookup = {
+  getApiKeyAndHeaders?: (
+    model: NonNullable<ExtensionContext["model"]>,
+  ) => Promise<ResolvedRequestAuth>;
+};
+
+type ResolvedRequestAuth =
+  | {
+      ok: true;
+      apiKey?: string;
+      headers?: Record<string, string>;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
 /**
  * Resolve model credentials. Returns auth details on success or a cancel reason on failure.
  * Extracted to keep the main handler readable when model/auth is conditional.
@@ -296,9 +310,9 @@ async function resolveModelAuth(
 ): Promise<
   { ok: true; apiKey?: string; headers?: Record<string, string> } | { ok: false; reason: string }
 > {
-  let requestAuth: Awaited<ReturnType<ExtensionContext["modelRegistry"]["getApiKeyAndHeaders"]>>;
+  let requestAuth: ResolvedRequestAuth;
   try {
-    const modelRegistry = ctx.modelRegistry;
+    const modelRegistry = ctx.modelRegistry as ModelRegistryWithRequestAuthLookup;
     if (typeof modelRegistry.getApiKeyAndHeaders !== "function") {
       throw new Error("model registry auth lookup unavailable");
     }
@@ -551,277 +565,6 @@ function resolveSummaryReserveTokens(
   return Math.max(1, Math.min(requested, Math.floor(modelMaxTokens)));
 }
 
-function extractMessageText(message: AgentMessage): string {
-  const content = (message as { content?: unknown }).content;
-  if (typeof content === "string") {
-    return content.trim();
-  }
-  return Array.isArray(content)
-    ? content
-        .flatMap((block) => {
-          const text =
-            block && typeof block === "object" ? (block as { text?: unknown }).text : undefined;
-          return typeof text === "string" && text.trim() ? [text.trim()] : [];
-        })
-        .join("\n")
-    : "";
-}
-
-function formatNonTextPlaceholder(content: unknown): string | null {
-  if (content == null || typeof content === "string") {
-    return null;
-  }
-  if (!Array.isArray(content)) {
-    return "[non-text content]";
-  }
-  const typeCounts = new Map<string, number>();
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const typeRaw = (block as { type?: unknown }).type;
-    const type = typeof typeRaw === "string" && typeRaw.trim().length > 0 ? typeRaw : "unknown";
-    if (type === "text") {
-      continue;
-    }
-    typeCounts.set(type, (typeCounts.get(type) ?? 0) + 1);
-  }
-  return typeCounts.size > 0
-    ? `[non-text content: ${Array.from(typeCounts, ([type, count]) =>
-        count > 1 ? `${type} x${count}` : type,
-      ).join(", ")}]`
-    : null;
-}
-
-function splitPreservedRecentTurns(params: {
-  messages: AgentMessage[];
-  recentTurnsPreserve: number;
-}): { summarizableMessages: AgentMessage[]; preservedMessages: AgentMessage[] } {
-  const preserveTurns = clampNonNegativeInt(
-    params.recentTurnsPreserve,
-    0,
-    MAX_RECENT_TURNS_PRESERVE,
-  );
-  if (preserveTurns <= 0) {
-    return { summarizableMessages: params.messages, preservedMessages: [] };
-  }
-  const conversationIndexes = params.messages.flatMap((message, index) =>
-    message.role === "user" || message.role === "assistant" ? [index] : [],
-  );
-  if (conversationIndexes.length === 0) {
-    return { summarizableMessages: params.messages, preservedMessages: [] };
-  }
-
-  const userIndexes = conversationIndexes.filter(
-    (index) => params.messages[index]?.role === "user",
-  );
-  const boundaryStartIndex = userIndexes.at(-preserveTurns);
-  const preservedIndexSet = new Set(
-    boundaryStartIndex === undefined
-      ? userIndexes
-      : conversationIndexes.filter((index) => index >= boundaryStartIndex),
-  );
-  if (boundaryStartIndex === undefined) {
-    for (const index of conversationIndexes.toReversed()) {
-      preservedIndexSet.add(index);
-      if (preservedIndexSet.size >= preserveTurns * 2) {
-        break;
-      }
-    }
-  }
-  const preservedToolCallIds = new Set<string>();
-  for (const index of preservedIndexSet) {
-    const message = params.messages[index];
-    if (message?.role === "assistant") {
-      for (const toolCall of extractToolCallsFromAssistant(message)) {
-        preservedToolCallIds.add(toolCall.id);
-      }
-    }
-  }
-  if (preservedToolCallIds.size > 0) {
-    const preservedStartIndex = conversationIndexes.find((index) => preservedIndexSet.has(index))!;
-    for (let index = preservedStartIndex; index < params.messages.length; index += 1) {
-      const message = params.messages[index];
-      if (message?.role !== "toolResult") {
-        continue;
-      }
-      const toolResultId = extractToolResultId(message);
-      if (toolResultId && preservedToolCallIds.has(toolResultId)) {
-        preservedIndexSet.add(index);
-      }
-    }
-  }
-  const summarizableMessages: AgentMessage[] = [];
-  const preservedMessages: AgentMessage[] = [];
-  for (const [index, message] of params.messages.entries()) {
-    (preservedIndexSet.has(index) ? preservedMessages : summarizableMessages).push(message);
-  }
-  // Preserving recent assistant turns can orphan downstream toolResult messages.
-  // Repair pairings here so compaction summarization doesn't trip strict providers.
-  return {
-    summarizableMessages: repairToolUseResultPairing(summarizableMessages).messages,
-    preservedMessages,
-  };
-}
-
-function formatContextMessage(message: AgentMessage): string | null {
-  let roleLabel: string;
-  if (message.role === "assistant") {
-    roleLabel = "Assistant";
-  } else if (message.role === "user") {
-    roleLabel = "User";
-  } else if (message.role === "toolResult") {
-    const toolName = (message as { toolName?: unknown }).toolName;
-    const safeToolName = typeof toolName === "string" && toolName.trim() ? toolName : "tool";
-    roleLabel = `Tool result (${safeToolName})`;
-  } else {
-    return null;
-  }
-  const rendered = [
-    extractMessageText(message),
-    formatNonTextPlaceholder((message as { content?: unknown }).content),
-  ]
-    .filter(Boolean)
-    .join("\n");
-  if (!rendered) {
-    return null;
-  }
-  const trimmed =
-    rendered.length > MAX_RECENT_TURN_TEXT_CHARS
-      ? `${truncateUtf16Safe(rendered, MAX_RECENT_TURN_TEXT_CHARS)}...`
-      : rendered;
-  return `- ${roleLabel}: ${trimmed}`;
-}
-
-function formatContextSegments(messages: AgentMessage[]): string[] {
-  const pairing = classifyToolUseResultPairing(messages);
-  // A call-bearing assistant and all occurrence-matched results are one context
-  // atom; keeping remainder messages separate lets later terminal text survive.
-  const toolSegments = new Map<AgentMessage, AgentMessage[]>(
-    pairing.frames.map((frame) => [
-      frame.assistant,
-      [
-        frame.assistant,
-        ...frame.occurrences.flatMap((occurrence) =>
-          occurrence.sourceResult ? [occurrence.sourceResult] : [],
-        ),
-      ],
-    ]),
-  );
-  return messages.flatMap((message) => {
-    if (message.role === "toolResult") {
-      // Paired results render with their assistant message; unclaimed results
-      // are unsafe context because their owning call is absent or ambiguous.
-      return [];
-    }
-    const lines = (toolSegments.get(message) ?? [message])
-      .map(formatContextMessage)
-      .filter((line): line is string => Boolean(line));
-    return lines.length > 0 ? [lines.join("\n")] : [];
-  });
-}
-
-function formatBoundedContextSection(params: {
-  messages: AgentMessage[];
-  heading: string;
-  maxChars: number;
-  truncatedMarker: string;
-  truncatedLoss: CompactionLoss;
-  onTruncated?: () => void;
-}): ContextSection {
-  const segments = formatContextSegments(params.messages);
-  if (segments.length === 0) {
-    return { text: "", segmentStarts: [] };
-  }
-
-  let prefix = `${params.heading}\n`;
-  let retained = segments;
-  const truncated = !(prefix.length + segments.join("\n").length <= params.maxChars);
-  if (truncated) {
-    prefix += params.truncatedMarker;
-    retained = [];
-    let usedChars = prefix.length;
-    for (const segment of segments.toReversed()) {
-      const segmentChars = segment.length + (retained.length > 0 ? 1 : 0);
-      if (usedChars + segmentChars > params.maxChars) {
-        break;
-      }
-      retained.unshift(segment);
-      usedChars += segmentChars;
-    }
-    params.onTruncated?.();
-  }
-  let offset = prefix.length;
-  return {
-    text: `${prefix}${retained.join("\n")}`,
-    segmentStarts: retained.map((segment) => {
-      const start = offset;
-      offset += segment.length + 1;
-      return start;
-    }),
-    ...(truncated ? { truncatedLoss: params.truncatedLoss } : {}),
-  };
-}
-
-function buildPreservedTurnsSection(messages: AgentMessage[]): ContextSection {
-  return formatBoundedContextSection({
-    messages,
-    heading: "\n\n## Recent turns preserved verbatim",
-    maxChars: MAX_SPLIT_TURN_CONTEXT_CHARS,
-    truncatedMarker: PRESERVED_TURNS_TRUNCATED_MARKER,
-    truncatedLoss: "preserved-turn-head",
-  });
-}
-
-function buildSplitTurnContextSection(
-  messages: AgentMessage[],
-  onTruncated?: () => void,
-): ContextSection {
-  return formatBoundedContextSection({
-    messages,
-    heading: "**Turn Context (split turn):**\n",
-    maxChars: MAX_SPLIT_TURN_CONTEXT_CHARS,
-    truncatedMarker: SPLIT_TURN_TRUNCATED_MARKER,
-    truncatedLoss: "split-turn-head",
-    onTruncated,
-  });
-}
-
-function formatGeneratedSplitTurnSection(summary: string, onTruncated?: () => void): string {
-  const heading = `${SPLIT_TURN_SECTION_HEADING}\n\n`;
-  const summaryBudget = MAX_SPLIT_TURN_CONTEXT_CHARS - heading.length;
-  const nestedSummary = nestMarkdownHeadings(summary);
-  const cappedSummary = capCompactionSummary(nestedSummary, summaryBudget);
-  if (cappedSummary.length < nestedSummary.length) {
-    onTruncated?.();
-  }
-  return `${heading}${cappedSummary}`;
-}
-
-function formatRequiredAskContext(rawAsk: string): string {
-  const source = rawAsk.trim();
-  if (source.length <= MAX_REQUIRED_ASK_CONTEXT_CHARS) {
-    return source;
-  }
-  const contentBudget =
-    MAX_REQUIRED_ASK_CONTEXT_CHARS - REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER.length;
-  const headBudget = Math.floor(contentBudget / 2);
-  const tailBudget = contentBudget - headBudget;
-  return `${truncateUtf16Safe(source, headBudget)}${REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER}${sliceUtf16Safe(source, -tailBudget)}`;
-}
-
-function extractLatestUserAsk(messages: AgentMessage[]): string | null {
-  for (const message of messages.toReversed()) {
-    if (message.role === "user") {
-      const ask = extractMessageText(message);
-      if (ask) {
-        return ask;
-      }
-    }
-  }
-  return null;
-}
-
 /**
  * Read and format critical workspace context for compaction summary.
  * Uses explicitly configured AGENTS.md section names only.
@@ -985,6 +728,121 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       summarizationInstructions,
       latestUnresolvedUserRequest ?? undefined,
     );
+
+    const semanticMode = getCurrentCompactionSemanticMode(ctx.sessionManager);
+    const semanticTimeoutMs = runtime?.semanticCurationTimeoutMs;
+    const semanticAgentId = ctx.sessionManager.getSessionTarget()?.agentId ?? runtime?.agentId;
+    const semanticSignal = signal ?? new AbortController().signal;
+    const semanticSourceMessages = [...baseMessagesToSummarize, ...turnPrefixMessages];
+    const semanticSnapshot =
+      semanticMode === "shadow"
+        ? (() => {
+            const { preservedMessages } = splitPreservedRecentTurns({
+              messages: baseMessagesToSummarize,
+              recentTurnsPreserve,
+            });
+            const semanticLatestAsk =
+              (preparation.isSplitTurn ? extractLatestUserAsk(turnPrefixMessages) : null) ??
+              extractLatestUserAsk(baseMessagesToSummarize);
+            const semanticIdentifiers = extractOpaqueIdentifiers(
+              semanticSourceMessages.slice(-10).map(extractMessageText).filter(Boolean).join("\n"),
+            );
+            return buildCompactionSemanticSnapshot({
+              messages: semanticSourceMessages,
+              protectedMessages: new Set(preservedMessages),
+              turnPrefixMessages: new Set(turnPrefixMessages),
+              identifiers: semanticIdentifiers,
+              latestUnresolvedUserRequest,
+              latestUserAsk: semanticLatestAsk,
+            });
+          })()
+        : undefined;
+    const observeSemanticSummary = async (summary: string) => {
+      if (!semanticSnapshot || getCurrentCompactionSemanticMode(ctx.sessionManager) !== "shadow") {
+        return;
+      }
+      if (getCurrentCompactionSemanticMode(ctx.sessionManager) !== "shadow") {
+        return;
+      }
+      try {
+        const [shadowResult, fidelityResult] = await Promise.allSettled([
+          evaluateCompactionShadowCuration({
+            runtime: { evaluate: evaluateDecision },
+            agentId: semanticAgentId,
+            snapshot: semanticSnapshot,
+            signal: semanticSignal,
+            timeoutMs: semanticTimeoutMs,
+            isEligible: () => getCurrentCompactionSemanticMode(ctx.sessionManager) === "shadow",
+          }),
+          evaluateCompactionFidelity({
+            runtime: { evaluate: evaluateDecision },
+            agentId: semanticAgentId,
+            snapshot: semanticSnapshot,
+            candidateSummary: summary,
+            signal: semanticSignal,
+            timeoutMs: semanticTimeoutMs,
+            isEligible: () => getCurrentCompactionSemanticMode(ctx.sessionManager) === "shadow",
+          }),
+        ]);
+        semanticSignal.throwIfAborted();
+        if (shadowResult.status === "rejected") {
+          throw shadowResult.reason;
+        }
+        if (fidelityResult.status === "rejected") {
+          throw fidelityResult.reason;
+        }
+        const shadow = shadowResult.value;
+        const fidelity = fidelityResult.value;
+        if (
+          getCurrentCompactionSemanticMode(ctx.sessionManager) !== "shadow" ||
+          fingerprintCompactionMessages(semanticSourceMessages) !==
+            semanticSnapshot.sourceFingerprint ||
+          shadow.sourceFingerprint !== semanticSnapshot.sourceFingerprint ||
+          fidelity.sourceFingerprint !== semanticSnapshot.sourceFingerprint ||
+          fidelity.candidateFingerprint !== fingerprint(summary)
+        ) {
+          log.info("Compaction semantic observation discarded because its source or mode changed.");
+          return;
+        }
+        if (shadow.status === "ok") {
+          log.info(
+            "Compaction semantic shadow: " +
+              `segments=${semanticSnapshot.segments.length} evaluated=${shadow.evaluatedSegmentIds.length} ` +
+              `excluded=${shadow.excludedSegmentIds.length} uncertain=${shadow.uncertainSegmentIds.length} ` +
+              `sourceChars=${shadow.originalChars} selectedChars=${shadow.selectedChars} ` +
+              `reduction=${(shadow.reductionRatio * 100).toFixed(1)}% complete=${shadow.complete} ` +
+              `provider=${shadow.provenance.providerId}`,
+          );
+        } else {
+          log.info(
+            `Compaction semantic shadow unavailable: status=${shadow.status} reason=${shadow.reason}`,
+          );
+        }
+        if (fidelity.status === "ok") {
+          const counts = fidelity.assessments.reduce<Record<string, number>>((acc, assessment) => {
+            acc[assessment.classification] = (acc[assessment.classification] ?? 0) + 1;
+            return acc;
+          }, {});
+          log.info(
+            "Compaction semantic fidelity: " +
+              `preserved=${counts.preserved ?? 0} missing=${counts.missing ?? 0} ` +
+              `contradicted=${counts.contradicted ?? 0} uncertain=${counts.uncertain ?? 0} ` +
+              `provider=${fidelity.provenance.providerId}`,
+          );
+        } else {
+          log.info(
+            `Compaction semantic fidelity unavailable: status=${fidelity.status} reason=${fidelity.reason}`,
+          );
+        }
+      } catch (err) {
+        if (semanticSignal.aborted) {
+          semanticSignal.throwIfAborted();
+        }
+        log.warn(
+          `Compaction semantic observation failed without changing compaction behavior: ${formatErrorMessage(err)}`,
+        );
+      }
+    };
     let workspaceContextPromise: Promise<string> | undefined;
     const finalizeSummaryText = async (
       body: string,
@@ -1034,18 +892,21 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       }
       return finalized;
     };
-    const compactionResult = (summary: string) => ({
-      compaction: {
-        summary,
-        firstKeptEntryId: preparation.firstKeptEntryId,
-        tokensBefore: preparation.tokensBefore,
-        details: {
-          readFiles,
-          modifiedFiles,
-          ...(latestUnresolvedUserRequest ? { latestUnresolvedUserRequest } : {}),
+    const compactionResult = (summary: string) => {
+      semanticSignal.throwIfAborted();
+      return {
+        compaction: {
+          summary,
+          firstKeptEntryId: preparation.firstKeptEntryId,
+          tokensBefore: preparation.tokensBefore,
+          details: {
+            readFiles,
+            modifiedFiles,
+            ...(latestUnresolvedUserRequest ? { latestUnresolvedUserRequest } : {}),
+          },
         },
-      },
-    });
+      };
+    };
     if (providerId) {
       const compactionProvider: CompactionProvider | undefined = getCompactionProvider(providerId);
       if (compactionProvider) {
@@ -1076,6 +937,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               },
               producerLosses,
             );
+            await observeSemanticSummary(finalized.summary);
             return compactionResult(finalized.summary);
           }
           log.warn(
@@ -1209,95 +1071,162 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         }
       }
 
-      const oracleMessages = [...messagesToSummarize, ...turnPrefixMessages];
+      const uncuratedSemanticSource = messagesToSummarize;
+      const oracleMessages = [...uncuratedSemanticSource, ...turnPrefixMessages];
       const splitUserAsk = preparation.isSplitTurn
         ? extractLatestUserAsk(turnPrefixMessages)
         : null;
-      const latestUserAsk = splitUserAsk ?? extractLatestUserAsk(messagesToSummarize);
+      const latestUserAsk = splitUserAsk ?? extractLatestUserAsk(uncuratedSemanticSource);
       const identifiers = extractOpaqueIdentifiers(
         oracleMessages.slice(-10).map(extractMessageText).filter(Boolean).join("\n"),
       );
-      const {
-        summarizableMessages: summaryTargetMessages,
-        preservedMessages: preservedRecentMessages,
-      } = splitPreservedRecentTurns({
-        messages: messagesToSummarize,
-        recentTurnsPreserve,
-      });
-      const preservedTurnsSectionLocal = buildPreservedTurnsSection(preservedRecentMessages);
-      const latestPreparedAsk = extractLatestUserAsk(messagesToSummarize);
       const requiredAskContext = formatRequiredAskContext(latestUserAsk ?? "");
-      const includePreservedContext =
-        !latestUnresolvedUserRequest &&
-        qualityGuardEnabled &&
-        latestPreparedAsk === latestUserAsk &&
-        Boolean(latestPreparedAsk) &&
-        (summaryTargetMessages.length > 0 ||
-          !preservedTurnsSectionLocal.text.includes(requiredAskContext));
-      messagesToSummarize = includePreservedContext ? messagesToSummarize : summaryTargetMessages;
-      const allMessages = [...messagesToSummarize, ...turnPrefixMessages];
 
-      // Use adaptive chunk ratio based on message sizes, reserving headroom for
-      // the summarization prompt, system prompt, previous summary, and reasoning budget
-      // that generateSummary adds on top of the serialized conversation chunk.
-      const adaptiveRatio = await computeAdaptiveChunkRatioWithWorker({
-        messages: allMessages,
-        contextWindow: contextWindowTokens,
-        signal,
+      const activeCuration = await prepareActiveCompactionCuration({
+        sessionManager: ctx.sessionManager,
+        agentId: semanticAgentId,
+        mode: semanticMode,
+        sourceMessages: uncuratedSemanticSource,
+        recentTurnsPreserve,
+        identifiers,
+        latestUnresolvedUserRequest,
+        latestUserAsk,
+        signal: semanticSignal,
+        timeoutMs: semanticTimeoutMs,
       });
-      const maxChunkTokens = Math.max(
-        1,
-        Math.floor(contextWindowTokens * adaptiveRatio) - SUMMARIZATION_OVERHEAD_TOKENS,
-      );
+      if (activeCuration.applied) {
+        log.info(
+          "Compaction semantic curation applied: " +
+            `sourceMessages=${activeCuration.applied.sourceMessages} ` +
+            `selectedMessages=${activeCuration.applied.selectedMessages} ` +
+            `sourceChars=${activeCuration.applied.originalChars} ` +
+            `selectedChars=${activeCuration.applied.selectedChars} ` +
+            `reduction=${(activeCuration.applied.reductionRatio * 100).toFixed(1)}% ` +
+            `provider=${activeCuration.applied.providerId}`,
+        );
+      } else if (semanticMode === "apply" && activeCuration.skippedReason) {
+        log.info(`Compaction semantic curation skipped: ${activeCuration.skippedReason}`);
+      }
+      messagesToSummarize = activeCuration.messages;
+
+      const preparedSummaryInput = prepareCompactionSummaryInput({
+        sourceMessages: messagesToSummarize,
+        recentTurnsPreserve,
+        qualityGuardEnabled,
+        latestUnresolvedUserRequest,
+        latestUserAsk,
+        requiredAskContext,
+      });
+      messagesToSummarize = preparedSummaryInput.messages;
+      const preservedTurnsSectionLocal = preparedSummaryInput.preservedTurnsSection;
       // Feed dropped-messages summary as previousSummary so the main summarization
       // incorporates context from pruned messages instead of losing it entirely.
       const effectivePreviousSummary = droppedSummary ?? previousSummary;
+
+      const summaryRuntime = createCompactionSummaryAttemptRuntime({
+        signal,
+        contextWindowTokens,
+        turnPrefixMessages,
+        isSplitTurn: preparation.isSplitTurn,
+        customInstructions,
+        structuredInstructions,
+        qualityGuardEnabled,
+        effectivePreviousSummary,
+        identifiers,
+        latestUserAsk,
+        splitUserAsk,
+        latestUnresolvedUserRequest,
+        requiredAskContext,
+        identifierPolicy,
+        summarize: (request) =>
+          summarizeViaLLM({
+            ...llmSummaryParams,
+            ...request,
+            headers: buildCompactionSummaryHeaders({
+              model,
+              messages: request.messages,
+              headers: authResult.headers,
+            }),
+          }),
+        finalizeSummaryText,
+      });
+      const { summarizePreparedInput, auditPreparedSummary } = summaryRuntime;
+      let uncuratedFallbackAttempted = false;
+
+      const buildUncuratedSemanticFallback = async (): Promise<string | null> => {
+        semanticSignal.throwIfAborted();
+        if (!activeCuration.uncuratedMessages || uncuratedFallbackAttempted) {
+          return null;
+        }
+        uncuratedFallbackAttempted = true;
+        const fallback = await summaryRuntime.buildUncuratedFallback({
+          sourceMessages: activeCuration.uncuratedMessages,
+          prepareInput: (sourceMessages) =>
+            prepareCompactionSummaryInput({
+              sourceMessages,
+              recentTurnsPreserve,
+              qualityGuardEnabled,
+              latestUnresolvedUserRequest,
+              latestUserAsk,
+              requiredAskContext,
+            }),
+        });
+        semanticSignal.throwIfAborted();
+        if (fallback.status !== "ok") {
+          log.warn(`Compaction semantic uncurated fallback failed: ${fallback.reason}`);
+          return null;
+        }
+        log.warn("Compaction semantic curation fell back to the uncurated summary input.");
+        return fallback.summary;
+      };
+
+      const acceptSummary = async (summary: string) => {
+        const resolution = await resolveCuratedCompactionCandidate({
+          sessionManager: ctx.sessionManager,
+          agentId: semanticAgentId,
+          snapshot: activeCuration.snapshot,
+          uncuratedMessages: activeCuration.uncuratedMessages,
+          omittedSegmentIds: activeCuration.omittedSegmentIds,
+          summary,
+          signal: semanticSignal,
+          timeoutMs: semanticTimeoutMs,
+          buildUncuratedFallback: buildUncuratedSemanticFallback,
+        });
+        if (resolution.status === "rejected") {
+          log.warn(`Compaction semantic curation rejected candidate: ${resolution.reason}`);
+          setCompactionSafeguardCancellation(
+            ctx.sessionManager,
+            "Compaction semantic curation could not preserve required source meaning.",
+          );
+          return { cancel: true as const };
+        }
+        if (resolution.usedFallback) {
+          log.warn(
+            `Compaction semantic curation fell back to uncurated input: ${resolution.reason}`,
+          );
+        }
+        await observeSemanticSummary(resolution.summary);
+        return compactionResult(resolution.summary);
+      };
 
       let correctiveInstructions = "";
       const totalAttempts = qualityGuardEnabled ? qualityGuardMaxRetries + 1 : 1;
 
       for (let attempt = 0; attempt < totalAttempts; attempt += 1) {
-        let splitTurnSectionLocal = "";
-        let splitTurnSummaryLocal = "";
-        let historySummary = "";
-        const producerLosses = new Set<CompactionLoss>();
+        let candidate: Awaited<ReturnType<typeof summarizePreparedInput>>;
         try {
-          historySummary =
-            messagesToSummarize.length > 0
-              ? await summarizeViaLLM({
-                  ...llmSummaryParams,
-                  messages: messagesToSummarize,
-                  maxChunkTokens,
-                  summaryPrompt: { kind: "custom", instructions: structuredInstructions },
-                  customInstructions: correctiveInstructions,
-                  previousSummary: effectivePreviousSummary,
-                })
-              : buildStructuredFallbackSummary(effectivePreviousSummary);
-
-          if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
-            const splitTurnFocusLabel = "Additional context from /compact";
-            const splitTurnFocus = wrapUntrustedInstructionBlock(
-              splitTurnFocusLabel,
-              customInstructions,
-            );
-            const prefixSummary = await summarizeViaLLM({
-              ...llmSummaryParams,
-              messages: turnPrefixMessages,
-              maxChunkTokens,
-              summaryPrompt: { kind: "turn-prefix" },
-              customInstructions: [splitTurnFocus, correctiveInstructions]
-                .filter(Boolean)
-                .join("\n\n"),
-              previousSummary: undefined,
-            });
-            splitTurnSummaryLocal = prefixSummary;
-            splitTurnSectionLocal = formatGeneratedSplitTurnSection(prefixSummary, () => {
-              producerLosses.add("split-turn-tail");
-            });
-          }
+          candidate = await summarizePreparedInput({
+            sourceMessages: messagesToSummarize,
+            preservedTurnsSection: preservedTurnsSectionLocal,
+            correctiveInstructions,
+          });
         } catch (attemptError) {
           if (signal?.aborted) {
             signal.throwIfAborted();
+          }
+          const fallbackSummary = await buildUncuratedSemanticFallback();
+          if (fallbackSummary) {
+            return compactionResult(fallbackSummary);
           }
           if (attempt > 0) {
             log.warn(
@@ -1312,41 +1241,20 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           }
           throw attemptError;
         }
-        const unbudgetedSummary = appendSummarySection(
-          historySummary,
-          splitTurnSectionLocal ? `\n\n${splitTurnSectionLocal}` : "",
-        );
-        const structuralSummary = qualityGuardEnabled ? historySummary : unbudgetedSummary;
-        const finalized = await finalizeSummaryText(
-          structuralSummary,
-          {
-            generatedSplitTurnSection:
-              qualityGuardEnabled && splitTurnSectionLocal
-                ? `\n\n${splitTurnSectionLocal}`
-                : undefined,
-            preservedTurnsSection: preservedTurnsSectionLocal,
-          },
-          producerLosses,
-          qualityGuardEnabled
-            ? {
-                auditSummary: unbudgetedSummary,
-                identifiers,
-                latestAsk: latestUserAsk,
-                latestAskInRetainedTurn: splitUserAsk !== null,
-                latestUnresolvedUserRequest: latestUnresolvedUserRequest ?? undefined,
-                requiredAskContext,
-                identifierPolicy,
-              }
-            : undefined,
-        );
 
+        const { finalized } = candidate;
         const canRegenerate =
           messagesToSummarize.length > 0 ||
           (preparation.isSplitTurn && turnPrefixMessages.length > 0);
+        const quality = auditPreparedSummary(candidate);
         if (!qualityGuardEnabled) {
-          return compactionResult(finalized.summary);
+          return await acceptSummary(finalized.summary);
         }
         if (finalized.qualityRetentionInfeasible) {
+          const fallbackSummary = await buildUncuratedSemanticFallback();
+          if (fallbackSummary) {
+            return compactionResult(fallbackSummary);
+          }
           log.warn(
             "Compaction safeguard: required quality facts exceed finalized artifact budget; " +
               `requiredChars>${MAX_COMPACTION_SUMMARY_CHARS} identifierCount=${identifiers.length}`,
@@ -1357,20 +1265,14 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           );
           return { cancel: true };
         }
-        const quality = auditSummaryQuality({
-          summary: finalized.summary,
-          structuralSummary: finalized.structuralSummary,
-          sourceSummaries: [historySummary, splitTurnSummaryLocal].filter(Boolean),
-          identifiers,
-          latestAsk: latestUserAsk,
-          latestUnresolvedUserRequest: latestUnresolvedUserRequest ?? undefined,
-          retainedTurnSummary: splitUserAsk !== null ? splitTurnSummaryLocal : undefined,
-          identifierPolicy,
-        });
         if (quality.ok) {
-          return compactionResult(finalized.summary);
+          return await acceptSummary(finalized.summary);
         }
         if (!canRegenerate || attempt >= totalAttempts - 1) {
+          const fallbackSummary = await buildUncuratedSemanticFallback();
+          if (fallbackSummary) {
+            return compactionResult(fallbackSummary);
+          }
           const reasonCodes = [
             ...new Set(quality.reasons.map((reason) => reason.split(":", 1)[0])),
           ];
@@ -1384,19 +1286,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           );
           return { cancel: true };
         }
-        const reasons = quality.reasons.join(", ");
-        const qualityFeedbackInstruction =
-          identifierPolicy === "strict"
-            ? "Fix all issues and include every required section with exact identifiers preserved."
-            : "Fix all issues and include every required section while following the configured identifier policy.";
-        const budgetInstruction = `Keep the complete summary body within ${finalized.bodyBudget} UTF-16 code units so the finalized artifact remains valid after required suffixes.`;
-        const qualityFeedbackReasons = wrapUntrustedInstructionBlock(
-          "Quality check feedback",
-          `Previous summary failed quality checks (${reasons}).`,
-        );
-        correctiveInstructions = qualityFeedbackReasons
-          ? `${qualityFeedbackInstruction}\n${budgetInstruction}\n\n${qualityFeedbackReasons}`
-          : `${qualityFeedbackInstruction}\n${budgetInstruction}`;
+        correctiveInstructions = summaryRuntime.buildCorrectiveInstructions({
+          audit: quality,
+          bodyBudget: finalized.bodyBudget,
+        });
       }
 
       throw new Error("Compaction safeguard exhausted summary attempts without a decision.");

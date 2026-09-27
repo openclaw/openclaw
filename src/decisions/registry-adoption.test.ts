@@ -21,6 +21,7 @@ import {
   prepareDecisionProviderReload,
 } from "./runtime.js";
 import type { DecisionProviderV1, ProviderDecisionOutcome } from "./types.js";
+import { DecisionConsumerClosedError } from "./validation.js";
 
 const config = {
   agents: { defaults: { decisionModel: "fixture/synthetic" } },
@@ -130,7 +131,7 @@ describe("prepared decision provider ownership", () => {
     const pending = run();
     await Promise.race([entered.promise, pending]);
     markPluginRegistryRetired(target);
-    await expect(pending).rejects.toBeDefined();
+    await expect(pending).rejects.toBeInstanceOf(DecisionConsumerClosedError);
     expect(settled).toBe(true);
     await expect(evaluateDecisionInRegistry(batch, options(), view, config)).rejects.toThrow(
       "consumer authority closed",
