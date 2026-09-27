@@ -55,6 +55,8 @@ describe("safe regex", () => {
     [/secret-mid/, `${"x".repeat(2500)}secret-mid${"y".repeat(2500)}`, true],
     [/^agent:ops:/, `${"E".repeat(2048)}agent:ops:ghost${"y".repeat(2500)}`, false],
     [/(?:^agent:ops:)/, `${"E".repeat(2048)}agent:ops:leak${"Z".repeat(2500)}`, false],
+    [/^agent:ops:|discord:tail/, `${"q".repeat(5000)}discord:tail`, true],
+    [/^agent:ops:|discord:tail/, `${"q".repeat(2500)}other${"q".repeat(2500)}`, false],
     [/discord:tail$/, `discord:tail${"y".repeat(5000)}`, false],
   ] as const)("checks bounded regex windows for %s", (pattern, input, expected) => {
     expect(testRegexWithBoundedInput(pattern, input)).toBe(expected);
