@@ -57,8 +57,7 @@ Do not disclose private desktop content, identifiers, model routes, or secrets.
 
 ## Review, prepare, merge
 
-For main-targeted PRs, prefer the native sequence; if blocked, use another
-authorized path.
+For main-targeted PRs, prefer the native sequence; adapt as needed.
 
 ```bash
 scripts/pr review-init <pr>
