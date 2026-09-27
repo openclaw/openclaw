@@ -54,17 +54,7 @@ export function resolveHeartbeatReplyPayload(
     // filters it, so the leak depends on the result shape.
     return isReasoningReplyPayload(replyResult) ? undefined : replyResult;
   }
-  for (let idx = replyResult.length - 1; idx >= 0; idx -= 1) {
-    const payload = replyResult[idx];
-    if (!payload) {
-      continue;
-    }
-    if (isReasoningReplyPayload(payload)) {
-      continue;
-    }
-    if (hasOutboundReplyContent(payload)) {
-      return payload;
-    }
-  }
-  return undefined;
+  return replyResult.findLast(
+    (payload) => payload && !isReasoningReplyPayload(payload) && hasOutboundReplyContent(payload),
+  );
 }

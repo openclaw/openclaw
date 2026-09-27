@@ -208,14 +208,10 @@ async function listStartupMemoryPathsByDate(params: {
       if (result.status !== "fulfilled") {
         continue;
       }
-      const existing = sluggedStatsByStamp.get(result.value.stamp);
-      if (existing) {
-        existing.push({ name: result.value.name, stat: result.value.stat });
-      } else {
-        sluggedStatsByStamp.set(result.value.stamp, [
-          { name: result.value.name, stat: result.value.stat },
-        ]);
-      }
+      const { stamp, name, stat } = result.value;
+      const entries = sluggedStatsByStamp.get(stamp) ?? [];
+      entries.push({ name, stat });
+      sluggedStatsByStamp.set(stamp, entries);
     }
 
     return new Map(
