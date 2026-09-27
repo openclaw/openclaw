@@ -19,7 +19,10 @@ import type { OpenClawStateWorkerOperations } from "./openclaw-state-worker-cont
 type LeaseWorkerOwner = ReturnType<typeof createOpenClawStateLeaseWorkerOwner>;
 
 /** Preserve the original admission, maintenance scope and coordinator runtime. */
-export function createOpenClawStateLeaseWorkerStorage(context: OpenClawStateWorkerContext) {
+export function createOpenClawStateLeaseWorkerStorage(
+  context: OpenClawStateWorkerContext,
+  processBound = false,
+) {
   const storage = {
     path: context.admission.databasePath,
     assertCurrent() {
@@ -54,6 +57,7 @@ export function createOpenClawStateLeaseWorkerStorage(context: OpenClawStateWork
                   identity: admission.identity,
                   leaseMs,
                   operationLabel,
+                  processBound,
                   ...(observeExpiry ? { observeExpiry: true as const } : {}),
                 },
               },

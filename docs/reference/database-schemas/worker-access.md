@@ -107,7 +107,23 @@ The exported `OpenClawAgentSqliteWorkerStore` type retains its `run` and `close`
 contract for existing adapters. The factory's inferred return type additionally
 provides the typed single-command `execute` method.
 
+Agent registration invalidates discovery when a missing store enters creating
+admission or an existing store begins its actual registration transaction. A
+validated native reopen leaves discovery snapshots current. The host rechecks
+the source after each notification and settles attempted registration even when
+its commit receipt is unavailable; committed topology publication retains the
+original shared-state generation.
+
 ## Carry facts, publish after commit
+
+Session branch summaries retain compact counts and headlines in the transcript
+read worker, keyed by physical database identity and the transcript rewrite/append
+watermark. After a complete scan verifies unique indexed identities and backward
+ancestry, ordinary message appends extend the active summary using only the new
+sequence range. Rewrites, navigation changes, and legacy or irregular graphs use
+the complete scanner. First reads still scale with transcript length; cached
+append refreshes scale with new messages and branch count. No schema, stored
+transcript, retention, or configuration changes are required.
 
 Proxy capture sessions, events, payload compression, queries, and purge operations
 execute through the shared-state worker. Bundled HTTP and WebSocket capture
@@ -146,8 +162,10 @@ inspection retains its existing-only, noncreating opener inside the broker.
 Only diagnostic failed health, pressure, and account discovery use the read-only
 worker. Channel callbacks retain payload and lane policy on the
 Gateway thread; the writer compares the prepared ordered rows before claiming
-and rejects stale recovery decisions. A conflicting claim snapshot is prepared
-again; an uncertain write is never replayed. Database admission and commit remain
+and rejects stale recovery decisions. The host rechecks lane selection against
+live channel policy at transaction and commit admission. A conflicting claim
+snapshot is prepared again; a policy conflict retries only after confirmed
+rollback, and an uncertain write is never replayed. Database admission and commit remain
 bound to the captured owner, and shutdown joins accepted work. The existing
 `channel_ingress_events` schema, payload encoding, dedupe windows, retention, and
 update behavior are unchanged. Drain inspection reads pending and claimed rows in

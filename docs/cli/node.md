@@ -122,8 +122,12 @@ persisted in service arguments.
 
 For a managed foreground process, `--pair-if-needed` reuses native device-token
 storage across restarts; it does not keep a separate enrollment marker. Preserve
-the node state directory. An expired setup code cannot enroll a new state
-directory or replace a revoked device token; provision a fresh code when needed.
+the node state directory. After the setup code expires, the node can still reconnect
+when its saved identity and node token exist and every selected Gateway endpoint
+matches the saved Gateway scope. The expired bootstrap token is never sent.
+An expired setup code cannot enroll a new state directory or replace a revoked
+device token; provision a fresh code when needed. Explicit `--pair` still rejects
+expired setup codes.
 
 `openclaw node run` and `openclaw node install` resolve gateway auth from config/env (no `--token`/`--password` flags on node commands):
 

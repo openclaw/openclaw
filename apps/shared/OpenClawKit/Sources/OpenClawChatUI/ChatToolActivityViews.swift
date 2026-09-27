@@ -55,6 +55,22 @@ struct ChatToolActivityItem: Identifiable, Equatable {
     }
 }
 
+extension ChatToolActivityItem {
+    init(live call: OpenClawChatPendingToolCall) {
+        self.init(
+            id: call.id,
+            name: call.name,
+            arguments: call.args,
+            details: nil,
+            resultText: nil,
+            state: call.activity == nil && !call.isComplete || call.activity?.status == "running" ? .running :
+                call.activity?.status == "completed" ? .finished :
+                call.activity?.status == "failed" || call.activity?.status == "blocked" ? .failed : .unavailable,
+            liveDiffStat: call.diffStat,
+            activity: call.activity)
+    }
+}
+
 enum ChatToolActivity {
     static func resultIsError(_ flag: Bool?, text: String?) -> Bool {
         if let flag { return flag }
@@ -77,35 +93,48 @@ enum ChatToolActivity {
 
     static func items(
         calls: [OpenClawChatMessageContent],
-        results: [OpenClawChatMessageContent]) -> [ChatToolActivityItem]
+        results: [OpenClawChatMessageContent],
+        activity: [OpenClawAgentActivityItem]? = nil,
+        liveTools: [OpenClawChatPendingToolCall] = []) -> [ChatToolActivityItem]
     {
         var remainingResults = Array(results.enumerated())
         var items = calls.enumerated().map { index, call in
+            let id = call.id ?? "call-\(index)"
             let resultIndex = call.id.flatMap { callID in
                 remainingResults.firstIndex { _, result in result.id == callID }
             }
             let result = resultIndex.map { remainingResults.remove(at: $0).element }
+            // History owns recorded inputs; live activity supplies status until
+            // the result arrives, never replacing already-recorded arguments.
+            let live = result == nil
+                ? liveTools.first(where: { $0.id == call.id }).map(ChatToolActivityItem.init(live:)) : nil
 
             return ChatToolActivityItem(
-                id: call.id ?? "call-\(index)",
-                name: call.name,
-                arguments: call.arguments,
+                id: id,
+                name: call.name ?? live?.name,
+                arguments: call.arguments ?? live?.arguments,
                 details: result?.details,
                 resultText: result?.text,
                 state: result
-                    .map { Self.resultIsError($0.isError, text: $0.text) ? .failed : .finished } ?? .unavailable,
-                liveDiffStat: nil)
+                    .map { Self.resultIsError($0.isError, text: $0.text) ? .failed : .finished } ??
+                    live?.state ?? .unavailable,
+                liveDiffStat: live?.liveDiffStat,
+                activity: live?.activity ?? activity?.first { $0.toolCallId == id },
+                activityPrepared: live == nil && activity != nil)
         }
 
         items.append(contentsOf: remainingResults.map { index, result in
-            ChatToolActivityItem(
-                id: result.id ?? "result-\(index)",
+            let id = result.id ?? "result-\(index)"
+            return ChatToolActivityItem(
+                id: id,
                 name: result.name,
                 arguments: nil,
                 details: result.details,
                 resultText: result.text,
                 state: Self.resultIsError(result.isError, text: result.text) ? .failed : .finished,
-                liveDiffStat: nil)
+                liveDiffStat: nil,
+                activity: activity?.first { $0.toolCallId == id },
+                activityPrepared: activity != nil)
         })
         return items
     }

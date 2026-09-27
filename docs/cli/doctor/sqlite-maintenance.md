@@ -191,7 +191,7 @@ for cleanup. Preserve the remaining originals and migration manifests for recove
 `historical_transcript_deferred` can report that an archived session registry no
 longer matches its migration receipt. The receipt identifies the original file by
 device, inode, modification time, size, and SHA-256; it is not an agent or install
-ID. Historical archive discovery and recovery cleanup accept a device-number
+ID. Historical archive discovery, restore, and recovery cleanup accept a device-number
 change after a volume remount; inode, modification time, size, and SHA-256 must
 still match. Copying, replacing, touching, or editing an archive can invalidate
 that receipt.

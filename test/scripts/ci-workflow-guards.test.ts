@@ -7964,7 +7964,7 @@ server.listen(0, "127.0.0.1", () => {
       "actionlint install",
     );
 
-    expect(setupGo.with).toEqual({ "go-version": "1.25.0", cache: false });
+    expect(setupGo.with).toEqual({ "go-version": "1.27.1", cache: false });
     expect(steps.indexOf(setupGo)).toBeLessThan(steps.indexOf(install));
     expect(install.run).toContain(`ACTIONLINT_REVISION="${revision}"`);
     expect(install.run).toContain('export GOBIN="$RUNNER_TEMP/actionlint-bin"');
@@ -11006,10 +11006,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         CRABBOX_COORDINATOR_TOKEN:
           "${{ secrets.CRABBOX_COORDINATOR_TOKEN || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN }}",
         GH_APP_TOKEN:
-          "${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}",
+          "${{ steps.publish-app-token.outputs.token || steps.publish-app-token-fallback.outputs.token }}",
         GH_TOKEN: "${{ github.token }}",
       },
-      run: "node scripts/pr-crabbox-gate-publisher.mjs",
+      run: "node scripts/pr-crabbox-gate-publisher.mjs --publish",
     });
     expect(job.steps[2].run).toContain("crabbox_0.46.0_linux_amd64.tar.gz");
     expect(job.steps[2].run).toContain(

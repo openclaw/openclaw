@@ -140,8 +140,11 @@ struct ChatProTab: View {
     @ViewBuilder
     private var chatSurface: some View {
         if let viewModel {
+            let owner = self.appModel.chatPresentation
+            let presentationID = owner.presentationID
             OpenClawChatView(
                 viewModel: viewModel,
+                resolveComposerModel: owner.composerModelResolver(),
                 drawsBackground: true,
                 showsSessionSwitcher: false,
                 userAccent: self.chatUserAccent,
@@ -149,7 +152,6 @@ struct ChatProTab: View {
                 assistantName: self.agentDisplayName,
                 assistantAvatarText: self.agentBadge,
                 assistantAvatarTint: OpenClawBrand.accent,
-                showsAssistantAvatars: false,
                 composerChrome: .clean,
                 isComposerEnabled: self.gatewayConnected || self.canQueueOffline,
                 isAttachmentInputEnabled: self.gatewayConnected || self.canQueueOffline,
@@ -173,7 +175,7 @@ struct ChatProTab: View {
                 })
                 // iMessage-style grey bubbles for agent replies in the clean chrome.
                 .environment(\.openClawAssistantBubblesInCleanChrome, true)
-                .id(ObjectIdentifier(viewModel))
+                .id(presentationID)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else {
             ContentUnavailableView(

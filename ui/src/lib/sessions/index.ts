@@ -4,6 +4,7 @@ import type { ConnectionBootstrapCoordinator } from "../../app/connection-bootst
 import { formatUiError } from "../format-error.ts";
 import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
 import type { SessionCreateOutcome } from "./create.ts";
+import { projectSessionResultRows } from "./reconcile.ts";
 import { subscribeAgentSelection, type SessionAgentSelection } from "./session-agent-selection.ts";
 import type { SessionCapability, SessionGateway, SessionState } from "./session-capability.ts";
 import { createSessionDeletions } from "./session-deletions.ts";
@@ -19,6 +20,7 @@ import { sessionRetryDelayMs } from "./session-retry.ts";
 import { createSessionRosterCacheLifecycle } from "./session-roster-cache-lifecycle.ts";
 import type { SessionRosterCacheOptions } from "./session-roster-cache.ts";
 import { createSessionRosterRefresh } from "./session-roster-refresh.ts";
+import { sanitizeSessionRow } from "./session-row-reconcile.ts";
 import type { SessionRunTerminal } from "./session-run-terminal.ts";
 import { createSessionScopedOperations } from "./session-scoped-operations.ts";
 import { createSessionThinkingClaims } from "./session-thinking-claims.ts";
@@ -236,7 +238,11 @@ export function createSessionCapability(
     observerError: () => sessionEventSubscriptionError,
     decorate: decorateRows,
     reconcileList: (result, revision, agentId) => {
-      const admitted = deletions.reconcileList(result, revision, agentId);
+      const admitted = deletions.reconcileList(
+        projectSessionResultRows(result, result?.sessions.map(sanitizeSessionRow) ?? []),
+        revision,
+        agentId,
+      );
       const sources = roster.observations.observeReadRows(
         admitted?.sessions ?? [],
         revision,

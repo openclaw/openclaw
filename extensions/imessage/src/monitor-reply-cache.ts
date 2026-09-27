@@ -408,10 +408,31 @@ export async function isKnownFromMeIMessageMessageId(
   }
   await hydrateFromStoreOnce();
   const cached = imessageReplyCacheByMessageId.get(trimmed);
-  if (!cached || cached.isFromMe !== true || cached.accountId !== ctx.accountId) {
+  if (!cached || cached.isFromMe !== true) {
     return false;
   }
-  return isPositiveIMessageChatMatch(cached, ctx);
+  return resolveCachedResourceBinding(trimmed, { ...ctx, accountId: ctx.accountId }) === "match";
+}
+
+export async function isKnownFromMeIMessageTarget(params: {
+  messageIds: string[];
+  accountId: string;
+  chatId?: number;
+  chatGuid?: string;
+  chatIdentifier?: string;
+  isKnownFromMeMessageId?: (
+    ...args: Parameters<typeof isKnownFromMeIMessageMessageId>
+  ) => boolean | Promise<boolean>;
+}): Promise<boolean> {
+  const { accountId, chatId, chatGuid, chatIdentifier } = params;
+  const ctx = { accountId, chatId, chatGuid, chatIdentifier };
+  const isKnownFromMe = params.isKnownFromMeMessageId ?? isKnownFromMeIMessageMessageId;
+  for (const messageId of params.messageIds) {
+    if (await isKnownFromMe(messageId, ctx)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function buildFromMeError(inputId: string, inputKind: "short" | "uuid"): Error {

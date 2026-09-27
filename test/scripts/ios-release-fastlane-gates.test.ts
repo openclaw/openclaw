@@ -671,7 +671,7 @@ puts JSON.generate(rows)
     expect(iosJob).not.toContain("Install locked Fastlane bundle");
     expect(shardJob).toContain('BUNDLE_DEPLOYMENT: "true"');
     expect(shardJob).toContain("BUNDLE_GEMFILE: ${{ github.workspace }}/apps/ios/Gemfile");
-    expect(shardJob).toContain("ruby/setup-ruby@984c0c890880bbf811283d6f09c4607c62d210a4");
+    expect(shardJob).toContain("ruby/setup-ruby@a0102e0972be65f351c307e2d64b9314a57c8073");
     expect(shardJob).toContain('ruby-version: "3.4.10"');
     expect(shardJob).toContain('bundler: "4.0.21"');
     expect(shardJob).toContain("bundler-cache: false");

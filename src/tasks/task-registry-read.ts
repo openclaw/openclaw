@@ -257,6 +257,14 @@ export function createTaskRegistryReadPreparation() {
   };
 }
 
+/** Maintenance joins a fresh event fence per batch without waiting for unrelated publication. */
+export function createTaskRegistryMaintenanceReadPreparation() {
+  const context = captureOpenClawStateWorkerContext();
+  const store = getTaskRegistryStore();
+  return async (): Promise<TaskRegistryRead | undefined> =>
+    prepareTaskRegistryRead(await prepareTaskRegistryReadOwner(context, store));
+}
+
 export async function prepareTaskRegistryRead(
   owner?: TaskRegistryReadOwner,
 ): Promise<TaskRegistryRead | undefined> {

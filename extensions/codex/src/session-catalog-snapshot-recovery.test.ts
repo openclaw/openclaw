@@ -19,96 +19,90 @@ import { idleThread } from "./session-catalog.test-helpers.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-it.each([1, 3])(
-  "does not restore offline-deleted rows after %i failed snapshot enumerations",
-  async (failedRestarts) => {
-    const namespace = `snapshot-read-recovery-${failedRestarts}`;
-    const openState = () =>
-      createPluginStateKeyedStoreForTests<StoredCodexCatalogEntry>("codex", {
-        namespace,
-        maxEntries: 20_001,
-      });
-    const deleted = idleThread({ id: "deleted-while-offline", source: "cli" });
-    const current = idleThread({ id: "still-current", source: "cli" });
-    let nativeRows: CodexThread[] = [deleted, current];
-    const readNative = vi.fn(async () =>
-      projectCodexCatalogPage({ data: nativeRows }, { sanitize: sanitizeTerminalText }),
-    );
-    const createIndex = (failSnapshot = false) => {
-      const state = openState();
-      if (failSnapshot) {
-        vi.spyOn(state, "entries").mockRejectedValue(new Error("snapshot enumeration unavailable"));
-      }
-      return new CodexCatalogIndex({
-        homeId: namespace,
-        state,
-        readNative,
-        assertCurrent: () => {},
-      });
-    };
-    const original = createIndex();
-    try {
-      await original.initialize();
-      expect((await original.list({})).sessions).toHaveLength(2);
-    } finally {
-      await original.close();
-    }
-    await closeOpenClawStateDatabaseAsync();
-    nativeRows = [current];
+function createSnapshotFixture(namespace: string, rows: CodexThread[], homeId = namespace) {
+  const native = { rows };
+  const openState = () =>
+    createPluginStateKeyedStoreForTests<StoredCodexCatalogEntry>("codex", {
+      namespace,
+      maxEntries: 20_001,
+    });
+  const readNative = vi.fn(async () =>
+    projectCodexCatalogPage({ data: native.rows }, { sanitize: sanitizeTerminalText }),
+  );
+  const createIndex = (state = openState()) =>
+    new CodexCatalogIndex({ homeId, state, readNative, assertCurrent: () => {} });
+  return { native, openState, readNative, createIndex };
+}
 
-    for (let restart = 0; restart < failedRestarts; restart++) {
-      const recovering = createIndex(true);
-      try {
-        // A snapshot outage must not prevent native hydration or memory serving.
-        expect((await recovering.list({})).sessions.map((row) => row.threadId)).toEqual([
-          current.id,
-        ]);
-        await recovering.initialize();
-        await recovering.upsertThread({ ...current, name: `Changed during outage ${restart}` });
-      } finally {
-        await recovering.close();
-      }
-      await closeOpenClawStateDatabaseAsync();
-    }
-
-    const recovered = createIndex();
-    try {
-      // Check the first list before a saved snapshot's background refresh could repair it.
-      expect((await recovered.list({})).sessions.map((row) => row.threadId)).toEqual([current.id]);
-      await recovered.initialize();
-      const saved = await openState().entries();
-      expect(
-        saved.flatMap((entry) => (entry.value.kind === "row" ? [entry.value.row.threadId] : [])),
-      ).toEqual([current.id]);
-      expect(saved.some((entry) => entry.key === "complete")).toBe(true);
-    } finally {
-      await recovered.close();
-    }
-  },
-);
-
-it("invalidates saved completeness when an admitted deletion fails during shutdown", async () => {
-  const home = tempDirs.make("codex-catalog-shutdown-failure-");
-  const startOptions: CodexAppServerStartOptions = {
+function localStartOptions(prefix: string): CodexAppServerStartOptions {
+  return {
     transport: "stdio",
     command: "codex",
     args: ["app-server"],
-    env: { CODEX_HOME: home },
+    env: { CODEX_HOME: tempDirs.make(prefix) },
     headers: {},
   };
+}
+
+it("does not restore offline-deleted rows after repeated failed snapshot enumerations", async () => {
+  const deleted = idleThread({ id: "deleted-while-offline", source: "cli" });
+  const current = idleThread({ id: "still-current", source: "cli" });
+  const { native, openState, createIndex } = createSnapshotFixture("snapshot-read-recovery", [
+    deleted,
+    current,
+  ]);
+  const original = createIndex();
+  try {
+    await original.initialize();
+    expect((await original.list({})).sessions).toHaveLength(2);
+  } finally {
+    await original.close();
+  }
+  await closeOpenClawStateDatabaseAsync();
+  native.rows = [current];
+
+  for (let restart = 0; restart < 3; restart++) {
+    const state = openState();
+    vi.spyOn(state, "entries").mockRejectedValue(new Error("snapshot enumeration unavailable"));
+    const recovering = createIndex(state);
+    try {
+      // A snapshot outage must not prevent native hydration or memory serving.
+      expect((await recovering.list({})).sessions.map((row) => row.threadId)).toEqual([current.id]);
+      await recovering.initialize();
+      await recovering.upsertThread({ ...current, name: `Changed during outage ${restart}` });
+    } finally {
+      await recovering.close();
+    }
+    await closeOpenClawStateDatabaseAsync();
+  }
+
+  const recovered = createIndex();
+  try {
+    // Check the first list before a saved snapshot's background refresh could repair it.
+    expect((await recovered.list({})).sessions.map((row) => row.threadId)).toEqual([current.id]);
+    await recovered.initialize();
+    const saved = await openState().entries();
+    expect(
+      saved.flatMap((entry) => (entry.value.kind === "row" ? [entry.value.row.threadId] : [])),
+    ).toEqual([current.id]);
+    expect(saved.some((entry) => entry.key === "complete")).toBe(true);
+  } finally {
+    await recovered.close();
+  }
+});
+
+it("invalidates saved completeness when an admitted deletion fails during shutdown", async () => {
+  const startOptions = localStartOptions("codex-catalog-shutdown-failure-");
   const homeId = await codexCatalogResidentHomeKey({ startOptions });
-  const openState = () =>
-    createPluginStateKeyedStoreForTests<StoredCodexCatalogEntry>("codex", {
-      namespace: "snapshot-shutdown-failure",
-      maxEntries: 20_001,
-    });
   const deleted = idleThread({ id: "deleted-before-shutdown", source: "cli" });
   const current = idleThread({ id: "still-current", source: "cli" });
-  let nativeRows: CodexThread[] = [deleted, current];
-  const readNative = async () =>
-    projectCodexCatalogPage({ data: nativeRows }, { sanitize: sanitizeTerminalText });
+  const { native, openState, createIndex } = createSnapshotFixture(
+    "snapshot-shutdown-failure",
+    [deleted, current],
+    homeId,
+  );
   const state = openState();
-  const index = new CodexCatalogIndex({ homeId, state, readNative, assertCurrent: () => {} });
+  const index = createIndex(state);
   const harness = createClientHarness();
   const deletionStarted = createDeferred<void>();
   const deletionAllowed = createDeferred<void>();
@@ -126,7 +120,7 @@ it("invalidates saved completeness when an admitted deletion fails during shutdo
       }
       return realDelete(key);
     });
-    nativeRows = [current];
+    native.rows = [current];
     harness.send({ method: "thread/deleted", params: { threadId: deleted.id } });
     await deletionStarted.promise;
     expect((await index.list({})).sessions.map((row) => row.threadId)).toEqual([current.id]);
@@ -141,12 +135,7 @@ it("invalidates saved completeness when an admitted deletion fails during shutdo
   const savedAfterShutdown = await openState().entries();
   await closeOpenClawStateDatabaseAsync();
 
-  const recovered = new CodexCatalogIndex({
-    homeId,
-    state: openState(),
-    readNative,
-    assertCurrent: () => {},
-  });
+  const recovered = createIndex();
   try {
     expect((await recovered.list({})).sessions.map((row) => row.threadId)).toEqual([current.id]);
     expect(savedAfterShutdown.some((entry) => entry.key === "complete")).toBe(false);
@@ -164,28 +153,15 @@ it("invalidates saved completeness when an admitted deletion fails during shutdo
 it.each(["before", "during"])(
   "persists archives received %s saved snapshot restoration",
   async (phase) => {
-    const home = tempDirs.make(`codex-catalog-archive-${phase}-restore-`);
-    const startOptions: CodexAppServerStartOptions = {
-      transport: "stdio",
-      command: "codex",
-      args: ["app-server"],
-      env: { CODEX_HOME: home },
-      headers: {},
-    };
+    const startOptions = localStartOptions(`codex-catalog-archive-${phase}-restore-`);
     const homeId = await codexCatalogResidentHomeKey({ startOptions });
-    const openState = () =>
-      createPluginStateKeyedStoreForTests<StoredCodexCatalogEntry>("codex", {
-        namespace: `archive-${phase}-snapshot-restore`,
-        maxEntries: 20_001,
-      });
     const archived = idleThread({ id: "archived-during-restore", source: "cli" });
     const current = idleThread({ id: "still-current", source: "cli" });
-    let nativeRows: CodexThread[] = [archived, current];
-    const readNative = vi.fn(async () =>
-      projectCodexCatalogPage({ data: nativeRows }, { sanitize: sanitizeTerminalText }),
+    const { native, openState, readNative, createIndex } = createSnapshotFixture(
+      `archive-${phase}-snapshot-restore`,
+      [archived, current],
+      homeId,
     );
-    const createIndex = (state = openState()) =>
-      new CodexCatalogIndex({ homeId, state, readNative, assertCurrent: () => {} });
     const original = createIndex();
     try {
       await original.initialize();
@@ -211,7 +187,7 @@ it.each(["before", "during"])(
     try {
       await observeCodexCatalogClient(harness.client, { startOptions });
       const archive = () => {
-        nativeRows = [current];
+        native.rows = [current];
         harness.send({ method: "thread/archived", params: { threadId: archived.id } });
       };
       if (phase === "before") {

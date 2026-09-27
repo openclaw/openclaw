@@ -4576,7 +4576,17 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   gap: 0;
 }
 
-.content:has(.plugin-tab-embed) > * + * {
+/* Name the children: a universal subject under this :has() restyles the whole
+   document on every insertion inside .content, including each chat row. */
+.content:has(.plugin-tab-embed)
+  > :is(
+    .connection-action-block,
+    openclaw-sidebar-attention,
+    openclaw-sidebar-update-card,
+    .native-embed-header,
+    .settings-embed-list,
+    openclaw-router-outlet
+  ) {
   margin-top: 0;
 }
 

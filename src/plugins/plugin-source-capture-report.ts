@@ -160,6 +160,10 @@ export async function pruneLegacyPluginSourceCaptures(
           skipped.push({ path: root.path, reason: "capture inspection is incomplete" });
           continue;
         }
+        if (process.getuid && current.identity.uid !== process.getuid()) {
+          skipped.push({ path: root.path, reason: "owned by another UID" });
+          continue;
+        }
         if (current.changedAtMs >= performance.timeOrigin) {
           skipped.push({
             path: root.path,
