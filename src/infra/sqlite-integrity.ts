@@ -32,9 +32,12 @@ export type SqliteIntegrityCheck = {
 export type SqliteIntegrityOperation<T> = Generator<SqliteIntegrityCheck, T, void>;
 
 export type SqliteIntegrityDiagnostics = {
-  integrityGateReason?: "revoked" | "no-proof" | "lease-class";
+  integrityGateReason?: "revoked" | "stale-lease" | "dirty-receipt" | "no-proof" | "lease-class";
   integrityGateMode?: "full" | "tables";
   integrityTableTimings?: SqliteIntegrityCheckTiming["tables"];
+  integrityTableTotals?: Partial<
+    Record<SqliteCheckPragma, { tableCount: number; elapsedMs: number }>
+  >;
   integrityGateMs?: number;
   integrityGateOutcome?: "healthy" | "failed" | "cached";
   integrityCheckSyncMs?: number;
@@ -59,6 +62,7 @@ export function* sqliteIntegrityCheckSteps(
     check.timing = {};
     diagnostics.integrityGateMode = tables ? "tables" : "full";
     delete diagnostics.integrityTableTimings;
+    delete diagnostics.integrityTableTotals;
     // A later async driver must not inherit an earlier gate's synchronous measurement.
     delete diagnostics.integrityCheckSyncMs;
     delete diagnostics.integrityOutsideCheckMs;
@@ -80,7 +84,18 @@ export function* sqliteIntegrityCheckSteps(
     if (diagnostics) {
       diagnostics.integrityGateMs = Math.floor(performance.now() - startedAt);
       if (check.timing?.tables) {
-        diagnostics.integrityTableTimings = check.timing.tables;
+        diagnostics.integrityTableTotals = {};
+        for (const table of check.timing.tables) {
+          const total = (diagnostics.integrityTableTotals[table.check] ??= {
+            tableCount: 0,
+            elapsedMs: 0,
+          });
+          total.tableCount += 1;
+          total.elapsedMs += table.elapsedMs;
+        }
+        diagnostics.integrityTableTimings = check.timing.tables
+          .toSorted((left, right) => right.elapsedMs - left.elapsedMs)
+          .slice(0, 10);
       }
       if (check.timing?.syncElapsedMs !== undefined) {
         diagnostics.integrityCheckSyncMs = Math.floor(check.timing.syncElapsedMs);
