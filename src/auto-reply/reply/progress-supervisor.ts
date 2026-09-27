@@ -2,9 +2,8 @@ import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { HOST_PROGRESS_SUPERVISOR_KIND, type ReplyPayload } from "../reply-payload.js";
 
-export const DEFAULT_PROGRESS_SUPERVISOR_INTERVAL_MS = 55_000;
-export const MAX_PROGRESS_SUPERVISOR_INTERVAL_SECONDS = 2_147_483;
-export const DEFAULT_PROGRESS_SUPERVISOR_TEXT =
+const DEFAULT_PROGRESS_SUPERVISOR_INTERVAL_MS = 55_000;
+const DEFAULT_PROGRESS_SUPERVISOR_TEXT =
   "Work is still in progress. Another update will follow if needed.";
 const PROGRESS_SUPERVISOR_GENERATION_KEY = "openclawProgressGeneration";
 
@@ -29,7 +28,7 @@ function readProgressSupervisorGeneration(payload: ReplyPayload): number | undef
   return typeof generation === "number" ? generation : undefined;
 }
 
-export function buildProgressSupervisorPayload(params: {
+function buildProgressSupervisorPayload(params: {
   generation: number;
   text: string;
 }): ReplyPayload {

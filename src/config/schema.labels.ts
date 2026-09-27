@@ -2,6 +2,7 @@
 import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
 import { GATEWAY_FIELD_LABELS } from "./schema.gateway-labels.js";
 import { AGENT_MODEL_FIELD_LABELS } from "./schema.labels.agent-models.js";
+import { AGENT_RUNTIME_FIELD_LABELS } from "./schema.labels.agent-runtime.js";
 import { BROWSER_FIELD_LABELS } from "./schema.labels.browser.js";
 import { SESSION_FIELD_LABELS } from "./schema.labels.session.js";
 import { WORKSPACE_FIELD_LABELS } from "./schema.labels.workspace.js";
@@ -89,18 +90,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.entries.*.runtime.acp.backend": "Agent ACP Backend",
   "agents.entries.*.runtime.acp.mode": "Agent ACP Mode",
   "agents.entries.*.runtime.acp.cwd": "Agent ACP Working Directory",
-  "agents.entries.*.thinkingDefault": "Agent Thinking Default",
-  "agents.entries.*.reasoningDefault": "Agent Reasoning Default",
-  "agents.entries.*.fastModeDefault": "Agent Fast Mode Default",
-  "agents.defaults.fastModeDefault": "Default Agent Fast Mode",
-  "agents.entries.*.progressSupervisor": "Agent Progress Supervisor",
-  "agents.entries.*.progressSupervisor.enabled": "Agent Progress Supervisor Enabled",
-  "agents.entries.*.progressSupervisor.intervalSeconds": "Agent Progress Supervisor Interval",
-  "agents.entries.*.progressSupervisor.text": "Agent Progress Supervisor Text",
-  "agents.defaults.progressSupervisor": "Default Progress Supervisor",
-  "agents.defaults.progressSupervisor.enabled": "Default Progress Supervisor Enabled",
-  "agents.defaults.progressSupervisor.intervalSeconds": "Default Progress Supervisor Interval",
-  "agents.defaults.progressSupervisor.text": "Default Progress Supervisor Text",
+  ...AGENT_RUNTIME_FIELD_LABELS,
   "agents.entries.*.contextInjection": "Agent Context Injection",
   "agents.entries.*.bootstrapMaxChars": "Agent Bootstrap Max Chars",
   "agents.entries.*.bootstrapTotalMaxChars": "Agent Bootstrap Total Max Chars",

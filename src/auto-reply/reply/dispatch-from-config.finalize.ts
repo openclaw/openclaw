@@ -472,7 +472,17 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
           // admission stays the strongest fact so channels cannot double-send.
           const fallbackSettle = await turnLedger.settleQueued(getDispatchAbortSignal());
           throwIfDispatchOperationAborted();
-          if (fallbackSettle !== "settled" || turnLedger.mayHaveDelivered()) {
+          const fallbackOutcome =
+            fallbackSettle === "settled" && fallbackSend.outcome
+              ? await fallbackSend.outcome
+              : undefined;
+          if (
+            fallbackSettle !== "settled" ||
+            !fallbackSend.outcome ||
+            fallbackOutcome === "delivered" ||
+            fallbackOutcome === "failed-deliver" ||
+            fallbackOutcome === "recovery-owned"
+          ) {
             queuedFinal = true;
             noVisibleReplyFallbackDelivered = true;
             // Re-snapshot so the delivered fallback is reflected in reported counts,

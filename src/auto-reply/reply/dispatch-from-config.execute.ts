@@ -1,7 +1,6 @@
 import {
   hasOutboundReplyContent,
   isFastModeAutoProgressPayload,
-  isHostProgressSupervisorPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { isAskUserPromptPending } from "../../agents/tools/ask-user-tool.js";
@@ -13,6 +12,7 @@ import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import {
   getReplyPayloadMetadata,
   isCommandReplyForDelivery,
+  isHostProgressSupervisorPayload,
   readAskUserQuestionId,
 } from "../reply-payload.js";
 import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
@@ -90,6 +90,10 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
   const supervisorConfig = resolveProgressSupervisorConfig({ cfg, agentId: sessionAgentId });
   const progressSupervisor = createProgressSupervisor({
     ...supervisorConfig,
+    enabled:
+      supervisorConfig.enabled &&
+      params.replyOptions?.isHeartbeat !== true &&
+      ctx.InboundEventKind !== "room_event",
     abortSignal: getDispatchAbortSignal(),
     emit: async (payload) => {
       if (
@@ -458,10 +462,10 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       requiresToolSummaryVisibility: true,
                     })
                   ) {
-                    const result = await settleProgressVisibilityCallbackResult(
+                    const visibility = await settleProgressVisibilityCallbackResult(
                       state.onPlanUpdateFromReplyOptions?.(normalized),
                     );
-                    if (result.visible) {
+                    if (visibility.visible) {
                       progressSupervisor.noteVisibleReply();
                     }
                   }
@@ -515,10 +519,18 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
         },
       ),
   )
-    .finally(async () => {
-      await progressSupervisor.stop();
-      removeVisibleDeliveryListener();
-    })
+    .then(
+      async (result) => {
+        await progressSupervisor.stop();
+        removeVisibleDeliveryListener();
+        return result;
+      },
+      async (error: unknown) => {
+        await progressSupervisor.stop();
+        removeVisibleDeliveryListener();
+        throw error;
+      },
+    )
     .catch(async (error: unknown) => {
       await releasePendingContinuation();
       await flushDeferredFinalText();

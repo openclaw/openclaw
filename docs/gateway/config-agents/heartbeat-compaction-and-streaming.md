@@ -106,7 +106,7 @@ Periodic progress supervision is disabled by default. Enable it for long-running
 }
 ```
 
-The host sends a generic status notice only after a full quiet interval. `intervalSeconds` accepts values from 5 through 2147483. Only a confirmed visible delivery restarts that interval. At most one notice is in flight, and supervision joins it before completion, failure, cancellation, or shutdown finishes. Notices use the normal `ReplyPayload` dispatch path and channel adapters; they are distinct from fast-mode auto progress and never include commands, logs, or error details. Set `text` globally or in `agents.entries.*.progressSupervisor`; per-agent fields inherit omitted values from the defaults.
+The host sends a generic status notice only after a full quiet interval. `intervalSeconds` accepts values from 5 through 2147483. Only a confirmed visible delivery restarts that interval. At most one notice is in flight, and supervision joins it before completion, failure, cancellation, or shutdown finishes. Notices use the normal `ReplyPayload` dispatch path and channel adapters, follow existing progress-delivery suppression, and do not run for heartbeats or room events. They are distinct from fast-mode auto progress and never include commands, logs, or error details. Set `text` globally or in `agents.entries.*.progressSupervisor`; per-agent fields inherit omitted values from the defaults.
 
 ## `agents.defaults.compaction`
 

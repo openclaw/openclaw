@@ -3,11 +3,13 @@ import { ProgressSupervisorSchema } from "../../config/zod-schema.agent-entry-ba
 import { isHostProgressSupervisorPayload, type ReplyPayload } from "../reply-payload.js";
 import {
   createProgressSupervisor,
-  DEFAULT_PROGRESS_SUPERVISOR_INTERVAL_MS,
-  DEFAULT_PROGRESS_SUPERVISOR_TEXT,
-  MAX_PROGRESS_SUPERVISOR_INTERVAL_SECONDS,
   resolveProgressSupervisorConfig,
 } from "./progress-supervisor.js";
+
+const DEFAULT_PROGRESS_SUPERVISOR_INTERVAL_MS = 55_000;
+const DEFAULT_PROGRESS_SUPERVISOR_TEXT =
+  "Work is still in progress. Another update will follow if needed.";
+const MAX_PROGRESS_SUPERVISOR_INTERVAL_SECONDS = 2_147_483;
 
 afterEach(() => vi.useRealTimers());
 
