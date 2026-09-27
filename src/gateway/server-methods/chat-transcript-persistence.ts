@@ -566,7 +566,6 @@ export async function rewriteAssistantTranscriptMessageByIdempotencyKey(params: 
         message: target.message,
         displayContent: params.content,
         managedMediaUrls: params.managedMediaUrls,
-        retainOriginalText: params.preserveModelContent,
       });
       return Object.assign({}, event as Record<string, unknown>, {
         message: params.preserveModelContent

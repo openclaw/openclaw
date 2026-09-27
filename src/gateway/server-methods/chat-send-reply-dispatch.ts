@@ -473,7 +473,10 @@ export function createChatSendReplyDispatch(params: {
       // TTS adds audio to its display without replacing the model's text.
       rewritten = await rewriteAssistantTranscriptMessageByIdempotencyKey({
         content: ttsSupplementMarker
-          ? persistedContentForAppend.filter((block) => block.type !== "text")
+          ? [
+              { type: "text", text: payload.text ?? "" },
+              ...persistedContentForAppend.filter((block) => block.type !== "text"),
+            ]
           : persistedContentForAppend,
         idempotencyKey: ownedTranscriptIdempotencyKey,
         managedMediaUrls: sourceMediaUrls,

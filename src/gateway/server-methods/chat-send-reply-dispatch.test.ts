@@ -1,5 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
+import { createPlaybackMediaFixture } from "../../../test/fixtures/media-playback.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { observeReplyDelivery } from "../../agents/reply-completion.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "../../agents/stream-message-shared.js";
@@ -12,6 +13,7 @@ import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.j
 import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import {
   appendTranscriptMessageSync,
+  loadTranscriptEventsSync,
   publishTranscriptUpdate,
   readActiveTranscriptEntryAnchor,
   replaceSessionEntry,
@@ -261,6 +263,54 @@ describe("buildAssistantReplyContentFromInputs", () => {
 });
 
 describe("createChatSendReplyDispatch", () => {
+  it("keeps hidden speech out of reloaded display for runtime-owned TTS", async () => {
+    await withOpenClawTestState({ label: "webchat-owned-tts" }, async () => {
+      const { dispatch, append, scope } = await createReplyTranscriptFixture();
+      const rawText = "Visible answer. [[tts:text]]Speech only.[[/tts:text]]";
+      const idempotencyKey = "runtime-owned-tts";
+      await dispatch.runAgentMediaTranscript(
+        { run: async (operation) => operation() },
+        async () => {
+          dispatch.captureAgentTranscriptStart();
+          await append("answer", {
+            role: "assistant",
+            idempotencyKey,
+            content: [{ type: "text", text: rawText }],
+            stopReason: "stop",
+          });
+          const dispatcher = createReplyDispatcher(dispatch.dispatcherOptions);
+          dispatcher.sendFinalReply(
+            setReplyPayloadMetadata(
+              {
+                text: "Visible answer.",
+                spokenText: "Speech only.",
+                mediaUrl: `data:audio/mpeg;base64,${createPlaybackMediaFixture("mp3").toString("base64")}`,
+                ttsSupplement: { spokenText: "Speech only." },
+              },
+              {
+                assistantTranscriptOwned: true,
+                assistantTranscriptIdempotencyKey: idempotencyKey,
+              },
+            ),
+          );
+          dispatcher.markComplete();
+          await dispatcher.waitForIdle();
+        },
+      );
+
+      const event = loadTranscriptEventsSync(scope).find(
+        (entry) => asOptionalRecord(entry)?.id === "answer",
+      );
+      const message = asOptionalRecord(asOptionalRecord(event)?.message);
+      expect(message?.content).toEqual([{ type: "text", text: rawText }]);
+      const display = projectChatDisplayMessage(message);
+      expect(JSON.stringify(display?.content)).toContain("Visible answer.");
+      expect(JSON.stringify(display?.content)).toContain('"type":"audio"');
+      expect(JSON.stringify(display?.content)).not.toContain("Speech only.");
+      expect(JSON.stringify(display?.content)).not.toContain("Audio reply");
+    });
+  });
+
   it("owns assistant media before transcript publication only during its live dispatch", async () => {
     let current = true;
     const dispatch = createChatSendReplyDispatch({
