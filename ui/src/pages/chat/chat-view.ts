@@ -86,6 +86,8 @@ export type ChatProps = Omit<
   | "onRetryQueuedMessage"
   | "onDiscardQueuedMessage"
   | "onFocusComposer"
+  | "commentAttachments"
+  | "commentsDisabled"
   | "onAddToChat"
   | "onOpenSession"
   | "onSend"
@@ -235,7 +237,8 @@ export function renderChat(props: ChatProps) {
         onDiscardQueuedMessage: props.onQueueRemove,
         onCompanionPrefill:
           props.canSend && !props.suggestionComposer ? props.onCompanionPrefill : undefined,
-        commentAttachments: props.suggestionComposer ? undefined : props,
+        commentAttachments: props.suggestionComposer ? undefined : props.attachments,
+        commentsDisabled: !canCompose || Boolean(props.readSignal?.aborted),
         onAddToChat:
           props.canSend && !props.suggestionComposer
             ? (selection, anchorRect) => {
