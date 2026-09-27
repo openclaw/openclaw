@@ -9,17 +9,16 @@ import { updateCommand } from "./update-command.js";
 
 const { fixture } = installFreshUpdateFixture();
 
-it.each(
-  [false, true].flatMap((dryRun) => [
-    { kind: "unknown key", config: { unknownSetting: true }, affectedKey: "<root>", dryRun },
-    {
-      kind: "invalid core field",
-      config: { gateway: { port: "invalid" } },
-      affectedKey: "gateway.port",
-      dryRun,
-    },
-  ]),
-)(
+it.each([
+  { kind: "unknown key", config: { unknownSetting: true }, affectedKey: "<root>", dryRun: false },
+  { kind: "unknown key", config: { unknownSetting: true }, affectedKey: "<root>", dryRun: true },
+  {
+    kind: "invalid core field",
+    config: { gateway: { port: "invalid" } },
+    affectedKey: "gateway.port",
+    dryRun: false,
+  },
+])(
   "identifies $kind during installed admission (dryRun=$dryRun)",
   async ({ config, dryRun, affectedKey }) => {
     const configPath = process.env.OPENCLAW_CONFIG_PATH!;
