@@ -205,6 +205,10 @@ a.activity-current-work__row:hover {
   border-radius: 0 var(--radius-md) var(--radius-md) 0;
 }
 
+.activity-feed__people-clear svg {
+  stroke-width: 2;
+}
+
 .activity-feed__people-trigger:focus-visible,
 .activity-feed__people-clear:focus-visible {
   outline: none;

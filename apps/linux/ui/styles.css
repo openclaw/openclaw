@@ -603,6 +603,9 @@ button.update-dismiss {
   color: var(--muted);
   background: transparent;
 }
+button.update-dismiss svg {
+  stroke-width: 2;
+}
 .update-progress {
   display: block;
   width: 100%;

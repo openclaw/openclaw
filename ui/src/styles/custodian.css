@@ -272,7 +272,6 @@ openclaw-custodian-page {
 .custodian__nudge-dismiss svg {
   width: 16px;
   height: 16px;
-  stroke-width: 1.5;
 }
 
 .custodian__nudge-action:focus-visible,

@@ -596,7 +596,6 @@
 .usage-query-chip button svg {
   width: 12px;
   height: 12px;
-  stroke-width: 1.5;
 }
 
 .usage-query-chip button {
@@ -1643,6 +1642,10 @@
 .session-detail-close {
   width: 30px;
   padding: 0;
+}
+
+.session-detail-close svg {
+  stroke-width: 2;
 }
 
 .session-bar-selection {

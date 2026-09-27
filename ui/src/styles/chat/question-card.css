@@ -395,7 +395,6 @@ openclaw-chat-question-panel {
 .chat-question-panel__error-dismiss svg {
   width: 14px;
   height: 14px;
-  stroke-width: 1.7;
 }
 
 .chat-question-panel__skip {

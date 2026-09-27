@@ -1064,7 +1064,6 @@
 .sw-revision-dialog__close svg {
   width: 16px;
   height: 16px;
-  stroke-width: 1.5;
 }
 
 .sw-revision-dialog__close:hover:not(:disabled) {
