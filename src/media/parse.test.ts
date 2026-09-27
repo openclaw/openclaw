@@ -239,6 +239,25 @@ describe("splitMediaFromOutput", () => {
     }
   });
 
+  it("keeps a quoted reference whole when its own value holds that quote and whitespace", () => {
+    // A quoted value can hold an inner quote and real filename whitespace at the same time. The closing
+    // quote is the first one followed by whitespace or the end of the line, so `'/tmp/team's.v1
+    // final/image.png'` is one reference; reading the inner quote as a delimiter split one path into two
+    // attachments, which `main` does not do.
+    for (const [input, expected] of [
+      ["MEDIA:'/tmp/team's.v1 final/image.png'", ["/tmp/team's.v1 final/image.png"]],
+      [
+        "MEDIA:'/tmp/team's.v1 final/image.png' '/tmp/second.png'",
+        ["/tmp/team's.v1 final/image.png", "/tmp/second.png"],
+      ],
+    ] as const) {
+      expectParsedMediaOutputCase(input, { mediaUrls: [...expected] });
+      expect(splitMediaFromOutput(input).segments).toEqual(
+        expected.map((url) => ({ type: "media", url })),
+      );
+    }
+  });
+
   it("keeps a quoted relative reference separate from the quoted reference before it", () => {
     // Explicit quotes already delimit each reference. The unquoted-path reconstruction heuristic exists
     // for bare paths with real filename spaces, so it must not reach across those quotes and fuse the

@@ -229,12 +229,15 @@ function beginsIndependentMediaSource(raw: string): boolean {
   return MEDIA_SOURCE_ROOT_RE.test(candidate) || SCHEME_RE.test(candidate);
 }
 
-// A quoted chunk is its own token only when its closing quote really ends the reference: whitespace or
-// the end of the payload must follow it. `"/tmp/album/photo.png copy.png"` closes on whitespace and so
-// stays one reference with its inner space, while `MEDIA:'…?token=it's' /tmp/second.png` has an inner
-// quote that is followed by more value, so the quote does not end a token and the whole reference is
-// taken from the fallback below. Ending a token at that inner quote would cut the value short.
-const MEDIA_DIRECTIVE_PART_RE = /"[^"]*"(?=\s|$)|'[^']*'(?=\s|$)|`[^`]*`(?=\s|$)|\S+/g;
+// A quoted chunk runs to the first quote that is followed by whitespace or the end of the payload. Any
+// earlier quote is followed by more value, so it is part of that value rather than a delimiter: that
+// keeps an inner quote (`MEDIA:'…?token=it's'`), a real filename space
+// (`MEDIA:"/tmp/album/photo.png copy.png"`), and both at once (`MEDIA:'/tmp/team's.v1 final/image.png'`)
+// inside one reference, while `MEDIA:"a" "b"` still splits at the whitespace between the two. Falling
+// back to `\S+` at a quote because of an inner quote would cut the value short and leak its tail into
+// the visible text.
+const MEDIA_DIRECTIVE_PART_RE =
+  /"(?:[^"]|"(?=[^\s]))*"(?=\s|$)|'(?:[^']|'(?=[^\s]))*'(?=\s|$)|`(?:[^`]|`(?=[^\s]))*`(?=\s|$)|\S+/g;
 
 const QUOTE_CHARS = new Set(['"', "'", "`"]);
 
