@@ -4,6 +4,7 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type { PluginHookAgentContext } from "../../plugins/hook-types.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { resolveAgentHarnessBeforePromptBuildResult } from "./prompt-compaction-hook-helpers.js";
@@ -53,6 +54,53 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
         currentUserMessageId: "message-1",
         prompt: expect.stringContaining("Prior conversation:"),
       });
+    },
+  );
+
+  it.each([
+    { content: "hello", expected: "hello" },
+    {
+      content: [
+        { type: "text", text: "What do you remember" },
+        { type: "image", mimeType: "image/png", data: "synthetic-image" },
+        { type: "text", text: "about my preferences?" },
+      ],
+      expected: "What do you remember\nabout my preferences?",
+    },
+    {
+      content: [{ type: "image", mimeType: "image/png", data: "synthetic-image" }],
+      expected: "",
+    },
+    { content: "", expected: "" },
+  ] satisfies { content: PersistedUserTurnMessage["content"]; expected: string }[])(
+    "normalizes admitted message content for prompt hooks: $expected",
+    async ({ content, expected }) => {
+      const handler = vi.fn(async (_event: unknown) => undefined);
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          { hookName: "before_prompt_build", handler },
+          { hookName: "before_prompt_build", requiresToolAuthority: true, handler },
+        ]),
+      );
+      await resolveAgentHarnessBeforePromptBuildResult({
+        prompt: "Projected transport prompt",
+        currentUserMessage: { content, idempotencyKey: "original:user" },
+        developerInstructions: "base",
+        messages: [],
+        ctx: {},
+        toolAuthority: {
+          fingerprint: "synthetic",
+          activeToolNames: () => ["memory_search"],
+          assertActive: () => undefined,
+        },
+      });
+      expect(handler).toHaveBeenCalledTimes(2);
+      for (const [event] of handler.mock.calls) {
+        expect(event).toMatchObject({
+          currentUserMessage: expected,
+          currentUserMessageId: "original:user",
+        });
+      }
     },
   );
 
@@ -185,7 +233,14 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
     expect(result.prompt).toBe("first\n\nsecond\n\nauthorized\n\nhello");
     expect(messages[0]!.content[0]!.text).toBe("original");
   });
-  it("runs a lazy builder with hook tool policy while preserving replacement order", async () => {
+  it.each([
+    { toolsAllow: undefined, hasToolRestrictions: false },
+    { toolsAllow: [], hasToolRestrictions: true },
+    { toolsAllow: ["read"], hasToolRestrictions: true },
+    { toolsAllow: ["read*"], hasToolRestrictions: true },
+    { toolsAllow: ["*"], hasToolRestrictions: false },
+    { toolsAllow: ["read", " * "], hasToolRestrictions: false },
+  ])("classifies $toolsAllow before building system instructions", async ({ toolsAllow, hasToolRestrictions }) => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([
         {
@@ -194,7 +249,7 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
             appendSystemContext: "after replacement",
             prependSystemContext: "before replacement",
             systemPrompt: "hook replacement",
-            toolsAllow: ["read"],
+            toolsAllow,
           }),
         },
       ]),
@@ -208,9 +263,9 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
       ctx: {},
     });
 
-    expect(build).toHaveBeenCalledWith({ toolsAllow: ["read"] });
+    expect(build).toHaveBeenCalledWith({ toolsAllow, hasToolRestrictions });
     expect(result).toMatchObject({
-      toolsAllow: ["read"],
+      ...(toolsAllow !== undefined ? { toolsAllow } : {}),
       developerInstructions:
         "---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\nbefore replacement\n\n---\n\nhook replacement\n\n---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\nafter replacement\n\n---",
     });

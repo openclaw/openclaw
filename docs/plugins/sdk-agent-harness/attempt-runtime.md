@@ -143,6 +143,18 @@ receives its own `options.currentInboundContext`; do not reuse the initial
 turn's context. Keep context out of the original user transcript and pending
 question answer text. Conversation fields are model context, not tool authority.
 
+`resolveAgentHarnessBeforePromptBuildResult` from
+`openclaw/plugin-sdk/agent-harness-runtime` runs prompt hooks with prepared history
+and tool authority. Pass the admitted message as `currentUserMessage`; the helper
+extracts its text parts and `idempotencyKey` for ordinary and authorized hooks.
+String input and a separate `currentUserMessageId` remain supported. The harness
+owns the fallback when no admitted message exists.
+
+The `developerInstructions.build` callback receives `toolsAllow` and
+`hasToolRestrictions`. Omitted policy or a trimmed `*` entry is unrestricted;
+an empty list or a list without `*` is restrictive. The backend must apply or
+reject restrictions inside that callback, before authorized recall runs.
+
 Official harnesses use the JavaScript-only private
 `openclaw/plugin-sdk/agent-harness-attempt-runtime` for deadlines, cancellation,
 and lifecycle/event publication; it is not a third-party Plugin SDK contract.
