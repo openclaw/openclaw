@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import {
   GatewayProtocolRequestError,
@@ -14,6 +15,7 @@ import {
   readGatewayOwnerLease,
   readWindowsProcessStartTimeSync,
   restartScheduledTask,
+  resolveTaskScriptPath,
   spawnSync,
   spawnSyncResult,
   scheduledTaskProbeResult,
@@ -210,6 +212,23 @@ describe("Scheduled Task shutdown and SQLite handle release", () => {
     });
   });
 
+  it("refuses restart without an inspectable Gateway identity", async () => {
+    await withPreparedGatewayTask(async ({ env, stdout }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      delete env.OPENCLAW_GATEWAY_PORT;
+      await fs.rm(resolveTaskScriptPath(env));
+      const onMutation = vi.fn();
+
+      await expect(restartScheduledTask({ env, stdout, onMutation })).rejects.toThrow(
+        "Gateway identity unavailable",
+      );
+      expect(onMutation).not.toHaveBeenCalled();
+      expect(callGatewayCli).not.toHaveBeenCalled();
+      expect(spawnSync.mock.calls.some(([exe]) => exe.endsWith("taskkill.exe"))).toBe(false);
+      expect(schtasksCalls.some(([action]) => action === "/End" || action === "/Run")).toBe(false);
+    });
+  });
+
   it("does not restart over a non-listening captured process when lease inspection fails", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
@@ -235,52 +254,63 @@ describe("Scheduled Task shutdown and SQLite handle release", () => {
     });
   });
 
-  it("stops pre-existing legacy children without adopting a later replacement", async () => {
-    await withPreparedGatewayTask(async ({ env, stdout }) => {
-      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-      const killed = new Set<number>();
-      spawnSync.mockImplementation((exe, args) => {
-        if (args?.includes("-EncodedCommand")) {
-          return scheduledTaskProbeResult(killed.has(4242) ? 3 : 4);
-        }
-        if (exe.endsWith("taskkill.exe")) {
-          killed.add(Number(args?.[args.indexOf("/PID") + 1]));
-          return spawnSyncResult("");
-        }
-        if (exe.endsWith("tasklist.exe")) {
-          const pid = Number(args?.[1]?.split(" ").at(-1));
-          return spawnSyncResult(
-            killed.has(pid) ? "No tasks" : `"node.exe","${pid}","Console","1","1 K"`,
-          );
-        }
-        const children = [
-          { ProcessId: 5151, CommandLine: INSTALLED_GATEWAY_COMMAND_LINE },
-          {
-            ProcessId: 4242,
-            CommandLine: `${INSTALLED_GATEWAY_COMMAND_LINE} ${formatWindowsTaskSupervisorChildArgument(305419896)}`,
-          },
-          ...(killed.has(4242)
-            ? [{ ProcessId: 6262, CommandLine: INSTALLED_GATEWAY_COMMAND_LINE }]
-            : []),
-        ].filter(({ ProcessId }) => !killed.has(ProcessId));
-        return spawnSyncResult(JSON.stringify(children));
+  it.each([false, true])(
+    "stops pre-existing children without adopting a replacement (published owner=%s)",
+    async (publishedOwner) => {
+      await withPreparedGatewayTask(async ({ env, stdout }) => {
+        vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+        const killed = new Set<number>();
+        readGatewayOwnerLease.mockImplementation(() =>
+          publishedOwner
+            ? { ...GATEWAY_OWNER, state: killed.has(4242) ? "dead" : "live" }
+            : undefined,
+        );
+        readWindowsProcessStartTimeSync.mockImplementation((pid) => (pid === 5151 ? 200 : 100));
+        spawnSync.mockImplementation((exe, args) => {
+          if (args?.includes("-EncodedCommand")) {
+            return scheduledTaskProbeResult(killed.has(4242) ? 3 : 4);
+          }
+          if (exe.endsWith("taskkill.exe")) {
+            killed.add(Number(args?.[args.indexOf("/PID") + 1]));
+            return spawnSyncResult("");
+          }
+          if (exe.endsWith("tasklist.exe")) {
+            const pid = Number(args?.[1]?.split(" ").at(-1));
+            return spawnSyncResult(
+              killed.has(pid) ? "No tasks" : `"node.exe","${pid}","Console","1","1 K"`,
+            );
+          }
+          const children = [
+            { ProcessId: 5151, CommandLine: INSTALLED_GATEWAY_COMMAND_LINE },
+            {
+              ProcessId: 4242,
+              CommandLine: `${INSTALLED_GATEWAY_COMMAND_LINE} ${formatWindowsTaskSupervisorChildArgument(305419896)}`,
+            },
+            ...(killed.has(4242)
+              ? [{ ProcessId: 6262, CommandLine: INSTALLED_GATEWAY_COMMAND_LINE }]
+              : []),
+          ].filter(({ ProcessId }) => !killed.has(ProcessId));
+          return spawnSyncResult(JSON.stringify(children));
+        });
+        inspectPortUsageMock.mockImplementation(async () => ({
+          port: 18789,
+          status: killed.has(5151) ? "free" : "busy",
+          hints: [],
+          listeners: killed.has(5151)
+            ? []
+            : [{ pid: 5151, command: "node.exe", commandLine: INSTALLED_GATEWAY_COMMAND_LINE }],
+        }));
+
+        await stopScheduledTask({ env, stdout });
+
+        expect([...killed]).toEqual([4242, 5151]);
+        expect(killed.has(6262)).toBe(false);
+        expect(schtasksCalls.some(([action]) => action === "/End" || action === "/Run")).toBe(
+          false,
+        );
       });
-      inspectPortUsageMock.mockImplementation(async () => ({
-        port: 18789,
-        status: killed.has(5151) ? "free" : "busy",
-        hints: [],
-        listeners: killed.has(5151)
-          ? []
-          : [{ pid: 5151, command: "node.exe", commandLine: INSTALLED_GATEWAY_COMMAND_LINE }],
-      }));
-
-      await stopScheduledTask({ env, stdout });
-
-      expect([...killed]).toEqual([4242, 5151]);
-      expect(killed.has(6262)).toBe(false);
-      expect(schtasksCalls.some(([action]) => action === "/End" || action === "/Run")).toBe(false);
-    });
-  });
+    },
+  );
 
   it("does not recover a failed lease read without a verified captured process", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {

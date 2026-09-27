@@ -51,10 +51,7 @@ const WINDOWS_FORCED_PROCESS_EXIT_TIMEOUT_MS = 15_000;
 
 export function resolveScheduledTaskCommandPort(
   env: GatewayServiceEnv,
-  command?: {
-    programArguments?: string[];
-    environment?: GatewayServiceEnv;
-  } | null,
+  command?: Partial<Pick<GatewayServiceCommandConfig, "programArguments" | "environment">> | null,
 ): number | null {
   return (
     parseTcpPortFromArgs(command?.programArguments) ??
@@ -134,10 +131,7 @@ export function findInstalledGatewayChildPid(
     (argv) => readWindowsTaskSupervisorRestartExitCode(argv) !== undefined,
     (argv) => argv.slice(0, -1),
   );
-  if (supervisedPid) {
-    return supervisedPid;
-  }
-  return findInstalledProcessPid(entries, port, installedArguments, () => true);
+  return supervisedPid ?? findInstalledProcessPid(entries, port, installedArguments, () => true);
 }
 
 async function resolveScheduledTaskNodeHostProcess(
@@ -210,6 +204,7 @@ async function resolveScheduledTaskGatewayOwnership(
   env: GatewayServiceEnv,
   context?: { port: number | null; probeHosts?: readonly string[] },
   installedCommand?: GatewayServiceCommandConfig | null,
+  captureExisting = false,
 ) {
   const command =
     installedCommand === undefined
@@ -235,11 +230,18 @@ async function resolveScheduledTaskGatewayOwnership(
       ? [owner.pid]
       : []
     : await resolveLegacyScheduledTaskOwnedGatewayPids(env, context, command);
+  if (captureExisting && owner && pids.length > 0) {
+    pids.push(
+      ...(await resolveLegacyScheduledTaskOwnedGatewayPids(env, context, command)).filter(
+        (pid) => pid !== owner.pid,
+      ),
+    );
+  }
   const starts = new Map<number, number | null>();
   const changed = new Error("Gateway owner changed before terminating the captured process");
   const matchesOwner = (current: NonNullable<typeof owner>, pid?: number) =>
     owner &&
-    (pid === undefined || hasCurrentProcessIdentity(current)) &&
+    (pid !== owner.pid || hasCurrentProcessIdentity(current)) &&
     current.owner === owner.owner &&
     current.pid === owner.pid &&
     current.port === owner.port &&
@@ -253,8 +255,12 @@ async function resolveScheduledTaskGatewayOwnership(
     acquireTerminationExclusion() {
       if (process.platform === "win32" && starts.size === 0) {
         for (const pid of pids) {
-          const start = owner?.startedAt ?? readWindowsProcessStartTimeSync(pid, 5_000, ownerEnv);
-          starts.set(pid, start);
+          starts.set(
+            pid,
+            pid === owner?.pid
+              ? owner.startedAt
+              : readWindowsProcessStartTimeSync(pid, 5_000, ownerEnv),
+          );
         }
       }
       if (
@@ -269,8 +275,6 @@ async function resolveScheduledTaskGatewayOwnership(
           `Gateway pid ${owner.pid} on port ${port} belongs to ${label}, not Scheduled Task ${taskName}. Run that supervisor's stop or restart command; the Gateway was left running.`,
         );
       }
-      // Both legacy discovery paths require exact installed argv. Older releases
-      // hold process ownership without publishing a row and remain terminable.
       if (pids.length > 0 || (owner && owner.state !== "dead")) {
         return null;
       }
@@ -303,7 +307,6 @@ async function resolveScheduledTaskGatewayOwnership(
   };
 }
 
-// Full snapshots and per-PID fallback lookups require the same installed-argv attribution.
 async function resolveLegacyScheduledTaskOwnedGatewayPids(
   env: GatewayServiceEnv,
   context?: { port: number | null; probeHosts?: readonly string[] },
@@ -323,34 +326,29 @@ async function resolveLegacyScheduledTaskOwnedGatewayPids(
   }
 
   const snapshot = readWindowsProcessSnapshot();
-  if (process.platform === "win32") {
-    if (snapshot) {
-      // Prefer the Gateway PID; before admission its exact supervisor still owns startup.
-      // /End can leave that supervisor alive, so stop must find it before a Gateway exists.
-      const gatewayPid = findInstalledGatewayChildPid(snapshot, port, installedArguments);
-      if (gatewayPid) {
-        // A legacy Startup child can coexist before lease publication. Capture both
-        // from this snapshot; post-stop discovery could adopt a replacement.
-        const children = snapshot
-          .filter((entry) => getSnapshotProcessId(entry) !== gatewayPid)
-          .flatMap((row) => findInstalledGatewayChildPid([row], port, installedArguments) ?? []);
-        return [gatewayPid, ...children];
-      }
-      const supervisorPid = findInstalledProcessPid(
-        snapshot,
-        port,
-        [...installedArguments, WINDOWS_TASK_SUPERVISOR_FLAG],
-        () => true,
-      );
-      if (supervisorPid) {
-        return [supervisorPid];
-      }
-      // A listener can be dual-stack or belong to another task; Windows control requires CIM argv proof.
-      return [];
+  if (process.platform === "win32" && snapshot) {
+    // Before a Gateway exists, capture its exact supervisor, which can outlive /End.
+    const gatewayPid = findInstalledGatewayChildPid(snapshot, port, installedArguments);
+    if (gatewayPid) {
+      // Capture only this snapshot; later discovery could adopt a replacement.
+      const children = snapshot
+        .filter((entry) => getSnapshotProcessId(entry) !== gatewayPid)
+        .flatMap((row) => findInstalledGatewayChildPid([row], port, installedArguments) ?? []);
+      return [gatewayPid, ...children];
     }
+    const supervisorPid = findInstalledProcessPid(
+      snapshot,
+      port,
+      [...installedArguments, WINDOWS_TASK_SUPERVISOR_FLAG],
+      () => true,
+    );
+    if (supervisorPid) {
+      return [supervisorPid];
+    }
+    // A listener can be dual-stack or belong to another task; Windows control requires CIM argv proof.
+    return [];
   }
-  // If the full CIM snapshot is unavailable, per-PID lookups can still prove
-  // Windows ownership. Both platforms require the same port and persisted argv.
+  // Per-PID fallback still requires the same port and persisted argv.
   const probeHosts =
     context?.probeHosts ?? (await resolveGatewayServiceProbeHosts({ env, command }));
   const diagnostics = await inspectPortUsage(port, { probeHosts }).catch(() => null);
@@ -460,8 +458,7 @@ export async function readBoundedScheduledTaskProcess(
   const pid = shouldManageGatewayListenerPort(env)
     ? findInstalledGatewayChildPid(snapshot, port, command.programArguments)
     : findInstalledProcessPid(snapshot, port, command.programArguments, isNodeHostArgv);
-  // A positive exact match survives unrelated unreadable rows. Only a complete
-  // snapshot can prove no match; missing argv or PID can conceal this process.
+  // An exact match proves presence; only a complete snapshot can prove absence.
   const complete = pid !== null || isCompleteWindowsProcessSnapshot(snapshot);
   remaining();
   return complete ? { port, pid } : null;
@@ -536,12 +533,11 @@ export async function terminateScheduledTaskGatewayListeners(
 ): Promise<number[] | null> {
   const windows = process.platform === "win32";
   const ownership = shouldManageGatewayListenerPort(env)
-    ? await resolveScheduledTaskGatewayOwnership(env, context)
+    ? await resolveScheduledTaskGatewayOwnership(env, context, undefined, true)
     : null;
   if (!ownership) {
     if (stop && windows && shouldManageGatewayListenerPort(env)) {
-      stop.warn("Gateway process identity unavailable; it was left running.");
-      return null;
+      throw new Error("Gateway identity unavailable; stop refused and Gateway preserved.");
     }
     await stop?.end();
     return [];
@@ -605,7 +601,9 @@ export async function terminateScheduledTaskGatewayListeners(
       stop.onRecovery?.();
       stop.warn("SQLite owner inspection is locked after stop; continuing with the port check.");
     }
-    stop?.onStopped?.();
+    if (ownership.pids.length > 0) {
+      stop?.onStopped?.();
+    }
     if (settle && stop) {
       const fact = await settle(() => {
         assertGatewayServiceUpdateCurrent();
@@ -694,8 +692,7 @@ export async function terminateGatewayProcessTree(
     timeout: 5_000,
     windowsHide: true,
   });
-  // Full CIM snapshots can lag either taskkill. Probe this PID directly so an
-  // already-removed owner never reaches the forced-termination authority check.
+  // Direct PID probes avoid signaling an exited owner despite a lagging CIM snapshot.
   if (
     await waitForProcessExit(
       pid,
@@ -719,7 +716,6 @@ export async function terminateGatewayProcessTree(
     }
     throw new Error(`taskkill could not terminate gateway process ${pid}`);
   }
-  // Verify the forced result through the same direct PID boundary.
   if (!(await waitForProcessExit(pid, WINDOWS_FORCED_PROCESS_EXIT_TIMEOUT_MS))) {
     throw new Error(`gateway process ${pid} exit could not be confirmed after taskkill`);
   }

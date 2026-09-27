@@ -220,11 +220,14 @@ function expectTaskkill(pid: number) {
   }
 }
 
-function setTaskStateProbeResult(state: number | null) {
+function setTaskStateProbeResult(state: number | null | (() => number | null)) {
   const previous = spawnSync.getMockImplementation();
   spawnSync.mockImplementation((command, args, options) => {
     if (command.toLowerCase().endsWith("powershell.exe") && args?.includes("-EncodedCommand")) {
-      return state === null ? spawnSyncResult("-2147024894", 1) : scheduledTaskProbeResult(state);
+      const current = typeof state === "function" ? state() : state;
+      return current === null
+        ? spawnSyncResult("-2147024894", 1)
+        : scheduledTaskProbeResult(current);
     }
     return previous?.(command, args, options) ?? spawnSyncResult("", 1);
   });
