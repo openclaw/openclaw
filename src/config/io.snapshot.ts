@@ -62,6 +62,7 @@ import type {
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "./io.types.js";
 import { warnIfConfigFromFuture } from "./io.warnings.js";
+import { captureConfigRootWriteTarget } from "./io.write-safety.js";
 import {
   findLegacyConfigIssues,
   migrateLegacyContextBudgetConfig,
@@ -72,6 +73,7 @@ import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import { captureManagedConfigSnapshotPreparation } from "./runtime-snapshot.js";
 import type { ConfigFileSnapshot, LegacyConfigIssue, OpenClawConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
+import { composeConfigWriteAssertions } from "./write-authority.js";
 
 type InternalReadOptions = {
   prepareValidation?: "runtime" | "strict";
@@ -625,13 +627,19 @@ export async function readConfigFileSnapshotForWriteFromContext(
   context: ConfigIoContext,
   options: Pick<ConfigSnapshotReadOptions, "observe"> = {},
 ): Promise<ReadConfigFileSnapshotForWriteResult> {
-  const assertConfigPathForWrite = () => {
+  const assertConfigSelection = () => {
     if (resolveConfigPathForDeps(context.deps) !== context.configPath) {
       throw new ConfigMutationConflictError("config path changed since last load", {
         retryable: false,
       });
     }
   };
+  assertConfigSelection();
+  const { pathProof } = captureConfigRootWriteTarget(context.configPath, context.deps.fs);
+  const assertConfigPathForWrite = composeConfigWriteAssertions(
+    assertConfigSelection,
+    pathProof.assertCurrent,
+  );
   assertConfigPathForWrite();
   // Per-call observation policy must not recapture the factory's path or environment.
   const readContext =

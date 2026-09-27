@@ -109,6 +109,37 @@ export function captureConfigFileWritePathProof(
   return { path: filePath, assertCurrent };
 }
 
+/** Pin the root directory while choosing a physical publication target. */
+export function captureConfigRootWriteTarget(filePath: string, ioFs: typeof fs) {
+  const directory = path.dirname(filePath);
+  const original = ioFs.lstatSync(directory, { bigint: true, throwIfNoEntry: false });
+  if (!original?.isSymbolicLink()) {
+    const assertCurrent = () => {
+      const current = ioFs.lstatSync(directory, { bigint: true, throwIfNoEntry: false });
+      if (
+        original
+          ? !current ||
+            !current.isDirectory() ||
+            current.dev !== original.dev ||
+            current.ino !== original.ino
+          : current && !current.isDirectory()
+      ) {
+        throw new ConfigMutationConflictError("config directory changed since last load", {
+          retryable: false,
+        });
+      }
+    };
+    assertCurrent();
+    return { path: filePath, pathProof: { path: filePath, assertCurrent } };
+  }
+  // Resolve only the immediate parent; following the leaf could redirect publication.
+  const targetPath = path.join(ioFs.realpathSync(directory), path.basename(filePath));
+  return {
+    path: targetPath,
+    pathProof: captureConfigFileWritePathProof(filePath, targetPath, ioFs),
+  };
+}
+
 type ConfigFileWriteIdentity = Pick<fs.BigIntStats, "dev" | "ino">;
 
 export type ConfigFileWriteRollbackProof = {
