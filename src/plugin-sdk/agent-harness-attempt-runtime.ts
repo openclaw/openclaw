@@ -13,6 +13,10 @@ export {
   createAgentHarnessAttemptLifecycle,
 } from "../agents/harness/attempt-events.js";
 export { selectSupportedReasoningEffort } from "../agents/harness/reasoning-effort.js";
+export {
+  resolveAgentWorkspaceMemoryRouting,
+  shouldIncludeAgentHarnessRuntimeContext,
+} from "../agents/harness/prompt-context.js";
 
 export {
   createAgentHarnessAssistantMessage,

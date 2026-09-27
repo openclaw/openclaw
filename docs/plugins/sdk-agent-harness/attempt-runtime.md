@@ -158,6 +158,12 @@ reject restrictions inside that callback, before authorized recall runs.
 Official harnesses use the JavaScript-only private
 `openclaw/plugin-sdk/agent-harness-attempt-runtime` for deadlines, cancellation,
 and lifecycle/event publication; it is not a third-party Plugin SDK contract.
+Codex and AgentsAPI also use `shouldIncludeAgentHarnessRuntimeContext` to exclude
+runtime prompt additions from lightweight cron inputs, and
+`resolveAgentWorkspaceMemoryRouting` to select admitted memory tools and check
+that they reach the prompt workspace. Backends retain workspace selection, tool
+name normalization, and native prompt rendering.
+
 `createAgentHarnessAttemptDeadlineController` takes the original `startedAtMs`,
 execution `timeoutMs`, backend `settlementTimeoutMs`, abort `signal`, and timeout
 callback. The first `beginSettlement(receivedAtMs)` starts an absolute settlement
