@@ -318,10 +318,10 @@ describe("probeGateway device auth scope", () => {
       expectedToken: "local-device-token",
     },
     {
-      name: "origin-scoped",
+      name: "unverified origin-only",
       localToken: undefined,
-      originToken: "origin-device-token",
-      expectedToken: "origin-device-token",
+      originToken: "retired-tunnel-device-token",
+      expectedToken: undefined,
     },
     {
       name: "local over retired tunnel",
@@ -330,7 +330,7 @@ describe("probeGateway device auth scope", () => {
       expectedToken: "local-device-token",
     },
   ])(
-    "uses cached $name device auth for local loopback probes",
+    "handles cached $name device auth for local loopback probes",
     async ({ localToken, originToken, expectedToken }) => {
       await withTempDir("openclaw-probe-local-scope-", async (stateDir) => {
         const env = createEnv(stateDir);
@@ -352,10 +352,10 @@ describe("probeGateway device auth scope", () => {
           env,
         });
 
-        expect(connect.params?.auth).toEqual({
-          deviceToken: expectedToken,
-        });
-        expect(connect.params?.device?.id).toBe(identity.deviceId);
+        expect(connect.params?.auth).toEqual(
+          expectedToken ? { deviceToken: expectedToken } : undefined,
+        );
+        expect(connect.params?.device?.id).toBe(expectedToken ? identity.deviceId : undefined);
       });
     },
   );

@@ -12,6 +12,7 @@ import {
   readMissingScopeError,
   type MissingScopeErrorDetails,
 } from "../../packages/gateway-protocol/src/gateway-error-details.js";
+import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   loadDeviceAuthTokenReadOnly,
@@ -24,6 +25,7 @@ import type { StatusSummary } from "../status/summary.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import {
   GatewayClient,
+  type GatewayClientOptions,
   GatewayClientRequestError,
   isGatewayProtocolResponseError,
 } from "./client.js";
@@ -291,6 +293,7 @@ export async function probeGateway(opts: {
 
   const detailLevel = opts.includeDetails === false ? "none" : (opts.detailLevel ?? "full");
   let deviceAuthScope = opts.suppressStoredDeviceAuth ? undefined : gatewayOriginScope(opts.url);
+  let preparedDeviceAuth: GatewayClientOptions["preparedDeviceAuth"];
 
   const deviceIdentity = await (async () => {
     try {
@@ -303,8 +306,8 @@ export async function probeGateway(opts: {
       if (opts.originScopedDeviceAuth && loopback && !hasProbeAuth(opts.auth)) {
         return null;
       }
-      const { loadDeviceIdentityIfPresent } = await import("../infra/device-identity.js");
-      const identity = loadDeviceIdentityIfPresent({ env: opts.env });
+      const identityModule = await import("../infra/device-identity.js");
+      const identity = identityModule.loadDeviceIdentityIfPresent({ env: opts.env });
       if (!identity) {
         return null;
       }
@@ -322,6 +325,32 @@ export async function probeGateway(opts: {
           ...lookup,
           gatewayScope: deviceAuthScope,
         });
+        if (
+          cachedOperatorToken &&
+          !opts.originScopedDeviceAuth &&
+          loopback &&
+          !hasProbeAuth(opts.auth)
+        ) {
+          const { loadPairedDevicePairingStoreRecordReadOnly } =
+            await import("../infra/device-pairing-store-readonly.js");
+          const { verifyPairingToken } = await import("../infra/pairing-token.js");
+          const paired = await loadPairedDevicePairingStoreRecordReadOnly(
+            identity.deviceId,
+            resolveStateDir(opts.env),
+          );
+          const issuedToken = paired?.tokens?.operator;
+          if (
+            paired?.publicKey !==
+              identityModule.publicKeyRawBase64UrlFromPem(identity.publicKeyPem) ||
+            !issuedToken ||
+            issuedToken.revokedAtMs ||
+            !verifyPairingToken(cachedOperatorToken.token.trim(), issuedToken.token)
+          ) {
+            return null;
+          }
+          // Pin local issuance evidence; a later cache read could select another Gateway's token.
+          preparedDeviceAuth = cachedOperatorToken;
+        }
       }
       return cachedOperatorToken ? identity : null;
     } catch {
@@ -444,6 +473,7 @@ export async function probeGateway(opts: {
     const client = new GatewayClient({
       url: opts.url,
       ...(deviceAuthScope ? { deviceAuthScope } : {}),
+      ...(preparedDeviceAuth ? { preparedDeviceAuth } : {}),
       token: opts.auth?.token,
       password: opts.auth?.password,
       edgeAuthHeaders,

@@ -88,7 +88,8 @@ Remote diagnostic probes do not reuse cached device tokens for loopback URLs,
 even after pairing: a forwarded port can later reach a different Gateway.
 Configure `gateway.remote.token` or `gateway.remote.password` for the intended
 remote Gateway; for an explicit `--url`, pass `--token` or `--password` instead.
-Local diagnostics still reuse paired-device credentials, and non-loopback remote
+Local diagnostics prefer their local paired-device credential. An origin-cache
+fallback must match the local Gateway's pairing record. Non-loopback remote
 probes can use a device token cached for their exact Gateway origin.
 
 Running `openclaw configure --section gateway` or interactive onboarding again

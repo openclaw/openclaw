@@ -2,9 +2,11 @@
 // state work with call/probe flows against a real local gateway harness.
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { createStatusGatewayProbeBudget } from "../commands/status.gateway-probe-budget.js";
 import { resolveGatewayProbeSnapshot } from "../commands/status.scan.shared.js";
+import * as deviceAuthStore from "../infra/device-auth-store.js";
 import { listDevicePairing } from "../infra/device-pairing.js";
 import { createGatewaySuiteHarness, installGatewayTestHooks, testState } from "./test-helpers.js";
 
@@ -167,12 +169,23 @@ describe("probeGateway auth integration", () => {
     expectRecord(recovered.gatewayProbe?.configSnapshot, "remote probe config snapshot");
 
     // A retired SSH tunnel can leave another Gateway's token at the local URL.
-    seedDeviceAuthToken(localAuth);
     seedOriginDeviceToken({
       ...localAuth,
       gatewayScope: url,
       token: "retired-tunnel-device-token",
     });
+    const unbound = await probeGateway({ url, timeoutMs: 10_000 });
+    expect(unbound.ok).toBe(false);
+    expect(unbound.connectErrorDetails).toMatchObject({
+      code: ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED,
+    });
+
+    const explicit = await probeGateway({ url, auth: { token }, timeoutMs: 10_000 });
+    expect(explicit.error).toBeNull();
+    expect(explicit.ok).toBe(true);
+    expectRecord(explicit.status, "explicit local auth with stale origin cache");
+
+    seedDeviceAuthToken(localAuth);
     const local = await probeGateway({ url, timeoutMs: 10_000 });
     expect(local.error).toBeNull();
     expect(local.ok).toBe(true);
@@ -180,5 +193,34 @@ describe("probeGateway auth integration", () => {
     expectRecord(local.health, "local probe health after tunnel");
     expectRecord(local.status, "local probe status after tunnel");
     expectRecord(local.configSnapshot, "local probe config after tunnel");
+  });
+
+  it("keeps a locally verified origin token when the client cache changes", async () => {
+    const localAuth = await seedCachedOperatorToken(["operator.read"]);
+    await deviceAuthStore.clearDeviceAuthToken({
+      deviceId: localAuth.deviceId,
+      role: "operator",
+    });
+    const url = `ws://127.0.0.1:${gatewayHarness.port}`;
+    const load = deviceAuthStore.loadOriginDeviceTokenReadOnly;
+    const read = vi
+      .spyOn(deviceAuthStore, "loadOriginDeviceTokenReadOnly")
+      .mockImplementationOnce(async (...args) => {
+        const entry = await load(...args);
+        seedOriginDeviceToken({
+          ...localAuth,
+          gatewayScope: url,
+          token: "replacement-tunnel-device-token",
+        });
+        return entry;
+      });
+    try {
+      const result = await probeGateway({ url, timeoutMs: 10_000 });
+      expect(result.error).toBeNull();
+      expect(result.ok).toBe(true);
+      expectRecord(result.status, "status after origin cache replacement");
+    } finally {
+      read.mockRestore();
+    }
   });
 });
