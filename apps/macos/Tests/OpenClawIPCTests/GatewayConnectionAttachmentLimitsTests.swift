@@ -19,6 +19,8 @@ struct GatewayConnectionAttachmentLimitsTests {
                 var frame = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
                 var payload = try #require(frame["payload"] as? [String: Any])
                 var policy = try #require(payload["policy"] as? [String: Any])
+                // The generic handshake uses a one-byte placeholder, too small for an attachment frame.
+                policy["maxPayload"] = 25 * 1024 * 1024
                 policy["attachments"] = ["maxBytes": 2000, "maxImageBytes": 1000]
                 payload["policy"] = policy
                 frame["payload"] = payload
