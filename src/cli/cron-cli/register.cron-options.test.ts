@@ -91,6 +91,41 @@ describe("shared automation mutation options", () => {
   );
 
   it.each(
+    ["add", "create"].flatMap((operation) =>
+      ["12", "bogus"].map((timeout) => ({ operation, timeout })),
+    ),
+  )(
+    "rejects --timeout-seconds=$timeout for systemEvent payloads on $operation before RPC",
+    async ({ operation, timeout }) => {
+      const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      try {
+        await expect(
+          createMutationProgram().parseAsync(
+            [
+              operation,
+              "--name",
+              "system-event-timeout",
+              "--every",
+              "1h",
+              "--system-event",
+              "tick",
+              "--timeout-seconds",
+              timeout,
+            ],
+            { from: "user" },
+          ),
+        ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+        expect(errorSpy).toHaveBeenCalledExactlyOnceWith(
+          expect.stringContaining("--timeout-seconds is not supported for systemEvent jobs."),
+        );
+        expect(callGatewayFromCli).not.toHaveBeenCalled();
+      } finally {
+        errorSpy.mockRestore();
+      }
+    },
+  );
+
+  it.each(
     creationCwdCases.flatMap((entry) =>
       ["add", "create"].flatMap((operation) =>
         [

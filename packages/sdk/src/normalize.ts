@@ -34,9 +34,9 @@ function normalizeAgentEventType(payload: JsonObject): OpenClawEventType {
       return "tool.call.delta";
     }
     // Terminal tool/item events carry phase:"end" together with the real status, so a failed or
-    // blocked tool must be classified before the end/completed branch — otherwise phase:"end" wins
+    // blocked or skipped tool must precede the end/completed branch — otherwise phase:"end" wins
     // and failures are reported as tool.call.completed.
-    if (status === "failed" || status === "blocked") {
+    if (status === "failed" || status === "blocked" || status === "skipped") {
       return "tool.call.failed";
     }
     if (phase === "end" || status === "completed") {

@@ -231,6 +231,7 @@ export function admitNativeChildModelExecution(
     owner,
     child.nativeTurnId,
     child.childThreadId,
+    child.completionCustody,
   );
   owner.onDirectChildAccepted?.();
 }

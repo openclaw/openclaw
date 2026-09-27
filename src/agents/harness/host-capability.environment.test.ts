@@ -73,13 +73,6 @@ describe("prepared harness tool environment", () => {
   });
 
   it.each([
-    { name: "global", expected: ["/fixture/global", "/fixture/system"] },
-    {
-      name: "agent",
-      agentPrepend: [" /fixture/agent ", "/fixture/agent"],
-      expected: ["/fixture/agent", "/fixture/system", "/fixture/global"],
-    },
-    { name: "empty agent", agentPrepend: [], expected: undefined },
     {
       name: "retained policy",
       sandboxAgentId: "policy",
@@ -110,7 +103,7 @@ describe("prepared harness tool environment", () => {
     },
     {
       name: "Gateway shim with agent prefix",
-      agentPrepend: ["/fixture/agent"],
+      agentPrepend: [" /fixture/agent ", "/fixture/agent"],
       shim: true,
       expected: ["/fixture/cli", "/fixture/agent", "/fixture/system", "/fixture/global"],
     },

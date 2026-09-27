@@ -101,6 +101,9 @@ path; active work must settle before replacement. This prevents Doctor and plugi
 migrations from recreating retired database paths or acquiring leases in the wrong
 database. Existing update drivers and stored schemas need no migration.
 
+Completion of a managed existing-schema scope also revokes its read admission.
+Ordinary callers reopen through normal schema admission after the idle actor retires.
+
 Each SQLite broker worker admits up to 128 running and queued requests. A busy
 worker's admission queue does not consume another worker's request capacity;
 independent workers continue serving their databases. Requests on the same worker

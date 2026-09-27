@@ -286,16 +286,15 @@ class ChatComposerLayoutTest {
   }
 
   @Test
-  @Config(qualifiers = "w1000dp-h1000dp-hdpi")
+  @Config(qualifiers = "w800dp-h800dp-mdpi")
   fun fullWidthEditorKeepsItsOriginAndIdentityWithOneToolbarRow() {
-    val width = mutableStateOf(390.dp)
-    showChat(currentViewportWidth = { width.value }, viewportHeight = { 640.dp })
+    val width = mutableStateOf(360.dp)
+    val fontScale = mutableStateOf(1f)
+    showChat(currentViewportWidth = { width.value }, viewportHeight = { 720.dp }, fontScale = { fontScale.value }, useChatShell = true)
     val editor = composerEditor()
     val editorId = editor.fetchSemanticsNode().id
-    val hint = composeRule.onNodeWithText(nativeString("Message OpenClaw"), useUnmergedTree = true).getUnclippedBoundsInRoot()
-    val empty = editor.getUnclippedBoundsInRoot()
-    val surface = composeRule.onNodeWithTag("chat-composer-surface").getUnclippedBoundsInRoot()
-    assertTrue("Editor must use the full writing area", empty.right - empty.left >= surface.right - surface.left - 32.dp)
+    editor.performClick()
+    applyChatImeInsets()
 
     fun assertToolbarOrder(primaryAction: String) {
       val left =
@@ -313,22 +312,45 @@ class ChatComposerLayoutTest {
       }
       assertEquals("The model starts beside +", left[0].right.value, left[1].left.value, 1f)
       assertEquals("Effort stays beside the model", left[1].right.value, left[2].left.value, 1f)
-      composeRule.onNodeWithContentDescription(nativeString("Permissions")).assertDoesNotExist()
+      val modelLabel = composeRule.onNodeWithText("GPT-5.2", useUnmergedTree = true).getUnclippedBoundsInRoot()
+      assertEquals("The model label is centered with the toolbar icons", ((primary.top + primary.bottom) / 2).value, ((modelLabel.top + modelLabel.bottom) / 2).value, 1f)
+      assertTrue("The complete toolbar stays above the IME", primary.bottom <= 500.dp)
     }
-    assertComposerControlsVisible()
-    assertToolbarOrder("Stop")
-    editor.performTextReplacement(nativeString("Message OpenClaw"))
-    val typed = editor.getUnclippedBoundsInRoot()
-    assertEquals("Hint and typed text share the horizontal origin", hint.left.value, typed.left.value, 1f)
-    assertEquals("Typing does not move the writing area", empty.top.value, typed.top.value, 1f)
-    composeRule.runOnIdle { width.value = 320.dp }
-    assertComposerControlsVisible(primaryAction = "Send")
-    assertToolbarOrder("Send")
-    val send = composeRule.onNodeWithContentDescription(nativeString("Send")).getUnclippedBoundsInRoot()
-    val modelLabel = composeRule.onNodeWithText("GPT-5.2", useUnmergedTree = true).getUnclippedBoundsInRoot()
-    assertEquals("The model label is centered with the toolbar icons", ((send.top + send.bottom) / 2).value, ((modelLabel.top + modelLabel.bottom) / 2).value, 1f)
-    assertEquals("Resizing must retain the same editor", editorId, editor.fetchSemanticsNode().id)
-    editor.assertTextEquals(nativeString("Message OpenClaw"))
+
+    for ((viewportWidth, scale) in listOf(360.dp to 1f, 320.dp to 1f, 320.dp to 2f)) {
+      composeRule.runOnIdle {
+        width.value = viewportWidth
+        fontScale.value = scale
+      }
+      editor.performTextReplacement("")
+      val surface = composeRule.onNodeWithTag("chat-composer-surface").getUnclippedBoundsInRoot()
+      val empty = editor.getUnclippedBoundsInRoot()
+      val hint = composeRule.onNodeWithText(nativeString("Message OpenClaw"), useUnmergedTree = true)
+      val hintBounds = hint.getUnclippedBoundsInRoot()
+      val hintLayouts = mutableListOf<TextLayoutResult>()
+      hint.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(hintLayouts)) }
+      val hintBaseline = hintBounds.top - surface.top + with(composeRule.density) { hintLayouts.single().firstBaseline.toDp() }
+      assertTrue("Editor must use the full writing area", empty.right - empty.left >= surface.right - surface.left - 32.dp)
+
+      for ((state, draft) in listOf("empty" to "", "single" to "Message", "two" to "Message\nSecond", "multi" to "Message\nSecond\nThird\nFourth\nFifth\nSixth")) {
+        editor.performTextReplacement(draft)
+        val bounds = editor.getUnclippedBoundsInRoot()
+        val currentSurface = composeRule.onNodeWithTag("chat-composer-surface").getUnclippedBoundsInRoot()
+        val layouts = mutableListOf<TextLayoutResult>()
+        editor.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(layouts)) }
+        val firstBaseline = bounds.top - currentSurface.top + with(composeRule.density) { layouts.single().firstBaseline.toDp() }
+        captureComposerProof("${viewportWidth.value.toInt()}-${scale.toInt()}x-$state")
+        assertEquals("Hint and draft share the horizontal origin", hintBounds.left.value, bounds.left.value, 1f)
+        assertEquals("The top text inset stays stable as the draft grows", (empty.top - surface.top).value, (bounds.top - currentSurface.top).value, 1f)
+        assertEquals("The first baseline stays stable relative to the composer", hintBaseline.value, firstBaseline.value, 1f)
+        assertEquals("Resizing must retain the same editor", editorId, editor.fetchSemanticsNode().id)
+        editor.assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString(draft))).assertIsFocused()
+        val primaryAction = if (draft.isEmpty()) "Stop" else "Send"
+        assertComposerControlsVisible(primaryAction = primaryAction)
+        assertToolbarOrder(primaryAction)
+        assertTrue("The editor stays above the IME", bounds.bottom <= 500.dp)
+      }
+    }
   }
 
   @Test

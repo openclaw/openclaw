@@ -63,6 +63,10 @@ dashboard turns collapse their narration and tool activity under **Worked for â€
 above the answer. Expanding it restores the sequence with the existing tool-call
 groups. When no run duration is available, the heading reads **Worked**.
 
+When an incoming message causes an unstarted tool call to be skipped, its card
+and work summary show **Skipped**, including after reloading the conversation.
+Approval blocks and tool failures keep their separate outcomes.
+
 Subagent runs appear in their session transcripts, outside sidebar navigation.
 Inspect them from the parent conversation with `/subagents list`,
 `/subagents info <id|#>`, and `/subagents log <id|#>`. Opening a child transcript

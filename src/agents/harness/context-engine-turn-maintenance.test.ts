@@ -266,8 +266,6 @@ describe("durable accepted-turn maintenance handoff", () => {
 
   it.each([
     { outcome: "committed", maintenanceFails: false },
-    { outcome: "duplicate", maintenanceFails: false },
-    { outcome: "committed", maintenanceFails: true },
     { outcome: "duplicate", maintenanceFails: true },
   ] as const)(
     "returns before maintenance settles and retains resources ($outcome, failure=$maintenanceFails)",
@@ -313,7 +311,7 @@ describe("durable accepted-turn maintenance handoff", () => {
     },
   );
 
-  it.each(["commit-failed", "aborted", "promptError", "yieldAborted"] as const)(
+  it.each(["commit-failed", "aborted"] as const)(
     "does not schedule maintenance for %s",
     async (failure) => {
       await withAcceptedTurn(

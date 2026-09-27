@@ -2468,7 +2468,7 @@ private fun ToolActivityDisclosure(
   var expanded by rememberSaveable(stableKey) { mutableStateOf(false) }
   var showAll by rememberSaveable(stableKey) { mutableStateOf(false) }
   val summary = completedToolGroupSummary(tools)
-  val hasError = tools.any { it.isError || it.activity?.status == "failed" }
+  val hasError = tools.any { it.hasFailedOutcome }
   val hasBlocked = tools.any { it.activity?.status == "blocked" }
   val running = item.liveTools.values.any { !it.isComplete }
   val state = if (expanded) nativeString("Expanded") else nativeString("Collapsed")
@@ -2608,13 +2608,8 @@ private fun ToolActivityItem(
   var expanded by rememberSaveable(parentStableKey, saveableKey) { mutableStateOf(false) }
   val kind = completedToolKind(tool.name)
   val resultPresentation = completedToolResultPresentation(tool)
-  val liveStatus =
-    when {
-      tool.isError || tool.activity?.status == "failed" -> nativeString("Failed")
-      tool.activity?.status == "blocked" -> nativeString("Blocked")
-      live?.isComplete == false -> nativeString("OpenClaw is working")
-      else -> null
-    }
+  val isError = tool.hasFailedOutcome
+  val outcome = resultPresentation.outcome ?: if (live?.isComplete == false) nativeString("OpenClaw is working") else null
   val preview =
     tool.detail
       ?.lineSequence()
@@ -2653,7 +2648,7 @@ private fun ToolActivityItem(
       ) {
         Icon(
           imageVector =
-            if (tool.isError) {
+            if (isError) {
               Icons.Default.Close
             } else {
               when (kind) {
@@ -2666,10 +2661,10 @@ private fun ToolActivityItem(
             },
           contentDescription = null,
           modifier = Modifier.size(16.dp),
-          tint = if (tool.isError) ClawTheme.colors.danger else ClawTheme.colors.textMuted,
+          tint = if (isError) ClawTheme.colors.danger else ClawTheme.colors.textMuted,
         )
-        (liveStatus ?: resultPresentation.outcome)?.let { outcome ->
-          Text(text = outcome, style = ClawTheme.type.caption, color = if (tool.isError || tool.activity?.status in setOf("failed", "blocked")) ClawTheme.colors.danger else ClawTheme.colors.textMuted)
+        outcome?.let {
+          Text(text = it, style = ClawTheme.type.caption, color = if (isError || tool.activity?.status == "blocked") ClawTheme.colors.danger else ClawTheme.colors.textMuted)
         }
         Row(
           modifier = Modifier.weight(1f),
@@ -4224,7 +4219,7 @@ private fun ChatInputPill(
               .fillMaxWidth()
               .heightIn(min = ClawTheme.spacing.touchTarget, max = with(LocalDensity.current) { sixLines.toDp() } + 12.dp)
               .padding(vertical = 6.dp),
-            contentAlignment = Alignment.CenterStart,
+            contentAlignment = Alignment.TopStart,
           ) {
             BasicTextField(
               value = textFieldValue,

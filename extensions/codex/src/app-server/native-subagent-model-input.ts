@@ -181,6 +181,7 @@ export async function prepareNativeModelToolInput(
   let targetRevision: ReturnType<InputDependencies["retainTargetRevision"]> | undefined;
   let assertTargetCurrent: (() => void) | undefined;
   const assertCurrent = () => {
+    request.signal?.throwIfAborted();
     request.assertCurrent();
     capture.assertCurrent();
     pendingBinding?.assertCurrent();

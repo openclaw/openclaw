@@ -269,7 +269,7 @@ private fun buildTranscriptTimeline(
       val projection = toolsByMessage[index]
       val tools = projection.displayedTools
       val knownRunIds = tools.mapNotNull { it.runId }.toSet()
-      val unresolvedTools = tools.any { it.pending || it.activity.isError }
+      val unresolvedTools = tools.any { it.pending || it.activity.requiresReply }
       val lastFailure = tools.maxOfOrNull { it.lastFailureMessageIndex } ?: -1
       val hasVisibleContent = message.content.any { it.toolActivity == null }
       // Empty or consumed result envelopes must not erase a pending turn boundary.
@@ -293,7 +293,7 @@ private fun buildTranscriptTimeline(
           add(
             classified.copy(
               turnBoundary = pendingTurnBoundary || classified.turnBoundary,
-              hasUnresolvedTools = projection.relatedTools.any { it.pending || it.activity.isError },
+              hasUnresolvedTools = projection.relatedTools.any { it.pending || it.activity.requiresReply },
               knownRunIds = projection.relatedTools.mapNotNull { it.runId }.toSet() + listOfNotNull(message.runId),
             ),
           )
@@ -571,6 +571,9 @@ private class TranscriptMessageTools {
   val relatedTools = mutableListOf<TranscriptTool>()
 }
 
+private val ChatToolActivity.requiresReply: Boolean
+  get() = hasFailedOutcome || activity?.status == "blocked"
+
 private fun projectTranscriptToolActivity(messages: List<ChatMessage>): List<TranscriptMessageTools> {
   val projected = messages.map { TranscriptMessageTools() }
   val calls = mutableMapOf<String, MutableMap<String?, TranscriptTool>>()
@@ -617,7 +620,11 @@ private fun projectTranscriptToolActivity(messages: List<ChatMessage>): List<Tra
         owner.activity = mergeToolActivity(owner.activity, tool)
         // A received result settles the call even when its display text is empty.
         owner.pending = false
-        if (tool.isError) owner.lastFailureMessageIndex = messageIndex
+        if (tool.activityPrepared) {
+          owner.lastFailureMessageIndex = if (owner.activity.requiresReply) messageIndex else -1
+        } else if (!owner.activity.activityPrepared && tool.isError) {
+          owner.lastFailureMessageIndex = messageIndex
+        }
         projected[messageIndex].relatedTools.add(owner)
       } else {
         // ID-only result envelopes have no standalone UI. Keep meaningful unnamed
@@ -626,7 +633,9 @@ private fun projectTranscriptToolActivity(messages: List<ChatMessage>): List<Tra
           result && tool.name == "tool" && tool.detail.isNullOrBlank() &&
             tool.result.isNullOrBlank() && !tool.isError && tool.arguments.isNullOrEmpty()
         if (!emptyOrphan) {
-          val projection = TranscriptTool(tool, message.runId, !result && tool.result == null, if (tool.isError) messageIndex else -1)
+          val preparedStatus = tool.activity?.takeIf { it.phase == "end" }?.status
+          val settled = result || tool.result != null || preparedStatus in setOf("completed", "failed", "blocked", "skipped")
+          val projection = TranscriptTool(tool, message.runId, !settled, if (tool.requiresReply) messageIndex else -1)
           projected[messageIndex].displayedTools.add(projection)
           projected[messageIndex].relatedTools.add(projection)
           if (!result) tool.toolCallId?.let { calls.getOrPut(it) { mutableMapOf() }[message.runId] = projection }

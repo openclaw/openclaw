@@ -14,6 +14,7 @@ import {
 } from "../../routing/session-key.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import type { SessionRowProjection } from "../session-row-projection.js";
 import {
   authorizeIncognitoSessionTarget,
   createSessionListEntryFilter,
@@ -32,6 +33,11 @@ type ResolvedArtifactSession = {
   sessionKey: string;
   agentId?: string;
 };
+
+type ArtifactSessionProjection = Pick<
+  SessionRowProjection,
+  "ensureMaterialized" | "findBySessionId" | "sharingRevision"
+>;
 
 function resolveArtifactSessionAgentId(
   sessionKey: string | undefined,
@@ -92,6 +98,7 @@ function resolveScopedArtifactSessionKey(
 function resolveQuerySession(
   query: ArtifactQuery,
   cfg: OpenClawConfig | undefined,
+  projection?: ArtifactSessionProjection,
 ): ResolvedArtifactSession | undefined {
   if (query.sessionKey) {
     const sessionKey = resolveScopedArtifactSessionKey(query.sessionKey, query.agentId, cfg);
@@ -102,10 +109,10 @@ function resolveQuerySession(
   if (query.runId) {
     // A live run context can resolve its own agent-scoped key. Do not force an
     // unrelated default-agent selection before consulting that authoritative row.
-    const sessionKey = resolveSessionKeyForRun(
-      query.runId,
-      query.agentId ? { agentId: query.agentId } : {},
-    );
+    const sessionKey = resolveSessionKeyForRun(query.runId, {
+      ...(query.agentId ? { agentId: query.agentId } : {}),
+      ...(projection ? { projection } : {}),
+    });
     const agentId =
       query.agentId ??
       resolveArtifactSessionAgentId(sessionKey, cfg) ??
@@ -137,6 +144,7 @@ export function artifactResponseIsCurrent(found: ArtifactLookup, respond: Respon
 
 export async function prepareArtifactSessionResolution(
   input: ArtifactQuery,
+  projection?: ArtifactSessionProjection,
 ): Promise<
   (
     cfg: OpenClawConfig | undefined,
@@ -144,6 +152,9 @@ export async function prepareArtifactSessionResolution(
   ) => ResolvedArtifactSession | undefined
 > {
   const query = { ...input };
+  if (!query.sessionKey && query.runId && projection?.sharingRevision === undefined) {
+    await projection?.ensureMaterialized();
+  }
   // Resolve the native session/run selector under current disclosure policy.
   return (cfg, client) => {
     const sessionKey = normalizeOptionalString(query.sessionKey);
@@ -155,7 +166,7 @@ export async function prepareArtifactSessionResolution(
       }
       scopedQuery = { ...query, agentId: owner.agentId };
     }
-    const resolved = resolveQuerySession(scopedQuery, cfg);
+    const resolved = resolveQuerySession(scopedQuery, cfg, projection);
     if (!resolved) {
       return undefined;
     }

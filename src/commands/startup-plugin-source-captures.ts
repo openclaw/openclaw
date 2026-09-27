@@ -43,11 +43,15 @@ export async function cleanupStartupPluginSourceCaptures(env = process.env): Pro
     if (!(await hasCaptureDirectories(stateDir, directory))) {
       return;
     }
-    const [{ withDoctorSqliteMaintenanceLock }, { pruneUnreferencedPluginNativeCaptures }] =
-      await Promise.all([
-        import("./doctor-sqlite-maintenance-lock.js"),
-        import("../plugins/plugin-source-capture-report.js"),
-      ]);
+    const [
+      { withDoctorSqliteMaintenanceLock, DoctorSqliteMaintenanceLockUnavailableError },
+      { pruneUnreferencedPluginNativeCaptures },
+      { isGatewayLifecycleContentionError },
+    ] = await Promise.all([
+      import("./doctor-sqlite-maintenance-lock.js"),
+      import("../plugins/plugin-source-capture-report.js"),
+      import("../infra/gateway-lock.js"),
+    ]);
     const result = await withDoctorSqliteMaintenanceLock({
       env,
       operation: "plugin source cleanup",
@@ -56,8 +60,16 @@ export async function cleanupStartupPluginSourceCaptures(env = process.env): Pro
         pruneUnreferencedPluginNativeCaptures(stateDir, () => authority.assertCurrent(), env, {
           startup: true,
         }),
+    }).catch((error: unknown) => {
+      if (
+        error instanceof DoctorSqliteMaintenanceLockUnavailableError &&
+        isGatewayLifecycleContentionError(error.cause)
+      ) {
+        return undefined;
+      }
+      throw error;
     });
-    if (result.warnings.length) {
+    if (result?.warnings.length) {
       process.emitWarning(`Plugin source capture startup cleanup: ${result.warnings.join("; ")}`);
     }
   } catch (error) {
