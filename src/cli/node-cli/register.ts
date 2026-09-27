@@ -74,7 +74,11 @@ export function registerNodeCli(program: Command) {
       let gatewayOptions;
       try {
         const setupCode = opts.pair ?? opts.pairIfNeeded;
-        pair = setupCode ? resolveNodePairGatewayOptions(setupCode) : undefined;
+        pair = setupCode
+          ? resolveNodePairGatewayOptions(setupCode, {
+              allowExpired: opts.pairIfNeeded !== undefined,
+            })
+          : undefined;
         const existing = await loadNodeHostConfig();
         gatewayOptions = resolveNodeGatewayOptions(opts, existing, pair);
       } catch (error) {
@@ -104,6 +108,7 @@ export function registerNodeCli(program: Command) {
         gatewayCloudflareAccess: cloudflareAccess,
         gatewayCandidates,
         gatewayBootstrapToken: pair?.bootstrapToken,
+        gatewayBootstrapExpiresAtMs: pair?.expiresAtMs,
         preferGatewayBootstrapToken: opts.pair !== undefined,
         ...(opts.ephemeral === true || opts.sessionHost === true ? { forceWorkerRuns: true } : {}),
         ...(opts.ephemeral === true ? { ephemeral: true } : {}),
