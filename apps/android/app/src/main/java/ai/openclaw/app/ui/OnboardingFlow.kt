@@ -2503,6 +2503,8 @@ private fun PermissionSetupScreen(
   var showAdditional by rememberSaveable { mutableStateOf(false) }
   val primaryIds = listOf(PermissionRowId.Notifications, PermissionRowId.Voice, PermissionRowId.Camera, PermissionRowId.Location)
   val primaryRows = primaryIds.map { id -> permissionState.rows.first { it.id == id } }
+  val additionalRows = permissionState.rows.filterNot { it.id in primaryIds || it.id == PermissionRowId.NotificationListener }
+  val additionalPermissionNames = additionalRows.map { it.title.resolveNativeTextResource() }.joinToString(", ")
   ClawScaffold(modifier = modifier, contentPadding = onboardingContentPadding()) {
     Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceBetween) {
       LazyColumn(
@@ -2535,7 +2537,11 @@ private fun PermissionSetupScreen(
             modifier = Modifier.fillMaxWidth(),
           )
           Text(
-            text = nativeString("Android asks you to approve each permission. Device features stay off until you enable them."),
+            text =
+              nativeString(
+                "Includes additional permissions: \${additionalPermissionNames}. Review Android's permission prompts. Camera and location features are enabled separately.",
+                additionalPermissionNames,
+              ),
             style = ClawTheme.type.caption,
             color = ClawTheme.colors.textMuted,
             modifier = Modifier.padding(vertical = ClawTheme.spacing.xxs),
@@ -2553,7 +2559,7 @@ private fun PermissionSetupScreen(
           }
         }
         if (showAdditional) {
-          items(permissionState.rows.filterNot { it.id in primaryIds || it.id == PermissionRowId.NotificationListener }, key = { it.id.name }) { row ->
+          items(additionalRows, key = { it.id.name }) { row ->
             PermissionRow(row = row, enabled = !permissionState.requesting)
           }
           item {

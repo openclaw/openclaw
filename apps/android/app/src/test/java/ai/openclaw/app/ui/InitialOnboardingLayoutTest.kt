@@ -321,6 +321,15 @@ class InitialOnboardingLayoutTest {
     shadowOf(app.packageManager).setSystemFeature(PackageManager.FEATURE_TELEPHONY, true)
     shadowOf(app).grantPermissions(Manifest.permission.READ_SMS)
     withOnboarding(permissionsStep = true) { model, activity ->
+      val disclosure =
+        composeRule
+          .onNodeWithText("Includes additional permissions:", substring = true)
+          .performScrollTo()
+          .fetchSemanticsNode()
+          .config[SemanticsProperties.Text]
+          .joinToString { it.text }
+      assertEquals(SensitiveFeatureConfig.smsEnabled, disclosure.contains("SMS"))
+      assertEquals(SensitiveFeatureConfig.callLogEnabled, disclosure.contains("Call Log"))
       composeRule.onNodeWithText("Additional features").performScrollTo().performClick()
       if (!SensitiveFeatureConfig.smsEnabled) {
         composeRule.onNodeWithText("SMS").assertDoesNotExist()
@@ -396,7 +405,7 @@ class InitialOnboardingLayoutTest {
   @Test
   @Config(sdk = [34], qualifiers = "en-rUS-w360dp-h720dp-mdpi")
   @GraphicsMode(GraphicsMode.Mode.NATIVE)
-  fun setupBatchAllowsAllWithoutEnablingDeviceCapabilities() = checkSetupBatch("allowed")
+  fun setupBatchAllowsAllWithoutEnablingCameraOrLocation() = checkSetupBatch("allowed")
 
   @Test
   @Config(sdk = [34], qualifiers = "en-rUS-w360dp-h720dp-mdpi")
