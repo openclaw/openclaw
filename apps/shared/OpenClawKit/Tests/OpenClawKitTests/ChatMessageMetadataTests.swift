@@ -104,6 +104,14 @@ struct ChatMessageMetadataTests {
         let metadata = ChatTranscriptRow.footerMetadata(
             in: rows, activeRunIDs: ["active"], runWorking: true, isMessageVisible: { _ in true })
         #expect(Set(metadata.keys) == [first.id, user.id])
+        let overlapping = ChatTranscriptRow.footerMetadata(
+            in: ChatTranscriptRow.build(from: [active, first]), activeRunIDs: ["active"], runWorking: true,
+            isMessageVisible: { _ in true })
+        #expect(Set(overlapping.keys) == [first.id])
+        let uncorrelated = try self.message()
+        #expect(ChatTranscriptRow.footerMetadata(
+            in: ChatTranscriptRow.build(from: [uncorrelated]), activeRunIDs: ["active"], runWorking: true,
+            isMessageVisible: { _ in true }).isEmpty)
         #expect(ChatTranscriptRow.footerMetadata(
             in: ChatTranscriptRow.build(from: [first]), activeRunIDs: [], runWorking: true,
             isMessageVisible: { _ in true }).isEmpty)

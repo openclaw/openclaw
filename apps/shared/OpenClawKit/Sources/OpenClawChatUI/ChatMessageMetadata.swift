@@ -28,7 +28,7 @@ extension ChatTranscriptRow {
                               $0.content.contains { $0.isInlineAttachment || $0.preview?.inlineWidgetPath != nil }
                       }),
                       !group.contains(where: { $0.workRunID.map(activeRunIDs.contains) == true }),
-                      !(isTrailing && runWorking)
+                      !(isTrailing && runWorking && (activeRunIDs.isEmpty || first.workRunID == nil))
                 else { return }
             }
             let model = role == "assistant" ? group.reversed().compactMap {
