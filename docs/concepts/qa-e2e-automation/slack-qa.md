@@ -17,10 +17,12 @@ Targets one real private Slack channel with two distinct bots: a driver bot
 controlled by the harness and a SUT bot started by the child OpenClaw gateway
 through the bundled Slack plugin.
 
-Slack QA requires a host with async proxy capture support so write evidence can
-be read without running SQLite on the Gateway thread. If the host lacks that
-capability, the adapter asks you to upgrade before acquiring credentials or
-contacting Slack. Missing capture support is a failure, not empty evidence.
+Once the Slack QA adapter loads, it requires async proxy capture support so write
+evidence can be read without running SQLite on the Gateway thread. If that
+capability is missing, adapter creation asks you to upgrade before acquiring
+credentials or contacting Slack. This does not guarantee that the current QA CLI
+loads on older hosts: use a matching current source checkout and see the
+[older-host import limitation](/concepts/qa-e2e-automation/operator-flow#operator-flow).
 
 ### Agent E2E recipes
 
