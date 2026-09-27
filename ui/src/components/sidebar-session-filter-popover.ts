@@ -1,9 +1,12 @@
 import WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
+import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
+import { t } from "../i18n/index.ts";
 import { occludeNativeBrowserSurface } from "../lib/native-overlay-occlusion.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { configureAnchoredPopup } from "./anchored-overlay.ts";
+import "./menu-surface.ts";
 
 class SidebarSessionFilterPopover extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) anchor: HTMLElement | null = null;
@@ -52,6 +55,8 @@ class SidebarSessionFilterPopover extends OpenClawLightDomContentsElement {
     const popup = this.querySelector<WaPopup>("wa-popup");
     if (popup && this.anchor) {
       configureAnchoredPopup(popup, this.anchor, "bottom");
+    } else {
+      this.focusInitialControl();
     }
   }
 
@@ -67,17 +72,29 @@ class SidebarSessionFilterPopover extends OpenClawLightDomContentsElement {
   };
 
   protected override render() {
-    return html`<wa-popup active @wa-reposition=${this.focusInitialControl}>
-      <div
-        class="sidebar-session-filter-panel"
-        role="dialog"
-        aria-label=${this.label}
-        @keydown=${this.handleKeydown}
-        @focusout=${this.handleFocusOut}
-      >
-        ${this.content}
-      </div>
-    </wa-popup>`;
+    // Mobile layouts present the panel as a bottom sheet, mirroring the sidebar
+    // issues sheet: a backdrop that closes it, a grabber, and top-layer placement.
+    const sheet = isMobileNavLayout();
+    const panel = html`<div
+      class="sidebar-session-filter-panel"
+      role="dialog"
+      aria-label=${this.label}
+      aria-modal=${sheet ? "true" : nothing}
+      @keydown=${this.handleKeydown}
+      @focusout=${this.handleFocusOut}
+    >
+      <div class="sidebar-session-filter-panel__grabber" aria-hidden="true"></div>
+      ${this.content}
+    </div>`;
+    return sheet
+      ? html`<button
+            type="button"
+            class="sidebar-session-filter-panel__backdrop"
+            aria-label=${t("common.close")}
+            @click=${() => this.onClose(true)}
+          ></button>
+          <openclaw-menu-surface>${panel}</openclaw-menu-surface>`
+      : html`<wa-popup active @wa-reposition=${this.focusInitialControl}>${panel}</wa-popup>`;
   }
 }
 

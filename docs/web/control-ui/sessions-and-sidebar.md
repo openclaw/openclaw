@@ -147,6 +147,13 @@ focus to the filter button. **Session sources** opens its Settings destination. 
 mode, Display omits grouping and empty-group controls because the sidebar always
 groups by agent.
 
+On phone-width layouts the panel opens as a bottom sheet, like the issues sheet:
+tap the backdrop or press Escape to close it. The sheet has no hover or flyouts:
+tapping **Owners**, **Group by**, **Sort by**, or **Hide empty groups** opens its
+choices as a page inside the sheet, with **Back** and the current choice checked.
+Choosing applies it and returns to the main page. The Owners page keeps its search
+field above the scrolling owner list. Status and the toggles stay on the main page.
+
 The chat header links to an accessible parent session even when it is outside the current session list, including Incognito parents.
 
 The agent switcher and workspace header preview their menu when you move the

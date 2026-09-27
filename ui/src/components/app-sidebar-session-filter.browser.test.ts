@@ -27,6 +27,9 @@ const ringStyle = (root: Element, selector: string) =>
 async function mountFilters(width: number) {
   const { page } = await import("vitest/browser");
   await page.viewport(width, 560);
+  // The app shell marks phone layouts; the filter panel becomes a bottom sheet there.
+  document.body.classList.toggle("shell--mobile-nav", width < 560);
+  onTestFinished(() => document.body.classList.remove("shell--mobile-nav"));
   const gateway = createGatewayHarness(createTestGatewayClient(async () => ({})));
   gateway.publish({ selfUser: { id: "profile-ada", name: "Ada" } });
   const sessions = createSessionsHarness("main", ["agent:main:ada", "agent:main:bob"]);
@@ -226,6 +229,41 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     await expect.element(sort).toHaveAttribute("aria-expanded", "true");
     await sort.click();
     await expect.element(sort).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("presents a bottom sheet with choice pages on phones", async () => {
+    const { sidebar, page } = await mountFilters(390);
+    const trigger = page.getByRole("button", { name: "Filter & sort", exact: true });
+    await trigger.click();
+    const panel = sidebar.querySelector<HTMLElement>(".sidebar-session-filter-panel")!;
+    await expect.element(panel).toBeVisible();
+    expect(panel.getAttribute("aria-modal")).toBe("true");
+    expect(sidebar.querySelector(".sidebar-session-sort-menu wa-popup")).toBeNull();
+    const sheet = panel.getBoundingClientRect();
+    expect(sheet.left).toBe(0);
+    expect(sheet.width).toBe(innerWidth);
+    expect(sheet.bottom).toBeCloseTo(innerHeight, 0);
+    // A choice opens as a page covering the sheet, with Back and a title.
+    await page.getByRole("button", { name: "Group by: Custom groups", exact: true }).click();
+    const choices = sidebar.querySelector<HTMLElement>('[role="listbox"][aria-label="Group by"]')!;
+    await expect.element(choices).toBeVisible();
+    const pageBounds = choices.closest(".picker-select__menu")!.getBoundingClientRect();
+    expect(pageBounds.left).toBe(sheet.left);
+    expect(pageBounds.right).toBe(sheet.right);
+    const back = page.getByRole("button", { name: "Back", exact: true });
+    await expect.element(back).toHaveFocus();
+    await back.click();
+    await expect.element(choices).not.toBeInTheDocument();
+    await page.getByRole("button", { name: "Group by: Custom groups", exact: true }).click();
+    await page.getByRole("option", { name: "Project", exact: true }).click();
+    expect(loadStoredSidebarSessionsGrouping()).toBe("project");
+    await expect
+      .element(page.getByRole("button", { name: "Group by: Project", exact: true }))
+      .toBeVisible();
+    // Tapping the backdrop dismisses the sheet, like the issues sheet.
+    sidebar.querySelector<HTMLElement>(".sidebar-session-filter-panel__backdrop")!.click();
+    expect(sidebar.querySelector(".sidebar-session-sort-menu")).toBeNull();
+    await expect.element(trigger).toHaveFocus();
   });
 
   it("applies every preference instantly and resets only active filters", async () => {

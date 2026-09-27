@@ -170,14 +170,18 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
   border: 0;
 }
 
+/* Boxed-control rows pin the label to the control's line so an inline owner
+   list can grow below it on the mobile sheet. */
 .sidebar-session-menu-row {
   display: grid;
   grid-template-columns: calc(var(--space-6) * 4) minmax(0, 1fr);
-  align-items: center;
+  align-items: start;
   gap: var(--space-2);
+  padding-block: calc((var(--sidebar-filter-row-height) - var(--settings-control-height)) / 2);
 }
 
 .sidebar-session-menu-row > :is(label, span) {
+  line-height: var(--settings-control-height);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -331,6 +335,76 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
   display: inline-flex;
   width: var(--space-4);
   height: var(--space-4);
+}
+
+/* Mobile bottom sheets (sidebar issues, session filters) share the backdrop,
+   grabber, and entrance motion; each sheet keeps its own frame. */
+.sidebar-issues-panel__backdrop,
+.sidebar-issues-panel__grabber,
+.sidebar-session-filter-panel__backdrop,
+.sidebar-session-filter-panel__grabber {
+  display: none;
+}
+
+.shell--mobile-nav :is(.sidebar-issues-panel__backdrop, .sidebar-session-filter-panel__backdrop) {
+  position: fixed;
+  z-index: 120;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: color-mix(in srgb, black 42%, transparent);
+  animation: fade-in 140ms var(--ease-out);
+}
+
+.shell--mobile-nav :is(.sidebar-issues-panel__grabber, .sidebar-session-filter-panel__grabber) {
+  display: block;
+  width: 36px;
+  height: 4px;
+  flex: none;
+  align-self: center;
+  margin-block: 8px 2px;
+  border-radius: var(--radius-full);
+  background: var(--border-strong);
+}
+
+@keyframes sidebar-sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shell--mobile-nav
+    :is(
+      .sidebar-issues-panel,
+      .sidebar-issues-panel__backdrop,
+      .sidebar-session-filter-panel,
+      .sidebar-session-filter-panel__backdrop
+    ) {
+    animation: none;
+  }
+}
+
+.shell--mobile-nav .sidebar-session-sort-menu .sidebar-session-filter-panel {
+  position: fixed;
+  z-index: 121;
+  inset: auto 0 0;
+  width: 100%;
+  max-width: none;
+  max-height: calc(100dvh - env(safe-area-inset-top, 0px) - var(--space-7));
+  /* Rows and headers keep the issues sheet's side inset. */
+  padding-inline: var(--space-3);
+  padding-block-end: calc(var(--menu-padding) + env(safe-area-inset-bottom, 0px));
+  border-width: 1px 0 0;
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  animation: sidebar-sheet-in 240ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.shell--mobile-nav .sidebar-session-filter-panel__grabber {
+  margin-inline: auto;
 }
 
 @media (max-width: 400px) {

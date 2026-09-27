@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
+import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import { t } from "../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
@@ -348,6 +349,8 @@ export function renderSidebarSessionSortMenu(params: {
 }) {
   const ownerVisible =
     params.owners.length > 0 || params.ownerFilterId !== null || params.involvingMe;
+  // The mobile sheet has no hover or room for flyouts: choices open as sheet pages.
+  const sheet = isMobileNavLayout();
   const ownerValue = params.involvingMe
     ? "involving-me"
     : params.ownerFilterId !== null
@@ -432,6 +435,7 @@ export function renderSidebarSessionSortMenu(params: {
                     label: t("sessionsView.owners"),
                     value: ownerValue,
                     searchable: "always",
+                    sheet,
                     showOptionTooltips: false,
                     renderLeading: (option) => {
                       const owner = params.owners.find(
@@ -496,6 +500,7 @@ export function renderSidebarSessionSortMenu(params: {
                   label: t("sessionsView.groupBy"),
                   value: params.grouping,
                   variant: "submenu",
+                  sheet,
                   showOptionTooltips: false,
                   options: [
                     { value: "category", label: t("sessionsView.groupByCategory") },
@@ -513,6 +518,7 @@ export function renderSidebarSessionSortMenu(params: {
             label: t("chat.sidebar.sortBy"),
             value: params.sortMode,
             variant: "submenu",
+            sheet,
             showOptionTooltips: false,
             options: SIDEBAR_SESSION_SORT_OPTIONS.filter(
               (option) => option.mode !== "people" || params.peopleSortAvailable,
@@ -532,6 +538,7 @@ export function renderSidebarSessionSortMenu(params: {
                   label: t("sessionsView.hideEmptyGroups"),
                   value: params.emptyGroupsMode,
                   variant: "submenu",
+                  sheet,
                   showOptionTooltips: false,
                   options: EMPTY_GROUPS_OPTIONS.map((option) => ({
                     value: option.mode,
