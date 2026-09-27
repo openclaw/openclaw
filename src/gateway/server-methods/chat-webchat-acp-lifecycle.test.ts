@@ -81,7 +81,7 @@ describe("bound ACP terminal lifecycle", () => {
     unsubs?.heartbeatUnsub();
     unsubs?.transcriptUnsub();
     unsubs?.lifecycleUnsub();
-    void unsubs?.taskUnsub();
+    await unsubs?.taskUnsub();
     resetAgentEventsForTest();
     resetTaskRegistryForTests({ persist: false });
   });

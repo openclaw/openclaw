@@ -101,7 +101,6 @@ it.each([
       const releasePreparation = createDeferred();
       const capturedSuccessor = createDeferred();
       const releaseRuntimePlugins = createDeferred();
-      const sharedDispatchSettled = createDeferred();
       const originalDispatch = dispatch.dispatchInboundMessageWithProjectedDispatcher;
       const originalLoadRuntimePlugins = dispatchRuntimeLoaders.loadRuntimePlugins;
       const holdRuntimePlugins =
@@ -112,7 +111,25 @@ it.each([
               return await originalLoadRuntimePlugins();
             })
           : undefined;
-      const observeChatDispatch = vi.spyOn(chatDispatch, "startChatDispatch");
+      const originalStartChatDispatch = chatDispatch.startChatDispatch;
+      const dispatchOwner: {
+        params?: ChatDispatchParams;
+        completion?: Promise<void>;
+        settled?: Promise<void>;
+      } = {};
+      // Capture dispatch before an ACK assertion can fail; registration removal is not a drain.
+      const observeChatDispatch = vi
+        .spyOn(chatDispatch, "startChatDispatch")
+        .mockImplementation((params) => {
+          dispatchOwner.params = params;
+          const completion = originalStartChatDispatch(params);
+          dispatchOwner.completion = completion;
+          dispatchOwner.settled = completion.then(
+            () => undefined,
+            () => undefined,
+          );
+          return completion;
+        });
       let owned: ChatDispatchParams | undefined;
       let successor: ReplyOperation | undefined;
       let originalRegistration: ChatDispatchParams["admission"]["sessionBinding"] | undefined;
@@ -147,11 +164,7 @@ it.each([
         .mockImplementation(async (options) => {
           prepared.resolve(options);
           await releasePreparation.promise;
-          try {
-            return await originalDispatch({ ...options, replyResolver: resolver });
-          } finally {
-            sharedDispatchSettled.resolve();
-          }
+          return await originalDispatch({ ...options, replyResolver: resolver });
         });
       try {
         const params = { sessionKey, sessionId: initialSessionId, message, idempotencyKey: runId };
@@ -178,11 +191,17 @@ it.each([
           undefined,
           expect.anything(),
         );
-        await prepared.promise;
-        owned = observeChatDispatch.mock.calls.at(-1)?.[0];
-        if (!owned) {
+        owned = dispatchOwner.params;
+        const completion = dispatchOwner.completion;
+        if (!owned || !completion) {
           throw new Error("chat.send did not start detached dispatch");
         }
+        await Promise.race([
+          prepared.promise,
+          completion.then(() => {
+            throw new Error("chat dispatch finished before preparation");
+          }),
+        ]);
         originalRegistration = owned.admission.sessionBinding;
         expect(originalRegistration.sessionId).toBe(initialSessionId);
 
@@ -223,7 +242,12 @@ it.each([
         releasePreparation.resolve();
         if (successor) {
           // Gather retains this newer owner before its existing plugin-loading await.
-          await capturedSuccessor.promise;
+          await Promise.race([
+            capturedSuccessor.promise,
+            completion.then(() => {
+              throw new Error("chat dispatch finished before capturing its successor");
+            }),
+          ]);
           await replaceSessionEntry(scope, { ...entry, sessionId: finalSessionId });
           successor.updateSessionId(finalSessionId);
           successor.complete();
@@ -231,7 +255,7 @@ it.each([
           expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
           releaseRuntimePlugins.resolve();
         }
-        await sharedDispatchSettled.promise;
+        await completion;
         await vi.waitFor(() => expect(context.chatAbortControllers.has(runId)).toBe(false));
 
         if (
@@ -269,11 +293,8 @@ it.each([
         successor?.complete();
         releasePreparation.resolve();
         releaseRuntimePlugins.resolve();
-        if (owned) {
-          await sharedDispatchSettled.promise;
-          await vi.waitFor(() => expect(context.chatAbortControllers.has(runId)).toBe(false));
-          owned.admission.cleanupAdmittedRun();
-        }
+        await dispatchOwner.settled;
+        dispatchOwner.params?.admission.cleanupAdmittedRun();
         holdPreparation.mockRestore();
         holdRuntimePlugins?.mockRestore();
         observeChatDispatch.mockRestore();
