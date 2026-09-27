@@ -445,10 +445,10 @@ async function migrateSource(
           ? (await readEvidence([{ agentId: owner.agentId, sessionId: owner.sessionId }]))[0]
           : undefined;
       const canCreateOwner = !readEvidence || canonicalOwner?.state === "unknown";
-      const sessionFile =
+      const storedSessionFile =
         typeof raw.sessionFile === "string" && raw.sessionFile.trim() ? raw.sessionFile : undefined;
-      const sourceSessionFile = sessionFile ?? source.transcriptPath;
-      const ownerSessionFile = sessionFile ?? owner?.transcriptPath;
+      const sourceSessionFile = storedSessionFile ?? source.transcriptPath;
+      const ownerSessionFile = storedSessionFile ?? owner?.transcriptPath;
       const conversationKeys = [
         sourceSessionFile,
         ...(ownerSessionFile && ownerSessionFile !== sourceSessionFile ? [ownerSessionFile] : []),

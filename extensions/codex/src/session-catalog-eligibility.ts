@@ -1,7 +1,11 @@
 import type { CodexManagedThreadStore } from "./app-server/managed-thread-store.js";
-import type { CodexThread } from "./app-server/protocol.js";
+import type {
+  CodexThread,
+  CodexThreadListParams,
+  CodexThreadListResponse,
+} from "./app-server/protocol.js";
 import { withTimeout } from "./app-server/timeout.js";
-import type { CodexSessionCatalogRequestSnapshot } from "./session-catalog-control-requests.js";
+import type { CodexCatalogIndex } from "./session-catalog-index.js";
 import {
   CatalogParamsError,
   isInteractiveThreadSource,
@@ -12,10 +16,12 @@ import { readCodexSessionMeta } from "./session-catalog-provenance.js";
 /** Exact identity and native membership are independent of resident retention. */
 export async function requireEligibleCodexThread(params: {
   threadId: string;
-  requests: Pick<
-    CodexSessionCatalogRequestSnapshot,
-    "requestTimeoutMs" | "index" | "readThread" | "listThreads"
-  >;
+  requests: {
+    requestTimeoutMs: number;
+    index(): Promise<CodexCatalogIndex>;
+    readThread(threadId: string, includeTurns: boolean, timeoutMs?: number): Promise<CodexThread>;
+    listThreads(params: CodexThreadListParams, timeoutMs: number): Promise<CodexThreadListResponse>;
+  };
   localSessionsRoot?: string;
   sourceHomeId?: string;
   managedThreads?: CodexManagedThreadStore;

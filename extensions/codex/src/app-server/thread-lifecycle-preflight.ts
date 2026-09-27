@@ -218,7 +218,16 @@ export function resolveCodexThreadAgentDir(params: CodexStartOrResumeThreadParam
 
 export function buildCodexThreadBindingPolicy(
   params: CodexStartOrResumeThreadParams,
-  preflight: Awaited<ReturnType<typeof prepareCodexThreadLifecyclePreflight>>,
+  preflight: Pick<
+    CodexThreadRequestContext,
+    | "dynamicToolsFingerprint"
+    | "dynamicToolsContainDeferred"
+    | "nativeSkillIsolationFingerprint"
+    | "userMcpServersFingerprint"
+    | "networkProxyConfigFingerprint"
+    | "contextEngineBinding"
+    | "environmentSelectionFingerprint"
+  >,
 ) {
   return {
     dynamicToolsFingerprint: preflight.dynamicToolsFingerprint,
