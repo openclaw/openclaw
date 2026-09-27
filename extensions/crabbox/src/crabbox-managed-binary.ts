@@ -6,11 +6,8 @@ import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/pro
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 
-export const CRABBOX_MIN_VERSION = "0.56.0";
-// Managed installs include the native Testbox SSH cleanup fix. Existing offline
-// cloud workers retain their supported floor; provider callers can require more.
-const MANAGED_VERSION = "0.67.0";
-const RELEASE_URL = `https://github.com/openclaw/crabbox/releases/download/v${MANAGED_VERSION}`;
+export const CRABBOX_MIN_VERSION = "0.67.0";
+const RELEASE_URL = `https://github.com/openclaw/crabbox/releases/download/v${CRABBOX_MIN_VERSION}`;
 const MAX_ARCHIVE_BYTES = 128 * 1024 * 1024;
 // Gateway startup contention can delay an otherwise healthy executable probe.
 const VERSION_TIMEOUT_MS = 30_000;
@@ -81,7 +78,7 @@ function releaseTarget() {
   return {
     directory: `${platform}-${arch}`,
     executable: platform === "windows" ? "crabbox.exe" : "crabbox",
-    asset: `crabbox_${MANAGED_VERSION}_${platform}_${arch}.${extension}`,
+    asset: `crabbox_${CRABBOX_MIN_VERSION}_${platform}_${arch}.${extension}`,
     tar: extension === "tar.gz",
   };
 }
@@ -99,7 +96,7 @@ function managedBinaryPath(env: NodeJS.ProcessEnv, version: string): string {
 }
 
 export function resolveManagedCrabboxBinaryPath(env: NodeJS.ProcessEnv = process.env): string {
-  return managedBinaryPath(env, MANAGED_VERSION);
+  return managedBinaryPath(env, CRABBOX_MIN_VERSION);
 }
 
 async function downloadReleaseFile(
@@ -166,7 +163,7 @@ async function probeInstallation(
   binary: string,
   runCommand: CrabboxCommandRunner,
   signal: AbortSignal | undefined,
-  minimumVersion = MANAGED_VERSION,
+  minimumVersion = CRABBOX_MIN_VERSION,
 ): Promise<CrabboxBinary | undefined> {
   const stat = await fs.lstat(binary).catch(() => undefined);
   if (!stat?.isFile()) {
@@ -189,7 +186,7 @@ export async function findManagedCrabboxBinary(
   const runCommand =
     params.runCommand ??
     ((argv, options) => runCommandWithTimeout(argv, { ...options, baseEnv: params.env }));
-  for (const cachedVersion of [MANAGED_VERSION, CRABBOX_MIN_VERSION]) {
+  for (const cachedVersion of [CRABBOX_MIN_VERSION, CRABBOX_MIN_VERSION]) {
     const binary = managedBinaryPath(params.env ?? process.env, cachedVersion);
     if (await inspectInstallationDirectory(path.dirname(binary))) {
       const cached = await probeInstallation(binary, runCommand, params.signal, cachedVersion);
@@ -349,7 +346,7 @@ async function installManagedBinary(
     const stagedBinary = path.join(payload, target.executable);
     const staged = await probeInstallation(stagedBinary, runCommand, signal);
     if (!staged) {
-      throw new Error(`Downloaded Crabbox executable does not satisfy ${MANAGED_VERSION}`);
+      throw new Error(`Downloaded Crabbox executable does not satisfy ${CRABBOX_MIN_VERSION}`);
     }
     return await publishInstallation({
       binary,
@@ -377,7 +374,7 @@ export async function ensureManagedCrabboxBinary(
     runCommand?: CrabboxCommandRunner;
     env?: NodeJS.ProcessEnv;
     signal?: AbortSignal;
-    minimumVersion?: typeof CRABBOX_MIN_VERSION | typeof MANAGED_VERSION;
+    minimumVersion?: typeof CRABBOX_MIN_VERSION;
   } = {},
 ): Promise<CrabboxBinary> {
   const { signal } = params;
@@ -395,7 +392,7 @@ export async function ensureManagedCrabboxBinary(
     candidate,
     runCommand,
     signal,
-    managedCandidate ? MANAGED_VERSION : params.minimumVersion,
+    managedCandidate ? CRABBOX_MIN_VERSION : params.minimumVersion,
   );
   if (preferred.status === "supported") {
     return { binary: candidate, version: preferred.version };
