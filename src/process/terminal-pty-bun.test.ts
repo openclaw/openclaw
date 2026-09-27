@@ -248,7 +248,8 @@ describe.runIf(Boolean(process.versions.bun) && process.platform !== "win32" && 
   },
 );
 
-it("replays queued chunks in order, honors a listener pause, and delivers exit last", async () => {
+// Drives the native adapter through controlled Bun.spawn terminal callbacks.
+function spawnControlledBunPty() {
   const runtime = bun ?? { spawn: vi.fn() };
   if (!bun) {
     vi.stubGlobal("Bun", runtime);
@@ -286,6 +287,11 @@ it("replays queued chunks in order, honors a listener pause, and delivers exit l
   if (!callbacks) {
     throw new Error("Bun.spawn did not receive terminal callbacks");
   }
+  return { handle, callbacks, terminal, done };
+}
+
+it("replays queued chunks in order, honors a listener pause, and delivers exit last", async () => {
+  const { handle, callbacks, terminal, done } = spawnControlledBunPty();
   const events: string[] = [];
   handle.onExit(({ exitCode }) => events.push(`exit:${exitCode}`));
   for (const chunk of ["early 🦞\r\n", "two\r\n", "three\r\n"]) {
@@ -309,6 +315,19 @@ it("replays queued chunks in order, honors a listener pause, and delivers exit l
   expect(terminal.close).toHaveBeenCalledOnce();
   handle.resume();
   expect(events).toEqual(["early 🦞\r\n", "two\r\n", "three\r\n", "exit:7"]);
+});
+
+it("never delivers unsubscribed output after exit", async () => {
+  const { handle, callbacks, terminal, done } = spawnControlledBunPty();
+  const events: string[] = [];
+  handle.onExit(({ exitCode }) => events.push(`exit:${exitCode}`));
+  callbacks.data(terminal, new TextEncoder().encode("unobserved\r\n"));
+  callbacks.exit(terminal);
+  done.resolve(7);
+  await done.promise;
+  expect(events).toEqual(["exit:7"]);
+  handle.onData((chunk) => events.push(chunk));
+  expect(events).toEqual(["exit:7"]);
 });
 
 it.each([false, true])("routes Bun PTYs with Terminal.pause=%s", async (flowControl) => {

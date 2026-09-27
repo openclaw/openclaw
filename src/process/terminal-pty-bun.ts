@@ -102,6 +102,10 @@ export function spawnBunTerminalPty(
     if (exitDue && processExit && !(paused && pending.length > 0 && !tearingDown)) {
       exitDue = false;
       exited = processExit;
+      // Only output without any data subscriber can remain; like node-pty, drop it
+      // so a late subscriber never receives data after exit.
+      pending = [];
+      delivered = 0;
       terminal.close();
       for (const listener of exitListeners) {
         listener(exited);
