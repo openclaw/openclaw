@@ -1,10 +1,73 @@
 import Foundation
+import Observation
 import OpenClawKit
 import Testing
 import UniformTypeIdentifiers
 @testable import OpenClawChatUI
+#if os(macOS)
+import AppKit
+#endif
 
 struct ChatFileAdmissionTests {
+    #if os(macOS)
+    @Test(arguments: [false, true])
+    @MainActor
+    func `stages whole file selection`(fromPasteboard: Bool) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let defaultsName = "ChatFileAdmissionTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        let (events, continuation) = AsyncStream<FileAdmissionBatchEvent>.makeStream()
+        defer { continuation.finish() }
+        let policyReadGate = FileAdmissionPolicyReadGate(events: continuation)
+        let model = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: FileAdmissionTransport(limits: nil, policyReadGate: policyReadGate),
+            modelPickerStore: ChatModelPickerStore(defaults: defaults))
+        defer { model.detachTransport() }
+        let names = ["Quarterly release checklist.pdf", "release-metrics.csv", "standup-note.wav"]
+        let sizes = [193, 54, 32 * 1024]
+        let files = names.map { directory.appendingPathComponent($0) }
+        for (file, size) in zip(files, sizes) {
+            try Data(count: size).write(to: file)
+        }
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("test-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        let urls: [URL]
+        if fromPasteboard {
+            #expect(pasteboard.writeObjects(files.map { $0 as NSURL }))
+            urls = ChatComposerPasteSupport.fileURLs(from: pasteboard)
+        } else {
+            urls = files
+        }
+        #expect(urls == files)
+
+        model.addAttachments(urls: urls)
+        #expect(model.attachmentStagingCount == 1)
+        withObservationTracking {
+            _ = model.attachmentStagingCount
+        } onChange: {
+            continuation.yield(.finished)
+        }
+        var iterator = events.makeAsyncIterator()
+        let firstEvent = await iterator.next()
+
+        #expect(firstEvent == .finished)
+        #expect(model.attachmentStagingCount == 0)
+        #expect(model.attachments.map(\.fileName) == names)
+        #expect(model.attachments.map(\.data.count) == sizes)
+        #expect(Set(model.attachments.map(\.id)).count == 3)
+        #expect(model.attachments.last?.mimeType.hasPrefix("audio/") == true)
+        #expect(model.errorText == nil)
+        // Always release a failing implementation's pending route lookup so
+        // the test owns and joins its staging task without timers or polling.
+        await policyReadGate.release()
+        if firstEvent != .finished { _ = await iterator.next() }
+    }
+    #endif
+
     @Test(arguments: [
         "pdf",
         "txt",
@@ -119,9 +182,11 @@ struct ChatFileAdmissionTests {
 
 private struct FileAdmissionTransport: OpenClawChatTransport {
     let limits: GatewayAttachmentLimits?
+    var policyReadGate: FileAdmissionPolicyReadGate?
 
     func attachmentLimits() async -> GatewayAttachmentLimits? {
-        self.limits
+        await self.policyReadGate?.read()
+        return self.limits
     }
 
     func events() -> AsyncStream<OpenClawChatTransportEvent> {
@@ -144,5 +209,34 @@ private struct FileAdmissionTransport: OpenClawChatTransport {
         attachments _: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
         throw CancellationError()
+    }
+}
+
+private enum FileAdmissionBatchEvent: Sendable {
+    case policyReread
+    case finished
+}
+
+private actor FileAdmissionPolicyReadGate {
+    let events: AsyncStream<FileAdmissionBatchEvent>.Continuation
+    private var reads = 0
+    private var isReleased = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    init(events: AsyncStream<FileAdmissionBatchEvent>.Continuation) {
+        self.events = events
+    }
+
+    func read() async {
+        self.reads += 1
+        guard self.reads > 1, !self.isReleased else { return }
+        self.events.yield(.policyReread)
+        await withCheckedContinuation { self.continuation = $0 }
+    }
+
+    func release() {
+        self.isReleased = true
+        self.continuation?.resume()
+        self.continuation = nil
     }
 }

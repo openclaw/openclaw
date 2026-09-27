@@ -37,7 +37,9 @@ extension OpenClawChatViewModel {
         self.beginAttachmentStaging()
         Task {
             defer { self.endAttachmentStaging() }
-            await self.addImageAttachment(url: nil, data: data, fileName: fileName, mimeType: mimeType)
+            let advertisedLimits = await self.transport.attachmentLimits()
+            await self.stageImageAttachment(
+                url: nil, data: data, fileName: fileName, mimeType: mimeType, advertisedLimits: advertisedLimits)
         }
     }
 
@@ -50,11 +52,13 @@ extension OpenClawChatViewModel {
         guard self.isCurrentSession(session) else { return }
         self.beginAttachmentStaging()
         defer { self.endAttachmentStaging() }
-        await self.addImageAttachment(
+        let advertisedLimits = await self.transport.attachmentLimits()
+        await self.stageImageAttachment(
             url: nil,
             data: data,
             fileName: fileName,
             mimeType: mimeType,
+            advertisedLimits: advertisedLimits,
             expectedSession: session)
     }
 
@@ -157,6 +161,9 @@ extension OpenClawChatViewModel {
     }
 
     func loadAttachments(urls: [URL], expectedSession: SessionSnapshot? = nil) async {
+        // One selection owns one policy snapshot. Reacquiring route-dependent
+        // limits between files can strand a partially staged batch during recovery.
+        let advertisedLimits = await self.transport.attachmentLimits()
         var unreadable: [String] = []
         var oversized: [String] = []
         for url in urls {
@@ -166,6 +173,7 @@ extension OpenClawChatViewModel {
                     url: url,
                     fileName: url.lastPathComponent,
                     mimeType: Self.mimeType(for: url) ?? "application/octet-stream",
+                    advertisedLimits: advertisedLimits,
                     expectedSession: expectedSession)
             } catch ChatAttachmentReadError.tooLarge {
                 oversized.append(url.lastPathComponent)
@@ -194,14 +202,14 @@ extension OpenClawChatViewModel {
         return (UTType(filenameExtension: ext) ?? .data).preferredMIMEType
     }
 
-    func addImageAttachment(
+    private func stageImageAttachment(
         url: URL?,
         data: Data,
         fileName: String,
         mimeType: String,
+        advertisedLimits: GatewayAttachmentLimits?,
         expectedSession: SessionSnapshot? = nil) async
     {
-        let advertisedLimits = await self.transport.attachmentLimits()
         let limits = advertisedLimits ?? .legacyClientFallback
         guard self.ownsAttachmentSession(expectedSession) else { return }
         guard !data.isEmpty else {
@@ -272,11 +280,13 @@ extension OpenClawChatViewModel {
         expectedSession: SessionSnapshot? = nil) async
     {
         guard self.ownsAttachmentSession(expectedSession) else { return }
+        let advertisedLimits = await self.transport.attachmentLimits()
         do {
             try await self.addFileAttachment(
                 url: url,
                 fileName: fileName,
                 mimeType: mimeType,
+                advertisedLimits: advertisedLimits,
                 expectedSession: expectedSession)
         } catch ChatAttachmentReadError.tooLarge {
             guard self.ownsAttachmentSession(expectedSession) else { return }
@@ -293,9 +303,9 @@ extension OpenClawChatViewModel {
         url: URL,
         fileName: String,
         mimeType: String,
+        advertisedLimits: GatewayAttachmentLimits?,
         expectedSession: SessionSnapshot?) async throws
     {
-        let advertisedLimits = await self.transport.attachmentLimits()
         let limits = advertisedLimits ?? .legacyClientFallback
         guard self.ownsAttachmentSession(expectedSession) else { return }
         let hasSecurityScope = url.startAccessingSecurityScopedResource()
@@ -308,8 +318,13 @@ extension OpenClawChatViewModel {
         let data = try await Self.readAttachmentData(from: url, maximumBytes: maximumBytes)
         guard self.ownsAttachmentSession(expectedSession) else { return }
         if mimeType.hasPrefix("image/") {
-            await self.addImageAttachment(
-                url: url, data: data, fileName: fileName, mimeType: mimeType, expectedSession: expectedSession)
+            await self.stageImageAttachment(
+                url: url,
+                data: data,
+                fileName: fileName,
+                mimeType: mimeType,
+                advertisedLimits: advertisedLimits,
+                expectedSession: expectedSession)
             return
         }
 
