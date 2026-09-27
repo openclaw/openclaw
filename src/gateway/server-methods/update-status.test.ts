@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as snapshots from "../../infra/sqlite-readonly-location.js";
 import { gatewayUpdateCampaign } from "../../infra/update-campaign.js";
+import { createGatewayUpdateLifecycle } from "../../infra/update-check-lifecycle.js";
 import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import * as ledger from "../../infra/update-run-ledger.js";
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
@@ -23,6 +24,7 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
 import { createCoreGatewayMethodDescriptors } from "../methods/core-method-policy.js";
@@ -566,7 +568,9 @@ it("reconciles an expired legacy admission on Gateway watcher startup", async ()
   const legacy = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
   clock.mockReturnValue(now);
   const broadcast = vi.fn();
-  const watcher = startUpdateRunWatcher({ broadcast, log: { warn: vi.fn() } });
+  const scheduler = createTestGatewayScheduler();
+  const lifecycle = createGatewayUpdateLifecycle(scheduler);
+  const watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn: vi.fn() } });
   try {
     expect(getUpdateRun(legacy.runId)).toMatchObject({
       phase: "finished",
@@ -579,5 +583,7 @@ it("reconciles an expired legacy admission on Gateway watcher startup", async ()
     );
   } finally {
     await watcher.stop();
+    await lifecycle.stop();
+    await scheduler.stop();
   }
 });
