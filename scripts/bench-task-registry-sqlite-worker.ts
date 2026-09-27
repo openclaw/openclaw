@@ -39,10 +39,19 @@ type TaskRecordApi = Pick<
   "createTaskRecord" | "markTaskTerminalById"
 >;
 
-type TaskRegistryQueryApi = Pick<
-  typeof import("../src/tasks/task-registry-query.js"),
-  "deleteTaskRecordById"
+type TaskRegistryMaintenanceApi = Pick<
+  typeof import("../src/tasks/task-registry.maintenance.js"),
+  "runTaskRegistryMaintenance"
 >;
+
+const EMPTY_COUNTS: RegistryLifecycleCounts = {
+  taskCount: 0,
+  deliveryStateCount: 0,
+  runningTasks: 0,
+  succeededTasks: 0,
+  pendingDeliveryTasks: 0,
+  succeededTerminalOutcomes: 0,
+};
 
 function parseInteger(raw: string | undefined, flag: string, min: number, max: number): number {
   const result = classifyBoundedUnsignedDecimal(raw, min, max);
@@ -145,28 +154,20 @@ function retainedMemoryDelta(
   };
 }
 
-function assertLifecycleCounts(
-  actual: RegistryLifecycleCounts,
-  expected: RegistryLifecycleCounts,
-  phase: string,
-  surface: string,
-): void {
-  for (const field of Object.keys(expected) as Array<keyof RegistryLifecycleCounts>) {
-    if (actual[field] !== expected[field]) {
-      throw new Error(
-        `${phase} ${surface} invariant failed: ${JSON.stringify({ expected, actual })}`,
-      );
-    }
-  }
-}
-
 function assertSnapshot(
-  actual: RegistrySnapshot,
+  snapshot: RegistrySnapshot,
   expected: RegistryLifecycleCounts,
   phase: string,
 ): void {
   for (const surface of ["memory", "sqlite"] as const) {
-    assertLifecycleCounts(actual[surface], expected, phase, surface);
+    const actual = snapshot[surface];
+    for (const field of Object.keys(expected) as Array<keyof RegistryLifecycleCounts>) {
+      if (actual[field] !== expected[field]) {
+        throw new Error(
+          `${phase} ${surface} invariant failed: ${JSON.stringify({ expected, actual })}`,
+        );
+      }
+    }
   }
 }
 
@@ -217,14 +218,7 @@ async function createCountReader() {
       };
     };
     return {
-      memory: summarize(
-        [...state.tasks.values()].map((task) => ({
-          status: task.status,
-          deliveryStatus: task.deliveryStatus,
-          terminalOutcome: task.terminalOutcome,
-        })),
-        state.taskDeliveryStates.size,
-      ),
+      memory: summarize(state.tasks.values(), state.taskDeliveryStates.size),
       sqlite: summarize(
         taskRows.map((task) => ({
           status: task.status,
@@ -242,7 +236,7 @@ async function runCycle(
   serial: number,
   readSnapshot: () => RegistrySnapshot,
   taskRecordApi: TaskRecordApi,
-  taskRegistryQuery: TaskRegistryQueryApi,
+  taskRegistryMaintenance: TaskRegistryMaintenanceApi,
 ): Promise<TimingSample> {
   const taskIds: string[] = [];
   const startedAt = Date.now();
@@ -260,6 +254,7 @@ async function runCycle(
       status: "running",
       deliveryStatus: "pending",
       notifyPolicy: "silent",
+      cleanupAfter: 0,
       startedAt,
       lastEventAt: startedAt,
     });
@@ -269,19 +264,11 @@ async function runCycle(
     taskIds.push(task.taskId);
   }
   const registrationMs = performance.now() - registrationStartedAt;
-  const emptyCounts: RegistryLifecycleCounts = {
-    taskCount: 0,
-    deliveryStateCount: 0,
-    runningTasks: 0,
-    succeededTasks: 0,
-    pendingDeliveryTasks: 0,
-    succeededTerminalOutcomes: 0,
-  };
   const registration = readSnapshot();
   assertSnapshot(
     registration,
     {
-      ...emptyCounts,
+      ...EMPTY_COUNTS,
       taskCount: size,
       deliveryStateCount: size,
       runningTasks: size,
@@ -309,7 +296,7 @@ async function runCycle(
   assertSnapshot(
     terminal,
     {
-      ...emptyCounts,
+      ...EMPTY_COUNTS,
       taskCount: size,
       deliveryStateCount: size,
       succeededTasks: size,
@@ -320,14 +307,13 @@ async function runCycle(
   );
 
   const teardownStartedAt = performance.now();
-  for (const taskId of taskIds) {
-    if (!taskRegistryQuery.deleteTaskRecordById(taskId)) {
-      throw new Error(`teardown failed for task ${taskId}`);
-    }
+  const maintenance = await taskRegistryMaintenance.runTaskRegistryMaintenance();
+  if (maintenance.pruned !== taskIds.length) {
+    throw new Error(`teardown pruned ${maintenance.pruned}/${taskIds.length} tasks`);
   }
   const teardownMs = performance.now() - teardownStartedAt;
   const teardown = readSnapshot();
-  assertSnapshot(teardown, emptyCounts, "teardown");
+  assertSnapshot(teardown, EMPTY_COUNTS, "teardown");
   return { registrationMs, terminalMs, teardownMs, registration, terminal, teardown };
 }
 
@@ -344,20 +330,12 @@ async function runBenchmark(options: WorkerOptions): Promise<WorkerResult> {
   await resetRuntime(true);
   // Load lifecycle owners before the baseline so warmup=0 still measures task churn,
   // not one-time module initialization retained by the worker.
-  const [readSnapshot, taskRecordApi, taskRegistryQuery] = await Promise.all([
+  const [readSnapshot, taskRecordApi, taskRegistryMaintenance] = await Promise.all([
     createCountReader(),
     import("../src/tasks/task-registry-record-api.js"),
-    import("../src/tasks/task-registry-query.js"),
+    import("../src/tasks/task-registry.maintenance.js"),
   ]);
-  const emptyCounts: RegistryLifecycleCounts = {
-    taskCount: 0,
-    deliveryStateCount: 0,
-    runningTasks: 0,
-    succeededTasks: 0,
-    pendingDeliveryTasks: 0,
-    succeededTerminalOutcomes: 0,
-  };
-  assertSnapshot(readSnapshot(), emptyCounts, "initial");
+  assertSnapshot(readSnapshot(), EMPTY_COUNTS, "initial");
   const timingsMs = {
     registration: [] as number[],
     terminal: [] as number[],
@@ -366,7 +344,7 @@ async function runBenchmark(options: WorkerOptions): Promise<WorkerResult> {
   const postGcSamples: MemorySample[] = [];
   let lastSample: TimingSample | undefined;
   for (let index = 0; index < options.warmup; index += 1) {
-    await runCycle(options.size, index, readSnapshot, taskRecordApi, taskRegistryQuery);
+    await runCycle(options.size, index, readSnapshot, taskRecordApi, taskRegistryMaintenance);
     forceGc();
   }
   forceGc();
@@ -377,7 +355,7 @@ async function runBenchmark(options: WorkerOptions): Promise<WorkerResult> {
       options.warmup + index,
       readSnapshot,
       taskRecordApi,
-      taskRegistryQuery,
+      taskRegistryMaintenance,
     );
     forceGc();
     timingsMs.registration.push(lastSample.registrationMs);

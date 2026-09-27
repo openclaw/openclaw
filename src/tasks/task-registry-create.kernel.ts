@@ -22,16 +22,15 @@ type TaskCreateOptions = Pick<
   "onCommitted" | "assertCurrent" | "retainTaskCommit"
 >;
 
-/** Shared writer custody spans the operation; write owns each separate transaction. */
+/** Each write callback reads its selection again under native SQLite serialization. */
 export function createTaskRecordInDatabase(
   db: DatabaseSync,
   input: TaskCreateInput,
   write: <T>(operation: () => T) => T,
   options: TaskCreateOptions,
 ): TaskCreateResult {
-  const { params } = input;
   return runTaskCreateOperation(input, {
-    readSelection: (identity) => {
+    readSelection: (identity, params) => {
       const parentFlowId = params.parentFlowId?.trim();
       assertParentFlowRecordLinkAllowed(
         { ...identity, parentFlowId },

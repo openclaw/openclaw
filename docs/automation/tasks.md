@@ -170,7 +170,7 @@ result; use **Copy result** in the Control UI or `openclaw tasks show <lookup>`.
 
 Agent run completion is authoritative for active task records. A successful detached run finalizes as `succeeded`, ordinary run errors finalize as `failed`, timeouts finalize as `timed_out`, and cancel/abort outcomes finalize as `cancelled`. Once a task is terminal, later lifecycle signals do not downgrade it - an operator-cancelled or already-`failed`/`timed_out`/`lost` task stays that way even if a success signal arrives afterwards.
 
-Distinct ACP executions receive separate task and flow IDs even when they share a request ID. Repeated status mirrors of the same execution keep its original task ID. A run-ID lookup selects the latest execution within that ACP session; an exact task-ID lookup still returns the older task and its terminal result. Cancelling one execution does not cancel a queued successor with the same request ID.
+Distinct ACP executions receive separate task and flow IDs even when they share a request ID. Each execution has its own completion notification; duplicate projections of the same execution share one notification. Repeated status mirrors of the same execution keep its original task ID. A run-ID lookup selects the latest execution within that ACP session; an exact task-ID lookup still returns the older task and its terminal result. Cancelling one execution does not cancel a queued successor with the same request ID.
 
 `lost` is runtime-aware:
 
@@ -366,9 +366,9 @@ For the full operator ledger, use the CLI: `openclaw tasks list`.
 
 ### Control UI
 
-The web Control UI has a **Tasks** page in the sidebar with live active and recent background tasks. Use it to inspect progress, open linked sessions, refresh the ledger, cancel queued and running tasks, or retry/dismiss a blocked completion delivery. Task detail keeps execution status and delivery status separate and exposes the retained result for copying. Final delivery and outcome corrections update the live task without counting delivery as additional execution time.
+The global **Tasks** workspace page has been removed. Use `openclaw tasks list` and `openclaw tasks show <task-id>` for the operator ledger, `openclaw tasks cancel <task-id>` to cancel work, and `openclaw tasks retry <task-id>` or `openclaw tasks dismiss <task-id>` to resolve blocked completion delivery. TaskFlow inspection and cancellation remain available through `openclaw tasks flow`. Chat task controls and automation run history remain available in the Control UI.
 
-Chat panes also have a collapsible **Background tasks** rail scoped to the current conversation, with active work, stop controls, and a finished section. Open it from the pane's **Tasks** panel action. Subagent activity below the parent conversation also opens the selected child's details.
+Chat panes have a collapsible **Background tasks** rail scoped to the current conversation, with active work, stop controls, and a finished section. Open it from the pane's **Tasks** panel action. Subagent activity below the parent conversation also opens the selected child's details.
 
 The compact subagent list below the conversation keeps queued, running, and waiting work in creation order. Completed children leave this list as soon as their task completion is published, including native harness subagents, without reloading the page. The list shows up to five ongoing children and a count of additional ongoing work. Open **Tasks** for the full active list and up to 50 recent finished tasks. Progress and result-delivery updates do not change the order.
 

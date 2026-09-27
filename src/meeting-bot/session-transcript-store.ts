@@ -1,3 +1,4 @@
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import type {
   MeetingSessionRecord,
@@ -55,7 +56,7 @@ export class MeetingTranscriptDeliveryError extends Error {
   readonly finalCaptureError?: string;
 
   constructor(cause: unknown, finalCaptureError?: unknown) {
-    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    super(coerceErrorMessage(cause), { cause });
     this.name = "MeetingTranscriptDeliveryError";
     if (finalCaptureError !== undefined) {
       this.finalCaptureError =
@@ -86,6 +87,8 @@ export class MeetingSessionTranscriptStore<TSession extends MeetingSessionRecord
         session: TSession,
         options?: { finalize?: boolean },
       ): Promise<MeetingTranscriptSnapshot | undefined>;
+      /** Observe every provider revision before the durable transcript cursor deduplicates lines. */
+      onSnapshot?(session: TSession, snapshot: MeetingTranscriptSnapshot): void;
       onLines?(session: TSession, lines: MeetingTranscriptLine[]): Promise<void>;
     },
   ) {}
@@ -206,6 +209,7 @@ export class MeetingSessionTranscriptStore<TSession extends MeetingSessionRecord
       throw error;
     }
     if (snapshot) {
+      this.options.onSnapshot?.(session, snapshot);
       if (this.options.isTranscribeSession(session)) {
         this.#merge(session.id, snapshot);
       }

@@ -47,15 +47,6 @@ function usesLegacyOpenClawCompaction(params: GatewaySessionCompactionParams): b
   );
 }
 
-async function resolveGatewayCompactionTranscriptTarget(params: GatewaySessionCompactionParams) {
-  return await resolveSessionTranscriptRuntimeTarget({
-    agentId: params.agentId,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionStoreKey,
-    storePath: params.storePath,
-  });
-}
-
 /** Returns only definitive legacy-runtime no-op verdicts; other runtimes decide for themselves. */
 export async function preflightGatewaySessionCompaction(
   params: GatewaySessionCompactionParams,
@@ -90,7 +81,12 @@ export async function runGatewaySessionCompaction(
   params: GatewaySessionCompactionParams,
   host: Parameters<typeof compactEmbeddedAgentSession>[1],
 ): Promise<Awaited<ReturnType<typeof compactEmbeddedAgentSession>>> {
-  const transcriptTarget = await resolveGatewayCompactionTranscriptTarget(params);
+  const transcriptTarget = await resolveSessionTranscriptRuntimeTarget({
+    agentId: params.agentId,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionStoreKey,
+    storePath: params.storePath,
+  });
   const resolvedModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
   const workspaceDir =
     resolveIngressWorkspaceOverrideForSessionRun({

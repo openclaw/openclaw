@@ -10,8 +10,8 @@ import {
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { backupNodeSqliteDatabase } from "./sqlite-backup.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
-import { createSqliteLifecycleAggregateError } from "./sqlite-coordinator.js";
 import { withSqliteInspectionOperation } from "./sqlite-error-diagnostics.js";
+import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import {
   adoptPreparedLocation,
@@ -38,11 +38,7 @@ import {
   sqliteSnapshotStagingError,
 } from "./sqlite-snapshot-staging.js";
 import { copySqliteWalPrefixSync } from "./sqlite-snapshot-wal-prefix.js";
-import {
-  withSqliteSourceHandle,
-  withSqliteSourceHandleAsync,
-  withSqliteSourceReadDatabase,
-} from "./sqlite-source-handle.js";
+import { withSqliteSourceReadDatabase } from "./sqlite-source-handle.js";
 
 const SQLITE_HEADER_BYTES = 20;
 const SQLITE_SOURCE_READ_BUSY_TIMEOUT_MS = 30_000;
@@ -511,45 +507,43 @@ function prepareReadOnlySourceSyncInProcess(
 
 /** Fixed metadata inspection in the read-only child; no payload scan or backup
  * unless source journal state requires private recovery/artifact preservation. */
-export function inspectSqliteSchemaHeaderInProcess(
+export async function inspectSqliteSchemaHeaderInProcess(
   pathname: string,
   stagingRoot?: string,
   agentSchemaVersionForOwnership?: number,
 ) {
-  return withSqliteSourceHandleAsync(pathname, async () => {
-    const canonicalPath = fs.realpathSync.native(pathname);
-    const mode = readSourceJournalMode(canonicalPath);
-    const sidecars = readSourceSidecars(canonicalPath);
-    if (mode !== "wal" || (sidecars.wal && sidecars.shm)) {
-      let readError: unknown;
-      try {
-        return withSqliteSourceReadDatabase(canonicalPath, "source", (database) => {
-          try {
-            setSqliteBusyTimeout(database, SQLITE_SOURCE_READ_BUSY_TIMEOUT_MS);
-            return readSqliteSchemaHeader(database, agentSchemaVersionForOwnership);
-          } catch (error) {
-            readError = error;
-            throw error;
-          }
-        });
-      } catch (error) {
-        // Only SQLite's recovery-required refusal permits private recovery.
-        // Ordinary I/O, admission, and native close errors must stay failures.
-        if (
-          error !== readError ||
-          !isSqliteReadOnlyError(error) ||
-          !statIfPresent(`${canonicalPath}-journal`) ||
-          readSourceJournalMode(canonicalPath) !== "rollback"
-        ) {
+  const canonicalPath = fs.realpathSync.native(pathname);
+  const mode = readSourceJournalMode(canonicalPath);
+  const sidecars = readSourceSidecars(canonicalPath);
+  if (mode !== "wal" || (sidecars.wal && sidecars.shm)) {
+    let readError: unknown;
+    try {
+      return withSqliteSourceReadDatabase(canonicalPath, "source", (database) => {
+        try {
+          setSqliteBusyTimeout(database, SQLITE_SOURCE_READ_BUSY_TIMEOUT_MS);
+          return readSqliteSchemaHeader(database, agentSchemaVersionForOwnership);
+        } catch (error) {
+          readError = error;
           throw error;
         }
+      });
+    } catch (error) {
+      // Only SQLite's recovery-required refusal permits private recovery.
+      // Ordinary I/O, admission, and native close errors must stay failures.
+      if (
+        error !== readError ||
+        !isSqliteReadOnlyError(error) ||
+        !statIfPresent(`${canonicalPath}-journal`) ||
+        readSourceJournalMode(canonicalPath) !== "rollback"
+      ) {
+        throw error;
       }
     }
-    // An incomplete WAL family would create source sidecars on native open.
-    // The existing snapshot owner also handles hot rollback recovery privately.
-    const prepared = await prepareReadOnlySourceInProcess(canonicalPath, stagingRoot);
-    return readSqliteSchemaHeaderFromSnapshot(prepared, undefined, agentSchemaVersionForOwnership);
-  });
+  }
+  // An incomplete WAL family would create source sidecars on native open.
+  // The existing snapshot owner also handles hot rollback recovery privately.
+  const prepared = await prepareReadOnlySourceInProcess(canonicalPath, stagingRoot);
+  return readSqliteSchemaHeaderFromSnapshot(prepared, undefined, agentSchemaVersionForOwnership);
 }
 
 export function prepareSqliteReadOnlyLocationInProcess(
@@ -559,15 +553,11 @@ export function prepareSqliteReadOnlyLocationInProcess(
   onProgress?: (progress: import("node:sqlite").BackupProgressInfo) => void,
 ) {
   signal?.throwIfAborted();
-  return withSqliteSourceHandleAsync(pathname, () =>
-    prepareReadOnlySourceInProcess(pathname, stagingRoot, signal, onProgress),
-  );
+  return prepareReadOnlySourceInProcess(pathname, stagingRoot, signal, onProgress);
 }
 
 export function prepareSqliteReadOnlyLocationSyncInProcess(pathname: string, stagingRoot?: string) {
-  return withSqliteSourceHandle(pathname, () =>
-    prepareReadOnlySourceSyncInProcess(pathname, stagingRoot),
-  );
+  return prepareReadOnlySourceSyncInProcess(pathname, stagingRoot);
 }
 
 /** Snapshot the lifecycle owner's already-open native connection. Opening or

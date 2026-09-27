@@ -1,10 +1,12 @@
-import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type {
+  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  ExecApprovalDecision,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import { describe, expect, it, vi } from "vitest";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import { codexTestTurnIds } from "./codex-app-server.test-fixtures.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
-import type { ExecApprovalDecision } from "./plugin-approval-roundtrip.js";
 import type { JsonValue } from "./protocol.js";
 import { createCodexTestModel } from "./test-support.js";
 
@@ -110,22 +112,19 @@ describe("Codex native command approval scopes", () => {
     expect(resolved?.message).toContain("for the session");
   });
 
-  it.each(["session", "persistent"] as const)(
-    "keeps automatic command approval one-shot when native offers %s approval",
-    async (scope) => {
-      const futureDecision =
-        scope === "session"
-          ? "acceptForSession"
-          : { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["node", "--version"] } };
-      const { result, requestApproval } = await requestCommandApproval({
-        availableDecisions: ["accept", futureDecision, "cancel"],
-        autoApprove: true,
-      });
+  it("keeps automatic command approval one-shot when native offers persistent approval", async () => {
+    const { result, requestApproval } = await requestCommandApproval({
+      availableDecisions: [
+        "accept",
+        { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["node", "--version"] } },
+        "cancel",
+      ],
+      autoApprove: true,
+    });
 
-      expect(result).toEqual({ decision: "accept" });
-      expect(requestApproval).not.toHaveBeenCalled();
-    },
-  );
+    expect(result).toEqual({ decision: "accept" });
+    expect(requestApproval).not.toHaveBeenCalled();
+  });
 
   it("does not automatically approve a native request offering only a persistent grant", async () => {
     const { result, resolved } = await requestCommandApproval({

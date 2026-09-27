@@ -117,6 +117,11 @@ export function teamsMeetingStatusPreludeSource(params: MeetingStatusPreludePara
   }
   const microphone = first(selectors.microphone) || findTextButton(/mute|unmute|microphone/i);
   let microphoneState = identityVerified ? toggleState(microphone, "microphone") : undefined;
+  const refreshMicrophoneState = async () => {
+    await waitForUi();
+    const currentMicrophone = first(selectors.microphone) || findTextButton(/mute|unmute|microphone/i);
+    microphoneState = toggleState(currentMicrophone, "microphone");
+  };
   const camera = first(selectors.camera) || findTextButton(/camera|video/i);
   let cameraState = identityVerified ? toggleState(camera, "camera") : undefined;
   let controlManualAction;
@@ -202,16 +207,12 @@ export function teamsMeetingStatusPreludeSource(params: MeetingStatusPreludePara
     if (!audioInputRouted) {
       if (canMutateSession && microphoneState === "on") {
         microphone.click();
-        await waitForUi();
-        const currentMicrophone = first(selectors.microphone) || findTextButton(/mute|unmute|microphone/i);
-        microphoneState = toggleState(currentMicrophone, "microphone");
+        await refreshMicrophoneState();
       }
       controlManualAction = manualActionFor("teams-audio-choice-required", "Select the OpenClaw virtual audio device as the Teams microphone and verify it is selected before enabling talk-back.");
     } else if (canMutateSession && microphoneState === "off") {
       microphone.click();
-      await waitForUi();
-      const currentMicrophone = first(selectors.microphone) || findTextButton(/mute|unmute|microphone/i);
-      microphoneState = toggleState(currentMicrophone, "microphone");
+      await refreshMicrophoneState();
       if (microphoneState === "on") {
         notes.push("Unmuted the Teams microphone after verifying the virtual audio input.");
       }
@@ -221,9 +222,7 @@ export function teamsMeetingStatusPreludeSource(params: MeetingStatusPreludePara
     }
   } else if (canMutateSession && identityVerified && !inCall && !allowMicrophone && microphoneState === "on") {
       microphone.click();
-      await waitForUi();
-      const currentMicrophone = first(selectors.microphone) || findTextButton(/mute|unmute|microphone/i);
-      microphoneState = toggleState(currentMicrophone, "microphone");
+      await refreshMicrophoneState();
       if (microphoneState === "off") {
         notes.push("Muted the Teams microphone for observe-only mode.");
       }
@@ -231,21 +230,15 @@ export function teamsMeetingStatusPreludeSource(params: MeetingStatusPreludePara
   if (identityVerified && inCall && allowMicrophone) {
     if (!selectedMicrophoneLabel() && canMutateSession && microphoneState === "on") {
       microphone?.click();
-      await waitForUi();
-      const currentMicrophone = first(selectors.microphone) || findTextButton(/mute|unmute|microphone/i);
-      microphoneState = toggleState(currentMicrophone, "microphone");
+      await refreshMicrophoneState();
     }
     audioInputRouted = await ensureVirtualAudioInput();
     if (audioInputRouted && canMutateSession && microphoneState === "off") {
       microphone?.click();
-      await waitForUi();
-      const currentMicrophone = first(selectors.microphone) || findTextButton(/mute|unmute|microphone/i);
-      microphoneState = toggleState(currentMicrophone, "microphone");
+      await refreshMicrophoneState();
     } else if (!audioInputRouted && canMutateSession && microphoneState === "on") {
       microphone?.click();
-      await waitForUi();
-      const currentMicrophone = first(selectors.microphone) || findTextButton(/mute|unmute|microphone/i);
-      microphoneState = toggleState(currentMicrophone, "microphone");
+      await refreshMicrophoneState();
       if (microphoneState === "off") {
         notes.push("Muted the Teams microphone because the virtual audio input could not be reverified.");
       }

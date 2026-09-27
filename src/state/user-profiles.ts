@@ -38,10 +38,10 @@ import {
 import {
   insertUserProfile,
   requireResolvedUserProfileMetadataById,
+  selectUserProfileEmailAlias,
   selectResolvedUserProfileMetadataById,
   setUserProfileEmailBinding,
   toUserProfile,
-  type UserProfile,
   userProfileAvatarPresence,
   userProfilesDb,
 } from "./user-profiles-internal.js";
@@ -63,10 +63,11 @@ import {
 } from "./user-profiles-tailscale-login.js";
 import {
   MAX_USER_PROFILE_DISPLAY_NAME_LENGTH,
+  type UserProfile,
   type UserProfileAvatarMime,
 } from "./user-profiles.types.js";
 
-export { formatUserProfileAvatarEtag, getProfileAvatar } from "./user-profiles-internal.js";
+export { formatUserProfileAvatarEtag } from "./user-profiles-internal.js";
 export {
   getUserProfileDisplay,
   readUserProfileAliases,
@@ -203,13 +204,7 @@ function ensureProfileForEmailWithInitialName(
   ensureUserProfilesSchema(options);
   const { db: reader } = openOpenClawStateDatabase(options);
   const selectExistingProfile = (database: DatabaseSync) => {
-    const alias = executeSqliteQueryTakeFirstSync(
-      database,
-      userProfilesDb(database)
-        .selectFrom("user_profile_emails")
-        .select("profile_id")
-        .where("email", "=", normalizedEmail),
-    );
+    const alias = selectUserProfileEmailAlias(database, normalizedEmail);
     return alias
       ? toUserProfile(requireResolvedUserProfileMetadataById(database, alias.profile_id))
       : undefined;
@@ -423,13 +418,7 @@ export function linkEmail(
       if (targetProfileId === GATEWAY_OWNER_PROFILE_ID || target.id === GATEWAY_OWNER_PROFILE_ID) {
         throw new UserProfileOwnerError("merge");
       }
-      const existingAlias = executeSqliteQueryTakeFirstSync(
-        db,
-        kysely
-          .selectFrom("user_profile_emails")
-          .select("profile_id")
-          .where("email", "=", normalizedEmail),
-      );
+      const existingAlias = selectUserProfileEmailAlias(db, normalizedEmail);
       if (existingAlias?.profile_id === GATEWAY_OWNER_PROFILE_ID) {
         throw new UserProfileOwnerError("merge");
       }

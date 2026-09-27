@@ -62,6 +62,11 @@ vi.mock("../substrate/e2ee-client.js", () => ({
   }),
 }));
 
+vi.mock("./scenario-runtime-cli.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./scenario-runtime-cli.js")>()),
+  createMatrixQaOpenClawCliRuntime: destructiveScenarioMocks.createMatrixQaRecoveryCliRuntime,
+}));
+
 vi.mock("./scenario-runtime-e2ee-destructive-recovery.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./scenario-runtime-e2ee-destructive-recovery.js")>()),
   createMatrixQaRecoveryCliRuntime: destructiveScenarioMocks.createMatrixQaRecoveryCliRuntime,
@@ -85,6 +90,10 @@ vi.mock("./scenario-runtime-state-files.js", () => ({
 }));
 
 import {
+  runMatrixQaE2eeHistoryExistsBackupEmptyScenario,
+  runMatrixQaE2eeServerDeviceDeletedLocalStateIntactScenario,
+  runMatrixQaE2eeStaleRecoveryKeyAfterBackupResetScenario,
+  runMatrixQaE2eeStateLossExternalRecoveryKeyScenario,
   runMatrixQaE2eeSyncStateLossCryptoIntactScenario,
   runMatrixQaE2eeWrongAccountRecoveryKeyScenario,
 } from "./scenario-runtime-e2ee-destructive.js";
@@ -260,6 +269,60 @@ describe("Matrix destructive E2EE storage discovery", () => {
       }),
     ).resolves.toMatchObject({ accountRoot });
   });
+});
+
+describe.each([
+  { name: "external key", run: runMatrixQaE2eeStateLossExternalRecoveryKeyScenario },
+  { name: "stale key", run: runMatrixQaE2eeStaleRecoveryKeyAfterBackupResetScenario },
+  { name: "empty backup", run: runMatrixQaE2eeHistoryExistsBackupEmptyScenario },
+  { name: "deleted device", run: runMatrixQaE2eeServerDeviceDeletedLocalStateIntactScenario },
+])("Matrix destructive $name setup ownership", ({ run }) => {
+  it.each(["login", "runtime"] as const)(
+    "releases acquired resources when recovery %s construction fails",
+    async (step) => {
+      const cleanupOrder: string[] = [];
+      const failure = new Error(`${step} construction failed`);
+      const owner = {
+        ...createDisposableOwner({
+          backupVersion: "owner-backup",
+          cleanupOrder,
+          encodedRecoveryKey: "owner-recovery-key",
+          label: "owner",
+        }),
+        resetRoomKeyBackup: vi.fn(async () => ({ success: true, createdVersion: "fresh-backup" })),
+      };
+      owner.getRecoveryKey
+        .mockResolvedValueOnce({ encodedPrivateKey: "owner-recovery-key", keyId: "owner-key" })
+        .mockResolvedValue({ encodedPrivateKey: "fresh-recovery-key", keyId: "fresh-key" });
+      destructiveScenarioMocks.createMatrixQaClient.mockReturnValue({
+        registerWithToken: async () => ({
+          accessToken: "owner-token",
+          deviceId: "OWNER",
+          password: "owner-password",
+          userId: "@owner:matrix-qa.test",
+        }),
+        createPrivateRoom: async () => "!owner:matrix-qa.test",
+        loginWithPassword: destructiveScenarioMocks.loginMatrixQaRecoveryDevice,
+      });
+      destructiveScenarioMocks.createMatrixQaE2eeScenarioClient.mockResolvedValue(owner);
+      destructiveScenarioMocks.loginMatrixQaRecoveryDevice.mockResolvedValue({
+        accessToken: "recovery-token",
+        deviceId: "RECOVERY",
+        userId: "@owner:matrix-qa.test",
+      });
+      if (step === "login") {
+        destructiveScenarioMocks.loginMatrixQaRecoveryDevice.mockRejectedValueOnce(failure);
+      } else {
+        destructiveScenarioMocks.createMatrixQaRecoveryCliRuntime.mockRejectedValueOnce(failure);
+      }
+      await expect(run(createMatrixQaE2eeTestContext({ gatewayRuntimeEnv: {} }))).rejects.toBe(
+        failure,
+      );
+      expect(cleanupOrder).toEqual(
+        step === "login" ? ["owner:stop"] : ["owner:stop", "owner:delete:RECOVERY"],
+      );
+    },
+  );
 });
 
 describe("Matrix wrong-account recovery-key isolation", () => {

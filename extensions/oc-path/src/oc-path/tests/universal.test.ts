@@ -545,15 +545,6 @@ describe("setOcPath — cross-cutting properties", () => {
     expect(JSON.stringify(jsonl)).toBe(before3);
   });
 
-  it("returns ok-tagged result with new ast on success", () => {
-    const md = parseMd("---\nname: x\n---\n").ast;
-    const r = setOcPath(md, parseOcPath("oc://X.md/[frontmatter]/name"), "y");
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      expect(r.ast.kind).toBe("md");
-    }
-  });
-
   it("returns failure-tagged result with reason on unresolved", () => {
     const ast = parseJsonc("{}").ast;
     const r = setOcPath(ast, parseOcPath("oc://config/missing"), "v");

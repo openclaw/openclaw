@@ -25,6 +25,22 @@ the remote's full ref inventory. Local upstreams need no fetch; an unknown upstr
 stays unknown. The selected upstream's own missing history may still be downloaded.
 Ahead/behind counts remain unavailable when shallow history has no merge base.
 
+For a clean source checkout configured with `update.channel: "stable"` or `"beta"`, `update status --json` can include `update.git.preferredTarget` with `channel`, `tag`, and the exact commit `sha`.
+This uses the updater's release selector and fetches into a temporary private Git repository, preserving the installed refs and checkout.
+The selected tag must still resolve to that commit at the release remote; retained local-only tags do not count as fresh targets.
+
+An absent field means unknown.
+Default/dev targets, explicit refs, unsupported channels, dirty checkouts, and unsuccessful inspections do not produce this fact.
+It describes the preferred selection for the observed configured channel, not candidate build success, downgrade approval, service readiness, or safe state recovery.
+An explicit update invocation can select a different target or install method.
+Older installed status commands cannot acquire this observation from candidate code.
+
+For Git installs, `update status --json` can include `update.git.artifacts`.
+`ready: true` includes the installed artifact `version` and immutable `buildId` after the native verifier checks the observed source commit, build stamps, runtime entry, and Control UI assets.
+`ready: false` means that verification failed; an absent field means artifact readiness is unknown.
+This observation does not establish remote target freshness, candidate validation, or the identity or health of the running Gateway, and does not authorize state recovery.
+The version prefers recorded build metadata and falls back to the package version when the build has no version, following the CLI's version precedence.
+
 If an update hands work to a background helper, the command has not finished the
 update. Follow its final `openclaw update status` command to check progress and the
 outcome. `openclaw gateway status --deep` checks Gateway health, not update progress.
@@ -212,6 +228,13 @@ A foreground updater publishes its final result after required finalization work
 and its local executor have settled. A late ownership or release failure returns
 an error instead of publishing an earlier success. Existing terminal history is
 not overwritten.
+
+Unexpected executor admission, settlement, or report publication failures also
+record the last reached phase, the redacted error, and whether rollback was needed
+or attempted before offering an interactive failure report. If ownership is lost
+or pending recovery prevents a safe history write, the command reports recovery
+pending and preserves the existing history for its owning updater instead of
+starting interactive triage.
 
 Activation has an enclosing deadline derived from the update's existing phase
 budget. If it expires, the updater cancels owned work and waits within that budget

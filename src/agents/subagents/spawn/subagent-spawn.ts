@@ -1,8 +1,3 @@
-/**
- * Subagent spawn executor.
- *
- * Validates spawn requests, prepares child sessions, stages attachments, binds delivery context, and registers runs.
- */
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { isExecutionIdentityCollectionEnabled } from "../../../audit/audit-config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
@@ -22,7 +17,7 @@ import {
 } from "../../spawn-pipeline.js";
 import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { cleanupMaterializedSubagentAttachments } from "../subagent-attachment-cleanup.js";
-import { activateSwarmRun, holdQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
+import { activateSwarmRun } from "../swarm/swarm-scheduler.js";
 import { readParentExecutionIdentity } from "./execution-identity-spawn-context.js";
 import { materializeSubagentAttachments } from "./subagent-attachments.js";
 import { resolveSubagentChildPlan } from "./subagent-spawn-child-plan.js";
@@ -78,7 +73,7 @@ export async function spawnSubagentDirect(
     gatewayScope?.context?.resolveGatewayContext;
   const operatorAuthority =
     gatewayCaller?.operatorAuthority ?? gatewayScope?.client?.internal?.operatorRunAuthority;
-  const requestResolution = resolveSubagentSpawnRequest(params, ctx);
+  const requestResolution = await resolveSubagentSpawnRequest(params, ctx);
   if (!requestResolution.ok) {
     return requestResolution.result;
   }
@@ -107,6 +102,7 @@ export async function spawnSubagentDirect(
       launchReplayKey: swarmLaunchReplayKey,
       soleImplicitMember,
       reservationPending,
+      reservation: swarmReservation,
     },
     admission: {
       resolve: resolveAdmission,
@@ -121,14 +117,14 @@ export async function spawnSubagentDirect(
   let hasBoundThreadDeliveryOrigin = false;
   let childRunId: string = childIdem;
   let swarmReservationPending = reservationPending;
-  const swarmReservation = reservationPending ? holdQueuedSwarmRun(childIdem) : undefined;
   let canCleanupCreatedSession: (() => boolean) | undefined;
   let canRetireReservation: (() => boolean) | undefined;
   let releaseOperatorAuthority: (() => void) | undefined;
   let provisionalCleanupOpen = true;
   let contextEnginePreparation: PreparedContextEngineSubagentSpawn | undefined;
   try {
-    if (reservationPending && !swarmReservation) {
+    assertActive?.();
+    if (reservationPending && !swarmReservation?.isCurrent()) {
       return { status: "error", error: "Collector FIFO reservation is no longer current" };
     }
     if (operatorAuthority && !gatewayContextResolver) {
@@ -671,7 +667,6 @@ export async function spawnSubagentDirect(
 
     // Publish only after preparation releases its hold and exposes the scheduler's capacity state.
     await swarmReservation?.release();
-    // Emit lifecycle event so the gateway can broadcast sessions.changed to SSE subscribers.
     emitSessionLifecycleEvent({
       sessionKey: childSessionKey,
       reason: "create",

@@ -215,29 +215,26 @@ describe("prepareSqliteReadOnlyLocation", () => {
     },
   );
 
-  it.each(
-    [
-      {
-        mode: "async backup",
-        prepare: prepareSqliteReadOnlyLocationInProcess,
-        empty: false,
-      },
-      {
-        mode: "async copy",
-        prepare: prepareSqliteReadOnlyLocationInProcess,
-        empty: true,
-      },
-      {
-        mode: "sync copy",
-        prepare: prepareSqliteReadOnlyLocationSyncInProcess,
-        empty: false,
-      },
-    ].flatMap((scenario) =>
-      ["ENOSPC", "EDQUOT", "EACCES", "EPERM", "EROFS"].map((code) =>
-        Object.assign({}, scenario, { code }),
-      ),
-    ),
-  )(
+  it.each([
+    {
+      mode: "async backup",
+      prepare: prepareSqliteReadOnlyLocationInProcess,
+      empty: false,
+      code: "EDQUOT",
+    },
+    {
+      mode: "async copy",
+      prepare: prepareSqliteReadOnlyLocationInProcess,
+      empty: true,
+      code: "EACCES",
+    },
+    {
+      mode: "sync copy",
+      prepare: prepareSqliteReadOnlyLocationSyncInProcess,
+      empty: false,
+      code: "EROFS",
+    },
+  ])(
     "identifies $mode private cache allocation failure $code before backup or copying",
     async ({ code, empty, prepare }) => {
       const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-allocation-");

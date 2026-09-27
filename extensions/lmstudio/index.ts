@@ -1,4 +1,3 @@
-// Lmstudio plugin entrypoint registers its OpenClaw integration.
 import {
   definePluginEntry,
   type OpenClawConfig,
@@ -45,11 +44,6 @@ function resolveLmstudioAugmentedCatalogEntries(config: OpenClawConfig | undefin
   );
 }
 
-/** Lazily loads setup helpers so provider wiring stays lightweight at startup. */
-async function loadProviderSetup() {
-  return await import("./src/setup.js");
-}
-
 export default definePluginEntry({
   id: PROVIDER_ID,
   name: "LM Studio Provider",
@@ -69,11 +63,11 @@ export default definePluginEntry({
           kind: "custom",
           appGuidedSetup: {
             detectAvailability: async (ctx) => {
-              const providerSetup = await loadProviderSetup();
+              const providerSetup = await import("./src/setup.js");
               return await providerSetup.detectAppGuidedLmstudioAvailability(ctx);
             },
             detect: async (ctx) => {
-              const providerSetup = await loadProviderSetup();
+              const providerSetup = await import("./src/setup.js");
               const result = await providerSetup.prepareAppGuidedLmstudioSetup(ctx);
               if (!result?.defaultModel) {
                 return null;
@@ -85,12 +79,12 @@ export default definePluginEntry({
               };
             },
             prepare: async (ctx) => {
-              const providerSetup = await loadProviderSetup();
+              const providerSetup = await import("./src/setup.js");
               return await providerSetup.prepareAppGuidedLmstudioSetup(ctx);
             },
           },
           run: async (ctx: ProviderAuthContext): Promise<ProviderAuthResult> => {
-            const providerSetup = await loadProviderSetup();
+            const providerSetup = await import("./src/setup.js");
             const suppliedApiKey =
               ctx.opts?.tokenProvider === PROVIDER_ID
                 ? normalizeOptionalSecretInput(ctx.opts.token)
@@ -113,11 +107,11 @@ export default definePluginEntry({
             });
           },
           validateNonInteractive: async (ctx) => {
-            const providerSetup = await loadProviderSetup();
+            const providerSetup = await import("./src/setup.js");
             return await providerSetup.validateLmstudioNonInteractive(ctx);
           },
           runNonInteractive: async (ctx: ProviderAuthMethodNonInteractiveContext) => {
-            const providerSetup = await loadProviderSetup();
+            const providerSetup = await import("./src/setup.js");
             return await providerSetup.configureLmstudioNonInteractive(ctx);
           },
         },
@@ -126,7 +120,7 @@ export default definePluginEntry({
         // Run after early providers so local LM Studio detection does not dominate resolution.
         order: "late",
         run: async (ctx) => {
-          const providerSetup = await loadProviderSetup();
+          const providerSetup = await import("./src/setup.js");
           return await providerSetup.discoverLmstudioProvider(ctx, { discoveryMode: "strict" });
         },
       },
@@ -145,7 +139,7 @@ export default definePluginEntry({
         resolvedApiKey?.trim() === CUSTOM_LOCAL_AUTH_MARKER,
       normalizeConfig: ({ providerConfig }) => normalizeLmstudioProviderConfig(providerConfig),
       prepareDynamicModel: async (ctx) => {
-        const providerSetup = await loadProviderSetup();
+        const providerSetup = await import("./src/setup.js");
         return await providerSetup.prepareLmstudioDynamicModel(ctx);
       },
       augmentModelCatalog: (ctx) => resolveLmstudioAugmentedCatalogEntries(ctx.config),

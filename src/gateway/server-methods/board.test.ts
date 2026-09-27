@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import type { BoardSnapshot } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  BoardSnapshot,
+  BoardWidgetPutParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { readBoardHtml } from "../../boards/board-store.test-support.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
@@ -11,6 +14,14 @@ import {
 
 const sessionKey = "agent:main:session";
 const boardBroadcastScope = { sessionKeys: [sessionKey], agentId: "main" };
+
+function putMainWidget(
+  invoke: ReturnType<typeof createHarness>["invoke"],
+  name: string,
+  content: BoardWidgetPutParams["content"],
+) {
+  return invoke("board.widget.put", { sessionKey: "agent:main:main", name, content });
+}
 
 describe("board gateway methods", () => {
   beforeEach(() => {
@@ -87,16 +98,8 @@ describe("board gateway methods", () => {
         tools: ["status.refresh"],
       },
     });
-    await invoke("board.widget.put", {
-      sessionKey: "agent:main:main",
-      name: "app",
-      content: { kind: "mcp-app", viewId: "mcp-app-source" },
-    });
-    await invoke("board.widget.put", {
-      sessionKey: "agent:main:main",
-      name: "plain",
-      content: { kind: "html", html: "<p>plain</p>" },
-    });
+    await putMainWidget(invoke, "app", { kind: "mcp-app", viewId: "mcp-app-source" });
+    await putMainWidget(invoke, "plain", { kind: "html", html: "<p>plain</p>" });
 
     const pendingResponse = await invoke("board.get", { sessionKey: "agent:main:main" });
     const pending = pendingResponse.mock.calls[0]?.[1] as BoardSnapshot;
@@ -179,11 +182,7 @@ describe("board gateway methods", () => {
       getMcpAppSandboxPort: () => sandboxPort,
       ensureSandboxHostPort,
     });
-    await invoke("board.widget.put", {
-      sessionKey: "agent:main:main",
-      name: "status",
-      content: { kind: "html", html: "<p>ok</p>" },
-    });
+    await putMainWidget(invoke, "status", { kind: "html", html: "<p>ok</p>" });
 
     const response = await invoke("board.get", { sessionKey: "agent:main:main" });
     const snapshot = response.mock.calls[0]?.[1] as BoardSnapshot;
@@ -194,16 +193,8 @@ describe("board gateway methods", () => {
 
   it("prepares HTML view metadata with the snapshot instead of rereading the store", async () => {
     const { invoke, store } = createHarness();
-    await invoke("board.widget.put", {
-      sessionKey: "agent:main:main",
-      name: "first",
-      content: { kind: "html", html: "<p>first</p>" },
-    });
-    await invoke("board.widget.put", {
-      sessionKey: "agent:main:main",
-      name: "second",
-      content: { kind: "html", html: "<p>second</p>" },
-    });
+    await putMainWidget(invoke, "first", { kind: "html", html: "<p>first</p>" });
+    await putMainWidget(invoke, "second", { kind: "html", html: "<p>second</p>" });
     const preparedRead = vi.spyOn(store, "getSnapshotWithHtmlViewMetadata");
     const documentRead = vi.spyOn(store, "useWidgetDocument");
 
@@ -340,10 +331,9 @@ describe("board gateway methods", () => {
     } as never);
     vi.mocked(mcpApp.resolveAllowedToolNames).mockResolvedValueOnce([]);
     const { invoke, store } = createHarness(undefined, mcpApp);
-    const put = await invoke("board.widget.put", {
-      sessionKey: "agent:main:main",
-      name: "restored",
-      content: { kind: "mcp-app", viewId: "mcp-app-restored" },
+    const put = await putMainWidget(invoke, "restored", {
+      kind: "mcp-app",
+      viewId: "mcp-app-restored",
     });
     const snapshot = put.mock.calls[0]?.[1] as BoardSnapshot;
     const widget = snapshot.widgets[0]!;
@@ -390,10 +380,9 @@ describe("board gateway methods", () => {
     } as never);
     const { invoke, store } = createHarness(undefined, mcpApp);
 
-    const put = await invoke("board.widget.put", {
-      sessionKey: "agent:main:main",
-      name: "revoked",
-      content: { kind: "mcp-app", viewId: "mcp-app-revoked" },
+    const put = await putMainWidget(invoke, "revoked", {
+      kind: "mcp-app",
+      viewId: "mcp-app-revoked",
     });
 
     const snapshot = put.mock.calls[0]?.[1] as BoardSnapshot;
@@ -431,10 +420,9 @@ describe("board gateway methods", () => {
     });
     const { invoke, store } = createHarness(undefined, mcpApp);
 
-    const pending = invoke("board.widget.put", {
-      sessionKey: "agent:main:main",
-      name: "revoked-during-resolution",
-      content: { kind: "mcp-app", viewId: "mcp-app-revoked-during-resolution" },
+    const pending = putMainWidget(invoke, "revoked-during-resolution", {
+      kind: "mcp-app",
+      viewId: "mcp-app-revoked-during-resolution",
     });
     await resolutionStarted.promise;
     expect(authorizeAppInteraction).toHaveBeenCalledOnce();
@@ -465,10 +453,9 @@ describe("board gateway methods", () => {
     vi.mocked(mcpApp.resolveAllowedToolNames).mockRejectedValueOnce(new Error("catalog failed"));
     const { invoke, store } = createHarness(undefined, mcpApp);
 
-    const response = await invoke("board.widget.put", {
-      sessionKey: "agent:main:main",
-      name: "catalog-failure",
-      content: { kind: "mcp-app", viewId: "mcp-app-source" },
+    const response = await putMainWidget(invoke, "catalog-failure", {
+      kind: "mcp-app",
+      viewId: "mcp-app-source",
     });
 
     expect(response.mock.calls[0]?.[0]).toBe(false);
@@ -483,10 +470,9 @@ describe("board gateway methods", () => {
     const mcpApp = createMcpAppDependencies();
     vi.mocked(mcpApp.resolveAllowedToolNames).mockResolvedValue([]);
     const { invoke } = createHarness(undefined, mcpApp);
-    const put = await invoke("board.widget.put", {
-      sessionKey: "agent:main:main",
-      name: "message-app",
-      content: { kind: "mcp-app", viewId: "mcp-app-source" },
+    const put = await putMainWidget(invoke, "message-app", {
+      kind: "mcp-app",
+      viewId: "mcp-app-source",
     });
     const snapshot = put.mock.calls[0]?.[1] as BoardSnapshot;
     const widget = snapshot.widgets[0]!;
@@ -640,10 +626,9 @@ describe("board gateway methods", () => {
 
   it("rejects app-view requests for a replaced widget revision", async () => {
     const { invoke, mcpApp, store } = createHarness();
-    const put = await invoke("board.widget.put", {
-      sessionKey: "agent:main:main",
-      name: "server-app",
-      content: { kind: "mcp-app", viewId: "mcp-app-source" },
+    const put = await putMainWidget(invoke, "server-app", {
+      kind: "mcp-app",
+      viewId: "mcp-app-source",
     });
     const snapshot = put.mock.calls[0]?.[1] as BoardSnapshot;
     const widget = snapshot.widgets[0]!;

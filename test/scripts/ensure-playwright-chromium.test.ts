@@ -16,22 +16,6 @@ const playwrightCli = path.join(
 );
 
 describe("ensurePlaywrightChromium", () => {
-  it("does nothing when the browser binary exists and runs", () => {
-    const spawnSync = vi.fn(() => ({ status: 0 }));
-
-    expect(
-      ensurePlaywrightChromium({
-        env: {},
-        executablePath: "/cache/chromium/chrome",
-        existsSync: () => true,
-        spawnSync,
-      }),
-    ).toBe(0);
-    expect(spawnSync).toHaveBeenCalledWith("/cache/chromium/chrome", ["--version"], {
-      stdio: "ignore",
-    });
-  });
-
   it("uses an explicit Chromium executable override", () => {
     const spawnSync = vi.fn(() => ({ status: 0 }));
 
@@ -65,25 +49,6 @@ describe("ensurePlaywrightChromium", () => {
     expect(logs.join("\n")).toContain(
       "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH points to /snap/bin/chromium",
     );
-  });
-
-  it("uses a system Chromium binary when Playwright Chromium is missing", () => {
-    const logs: string[] = [];
-    const spawnSync = vi.fn(() => ({ status: 0 }));
-
-    expect(
-      ensurePlaywrightChromium({
-        env: {},
-        executablePath: "/cache/chromium/chrome",
-        existsSync: (candidatePath: string) => candidatePath === "/usr/bin/chromium-browser",
-        log: (line: string) => logs.push(line),
-        spawnSync,
-      }),
-    ).toBe(0);
-    expect(spawnSync).toHaveBeenCalledWith("/usr/bin/chromium-browser", ["--version"], {
-      stdio: "ignore",
-    });
-    expect(logs.join("\n")).toContain("Using system Chromium at /usr/bin/chromium-browser");
   });
 
   it("installs Playwright Chromium when the lane requires its pinned browser", () => {

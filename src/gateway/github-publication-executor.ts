@@ -40,6 +40,7 @@ import {
   assertGitHubPublicationBranchRef,
   captureGitHubPublicationWorkspaceSnapshot,
   createGitHubPublicationCommandRunner,
+  githubPublicationApiArgs,
   githubPublicationPushArgs,
   githubPublicationRemoteHeadArgs,
   githubPublicationUpdateRefArgs,
@@ -50,7 +51,6 @@ import {
   runPublicationCommand as runCommand,
 } from "./github-publication-git-transport.js";
 import {
-  githubPublicationCreatePullRequestArgs,
   findGitHubPublicationPullRequest,
   reconcileGitHubPublicationPullRequest,
 } from "./github-publication-pull-requests.js";
@@ -642,17 +642,20 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       params.recordEffect?.("pull_request");
       pullRequestPending = true;
       effectDispatched = true;
-      const created = await runCommand(githubPublicationCreatePullRequestArgs(repository), {
-        env: identity.env,
-        beforeRun: assertAction,
-        input: JSON.stringify({
-          title: row.title?.trim() || `Publish ${branch}`,
-          body,
-          head: `${pushOwner}:${branch}`,
-          base: baseBranch,
-          draft: true,
-        }),
-      });
+      const created = await runCommand(
+        githubPublicationApiArgs(`repos/${repository}/pulls`, "POST"),
+        {
+          env: identity.env,
+          beforeRun: assertAction,
+          input: JSON.stringify({
+            title: row.title?.trim() || `Publish ${branch}`,
+            body,
+            head: `${pushOwner}:${branch}`,
+            base: baseBranch,
+            draft: true,
+          }),
+        },
+      );
       if (created.code === 0) {
         pullRequestUrl = readNonBlankString(
           parseJsonObject(created.stdout.toString("utf8"), "GitHub pull request creation").html_url,

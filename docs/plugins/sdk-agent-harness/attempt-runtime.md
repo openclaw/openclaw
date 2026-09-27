@@ -115,7 +115,17 @@ The reader must enforce the byte limit and workspace boundary and honor
 cancellation. It receives only paths authorized under the host's captured
 policy. Supply `workspaceRoot` when the remote workspace has a different
 absolute path; the host maps that alias to the logical workspace before checking
-policy. Keep the reader alive until preparation finishes.
+policy. Supply `assertCurrent` when native session or transport ownership can be
+revoked independently of the host attempt. The host retains this additional check
+through the final media write and publication. Keep the reader alive until preparation finishes.
+
+For artifacts whose bytes the provider has already admitted, use `kind: "artifact"`
+with `buffer`, `fileName`, `assertCurrent`, and an optional `signal`. The host
+stages those exact bytes under the captured channel/account byte limit and returns
+a prepared `payload`. This request grants no filesystem reads and applies no
+image transformation or host-file MIME allowlist. The harness owns validation of
+the provider artifact's session, turn, environment, and path before downloading it;
+the host owns the outbound destination and retains live authority through publication.
 
 Missing, denied, and oversized attachments produce the usual delivery failure
 notice; preparation does not fall back to a stale Gateway workspace file.
@@ -169,6 +179,17 @@ records an already-confirmed messaging delivery, and
 `recordAgentHarnessToolResultMedia` collects and trust-filters presented media.
 Callers retain their native receipt, routing, cancellation, and result-encoding
 contracts; these helpers do not establish delivery or grant execution authority.
+
+## Workspace-staged attachments
+
+Admitted attachment facts can refer to files staged under the prepared workspace
+instead of the managed media store. Use `root(workspaceDir)` and
+`createStagedInputPathMatcher(root)` from `openclaw/plugin-sdk/file-access-runtime`
+to verify staging ownership before a bounded `root.read(relativePath, { maxBytes })`.
+Match the fact's workspace to the attempt's prepared workspace, retain the host's
+current-run assertion through awaited reads, and use admitted media facts rather
+than paths extracted from user or model text. The matcher shares the staging
+owner's exact marker contract and caches results only for that capture.
 
 ## Final tool-argument validation
 

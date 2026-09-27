@@ -22,11 +22,6 @@ export type WorkspaceReconcileMetrics = {
   localReconciliationDurationMs: number;
 };
 
-type RemoteWorkspaceHashMetrics = WorkspaceHashMetrics & {
-  memoTruncatedCount: number;
-  totalDurationMs: number;
-};
-
 export const MAX_WORKSPACE_HASH_MEMO_BYTES = 8 * 1024 * 1024;
 export const MAX_WORKSPACE_HASH_MEMO_ENTRIES = 25_000;
 
@@ -227,7 +222,7 @@ export function serializeRemoteWorkspaceHashMemo(
 
 export function recordRemoteWorkspaceHashMetrics(
   aggregate: WorkspaceReconcileMetrics,
-  metrics: RemoteWorkspaceHashMetrics,
+  metrics: RemoteWorkspaceManifestEnvelope["metrics"],
 ): void {
   aggregate.remoteContentHashCount += metrics.contentHashCount;
   aggregate.remoteMemoHitCount += metrics.memoHitCount;

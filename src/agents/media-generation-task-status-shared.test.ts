@@ -27,12 +27,12 @@ const ownerMocks = vi.hoisted(() => ({
   assertCurrent: vi.fn(),
   context: {
     admission: {
+      coordinationKey: "media-test",
       databasePath: "/synthetic/media/state.sqlite",
       identity: { key: "media-test", canonicalPath: "/synthetic/media/state.sqlite" },
       assertCurrent: vi.fn(),
     },
     environment: { OPENCLAW_STATE_DIR: "/synthetic/media" },
-    coordinatorRuntime: { directory: "/synthetic/coordinator", keepAlive: false },
   } satisfies OpenClawStateWorkerContext,
 }));
 

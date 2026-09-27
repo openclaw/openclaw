@@ -1,16 +1,26 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  validatePluginUiCapabilities,
+  type PluginUiCapability,
+} from "../../packages/gateway-protocol/src/plugin-ui-capabilities.js";
 import { readClawHubStringArrayField, readClawHubStringField } from "./clawhub-client.js";
 
 export type ClawHubPluginCapabilities = {
   contracts?: Record<string, string[]>;
   providers?: string[];
   channels?: string[];
+  uiCapabilities?: PluginUiCapability[];
 };
 
 export function parseClawHubPluginCapabilities(
   summary: Record<string, unknown>,
 ): ClawHubPluginCapabilities {
   const result: ClawHubPluginCapabilities = {};
+  const ui = validatePluginUiCapabilities(summary.uiCapabilities);
+  // Older readers ignored this advisory field; invalid UI metadata must not hide the package.
+  if (ui.ok && ui.capabilities !== undefined) {
+    result.uiCapabilities = ui.capabilities;
+  }
   for (const field of ["providers", "channels"] as const) {
     const names = readClawHubStringArrayField(summary, field, "plugin manifest summary");
     if (names) {

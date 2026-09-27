@@ -21,6 +21,7 @@ export function writeStoredComposerSession(
   if (
     !session?.draft &&
     !session?.goalMode &&
+    !session?.replyTarget &&
     session?.draftRevision === undefined &&
     queue.length === 0
   ) {
@@ -32,6 +33,7 @@ export function writeStoredComposerSession(
     ...(session?.draft ? { draft: session.draft } : {}),
     ...(session?.draftMentions ? { draftMentions: session.draftMentions } : {}),
     ...(session?.goalMode ? { goalMode: session.goalMode } : {}),
+    ...(session?.replyTarget ? { replyTarget: session.replyTarget } : {}),
     ...(session?.draftRevision !== undefined ? { draftRevision: session.draftRevision } : {}),
     ...(queue.length ? { queue } : {}),
     updatedAt: Date.now(),

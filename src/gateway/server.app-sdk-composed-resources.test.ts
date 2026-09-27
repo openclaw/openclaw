@@ -33,11 +33,15 @@ import {
   OpenClaw,
   type OpenClawEvent,
 } from "../../packages/sdk/src/index.js";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.entry.js";
+import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { withTimeout } from "../utils/with-timeout.js";
 import { environmentsHandlers } from "./server-methods/environments.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./server-methods/types.js";
+import * as lifecycleState from "./session-lifecycle-state.js";
 import {
   installGatewayTestHooks,
   startServer,
@@ -665,6 +669,34 @@ async function proveRealGatewayContracts(): Promise<void> {
   const sessionId = "sdk-real-gateway-session";
   const transcriptPath = path.join(tempDir, `${sessionId}.jsonl`);
   const previousSessionStorePath = testState.sessionStorePath;
+  const runId = "sdk-real-gateway-run";
+  const timeoutRunId = "sdk-real-gateway-timeout";
+  const pendingLifecycleEvents = new Set([
+    `${runId}:start`,
+    `${runId}:end`,
+    `${timeoutRunId}:start`,
+    `${timeoutRunId}:error`,
+  ]);
+  const lifecycleWritesStarted = createDeferred();
+  const lifecycleWrites: Promise<void>[] = [];
+  const persistLifecycle = lifecycleState.persistGatewaySessionLifecycleEvent;
+  const lifecyclePersistence = vi
+    .spyOn(lifecycleState, "persistGatewaySessionLifecycleEvent")
+    .mockImplementation((params) => {
+      const write = persistLifecycle(params);
+      const phase = params.event.data?.phase;
+      if (
+        (params.event.runId === runId || params.event.runId === timeoutRunId) &&
+        (phase === "start" || phase === "end" || phase === "error")
+      ) {
+        lifecycleWrites.push(write);
+        pendingLifecycleEvents.delete(`${params.event.runId}:${phase}`);
+        if (pendingLifecycleEvents.size === 0) {
+          lifecycleWritesStarted.resolve();
+        }
+      }
+      return write;
+    });
   let started: Awaited<ReturnType<typeof startServer>> | undefined;
   let oc: OpenClaw | undefined;
   testState.sessionStorePath = path.join(tempDir, "sessions.json");
@@ -672,24 +704,26 @@ async function proveRealGatewayContracts(): Promise<void> {
   try {
     await fs.writeFile(
       transcriptPath,
-      `${JSON.stringify({
-        type: "message",
-        id: "sdk-artifact-message",
-        parentId: null,
-        timestamp: "2026-08-03T00:00:00.000Z",
-        message: {
-          role: "assistant",
-          content: [
-            {
-              type: "file",
-              data: "aGVsbG8=",
-              mimeType: "text/plain",
-              title: "sdk-result.txt",
-            },
-          ],
-          __openclaw: { seq: 2, runId: "sdk-artifact-run" },
+      `${JSON.stringify({ type: "session", version: CURRENT_SESSION_VERSION, id: sessionId })}\n${JSON.stringify(
+        {
+          type: "message",
+          id: "sdk-artifact-message",
+          parentId: null,
+          timestamp: "2026-08-03T00:00:00.000Z",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "file",
+                data: "aGVsbG8=",
+                mimeType: "text/plain",
+                title: "sdk-result.txt",
+              },
+            ],
+            __openclaw: { seq: 2, runId: "sdk-artifact-run" },
+          },
         },
-      })}\n`,
+      )}\n`,
     );
     await writeSessionStore({
       entries: {
@@ -713,7 +747,6 @@ async function proveRealGatewayContracts(): Promise<void> {
     });
     await oc.connect();
 
-    const runId = "sdk-real-gateway-run";
     registerAgentRunContext(runId, { sessionKey, verboseLevel: "off" });
     const run = await oc.runs.get(runId);
     await expect(run.wait({ timeoutMs: 0 })).resolves.toMatchObject({
@@ -756,7 +789,6 @@ async function proveRealGatewayContracts(): Promise<void> {
       endedAt: 222,
     });
 
-    const timeoutRunId = "sdk-real-gateway-timeout";
     registerAgentRunContext(timeoutRunId, { sessionKey, verboseLevel: "off" });
     emitAgentEvent({
       runId: timeoutRunId,
@@ -784,6 +816,17 @@ async function proveRealGatewayContracts(): Promise<void> {
       startedAt: 333,
       endedAt: 444,
       error: { message: "provider timed out" },
+    });
+
+    // run.wait observes events before persistence finishes registering the report writer's store.
+    await lifecycleWritesStarted.promise;
+    await Promise.all(lifecycleWrites);
+    expect(loadSessionEntry({ storePath: testState.sessionStorePath, sessionKey })).toMatchObject({
+      sessionId,
+      status: "timeout",
+      lastRunId: timeoutRunId,
+      startedAt: 333,
+      endedAt: 444,
     });
 
     const artifacts = await oc.artifacts.list({ sessionKey });
@@ -839,11 +882,15 @@ async function proveRealGatewayContracts(): Promise<void> {
       "unknown environmentId",
     );
   } finally {
-    await oc?.close();
-    await started?.server.close();
-    started?.envSnapshot.restore();
-    testState.sessionStorePath = previousSessionStorePath;
-    await fs.rm(tempDir, { recursive: true, force: true });
+    try {
+      await oc?.close();
+      await started?.server.close();
+    } finally {
+      lifecyclePersistence.mockRestore();
+      started?.envSnapshot.restore();
+      testState.sessionStorePath = previousSessionStorePath;
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   }
 }
 

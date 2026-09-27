@@ -1,5 +1,5 @@
 import type { Result } from "@openclaw/normalization-core/result";
-// RPC adapter for chat.abort; cancellation policy lives in the sibling modules.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -39,10 +39,6 @@ import {
   deferAbortedPartialPersistence,
   withAbortedPartialPersistenceWarning,
 } from "./chat-aborted-partial.js";
-import {
-  normalizeOptionalChatText as normalizeOptionalText,
-  normalizeUnknownChatText as normalizeUnknownText,
-} from "./chat-text-normalization.js";
 import { persistAbortedPartials } from "./chat-transcript-persistence.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
@@ -72,17 +68,8 @@ export async function handleChatAbortRequestWithLifecycle(
   if (!assertValidParams(params, validateChatAbortParams, "chat.abort", respond)) {
     return;
   }
-  const {
-    sessionKey: rawSessionKey,
-    runId,
-    preserveSideRuns,
-  } = params as {
-    sessionKey: string;
-    agentId?: string;
-    runId?: string;
-    preserveSideRuns?: boolean;
-  };
-  const agentIdOverride = normalizeOptionalText((params as { agentId?: string }).agentId);
+  const { sessionKey: rawSessionKey, runId, preserveSideRuns } = params;
+  const agentIdOverride = normalizeOptionalString(params.agentId);
   const abortCfg = context.getRuntimeConfig();
   const parsedAbortSessionKey = parseAgentSessionKey(rawSessionKey);
   const compatibilityDefaultAgentId = tryResolveSessionCompatibilityOwnerAgentId(
@@ -155,10 +142,12 @@ export async function handleChatAbortRequestWithLifecycle(
   const ops = createChatAbortOps(context);
   const requester = resolveChatAbortRequester(client);
 
-  const sessionLoadOptions = { agentId: abortAgentId };
   const abortSession: Result<ReturnType<typeof loadSessionEntry>, unknown> = (() => {
     try {
-      return { ok: true, value: loadSessionEntry(canonicalAbortSessionKey, sessionLoadOptions) };
+      return {
+        ok: true,
+        value: loadSessionEntry(canonicalAbortSessionKey, { agentId: abortAgentId }),
+      };
     } catch (error) {
       return { ok: false, error };
     }
@@ -290,7 +279,7 @@ export async function handleChatAbortRequestWithLifecycle(
         });
         if (payload) {
           return {
-            sessionKey: normalizeUnknownText(payload.sessionKey) ? sessionKey : undefined,
+            sessionKey: normalizeOptionalString(payload.sessionKey) ? sessionKey : undefined,
             payload,
           };
         }
@@ -310,7 +299,7 @@ export async function handleChatAbortRequestWithLifecycle(
         context,
         runId,
         stopReason: "rpc",
-        attemptId: normalizeUnknownText(pendingChatMatch.payload.attemptId),
+        attemptId: normalizeOptionalString(pendingChatMatch.payload.attemptId),
         expectedPayload: pendingChatMatch.payload,
       });
       await respondWithWorkerRuns(aborted ? [runId] : []);
@@ -498,7 +487,7 @@ export async function handleChatAbortRequest(options: GatewayRequestHandlerOptio
       errorShape(
         ErrorCodes.UNAVAILABLE,
         "The server is busy. Check this turn's status before trying Stop again.\n\n" +
-          "StateDatabaseCoordinatorContentionError: state-lifecycle acquisition remained busy. Stopping may already have taken effect.",
+          "SQLite transaction admission remained busy. Stopping may already have taken effect.",
         { details: { errorKind: contention.errorKind } },
       ),
     );

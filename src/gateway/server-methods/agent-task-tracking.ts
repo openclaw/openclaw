@@ -3,7 +3,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
+import { readAcpSessionMetaAsync } from "../../acp/runtime/session-meta.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry-read.js";
 import { resolveAgentIdFromSessionKey, resolveAgentMainSessionKey } from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -194,12 +194,12 @@ function isTrustedBackendAcpSpawnClient(client: GatewayRequestHandlerOptions["cl
   );
 }
 
-export function isConfirmedAcpManualSpawnTaskOwner(params: {
+export async function isConfirmedAcpManualSpawnTaskOwner(params: {
   acpTurnSource?: string;
   sessionKey?: string;
   client: GatewayRequestHandlerOptions["client"];
-  logGateway: Pick<GatewayRequestContext["logGateway"], "warn">;
-}): boolean {
+  assertCurrent: () => void;
+}): Promise<boolean> {
   const sessionKey = params.sessionKey;
   if (
     !isTrustedBackendAcpSpawnClient(params.client) ||
@@ -210,14 +210,12 @@ export function isConfirmedAcpManualSpawnTaskOwner(params: {
     return false;
   }
   try {
-    return readAcpSessionMeta({ sessionKey }) != null;
+    const meta = await readAcpSessionMetaAsync({ sessionKey, assertCurrent: params.assertCurrent });
+    params.assertCurrent();
+    return meta != null;
   } catch (err) {
-    params.logGateway.warn(
-      `failed to read ACP session metadata for manual-spawn task tracking ${sessionKey}; falling back to cli task tracking: ${formatForLog(
-        err,
-      )}`,
-    );
-    return false;
+    params.assertCurrent();
+    throw err;
   }
 }
 
@@ -290,6 +288,7 @@ export function tryFinalizeTrackedAgentTask(params: {
   status: GatewayAgentTaskTerminalStatus;
   error?: string;
   terminalSummary?: string;
+  isIncognito?: boolean;
   log: Pick<GatewayRequestContext["logGateway"], "warn">;
 }): void {
   try {
@@ -305,6 +304,8 @@ export function tryFinalizeTrackedAgentTask(params: {
   } catch (err) {
     // Best-effort only: background task tracking must not block agent runs.
     // Still surface the swallowed error so non-transient finalize failures stay observable.
-    params.log.warn(`failed to finalize tracked agent task ${params.runId}: ${formatForLog(err)}`);
+    params.log.warn(
+      `failed to finalize tracked agent task ${params.runId}: ${params.isIncognito ? "Incognito agent error." : formatForLog(err)}`,
+    );
   }
 }

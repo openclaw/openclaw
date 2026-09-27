@@ -6,12 +6,14 @@ import {
   type deliverAgentHarnessTaskCompletion,
   type AgentHarnessCompletionDelivery,
   type AgentHarnessScopedSetDeliveryStatusParams,
+  type AgentHarnessScopedCreateRunningTaskRunParams,
   type AgentHarnessTaskRecord,
   type AgentHarnessTaskRuntime,
   type AgentHarnessTaskRuntimeScope,
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { onTestFinished, vi } from "vitest";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
+import { CodexNativeSubagentCompletionDelivery } from "./native-subagent-completion-delivery.js";
 import {
   createCodexNativeSubagentHistoryOwner,
   type CodexNativeSubagentHistoryOwner,
@@ -21,6 +23,7 @@ import type {
   NativeModelSourceCapture,
 } from "./native-subagent-monitor-types.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
+import { CodexNativeSubagentRecoveryCoordinator } from "./native-subagent-recovery-coordinator.js";
 import type {
   CodexAppServerRequestResult,
   CodexServerNotification,
@@ -75,6 +78,94 @@ export function successfulSendInputOutput(params: {
 export const CodexNativeSubagentMonitor = codexNativeSubagentMonitorRuntime.Monitor;
 export const registerCodexNativeSubagentMonitor = codexNativeSubagentMonitorRuntime.register;
 type CodexNativeSubagentMonitorInstance = InstanceType<typeof CodexNativeSubagentMonitor>;
+
+/** Join real native persistence and recovery before asserting outcomes or releasing fixture stores. */
+export function captureNativeSubagentMonitorWork() {
+  const completion = vi.spyOn(CodexNativeSubagentCompletionDelivery.prototype, "deliverPending");
+  const recovery = vi.spyOn(
+    CodexNativeSubagentRecoveryCoordinator.prototype,
+    "reconcileTaskCandidate",
+  );
+  let completed = 0;
+  let reconciled = 0;
+  return {
+    async settle(): Promise<unknown[]> {
+      const failures: unknown[] = [];
+      while (
+        completed < completion.mock.results.length ||
+        reconciled < recovery.mock.results.length
+      ) {
+        const work = [
+          ...completion.mock.results.slice(completed),
+          ...recovery.mock.results.slice(reconciled),
+        ];
+        completed = completion.mock.results.length;
+        reconciled = recovery.mock.results.length;
+        for (const result of work) {
+          if (result.type === "throw") {
+            failures.push(result.value);
+          }
+        }
+        const results = await Promise.allSettled(
+          work.filter((result) => result.type === "return").map((result) => result.value),
+        );
+        failures.push(
+          ...results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+        );
+      }
+      return failures;
+    },
+    [Symbol.dispose]() {
+      recovery.mockRestore();
+      completion.mockRestore();
+    },
+  };
+}
+
+export function observeCompletionAttempts() {
+  const attempts = new Map<Promise<void>, string>();
+  const started = new Set<{ runId: string; resolve: (attempt: Promise<void>) => void }>();
+  const prototype = CodexNativeSubagentCompletionDelivery.prototype;
+  const observer = vi.spyOn(prototype, "deliverPending");
+  prototype.deliverPending = function (
+    this: CodexNativeSubagentCompletionDelivery,
+    state,
+    child,
+    trigger,
+  ) {
+    const attempt = observer.call(this, state, child, trigger);
+    attempts.set(attempt, child.runId);
+    for (const waiter of started) {
+      if (waiter.runId === child.runId) {
+        started.delete(waiter);
+        waiter.resolve(attempt);
+      }
+    }
+    return attempt;
+  };
+  onTestFinished(() => observer.mockRestore());
+  return {
+    next(runId: string) {
+      return new Promise<void>((resolve, reject) => {
+        started.add({ runId, resolve: (attempt) => void attempt.then(resolve, reject) });
+      });
+    },
+    async settle(runId?: string) {
+      // Join the real persistence owner, including attempts accepted by its completion callbacks.
+      while (true) {
+        const batch = [...attempts].filter(([, id]) => runId === undefined || id === runId);
+        if (batch.length === 0) {
+          return;
+        }
+        for (const [attempt] of batch) {
+          attempts.delete(attempt);
+        }
+        await Promise.all(batch.map(([attempt]) => attempt));
+      }
+    },
+    restore: () => observer.mockRestore(),
+  };
+}
 
 export function createClient() {
   type ThreadReadParams = { threadId?: string; includeTurns?: boolean };
@@ -207,6 +298,30 @@ export function createRuntime() {
       vi.fn<AgentHarnessTaskRuntime["recordTaskRunProgressByRunId"]>(update),
     finalizeTaskRunByRunId: vi.fn<AgentHarnessTaskRuntime["finalizeTaskRunByRunId"]>(update),
     listTaskRecords: vi.fn((): AgentHarnessTaskRecord[] => [...records.values()]),
+    tryCreateRunningTaskRunAsync: vi.fn(
+      async (params: AgentHarnessScopedCreateRunningTaskRunParams) =>
+        taskRuntime.tryCreateRunningTaskRun(params),
+    ),
+    createRunningTaskRunAsync: vi.fn(async (params: AgentHarnessScopedCreateRunningTaskRunParams) =>
+      taskRuntime.createRunningTaskRun(params),
+    ),
+    recordTaskRunProgressByRunIdAsync: vi.fn(
+      async (params: Parameters<AgentHarnessTaskRuntime["recordTaskRunProgressByRunId"]>[0]) =>
+        taskRuntime.recordTaskRunProgressByRunId(params),
+    ),
+    finalizeTaskRunByRunIdAsync: vi.fn(
+      async (params: Parameters<AgentHarnessTaskRuntime["finalizeTaskRunByRunId"]>[0]) =>
+        taskRuntime.finalizeTaskRunByRunId(params),
+    ),
+    setDetachedTaskDeliveryStatusByRunIdAsync: vi.fn(
+      async (params: AgentHarnessScopedSetDeliveryStatusParams) =>
+        taskRuntime.setDetachedTaskDeliveryStatusByRunId(params),
+    ),
+    prepareTaskRecordsRead: vi.fn(async () => () => taskRuntime.listTaskRecords()),
+    prepareTaskRunRead: vi.fn(
+      async (runId: string) => () =>
+        taskRuntime.listTaskRecords().filter((task) => task.runId === runId),
+    ),
     setDetachedTaskDeliveryStatusByRunId: vi.fn(
       (params: AgentHarnessScopedSetDeliveryStatusParams) => update(params),
     ),

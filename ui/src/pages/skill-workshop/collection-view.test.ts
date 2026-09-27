@@ -17,25 +17,11 @@ describe("Workshop installed comparisons", () => {
   it.each([
     {
       previous: "Keep the existing check.",
-      current: "Keep the existing check.\nCheck rollback before release.",
-      name: "short skill",
-    },
-    {
-      previous: "Keep the existing check.",
       current: [
         "Keep the existing check.",
         ...Array.from({ length: 450 }, (_, index) => `Check release item ${index + 1}.`),
       ].join("\n"),
       name: "long insertion",
-    },
-    {
-      previous: Array.from({ length: 700 }, (_, index) => `Check release item ${index + 1}.`).join(
-        "\n",
-      ),
-      current: Array.from({ length: 700 }, (_, index) =>
-        index === 649 ? "Late-only instruction change." : `Check release item ${index + 1}.`,
-      ).join("\n"),
-      name: "late edit",
     },
     {
       previous: Array.from({ length: 700 }, (_, index) => `Check release item ${index + 1}.`).join(

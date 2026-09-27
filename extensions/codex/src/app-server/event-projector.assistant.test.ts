@@ -8,7 +8,6 @@ import {
   createCodexTestModel,
   createParams,
   createProjector,
-  createProjectorWithAssistantHooks,
   buildEmptyToolTelemetry,
   requireRecord,
   expectUsageFields,
@@ -20,6 +19,24 @@ import {
 } from "./event-projector.test-harness.js";
 
 registerCodexEventProjectorTestLifecycle();
+
+async function streamFinalAnswer(
+  projector: Awaited<ReturnType<typeof createProjector>>,
+  id: string,
+  text: string,
+) {
+  await projector.handleNotification(
+    forCurrentTurn("item/started", {
+      item: { type: "agentMessage", id, phase: "final_answer", text: "" },
+    }),
+  );
+  await projector.handleNotification(agentMessageDelta(text, id));
+  await projector.handleNotification(
+    forCurrentTurn("item/completed", {
+      item: { type: "agentMessage", id, phase: "final_answer", text },
+    }),
+  );
+}
 
 describe("CodexAppServerEventProjector assistant projection", () => {
   it.each(["failed", "interrupted"])(
@@ -110,8 +127,15 @@ describe("CodexAppServerEventProjector assistant projection", () => {
   });
 
   it("projects assistant deltas and usage into embedded attempt results", async () => {
-    const { onAssistantMessageStart, onPartialReply, projector } =
-      await createProjectorWithAssistantHooks();
+    const onAssistantMessageStart = vi.fn();
+    const onPartialReply = vi.fn();
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onAssistantMessageStart,
+      onPartialReply,
+      onAgentEvent,
+    });
 
     await projector.handleNotification(
       forCurrentTurn("item/started", {
@@ -143,6 +167,14 @@ describe("CodexAppServerEventProjector assistant projection", () => {
     expect(onPartialReply.mock.calls.map((call) => call[0])).toEqual([
       { text: "hel", delta: "hel" },
       { text: "hello", delta: "lo" },
+    ]);
+    expect(
+      onAgentEvent.mock.calls
+        .map(([event]) => event)
+        .filter((event) => event.stream === "assistant"),
+    ).toEqual([
+      { stream: "assistant", data: { itemId: "msg-1", text: "hel", delta: "hel" } },
+      { stream: "assistant", data: { itemId: "msg-1", text: "hello", delta: "lo" } },
     ]);
     expect(result.assistantTexts).toEqual(["hello"]);
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["user", "assistant"]);
@@ -227,22 +259,7 @@ describe("CodexAppServerEventProjector assistant projection", () => {
       onAgentEvent,
     });
 
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: { type: "agentMessage", id: "answer-1", phase: "final_answer", text: "" },
-      }),
-    );
-    await projector.handleNotification(agentMessageDelta("First candidate", "answer-1"));
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: {
-          type: "agentMessage",
-          id: "answer-1",
-          phase: "final_answer",
-          text: "First candidate",
-        },
-      }),
-    );
+    await streamFinalAnswer(projector, "answer-1", "First candidate");
 
     const lateTool = {
       type: "commandExecution",
@@ -264,22 +281,7 @@ describe("CodexAppServerEventProjector assistant projection", () => {
     );
     await projector.handleNotification(forCurrentTurn("item/completed", { item: lateTool }));
 
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: { type: "agentMessage", id: "answer-2", phase: "final_answer", text: "" },
-      }),
-    );
-    await projector.handleNotification(agentMessageDelta("Second candidate", "answer-2"));
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: {
-          type: "agentMessage",
-          id: "answer-2",
-          phase: "final_answer",
-          text: "Second candidate",
-        },
-      }),
-    );
+    await streamFinalAnswer(projector, "answer-2", "Second candidate");
     await projector.handleNotification(
       turnCompleted([
         {
@@ -334,38 +336,8 @@ describe("CodexAppServerEventProjector assistant projection", () => {
     const summary = "Read-only; inspected actual diffs, no mutations: - #122457 — Copies";
     const coda = "The summary above already incorporates the final review results.";
 
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: { type: "agentMessage", id: "answer-1", phase: "final_answer", text: "" },
-      }),
-    );
-    await projector.handleNotification(agentMessageDelta(summary, "answer-1"));
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: {
-          type: "agentMessage",
-          id: "answer-1",
-          phase: "final_answer",
-          text: summary,
-        },
-      }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: { type: "agentMessage", id: "answer-2", phase: "final_answer", text: "" },
-      }),
-    );
-    await projector.handleNotification(agentMessageDelta(coda, "answer-2"));
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: {
-          type: "agentMessage",
-          id: "answer-2",
-          phase: "final_answer",
-          text: coda,
-        },
-      }),
-    );
+    await streamFinalAnswer(projector, "answer-1", summary);
+    await streamFinalAnswer(projector, "answer-2", coda);
     await projector.handleNotification(
       turnCompleted([
         {
@@ -400,39 +372,9 @@ describe("CodexAppServerEventProjector assistant projection", () => {
     const onAgentEvent = vi.fn();
     const projector = await createProjector({ ...(await createParams()), onAgentEvent });
 
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: { type: "agentMessage", id: "answer-1", phase: "final_answer", text: "" },
-      }),
-    );
-    await projector.handleNotification(agentMessageDelta("First candidate", "answer-1"));
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: {
-          type: "agentMessage",
-          id: "answer-1",
-          phase: "final_answer",
-          text: "First candidate",
-        },
-      }),
-    );
+    await streamFinalAnswer(projector, "answer-1", "First candidate");
     await projector.handleNotification(agentMessageDelta("Replacement draft", "answer-2"));
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: { type: "agentMessage", id: "answer-3", phase: "final_answer", text: "" },
-      }),
-    );
-    await projector.handleNotification(agentMessageDelta("Later final", "answer-3"));
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: {
-          type: "agentMessage",
-          id: "answer-3",
-          phase: "final_answer",
-          text: "Later final",
-        },
-      }),
-    );
+    await streamFinalAnswer(projector, "answer-3", "Later final");
     await projector.handleNotification(
       turnCompleted([
         { type: "agentMessage", id: "answer-3", phase: "final_answer", text: "Later final" },
@@ -458,39 +400,9 @@ describe("CodexAppServerEventProjector assistant projection", () => {
   it("keeps the unphased replacement when a later silent final follows", async () => {
     const projector = await createProjector(await createParams());
 
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: { type: "agentMessage", id: "answer-1", phase: "final_answer", text: "" },
-      }),
-    );
-    await projector.handleNotification(agentMessageDelta("First candidate", "answer-1"));
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: {
-          type: "agentMessage",
-          id: "answer-1",
-          phase: "final_answer",
-          text: "First candidate",
-        },
-      }),
-    );
+    await streamFinalAnswer(projector, "answer-1", "First candidate");
     await projector.handleNotification(agentMessageDelta("Replacement draft", "answer-2"));
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: { type: "agentMessage", id: "answer-3", phase: "final_answer", text: "" },
-      }),
-    );
-    await projector.handleNotification(agentMessageDelta("NO_REPLY", "answer-3"));
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: {
-          type: "agentMessage",
-          id: "answer-3",
-          phase: "final_answer",
-          text: "NO_REPLY",
-        },
-      }),
-    );
+    await streamFinalAnswer(projector, "answer-3", "NO_REPLY");
     await projector.handleNotification(
       turnCompleted([
         { type: "agentMessage", id: "answer-3", phase: "final_answer", text: "NO_REPLY" },
@@ -524,40 +436,10 @@ describe("CodexAppServerEventProjector assistant projection", () => {
     const projector = await createProjector(await createParams());
     const sleepItem = { type: "sleep", id: "sleep-1", durationMs: 250 };
 
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: { type: "agentMessage", id: "answer-1", phase: "final_answer", text: "" },
-      }),
-    );
-    await projector.handleNotification(agentMessageDelta("First candidate", "answer-1"));
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: {
-          type: "agentMessage",
-          id: "answer-1",
-          phase: "final_answer",
-          text: "First candidate",
-        },
-      }),
-    );
+    await streamFinalAnswer(projector, "answer-1", "First candidate");
     await projector.handleNotification(forCurrentTurn("item/started", { item: sleepItem }));
     await projector.handleNotification(forCurrentTurn("item/completed", { item: sleepItem }));
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: { type: "agentMessage", id: "answer-2", phase: "final_answer", text: "" },
-      }),
-    );
-    await projector.handleNotification(agentMessageDelta("After sleep", "answer-2"));
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: {
-          type: "agentMessage",
-          id: "answer-2",
-          phase: "final_answer",
-          text: "After sleep",
-        },
-      }),
-    );
+    await streamFinalAnswer(projector, "answer-2", "After sleep");
     await projector.handleNotification(
       turnCompleted([
         { type: "agentMessage", id: "answer-2", phase: "final_answer", text: "After sleep" },
@@ -573,38 +455,8 @@ describe("CodexAppServerEventProjector assistant projection", () => {
     const projector = await createProjector(await createParams());
     const jsonSilent = '{"action":"NO_REPLY"}';
 
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: { type: "agentMessage", id: "answer-1", phase: "final_answer", text: "" },
-      }),
-    );
-    await projector.handleNotification(agentMessageDelta("Keep this answer", "answer-1"));
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: {
-          type: "agentMessage",
-          id: "answer-1",
-          phase: "final_answer",
-          text: "Keep this answer",
-        },
-      }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: { type: "agentMessage", id: "answer-2", phase: "final_answer", text: "" },
-      }),
-    );
-    await projector.handleNotification(agentMessageDelta(jsonSilent, "answer-2"));
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: {
-          type: "agentMessage",
-          id: "answer-2",
-          phase: "final_answer",
-          text: jsonSilent,
-        },
-      }),
-    );
+    await streamFinalAnswer(projector, "answer-1", "Keep this answer");
+    await streamFinalAnswer(projector, "answer-2", jsonSilent);
     await projector.handleNotification(
       turnCompleted([
         { type: "agentMessage", id: "answer-2", phase: "final_answer", text: jsonSilent },
@@ -624,22 +476,7 @@ describe("CodexAppServerEventProjector assistant projection", () => {
         item: { type: "imageGeneration", id: "ig_1", status: "inProgress" },
       }),
     );
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: { type: "agentMessage", id: "answer-1", phase: "final_answer", text: "" },
-      }),
-    );
-    await projector.handleNotification(agentMessageDelta("Done.", "answer-1"));
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: {
-          type: "agentMessage",
-          id: "answer-1",
-          phase: "final_answer",
-          text: "Done.",
-        },
-      }),
-    );
+    await streamFinalAnswer(projector, "answer-1", "Done.");
     await projector.handleNotification(
       forCurrentTurn("item/completed", {
         item: { type: "imageGeneration", id: "ig_1", status: "completed" },
@@ -657,22 +494,7 @@ describe("CodexAppServerEventProjector assistant projection", () => {
   it("drops a pre-handoff final after a later dynamic tool call", async () => {
     const projector = await createProjector(await createParams());
 
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: { type: "agentMessage", id: "answer-1", phase: "final_answer", text: "" },
-      }),
-    );
-    await projector.handleNotification(agentMessageDelta("First candidate", "answer-1"));
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: {
-          type: "agentMessage",
-          id: "answer-1",
-          phase: "final_answer",
-          text: "First candidate",
-        },
-      }),
-    );
+    await streamFinalAnswer(projector, "answer-1", "First candidate");
     await projector.handleNotification(
       forCurrentTurn("item/started", {
         item: {
@@ -693,22 +515,7 @@ describe("CodexAppServerEventProjector assistant projection", () => {
         },
       }),
     );
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: { type: "agentMessage", id: "answer-2", phase: "final_answer", text: "" },
-      }),
-    );
-    await projector.handleNotification(agentMessageDelta("Second candidate", "answer-2"));
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: {
-          type: "agentMessage",
-          id: "answer-2",
-          phase: "final_answer",
-          text: "Second candidate",
-        },
-      }),
-    );
+    await streamFinalAnswer(projector, "answer-2", "Second candidate");
     await projector.handleNotification(
       turnCompleted([
         {
@@ -741,44 +548,14 @@ describe("CodexAppServerEventProjector assistant projection", () => {
       durationMs: 1,
     };
 
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: { type: "agentMessage", id: "answer-1", phase: "final_answer", text: "" },
-      }),
-    );
-    await projector.handleNotification(agentMessageDelta("First candidate", "answer-1"));
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: {
-          type: "agentMessage",
-          id: "answer-1",
-          phase: "final_answer",
-          text: "First candidate",
-        },
-      }),
-    );
+    await streamFinalAnswer(projector, "answer-1", "First candidate");
     await projector.handleNotification(
       forCurrentTurn("item/started", {
         item: { ...lateTool, status: "inProgress", aggregatedOutput: null, exitCode: null },
       }),
     );
     await projector.handleNotification(forCurrentTurn("item/completed", { item: lateTool }));
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: { type: "agentMessage", id: "answer-2", phase: "final_answer", text: "" },
-      }),
-    );
-    await projector.handleNotification(agentMessageDelta("NO_REPLY", "answer-2"));
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: {
-          type: "agentMessage",
-          id: "answer-2",
-          phase: "final_answer",
-          text: "NO_REPLY",
-        },
-      }),
-    );
+    await streamFinalAnswer(projector, "answer-2", "NO_REPLY");
     await projector.handleNotification(
       turnCompleted([
         { type: "agentMessage", id: "answer-2", phase: "final_answer", text: "NO_REPLY" },
@@ -788,43 +565,6 @@ describe("CodexAppServerEventProjector assistant projection", () => {
     const result = projector.buildResult(buildEmptyToolTelemetry());
     expect(result.assistantTexts).toEqual(["NO_REPLY"]);
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("First candidate");
-  });
-
-  it("streams final-answer assistant deltas into partial replies", async () => {
-    const onAgentEvent = vi.fn();
-    const onPartialReply = vi.fn();
-    const projector = await createProjector({
-      ...(await createParams()),
-      onAgentEvent,
-      onPartialReply,
-    });
-
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: {
-          type: "agentMessage",
-          id: "msg-final",
-          phase: "final_answer",
-          text: "",
-        },
-      }),
-    );
-    await projector.handleNotification(agentMessageDelta("hel", "msg-final"));
-    await projector.handleNotification(agentMessageDelta("lo", "msg-final"));
-
-    expect(onPartialReply).toHaveBeenCalledTimes(2);
-    expect(onPartialReply.mock.calls.map((call) => call[0])).toEqual([
-      { text: "hel", delta: "hel" },
-      { text: "hello", delta: "lo" },
-    ]);
-    expect(
-      onAgentEvent.mock.calls
-        .map((call) => call[0])
-        .filter((event) => event.stream === "assistant"),
-    ).toEqual([
-      { stream: "assistant", data: { itemId: "msg-final", text: "hel", delta: "hel" } },
-      { stream: "assistant", data: { itemId: "msg-final", text: "hello", delta: "lo" } },
-    ]);
   });
 
   it("streams assistant deltas when the app-server omits the item phase", async () => {

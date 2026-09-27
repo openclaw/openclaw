@@ -29,21 +29,6 @@ export type PairedComputerUseAvailability = {
   prepared?: PreparedPairedComputerUse;
 };
 
-/** Avoids desktop discovery unless the model will receive an ordinary computer tool. */
-function shouldLoadPairedComputerUseAvailability(params: {
-  computerAllowed: boolean;
-  modelHasVision?: boolean;
-  computerTransport?: ComputerToolTransport | null;
-  embeddedMode?: boolean;
-}): boolean {
-  return (
-    params.computerAllowed &&
-    params.modelHasVision !== false &&
-    params.embeddedMode !== true &&
-    params.computerTransport === undefined
-  );
-}
-
 /** Loads host and node inventory only when an ordinary computer tool can reach the model. */
 export async function loadPairedComputerUseAvailabilityForSurface(params: {
   computerAllowed: boolean;
@@ -52,7 +37,12 @@ export async function loadPairedComputerUseAvailabilityForSurface(params: {
   embeddedMode?: boolean;
   signal?: AbortSignal;
 }): Promise<PairedComputerUseAvailability | undefined> {
-  if (!shouldLoadPairedComputerUseAvailability(params)) {
+  if (
+    !params.computerAllowed ||
+    params.modelHasVision === false ||
+    params.embeddedMode === true ||
+    params.computerTransport !== undefined
+  ) {
     return undefined;
   }
   return loadPairedComputerUseAvailability(params.signal);
@@ -70,10 +60,9 @@ export function isEligibleComputerNode(node: NodeListNode): boolean {
 
 /** Projects Gateway and paired-node descriptors into the initial action surface. */
 function preparePairedComputerUse(
-  nodes: readonly NodeListNode[],
+  eligible: readonly NodeListNode[],
   gateway: GatewayComputerStatus,
 ): PreparedPairedComputerUse {
-  const eligible = nodes.filter(isEligibleComputerNode);
   const advertised = new Set<ComputerUseV2ActionName>();
   for (const node of eligible) {
     for (const action of node.computerUse?.actions ?? COMPUTER_USE_V1_ACTION_NAMES) {

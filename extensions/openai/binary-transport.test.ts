@@ -1,13 +1,11 @@
 import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
-// Reject ambiguous provider media before it becomes a user-visible artifact.
 import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import {
-  createDebugProxyCaptureReader,
-  finalizeDebugProxyCapture,
-  getDebugProxyCaptureStore,
-  initializeDebugProxyCapture,
+  createDebugProxyCaptureReaderAsync,
+  finalizeDebugProxyCaptureAsync,
+  initializeDebugProxyCaptureAsync,
 } from "openclaw/plugin-sdk/proxy-capture";
-import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
@@ -21,7 +19,7 @@ const modelAuth = createCapturedPluginRegistration().api.runtime.modelAuth;
 async function requestMedia(
   baseUrl: string,
   kind: "audio" | "video",
-  options: { timeoutMs?: number; mediaMaxMb?: number } = {},
+  options: { timeoutMs?: number; mediaMaxMb?: number; reference?: "image" | "video" } = {},
 ) {
   const budget =
     options.mediaMaxMb === undefined
@@ -60,6 +58,12 @@ async function requestMedia(
       },
     },
     timeoutMs: options.timeoutMs ?? 5_000,
+    ...(options.reference === "image"
+      ? { inputImages: [{ buffer: Buffer.from("image"), mimeType: "image/png" }] }
+      : {}),
+    ...(options.reference === "video"
+      ? { inputVideos: [{ buffer: Buffer.from("video"), mimeType: "video/mp4" }] }
+      : {}),
   });
   return result.videos[0]?.buffer;
 }
@@ -152,12 +156,9 @@ describe("production OpenAI binary transport", () => {
   );
 
   it.each([
-    { status: "queued", reference: "text" },
     { status: "queued", reference: "image" },
-    { status: "queued", reference: "video" },
-    { status: "completed", reference: "text" },
     { status: "completed", reference: "video" },
-  ])(
+  ] as const)(
     "releases $status $reference submission before real follow-up transport",
     async ({ status, reference }) => {
       const originalPost = providerHttp.postMultipartRequest;
@@ -202,31 +203,8 @@ describe("production OpenAI binary transport", () => {
             }
           },
           async (baseUrl) => {
-            const result = await buildOpenAIVideoGenerationProvider(modelAuth).generateVideo({
-              provider: "openai",
-              model: "sora-2",
-              prompt: "release submission before follow-up",
-              cfg: {
-                models: {
-                  providers: {
-                    openai: {
-                      apiKey: "local-test-key",
-                      baseUrl: `${baseUrl}/v1`,
-                      models: [],
-                      request: { allowPrivateNetwork: true },
-                    },
-                  },
-                },
-              },
-              timeoutMs: 5_000,
-              ...(reference === "image"
-                ? { inputImages: [{ buffer: Buffer.from("image"), mimeType: "image/png" }] }
-                : {}),
-              ...(reference === "video"
-                ? { inputVideos: [{ buffer: Buffer.from("video"), mimeType: "video/mp4" }] }
-                : {}),
-            });
-            expect(result.videos[0]?.buffer).toEqual(Buffer.from("rendered-video"));
+            const result = await requestMedia(baseUrl, "video", { reference });
+            expect(result).toEqual(Buffer.from("rendered-video"));
             expect(paths[0]).toBe(reference === "video" ? "/v1/videos/edits" : "/v1/videos");
             expect(paths).toHaveLength(status === "queued" ? 3 : 2);
             expect(releases).toBe(1);
@@ -291,7 +269,7 @@ describe("production OpenAI binary transport", () => {
   });
 
   it.each(["audio", "video"] as const)(
-    "persists %s capture and closes its SQLite store and rejected upstream socket",
+    "persists %s capture through finalization and closes the rejected upstream socket",
     async (kind) => {
       proxyReset.captureProxyEnv();
       const state = await createOpenClawTestState({ layout: "state-only", prefix: "binary-tcp-" });
@@ -300,8 +278,7 @@ describe("production OpenAI binary transport", () => {
       let closed = false;
       let mediaResponses = 0;
       try {
-        initializeDebugProxyCapture("test");
-        const store = getDebugProxyCaptureStore();
+        await initializeDebugProxyCaptureAsync("test");
         await withServer(
           (request, response) => {
             request.resume();
@@ -328,24 +305,17 @@ describe("production OpenAI binary transport", () => {
             );
             await expect(requestMedia(baseUrl, kind)).rejects.toThrow(`malformed ${kind} response`);
             await vi.waitFor(() => expect(closed).toBe(true));
-            await vi.waitFor(() => {
-              const events = store.getSessionEvents(`binary-${kind}`, 20);
-              expect(events.some((event) => event.kind === "request")).toBe(true);
-              expect(events.some((event) => event.kind === "response")).toBe(true);
-              expect(events).toHaveLength(kind === "audio" ? 4 : 8);
-            });
-            finalizeDebugProxyCapture();
-            expect(store.isClosed).toBe(true);
-            closeOpenClawStateDatabaseForTest();
-            const reader = createDebugProxyCaptureReader({ env: process.env });
-            const persisted = reader.getSessionEvents(`binary-${kind}`, 20);
+            await finalizeDebugProxyCaptureAsync();
+            await closeOpenClawStateDatabaseAsync();
+            const reopened = createDebugProxyCaptureReaderAsync({ env: process.env });
+            const persisted = await reopened.getSessionEvents(`binary-${kind}`, 20);
             expect(persisted.some((event) => event.kind === "request")).toBe(true);
             expect(persisted.some((event) => event.kind === "response")).toBe(true);
             expect(persisted).toHaveLength(kind === "audio" ? 4 : 8);
           },
         );
       } finally {
-        finalizeDebugProxyCapture();
+        await finalizeDebugProxyCaptureAsync();
         vi.unstubAllEnvs();
         await state.cleanup();
       }

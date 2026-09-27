@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { finalizeRestartUpdateRun } from "../../gateway/server-restart-update-run.js";
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
@@ -15,8 +16,11 @@ import {
   createRetainedPackageSwap,
 } from "../../infra/package-update-swap.test-support.js";
 import { readRestartSentinel } from "../../infra/restart-sentinel.js";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as snapshot from "../../infra/sqlite-snapshot-source.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
+import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { prepareNativePackageStage } from "../../infra/update-native-package-stage.js";
 import {
@@ -32,6 +36,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { VERSION } from "../../version.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { readUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import {
   finishSuccessfulPackageSwitch,
@@ -43,6 +48,7 @@ import {
   UpdateCommandPendingRecoveryFailure,
 } from "./update-command-result.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
+import * as service from "./update-command-service.js";
 import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
@@ -166,6 +172,7 @@ async function scenario(
     | "link-changed"
     | "transient-read"
     | "cleanup-read"
+    | "verified-report-read"
     | "unverified-completion"
     | "rollback-refused",
   json: boolean,
@@ -237,6 +244,27 @@ async function scenario(
       throw new Error("linked swap failed");
     }
     swap = { ...fixture, result, transaction };
+  } else if (kind === "verified-report-read") {
+    const fixture = await createPackageSwapFixture(base);
+    const candidate = fixture.params.stage.packageRoot;
+    const worker = path.join(candidate, "dist", "infra", "update-candidate-state.worker.js");
+    await fs.mkdir(path.dirname(worker), { recursive: true });
+    await fs.writeFile(
+      worker,
+      `void import(${JSON.stringify(resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateCandidateState).href)});\n`,
+    );
+    await writePackageDistInventory(candidate);
+    let transaction: PackageUpdateTransaction | undefined;
+    const result = await swapStagedPackageInstall({
+      ...fixture.params,
+      onTransaction: (value) => {
+        transaction = value;
+      },
+    });
+    if (!transaction || result.status !== "committed") {
+      throw new Error("Verified candidate fixture swap failed");
+    }
+    swap = { ...fixture, result, transaction };
   } else {
     swap = await createRetainedPackageSwap(base);
   }
@@ -244,6 +272,19 @@ async function scenario(
     runId: createUpdateRun({ trigger: "cli" }, { env: process.env }).runId,
     env: { ...process.env },
   };
+  const verifiedState =
+    kind === "verified-report-read"
+      ? {
+          schemaVersions: await readUpdateStateSchemaVersions({
+            stateDir: path.join(base, "state"),
+            config: {},
+            env: run.env,
+          }),
+          activationConfig: await readUpdateConfigSnapshot(
+            path.join(base, "state", "openclaw.json"),
+          ),
+        }
+      : {};
   const rmdir = fs.rmdir.bind(fs);
   const rename = fs.rename.bind(fs);
   const unlink = fs.unlink.bind(fs);
@@ -262,8 +303,19 @@ async function scenario(
   };
   let injected = setupInjected;
   let failNextLeaseRead = false;
+  let failNextStateRead = false;
   const lstat = syncFs.lstatSync.bind(syncFs);
   vi.spyOn(syncFs, "lstatSync").mockImplementation((...args) => {
+    if (
+      failNextStateRead &&
+      String(args[0]) === path.join(base, "state", "state", "openclaw.sqlite")
+    ) {
+      failNextStateRead = false;
+      injected = true;
+      throw Object.assign(new Error("fixture update reporting identity read failed"), {
+        code: "EIO",
+      });
+    }
     if (
       failNextLeaseRead &&
       String(args[0]) === path.join(temporary, "managed-update-handoffs.sqlite")
@@ -389,6 +441,24 @@ async function scenario(
           run.executorFence!.assertCurrent(),
         );
       }
+      if (kind === "verified-report-read") {
+        vi.spyOn(service, "maybeRestartService").mockImplementationOnce(async ({ result }) => {
+          const verification = {
+            serviceRunning: true,
+            versionMatch: true,
+            channelsReady: true,
+            readyz: true,
+            settled: true,
+            runningVersion: "2.0.0",
+            pluginErrors: [],
+          };
+          recordUpdateRunVerification(run.runId, verification, { env: run.env });
+          result.verification = verification;
+          closeOpenClawStateDatabaseForTest();
+          failNextStateRead = true;
+          return "ok";
+        });
+      }
       try {
         if (preparedRecovery) {
           mockVerifiedGatewayRun(run);
@@ -427,6 +497,7 @@ async function scenario(
               durationMs: 0,
             },
             packageTransaction: swap.transaction,
+            ...verifiedState,
             ...(preparedRecovery ? { coreAlreadyCurrent: true } : {}),
             shouldRestart: false,
             installKindChanged: false,
@@ -554,6 +625,16 @@ async function scenario(
 }
 
 describe("composed cleanup and terminal outcome", () => {
+  it("keeps the verified candidate when its running update row cannot be read for reporting", async () => {
+    const value = await scenario("verified-report-read", true);
+    expect(value.injected).toBe(true);
+    expect(value.package.version).toBe("2.0.0");
+    expect(value.launcher).toBe("candidate launcher\n");
+    expect(value.retainedExists).toBe(true);
+    expect(value.exitCode).toBe(1);
+    expect(value.history?.status).not.toBe("succeeded");
+    expect(value.history?.status).not.toBe("rolled-back");
+  });
   it.each([true, false])(
     "publishes the Gateway's completed row after real executor release (json=%s)",
     async (json) => {

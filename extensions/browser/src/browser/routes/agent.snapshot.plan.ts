@@ -1,9 +1,3 @@
-/**
- * Snapshot planning for browser route handlers.
- *
- * Resolves requested snapshot mode, format, limits, refs, labels, and driver
- * choice before the route talks to Playwright or Chrome MCP.
- */
 import {
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
@@ -37,7 +31,6 @@ type BrowserSnapshotPlan = {
   wantsRoleSnapshot: boolean;
 };
 
-/** Resolve a normalized snapshot plan from query parameters and profile caps. */
 export function resolveSnapshotPlan(params: {
   profile: ResolvedBrowserProfile;
   query: Record<string, unknown>;
@@ -55,25 +48,22 @@ export function resolveSnapshotPlan(params: {
     mode,
   });
   const limit = parseStrictPositiveInteger(params.query.limit);
-  const hasMaxChars = Object.hasOwn(params.query, "maxChars");
-  const maxCharsRaw = parseStrictNonNegativeInteger(params.query.maxChars);
+  const maxCharsRaw = Object.hasOwn(params.query, "maxChars")
+    ? parseStrictNonNegativeInteger(params.query.maxChars)
+    : undefined;
   const maxChars = maxCharsRaw !== undefined && maxCharsRaw > 0 ? maxCharsRaw : undefined;
   const resolvedMaxChars =
-    format === "ai"
-      ? hasMaxChars
-        ? maxCharsRaw === undefined
-          ? mode === "efficient"
-            ? DEFAULT_AI_SNAPSHOT_EFFICIENT_MAX_CHARS
-            : DEFAULT_AI_SNAPSHOT_MAX_CHARS
-          : maxChars
+    format !== "ai"
+      ? undefined
+      : maxCharsRaw !== undefined
+        ? maxChars
         : mode === "efficient"
           ? DEFAULT_AI_SNAPSHOT_EFFICIENT_MAX_CHARS
-          : DEFAULT_AI_SNAPSHOT_MAX_CHARS
-      : undefined;
+          : DEFAULT_AI_SNAPSHOT_MAX_CHARS;
   const interactiveRaw = toBoolean(params.query.interactive);
   const compactRaw = toBoolean(params.query.compact);
   const depthRaw = parseStrictNonNegativeInteger(params.query.depth);
-  const refsModeRaw = toStringOrEmpty(params.query.refs).trim();
+  const refsModeRaw = toStringOrEmpty(params.query.refs);
   const refsMode: "aria" | "role" | undefined =
     refsModeRaw === "aria"
       ? "aria"

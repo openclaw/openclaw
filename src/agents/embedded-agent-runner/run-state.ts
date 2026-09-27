@@ -118,6 +118,7 @@ export type EmbeddedRunToolAuthorityBinding = (registration: {
   handle: EmbeddedAgentQueueHandle;
 }) => {
   source: "reply" | "attempt";
+  sourceTurnId?: string;
   project: (overlay: ReplyToolAuthorityOverlay) => string | undefined;
   assertActive: () => void;
 };

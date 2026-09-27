@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { leaseRunArgs } from "./crabbox-worker-command.js";
 import {
   resolveCrabboxWarmImageProfileKey,
   type parseCrabboxProfile,
@@ -47,7 +48,6 @@ export function createCrabboxWarmImageCapture(dependencies: {
   deleteImage: (context: LeaseContext, key: string, record: WarmProfileRecord) => Promise<void>;
   retireImage: (context: LeaseContext, key: string, record: WarmProfileRecord) => Promise<void>;
   checkpointCommand: ReturnType<typeof createCheckpointCommands>["checkpointCommand"];
-  runArgs: (context: LeaseContext) => string[];
 }) {
   const {
     openStore,
@@ -223,7 +223,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
           await checkpointCommand(
             context,
             "scrub",
-            dependencies.runArgs(context),
+            leaseRunArgs(context),
             WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS,
             SCRUB_WORKER_STATE,
           );

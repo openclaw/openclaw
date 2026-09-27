@@ -4,6 +4,8 @@ import { stripAnsi } from "../../../../packages/terminal-core/src/ansi.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
+import { resolveOpenClawReleaseCohortVersion } from "../../../infra/npm-registry-spec.js";
+import { isPackageVersionDowngrade } from "../../../infra/package-update-utils.js";
 import type { PluginCapabilityConsentHandler } from "../../../plugins/capability-consent.js";
 import {
   normalizePluginsConfig,
@@ -37,6 +39,7 @@ import {
 import { updateNpmInstalledPlugins, type PluginUpdateOutcome } from "../../../plugins/update.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveCompatibilityHostVersion } from "../../../version.js";
+import { VERSION_BOUND_RUNTIME_PLUGIN_IDS } from "./configured-runtime-plugin-installs.js";
 import {
   collectDownloadableInstallCandidates,
   collectUpdateDeferredPluginIds,
@@ -288,6 +291,21 @@ async function repairMissingPluginInstallsWithLease(
     installRecords: records,
     config: params.cfg,
   });
+  // A missing payload cannot supply currentVersion to the updater's downgrade guard.
+  const newerRecordedPluginIds = new Set(
+    updateChannel === "stable" || updateChannel === "beta"
+      ? Object.keys(cohortSpecs).filter((pluginId) => {
+          const version = records[pluginId]?.resolvedVersion ?? records[pluginId]?.version;
+          return (
+            version &&
+            isPackageVersionDowngrade(
+              resolveOpenClawReleaseCohortVersion(version),
+              resolveOpenClawReleaseCohortVersion(coreVersion),
+            )
+          );
+        })
+      : [],
+  );
   const driftedPluginIds = new Set(
     params.repairVersionDrift && !shouldDeferConfiguredPluginInstallRepair(env)
       ? detectPluginVersionDrift({
@@ -475,7 +493,24 @@ async function repairMissingPluginInstallsWithLease(
         timeoutMs: params.timeoutMs,
         workTimeoutMs: params.workTimeoutMs,
         npmInstallSpecOverrides: Object.fromEntries(
-          Object.entries(cohortSpecs).filter(([pluginId]) => driftedPluginIds.has(pluginId)),
+          Object.entries(cohortSpecs).filter(
+            ([pluginId]) => driftedPluginIds.has(pluginId) && !newerRecordedPluginIds.has(pluginId),
+          ),
+        ),
+        versionBoundPluginIds: new Set(
+          missingRecordedPlugins
+            .filter(
+              ([pluginId, record]) =>
+                (updateChannel === "stable" || updateChannel === "extended-stable") &&
+                params.pluginIds.has(pluginId) &&
+                VERSION_BOUND_RUNTIME_PLUGIN_IDS.has(pluginId) &&
+                record.source === "npm" &&
+                Boolean(cohortSpecs[pluginId]) &&
+                !newerRecordedPluginIds.has(pluginId) &&
+                (installedPluginIdsWithStaleVersionBoundRuntimePackages.has(pluginId) ||
+                  isPayloadMissing(env, record.installPath)),
+            )
+            .map(([pluginId]) => pluginId),
         ),
         retainOnUnavailable: true,
         skipDisabledPlugins: true,

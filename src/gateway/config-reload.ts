@@ -234,12 +234,8 @@ export function startGatewayConfigReloader(opts: {
   let currentRuntimeEnvSourceConfig = initialSourceConfig;
   let currentReapplyRuntimeOverlays = (config: OpenClawConfig) => config;
   let currentRuntimeRefresh: RuntimeConfigSnapshotRefreshOptions | undefined;
-  const resolveSettings = (config: OpenClawConfig) => {
-    const resolved = resolveGatewayReloadSettings(config);
-    return opts.testDebounceMs === undefined
-      ? resolved
-      : { ...resolved, debounceMs: opts.testDebounceMs };
-  };
+  const resolveSettings = (config: OpenClawConfig) =>
+    resolveGatewayReloadSettings(config, opts.testDebounceMs);
   let settings = resolveSettings(currentConfig);
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let pending = false;
@@ -825,6 +821,7 @@ export function startGatewayConfigReloader(opts: {
       return completeApplication();
     }
     const plan = buildGatewayReloadPlan(changedPaths, {
+      pluginLifecycle,
       noopPaths: [...configInstallMetadata.noopPaths, ...installMetadata.noopPaths],
       forceChangedPaths: [
         ...configInstallMetadata.forceChangedPaths,
@@ -835,20 +832,6 @@ export function startGatewayConfigReloader(opts: {
       previousCompareConfig: currentCompareConfig,
       candidateCompareConfig: nextCompareConfig,
     });
-    if (pluginLifecycle) {
-      plan.pluginLifecycle = pluginLifecycle;
-      plan.reloadPlugins = true;
-      const unrelatedRestart = plan.restartReasons.find(
-        (path) => path !== "plugins" && !path.startsWith("plugins."),
-      );
-      if (unrelatedRestart) {
-        throw new Error(
-          `Cannot apply plugin change while ${unrelatedRestart} requires a Gateway restart.`,
-        );
-      }
-      plan.restartGateway = false;
-      plan.restartReasons = [];
-    }
     if (nextSettings.mode === "off" && !pluginLifecycle) {
       opts.log.info("config reload disabled (gateway.reload.mode=off)");
       await commitReloadBaseline({ runtimeApplied: false });
@@ -1243,6 +1226,8 @@ export function startGatewayConfigReloader(opts: {
         throw new Error("Gateway plugin lifecycle is stopped.");
       }
       running = true;
+      // The operation may consume a real observation, but failure must not discard its timer.
+      pending ||= debounceTimer !== null;
       clearReloadTimer();
       let candidate = pendingInProcessConfig ?? retryWriteCandidate;
       let committed = false;
@@ -1250,7 +1235,8 @@ export function startGatewayConfigReloader(opts: {
         const expectedSourceConfig = params.write
           ? params.write.persistedSourceConfig
           : params.config;
-        source.observe();
+        // Refresh identity and bytes without inventing independent passive reload work.
+        source.observe(undefined, false);
         const epoch = source.observation.revision;
         const snapshot = await source.readSnapshot();
         params.assertInvokerOwned?.();
@@ -1293,6 +1279,7 @@ export function startGatewayConfigReloader(opts: {
             pluginIds: params.pluginIds,
             reason: params.reason,
             operationId,
+            ...(params.waitForDrain ? { waitForDrain: true, drainSignal: params.drainSignal } : {}),
             expectedSourceDigests: params.expectedSourceDigests,
             expectedInstallHashes: params.expectedInstallHashes,
           },

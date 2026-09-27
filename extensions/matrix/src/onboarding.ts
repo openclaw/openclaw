@@ -1,4 +1,3 @@
-// Matrix setup module handles plugin onboarding behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import {
@@ -14,6 +13,7 @@ import {
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-policy";
+import { isPrivateOrLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -28,7 +28,6 @@ import {
   resolveMatrixAccountConfig,
 } from "./matrix/accounts.js";
 import { resolveMatrixEnvAuthReadiness } from "./matrix/client/env-auth.js";
-import { isPrivateOrLoopbackHost } from "./matrix/client/private-network-host.js";
 import {
   resolveValidatedMatrixHomeserverUrl,
   validateMatrixHomeserverUrl,

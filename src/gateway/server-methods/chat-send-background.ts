@@ -9,7 +9,6 @@ import {
   isDashboardSessionTitleCandidate,
   maybeGenerateDashboardSessionTitle,
 } from "../dashboard-session-title.js";
-import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -44,7 +43,6 @@ type DashboardSessionTitleRequest = {
   context: GatewayRequestContext;
   request: Pick<NormalizedChatSendRequest, "normalizedAttachments" | "rawMessage">;
   sessionKey: string;
-  sessionLoadOptions: Parameters<typeof loadSessionEntry>[1];
   storePath: string;
 };
 
@@ -77,7 +75,6 @@ export function scheduleCreatedDashboardSessionTitle(
       context,
       request: { rawMessage: titleSource, normalizedAttachments: [] },
       sessionKey: created.key,
-      sessionLoadOptions: { agentId: created.agentId },
       storePath: created.storePath,
     },
     "gateway",
@@ -99,14 +96,9 @@ function scheduleDashboardSessionTitle(
   }
   void runWithGatewayIndependentRootWorkContinuation(async () => {
     const generateTitle = async () => {
-      const titleEntry = loadSessionEntry(params.sessionKey, params.sessionLoadOptions).entry;
-      if (titleEntry?.sessionId !== params.admittedSessionId) {
-        return;
-      }
       const updated = await maybeGenerateDashboardSessionTitle({
         cfg: params.cfg,
         agentId: params.agentId,
-        entry: titleEntry,
         sessionId: params.admittedSessionId,
         sessionKey: params.sessionKey,
         storePath: params.storePath,

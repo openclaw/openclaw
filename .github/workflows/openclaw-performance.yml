@@ -1844,9 +1844,9 @@ jobs:
           set -euo pipefail
           pnpm_prefix="$RUNNER_TEMP/vitest-pair-pnpm"
           npm_config_cache="$RUNNER_TEMP/vitest-pair-npm-cache" \
-            npm install --global --prefix "$pnpm_prefix" pnpm@12.4.2
+            npm install --global --prefix "$pnpm_prefix" pnpm@12.5.0
           pnpm_bin="$pnpm_prefix/bin/pnpm"
-          [[ "$("$pnpm_bin" --version)" == "12.4.2" ]]
+          [[ "$("$pnpm_bin" --version)" == "12.5.0" ]]
           echo "VITEST_PAIR_PNPM_BIN=$pnpm_bin" >> "$GITHUB_ENV"
 
       - name: Run Vitest pair benchmark

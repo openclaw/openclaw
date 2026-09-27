@@ -126,23 +126,14 @@ export class CodexNativeSubagentDeliveryReceipts {
   }
 
   record(runId: string, paths: Iterable<string>, result: string): string[] {
-    const outcome: Outcome = this.outcomes.get(runId) ?? {
-      paths: new Set(paths),
-      received: false,
-      receiptResults: new Set(),
-    };
+    const outcome = this.getOutcome(runId, paths);
     outcome.result = receiptResultKey(result);
     this.outcomes.set(runId, outcome);
-    const matched = this.match();
-    return outcome.received ? [...new Set([...matched, runId])] : matched;
+    return this.track(runId, []);
   }
 
   track(runId: string, paths: Iterable<string>): string[] {
-    const outcome = this.outcomes.get(runId) ?? {
-      paths: new Set<string>(),
-      received: false,
-      receiptResults: new Set<string | undefined>(),
-    };
+    const outcome = this.getOutcome(runId);
     for (const path of paths) {
       outcome.paths.add(path);
     }
@@ -156,11 +147,7 @@ export class CodexNativeSubagentDeliveryReceipts {
   ): string[] {
     const restored = new Map<string, Outcome>();
     for (const assignment of assignments) {
-      const outcome = this.outcomes.get(assignment.runId) ?? {
-        paths: new Set<string>(),
-        received: false,
-        receiptResults: new Set<string | undefined>(),
-      };
+      const outcome = this.getOutcome(assignment.runId);
       for (const path of assignment.paths) {
         outcome.paths.add(path);
       }
@@ -200,6 +187,16 @@ export class CodexNativeSubagentDeliveryReceipts {
       }
     }
     return this.match();
+  }
+
+  private getOutcome(runId: string, paths: Iterable<string> = []): Outcome {
+    return (
+      this.outcomes.get(runId) ?? {
+        paths: new Set(paths),
+        received: false,
+        receiptResults: new Set(),
+      }
+    );
   }
 
   private match(): string[] {

@@ -1,8 +1,3 @@
-/**
- * Read-only channel plugin discovery.
- *
- * Builds lightweight channel plugin views from config, manifests, and setup metadata.
- */
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -582,25 +577,18 @@ export function resolveReadOnlyChannelPluginsForConfig(
     (plugin) => plugin.origin !== "bundled" && plugin.channels.length > 0,
   );
   const activationSourceConfig = options.activationSourceConfig ?? cfg;
-  const configuredChannelIds = uniqueStrings([
-    ...listConfiguredChannelIdsForReadOnlyScope({
-      config: cfg,
+  const listConfiguredIds = (config: OpenClawConfig) =>
+    listConfiguredChannelIdsForReadOnlyScope({
+      config,
       activationSourceConfig,
       workspaceDir,
       env,
       includePersistedAuthState: options.includePersistedAuthState,
       manifestRecords,
-    }),
-    ...(activationSourceConfig === cfg
-      ? []
-      : listConfiguredChannelIdsForReadOnlyScope({
-          config: activationSourceConfig,
-          activationSourceConfig,
-          workspaceDir,
-          env,
-          includePersistedAuthState: options.includePersistedAuthState,
-          manifestRecords,
-        })),
+    });
+  const configuredChannelIds = uniqueStrings([
+    ...listConfiguredIds(cfg),
+    ...(activationSourceConfig === cfg ? [] : listConfiguredIds(activationSourceConfig)),
   ]).filter(isSafeManifestChannelId);
   const byId = new Map<string, ChannelPlugin>();
   const loadFailures: ChannelSetupPluginLoadFailure[] = [];
@@ -656,7 +644,7 @@ export function resolveReadOnlyChannelPluginsForConfig(
   );
   const externalPluginIds = resolveExternalReadOnlyChannelPluginIds({
     cfg,
-    activationSourceConfig: options.activationSourceConfig ?? cfg,
+    activationSourceConfig,
     channelIds: missingConfiguredChannelIds,
     records: externalManifestRecords,
     workspaceDir,

@@ -3,20 +3,12 @@ import {
   parseStrictNonNegativeInteger,
 } from "openclaw/plugin-sdk/number-runtime";
 
-function parseIntegerId(value: unknown): number | undefined {
-  return parseStrictInteger(value);
-}
-
 export function parseTelegramMessageThreadId(value: unknown): number | undefined {
   return parseStrictNonNegativeInteger(value);
 }
 
 export function normalizeTelegramReplyToMessageId(value: unknown): number | undefined {
-  if (typeof value !== "string") {
-    return parseIntegerId(value);
-  }
-  const trimmed = value.trim();
-  return trimmed ? parseIntegerId(trimmed) : undefined;
+  return parseStrictInteger(value);
 }
 
 export function parseTelegramReplyToMessageId(replyToId?: unknown): number | undefined {
@@ -28,7 +20,7 @@ export function parseTelegramThreadId(threadId?: string | number | null): number
     return undefined;
   }
   if (typeof threadId === "number") {
-    return parseIntegerId(threadId);
+    return parseStrictInteger(threadId);
   }
   const trimmed = threadId.trim();
   if (!trimmed) {
@@ -36,10 +28,10 @@ export function parseTelegramThreadId(threadId?: string | number | null): number
   }
   const topicMatch = /^-?\d+:topic:(\d+)$/.exec(trimmed);
   if (topicMatch) {
-    return parseIntegerId(topicMatch[1]);
+    return parseStrictInteger(topicMatch[1]);
   }
   // DM topic session keys may scope thread ids as "<chatId>:<threadId>".
   const scopedMatch = /^-?\d+:(-?\d+)$/.exec(trimmed);
   const rawThreadId = scopedMatch ? scopedMatch[1] : trimmed;
-  return parseIntegerId(rawThreadId);
+  return parseStrictInteger(rawThreadId);
 }

@@ -6,11 +6,15 @@ import {
   registerMigratedPluginStateEntry,
 } from "../plugin-state/plugin-state-store.js";
 import { inspectPersistedInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-state.js";
-import { writePersistedInstalledPluginIndexSync } from "../plugins/installed-plugin-index-store-write.js";
+import { writePersistedInstalledPluginIndexWithLeaseSync } from "../plugins/installed-plugin-index-store-write.js";
 import {
   readPersistedInstalledPluginIndexSync,
   resolveLegacyInstalledPluginIndexStorePath,
 } from "../plugins/installed-plugin-index-store.js";
+import {
+  withPluginLifecycleLease,
+  type PluginLifecycleLeaseContext,
+} from "../plugins/plugin-lifecycle-lease.js";
 import { ensureMigrationDir, migrationFileExists } from "./state-migrations.fs.js";
 import {
   archiveLegacyImportSource,
@@ -24,6 +28,20 @@ import type { MigrationMessages } from "./state-migrations.types.js";
 export async function migrateLegacyInstalledPluginIndex(params: {
   stateDir: string;
 }): Promise<MigrationMessages> {
+  const sourcePath = resolveLegacyInstalledPluginIndexStorePath(params);
+  if (!migrationFileExists(sourcePath)) {
+    return { changes: [], warnings: [] };
+  }
+  return await withPluginLifecycleLease(
+    { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } },
+    async (lease) => migrateLegacyInstalledPluginIndexWithLease(params, lease),
+  );
+}
+
+function migrateLegacyInstalledPluginIndexWithLease(
+  params: { stateDir: string },
+  lease: PluginLifecycleLeaseContext,
+): MigrationMessages {
   const sourcePath = resolveLegacyInstalledPluginIndexStorePath({ stateDir: params.stateDir });
   if (!migrationFileExists(sourcePath)) {
     return { changes: [], warnings: [] };
@@ -50,13 +68,13 @@ export async function migrateLegacyInstalledPluginIndex(params: {
     };
   }
 
-  const storeOptions = { stateDir: params.stateDir };
+  const storeOptions = { stateDir: params.stateDir, lease };
   const current = readPersistedInstalledPluginIndexSync(storeOptions);
   if (current && !legacyInstalledPluginIndexMatches(current, legacy)) {
     const merged = mergeLegacyInstalledPluginIndexRecords(current, legacy);
     if (merged.addedCount > 0) {
       try {
-        writePersistedInstalledPluginIndexSync(merged.merged, storeOptions);
+        writePersistedInstalledPluginIndexWithLeaseSync(merged.merged, storeOptions);
         changes.push(
           `Merged ${merged.addedCount} legacy plugin install ${merged.addedCount === 1 ? "record" : "records"} → shared SQLite state`,
         );
@@ -70,6 +88,7 @@ export async function migrateLegacyInstalledPluginIndex(params: {
     if (merged.conflicts.length > 0) {
       // SQLite owns the install ledger; discovery can omit disabled or currently unloadable plugins.
       // Archive the retired JSON for recovery instead of blocking startup on conflicting metadata.
+      lease.assertOwned();
       archiveLegacyInstalledPluginIndex({ sourcePath, changes, warnings });
       return {
         changes,
@@ -83,7 +102,7 @@ export async function migrateLegacyInstalledPluginIndex(params: {
 
   if (!current) {
     try {
-      writePersistedInstalledPluginIndexSync(legacy, storeOptions);
+      writePersistedInstalledPluginIndexWithLeaseSync(legacy, storeOptions);
       const recordCount = Object.keys(legacy.installRecords).length;
       changes.push(
         `Migrated plugin install index ${recordCount} ${recordCount === 1 ? "record" : "records"} → shared SQLite state`,
@@ -96,6 +115,7 @@ export async function migrateLegacyInstalledPluginIndex(params: {
     }
   }
 
+  lease.assertOwned();
   archiveLegacyInstalledPluginIndex({ sourcePath, changes, warnings });
   return { changes, warnings };
 }

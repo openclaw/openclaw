@@ -722,6 +722,7 @@ describe("subagent registry archive behavior", () => {
 
     expect(taskRuntimeMocks.finalizeTaskRunByRunId).toHaveBeenCalledWith(
       expect.objectContaining({
+        taskId: "task-before-replacement",
         runId: "run-before-replacement",
         sessionKey: "agent:main:subagent:replacement",
       }),

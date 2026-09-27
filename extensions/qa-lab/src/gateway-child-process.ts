@@ -1,4 +1,3 @@
-// Qa Lab plugin module owns gateway child process lifecycle behavior.
 import type { ChildProcess } from "node:child_process";
 import type { WriteStream } from "node:fs";
 import { finished } from "node:stream/promises";

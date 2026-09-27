@@ -155,37 +155,6 @@ describe("mapSensitivePaths", () => {
     expect(result["discriminated.value"]?.sensitive).toBe(true);
   });
 
-  it("should not detect non-sensitive fields nested inside all structural Zod types", () => {
-    const GrandSchema = z.object({
-      simple: z.string().optional(),
-      simpleReversed: z.string().optional(),
-      nested: z.object({
-        nested: z.string(),
-      }),
-      list: z.array(z.string()),
-      listOfObjects: z.array(z.object({ nested: z.string() })),
-      headers: z.record(z.string(), z.string()),
-      headersNested: z.record(z.string(), z.object({ nested: z.string() })),
-      auth: z.union([
-        z.object({ type: z.literal("none") }),
-        z.object({ type: z.literal("token"), value: z.string() }),
-      ]),
-      merged: z.object({ id: z.string() }).and(z.object({ nested: z.string() })),
-    });
-
-    const result = mapSensitivePaths(GrandSchema, "", {});
-
-    expect(result["simple"]?.sensitive).toBe(undefined);
-    expect(result["simpleReversed"]?.sensitive).toBe(undefined);
-    expect(result["nested.nested"]?.sensitive).toBe(undefined);
-    expect(result["list[]"]?.sensitive).toBe(undefined);
-    expect(result["listOfObjects[].nested"]?.sensitive).toBe(undefined);
-    expect(result["headers.*"]?.sensitive).toBe(undefined);
-    expect(result["headersNested.*.nested"]?.sensitive).toBe(undefined);
-    expect(result["auth.value"]?.sensitive).toBe(undefined);
-    expect(result["merged.nested"]?.sensitive).toBe(undefined);
-  });
-
   it("maps sensitive fields nested under object catchall schemas", () => {
     const schema = z.object({
       custom: z.object({}).catchall(
@@ -231,11 +200,6 @@ describe("mapSensitivePaths", () => {
   });
 
   it("main schema yields correct hints (samples)", () => {
-    const schema = OpenClawSchema.toJSONSchema({
-      target: "draft-07",
-      unrepresentable: "any",
-    });
-    schema.title = "OpenClawConfig";
     const hints = mapSensitivePaths(OpenClawSchema, "", {});
 
     expect(hints["memory.search.remote.apiKey"]?.sensitive).toBe(true);

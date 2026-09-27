@@ -22,7 +22,6 @@ import { runWorkspaceInventoryCommandToFile } from "./workspace-sync-inventory.j
 const GIT_TIMEOUT_MS = 10 * 60_000;
 const COMMIT_PATTERN = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u;
 
-export type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
 export type WorkerLocalProjectSnapshot = {
   key: string;
   root: string;

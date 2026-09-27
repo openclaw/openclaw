@@ -7,15 +7,15 @@ import {
   resolveChannelThreadAddressing,
 } from "./thread-addressing.js";
 
+beforeEach(() => {
+  setActivePluginRegistry(createTestRegistry([]));
+});
+
+afterEach(() => {
+  setActivePluginRegistry(createTestRegistry([]));
+});
+
 describe("resolveChannelThreadAddressing", () => {
-  beforeEach(() => {
-    setActivePluginRegistry(createTestRegistry([]));
-  });
-
-  afterEach(() => {
-    setActivePluginRegistry(createTestRegistry([]));
-  });
-
   it("defaults missing channel metadata to address-scoped threads", () => {
     expect(resolveChannelThreadAddressing()).toBe("address");
     expect(resolveChannelThreadAddressing("missing")).toBe("address");
@@ -41,14 +41,6 @@ describe("resolveChannelThreadAddressing", () => {
 });
 
 describe("channelSupportsThreadDelivery", () => {
-  beforeEach(() => {
-    setActivePluginRegistry(createTestRegistry([]));
-  });
-
-  afterEach(() => {
-    setActivePluginRegistry(createTestRegistry([]));
-  });
-
   it("stays false for missing channels and undeclared thread capability", () => {
     expect(channelSupportsThreadDelivery()).toBe(false);
     expect(channelSupportsThreadDelivery("missing")).toBe(false);

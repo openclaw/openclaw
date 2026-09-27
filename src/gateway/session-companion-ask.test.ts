@@ -12,6 +12,7 @@ import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { sessionCompanionHandlers } from "./session-companion-rpc.js";
 import { createSessionCompanion } from "./session-companion.js";
 
@@ -89,6 +90,7 @@ vi.mock("../agents/model-auth-provider.js", () => ({ resolveApiKeyForProviderCor
 
 function createCompanion(cfg: OpenClawConfig = {}) {
   return createSessionCompanion({
+    scheduler: createTestGatewayScheduler(),
     getConfig: () => cfg,
     contextReader: {
       currentSessionId: () => "session-1",

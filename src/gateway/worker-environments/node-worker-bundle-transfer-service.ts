@@ -45,9 +45,6 @@ export function createNodeWorkerBundleTransferService(options: ArtifactTransferO
         },
       };
     },
-    authorize(params: { token: string; bundleHash: string }) {
-      return transfer.authorize({ token: params.token, artifactKey: params.bundleHash });
-    },
   };
 }
 

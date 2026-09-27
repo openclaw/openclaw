@@ -1,4 +1,3 @@
-// Mattermost plugin module implements reply delivery behavior.
 import {
   createAcceptedChannelDeliveryResult,
   createChannelPartialDeliveryError,

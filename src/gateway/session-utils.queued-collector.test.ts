@@ -4,6 +4,7 @@ import "../agents/subagents/spawn/subagent-spawn-model.mocks.shared.js";
 import { useQueuedCollectorFixture } from "./session-utils.queued-collector.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import * as subagentKill from "../agents/subagents/registry/subagent-control-kill.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { isSubagentRunQueued } from "../agents/subagents/registry/subagent-registry-read.js";
@@ -14,6 +15,7 @@ import {
   releaseSubagentRun,
   releaseSubagentRunKillClaim,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
+import * as nativeSpawn from "../agents/subagents/spawn/subagent-spawn.js";
 import {
   activateSwarmRun,
   holdQueuedSwarmRun,
@@ -22,7 +24,12 @@ import {
   reserveSwarmRun,
 } from "../agents/subagents/swarm/swarm-scheduler.js";
 import { testing as schedulerTesting } from "../agents/subagents/swarm/swarm-scheduler.test-support.js";
-import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  loadTranscriptEvents,
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
+import { onAgentEvent } from "../infra/agent-events.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { handleChatAbortRequest } from "./server-methods/chat-abort-handler.js";
@@ -35,11 +42,13 @@ import { sessionMutationHandlers } from "./server-methods/sessions-mutations.js"
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createLifecycleEventBroadcastHandler } from "./server-session-events.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
+import * as sessionStoreWorker from "./session-utils-store-worker.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
 const {
   parentKey,
   launchedRunIds,
+  waitForLaunch,
   requestContext,
   operatorClient,
   listChildren,
@@ -84,6 +93,28 @@ async function expectUnstartedChildHistory(
 }
 
 describe("queued collector session projection", () => {
+  it("rejects an already-cancelled collector before starting spawn effects", async () => {
+    const effectsStarted = vi.fn();
+    await expect(
+      nativeSpawn.spawnSubagentDirect(
+        { task: "cancelled collector", collect: true, context: "isolated" },
+        {
+          agentSessionKey: parentKey,
+          requesterRunId: "parent-turn",
+          assertActive: () => {
+            throw new Error("requester already cancelled");
+          },
+          onSpawnEffectsStart: effectsStarted,
+        },
+      ),
+    ).resolves.toEqual({
+      status: "error",
+      error: "sessions_spawn could not read the requester session: requester already cancelled",
+    });
+    expect(effectsStarted).not.toHaveBeenCalled();
+    expect(launchedRunIds).toEqual([]);
+  });
+
   it("lists both labeled collectors before the second launches without inventing its runtime", async () => {
     const context = requestContext();
     const broadcast = vi.fn();
@@ -102,7 +133,7 @@ describe("queued collector session projection", () => {
       const first = expectDefined(results[0], "first collector");
       const second = expectDefined(results[1], "second collector");
       expect(results.map((result) => result.status)).toEqual(["accepted", "accepted"]);
-      await vi.waitFor(() => expect(launchedRunIds).toEqual([first.runId]));
+      expect(launchedRunIds).toEqual([first.runId]);
       try {
         const rows = (await listChildren(context)).sessions;
         expect(rows.map((row) => row.key).toSorted()).toEqual(
@@ -203,7 +234,27 @@ describe("queued collector session projection", () => {
 
   it("preserves an operator rename when a queued collector reaches agent dispatch", async () => {
     const context = requestContext();
-    const [first, second] = await spawnCollectors();
+    const secondRead = createDeferred();
+    const readTarget = sessionStoreWorker.resolveGatewaySessionStoreTargetInWorker;
+    let reads = 0;
+    const readGate = vi
+      .spyOn(sessionStoreWorker, "resolveGatewaySessionStoreTargetInWorker")
+      .mockImplementation(async (...args) => {
+        const order = ++reads;
+        const target = await readTarget(...args);
+        // Concurrent requester reads need not finish in invocation order.
+        if (order === 1 && reads > 1) {
+          await secondRead.promise;
+        }
+        if (order === 2) {
+          secondRead.resolve();
+        }
+        return target;
+      });
+    const [first, second] = await spawnCollectors().finally(() => {
+      secondRead.resolve();
+      readGate.mockRestore();
+    });
     const queued = expectDefined(
       (await listChildren(context)).sessions.find((row) => row.key === second!.childSessionKey),
       "queued row",
@@ -232,7 +283,8 @@ describe("queued collector session projection", () => {
       undefined,
     );
     releaseSwarmRun(first!.runId!);
-    await vi.waitFor(() => expect(launchedRunIds).toEqual([first!.runId, second!.runId]));
+    await waitForLaunch(second!.runId!);
+    expect(launchedRunIds).toEqual([first!.runId, second!.runId]);
     const running = (await listChildren(context)).sessions.find((row) => row.key === queued.key);
     expect(running).toMatchObject({
       label: "Operator renamed collector",
@@ -243,12 +295,119 @@ describe("queued collector session projection", () => {
 
   it("keeps native spawn's normalized duplicate-label contract", async () => {
     const label = `  ${"Shared collector title ".repeat(4)}  `;
-    await spawnCollectors([label, label]);
-    expect((await listChildren(requestContext())).sessions.map((row) => row.label)).toEqual([
-      label.trim(),
-      label.trim(),
-    ]);
+    const releaseFirstRequester = createDeferred();
+    const readRequester = sessionStoreWorker.resolveGatewaySessionStoreTargetInWorker;
+    const requester = vi
+      .spyOn(sessionStoreWorker, "resolveGatewaySessionStoreTargetInWorker")
+      .mockImplementationOnce(async (params) => {
+        await releaseFirstRequester.promise;
+        return await readRequester(params);
+      });
+    const spawn = () =>
+      nativeSpawn.spawnSubagentDirect(
+        {
+          task: "Wait for cancellation",
+          label,
+          collect: true,
+          context: "isolated",
+          lightContext: true,
+        },
+        {
+          agentSessionKey: parentKey,
+          requesterRunId: "parent-turn",
+          requesterTurnRunId: "parent-turn",
+        },
+      );
+    const first = spawn();
+    try {
+      // Finish the second preparation while the first still owns FIFO admission.
+      const second = await spawn();
+      releaseFirstRequester.resolve();
+      const results = [await first, second];
+      expect(results.map((result) => result.status)).toEqual(["accepted", "accepted"]);
+      await Promise.race(
+        results.map((result) => waitForLaunch(expectDefined(result.runId, "collector run"))),
+      );
+      expect(launchedRunIds).toEqual([results[0]!.runId]);
+      expect((await listChildren(requestContext())).sessions.map((row) => row.label)).toEqual([
+        label.trim(),
+        label.trim(),
+      ]);
+      releaseSwarmRun(results[0]!.runId!);
+      await waitForLaunch(expectDefined(second.runId, "second collector run"));
+      expect(launchedRunIds).toEqual(results.map((result) => result.runId));
+    } finally {
+      releaseFirstRequester.resolve();
+      await first;
+      requester.mockRestore();
+    }
   });
+
+  it.each(["failure", "cancellation"] as const)(
+    "withdraws FIFO admission after requester acquisition %s",
+    async (outcome) => {
+      const releaseFirstRequester = createDeferred();
+      const abort = new AbortController();
+      const readRequester = sessionStoreWorker.resolveGatewaySessionStoreTargetInWorker;
+      const requester = vi
+        .spyOn(sessionStoreWorker, "resolveGatewaySessionStoreTargetInWorker")
+        .mockImplementationOnce(async (params) => {
+          const target = outcome === "cancellation" ? await readRequester(params) : undefined;
+          await releaseFirstRequester.promise;
+          if (outcome === "failure") {
+            throw new Error("requester read failed");
+          }
+          return expectDefined(target, "prepared requester");
+        });
+      const started = createDeferred<string>();
+      const unsubscribe = onAgentEvent((event) => {
+        if (event.stream === "lifecycle" && event.data.phase === "start") {
+          started.resolve(event.runId);
+        }
+      });
+      const effectsStarted = vi.fn();
+      const spawn = (label: string, assertActive?: () => void) =>
+        nativeSpawn.spawnSubagentDirect(
+          {
+            task: "Wait for cancellation",
+            label,
+            collect: true,
+            context: "isolated",
+            lightContext: true,
+          },
+          {
+            agentSessionKey: parentKey,
+            requesterRunId: "parent-turn",
+            requesterTurnRunId: "parent-turn",
+            onSpawnEffectsStart: effectsStarted,
+            assertActive,
+          },
+        );
+      const first = spawn("Failed requester", () => abort.signal.throwIfAborted());
+      try {
+        const second = await spawn("Surviving collector");
+        expect(second.status).toBe("accepted");
+        expect(launchedRunIds).toEqual([]);
+        expect(effectsStarted).toHaveBeenCalledTimes(1);
+        if (outcome === "cancellation") {
+          abort.abort(new Error("requester read cancelled"));
+        }
+        releaseFirstRequester.resolve();
+        expect(await first).toEqual({
+          status: "error",
+          error: `sessions_spawn could not read the requester session: requester read ${outcome === "failure" ? "failed" : "cancelled"}`,
+        });
+        expect(effectsStarted).toHaveBeenCalledTimes(2);
+        expect(await started.promise).toBe(second.runId);
+        expect(launchedRunIds).toEqual([second.runId]);
+      } finally {
+        releaseFirstRequester.resolve();
+        await first;
+        unsubscribe();
+        requester.mockRestore();
+      }
+    },
+  );
 
   it("keeps preactivation and held cancellation reservations pending until withdrawal", async () => {
     const { entry } = await createQueuedReservation();
@@ -615,8 +774,30 @@ describe("queued collector session projection", () => {
 
   it("keeps the controlling parent authoritative when native completion routing differs", async () => {
     const completionOwner = "agent:main:dashboard:completion-recipient";
+    replaceSessionEntrySync(
+      { sessionKey: completionOwner, agentId: "main" },
+      { sessionId: "original-completion-owner", updatedAt: Date.now() },
+    );
     const context = requestContext();
-    const [, second] = await spawnCollectors(undefined, completionOwner);
+    const spawn = nativeSpawn.spawnSubagentDirect;
+    const spawning = vi
+      .spyOn(nativeSpawn, "spawnSubagentDirect")
+      .mockImplementation((params, ctx) =>
+        spawn(params, {
+          ...ctx,
+          onSpawnEffectsStart: () =>
+            replaceSessionEntrySync(
+              { sessionKey: completionOwner, agentId: "main" },
+              { sessionId: "replacement-completion-owner", updatedAt: Date.now() },
+            ),
+        }),
+      );
+    const [first, second] = await spawnCollectors(undefined, completionOwner).finally(() =>
+      spawning.mockRestore(),
+    );
+    expect(subagentRuns.get(first!.runId!)?.completionRequesterSessionId).toBe(
+      "original-completion-owner",
+    );
     const entry = expectDefined(subagentRuns.get(second!.runId!), "proxied queued collector");
     expect(entry).toMatchObject({
       controllerSessionKey: parentKey,

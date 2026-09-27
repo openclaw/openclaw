@@ -11,13 +11,12 @@ import { createNextAcpTaskBackingDetail } from "./task-backing-authority.js";
 import { createAcpTaskBackingDetailForTest } from "./task-backing-authority.test-support.js";
 import { createTaskFlowForTask } from "./task-flow-registry.js";
 import { recordTaskActivityEvent } from "./task-registry-activity.js";
+import { applyTaskRegistryMaintenanceRetention } from "./task-registry-maintenance-retention.js";
 import { updateTask } from "./task-registry-mutation.js";
 import { publishTaskRecordAfterAtomicStore } from "./task-registry-publication.js";
 import {
-  deleteTaskRecordById,
   findTaskByRunId,
   getTaskById,
-  hasActiveTaskForChildSessionKey,
   listTaskRecordPage,
   listTasksForRelatedSessionKey,
 } from "./task-registry-query.js";
@@ -76,8 +75,6 @@ it("publishes requester membership through create, update, restore, atomic publi
   const task = createTask({});
   const originalKey = task.requesterSessionKey;
   expect(await taskIds({ sessionKey: originalKey })).toEqual([task.taskId]);
-  expect(hasActiveTaskForChildSessionKey({ sessionKey: originalKey })).toBe(false);
-  expect(hasActiveTaskForChildSessionKey({ sessionKey: task.childSessionKey! })).toBe(true);
 
   const store = getTaskRegistryStore();
   configureTaskRegistryRuntime({
@@ -105,7 +102,12 @@ it("publishes requester membership through create, update, restore, atomic publi
     task.taskId,
   ]);
 
-  const published = { ...task, requesterSessionKey: "agent:main:published" };
+  const published = {
+    ...task,
+    requesterSessionKey: "agent:main:published",
+    status: "succeeded" as const,
+    cleanupAfter: 0,
+  };
   const deliveryState = store.loadSnapshot().deliveryStates.get(task.taskId);
   upsertTaskWithDeliveryStateToSqlite({
     task: published,
@@ -114,7 +116,9 @@ it("publishes requester membership through create, update, restore, atomic publi
   publishTaskRecordAfterAtomicStore(published);
   expect(await taskIds({ sessionKey: published.requesterSessionKey })).toEqual([task.taskId]);
   expect(await taskIds({ sessionKey: task.ownerKey })).toEqual([task.taskId]);
-  expect(deleteTaskRecordById(task.taskId)).toBe(true);
+  expect(
+    await applyTaskRegistryMaintenanceRetention(published, Date.now(), new Map(), () => {}),
+  ).toBe("pruned");
   await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
   for (const sessionKey of [
     originalKey,
@@ -175,8 +179,13 @@ it("preserves owner-or-child ACP generation history when requester candidates ar
   expect(
     createNextAcpTaskBackingDetail({ childSessionKey: key, instanceId: "after-restore" }),
   ).toMatchObject({ generation: 9 });
-  expect(deleteTaskRecordById(records[0]!.taskId)).toBe(true);
-  expect(hasActiveTaskForChildSessionKey({ sessionKey: key })).toBe(false);
+  const expired = expectDefined(
+    updateTask(records[0]!.taskId, { status: "succeeded", cleanupAfter: 0 }),
+    "expired child task",
+  );
+  expect(
+    await applyTaskRegistryMaintenanceRetention(expired, Date.now(), new Map(), () => {}),
+  ).toBe("pruned");
 });
 
 function createEqualTimeRunTasks() {
@@ -238,8 +247,10 @@ it.each(["native update", "store readback"] as const)(
     };
     upsertTaskWithDeliveryStateToSqlite({ task: published });
     publishTaskRecordAfterAtomicStore(published);
-    const unrelated = createTask({ runId: "run-unrelated" });
-    expect(deleteTaskRecordById(unrelated.taskId)).toBe(true);
+    const unrelated = createTask({ runId: "run-unrelated", status: "succeeded", cleanupAfter: 0 });
+    expect(
+      await applyTaskRegistryMaintenanceRetention(unrelated, Date.now(), new Map(), () => {}),
+    ).toBe("pruned");
     expect(getTasksByRunId("run-shared").map((task) => task.taskId)).toEqual(expectedIds);
     expect(findTaskByRunId("run-shared")?.taskId).toBe(first.taskId);
 
@@ -252,12 +263,13 @@ it.each(["native update", "store readback"] as const)(
 );
 
 it.each(["native update", "atomic publication"] as const)(
-  "indexes the row actually replaced after reentrant activity publication during %s",
+  "indexes the last committed row after reentrant activity publication during %s",
   (writer) => {
     const task = createTask({ runId: "run-before-flush", notifyPolicy: "silent" });
     const completed = { ...task, status: "succeeded" as const, endedAt: Date.now() };
     const store = getTaskRegistryStore();
     let reentered = false;
+    let observerInTransaction: boolean | undefined;
     let observerUpdate: ReturnType<typeof updateTask> | undefined;
     recordTaskActivityEvent(task, {
       runId: task.runId!,
@@ -276,6 +288,7 @@ it.each(["native update", "atomic publication"] as const)(
             event.task.status === "running"
           ) {
             reentered = true;
+            observerInTransaction = openOpenClawStateDatabase().db.isTransaction;
             observerUpdate = updateTask(task.taskId, { runId: "run-from-observer" });
             if (writer === "atomic publication") {
               // The outer publisher resumes with this last committed record after the observer.
@@ -294,20 +307,68 @@ it.each(["native update", "atomic publication"] as const)(
       publishTaskRecordAfterAtomicStore(completed);
     }
     expect(reentered).toBe(true);
+    expect(observerInTransaction).toBe(false);
     expect(observerUpdate).toMatchObject({ runId: "run-from-observer" });
-    expect(findTaskByRunId("run-from-observer")).toBeUndefined();
-    expect(findTaskByRunId(task.runId!)?.taskId).toBe(task.taskId);
-    expect(getTaskById(task.taskId)).toMatchObject({ runId: task.runId, status: "succeeded" });
+    // Native observers run after commit; the atomic publisher resumes after its observer.
+    const [committedRunId, replacedRunId]: [string, string] =
+      writer === "native update"
+        ? ["run-from-observer", task.runId!]
+        : [task.runId!, "run-from-observer"];
+    expect(findTaskByRunId(replacedRunId)).toBeUndefined();
+    expect(findTaskByRunId(committedRunId)?.taskId).toBe(task.taskId);
+    expect(getTaskById(task.taskId)).toMatchObject({ runId: committedRunId, status: "succeeded" });
     expect(store.loadSnapshot().tasks.get(task.taskId)).toMatchObject({
-      runId: task.runId,
+      runId: committedRunId,
       status: "succeeded",
     });
   },
 );
 
-it("preserves run membership across rejected deletion and enclosing transaction rollback", () => {
+it.each(["commit", "rollback"] as const)(
+  "keeps a newly created task visible inside its transaction through %s",
+  (outcome) => {
+    const onEvent = vi.fn();
+    configureTaskRegistryRuntime({ observers: { onEvent } });
+    const failure = new Error("Synthetic creation rollback");
+    let taskId: string | undefined;
+    const write = () =>
+      runOpenClawStateWriteTransaction(() => {
+        const task = createTask({ runId: "run-created-in-transaction" });
+        taskId = task.taskId;
+        expect(findTaskByRunId(task.runId!)?.taskId).toBe(taskId);
+        expect(updateTask(taskId, { status: "succeeded" })).toMatchObject({ status: "succeeded" });
+        expect(getTaskById(taskId)?.status).toBe("succeeded");
+        expect(onEvent).not.toHaveBeenCalled();
+        if (outcome === "rollback") {
+          throw failure;
+        }
+      });
+    if (outcome === "rollback") {
+      expect(write).toThrow(failure);
+      expect(findTaskByRunId("run-created-in-transaction")).toBeUndefined();
+      expect(getTaskRegistryStore().loadSnapshot().tasks.has(taskId!)).toBe(false);
+      expect(onEvent).not.toHaveBeenCalled();
+    } else {
+      write();
+      expect(findTaskByRunId("run-created-in-transaction")).toMatchObject({
+        taskId,
+        status: "succeeded",
+      });
+      expect(getTaskRegistryStore().loadSnapshot().tasks.get(taskId!)).toMatchObject({
+        status: "succeeded",
+      });
+      expect(onEvent).toHaveBeenCalled();
+    }
+  },
+);
+
+it("preserves run membership across rejected retention and enclosing update rollback", async () => {
   const { first, second } = createEqualTimeRunTasks();
   expect(updateTask(first.taskId, { runId: "run-shared" })).not.toBeNull();
+  const expired = expectDefined(
+    updateTask(first.taskId, { status: "succeeded", cleanupAfter: 0 }),
+    "expired indexed task",
+  );
   const expectedIds = [first.taskId, second.taskId];
   const store = getTaskRegistryStore();
   const before = store.loadSnapshot();
@@ -323,11 +384,13 @@ it("preserves run membership across rejected deletion and enclosing transaction 
     },
   });
   database.db.exec(`
-    CREATE TEMP TRIGGER task_index_reject_delete BEFORE DELETE ON task_runs
+    CREATE TRIGGER task_index_reject_delete BEFORE DELETE ON task_runs
     BEGIN SELECT RAISE(ABORT, 'synthetic delete rejection'); END;
   `);
   try {
-    expect(deleteTaskRecordById(first.taskId)).toBe(false);
+    expect(
+      await applyTaskRegistryMaintenanceRetention(expired, Date.now(), new Map(), () => {}),
+    ).toBeUndefined();
     expect(deleted).toEqual([]);
     expect(getTasksByRunId("run-shared").map((task) => task.taskId)).toEqual(expectedIds);
     expect(store.loadSnapshot()).toEqual(before);
@@ -339,11 +402,12 @@ it("preserves run membership across rejected deletion and enclosing transaction 
   expect(() =>
     runOpenClawStateWriteTransaction(() => {
       expect(updateTask(first.taskId, { runId: "run-rolled-back" })).not.toBeNull();
-      expect(deleteTaskRecordById(second.taskId)).toBe(true);
+      expect(updateTask(second.taskId, { runId: "second-rolled-back" })).not.toBeNull();
       throw failure;
     }),
   ).toThrow(failure);
   expect(findTaskByRunId("run-rolled-back")).toBeUndefined();
+  expect(findTaskByRunId("second-rolled-back")).toBeUndefined();
   expect(getTasksByRunId("run-shared").map((task) => task.taskId)).toEqual(expectedIds);
   expect(findTaskByRunId("run-shared")?.taskId).toBe(first.taskId);
   expect(store.loadSnapshot()).toEqual(before);

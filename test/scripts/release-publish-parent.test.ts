@@ -349,7 +349,8 @@ describe("superseded release children", () => {
     );
     expect(result.status, result.stderr).toBe(0);
     expect(result.calls.filter(isCancel).map((call) => call.args.at(-1))).toEqual(["91"]);
-    expect(result.calls.some((call) => call.args.includes("state=rejected"))).toBe(true);
+    // Same-tooling npm children publish in npm-publish and have no gate to reject.
+    expect(result.calls.some((call) => call.args.includes("state=rejected"))).toBe(false);
   });
 });
 

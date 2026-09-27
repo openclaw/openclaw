@@ -11,8 +11,10 @@ import {
   asOptionalObjectRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveDiscordChannelId } from "../target-parsing.js";
-import { resolveChannelIdForBinding } from "./thread-bindings.discord-api.js";
+import {
+  normalizeDiscordBindingChannelId,
+  resolveChannelIdForBinding,
+} from "./thread-bindings.discord-api.js";
 import { snapshotThreadBindingJson } from "./thread-bindings.persistence.js";
 import {
   resolveBindingRecordKey,
@@ -29,18 +31,6 @@ type ThreadBindingDefaults = {
   idleTimeoutMs: number;
   maxAgeMs: number;
 };
-
-function normalizeChildBindingParentChannelId(raw?: string | null): string | undefined {
-  const trimmed = normalizeOptionalString(raw) ?? "";
-  if (!trimmed) {
-    return undefined;
-  }
-  try {
-    return resolveDiscordChannelId(trimmed);
-  } catch {
-    return undefined;
-  }
-}
 
 function toSessionBindingRecord(
   record: ThreadBindingRecord,
@@ -122,7 +112,8 @@ export function createThreadBindingSessionAdapter(params: {
 
       if (placement === "child") {
         createThread = true;
-        channelId = normalizeChildBindingParentChannelId(input.conversation.parentConversationId);
+        channelId =
+          normalizeDiscordBindingChannelId(input.conversation.parentConversationId) ?? undefined;
         if (!channelId && conversationId) {
           channelId =
             (await resolveChannelIdForBinding({

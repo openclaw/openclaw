@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
@@ -59,40 +60,43 @@ export function schedulePostReadySidecarTask(params: {
 }
 
 export function scheduleGatewayGenerationTimer(params: {
+  scheduler: GatewayScheduler;
   delayMs: number;
   origin: string;
   run: (isStopped: () => boolean) => Awaitable<void>;
   onError: (err: unknown) => void;
   shouldRun?: () => boolean;
 }): GatewayPostReadySidecarHandle {
-  let stopped = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const isStopped = () => stopped || params.shouldRun?.() === false;
-  timer = setTimeout(() => {
-    timer = undefined;
-    if (isStopped()) {
-      return;
-    }
-    void runWithGatewayIndependentRootWorkAdmission(async () => {
+  const { scheduler } = params;
+  const controller = new AbortController();
+  const isStopped = () => controller.signal.aborted || params.shouldRun?.() === false;
+  const job = scheduler.schedule({
+    id: params.origin,
+    delayMs: params.delayMs,
+    run: () => {
       if (isStopped()) {
-        return;
+        return undefined;
       }
-      await params.run(isStopped);
-    }, params.origin).catch((err: unknown) => {
-      // Closing must not hide errors from callbacks already admitted before it.
-      if (!stopped) {
-        params.onError(err);
-      }
-    });
-  }, params.delayMs);
-  timer.unref?.();
+      return runWithGatewayIndependentRootWorkAdmission(
+        async () => {
+          if (isStopped()) {
+            return;
+          }
+          await params.run(isStopped);
+        },
+        params.origin,
+        controller.signal,
+      ).catch((err: unknown) => {
+        if (!controller.signal.aborted) {
+          params.onError(err);
+        }
+      });
+    },
+  });
   return {
     stop: () => {
-      stopped = true;
-      if (timer) {
-        clearTimeout(timer);
-        timer = undefined;
-      }
+      controller.abort();
+      return job.stop();
     },
   };
 }

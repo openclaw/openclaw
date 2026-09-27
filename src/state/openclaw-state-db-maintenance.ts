@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { OpenClawStateOwnershipError } from "../infra/sqlite-lifecycle-errors.js";
 import {
   assertSqliteSchemaContains,
   assertSqliteSchemaTablesPresent,
@@ -33,10 +34,7 @@ import {
 } from "./openclaw-state-db-schema-version.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
-import {
-  assertOpenClawStateWriteAllowed,
-  OpenClawStateOwnershipError,
-} from "./openclaw-state-ownership.js";
+import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 import {
   getOpenClawStateRuntimeSchema,
   OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
@@ -80,14 +78,6 @@ function repairDanglingSkillWorkshopCollectionReviewIndexChanges(database: Datab
     : [];
 }
 
-/** Run read-only schema admission while SQLite ignores malformed catalog rows. */
-function admitStateDatabaseWithDanglingWorkshopIndex<T>(
-  database: DatabaseSync,
-  operation: () => T,
-): T {
-  return withSqliteWritableSchema(database, operation);
-}
-
 /** Admit the schema before Doctor begins its write transaction. */
 function admitStateDatabaseForSchemaRepair(
   database: DatabaseSync,
@@ -102,7 +92,8 @@ function admitStateDatabaseForSchemaRepair(
     }
   };
   if (danglingWorkshopIndex) {
-    admitStateDatabaseWithDanglingWorkshopIndex(database, admit);
+    // Run read-only admission while SQLite ignores malformed catalog rows.
+    withSqliteWritableSchema(database, admit);
   } else {
     admit();
   }
@@ -119,7 +110,7 @@ function assertStateDatabaseSchemaRepairWriteAllowed(
   const assertAllowed = () =>
     assertOpenClawStateWriteAllowed({ database, databasePath: pathname, env });
   if (danglingWorkshopIndex) {
-    admitStateDatabaseWithDanglingWorkshopIndex(database, assertAllowed);
+    withSqliteWritableSchema(database, assertAllowed);
   } else {
     assertAllowed();
   }

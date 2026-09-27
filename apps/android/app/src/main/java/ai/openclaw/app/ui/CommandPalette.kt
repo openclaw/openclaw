@@ -3,6 +3,7 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.GatewayModelProviderSummary
 import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.currentAppLanguage
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeString
@@ -62,7 +63,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
-/** Full-screen command palette for navigation and recent-session search. */
 @Composable
 internal fun CommandPalette(
   viewModel: MainViewModel,
@@ -157,16 +157,7 @@ internal fun CommandPalette(
             }
           } else {
             CommandSessionList(
-              rows =
-                sessionRows.map { session ->
-                  CommandSessionRow(
-                    key = session.key,
-                    ownerAgentId = session.ownerAgentId,
-                    title = sessionPresentationTitle(session) { nativeString("Main thread") },
-                    subtitle = sessionListSubtitle(session, fallback = nativeString("OpenClaw thread"), activeRunLabel = nativeString("Assistant working")),
-                    metadata = session.updatedAtMs?.let(::relativeSessionTime) ?: nativeString("now"),
-                  )
-                },
+              rows = sessionRows,
               onOpen = onOpenSession,
             )
           }
@@ -266,14 +257,6 @@ internal fun commandActionAccessibilityDescription(
     is CommandAction.Settings -> resolve("Open \${row.title}", title)
   }
 
-private data class CommandSessionRow(
-  val key: String,
-  val ownerAgentId: String?,
-  val title: String,
-  val subtitle: String,
-  val metadata: String,
-)
-
 @Composable
 private fun CommandActionList(
   rows: List<CommandItem>,
@@ -309,7 +292,7 @@ private fun CommandActionRow(
 
 @Composable
 private fun CommandSessionList(
-  rows: List<CommandSessionRow>,
+  rows: List<ChatSessionEntry>,
   onOpen: (String, String?) -> Unit,
 ) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
@@ -321,7 +304,7 @@ private fun CommandSessionList(
 
 @Composable
 private fun CommandSessionListRow(
-  row: CommandSessionRow,
+  row: ChatSessionEntry,
   onClick: () -> Unit,
 ) {
   Surface(color = ClawTheme.colors.canvas, contentColor = ClawTheme.colors.text) {
@@ -338,10 +321,10 @@ private fun CommandSessionListRow(
     ) {
       CommandRowIcon(icon = Icons.Outlined.ChatBubbleOutline)
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-        Text(text = row.title, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(text = row.subtitle, style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text = sessionPresentationTitle(row) { nativeString("Main thread") }, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text = sessionListSubtitle(row, fallback = nativeString("OpenClaw thread"), activeRunLabel = nativeString("Assistant working")), style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
-      Text(text = row.metadata, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      Text(text = row.updatedAtMs?.let(::relativeSessionTime) ?: nativeString("now"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
       CommandRowChevron(contentDescription = nativeString("Open thread"))
     }
   }

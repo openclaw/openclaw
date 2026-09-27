@@ -46,6 +46,21 @@ vi.mock("openclaw/plugin-sdk/provider-http", async () => {
   };
 });
 
+const demoOptions = {
+  id: "demo",
+  label: "Demo",
+  autoSelectOrder: 40,
+  models: ["demo-tts"],
+  voices: ["alloy"],
+  defaultModel: "demo-tts",
+  defaultVoice: "alloy",
+  defaultBaseUrl: "https://example.test/v1",
+  envKey: "DEMO_API_KEY",
+  responseFormats: ["mp3"],
+  defaultResponseFormat: "mp3",
+  voiceCompatibleResponseFormats: ["mp3"],
+};
+
 describe("createOpenAiCompatibleSpeechProvider", () => {
   afterEach(() => {
     assertOkOrThrowHttpErrorMock.mockClear();
@@ -65,11 +80,6 @@ describe("createOpenAiCompatibleSpeechProvider", () => {
         voiceId: "legacy-id",
       },
       expected: "cedar",
-    },
-    {
-      name: "canonical id before a legacy name",
-      selection: { speakerVoiceId: " canonical-id ", voice: "legacy", voiceId: "legacy-id" },
-      expected: "canonical-id",
     },
     {
       name: "canonical id after a blank canonical name",
@@ -95,20 +105,7 @@ describe("createOpenAiCompatibleSpeechProvider", () => {
   ])(
     "preserves $name through direct, normalized, runtime, and Talk synthesis",
     async ({ selection, expected }) => {
-      const provider = createOpenAiCompatibleSpeechProvider({
-        id: "demo",
-        label: "Demo",
-        autoSelectOrder: 40,
-        models: ["demo-tts"],
-        voices: ["alloy"],
-        defaultModel: "demo-tts",
-        defaultVoice: "alloy",
-        defaultBaseUrl: "https://example.test/v1",
-        envKey: "DEMO_API_KEY",
-        responseFormats: ["mp3"],
-        defaultResponseFormat: "mp3",
-        voiceCompatibleResponseFormats: ["mp3"],
-      });
+      const provider = createOpenAiCompatibleSpeechProvider(demoOptions);
       providerState.provider = provider;
       postJsonRequestMock.mockImplementation(async () => ({
         response: new Response(new Uint8Array([4, 5, 6]), { status: 200 }),
@@ -159,18 +156,9 @@ describe("createOpenAiCompatibleSpeechProvider", () => {
 
   it("normalizes config with built-in base URL policies and preserves secret error paths", () => {
     const provider = createOpenAiCompatibleSpeechProvider({
-      id: "demo",
-      label: "Demo",
-      autoSelectOrder: 40,
-      models: ["demo-tts"],
-      voices: ["alloy"],
-      defaultModel: "demo-tts",
-      defaultVoice: "alloy",
+      ...demoOptions,
       defaultBaseUrl: "https://example.test/api/v1",
-      envKey: "DEMO_API_KEY",
       responseFormats: ["mp3", "pcm"],
-      defaultResponseFormat: "mp3",
-      voiceCompatibleResponseFormats: ["mp3"],
       baseUrlPolicy: {
         kind: "canonical",
         aliases: ["https://example.test/v1"],
@@ -232,17 +220,8 @@ describe("createOpenAiCompatibleSpeechProvider", () => {
     const provider = createOpenAiCompatibleSpeechProvider<{
       routing?: Record<string, unknown>;
     }>({
-      id: "demo",
-      label: "Demo",
-      autoSelectOrder: 40,
-      models: ["demo-tts"],
-      voices: ["alloy"],
-      defaultModel: "demo-tts",
-      defaultVoice: "alloy",
-      defaultBaseUrl: "https://example.test/v1",
-      envKey: "DEMO_API_KEY",
+      ...demoOptions,
       responseFormats: ["mp3", "opus"],
-      defaultResponseFormat: "mp3",
       voiceCompatibleResponseFormats: ["opus"],
       baseUrlPolicy: { kind: "trim-trailing-slash" },
       readExtraConfig: (raw) =>
@@ -295,66 +274,24 @@ describe("createOpenAiCompatibleSpeechProvider", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("rejects JSON success bodies from TTS responses as malformed audio", async () => {
+  it.each([
+    {
+      name: "JSON success bodies",
+      response: () =>
+        new Response(JSON.stringify({ error: "not audio" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    },
+    {
+      name: "empty successful bodies",
+      response: () => new Response(new Uint8Array(), { status: 200 }),
+    },
+  ])("rejects $name as malformed audio", async ({ response }) => {
     const release = vi.fn(async () => {});
-    postJsonRequestMock.mockResolvedValue({
-      response: new Response(JSON.stringify({ error: "not audio" }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-      release,
-    });
+    postJsonRequestMock.mockResolvedValue({ response: response(), release });
     vi.stubEnv("DEMO_API_KEY", "sk-env");
-
-    const provider = createOpenAiCompatibleSpeechProvider({
-      id: "demo",
-      label: "Demo",
-      autoSelectOrder: 40,
-      models: ["demo-tts"],
-      voices: ["alloy"],
-      defaultModel: "demo-tts",
-      defaultVoice: "alloy",
-      defaultBaseUrl: "https://example.test/v1",
-      envKey: "DEMO_API_KEY",
-      responseFormats: ["mp3"],
-      defaultResponseFormat: "mp3",
-      voiceCompatibleResponseFormats: ["mp3"],
-    });
-
-    await expect(
-      provider.synthesize({
-        text: "hello",
-        cfg: {} as never,
-        providerConfig: {},
-        target: "voice-note",
-        timeoutMs: 1234,
-      }),
-    ).rejects.toThrow("Demo TTS API error: malformed audio response");
-    expect(release).toHaveBeenCalledOnce();
-  });
-
-  it("rejects empty successful TTS bodies as malformed audio", async () => {
-    const release = vi.fn(async () => {});
-    postJsonRequestMock.mockResolvedValue({
-      response: new Response(new Uint8Array(), { status: 200 }),
-      release,
-    });
-    vi.stubEnv("DEMO_API_KEY", "sk-env");
-
-    const provider = createOpenAiCompatibleSpeechProvider({
-      id: "demo",
-      label: "Demo",
-      autoSelectOrder: 40,
-      models: ["demo-tts"],
-      voices: ["alloy"],
-      defaultModel: "demo-tts",
-      defaultVoice: "alloy",
-      defaultBaseUrl: "https://example.test/v1",
-      envKey: "DEMO_API_KEY",
-      responseFormats: ["mp3"],
-      defaultResponseFormat: "mp3",
-      voiceCompatibleResponseFormats: ["mp3"],
-    });
+    const provider = createOpenAiCompatibleSpeechProvider(demoOptions);
 
     await expect(
       provider.synthesize({

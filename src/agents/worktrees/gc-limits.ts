@@ -21,9 +21,7 @@ export async function enforceWorktreeCleanupLimits(
     progress.recordLimitState(true);
     return [];
   }
-  const live = (await readRegistryWorktrees(params.env)).filter(
-    (record) => record.removedAt === undefined,
-  );
+  const live = await readRegistryWorktrees(params.env, { liveOnly: true });
   const sizes = new Map<string, number>();
   let totalBytes = 0;
   let inventoryComplete = true;

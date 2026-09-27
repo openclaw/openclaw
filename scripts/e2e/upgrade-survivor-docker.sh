@@ -155,6 +155,7 @@ if [ "$UPGRADE_TARGET_TRAIN" = extended-stable ]; then
   cp -R "$UPGRADE_SCENARIO_DIR/." "$UPGRADE_SCENARIO_STAGE/"
   cp "$UPGRADE_DIAGNOSTICS" "$UPGRADE_SCENARIO_STAGE/diagnostics.mjs"
   cp "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/backup-rollback-summary.mjs" "$UPGRADE_SCENARIO_STAGE/backup-rollback-summary.mjs"
+  cp "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/plugin-policy-summary.mjs" "$UPGRADE_SCENARIO_STAGE/plugin-policy-summary.mjs"
   chmod 0755 "$UPGRADE_SCENARIO_STAGE"
   UPGRADE_SCENARIO_ARGS+=(
     -v "$UPGRADE_SCENARIO_STAGE:/app/scripts/e2e/lib/upgrade-survivor:ro"
@@ -310,6 +311,11 @@ prepare_limit_summary() {
   )
 }
 DOCKER_RUN_USER_ARGS=()
+UPGRADE_ENTRYPOINT=()
+if [ "$UPDATE_RESTART_MODE" = auto-auth ]; then
+  DOCKER_RUN_USER_ARGS+=(--user root --cgroupns private --cap-add SYS_ADMIN --security-opt apparmor=unconfined)
+  UPGRADE_ENTRYPOINT=(bash /tmp/openclaw-release-harness/scripts/e2e/lib/upgrade-survivor/cgroup-entrypoint.sh)
+fi
 PROBE_ENV_ARGS=(
   -e OPENCLAW_UPGRADE_SURVIVOR_PROBE_TIMEOUT_MS="$PROBE_TIMEOUT_MS"
   -e OPENCLAW_UPGRADE_SURVIVOR_PROBE_ATTEMPT_TIMEOUT_MS="$PROBE_ATTEMPT_TIMEOUT_MS"
@@ -460,6 +466,10 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
   fi
 
   docker_e2e_build_or_reuse "$IMAGE_NAME" upgrade-survivor "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
+  if [ "$UPDATE_RESTART_MODE" = auto-auth ]; then
+    # Have Docker load its default AppArmor profile before the setup process reattaches it.
+    docker_e2e_docker_cmd run --rm --network none --entrypoint true "$IMAGE_NAME"
+  fi
 
   echo "Running published upgrade survivor Docker E2E..."
   # Keep candidate images from selecting an older copy of the trusted release runner.
@@ -501,6 +511,7 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
     ${DOCKER_E2E_PACKAGE_ARGS[@]+"${DOCKER_E2E_PACKAGE_ARGS[@]}"} \
     ${DOCKER_RUN_USER_ARGS[@]+"${DOCKER_RUN_USER_ARGS[@]}"} \
     "$IMAGE_NAME" \
+    ${UPGRADE_ENTRYPOINT[@]+"${UPGRADE_ENTRYPOINT[@]}"} \
     timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" bash /tmp/openclaw-upgrade-survivor-run.sh
   run_completed="1"
   exit 0
@@ -530,6 +541,9 @@ prepare_diagnostics_capture
 prepare_limit_summary
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" upgrade-survivor "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
+if [ "$UPDATE_RESTART_MODE" = auto-auth ]; then
+  docker_e2e_docker_cmd run --rm --network none --entrypoint true "$IMAGE_NAME"
+fi
 
 echo "Running upgrade survivor Docker E2E..."
 docker_e2e_run_with_harness \
@@ -559,6 +573,7 @@ docker_e2e_run_with_harness \
   ${DOCKER_E2E_PACKAGE_ARGS[@]+"${DOCKER_E2E_PACKAGE_ARGS[@]}"} \
   ${DOCKER_RUN_USER_ARGS[@]+"${DOCKER_RUN_USER_ARGS[@]}"} \
   "$IMAGE_NAME" \
+  ${UPGRADE_ENTRYPOINT[@]+"${UPGRADE_ENTRYPOINT[@]}"} \
  timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" bash -lc 'set -euo pipefail
  source scripts/lib/openclaw-e2e-instance.sh
  source scripts/e2e/lib/prepublish-plugin-registry.sh
@@ -685,56 +700,8 @@ configure_clawhub_fixture() {
 
    if [ "${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}" = "configured-plugin-installs" ]; then
     mkdir -p "$package_dir"
-    FIXTURE_PACKAGE_DIR="$package_dir" node <<'"'"'NODE'"'"'
-const fs = require("node:fs");
-const path = require("node:path");
-const root = process.env.FIXTURE_PACKAGE_DIR;
-fs.mkdirSync(root, { recursive: true });
-fs.writeFileSync(
-  path.join(root, "package.json"),
-  `${JSON.stringify(
-    {
-      name: "@openclaw/brave-plugin",
-      version: "2026.5.2",
-      openclaw: { extensions: ["./index.js"] },
-    },
-    null,
-    2,
-  )}\n`,
-);
-fs.writeFileSync(
-  path.join(root, "openclaw.plugin.json"),
-  `${JSON.stringify(
-    {
-      id: "brave",
-      activation: { onStartup: false },
-      setup: { providers: [{ id: "brave", envVars: ["BRAVE_API_KEY"] }] },
-      contracts: { webSearchProviders: ["brave"] },
-      configSchema: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          webSearch: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              apiKey: { type: ["string", "object"] },
-              mode: { type: "string", enum: ["web", "llm-context"] },
-              baseUrl: { type: ["string", "object"] },
-            },
-          },
-        },
-      },
-    },
-    null,
-    2,
-  )}\n`,
-);
-fs.writeFileSync(
-  path.join(root, "index.js"),
-  `module.exports = { id: "brave", name: "Brave Fixture", register() {} };\n`,
-);
-NODE
+    FIXTURE_PACKAGE_DIR="$package_dir" FIXTURE_PACKAGE_VERSION="2026.5.2" \
+      node /tmp/openclaw-release-harness/scripts/e2e/lib/fixture.mjs brave-plugin
     tar -czf "$tarball" -C "$fixture_root" package
     registry_args+=("@openclaw/brave-plugin" "2026.5.2" "$tarball")
   fi

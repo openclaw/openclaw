@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi, type MockInstance } from "vitest";
 import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 import * as gatewayWorkAdmission from "../process/gateway-work-admission.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createManagedTaskFlow, getTaskFlowById } from "./task-flow-registry.js";
 import { resetTaskFlowRegistryForTests } from "./task-flow-registry.test-support.js";
 import { getTaskById } from "./task-registry.js";
@@ -42,7 +43,7 @@ export function registerTaskRegistryScheduledMaintenanceTests() {
         lastEventAt: now - 10 * 60_000,
       });
 
-      startTaskRegistryMaintenance();
+      startTaskRegistryMaintenance(createTestGatewayScheduler("fake-timers"));
       await stopTaskRegistryMaintenance();
 
       await vi.advanceTimersByTimeAsync(5_000);
@@ -78,7 +79,7 @@ export function registerTaskRegistryScheduledMaintenanceTests() {
           "runWithGatewayIndependentRootWorkAdmission",
         );
         try {
-          startTaskRegistryMaintenance();
+          startTaskRegistryMaintenance(createTestGatewayScheduler("fake-timers"));
           await vi.advanceTimersByTimeAsync(5_000);
           await waitForScheduledMaintenance(admissions);
           expect(getTaskFlowById(flow.flowId)).toBeUndefined();
@@ -107,7 +108,7 @@ export function registerTaskRegistryScheduledMaintenanceTests() {
         "runWithGatewayIndependentRootWorkAdmission",
       );
       try {
-        startTaskRegistryMaintenance();
+        startTaskRegistryMaintenance(createTestGatewayScheduler("fake-timers"));
         await vi.advanceTimersByTimeAsync(5_000);
         expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBe(1);
 

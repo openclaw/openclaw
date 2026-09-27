@@ -3,6 +3,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { validateDiagnosticsHeapProfileParams } from "../../../packages/gateway-protocol/src/schema/diagnostics.js";
+import { getTrackedWorkerPoolSnapshot } from "../../infra/worker-cpu.js";
 import type { DiagnosticProfileOutcome } from "../../logging/diagnostic-profile.js";
 import {
   getDiagnosticStabilitySnapshot,
@@ -87,7 +88,11 @@ export const diagnosticsHandlers: GatewayRequestHandlers = {
     });
   },
   "diagnostics.lanes": ({ respond }) => {
-    respond(true, { ts: Date.now(), ...getCommandLaneDiagnostics() }, undefined);
+    respond(
+      true,
+      { ts: Date.now(), ...getCommandLaneDiagnostics(), ...getTrackedWorkerPoolSnapshot() },
+      undefined,
+    );
   },
   "diagnostics.stability": async ({ params, respond }) => {
     try {

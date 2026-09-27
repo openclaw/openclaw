@@ -14,15 +14,12 @@ export {
   markTaskRunningByRunId,
   markTaskTerminalById,
   recordTaskProgressByRunId,
-  setTaskCleanupAfterById,
   setTaskRunDeliveryStatusByRunId,
   updateTaskNotifyPolicyById,
 } from "./task-registry-record-api.js";
 export {
-  deleteTaskRecordById,
   findTaskByRunId,
   getTaskById,
-  hasActiveTaskForChildSessionKey,
   listFreshTasksForOwnerKey,
   listTaskRecordPage,
   listTaskRecords,

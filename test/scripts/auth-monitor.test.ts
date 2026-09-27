@@ -1,9 +1,11 @@
 // Auth monitor tests cover optional systemd and Termux helper script contracts.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const AUTH_MONITOR_PATH = "scripts/auth-monitor.sh";
 const MOBILE_REAUTH_PATH = "scripts/mobile-reauth.sh";
@@ -21,7 +23,7 @@ function readScript(path: string): string {
 }
 
 function createAuthMonitorHarness() {
-  const home = mkdtempSync(join(tmpdir(), "openclaw-auth-monitor-"));
+  const home = tempDirs.make("openclaw-auth-monitor-");
   const binDir = join(home, "bin");
   const curlLog = join(home, "curl.log");
   const openclawLog = join(home, "openclaw.log");
@@ -51,7 +53,6 @@ function createAuthMonitorHarness() {
     home,
     openclawLog,
     stateFile,
-    cleanup: () => rmSync(home, { recursive: true, force: true }),
     enablePhoneAuth: () => {
       const expiresAt = Date.now() + 90 * 60 * 1000;
       mkdirSync(join(home, ".claude"), { recursive: true });
@@ -139,86 +140,70 @@ describe("auth monitoring scripts", () => {
   it("retries after ntfy rejects a notification", () => {
     const harness = createAuthMonitorHarness();
 
-    try {
-      const rejected = harness.run({ curlExitCode: 22 });
-      expect(rejected.status).toBe(1);
-      expect(existsSync(harness.stateFile)).toBe(false);
-      expect(rejected.stderr).toContain("No notification delivered; cooldown not updated");
+    const rejected = harness.run({ curlExitCode: 22 });
+    expect(rejected.status).toBe(1);
+    expect(existsSync(harness.stateFile)).toBe(false);
+    expect(rejected.stderr).toContain("No notification delivered; cooldown not updated");
 
-      const retry = harness.run();
-      expect(retry.stdout).toContain("Sending via ntfy.sh to test-topic...");
-      expect(retry.stdout).not.toContain("Skipping notification (sent recently)");
-      expect(readFileSync(harness.curlLog, "utf8").trim().split("\n")).toHaveLength(2);
-    } finally {
-      harness.cleanup();
-    }
+    const retry = harness.run();
+    expect(retry.stdout).toContain("Sending via ntfy.sh to test-topic...");
+    expect(retry.stdout).not.toContain("Skipping notification (sent recently)");
+    expect(readFileSync(harness.curlLog, "utf8").trim().split("\n")).toHaveLength(2);
   });
 
   it("rate-limits after ntfy accepts a notification", () => {
     const harness = createAuthMonitorHarness();
 
-    try {
-      const accepted = harness.run();
-      expect(accepted.status).toBe(1);
-      expect(existsSync(harness.stateFile)).toBe(true);
+    const accepted = harness.run();
+    expect(accepted.status).toBe(1);
+    expect(existsSync(harness.stateFile)).toBe(true);
 
-      const throttled = harness.run();
-      expect(throttled.stdout).toContain("Skipping notification (sent recently)");
-      expect(readFileSync(harness.curlLog, "utf8").trim().split("\n")).toHaveLength(1);
-    } finally {
-      harness.cleanup();
-    }
+    const throttled = harness.run();
+    expect(throttled.stdout).toContain("Skipping notification (sent recently)");
+    expect(readFileSync(harness.curlLog, "utf8").trim().split("\n")).toHaveLength(1);
   });
 
   it("rate-limits after any configured notification channel succeeds", () => {
     const harness = createAuthMonitorHarness();
     harness.enablePhoneAuth();
 
-    try {
-      const delivered = harness.run({
-        curlExitCode: 22,
-        notifyPhone: "+15550000000",
-      });
-      expect(delivered.status).toBe(0);
-      expect(existsSync(harness.stateFile)).toBe(true);
+    const delivered = harness.run({
+      curlExitCode: 22,
+      notifyPhone: "+15550000000",
+    });
+    expect(delivered.status).toBe(0);
+    expect(existsSync(harness.stateFile)).toBe(true);
 
-      const throttled = harness.run({
-        curlExitCode: 22,
-        notifyPhone: "+15550000000",
-      });
-      expect(throttled.stdout).toContain("Skipping notification (sent recently)");
-      expect(readFileSync(harness.openclawLog, "utf8").trim().split("\n")).toHaveLength(1);
-      expect(readFileSync(harness.curlLog, "utf8").trim().split("\n")).toHaveLength(1);
-    } finally {
-      harness.cleanup();
-    }
+    const throttled = harness.run({
+      curlExitCode: 22,
+      notifyPhone: "+15550000000",
+    });
+    expect(throttled.stdout).toContain("Skipping notification (sent recently)");
+    expect(readFileSync(harness.openclawLog, "utf8").trim().split("\n")).toHaveLength(1);
+    expect(readFileSync(harness.curlLog, "utf8").trim().split("\n")).toHaveLength(1);
   });
 
   it("retries when all configured notification channels fail", () => {
     const harness = createAuthMonitorHarness();
     harness.enablePhoneAuth();
 
-    try {
-      const failed = harness.run({
-        curlExitCode: 22,
-        notifyPhone: "+15550000000",
-        openclawExitCode: 1,
-      });
-      expect(failed.status).toBe(0);
-      expect(existsSync(harness.stateFile)).toBe(false);
-      expect(failed.stderr).toContain("No notification delivered; cooldown not updated");
+    const failed = harness.run({
+      curlExitCode: 22,
+      notifyPhone: "+15550000000",
+      openclawExitCode: 1,
+    });
+    expect(failed.status).toBe(0);
+    expect(existsSync(harness.stateFile)).toBe(false);
+    expect(failed.stderr).toContain("No notification delivered; cooldown not updated");
 
-      const retry = harness.run({
-        curlExitCode: 22,
-        notifyPhone: "+15550000000",
-        openclawExitCode: 1,
-      });
-      expect(retry.stdout).not.toContain("Skipping notification (sent recently)");
-      expect(readFileSync(harness.openclawLog, "utf8").trim().split("\n")).toHaveLength(2);
-      expect(readFileSync(harness.curlLog, "utf8").trim().split("\n")).toHaveLength(2);
-    } finally {
-      harness.cleanup();
-    }
+    const retry = harness.run({
+      curlExitCode: 22,
+      notifyPhone: "+15550000000",
+      openclawExitCode: 1,
+    });
+    expect(retry.stdout).not.toContain("Skipping notification (sent recently)");
+    expect(readFileSync(harness.openclawLog, "utf8").trim().split("\n")).toHaveLength(2);
+    expect(readFileSync(harness.curlLog, "utf8").trim().split("\n")).toHaveLength(2);
   });
 
   it("keeps mobile reauth wired to local auth status and Claude token setup", () => {

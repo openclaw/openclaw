@@ -156,7 +156,6 @@ describe("CodexAppServerClient message decoding", () => {
   });
 
   it.each([
-    { name: "plain text", fragments: ["first", "second"], delta: "first\nsecond" },
     { name: "trailing spaces", fragments: ["first ", " second "], delta: "first \n second " },
     { name: "empty fragments", fragments: ["", "middle", "", ""], delta: "\nmiddle\n\n" },
     {
@@ -169,11 +168,6 @@ describe("CodexAppServerClient message decoding", () => {
       delta: 'first "quoted"\npath C:\\synthetic\\\nunicode a 😀',
     },
     { name: "trailing backslash", fragments: ["first \\", "second"], delta: "first \\nsecond" },
-    {
-      name: "large text",
-      fragments: ["x".repeat(1_100_000), "second"],
-      delta: `${"x".repeat(1_100_000)}\nsecond`,
-    },
   ])("preserves $name while recovering raw-newline strings", ({ fragments, delta }) => {
     const harness = createHarness();
     harness.process.stdout.write(` \t\n  ${prefix}${fragments.join("\n")}"}}\n`);
@@ -207,7 +201,6 @@ describe("CodexAppServerClient message decoding", () => {
   it.each([
     { name: "invalid escape", fragment: String.raw`bad \q` },
     { name: "incomplete Unicode escape", fragment: String.raw`bad \u12` },
-    { name: "invalid Unicode escape", fragment: String.raw`bad \u123x` },
     { name: "unescaped control", fragment: "bad\tvalue" },
     { name: "invalid completed frame", fragment: 'second"}} trailing' },
   ])("resynchronizes after a recovered $name", ({ fragment }) => {

@@ -17,6 +17,7 @@ import type { upsertNativeWebPushSubscription } from "../infra/push-web-store.na
 import type { WebPushWorkerOperations } from "../infra/push-web-store.worker-contract.js";
 import type { prepareWebPushNotificationSender } from "../infra/push-web.js";
 import { SQLITE_WORKER_MAX_REQUESTS_PER_WORKER } from "../infra/sqlite-worker-broker.js";
+import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
   closeOpenClawStateDatabaseByPathAsync,
@@ -25,12 +26,7 @@ import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-
 import { createEventWebPushDelivery } from "./event-web-push.js";
 
 type PreparedSender = Awaited<ReturnType<typeof prepareWebPushNotificationSender>>;
-type WebPushCommand = {
-  [Type in keyof WebPushWorkerOperations]: {
-    type: Type;
-    input: WebPushWorkerOperations[Type]["input"];
-  };
-}[keyof WebPushWorkerOperations];
+type WebPushCommand = SqliteWorkerCommand<WebPushWorkerOperations>;
 
 const mocks = vi.hoisted(() => ({
   captureContext: vi.fn(),
@@ -77,12 +73,21 @@ vi.mock("../infra/device-pairing-worker.js", () => ({
 vi.mock("../infra/device-pairing.js", () => ({
   hasEffectivePairedDeviceRole: () => true,
 }));
-vi.mock("../state/user-profiles.js", () => ({
-  resolveUserProfileId: (profileId: string) => profileId,
+vi.mock("../state/user-profile-list.js", () => ({
+  prepareUserProfileCatalog: async () => ({
+    readCurrentIdentity: (profileId: string) => ({
+      profileId,
+      aliases: new Set([profileId]),
+      role: null,
+    }),
+    release: () => {},
+  }),
 }));
-vi.mock("../state/user-preferences.js", () => ({ getUserPreferences: () => ({}) }));
+vi.mock("../state/user-preferences.js", () => ({
+  getUserPreferenceValues: async () => ({ values: new Map(), isCurrent: () => true }),
+}));
 vi.mock("./operator-role-policy.js", () => ({
-  resolveOperatorRolePolicyForProfile: () => undefined,
+  resolveOperatorRolePolicyForAssignment: () => undefined,
 }));
 vi.mock("./session-sharing.js", () => ({ canReceiveSessionEvent: () => true }));
 
@@ -93,8 +98,8 @@ function mockCapturedContext() {
   const databasePath = `${stateDir}/openclaw.sqlite`;
   const context: OpenClawStateWorkerContext = {
     environment: { OPENCLAW_STATE_DIR: stateDir },
-    coordinatorRuntime: { directory: "/synthetic/webpush-coordinator", keepAlive: false },
     admission: {
+      coordinationKey: `path:${databasePath}`,
       databasePath,
       identity: { key: `path:${databasePath}`, canonicalPath: databasePath },
       assertCurrent: () => {},
@@ -389,7 +394,6 @@ it("canonical close seals retained and new admissions and joins the held binding
   const databasePath = path.join(stateDir, "state.sqlite");
   mocks.captureContext.mockImplementation((): OpenClawStateWorkerContext => ({
     environment: { OPENCLAW_STATE_DIR: stateDir },
-    coordinatorRuntime: { directory: stateDir, keepAlive: false },
     admission: captureOpenClawStateDatabaseReadAdmission(databasePath),
   }));
   const start = vi.fn();

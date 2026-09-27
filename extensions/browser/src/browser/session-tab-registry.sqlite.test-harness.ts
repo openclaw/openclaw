@@ -1,5 +1,7 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   OpenKeyedStoreOptions,
+  PluginStateKeyedStore,
   PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
@@ -8,19 +10,23 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, vi } from "vitest";
 import { registerBrowserPlugin } from "../../plugin-registration.js";
 import type { OpenClawPluginApi } from "../../runtime-api.js";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
-import type { CloseTrackedCdpTargetResult } from "./cdp.helpers.js";
+import type { closeTrackedCdpTarget } from "./cdp.helpers.js";
 import type { RegistryModule } from "./session-tab-registry.sqlite.test-helpers.js";
+import { ensureBrowserSessionTabStoreReady } from "./session-tab-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const cdpMocks = vi.hoisted(() => ({
-  closeTrackedCdpTarget: vi.fn<() => Promise<CloseTrackedCdpTargetResult>>(),
+  closeTrackedCdpTarget: vi.fn<typeof closeTrackedCdpTarget>(),
 }));
 
 export { cdpMocks };
@@ -58,11 +64,11 @@ export function installSessionTabRegistrySqliteHarness() {
     });
   }
 
-  function installRuntime(
-    openSyncKeyedStore: (options: OpenKeyedStoreOptions) => PluginStateSyncKeyedStore<unknown> = (
+  async function installRuntime(
+    openKeyedStore: (options: OpenKeyedStoreOptions) => PluginStateKeyedStore<unknown> = (
       options,
-    ) => createPluginStateSyncKeyedStoreForTests("browser", options),
-  ): void {
+    ) => createPluginStateKeyedStoreForTests("browser", options),
+  ): Promise<void> {
     registerBrowserPlugin(
       createTestPluginApi({
         id: "browser",
@@ -72,13 +78,12 @@ export function installSessionTabRegistrySqliteHarness() {
         config: {},
         runtime: {
           state: {
-            openKeyedStore: (options: OpenKeyedStoreOptions) =>
-              createPluginStateKeyedStoreForTests("browser", options),
-            openSyncKeyedStore,
+            openKeyedStore,
           },
         } as unknown as OpenClawPluginApi["runtime"],
       }),
     );
+    await ensureBrowserSessionTabStoreReady();
   }
 
   async function freshRegistry(label: string): Promise<RegistryModule> {
@@ -89,14 +94,20 @@ export function installSessionTabRegistrySqliteHarness() {
     );
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
     clearRuntimeConfigSnapshot();
     clearProcessLocalTabState();
     process.env.OPENCLAW_STATE_DIR = tempDirs.make("openclaw-browser-tabs-");
     resetPluginStateStoreForTests();
-    installRuntime();
+    await installRuntime();
     openStore().clear();
-    cdpMocks.closeTrackedCdpTarget.mockReset().mockResolvedValue({ status: "closed" });
+    cdpMocks.closeTrackedCdpTarget
+      .mockReset()
+      .mockImplementation(async ({ closeIfCurrent }) =>
+        closeIfCurrent
+          ? await closeIfCurrent(async () => ({ status: "closed" }))
+          : { status: "closed" },
+      );
   });
 
   afterEach(() => {
@@ -111,4 +122,20 @@ export function installSessionTabRegistrySqliteHarness() {
   });
 
   return { openStore, installRuntime, freshRegistry };
+}
+
+export function setBrowserProfileConfig(): void {
+  const config = {
+    browser: {
+      defaultProfile: "remote",
+      profiles: {
+        remote: {
+          driver: "existing-session",
+          cdpUrl: "http://127.0.0.1:9222",
+          color: "#123456",
+        },
+      },
+    },
+  } satisfies OpenClawConfig;
+  setRuntimeConfigSnapshot(config, config);
 }

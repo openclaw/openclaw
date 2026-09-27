@@ -1,8 +1,10 @@
 /** Gateway-backed archive and delete commands for stored sessions. */
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type {
   PreservedSessionWorktree,
   SessionRow,
   SessionsDeleteResult,
+  SessionsPatchResult,
   WorktreePreservationReason,
 } from "../../packages/gateway-protocol/src/index.js";
 import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
@@ -54,12 +56,6 @@ type SessionsDescribeResult = {
   session: SessionsListRow | null;
 };
 
-type SessionsPatchResult = {
-  ok?: boolean;
-  key?: string;
-  entry?: { archivedAt?: number };
-};
-
 type SessionsLifecycleRpcOptions = Parameters<typeof callGatewayFromCliWithTransport>[1];
 
 function resolveLifecycleAgentId(rawAgent: string | undefined): string | undefined {
@@ -96,24 +92,36 @@ async function listRequestedSessions(
   keys: readonly string[],
   agent: string | undefined,
   rpcOptions: SessionsLifecycleRpcOptions,
-): Promise<Map<string, SessionsListRow>> {
-  const found = new Map<string, SessionsListRow>();
-  for (const key of new Set(keys)) {
-    const response = (await callGatewayFromCliWithTransport(
-      "sessions.describe",
-      rpcOptions,
-      { key, ...(agent ? { agentId: agent } : {}) },
-      { defaultTimeoutMs: 30_000 },
-    )) as SessionsDescribeResult;
-    if (!response || !("session" in response)) {
-      throw new Error("Gateway returned an invalid sessions.describe response.");
+) {
+  const targets: Array<{ index: number; session: SessionsListRow }> = [];
+  const results = keys.map((key): SessionsLifecycleResult | undefined =>
+    notFoundResult(key, agent),
+  );
+  for (const [index, key] of keys.entries()) {
+    if (!key) {
+      continue;
     }
-    if (response.session) {
-      found.set(key, response.session);
+    try {
+      const response = (await callGatewayFromCliWithTransport(
+        "sessions.describe",
+        rpcOptions,
+        { key, ...(agent ? { agentId: agent } : {}) },
+        { defaultTimeoutMs: 30_000 },
+      )) as SessionsDescribeResult;
+      if (!response || !("session" in response)) {
+        throw new Error("Gateway returned an invalid sessions.describe response.");
+      }
+      if (response.session) {
+        targets.push({ index, session: response.session });
+        results[index] = undefined;
+      }
+    } catch (error) {
+      rethrowExpectedCliError(error);
+      results[index] = { key, ok: false, status: "failed", error: formatErrorMessage(error) };
     }
   }
 
-  return found;
+  return { targets, results };
 }
 
 function outputLifecycleResults(
@@ -194,7 +202,7 @@ async function runSessionsLifecycleCommand(
   opts: SessionsLifecycleCliOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  const keys = opts.keys.map((key) => key.trim());
+  const keys = uniqueStrings(opts.keys.map((key) => key.trim()));
   const rpcOptions: SessionsLifecycleRpcOptions = {
     url: opts.url,
     token: opts.token,
@@ -202,13 +210,13 @@ async function runSessionsLifecycleCommand(
     timeout: opts.timeout,
     json: opts.json,
   };
-  let sessions: Map<string, SessionsListRow>;
+  let requested: Awaited<ReturnType<typeof listRequestedSessions>>;
   let agent: string | undefined;
   try {
     // The not-found hint points at `sessions list --agent <id>`, which rejects an unconfigured id
     // locally. Validating here keeps that suggestion runnable instead of handing back a dead end.
     agent = resolveLifecycleAgentId(opts.agent);
-    sessions = await listRequestedSessions(keys.filter(Boolean), agent, rpcOptions);
+    requested = await listRequestedSessions(keys, agent, rpcOptions);
   } catch (error) {
     rethrowExpectedCliError(error);
     const message = formatErrorMessage(error);
@@ -222,15 +230,9 @@ async function runSessionsLifecycleCommand(
     return;
   }
 
-  const results = keys.map((key): SessionsLifecycleResult | undefined =>
-    key && sessions.has(key) ? undefined : notFoundResult(key, agent),
-  );
+  const { targets, results } = requested;
   const deletedSessions = new Map<SessionsLifecycleResult, SessionsListRow>();
-  const listedTargets = keys.flatMap((key, index) => {
-    const session = sessions.get(key);
-    return session ? [{ index, session }] : [];
-  });
-  const validTargets = listedTargets.filter(({ index, session }) => {
+  const validTargets = targets.filter(({ index, session }) => {
     const needsMutation = !opts.dryRun && !(operation === "archive" && session.archived === true);
     if (!needsMutation || session.sessionId) {
       return true;
@@ -303,7 +305,7 @@ async function runSessionsLifecycleCommand(
           },
           { defaultTimeoutMs: SESSION_ARCHIVE_REQUEST_TIMEOUT_MS },
         )) as SessionsPatchResult;
-        if (response?.ok !== true || response.entry?.archivedAt === undefined) {
+        if (!response?.ok || response.entry?.archivedAt === undefined) {
           throw new Error("Gateway did not confirm that the session was archived.");
         }
         results[index] = { key: response.key ?? session.key, ok: true, status: "archived" };

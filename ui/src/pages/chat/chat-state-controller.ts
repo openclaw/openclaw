@@ -4,10 +4,7 @@ import type { ChatPendingInputsPage } from "../../../../packages/gateway-protoco
 import { registerControlUiReloadGuard } from "../../app/document-reload-guard.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import {
-  parseStoredChatOutboxScope,
-  type StoredChatOutboxScope,
-} from "../../lib/chat/outbox-store.ts";
+import { parseStoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { releaseDisplacedChatAttachmentPayloads } from "./attachment-payload-store.ts";
@@ -28,7 +25,6 @@ import {
   isChatComposerOwnerCurrent,
   isIncognitoComposerScope,
 } from "./composer-persistence-state.ts";
-import type { ChatComposerPersistResult } from "./composer-persistence-state.ts";
 import { ChatComposerPersistence, markChatComposerEdit } from "./composer-persistence.ts";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
 import type { AfterCommitEffect, RenderLifecycle } from "./render-lifecycle.ts";
@@ -40,7 +36,7 @@ type ChatRenderLifecycleScope = {
 
 export class ChatStateController<TState extends ChatPageHost> implements ReactiveController {
   private attachmentReadsValue: ChatAttachmentReadLifecycle;
-  private readonly composerPersistence: ChatComposerPersistence;
+  readonly composerPersistence: ChatComposerPersistence;
   private stateValue: TState | undefined;
   private privateDraftReview: { controller: AbortController; isCurrent: () => boolean } | undefined;
   private previousChatLoading = false;
@@ -236,6 +232,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
         state.chatMessage ||
         state.chatAttachments.length ||
         state.chatGoalDraftMode ||
+        state.chatReplyTarget ||
         state.chatMentions?.length ||
         this.attachmentReads.pendingReads,
       )
@@ -251,6 +248,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
           fallback.message ||
           fallback.attachments.length ||
           fallback.goalMode ||
+          fallback.replyTarget ||
           fallback.mentions?.length,
         )
       );
@@ -271,6 +269,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     const chatMessage = fallback?.[1].message ?? state.chatMessage;
     const chatMentions = fallback ? fallback[1].mentions : state.chatMentions;
     const chatGoalDraftMode = fallback ? fallback[1].goalMode : state.chatGoalDraftMode;
+    const chatReplyTarget = fallback ? fallback[1].replyTarget : state.chatReplyTarget;
     const attachments = [...(fallback?.[1].attachments ?? state.chatAttachments)];
     const reads = this.attachmentReads;
     const pendingReads = fallback ? 0 : reads.pendingReads;
@@ -288,6 +287,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
           : state.chatMessage === chatMessage &&
             state.chatMentions === chatMentions &&
             state.chatGoalDraftMode === chatGoalDraftMode &&
+            state.chatReplyTarget === chatReplyTarget &&
             this.attachmentReads === reads &&
             reads.pendingReads === pendingReads &&
             state.chatAttachments.length === attachments.length &&
@@ -319,6 +319,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
         reads.abortReads();
         state.chatAttachments = [];
         state.chatGoalDraftMode = null;
+        state.chatReplyTarget = null;
         state.handleChatDraftChange("", []);
       }
       const retained = state.captureComposerRecoveryOwner?.()?.retainedAttachmentIds(attachments);
@@ -578,34 +579,6 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       return;
     }
     scheduleCommittedChatScroll(state, force, state.chatHasAutoScrolled, { contentChanged });
-  }
-
-  restoreComposer(options: { preserveCurrent?: boolean } = {}) {
-    this.composerPersistence.restore(options);
-  }
-
-  startComposerPersistence() {
-    this.composerPersistence.start();
-  }
-
-  pauseComposerPersistence() {
-    this.composerPersistence.stop();
-  }
-
-  persistComposerForEviction(): ChatComposerPersistResult {
-    return this.composerPersistence.persistForRouteSwitchResult();
-  }
-
-  composerScopeForEviction(): StoredChatOutboxScope | null {
-    return this.composerPersistence.scopeForRouteSwitch();
-  }
-
-  get durableComposerScope() {
-    return this.composerPersistence.durableScope;
-  }
-
-  get composerDraftRevision(): number {
-    return this.composerPersistence.draftRevision;
   }
 
   private stopChatEffects() {

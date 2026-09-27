@@ -27,6 +27,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "./session-accessor.js";
+import { withSqliteTranscriptArchiveSession } from "./session-accessor.sqlite-archive-session.js";
 import { publishSessionStateArchives } from "./session-accessor.sqlite-archive-store.js";
 import type {
   TranscriptArchivePublishWorkerMessage,
@@ -96,6 +97,38 @@ describe("SQLite transcript archive sessions", () => {
     await waitForSessionTranscriptIndexReconcilesInStateDir(tempDir);
     await closeOpenClawAgentDatabasesAsync(tempDir);
     await testState.cleanup();
+  });
+
+  it("reads pending archives without waiting for reclamation or writer admission", async ({
+    signal,
+  }) => {
+    const database = openLifecycleTestDatabase(storePath);
+    const options = { agentId: "main", path: database.path, env: testState.env };
+    const archiveEntered = createDeferred();
+    const writerEntered = createDeferred();
+    const release = createDeferred();
+    const archive = runExclusiveSqliteTranscriptArchiveWorker(async () => {
+      archiveEntered.resolve();
+      await release.promise;
+    });
+    const writer = writeAdmission.runOpenClawAgentWriteAdmission(options, async () => {
+      writerEntered.resolve();
+      await release.promise;
+    });
+    try {
+      await Promise.all([archiveEntered.promise, writerEntered.promise]);
+      await expect(
+        withSqliteTranscriptArchiveSession(options, () =>
+          archiveWorker.readPendingSqliteTranscriptArchivesInWorker(
+            { agentId: "main", databasePath: database.path, env: testState.env },
+            signal,
+          ),
+        ),
+      ).resolves.toBe(false);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([archive, writer]);
+    }
   });
 
   it("reuses one archive worker across deletion generations and joins it before returning", async () => {
@@ -492,9 +525,6 @@ describe("SQLite transcript archive sessions", () => {
   );
 
   it.each([
-    { phase: "pending", owner: "agent" },
-    { phase: "pending writer", owner: "agent" },
-    { phase: "pending writer", owner: "state" },
     { phase: "file", owner: "agent" },
     { phase: "prepare", owner: "agent" },
     { phase: "record", owner: "agent" },
@@ -511,11 +541,6 @@ describe("SQLite transcript archive sessions", () => {
       ]);
       await waitForSessionTranscriptIndexReconcilesInStateDir(tempDir);
       const database = openLifecycleTestDatabase(storePath);
-      const options = { agentId: "main", path: database.path, env: testState.env };
-      const probesPending = phase === "pending" || phase === "pending writer";
-      if (probesPending) {
-        await closeOpenClawAgentDatabaseByPathAsync(database.path);
-      }
       const queued = createDeferred();
       const release = createDeferred();
       let blocker: Promise<void> | undefined;
@@ -525,40 +550,7 @@ describe("SQLite transcript archive sessions", () => {
         queued.resolve();
         return pending;
       };
-      const writerEntered = createDeferred();
-      let pendingReadEntered = false;
-      const admit = writeAdmission.runOpenClawAgentWriteAdmission;
-      const writerObserver = vi
-        .spyOn(writeAdmission, "runOpenClawAgentWriteAdmission")
-        .mockImplementation((...args) => {
-          if (phase !== "pending writer" || args[0].path !== database.path || blocker) {
-            return admit(...args);
-          }
-          const [writerOptions, run, reentrant, timing, signal] = args;
-          blocker = admit(writerOptions, () => {
-            writerEntered.resolve();
-            return release.promise;
-          });
-          const pending = admit(
-            writerOptions,
-            () => {
-              pendingReadEntered = true;
-              return run();
-            },
-            reentrant,
-            timing,
-            signal,
-          );
-          queued.resolve();
-          return pending;
-        });
-      const probe = archiveWorker.readPendingSqliteTranscriptArchivesInWorker;
       const publish = archiveWorker.runSqliteTranscriptArchivePublishWorker;
-      const probeObserver = vi
-        .spyOn(archiveWorker, "readPendingSqliteTranscriptArchivesInWorker")
-        .mockImplementation((...args) =>
-          phase === "pending" ? blockBefore(() => probe(...args)) : probe(...args),
-        );
       const publishObserver = vi
         .spyOn(archiveWorker, "runSqliteTranscriptArchivePublishWorker")
         .mockImplementation((...args) =>
@@ -578,13 +570,11 @@ describe("SQLite transcript archive sessions", () => {
             ? blockBefore(() => withWorker(...args))
             : withWorker(...args),
         );
-      const publication = probesPending
-        ? publishSessionStateArchives(options, [])
-        : deleteSessionEntryLifecycle({
-            archiveTranscript: true,
-            storePath,
-            target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-          });
+      const publication = deleteSessionEntryLifecycle({
+        archiveTranscript: true,
+        storePath,
+        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+      });
       const observed = publication.then(
         () => undefined,
         (error: unknown) => error,
@@ -597,10 +587,6 @@ describe("SQLite transcript archive sessions", () => {
             throw new Error("Publication skipped its queue");
           }),
         ]);
-        if (phase === "pending writer") {
-          await writerEntered.promise;
-          expect(pendingReadEntered).toBe(false);
-        }
         close =
           owner === "agent"
             ? closeOpenClawAgentDatabaseByPathAsync(database.path)
@@ -610,14 +596,9 @@ describe("SQLite transcript archive sessions", () => {
       } finally {
         release.resolve();
         await Promise.allSettled([publication, blocker, close]);
-        probeObserver.mockRestore();
         publishObserver.mockRestore();
         metadataObserver.mockRestore();
         metadataQueueObserver.mockRestore();
-        writerObserver.mockRestore();
-      }
-      if (phase === "pending writer") {
-        expect(pendingReadEntered).toBe(false);
       }
     },
   );

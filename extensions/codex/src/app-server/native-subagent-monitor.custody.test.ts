@@ -1,4 +1,8 @@
-import type { AgentHarnessCompletionCustody } from "openclaw/plugin-sdk/agent-harness-task-runtime";
+import {
+  captureAgentHarnessTaskAssignment,
+  type AgentHarnessCompletionCustody,
+  type AgentHarnessTaskRuntime,
+} from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -147,9 +151,9 @@ describe("native assignment completion custody", () => {
         } else if (ending === "caller-revoked") {
           current = false;
         } else if (ending === "dispose") {
-          monitor.dispose();
+          await monitor.dispose();
         } else if (ending === "retire" || ending === "replace") {
-          monitor.retireParent("parent-thread");
+          await monitor.retireParent("parent-thread");
           if (ending === "replace") {
             successor = await registerParent(monitor, "parent-thread", "agent:main:replacement");
           }
@@ -204,7 +208,7 @@ describe("native assignment completion custody", () => {
           }
         }
       } finally {
-        monitor.dispose();
+        await monitor.dispose();
         capture.resolve(source.root);
         nextCapture.resolve(replacement.root);
         await pending.catch(() => {});
@@ -234,12 +238,10 @@ describe("native assignment completion custody", () => {
     try {
       const parent = await registerParent(monitor);
       const failure = new Error("captured task runtime retired");
-      runtime.assertTaskAssignmentSupported.mockImplementationOnce(() => {
-        throw failure;
-      });
+      runtime.prepareTaskRecordsRead.mockRejectedValueOnce(failure);
       await expect(registerParent(monitor)).rejects.toThrow(failure);
       expect(runtime.createAgentHarnessTaskRuntime).toHaveBeenCalledOnce();
-      expect(runtime.assertTaskAssignmentSupported).toHaveBeenCalledTimes(2);
+      expect(runtime.prepareTaskRecordsRead).toHaveBeenCalledTimes(2);
       expect(runtime.createRunningTaskRun).not.toHaveBeenCalled();
       expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
       expect(first.live()).toHaveLength(1);
@@ -247,8 +249,164 @@ describe("native assignment completion custody", () => {
       await parent.unregister();
       expect(first.live()).toHaveLength(0);
     } finally {
-      monitor.dispose();
+      await monitor.dispose();
     }
+  });
+
+  it.each([
+    "tryCreateRunningTaskRunAsync",
+    "recordTaskRunProgressByRunIdAsync",
+    "finalizeTaskRunByRunIdAsync",
+    "prepareTaskRecordsRead",
+    "prepareTaskRunRead",
+    "setDetachedTaskDeliveryStatusByRunIdAsync",
+    "legacy-exact-adapter",
+  ] as const)(
+    "allows ordinary parents but refuses native admission with unsupported %s",
+    async (missing) => {
+      const client = createClient();
+      const runtime = createRuntime();
+      const taskRuntime: AgentHarnessTaskRuntime = runtime.createAgentHarnessTaskRuntime();
+      const legacyAdapterError = new Error(
+        "Detached task runtime must implement transitionTaskAssignment before accepting exact-assignment work. Upgrade the custom task runtime adapter.",
+      );
+      if (missing === "legacy-exact-adapter") {
+        runtime.assertTaskAssignmentSupported.mockImplementation(() => {
+          throw legacyAdapterError;
+        });
+      } else {
+        delete taskRuntime[missing];
+      }
+      const ordinaryCustody = createCustody();
+      const nativeCustody = createCustody();
+      runtime.captureAgentHarnessCompletionCustody
+        .mockResolvedValueOnce(ordinaryCustody.root)
+        .mockResolvedValueOnce(nativeCustody.root);
+      const claimChildThread = vi.fn(async () => undefined);
+      const retainClient = vi.fn(() => vi.fn());
+      const retainParentThread = vi.fn(() => vi.fn());
+      const monitor = new CodexNativeSubagentMonitor(client.client, runtime, {
+        recoveryPollDelaysMs: [],
+        claimChildThread,
+        retainClient,
+        retainParentThread,
+      });
+      let ordinary: Awaited<ReturnType<typeof registerParent>> | undefined;
+      let native: Awaited<ReturnType<typeof registerParent>> | undefined;
+      try {
+        ordinary = await registerParent(monitor);
+        ordinary.bindTurn("ordinary-turn");
+        await ordinary.unregister();
+        expect(ordinaryCustody.live()).toHaveLength(0);
+        native = await registerParent(monitor);
+        native.bindTurn("native-turn");
+        await expect(notifyChildStarted(client)).rejects.toThrow(
+          missing === "legacy-exact-adapter"
+            ? legacyAdapterError
+            : "requires asynchronous exact-assignment persistence. Upgrade the OpenClaw host.",
+        );
+        expect(claimChildThread).not.toHaveBeenCalled();
+        expect(retainClient).not.toHaveBeenCalled();
+        expect(retainParentThread).not.toHaveBeenCalled();
+        expect(runtime.createRunningTaskRun).not.toHaveBeenCalled();
+        expect(runtime.createAgentHarnessTaskEventSink).not.toHaveBeenCalled();
+        expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
+        await native.unregister();
+        expect(nativeCustody.live()).toHaveLength(0);
+      } finally {
+        await ordinary?.unregister();
+        await native?.unregister();
+        await monitor.dispose();
+        ordinaryCustody.root.release();
+        nativeCustody.root.release();
+      }
+    },
+  );
+
+  it("drains registered native activity after delayed task creation binds its receipt", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    const source = createCustody();
+    runtime.captureAgentHarnessCompletionCustody.mockResolvedValue(source.root);
+    const emit = vi.fn();
+    runtime.createAgentHarnessTaskEventSink.mockReturnValue(emit);
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    runtime.tryCreateRunningTaskRunAsync.mockImplementationOnce(async (params) => {
+      entered.resolve();
+      await release.promise;
+      return runtime.tryCreateRunningTaskRun(params);
+    });
+    const monitor = new CodexNativeSubagentMonitor(client.client, runtime, {
+      recoveryPollDelaysMs: [],
+    });
+    const parent = await registerParent(monitor);
+    parent.bindTurn("parent-turn");
+    const creation = client.notify({
+      method: "item/completed",
+      params: {
+        threadId: "parent-thread",
+        turnId: "parent-turn",
+        item: directSpawnItem("v2", "parent-thread", "child-thread"),
+      },
+    });
+    const work: Promise<unknown>[] = [creation];
+    try {
+      await Promise.race([
+        entered.promise,
+        creation.then(() => {
+          throw new Error("Native spawn completed without entering task creation");
+        }),
+      ]);
+      work.push(client.notify(turnStartedNotification("child-turn")));
+      work.push(
+        client.notify({
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "child-thread",
+            turnId: "child-turn",
+            itemId: "assistant-delayed",
+            delta: "Activity accepted while task creation waits",
+          },
+        }),
+      );
+      const drained = parent.unregister().then(() => {
+        expect(emit).toHaveBeenCalledWith(
+          expect.objectContaining({
+            stream: "execution",
+            data: expect.objectContaining({ state: "running", executionId: "child-turn" }),
+          }),
+        );
+        expect(emit).toHaveBeenCalledWith(
+          expect.objectContaining({
+            stream: "assistant",
+            data: expect.objectContaining({ delta: "Activity accepted while task creation waits" }),
+          }),
+        );
+      });
+      work.push(drained);
+      expect(runtime.createRunningTaskRun).not.toHaveBeenCalled();
+      expect(runtime.createAgentHarnessTaskEventSink).not.toHaveBeenCalled();
+      expect(emit).not.toHaveBeenCalled();
+      release.resolve();
+      await Promise.all(work);
+      const created = runtime.createRunningTaskRun.mock.results[0]!.value;
+      expect(source.live()).toHaveLength(1);
+      expect(runtime.createAgentHarnessTaskEventSink).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          runId: "codex-thread:child-thread",
+          expectedTask: captureAgentHarnessTaskAssignment(created),
+          completionCustody: source.live()[0],
+        }),
+      );
+    } finally {
+      release.resolve();
+      await Promise.allSettled(work);
+      await parent.unregister();
+      await monitor.dispose();
+      source.root.release();
+    }
+    expect(source.live()).toHaveLength(0);
   });
 
   it.each(["delivered", "retry", "closed", "exhausted"] as const)(
@@ -273,51 +431,63 @@ describe("native assignment completion custody", () => {
         completionDeliveryRetryDelaysMs: [1],
         completionDeliveryMaxRetries: 1,
       });
-      const owner = await registerParent(monitor);
-      const other = await registerParent(monitor);
-      other.bindTurn("other-turn");
-      // Native spawn evidence can arrive before the admitting turn/start response.
-      await client.notify({
-        method: "item/completed",
-        params: {
-          threadId: "parent-thread",
-          turnId: "parent-turn",
-          item: directSpawnItem("v2", "parent-thread", "child-thread"),
-        },
-      });
-      owner.bindTurn("parent-turn");
-      await owner.unregister();
-      expect(first.live()).toHaveLength(1);
-      await other.unregister();
-      expect(second.live()).toHaveLength(0);
-      await client.notify(nativeCompletionNotification({ agentPath: "/root/child-thread" }));
-      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledOnce();
-      expect(first.holds).toContain(
-        runtime.deliverAgentHarnessTaskCompletion.mock.calls[0]![0].completionCustody,
-      );
-      expect(first.executions.size).toBe(0);
-      if (ending === "closed") {
-        monitor.dispose();
+      try {
+        const owner = await registerParent(monitor);
+        const other = await registerParent(monitor);
+        other.bindTurn("other-turn");
+        // Native spawn evidence can arrive before the admitting turn/start response.
+        await client.notify({
+          method: "item/completed",
+          params: {
+            threadId: "parent-thread",
+            turnId: "parent-turn",
+            item: directSpawnItem("v2", "parent-thread", "child-thread"),
+          },
+        });
+        owner.bindTurn("parent-turn");
+        await owner.unregister();
         expect(first.live()).toHaveLength(1);
-        runtime.deliverAgentHarnessTaskCompletion.mockResolvedValue({
-          delivered: true,
-          path: "direct",
-        });
-        await vi.advanceTimersByTimeAsync(1);
-      } else if (ending === "retry") {
-        runtime.deliverAgentHarnessTaskCompletion.mockResolvedValue({
-          delivered: true,
-          path: "direct",
-        });
-        await vi.advanceTimersByTimeAsync(1);
-      } else if (ending === "exhausted") {
-        await vi.advanceTimersByTimeAsync(1);
-        expect(runtime.setDetachedTaskDeliveryStatusByRunId).toHaveBeenCalledWith(
-          expect.objectContaining({ deliveryStatus: "failed" }),
+        await other.unregister();
+        expect(second.live()).toHaveLength(0);
+        await client.notify(nativeCompletionNotification({ agentPath: "/root/child-thread" }));
+        expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledOnce();
+        expect(first.holds).toContain(
+          runtime.deliverAgentHarnessTaskCompletion.mock.calls[0]![0].completionCustody,
         );
+        expect(first.executions.size).toBe(0);
+        if (ending === "closed") {
+          await monitor.dispose();
+          expect(first.live()).toHaveLength(1);
+          runtime.deliverAgentHarnessTaskCompletion.mockResolvedValue({
+            delivered: true,
+            path: "direct",
+          });
+          await vi.advanceTimersByTimeAsync(1);
+        } else if (ending === "retry") {
+          runtime.deliverAgentHarnessTaskCompletion.mockResolvedValue({
+            delivered: true,
+            path: "direct",
+          });
+          await vi.advanceTimersByTimeAsync(1);
+        } else if (ending === "exhausted") {
+          await vi.advanceTimersByTimeAsync(1);
+          expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(2);
+          expect(first.live()).toHaveLength(1);
+          // Exhausted delivery still owns the asynchronous failed-status settlement.
+          await vi.advanceTimersToNextTimerAsync();
+          await first.released;
+          expect(runtime.setDetachedTaskDeliveryStatusByRunId).toHaveBeenCalledWith(
+            expect.objectContaining({ deliveryStatus: "failed" }),
+          );
+          expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(2);
+        }
+        expect(first.live()).toHaveLength(0);
+      } finally {
+        await monitor.retireParent("parent-thread");
+        await monitor.dispose();
+        first.root.release();
+        second.root.release();
       }
-      expect(first.live()).toHaveLength(0);
-      monitor.dispose();
     },
   );
 
@@ -356,7 +526,7 @@ describe("native assignment completion custody", () => {
     historyRead.resolve(threadRead({ result: "recovered result" }));
     await delivered.promise;
     await source.released;
-    monitor.dispose();
+    await monitor.dispose();
     expect(source.live()).toHaveLength(0);
   });
 
@@ -391,7 +561,7 @@ describe("native assignment completion custody", () => {
     emit.mockImplementation(() => {
       throw new Error("requester lifecycle replaced");
     });
-    expect(() => monitor.dispose()).not.toThrow();
+    await expect(monitor.dispose()).resolves.toBeUndefined();
     expect(source.live()).toHaveLength(0);
     expect(source.executions.size).toBe(0);
   });
@@ -444,7 +614,7 @@ describe("native assignment completion custody", () => {
       );
       await oldReadStarted.promise;
       await parent.unregister();
-      monitor.retireParent("parent-thread");
+      await monitor.retireParent("parent-thread");
       expect(retired.live()).toHaveLength(0);
       const next = await registerParent(
         monitor,
@@ -471,7 +641,7 @@ describe("native assignment completion custody", () => {
       expect(runtime.listTaskRecords()).toEqual([expect.objectContaining(deliveredTask)]);
       expect(replacement.live()).toHaveLength(0);
     } finally {
-      monitor.dispose();
+      await monitor.dispose();
       oldRead.resolve(threadRead());
       nextRead.resolve(threadRead());
     }
@@ -501,14 +671,14 @@ describe("native assignment completion custody", () => {
       expect(source.live()).toHaveLength(1);
       expect(source.executions.size).toBe(1);
       if (ending === "dispose") {
-        monitor.dispose();
+        await monitor.dispose();
       } else {
-        monitor.retireParent("parent-thread");
+        await monitor.retireParent("parent-thread");
       }
       expect(source.live()).toHaveLength(0);
       expect(source.executions.size).toBe(0);
       historyRead.resolve(threadRead({ result: "stale result" }));
-      monitor.dispose();
+      await monitor.dispose();
       expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
     },
   );
@@ -552,7 +722,7 @@ describe("native assignment completion custody", () => {
     );
     await parent.unregister();
     expect(source.live()).toHaveLength(2);
-    monitor.dispose();
+    await monitor.dispose();
     expect(source.live()).toHaveLength(0);
   });
 
@@ -591,7 +761,7 @@ describe("native assignment completion custody", () => {
       expect(source.live()).toHaveLength(0);
       expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
     } finally {
-      monitor.dispose();
+      await monitor.dispose();
       historyRead.resolve(threadRead({ childThreadId: "foreign-child" }));
     }
   });

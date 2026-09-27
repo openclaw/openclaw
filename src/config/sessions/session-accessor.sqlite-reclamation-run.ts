@@ -161,16 +161,5 @@ export async function runPreparedSqliteSessionReclamation(
           transferList: prepareReclamationWorkerTransferList(plan),
         }),
     );
-  // Finalization retains its logical FIFO place across cold validation.
-  // Acquire here, after the archive FIFO, so earlier worker work can settle.
-  return plan.kind === "maintenance-finalize"
-    ? await runExclusiveSqliteSessionWrite(
-        plan.databaseOptions,
-        runAuthorized,
-        "session.maintenance.finalize",
-        params.diagnostics,
-        "foreground",
-        owner.signal,
-      )
-    : await runAuthorized();
+  return await runAuthorized();
 }

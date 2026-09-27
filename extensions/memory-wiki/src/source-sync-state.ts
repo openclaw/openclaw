@@ -1,4 +1,3 @@
-// Memory Wiki plugin module implements source sync state behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";

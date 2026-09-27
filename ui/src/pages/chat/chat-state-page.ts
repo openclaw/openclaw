@@ -23,6 +23,7 @@ import {
 import { requestChatAbort } from "./chat-abort-request.ts";
 import { resolveAgentIdForSession } from "./chat-avatar.ts";
 import { CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT } from "./chat-history-events.ts";
+import { setChatError } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
@@ -34,7 +35,6 @@ import {
   retryQueuedChatMessage,
   steerQueuedChatMessage,
 } from "./chat-send-actions.ts";
-import { setChatError } from "./chat-send-queue-state.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
 import { retireChatModelSelectionOwnership } from "./chat-session.ts";
@@ -124,15 +124,11 @@ type ChatPageElement = {
   querySelector: (selectors: string) => Element | null;
 };
 
-function clearImageLightbox(state: ChatPageHost) {
+export function invalidateImageLightbox(state: ChatPageHost) {
+  state.imageLightboxRequestVersion += 1;
   const item = state.imageLightbox;
   state.imageLightbox = null;
   item?.release?.();
-}
-
-export function invalidateImageLightbox(state: ChatPageHost) {
-  state.imageLightboxRequestVersion += 1;
-  clearImageLightbox(state);
   return state.imageLightboxRequestVersion;
 }
 

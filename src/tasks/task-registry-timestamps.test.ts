@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
 import { captureTaskDeliveryWork } from "./task-registry-delivery.test-support.js";
-import { setTaskCleanupAfterById, updateTaskStateByRunId } from "./task-registry-record-api.js";
+import { updateTaskStateByRunId } from "./task-registry-record-api.js";
 import { readTaskRegistryRevision } from "./task-registry-state.js";
 import { finalizeTaskRecordByRunId, getTaskById, markTaskTerminalById } from "./task-registry.js";
 import { configureTaskRegistryRuntime, getTaskRegistryStore } from "./task-registry.store.js";
@@ -23,33 +23,6 @@ function requireTaskById(taskId: string): TaskRecord {
 }
 
 describe("task registry terminal update timestamps", () => {
-  it("persists retention bookkeeping without advancing terminal activity", async () => {
-    await withTaskRegistryTempDir(async () => {
-      const task = createTaskFixture("cli", {
-        task: "Retained completed work",
-        status: "succeeded",
-        lastEventAt: 200,
-      });
-      const published: Array<{ lastEventAt?: number }> = [];
-      configureTaskRegistryRuntime({
-        observers: {
-          onEvent(event) {
-            if (event.kind === "upserted" && event.task.taskId === task.taskId) {
-              published.push(event.task);
-            }
-          },
-        },
-      });
-      const cleanupAfter = task.cleanupAfter! + 1_000;
-      setTaskCleanupAfterById({ taskId: task.taskId, cleanupAfter });
-      const retained = { ...task, cleanupAfter };
-      expect(requireTaskById(task.taskId)).toEqual(retained);
-      expect(getTaskRegistryStore().loadSnapshot().tasks.get(task.taskId)).toEqual(retained);
-      expect(published).toHaveLength(1);
-      expect(published[0]?.lastEventAt).toBe(task.lastEventAt);
-    });
-  });
-
   it.each([2_000, 2_235])(
     "publishes a newer terminal correction when cancellation occurred at %s",
     async (cancelledAt) => {

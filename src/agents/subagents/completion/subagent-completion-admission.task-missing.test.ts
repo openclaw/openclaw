@@ -138,6 +138,10 @@ describe("missing subagent completion tasks", () => {
               "restore",
             );
       try {
+        // SQLite diagnostics share the root transport but are not completion retirement.
+        getLogger().warn("Unrelated SQLite diagnostic", {
+          databaseLabel: "synthetic-completion-fixture",
+        });
         attempt();
         await vi.advanceTimersByTimeAsync(300_000);
         expect(getActiveGatewayRootWorkCount()).toBe(0);
@@ -182,9 +186,11 @@ describe("missing subagent completion tasks", () => {
           expect(loadSubagentRegistryFromSqlite().get(input.subagent.runId)).toEqual(
             input.subagent,
           );
-          expect(warnings).toHaveBeenCalledOnce();
-          expect(JSON.stringify(warnings.mock.calls[0])).toContain(input.subagent.runId);
-          expect(JSON.stringify(warnings.mock.calls[0])).toContain("task-missing");
+          const retirementWarnings = warnings.mock.calls
+            .map((call) => JSON.stringify(call))
+            .filter((warning) => warning.includes("Subagent completion retired: task-missing"));
+          expect(retirementWarnings).toHaveLength(1);
+          expect(retirementWarnings[0]).toContain(input.subagent.runId);
         } finally {
           restarted.controller.clearScheduledResumeTimers();
         }

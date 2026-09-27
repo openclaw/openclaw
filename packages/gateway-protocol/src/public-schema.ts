@@ -2,6 +2,7 @@
 export * from "./schema/sessions-goal.js";
 export * from "./schema/sessions-provider-review.js";
 export * from "./schema/human-mentions.js";
+export * from "./schema/presence.js";
 export * from "./public-schema-push.js";
 export * from "./public-schema-users.js";
 export * from "./public-schema-plugins.js";
@@ -48,6 +49,9 @@ export {
   WorkerSessionsSendResponseFrameSchema,
   WorkerPortalParamsSchema,
   WorkerPortalResponseFrameSchema,
+  WorkerPresenceParamsSchema,
+  WorkerPresenceResponseFrameSchema,
+  WORKER_PRESENCE_PROTOCOL_FEATURE,
   WorkerSessionToolResultSchema,
   WorkerLiveEventSchema,
   WorkerLiveEventErrorDetailsSchema,
@@ -193,6 +197,8 @@ export {
   SessionsDiffParamsSchema,
   SessionsDiffResultSchema,
   SessionBranchSchema,
+  SessionAncestorRefSchema,
+  SessionEventAncestorsSchema,
   SessionRowSchema,
   SessionsBranchesListParamsSchema,
   SessionsBranchesListResultSchema,
@@ -550,6 +556,8 @@ export {
   CronRemoveParamsSchema,
   CronRunParamsSchema,
   CronRunsParamsSchema,
+  CronHistoryParamsSchema,
+  CronHistoryResultSchema,
   CronScratchGetParamsSchema,
   CronScratchGetResultSchema,
   CronScratchSetParamsSchema,

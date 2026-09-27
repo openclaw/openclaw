@@ -1,10 +1,12 @@
 import { err } from "@openclaw/normalization-core/result";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import type { MessageSendResult } from "../infra/outbound/message.js";
-import * as stateCoordinator from "../infra/state-database-coordinator.js";
 import * as systemEvents from "../infra/system-events.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -30,11 +32,12 @@ import {
   commitTaskDeliveryFixture,
 } from "./task-registry-delivery.test-support.js";
 import * as taskRegistryListener from "./task-registry-listener-state.js";
-import { getTaskDeliveryState } from "./task-registry-mutation.js";
+import { applyTaskRegistryMaintenanceRetention } from "./task-registry-maintenance-retention.js";
+import { getTaskDeliveryState, updateTask } from "./task-registry-mutation.js";
 import { publishTaskRecordAfterAtomicStore } from "./task-registry-publication.js";
 import * as deliveryRuntime from "./task-registry-runtime-loaders.js";
 import * as taskRegistryState from "./task-registry-state.js";
-import { deleteTaskRecordById, getTaskById, markTaskRunningByRunId } from "./task-registry.js";
+import { getTaskById, markTaskRunningByRunId } from "./task-registry.js";
 import { getTaskRegistryStore, onTaskRegistryChange } from "./task-registry.store.js";
 import {
   loadTaskRegistryMutationStateFromSqlite,
@@ -236,7 +239,7 @@ describe("task state notification acknowledgements", () => {
   });
 
   it.each([false, true])(
-    "delivers and acknowledges with parent flow=%s without entering the host state coordinator",
+    "delivers and acknowledges with parent flow=%s without host SQLite",
     async (linked) => {
       const flow = linked
         ? createManagedTaskFlow({
@@ -247,16 +250,16 @@ describe("task state notification acknowledgements", () => {
           })
         : undefined;
       const task = createTask(flow?.flowId);
-      const acquire = vi
-        .spyOn(stateCoordinator, "acquireStateDatabaseCoordinator")
-        .mockImplementation(() => {
-          throw new Error("Synthetic held host coordinator must not block notification delivery");
-        });
-      const notification = startNotification(task, progress(task.createdAt + 10));
-      expect(await notification.dispatched).toMatchObject(linked ? nextOrigin : origin);
-      notification.complete();
-      expect(await notification.result).toMatchObject({ taskId: task.taskId });
-      expect(acquire).not.toHaveBeenCalled();
+      const sql = observeHostDataSql();
+      try {
+        const notification = startNotification(task, progress(task.createdAt + 10));
+        expect(await notification.dispatched).toMatchObject(linked ? nextOrigin : origin);
+        notification.complete();
+        expect(await notification.result).toMatchObject({ taskId: task.taskId });
+        sql.calls.forEach((call) => expect(call).not.toHaveBeenCalled());
+      } finally {
+        sql.restore();
+      }
     },
   );
 
@@ -644,7 +647,6 @@ describe("task state notification acknowledgements", () => {
         return;
       }
       replaced = true;
-      deleteTaskRecordById(task.taskId);
       upsertTaskWithDeliveryStateToSqlite({ task: replacement, deliveryState: delivery });
       publishTaskRecordAfterAtomicStore(replacement);
       commitTaskDeliveryFixture(delivery);
@@ -693,7 +695,6 @@ describe("task state notification acknowledgements", () => {
         expect(
           await Promise.race([loading.promise.then(() => "loading"), result.then(() => "settled")]),
         ).toBe("loading");
-        expect(deleteTaskRecordById(task.taskId)).toBe(true);
         const replacement: TaskRecord = {
           ...task,
           runId: "replacement-before-send",
@@ -733,7 +734,6 @@ describe("task state notification acknowledgements", () => {
       const event = progress(task.createdAt + 10);
       const notification = startNotification(task, event);
       await notification.dispatched;
-      expect(deleteTaskRecordById(task.taskId)).toBe(true);
       if (change === "replaced") {
         const replacement: TaskRecord = {
           ...task,
@@ -750,6 +750,14 @@ describe("task state notification acknowledgements", () => {
         upsertTaskWithDeliveryStateToSqlite({ task: replacement, deliveryState: delivery });
         publishTaskRecordAfterAtomicStore(replacement);
         commitTaskDeliveryFixture(delivery);
+      } else {
+        const expired = updateTask(task.taskId, { status: "succeeded", cleanupAfter: 0 });
+        if (!expired) {
+          throw new Error("Expected the terminal task before retention");
+        }
+        expect(
+          await applyTaskRegistryMaintenanceRetention(expired, Date.now(), new Map(), () => {}),
+        ).toBe("pruned");
       }
       const beforeAck = stored(task.taskId);
       notification.complete();

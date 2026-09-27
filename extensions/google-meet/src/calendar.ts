@@ -1,5 +1,4 @@
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-// Google Meet plugin module implements calendar behavior.
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { googleApiError } from "./google-api-errors.js";
 import { normalizeMeetUrl } from "./meet-url.js";
@@ -193,7 +192,7 @@ function chooseBestMeetCalendarEvent(
   return selected;
 }
 
-async function fetchGoogleCalendarEvents(params: {
+type GoogleMeetCalendarQuery = {
   accessToken: string;
   calendarId?: string;
   eventQuery?: string;
@@ -201,7 +200,11 @@ async function fetchGoogleCalendarEvents(params: {
   timeMax?: string;
   maxResults?: number;
   now?: Date;
-}): Promise<{ calendarId: string; events: GoogleMeetCalendarEvent[]; now: Date }> {
+};
+
+async function fetchGoogleCalendarEvents(
+  params: GoogleMeetCalendarQuery,
+): Promise<{ calendarId: string; events: GoogleMeetCalendarEvent[]; now: Date }> {
   const calendarId = params.calendarId?.trim() || "primary";
   const now = params.now ?? new Date();
   const defaultTimeMax = new Date(now);
@@ -250,15 +253,9 @@ async function fetchGoogleCalendarEvents(params: {
   }
 }
 
-export async function listGoogleMeetCalendarEvents(params: {
-  accessToken: string;
-  calendarId?: string;
-  eventQuery?: string;
-  timeMin?: string;
-  timeMax?: string;
-  maxResults?: number;
-  now?: Date;
-}): Promise<GoogleMeetCalendarEventsResult> {
+export async function listGoogleMeetCalendarEvents(
+  params: GoogleMeetCalendarQuery,
+): Promise<GoogleMeetCalendarEventsResult> {
   const { calendarId, events, now } = await fetchGoogleCalendarEvents(params);
   const best = chooseBestMeetCalendarEvent(events, now);
   return {
@@ -272,15 +269,9 @@ export async function listGoogleMeetCalendarEvents(params: {
   };
 }
 
-export async function findGoogleMeetCalendarEvent(params: {
-  accessToken: string;
-  calendarId?: string;
-  eventQuery?: string;
-  timeMin?: string;
-  timeMax?: string;
-  maxResults?: number;
-  now?: Date;
-}): Promise<GoogleMeetCalendarLookupResult> {
+export async function findGoogleMeetCalendarEvent(
+  params: GoogleMeetCalendarQuery,
+): Promise<GoogleMeetCalendarLookupResult> {
   const result = await listGoogleMeetCalendarEvents(params);
   const selected = result.events.find((event) => event.selected) ?? result.events[0];
   if (!selected) {

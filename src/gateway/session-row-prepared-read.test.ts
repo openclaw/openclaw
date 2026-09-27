@@ -224,6 +224,7 @@ it.each(["child", "parent"] as const)(
       moves: new Map(),
       environments: new Map(),
       workspaceResultReconcilingSessionIds: new Set(),
+      workspaceRecoveryPendingSessionIds: new Set(),
     };
     const readPlacement = vi
       .fn()

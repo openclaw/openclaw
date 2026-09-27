@@ -26,12 +26,12 @@ import type {
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
 import { hasSessionChangeReceivers } from "./session-change-receivers.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
+import { sessionEventPublicationRows } from "./session-event-prepared-row.js";
 import {
   resolvePrivateSessionEventBroadcastScope,
   resolveSessionEventAgentScope,
   type SessionEventAgentScope,
 } from "./session-request-agent.js";
-import { withReadySessionRows } from "./session-row-prepared-read.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import {
   resolveSessionSubscriptionKey,
@@ -65,7 +65,9 @@ async function withPreparedEventRow(
     publish();
     return;
   }
-  await withReadySessionRows(projection, () => [query], publish, { includeAncestors: true });
+  await sessionEventPublicationRows(projection).withReadyRows(() => [query], publish, {
+    includeAncestors: true,
+  });
 }
 
 function readTranscriptUpdateLifecycleOwner(

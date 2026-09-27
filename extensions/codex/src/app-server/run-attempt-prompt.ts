@@ -63,7 +63,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   } = context;
   const {
     connection,
-    buildActiveRunAttemptParams,
+    runtimeParams,
     effectiveContextTokenBudget,
     effectiveRuntimeModelId,
     effectiveRuntimeProviderId,
@@ -164,7 +164,6 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   const applyContinuityProjection = async (messages: typeof historyState.messages) => {
     const projection = await projectContextEngineAssemblyForCodex({
       assembledMessages: messages,
-      originalHistoryMessages: historyState.messages,
       prompt: params.prompt,
       maxRenderedContextChars: codexContinuityProjectionMaxChars,
       toolPayloadMode:
@@ -176,7 +175,6 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     contextImageGroups = projection.imageGroups ?? [];
     promptState.promptText = projection.promptText;
     promptState.promptContextRange = projection.promptContextRange;
-    promptState.prePromptMessageCount = projection.prePromptMessageCount;
     promptState.noEngineContinuityProjectionApplied = true;
   };
   const applyActiveContextEngineProjection = async (
@@ -188,7 +186,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     try {
       const assembled = await assembleHarnessContextEngine({
         contextEngine: activeContextEngine,
-        sessionId: runtime.activeSessionId,
+        sessionId: runtimeParams.sessionId,
         sessionKey: contextSessionKey,
         messages: historyState.messages,
         tokenBudget: effectiveContextTokenBudget,
@@ -219,7 +217,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         ? resolveContextEngineBootstrapProjectionDecision({
             startupBinding: decisionStartupBinding,
             expectedBinding: buildContextEngineBinding(
-              buildActiveRunAttemptParams(),
+              { ...runtimeParams },
               contextEngineProjection,
             ),
             projection: contextEngineProjection,
@@ -229,7 +227,6 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         : { project: true, reason: "per-turn-projection" };
       const projection = await projectContextEngineAssemblyForCodex({
         assembledMessages: assembled.messages,
-        originalHistoryMessages: historyState.messages,
         prompt: params.prompt,
         systemPromptAddition: assembled.systemPromptAddition,
         maxRenderedContextChars: codexContextProjectionMaxChars,
@@ -272,7 +269,6 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         baseDeveloperInstructions,
         projection.developerInstructionAddition,
       );
-      promptState.prePromptMessageCount = projection.prePromptMessageCount;
     } catch (assembleErr) {
       if (
         assembleErr instanceof CodexContextAttachmentError ||
@@ -291,7 +287,6 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       runtime.nativeToolSurfaceEnabled ? mutable.startupBinding : undefined,
     );
   }
-  const codexModelInputHistoryMessages: typeof historyState.messages = [];
   // Refresh changes the transport prompt, but retains the admitted request's recorder.
   const admittedContent = admittedMessage?.content;
   const currentUserMessage = admittedMessage
@@ -303,8 +298,8 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     : params.pluginRuntimeRefreshMessages
       ? ""
       : params.prompt;
-  const buildPromptFromCurrentInputs = async () => {
-    const result = await resolveAgentHarnessBeforePromptBuildResult({
+  const buildPromptFromCurrentInputs = () =>
+    resolveAgentHarnessBeforePromptBuildResult({
       currentUserMessage,
       currentUserMessageId: admittedMessage?.idempotencyKey,
       prompt: prependCurrentInboundContext(promptState.promptText, params.currentInboundContext),
@@ -330,8 +325,6 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         assertActive: connection.assertCurrent,
       },
     });
-    return result;
-  };
   const resolveShiftedPromptInputRange = (
     prompt: string,
     promptInputRange: { start: number; end: number } | undefined,
@@ -655,7 +648,6 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     get contextImageGroups() {
       return turnContextImageGroups;
     },
-    codexModelInputHistoryMessages,
     nativeHistoryProvenancePrefix,
     turnState,
     refreshWorkspaceReferences: (include: boolean) => {

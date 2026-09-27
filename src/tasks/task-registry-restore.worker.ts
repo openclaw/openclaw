@@ -4,7 +4,6 @@ import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-contex
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { serializeAgentSchemaInspectionError } from "../state/openclaw-agent-schema-inspection-response.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
-import { withSharedStateWriteCoordinator } from "../state/openclaw-state-db-write-coordination.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
   restoreTaskExecutionSnapshot,
@@ -23,6 +22,7 @@ import {
 import type { TaskFlowRecord, TaskFlowSyncResult } from "./task-flow-registry.types.js";
 import { findLatestTaskForFlowInSnapshot } from "./task-registry-records.js";
 import {
+  readTaskRegistryMutationSnapshotInDatabase,
   readTaskRegistrySnapshot,
   upsertTaskWithDeliveryStateInDatabase,
 } from "./task-registry.store.kernel.js";
@@ -47,6 +47,7 @@ export function syncTaskMirroredFlowInDatabase(
 ): TaskMirroredFlowSyncOutcome {
   let flowId = params.expectedParentFlowId?.trim();
   let committedFlow: TaskFlowRecord | undefined;
+  let attemptedCurrent: TaskFlowRecord | undefined;
   const outcome = (result: TaskFlowSyncResult): TaskMirroredFlowSyncOutcome => ({
     taskId: params.taskId,
     ...(flowId ? { flowId } : {}),
@@ -54,9 +55,8 @@ export function syncTaskMirroredFlowInDatabase(
     result,
   });
   try {
-    return withSharedStateWriteCoordinator(
-      { databasePath: database.path, existing: database.db, operationLabel: "task.flow.sync" },
-      () => {
+    return runOpenClawStateWriteTransaction(
+      ({ db }) => {
         const snapshot = readTaskRegistrySnapshot(database);
         const task = snapshot.tasks.get(params.taskId);
         const currentParentFlowId = task?.parentFlowId?.trim();
@@ -84,48 +84,36 @@ export function syncTaskMirroredFlowInDatabase(
         if (isTaskMirroredFlowSyncUnchanged(prepared)) {
           return outcome({ ok: true, flow: current });
         }
-        try {
-          runOpenClawStateWriteTransaction(
-            ({ db }) => {
-              requestSqliteWorkerOperationAdmission({
-                stage: "transaction",
-                facts: { kind: "task-restored-flow", taskId: task.taskId, flowId },
-              });
-              upsertTaskFlowRowInDatabase(db, bindTaskFlowRecord(prepared.next));
-              deferSqlitePostCommitPublication(db, () => {
-                committedFlow = prepared.next;
-              });
-            },
-            { database, path: database.path, env: getSqliteWorkerStateContext().environment },
-          );
-          return outcome({ ok: true, flow: prepared.next });
-        } catch (error) {
-          if (committedFlow) {
-            log.warn("Task-mirrored flow sync committed before cleanup failed", {
-              taskId: task.taskId,
-              flowId,
-              error,
-            });
-            return outcome({ ok: true, flow: committedFlow });
-          }
-          log.warn("Failed to persist task-mirrored flow sync", {
-            taskId: task.taskId,
-            flowId,
-            error,
-          });
-          return outcome({ ok: false, reason: "persist_failed", current });
-        }
+        attemptedCurrent = current;
+        requestSqliteWorkerOperationAdmission({
+          stage: "transaction",
+          facts: { kind: "task-restored-flow", taskId: task.taskId, flowId },
+        });
+        upsertTaskFlowRowInDatabase(db, bindTaskFlowRecord(prepared.next));
+        deferSqlitePostCommitPublication(db, () => {
+          committedFlow = prepared.next;
+        });
+        return outcome({ ok: true, flow: prepared.next });
       },
+      { database, path: database.path, env: getSqliteWorkerStateContext().environment },
+      { operationLabel: "task.flow.sync" },
     );
   } catch (error) {
-    // A coordinator cleanup failure must not invite replay of a committed flow update.
     if (committedFlow) {
-      log.warn("Task-mirrored flow sync committed before coordinator cleanup failed", {
+      log.warn("Task-mirrored flow sync committed before cleanup failed", {
         taskId: params.taskId,
         flowId,
         error,
       });
       return outcome({ ok: true, flow: committedFlow });
+    }
+    if (attemptedCurrent) {
+      log.warn("Failed to persist task-mirrored flow sync", {
+        taskId: params.taskId,
+        flowId,
+        error,
+      });
+      return outcome({ ok: false, reason: "persist_failed", current: attemptedCurrent });
     }
     return {
       taskId: params.taskId,
@@ -142,16 +130,16 @@ export function restoreTaskRegistryInDatabase(
 ): TaskRegistryRestoreResult {
   const restored = restoreTaskExecutionSnapshot({
     loadSnapshot: () => readTaskRegistrySnapshot(database),
+    loadMutationSnapshot: (scopes) =>
+      readTaskRegistryMutationSnapshotInDatabase(database.db, scopes),
     withMutation: (operation) =>
-      withSharedStateWriteCoordinator(
-        { databasePath: database.path, existing: database.db, operationLabel: "task.mutation" },
+      runOpenClawStateWriteTransaction(
         operation,
+        { database, path: database.path, env: getSqliteWorkerStateContext().environment },
+        { operationLabel: "task.mutation" },
       ),
     upsertTaskWithDeliveryState: (params) =>
-      runOpenClawStateWriteTransaction(
-        (writer) => upsertTaskWithDeliveryStateInDatabase(writer, params),
-        { database, path: database.path, env: getSqliteWorkerStateContext().environment },
-      ),
+      upsertTaskWithDeliveryStateInDatabase(database, params),
   });
   const flowSyncs = restored.settledTasks.flatMap((task) => {
     const flowId = task.parentFlowId?.trim();

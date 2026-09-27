@@ -24,7 +24,6 @@ import {
   appendBoundedShellCapture,
   buildLaneRerunCommand,
   canStartSchedulerLane,
-  describeDockerSchedulerLimits,
   dockerPreflightContainerNames,
   dockerPreflightSmokeCommand,
   githubWorkflowRerunCommand,
@@ -340,26 +339,10 @@ async function runReadyTimedCommand<T>(
 }
 
 describe("scripts/test-docker-all scheduler", () => {
-  it("parses the supported CLI options", () => {
-    expect(parseDockerAllCliArgs([])).toEqual({
-      help: false,
-      planJson: false,
-      preparePluginRegistry: false,
-    });
-    expect(parseDockerAllCliArgs(["--plan-json"])).toEqual({
-      help: false,
-      planJson: true,
-      preparePluginRegistry: false,
-    });
+  it("parses CLI modes and rejects conflicts", () => {
     expect(parseDockerAllCliArgs(["--help"])).toEqual({
       help: true,
       planJson: false,
-      preparePluginRegistry: false,
-    });
-    expect(parseDockerAllCliArgs(["--prepare-only=/tmp/candidate.json"])).toEqual({
-      help: false,
-      planJson: false,
-      prepareOnly: "/tmp/candidate.json",
       preparePluginRegistry: false,
     });
     expect(parseDockerAllCliArgs(["--prepare-plugin-registry"])).toEqual({
@@ -1168,48 +1151,6 @@ process.exit(0);
     ).toBe(false);
   });
 
-  it("keeps resource and weight limits as co-scheduling limits", () => {
-    expect(
-      canStartSchedulerLane(
-        {
-          name: "npm-smoke",
-          resources: ["npm"],
-          weight: 1,
-        },
-        activePool({
-          count: 1,
-          resources: {
-            docker: 1,
-            npm: 1,
-          },
-          weight: 1,
-        }),
-        2,
-        limits,
-      ),
-    ).toBe(true);
-
-    expect(
-      canStartSchedulerLane(
-        {
-          name: "npm-heavy",
-          resources: ["npm"],
-          weight: 2,
-        },
-        activePool({
-          count: 1,
-          resources: {
-            docker: 1,
-            npm: 1,
-          },
-          weight: 1,
-        }),
-        2,
-        limits,
-      ),
-    ).toBe(false);
-  });
-
   it("serializes live OpenAI Docker lanes by default", () => {
     expect(DEFAULT_RESOURCE_LIMITS["live:openai"]).toBe(1);
   });
@@ -1279,6 +1220,49 @@ postgres Created
       rmSync(root, { force: true, recursive: true });
     }
   });
+
+  posixIt.each(["extra field", "oversized", "two receipts", "injected phase"])(
+    "never promotes logs or invalid %s metadata into an annotation",
+    async (kind) => {
+      const root = tempDirs.make("docker-failure-metadata-");
+      const logFile = path.join(root, "lane.log");
+      const metadata = { phase: "update-candidate", exitStatus: 7, signal: null };
+      const valid = JSON.stringify(metadata);
+      const payload =
+        kind === "oversized"
+          ? "x".repeat(1025)
+          : kind === "two receipts"
+            ? valid + valid
+            : JSON.stringify(
+                kind === "extra field"
+                  ? { ...metadata, secret: "PRIVATE_ENV_BYTES" }
+                  : { ...metadata, phase: "update\n::error::PRIVATE_LOG_BYTES" },
+              );
+      const program = [
+        "const fs = require('node:fs');",
+        "console.error(" + JSON.stringify(valid) + ");",
+        "fs.writeSync(3," + JSON.stringify(payload) + ");",
+        "process.exitCode = 7;",
+      ].join("\n");
+      const entry = path.join(root, "metadata.cjs");
+      writeFileSync(entry, program);
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const result = await runShellCommand({
+          command: JSON.stringify(process.execPath) + " " + JSON.stringify(entry),
+          env: { ...process.env, GITHUB_ACTIONS: "true" },
+          label: "metadata",
+          logFile,
+          captureUpgradeFailure: true,
+        });
+        expect(result).toMatchObject({ status: 7, timedOut: false, noOutputTimedOut: false });
+        expect(error.mock.calls.some(([text]) => String(text).startsWith("::error"))).toBe(false);
+        expect(readFileSync(logFile, "utf8")).toContain(valid);
+      } finally {
+        error.mockRestore();
+      }
+    },
+  );
 
   posixIt("clamps oversized shell command timers before scheduling", async () => {
     const result = await runShellCommand({
@@ -1563,11 +1547,5 @@ await runShellCommand({
         runner.kill("SIGKILL");
       }
     }
-  });
-
-  it("describes effective scheduler limits for operator errors", () => {
-    expect(describeDockerSchedulerLimits(2, limits)).toBe(
-      "parallelism=2 weightLimit=2 resources=docker=2 npm=2",
-    );
   });
 });

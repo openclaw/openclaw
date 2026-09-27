@@ -208,6 +208,9 @@ inside one lazily created package fixture per test run, keeping real UI checks o
 fixture-owned assets and each scenario’s state separate. Standalone and watch runs
 use live source inside the same fixture.
 
+Broadcast output coverage prepares its message helper and exit finalizer together,
+preserving command substitution and joining its process tree before fixture cleanup.
+
 Isolated Doctor config scripts also share the prepared config-flow, health-writer,
 and install-index modules. Each case still starts a fresh process with separate
 state; standalone and watch runs resolve the original TypeScript entrypoints.
@@ -339,6 +342,12 @@ For local PR land/gate checks, run:
 - `pnpm build`
 - `pnpm test`
 - `pnpm check:docs`
+
+`pnpm check --base <ref>` pins the line-cap, max-lines suppression, and assertion
+safety ratchets to the merge base of `HEAD` and that ref. Native PR gates pass
+their candidate's fork from the captured main snapshot, so inherited main
+changes retain their allowance even when the shared `origin/main` ref is stale.
+Other check stages still run normally.
 
 If `pnpm test` flakes on a loaded host, rerun once before treating it as a regression, then isolate with `pnpm test <path/to/test>`. For memory-constrained hosts:
 

@@ -69,10 +69,7 @@ struct ChatComposerTextView: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let textView = ChatComposerTextViewFactory.makeConfiguredTextView()
-        guard let composerTextView = textView as? ChatComposerNSTextView else {
-            preconditionFailure("ChatComposerTextViewFactory must return ChatComposerNSTextView")
-        }
+        let composerTextView = ChatComposerTextViewFactory.makeConfiguredTextView()
         composerTextView.delegate = context.coordinator
 
         composerTextView.string = self.text
@@ -92,7 +89,7 @@ struct ChatComposerTextView: NSViewRepresentable {
         scroll.autohidesScrollers = true
         scroll.scrollerStyle = .overlay
         scroll.hasHorizontalScroller = false
-        scroll.documentView = textView
+        scroll.documentView = composerTextView
         return scroll
     }
 
@@ -190,7 +187,7 @@ enum ChatComposerTextViewFactory {
 
     /// Internal for @testable import coverage of composer text view defaults.
     @MainActor
-    static func makeConfiguredTextView() -> NSTextView {
+    static func makeConfiguredTextView() -> ChatComposerNSTextView {
         let textView = ChatComposerNSTextView()
         textView.drawsBackground = false
         textView.isRichText = false
@@ -217,7 +214,7 @@ enum ChatComposerTextViewFactory {
     }
 }
 
-private final class ChatComposerNSTextView: NSTextView {
+final class ChatComposerNSTextView: NSTextView {
     var placeholder = "" {
         didSet {
             if self.placeholder != oldValue { self.needsDisplay = true }
@@ -377,23 +374,7 @@ enum ChatComposerPasteSupport {
         from pasteboard: NSPasteboard,
         matching preferredType: NSPasteboard.PasteboardType? = nil) -> [FileImageReference]
     {
-        guard self.matchesFileURL(preferredType) else { return [] }
-        return self.imageFileReferencesFromFileURLs(in: pasteboard)
-    }
-
-    static func loadImageAttachments(from fileReferences: [FileImageReference]) -> [ImageAttachment] {
-        fileReferences.compactMap { reference in
-            guard let data = try? Data(contentsOf: reference.url), !data.isEmpty else {
-                return nil
-            }
-            return (
-                data: data,
-                fileName: reference.fileName,
-                mimeType: reference.mimeType)
-        }
-    }
-
-    private static func imageFileReferencesFromFileURLs(in pasteboard: NSPasteboard) -> [FileImageReference] {
+        guard self.matches(preferredType, candidate: .fileURL) else { return [] }
         guard let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL], !urls.isEmpty else {
             return []
         }
@@ -414,13 +395,23 @@ enum ChatComposerPasteSupport {
         }
     }
 
+    static func loadImageAttachments(from fileReferences: [FileImageReference]) -> [ImageAttachment] {
+        fileReferences.compactMap { reference in
+            guard let data = try? Data(contentsOf: reference.url), !data.isEmpty else {
+                return nil
+            }
+            return (
+                data: data,
+                fileName: reference.fileName,
+                mimeType: reference.mimeType)
+        }
+    }
+
     private static func imageAttachmentsFromRawData(
         in pasteboard: NSPasteboard,
         matching preferredType: NSPasteboard.PasteboardType?) -> [ImageAttachment]
     {
         let items = pasteboard.pasteboardItems ?? []
-        guard !items.isEmpty else { return [] }
-
         return items.enumerated().compactMap { index, item in
             self.imageAttachment(from: item, index: index, matching: preferredType)
         }
@@ -481,11 +472,6 @@ enum ChatComposerPasteSupport {
     {
         guard let preferredType else { return true }
         return preferredType == candidate
-    }
-
-    private static func matchesFileURL(_ preferredType: NSPasteboard.PasteboardType?) -> Bool {
-        guard let preferredType else { return true }
-        return preferredType == .fileURL
     }
 
     private static func matchesImageType(_ preferredType: NSPasteboard.PasteboardType) -> Bool {

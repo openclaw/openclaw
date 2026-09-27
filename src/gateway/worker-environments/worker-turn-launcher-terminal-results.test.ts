@@ -23,6 +23,7 @@ import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../tasks/task-status-access.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { NodeWorkerWorkspaceTransferError } from "../../worker/node-workspace-transfer-protocol.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
@@ -116,7 +117,7 @@ describe("worker turn launcher terminal results", () => {
     "retains the ACKed finishing outcome after assistant $stopReason (reconciliation fails: $reconciliationFails; cleanup: $cleanupFailure; provider fallback: $providerFailure)",
     async ({ stopReason, reconciliationFails, cleanupFailure, providerFailure }) => {
       const outerFallback = cleanupFailure !== undefined || providerFailure === true;
-      seedActivePlacement();
+      await seedActivePlacement();
       const grant = credential();
       const environment = attachedEnvironment();
       const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
@@ -124,6 +125,7 @@ describe("worker turn launcher terminal results", () => {
       const getConfig = () => ({ session: { store: sessionTarget.storePath } });
       const liveEvents = createWorkerLiveEventReceiver();
       const service = createWorkerEnvironmentService({
+        scheduler: createTestGatewayScheduler(),
         store: {
           ...(await createWorkerEnvironmentStore({ database })),
           get: () => environment,
@@ -461,7 +463,7 @@ describe("worker turn launcher terminal results", () => {
   );
 
   it("requests immediate recovery when reconciliation fails after worker finishing", async () => {
-    seedActivePlacement();
+    await seedActivePlacement();
     const destroy = vi.fn(async () => attachedEnvironment());
     const tunnelFailure = new NodeWorkerWorkspaceTransferError(
       "workspace-transfer-failed: gateway TLS fingerprint mismatch",
@@ -620,7 +622,7 @@ describe("worker turn launcher terminal results", () => {
       terminalReply,
       costs = { first: 0, last: 0, total: 0 },
     }) => {
-      seedActivePlacement();
+      await seedActivePlacement();
       const environments: WorkerTurnEnvironmentService = {
         get: vi.fn(() => attachedEnvironment()),
         acquireTurnCredential: vi.fn(async () => credential()),

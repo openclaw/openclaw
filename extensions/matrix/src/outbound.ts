@@ -2,7 +2,6 @@ import type {
   ChannelOutboundAdapter,
   ChannelOutboundContext,
 } from "openclaw/plugin-sdk/channel-contract";
-// Matrix plugin module implements outbound behavior.
 import {
   createMessageReceiptFromOutboundResults,
   createReplyToFanout,
@@ -56,14 +55,6 @@ function resolveMatrixChannelData(payload: ReplyPayload): MatrixChannelData {
   return (asOptionalRecord(raw) as MatrixChannelData | undefined) ?? {};
 }
 
-function buildMatrixPresentationContent(presentation: MessagePresentation) {
-  return {
-    ...presentation,
-    version: 1,
-    type: MATRIX_OPENCLAW_PRESENTATION_TYPE,
-  };
-}
-
 function resolveMatrixPresentationContent(
   payload: ReplyPayload,
 ): Record<string, unknown> | undefined {
@@ -97,7 +88,11 @@ function renderMatrixPresentationPayload(params: {
       matrix: {
         ...matrixData,
         extraContent: {
-          [MATRIX_OPENCLAW_PRESENTATION_KEY]: buildMatrixPresentationContent(params.presentation),
+          [MATRIX_OPENCLAW_PRESENTATION_KEY]: {
+            ...params.presentation,
+            version: 1,
+            type: MATRIX_OPENCLAW_PRESENTATION_TYPE,
+          },
         },
       },
     },
@@ -176,8 +171,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
   chunkerMode: "markdown",
   textChunkLimit: 4000,
   presentationCapabilities: MATRIX_PRESENTATION_CAPABILITIES,
-  renderPresentation: ({ payload, presentation }) =>
-    renderMatrixPresentationPayload({ payload, presentation }),
+  renderPresentation: renderMatrixPresentationPayload,
   sendPayload: async ({
     cfg,
     to,

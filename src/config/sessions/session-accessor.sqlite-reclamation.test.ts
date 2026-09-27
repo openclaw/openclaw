@@ -678,7 +678,11 @@ test.each([false, true])(
     const file = path.join(tempDirs.make("openclaw-writer-log-"), "writer.log");
     const diagnostics: SqliteSessionReclamationDiagnostics = {};
     const workers: Array<{ worker: Worker; id: number }> = [];
-    const observeWorker = (worker: Worker) => workers.push({ worker, id: worker.threadId });
+    const exits: number[] = [];
+    const observeWorker = (worker: Worker) => {
+      workers.push({ worker, id: worker.threadId });
+      worker.once("exit", (code) => exits.push(code));
+    };
     setLoggerOverride({ level: "info", file });
     process.on("worker", observeWorker);
     let clock = 0;
@@ -734,8 +738,11 @@ test.each([false, true])(
         });
       expect(workers).toHaveLength(1);
       expect(workers[0]?.id).toBeGreaterThan(0);
+      expect(workers[0]?.worker.threadId).toBe(workers[0]?.id);
+      expect(exits).toEqual([]);
       await closeOpenClawAgentDatabasesAsync();
       expect(workers[0]?.worker.threadId).toBe(-1);
+      expect(exits).toEqual([0]);
       expect(records).toHaveLength(3);
       const workerRecords = records.filter((record) => record.workerThreadId === workers[0]?.id);
       expect(workerRecords).toHaveLength(2);
@@ -746,7 +753,7 @@ test.each([false, true])(
         })),
       ).toEqual([
         { id: 1, cause: "worker-release" },
-        { id: 2, cause: rejected ? "worker-exit" : "worker-release" },
+        { id: 2, cause: "worker-release" },
       ]);
       for (const record of workerRecords) {
         expect(record).toMatchObject({
@@ -885,7 +892,11 @@ test.each([
     let clock = 0;
     vi.spyOn(performance, "now").mockImplementation(() => clock);
     const workers: Array<{ worker: Worker; id: number }> = [];
-    const observeWorker = (worker: Worker) => workers.push({ worker, id: worker.threadId });
+    const exits: number[] = [];
+    const observeWorker = (worker: Worker) => {
+      workers.push({ worker, id: worker.threadId });
+      worker.once("exit", (code) => exits.push(code));
+    };
     process.on("worker", observeWorker);
     const failure = new Error("synthetic reclamation refusal", {
       cause: new Error("synthetic storage failure; Authorization: Bearer synthetic-private-token"),
@@ -945,8 +956,11 @@ test.each([
       expect(otherWriterRan).toBe(true);
       expect(workers).toHaveLength(1);
       expect(workers[0]?.id).toBeGreaterThan(0);
+      expect(workers[0]?.worker.threadId).toBe(workers[0]?.id);
+      expect(exits).toEqual([]);
       await closeOpenClawAgentDatabasesAsync();
       expect(workers[0]?.worker.threadId).toBe(-1);
+      expect(exits).toEqual([0]);
       expect(records.some((record) => record["1"] === "slow SQLite session write")).toBe(false);
       expect(hooks.workerLogAttempts).toBe(elapsedMs > 0 || rejected ? 1 : 0);
       expect(observations).toHaveLength((elapsedMs > 0 || rejected) && !failLog ? 1 : 0);
@@ -967,7 +981,6 @@ test.each([
           outcome: rejected ? "rejected" : "resolved",
           ...(rejected
             ? {
-                exitCode: 1,
                 sessionIdHash: redactIdentifier(plan.sessionId),
                 error: expect.stringContaining(
                   "synthetic reclamation refusal | synthetic storage failure",

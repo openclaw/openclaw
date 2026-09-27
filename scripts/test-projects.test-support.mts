@@ -2515,6 +2515,11 @@ function isVitestConfigFileTarget(relative: string) {
   return RUNNABLE_VITEST_CONFIG_TARGETS.has(relative);
 }
 
+/** Config identities do not require test discovery or CI shard construction. */
+export function listRunnableVitestConfigTargets(): string[] {
+  return [...RUNNABLE_VITEST_CONFIG_TARGETS];
+}
+
 function isVitestConfigTargetForKind(kind: string, targetArg: string, cwd: string) {
   return resolveVitestConfigTargetKind(toRepoRelativeTarget(targetArg, cwd)) === kind;
 }
@@ -2759,6 +2764,22 @@ const pluginSdkEntryOwners = [
 // Keep only genuinely ambiguous paths explicit; conventional discovery owns
 // unambiguous scripts and direct imports without a second inventory.
 const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
+  // The native gate/check handoff crosses processes outside the import graph.
+  ["scripts/check.mts", ["check", "pr-gate-base"]],
+  [
+    "scripts/pr-lib/gates.sh",
+    [
+      "pr-correction-preparation",
+      "pr-crabbox-gate-plan",
+      "pr-main-refresh",
+      "pr-merge-hosted",
+      "pr-metadata",
+      "pr-prepare-gates",
+      "pr-prepare-preflight",
+      "pr-wrappers",
+      "pr-gate-base",
+    ],
+  ],
   [".github/workflows/ci.yml", ["ci-platform-checkout", "ci-linux-git", "ci-git-owner"]],
   [".github/actions/setup-android-toolchain/action.yml", [workflowPlanning]],
   [".github/workflows/docs-sync-publish.yml", ["docs-sync-publish"]],
@@ -2861,6 +2882,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   ],
   ["scripts/lib/managed-child-process.mts", ["managed-child-process", "lint-status"]],
   ["scripts/lib/dist-artifact-ownership.mts", ["dist-artifact-ownership", "lint-status"]],
+  ["scripts/lib/dist-artifact-lock.mts", ["dist-artifact-ownership", "lint-status"]],
   ["scripts/docker-e2e-rerun.mts", ["docker-e2e-helper-cli"]],
   ["scripts/openclaw-postpack.mjs", [TOOLING_VITEST_CONFIG]],
   ["scripts/package-manifest.mjs", ["test/openclaw-prepack.test.ts"]],

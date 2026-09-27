@@ -1,4 +1,3 @@
-// Status message helpers read and format stored status messages.
 import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
@@ -144,23 +143,10 @@ function normalizeAuthMode(value?: string): NormalizedAuthMode | undefined {
   if (!normalized) {
     return undefined;
   }
-  if (normalized === "api-key" || normalized.startsWith("api-key ")) {
-    return "api-key";
-  }
-  if (normalized === "oauth" || normalized.startsWith("oauth ")) {
-    return "oauth";
-  }
-  if (normalized === "token" || normalized.startsWith("token ")) {
-    return "token";
-  }
-  if (normalized === "aws-sdk" || normalized.startsWith("aws-sdk ")) {
-    return "aws-sdk";
-  }
-  if (normalized === "native" || normalized.startsWith("native ")) {
-    return "native";
-  }
-  if (normalized === "mixed" || normalized.startsWith("mixed ")) {
-    return "mixed";
+  for (const mode of ["api-key", "oauth", "token", "aws-sdk", "native", "mixed"] as const) {
+    if (normalized === mode || normalized.startsWith(`${mode} `)) {
+      return mode;
+    }
   }
   if (normalized === "unknown") {
     return "unknown";
@@ -203,7 +189,7 @@ function resolveExecutionLabel(
     if (sandboxMode === "off") {
       return "direct";
     }
-    const runtime = runtimeStatus.sandboxed ? "docker" : sessionKey ? "direct" : "unknown";
+    const runtime = runtimeStatus.sandboxed ? "docker" : "direct";
     return `${runtime}/${sandboxMode}`;
   }
 
@@ -307,19 +293,7 @@ const readUsageFromSessionLog = (
   agentId?: string,
   sessionKey?: string,
   storePath?: string,
-):
-  | {
-      input: number;
-      output: number;
-      cacheRead?: number;
-      cacheWrite?: number;
-      promptTokens: number;
-      total: number;
-      totalTokensFresh: boolean;
-      model?: string;
-    }
-  | undefined => {
-  // Transcripts are stored at the session file path (fallback: ~/.openclaw/sessions/<SessionId>.jsonl)
+) => {
   if (!sessionId) {
     return undefined;
   }
@@ -441,15 +415,13 @@ const formatMediaUnderstandingLine = (decisions?: ReadonlyArray<MediaUnderstandi
       if (decision.outcome === "scope-deny") {
         return `${decision.capability} denied`;
       }
-      if (decision.outcome === "skipped") {
-        const reason = findDecisionReason(decision);
+      if (decision.outcome === "skipped" || decision.outcome === "failed") {
+        const reason = findDecisionReason(
+          decision,
+          decision.outcome === "failed" ? "failed" : undefined,
+        );
         const shortReason = summarizeDecisionReason(reason);
-        return `${decision.capability} skipped${shortReason ? ` (${shortReason})` : ""}`;
-      }
-      if (decision.outcome === "failed") {
-        const reason = findDecisionReason(decision, "failed");
-        const shortReason = summarizeDecisionReason(reason);
-        return `${decision.capability} failed${shortReason ? ` (${shortReason})` : ""}`;
+        return `${decision.capability} ${decision.outcome}${shortReason ? ` (${shortReason})` : ""}`;
       }
       return null;
     })
@@ -782,8 +754,8 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   const fastMode = args.resolvedFast ?? args.sessionEntry?.fastMode ?? false;
   const fastModeState = resolveFastModeState({
     cfg: args.config,
-    provider: activeProvider,
-    model: activeModel,
+    provider: selectedLookupProvider,
+    model: selectedLookupModel,
     agentId: args.agentId,
     sessionEntry: args.sessionEntry,
   });

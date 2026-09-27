@@ -232,6 +232,10 @@ function browserRequest<T>(
     : client.request<T>(BROWSER_REQUEST_METHOD, envelope);
 }
 
+function browserAction(client: BrowserRequestClient, body: Record<string, unknown>) {
+  return browserRequest(client, { method: "POST", path: "/act", body });
+}
+
 function stringOrEmpty(value: unknown): string {
   return readStringValue(value) ?? "";
 }
@@ -352,8 +356,7 @@ export async function requestBrowserScreencast(
 
 export function isBrowserScreencastUnsupportedError(error: unknown): boolean {
   const record = asRecord(error);
-  const details =
-    error instanceof GatewayRequestError ? asRecord(error.details) : asRecord(record?.details);
+  const details = asRecord(record?.details);
   return (
     details?.code === "SCREENCAST_UNSUPPORTED" ||
     asRecord(details?.body)?.code === "SCREENCAST_UNSUPPORTED" ||
@@ -387,16 +390,12 @@ export async function clickBrowserCoords(
   client: BrowserRequestClient,
   params: { targetId: string; x: number; y: number; doubleClick?: boolean },
 ) {
-  await browserRequest(client, {
-    method: "POST",
-    path: "/act",
-    body: {
-      kind: "clickCoords",
-      targetId: params.targetId,
-      x: Math.max(0, Math.round(params.x)),
-      y: Math.max(0, Math.round(params.y)),
-      ...(params.doubleClick ? { doubleClick: true } : {}),
-    },
+  await browserAction(client, {
+    kind: "clickCoords",
+    targetId: params.targetId,
+    x: Math.max(0, Math.round(params.x)),
+    y: Math.max(0, Math.round(params.y)),
+    ...(params.doubleClick ? { doubleClick: true } : {}),
   });
 }
 
@@ -404,11 +403,7 @@ export async function pressBrowserKey(
   client: BrowserRequestClient,
   params: { targetId: string; key: string },
 ) {
-  await browserRequest(client, {
-    method: "POST",
-    path: "/act",
-    body: { kind: "press", targetId: params.targetId, key: params.key },
-  });
+  await browserAction(client, { kind: "press", targetId: params.targetId, key: params.key });
 }
 
 export async function insertBrowserText(
@@ -416,11 +411,7 @@ export async function insertBrowserText(
   params: { targetId: string; text: string },
 ) {
   try {
-    await browserRequest(client, {
-      method: "POST",
-      path: "/act",
-      body: { kind: "insertText", ...params },
-    });
+    await browserAction(client, { kind: "insertText", ...params });
   } catch {
     // Transport errors can echo request bodies containing pasted passwords.
     throw new Error(t("browser.errors.pasteFailed"));
@@ -431,15 +422,11 @@ export async function resizeBrowserViewport(
   client: BrowserRequestClient,
   params: { targetId: string; width: number; height: number },
 ) {
-  await browserRequest(client, {
-    method: "POST",
-    path: "/act",
-    body: {
-      kind: "resize",
-      targetId: params.targetId,
-      width: Math.round(params.width),
-      height: Math.round(params.height),
-    },
+  await browserAction(client, {
+    kind: "resize",
+    targetId: params.targetId,
+    width: Math.round(params.width),
+    height: Math.round(params.height),
   });
 }
 
@@ -448,11 +435,7 @@ async function evaluateInBrowser<T>(
   params: { targetId: string; fn: string },
 ): Promise<T | null> {
   const result = asRecord(
-    await browserRequest(client, {
-      method: "POST",
-      path: "/act",
-      body: { kind: "evaluate", targetId: params.targetId, fn: params.fn },
-    }),
+    await browserAction(client, { kind: "evaluate", targetId: params.targetId, fn: params.fn }),
   );
   return (result?.result as T | undefined) ?? null;
 }

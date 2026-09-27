@@ -119,18 +119,22 @@ it("refreshes committed metadata and lifecycle marks during a transcript window"
     expect(projection.materializedCount).toBe(before);
     const reads: string[] = [];
     const readDatabases = history.withSessionHistoryWorkerDatabases;
-    vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation((targets, consume) =>
-      readDatabases(targets, (owners) =>
-        consume(
-          owners.map((owner) => ({
-            ...owner,
-            readRowFacts(input) {
-              reads.push(...input.sessionKeys);
-              return owner.readRowFacts(input);
-            },
-          })),
+    vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
+      (targets, consume, lane) =>
+        readDatabases(
+          targets,
+          (owners) =>
+            consume(
+              owners.map((owner) => ({
+                ...owner,
+                readRowFacts(input) {
+                  reads.push(...input.sessionKeys);
+                  return owner.readRowFacts(input);
+                },
+              })),
+            ),
+          lane,
         ),
-      ),
     );
     sessionChanges.emit({ all: true, scope: "catalog" });
     await projection.ensureMaterialized();
@@ -139,24 +143,28 @@ it("refreshes committed metadata and lifecycle marks during a transcript window"
     const captured = createDeferredCore();
     const resume = createDeferredCore();
     let pause = true;
-    vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation((targets, consume) =>
-      readDatabases(targets, (owners) =>
-        consume(
-          owners.map((owner) => ({
-            ...owner,
-            async readRowFacts(input) {
-              reads.push(...input.sessionKeys);
-              const result = await owner.readRowFacts(input);
-              if (pause) {
-                pause = false;
-                captured.resolve();
-                await resume.promise;
-              }
-              return result;
-            },
-          })),
+    vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
+      (targets, consume, lane) =>
+        readDatabases(
+          targets,
+          (owners) =>
+            consume(
+              owners.map((owner) => ({
+                ...owner,
+                async readRowFacts(input) {
+                  reads.push(...input.sessionKeys);
+                  const result = await owner.readRowFacts(input);
+                  if (pause) {
+                    pause = false;
+                    captured.resolve();
+                    await resume.promise;
+                  }
+                  return result;
+                },
+              })),
+            ),
+          lane,
         ),
-      ),
     );
     sessionChanges.emit({ all: true, scope: "catalog", factsInvalidated: true });
     const refreshing = projection.ensureMaterialized();

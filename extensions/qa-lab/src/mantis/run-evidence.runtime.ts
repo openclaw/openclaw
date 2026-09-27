@@ -51,34 +51,28 @@ export function renderReport(params: {
     `Scenario: ${params.comparison.scenario}`,
     `Output: ${params.outputDir}`,
     "",
-    "## Baseline",
-    "",
-    `- Ref: \`${params.comparison.baseline.ref}\``,
-    `- Expected: ${params.comparison.baseline.expected}`,
-    `- Status: \`${params.baseline.status}\``,
-    `- Reproduced: \`${params.comparison.baseline.reproduced}\``,
-    params.baseline.screenshotPath
-      ? `- Screenshot: \`${path.join("baseline", path.basename(params.baseline.screenshotPath))}\``
-      : "- Screenshot: missing",
-    params.baseline.videoPath
-      ? `- Video: \`${path.join("baseline", path.basename(params.baseline.videoPath))}\``
-      : "- Video: missing",
-    params.baseline.scenarioDetails ? `- Details: ${params.baseline.scenarioDetails}` : undefined,
-    "",
-    "## Candidate",
-    "",
-    `- Ref: \`${params.comparison.candidate.ref}\``,
-    `- Expected: ${params.comparison.candidate.expected}`,
-    `- Status: \`${params.candidate.status}\``,
-    `- Fixed: \`${params.comparison.candidate.fixed}\``,
-    params.candidate.screenshotPath
-      ? `- Screenshot: \`${path.join("candidate", path.basename(params.candidate.screenshotPath))}\``
-      : "- Screenshot: missing",
-    params.candidate.videoPath
-      ? `- Video: \`${path.join("candidate", path.basename(params.candidate.videoPath))}\``
-      : "- Video: missing",
-    params.candidate.scenarioDetails ? `- Details: ${params.candidate.scenarioDetails}` : undefined,
-    "",
+    ...(["baseline", "candidate"] as const).flatMap((lane) => {
+      const result = params[lane];
+      const comparison = params.comparison[lane];
+      return [
+        lane === "baseline" ? "## Baseline" : "## Candidate",
+        "",
+        `- Ref: \`${comparison.ref}\``,
+        `- Expected: ${comparison.expected}`,
+        `- Status: \`${result.status}\``,
+        lane === "baseline"
+          ? `- Reproduced: \`${params.comparison.baseline.reproduced}\``
+          : `- Fixed: \`${params.comparison.candidate.fixed}\``,
+        result.screenshotPath
+          ? `- Screenshot: \`${path.join(lane, path.basename(result.screenshotPath))}\``
+          : "- Screenshot: missing",
+        result.videoPath
+          ? `- Video: \`${path.join(lane, path.basename(result.videoPath))}\``
+          : "- Video: missing",
+        result.scenarioDetails ? `- Details: ${result.scenarioDetails}` : undefined,
+        "",
+      ];
+    }),
   ].filter((line) => line !== undefined);
   return `${lines.join("\n")}\n`;
 }
@@ -122,54 +116,32 @@ export function buildEvidenceManifest(params: {
       targetPath: "mantis-report.md",
     },
   ];
-  const baselineScreenshot = relativeArtifactPath(params.outputDir, params.baseline.screenshotPath);
-  if (baselineScreenshot) {
-    artifacts.push({
-      alt: params.scenarioConfig.baselineScreenshotAlt,
-      kind: "timeline",
-      label: params.scenarioConfig.baselineLabel,
-      lane: "baseline",
-      path: baselineScreenshot,
-      targetPath: "baseline.png",
-      width: 420,
-    });
+  for (const lane of ["baseline", "candidate"] as const) {
+    const screenshot = relativeArtifactPath(params.outputDir, params[lane].screenshotPath);
+    if (screenshot) {
+      artifacts.push({
+        alt: params.scenarioConfig[`${lane}ScreenshotAlt`],
+        kind: "timeline",
+        label: params.scenarioConfig[`${lane}Label`],
+        lane,
+        path: screenshot,
+        targetPath: `${lane}.png`,
+        width: 420,
+      });
+    }
   }
-  const candidateScreenshot = relativeArtifactPath(
-    params.outputDir,
-    params.candidate.screenshotPath,
-  );
-  if (candidateScreenshot) {
-    artifacts.push({
-      alt: params.scenarioConfig.candidateScreenshotAlt,
-      kind: "timeline",
-      label: params.scenarioConfig.candidateLabel,
-      lane: "candidate",
-      path: candidateScreenshot,
-      targetPath: "candidate.png",
-      width: 420,
-    });
-  }
-  const baselineVideo = relativeArtifactPath(params.outputDir, params.baseline.videoPath);
-  if (baselineVideo) {
-    artifacts.push({
-      kind: "fullVideo",
-      label: "Baseline MP4",
-      lane: "baseline",
-      path: baselineVideo,
-      targetPath: "baseline.mp4",
-      required: false,
-    });
-  }
-  const candidateVideo = relativeArtifactPath(params.outputDir, params.candidate.videoPath);
-  if (candidateVideo) {
-    artifacts.push({
-      kind: "fullVideo",
-      label: "Candidate MP4",
-      lane: "candidate",
-      path: candidateVideo,
-      targetPath: "candidate.mp4",
-      required: false,
-    });
+  for (const lane of ["baseline", "candidate"] as const) {
+    const video = relativeArtifactPath(params.outputDir, params[lane].videoPath);
+    if (video) {
+      artifacts.push({
+        kind: "fullVideo",
+        label: lane === "baseline" ? "Baseline MP4" : "Candidate MP4",
+        lane,
+        path: video,
+        targetPath: `${lane}.mp4`,
+        required: false,
+      });
+    }
   }
 
   return {

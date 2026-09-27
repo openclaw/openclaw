@@ -18,6 +18,7 @@ import * as clientVoiceSession from "../talk/client-voice-session.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-tool-call.state.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { markCodeModeControlTool } from "./code-mode-control-tools.js";
 
 const VOICE_SESSION_ID = "voice-authority";
 const SEND = { action: "send", to: "target-a", message: "approved body" };
@@ -90,6 +91,46 @@ describe("spoken confirmation authority reaches the final tool effect", () => {
     resetClientVoiceConfirmationStateForTest();
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("executes marked Code Mode scripts while still confirming plain shell exec", async () => {
+    const runId = "run-code-mode";
+    bindVoiceRuns([runId]);
+    const ctx = { runId, agentId: "main", sessionKey: "agent:main:voice" };
+    const executeScript = vi.fn().mockResolvedValue({ content: [], details: { sessions: [] } });
+    const script = wrapToolWithBeforeToolCallHook(
+      markCodeModeControlTool({
+        name: "exec",
+        label: "Code Mode",
+        description: "Run a Code Mode script",
+        parameters: { type: "object", properties: {} },
+        execute: executeScript,
+      }),
+      ctx,
+    );
+    const result = await script.execute("script-1", {
+      code: "const x = await sessions_list({}); return x;",
+    });
+    expect(result.details).toEqual({ sessions: [] });
+    expect(executeScript).toHaveBeenCalledOnce();
+
+    const executeShell = vi.fn();
+    const shell = wrapToolWithBeforeToolCallHook(
+      {
+        name: "exec",
+        label: "Shell",
+        description: "Run a shell command",
+        parameters: { type: "object", properties: {} },
+        execute: executeShell,
+      },
+      ctx,
+    );
+    const blocked = await shell.execute("shell-1", { command: "touch voice-confirmation-marker" });
+    expect(blocked.details).toMatchObject({
+      deniedReason: "client-voice-confirmation",
+      reason: expect.stringContaining("VOICE_CONFIRMATION_REQUIRED:"),
+    });
+    expect(executeShell).not.toHaveBeenCalled();
   });
 
   it("runs the tool body once for the current confirmed action", async () => {

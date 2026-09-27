@@ -28,6 +28,8 @@ export function createSessionRowRefresh(
       registryPrepared: boolean;
     };
     databaseRevision: () => number;
+    registrySnapshot: () => object | undefined;
+    env: NodeJS.ProcessEnv;
     runAsOwner: <T>(operation: () => T) => T;
     lookup: (query: records.Lookup) => records.Row | undefined;
     prepareRegistryFacts: () => Promise<void> | undefined;
@@ -65,7 +67,7 @@ export function createSessionRowRefresh(
           }),
         );
         if (selected.size > 0) {
-          await owner.runAsOwner(() => readExactRows(selected));
+          await owner.runAsOwner(() => readRows(selected, true));
         }
       }
       for (const read of batch.values()) {
@@ -163,12 +165,20 @@ export function createSessionRowRefresh(
     // The bulk read may reject its facts; recheck the rows once it settles.
     return Promise.all([exact, ...joined]).then(() => prepareExactRows(queries));
   }
-  function readExactRows(selected: ReadonlySet<string>) {
+  function readRows(selected: ReadonlySet<string>, materializeArchived = false) {
     return withSessionRowDatabaseFacts(
-      { rows: owner.rows, dirty: owner.dirty, selected, cfg: owner.state().cfg, revision },
+      {
+        rows: owner.rows,
+        dirty: owner.dirty,
+        selected,
+        cfg: owner.state().cfg,
+        revision,
+        registrySnapshot: owner.registrySnapshot,
+        env: owner.env,
+      },
       {
         refreshPending: materializer.refreshPending,
-        accept: (ids, facts) => materializer.accept(ids, facts, true),
+        accept: (ids, facts) => materializer.accept(ids, facts, materializeArchived),
       },
     );
   }
@@ -252,10 +262,7 @@ export function createSessionRowRefresh(
       bulkReads.set(id, read.promise);
     }
     try {
-      await withSessionRowDatabaseFacts(
-        { rows: owner.rows, dirty: owner.dirty, selected, cfg: owner.state().cfg, revision },
-        materializer,
-      );
+      await readRows(selected);
     } finally {
       for (const id of selected) {
         if (bulkReads.get(id) === read.promise) {

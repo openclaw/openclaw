@@ -52,7 +52,7 @@ these hub links to reach the same top-level docs areas from the page body.
 
 <Columns>
   <Card title="Get started" href="/start/getting-started" icon="rocket">
-    Overview, showcase, first steps, and setup guides.
+    Overview, first steps, and setup guides.
   </Card>
   <Card title="Install" href="/install" icon="download">
     Install paths, updates, containers, hosting, and advanced setup.

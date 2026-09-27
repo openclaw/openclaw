@@ -1,7 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
+import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-operation-settlement.js";
-import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import type {
@@ -24,7 +25,6 @@ export async function syncLiveTaskFlowWithWorker(
       context,
       (scope) => scope.execute({ type: "flows.syncLiveMirroredTask", input: params }),
       {
-        requireStateLifecycle: true,
         assertCurrent: () => authority.assertCurrent(),
         createAdmission(retained) {
           // Record factory entry even when its first authority assertion refuses.
@@ -62,8 +62,11 @@ export async function syncLiveTaskFlowWithWorker(
       },
     );
   } catch (error) {
-    if (!settlement && error instanceof StateDatabaseCoordinatorContentionError) {
-      // Opening or lifecycle acquisition can refuse before command admission/dispatch.
+    if (
+      !settlement &&
+      (isSqliteLockError(error) || error instanceof GatewayStateOwnerContentionError)
+    ) {
+      // Database opening can refuse before command admission or dispatch.
       authority.assertCurrent();
       return { kind: "retry", reason: "storage_contention" };
     }

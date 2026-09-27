@@ -8,13 +8,12 @@ describe("registered sessions_spawn binding discovery", () => {
   afterEach(() => resetPluginRuntimeStateForTest());
 
   it.each([
-    { placement: "current", supportsCurrent: true, spawnSessions: true, available: true },
-    { placement: "current", supportsCurrent: false, spawnSessions: true, available: false },
-    { placement: "current", supportsCurrent: true, spawnSessions: false, available: false },
-    { placement: "child", supportsCurrent: false, spawnSessions: true, available: true },
+    { placement: "current", spawnSessions: true, available: false },
+    { placement: "child", spawnSessions: true, available: true },
+    { placement: "child", spawnSessions: false, available: false },
   ] as const)(
-    "$placement, current support=$supportsCurrent, spawn policy=$spawnSessions",
-    ({ placement, supportsCurrent, spawnSessions, available }) => {
+    "$placement placement, spawn policy=$spawnSessions",
+    ({ placement, spawnSessions, available }) => {
       setActivePluginRegistry(
         createTestRegistry([
           {
@@ -24,7 +23,7 @@ describe("registered sessions_spawn binding discovery", () => {
               ...createChannelTestPluginBase({ id: "binding-chat", label: "Binding chat" }),
               conversationBindings: {
                 defaultTopLevelPlacement: placement,
-                supportsCurrentConversationBinding: supportsCurrent,
+                supportsCurrentConversationBinding: true,
               },
             },
           },

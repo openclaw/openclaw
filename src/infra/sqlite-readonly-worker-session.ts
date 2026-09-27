@@ -303,7 +303,6 @@ export function createSqliteReadOnlyWorkerSession(
                   ? {
                       auth: {
                         expectedIdentity: options.expectedIdentity,
-                        coordinatorRuntime: options.coordinatorRuntime,
                       },
                     }
                   : {}),

@@ -81,6 +81,7 @@ export type ReplyToolAuthorityInput = {
       | "traceAuthorized"
       | "approvalReviewerDeviceId"
       | "authProfileId"
+      | "authProfileIdSource"
       | "clientCaps"
       | "gatewayUiCommandTarget"
       | "toolBindings"
@@ -381,7 +382,11 @@ function resolveReplyToolAuthorityInputFingerprint(
         elevatedLevel: execution.elevatedLevel,
         bashElevated: execution.bashElevated,
         traceAuthorized: execution.traceAuthorized === true,
-        authProfileId: execution.authProfileId,
+        // Automatic credential rotation retains the turn; explicit account pins stay exact.
+        authProfile:
+          execution.authProfileIdSource === "auto"
+            ? { source: "auto" }
+            : { id: execution.authProfileId },
         clientCaps: [...new Set(execution.clientCaps ?? [])].toSorted(),
         gatewayUiCommandTarget:
           authority && screenTarget?.profileId === authority.profileId
@@ -409,6 +414,7 @@ export function prepareReplyToolAuthority(
 ): ReplyToolAuthoritySnapshot {
   const snapshot = snapshotFollowupRunToolAuthority(run);
   return {
+    requestedRoute: Object.freeze({ provider: snapshot.run.provider, model: snapshot.run.model }),
     fingerprint: (route) => resolveReplyToolAuthorityInputFingerprint(snapshot, route),
     project: (overlay, route) => {
       // Steering retains the running turn's authority and browser bindings across reconnects.

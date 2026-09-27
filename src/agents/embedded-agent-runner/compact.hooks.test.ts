@@ -118,12 +118,13 @@ import {
   clearActiveEmbeddedRun,
   isEmbeddedAgentRunActive,
   isEmbeddedAgentRunHandleActive,
+  queueEmbeddedAgentMessageWithOutcomeAsync,
   setActiveEmbeddedRun,
 } from "./runs.js";
 
 let compactEmbeddedAgentSessionDirect: typeof import("./compact.js").compactEmbeddedAgentSessionDirect;
 let compactEmbeddedAgentSession: CompactHooksQueuedCompaction;
-let compactTesting: typeof import("./compact.js").testing;
+let compactTesting: typeof import("./compact.hooks.owner-test-support.js");
 let onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 let onInternalSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onInternalSessionTranscriptUpdate;
 let diagnosticEvents: typeof import("../../infra/diagnostic-events.js");
@@ -388,14 +389,14 @@ async function runCompactionHooks(params: { sessionKey: string; messageProvider?
 
 beforeAll(async () => {
   const loaded = await loadCompactHooksHarness();
-  [diagnosticEvents, diagnosticRunActivity] = await Promise.all([
+  [diagnosticEvents, diagnosticRunActivity, compactTesting] = await Promise.all([
     import("../../infra/diagnostic-events.js"),
     import("../../logging/diagnostic-run-activity.js"),
+    import("./compact.hooks.owner-test-support.js"),
   ]);
   compactEmbeddedAgentSessionDirect = (params) =>
     loaded.compactEmbeddedAgentSessionDirect({ agentId: "main", ...params });
   compactEmbeddedAgentSession = loaded.compactEmbeddedAgentSession;
-  compactTesting = loaded.testing;
   onSessionTranscriptUpdate = loaded.onSessionTranscriptUpdate;
   onInternalSessionTranscriptUpdate = loaded.onInternalSessionTranscriptUpdate;
   TEST_STORE_PATH = await compactionFixture.prepare();
@@ -6562,6 +6563,57 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(hookRunner.runBeforeCompaction).not.toHaveBeenCalled();
     expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
     expect(isEmbeddedAgentRunHandleActive(TEST_SESSION_ID)).toBe(false);
+  });
+
+  it("skips a faulty compacting probe and cancels the live compaction behind it", async () => {
+    const faultyAbort = vi.fn();
+    const faultyHandle = {
+      kind: "embedded" as const,
+      queueMessage: async () => {},
+      isStreaming: () => true,
+      isCompacting: () => {
+        throw new Error("compaction probe unavailable");
+      },
+      abort: faultyAbort,
+    };
+    setActiveEmbeddedRun("session-faulty-probe", faultyHandle, "agent:main:faulty-probe");
+    const pending = mockPendingContextEngineCompaction();
+    try {
+      const resultPromise = compactEmbeddedAgentSession(
+        wrappedCompactionArgs({ trigger: "manual" }),
+      );
+      await pending.started.promise;
+      expect(isEmbeddedAgentRunHandleActive(TEST_SESSION_ID)).toBe(true);
+
+      // An unreadable compaction state fails closed: the caller keeps the same
+      // structured rejection a genuinely compacting run returns, and the probe
+      // exception never reaches the steering caller.
+      await expect(
+        queueEmbeddedAgentMessageWithOutcomeAsync("session-faulty-probe", "steer"),
+      ).resolves.toMatchObject({ queued: false, reason: "compacting" });
+      await expect(
+        queueEmbeddedAgentMessageWithOutcomeAsync(TEST_SESSION_ID, "steer"),
+      ).resolves.toMatchObject({ queued: false, reason: "compacting" });
+
+      // A restart sweep walks past the unreadable handle and cancels the
+      // compaction that is really running behind it.
+      expect(abortEmbeddedAgentRun(undefined, { mode: "compacting", reason: "restart" })).toBe(
+        true,
+      );
+      expect(faultyAbort).not.toHaveBeenCalled();
+      expect(isEmbeddedAgentRunHandleActive("session-faulty-probe")).toBe(true);
+      expect(pending.signal?.aborted).toBe(true);
+
+      await expect(resultPromise).resolves.toMatchObject({
+        ok: false,
+        compacted: false,
+        reason: expect.stringContaining("abort"),
+      });
+      expect(isEmbeddedAgentRunHandleActive(TEST_SESSION_ID)).toBe(false);
+    } finally {
+      pending.release.resolve(undefined);
+      clearActiveEmbeddedRun("session-faulty-probe", faultyHandle, "agent:main:faulty-probe");
+    }
   });
 
   it.each([

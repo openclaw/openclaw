@@ -12,12 +12,12 @@ const { read, update, context, lease } = vi.hoisted(() => ({
   },
   context: {
     admission: {
+      coordinationKey: "synthetic-state",
       databasePath: "/synthetic/mcp/state.sqlite",
       identity: { key: "synthetic-state", canonicalPath: "/synthetic/mcp/state.sqlite" },
       assertCurrent() {},
     },
     environment: { OPENCLAW_STATE_DIR: "/synthetic/mcp" },
-    coordinatorRuntime: { directory: "/synthetic/mcp/coordinator", keepAlive: false },
   },
 }));
 

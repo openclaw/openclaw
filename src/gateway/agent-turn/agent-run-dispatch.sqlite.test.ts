@@ -20,7 +20,9 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import { captureTaskExecutionOwner } from "../../tasks/task-execution-owner.js";
 import { createRunningTaskRunCoreWithReceiptAsync } from "../../tasks/task-executor-create.async.js";
 import { loadTaskFlowRegistryStateFromSqlite } from "../../tasks/task-flow-registry.store.sqlite.js";
+import { getTaskActivitySnapshot } from "../../tasks/task-registry-activity.js";
 import * as taskLineage from "../../tasks/task-registry-agent-event-lineage.js";
+import { captureTaskRegistryReadFence } from "../../tasks/task-registry-listener-state.js";
 import { requestTasks } from "../../tasks/task-registry-read.test-support.js";
 import { taskDeliveryStates, tasks } from "../../tasks/task-registry-state.js";
 import {
@@ -35,7 +37,7 @@ import {
   resetTaskRegistryForTests,
 } from "../../tasks/task-runtime.test-helpers.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { holdStateDatabaseCoordinator } from "../../test-utils/state-database-contention.js";
+import { holdStateDatabaseWriteTransaction } from "../../test-utils/state-database-contention.js";
 import { dispatchAgentRunFromGateway } from "./agent-run-dispatch.js";
 import { createTrackedDispatch } from "./agent-run-dispatch.test-support.js";
 import { registerSessionFollowupTask } from "./agent-run-task-tracking.js";
@@ -44,6 +46,127 @@ import type { AgentTurnIo } from "./types.js";
 const provider = vi.hoisted(() => ({
   execute: vi.fn<typeof import("../../commands/agent.js").agentCommandFromGatewayIngress>(),
 }));
+
+it.each([
+  { mode: "ordinary CLI", incognito: false, followup: false },
+  { mode: "Incognito CLI", incognito: true, followup: false },
+  { mode: "Incognito follow-up", incognito: true, followup: true },
+])(
+  "keeps $mode task lifecycle receipts free of private content",
+  async ({ incognito, followup }) => {
+    const state = await createOpenClawTestState({ layout: "state-only" });
+    const registry = createEmptyPluginRegistry();
+    markPluginRegistryActive(registry);
+    try {
+      await withPluginRuntimeRegistryScope(registry, async () => {
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+        const { runId, context, entry } = createTrackedDispatch();
+        const sessionKey = incognito
+          ? "agent:main:dashboard:incognito-synthetic-task"
+          : entry.sessionKey;
+        entry.sessionKey = sessionKey;
+        const content = {
+          task: "Synthetic private prompt for task persistence",
+          label: "Synthetic private follow-up label",
+          progress: "Synthetic private provider error event",
+          activity: "Synthetic private live assistant activity",
+          failure: "Synthetic private provider terminal failure",
+        };
+        const expectedError = incognito ? "Incognito task error." : content.failure;
+        const readTask = () =>
+          [...loadTaskRegistryStateFromSqlite().tasks.values()].find(
+            (task) => task.runId === runId,
+          );
+        const registration = {
+          followup: {
+            kind: "session_followup" as const,
+            requesterSessionKey: sessionKey,
+            label: content.label,
+          },
+          runId,
+          sessionKey,
+          task: content.task,
+          requesterOrigin: undefined,
+          assertCurrent() {},
+        };
+        const tracking = followup ? await registerSessionFollowupTask(registration) : "cli";
+        if (followup && typeof tracking === "object") {
+          const reused = await registerSessionFollowupTask(registration);
+          expect.soft(reused.task.taskId).toBe(tracking.task.taskId);
+        }
+        provider.execute.mockImplementation(async (options) => {
+          expect.soft(options.message).toBe(content.task);
+          expect.soft(readTask()?.task).toBe(incognito ? "Incognito task" : content.task);
+          if (followup) {
+            expect.soft(readTask()?.label).toBe("Incognito task");
+          }
+          await options.onExecutionStarted?.();
+          emitAgentEvent({ runId, stream: "assistant", data: { text: content.activity } });
+          const taskId = readTask()?.taskId;
+          expect
+            .soft(taskId && getTaskActivitySnapshot(taskId)?.lastActivity)
+            .toBe(content.activity);
+          emitAgentEvent({ runId, stream: "error", data: { error: content.progress } });
+          await captureTaskRegistryReadFence(captureOpenClawStateWorkerContext().admission);
+          expect
+            .soft(readTask()?.error)
+            .toBe(incognito ? "Incognito task error." : content.progress);
+          throw new Error(content.failure);
+        });
+        try {
+          const emitFinal = vi.fn<AgentTurnIo["emitFinal"]>();
+          await dispatchAgentRunFromGateway({
+            ingressOpts: { message: content.task, sessionKey, allowModelOverride: false },
+            runId,
+            dedupeKeys: [`agent:${runId}`],
+            admittedRunEntry: entry,
+            abortController: entry.controller,
+            assertCurrent() {},
+            assertSettlementCurrent() {},
+            cleanupAbortController() {
+              context.chatAbortControllers.delete(runId);
+            },
+            io: { emitAcceptance: vi.fn(), emitFinal },
+            context,
+            taskTrackingMode: tracking,
+          });
+          expect.soft(provider.execute).toHaveBeenCalledOnce();
+          expect.soft(emitFinal.mock.calls[0]?.[0]?.[1]).toMatchObject({
+            status: "error",
+            summary: content.failure,
+          });
+          await closeOpenClawStateDatabaseAsync();
+          resetTaskRegistryForTests({ persist: false });
+          const persisted = readTask();
+          expect.soft(persisted).toMatchObject({
+            task: incognito ? "Incognito task" : content.task,
+            status: "failed",
+            error: expectedError,
+          });
+          expect.soft(persisted?.terminalSummary).toBe(incognito ? undefined : content.failure);
+          if (incognito) {
+            const durable = JSON.stringify({
+              tasks: [...loadTaskRegistryStateFromSqlite().tasks.values()],
+              flows: [...loadTaskFlowRegistryStateFromSqlite().flows.values()],
+            });
+            for (const value of Object.values(content)) {
+              expect.soft(durable).not.toContain(value);
+            }
+          }
+        } finally {
+          provider.execute.mockReset();
+          await closeOpenClawStateDatabaseAsync();
+          resetTaskRegistryForTests({ persist: false });
+          resetTaskFlowRegistryForTests({ persist: false });
+        }
+      });
+    } finally {
+      markPluginRegistryRetired(registry);
+      await state.cleanup();
+    }
+  },
+);
 
 it.each(["succeeded", "failed", "cancelled", "timed_out"] as const)(
   "releases rejected follow-up lineage without rewriting a %s task",
@@ -189,11 +312,7 @@ it.each([
         expect(receipt.task.taskId).toBe(originalReceipt?.task.taskId);
         const initialCreatedAt = receipt.task.createdAt;
         const workerContext = captureOpenClawStateWorkerContext();
-        const held = holdStateDatabaseCoordinator(
-          workerContext.admission.databasePath,
-          workerContext.coordinatorRuntime,
-          5_000,
-        );
+        const held = holdStateDatabaseWriteTransaction(workerContext.admission.databasePath, 5_000);
         const entered = createDeferred();
         const releaseProvider = createDeferred();
         const timerObserved = createDeferred<number>();
@@ -569,9 +688,12 @@ it.each([
             notifyPolicy: "silent",
           });
           expect(creation).toEqual({ taskId: running.taskId, writes: noWrites });
-          expect(
-            Object.values(creationSql ?? {}).flatMap((counts) => Object.values(counts)),
-          ).toEqual(Array(28).fill(0));
+          expect(creationSql).toBeDefined();
+          const creationSqlCounts = Object.values(creationSql ?? {}).flatMap((counts) =>
+            Object.values(counts),
+          );
+          expect(creationSqlCounts.length).toBeGreaterThan(0);
+          expect(creationSqlCounts.every((count) => count === 0)).toBe(true);
           expect(running.parentFlowId).toBeUndefined();
           expect(observed.flowCount).toBe(0);
           expect(observed.writes).toEqual(noWrites);

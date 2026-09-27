@@ -35,6 +35,7 @@ export const validateWorkerHeartbeatParams = compile(S.WorkerHeartbeatParamsSche
 export const validateWorkerSessionsSpawnParams = compile(S.WorkerSessionsSpawnParamsSchema);
 export const validateWorkerSessionsSendParams = compile(S.WorkerSessionsSendParamsSchema);
 export const validateWorkerPortalParams = compile(S.WorkerPortalParamsSchema);
+export const validateWorkerPresenceParams = compile(S.WorkerPresenceParamsSchema);
 export const validateWorkerComputerParams = compile(WorkerComputerParamsSchema);
 
 function checkWorkerProtocolJson(data: unknown): ValidationError | undefined {
@@ -254,6 +255,8 @@ export const validateDesktopReleaseParams = compile(S.DesktopReleaseParamsSchema
 export const validateDesktopReleaseResult = compile(S.DesktopReleaseResultSchema);
 export const validateSystemInfoParams = compile(S.SystemInfoParamsSchema);
 export const validateSystemInfoResult = compile(S.SystemInfoResultSchema);
+export const validatePresenceQueryParams = compile(S.PresenceQueryParamsSchema);
+export const validatePresenceQueryResult = compile(S.PresenceQueryResultSchema);
 export const validateNodePendingAckParams = compile(S.NodePendingAckParamsSchema);
 export const validateNodeDescribeParams = compile(S.NodeDescribeParamsSchema);
 export const validateNodeInvokeParams = compile(S.NodeInvokeParamsSchema);
@@ -521,6 +524,7 @@ export const validateCronUpdateParams = compile(S.CronUpdateParamsSchema);
 export const validateCronRemoveParams = compile(S.CronRemoveParamsSchema);
 export const validateCronRunParams = compile(S.CronRunParamsSchema);
 export const validateCronRunsParams = compile(S.CronRunsParamsSchema);
+export const validateCronHistoryParams = compile(S.CronHistoryParamsSchema);
 export const validateCronScratchGetParams = compile(S.CronScratchGetParamsSchema);
 export const validateCronScratchSetParams = compile(S.CronScratchSetParamsSchema);
 export const validateDevicePairListParams = compile(S.DevicePairListParamsSchema);

@@ -7,7 +7,8 @@ import { maybeStopManagedServiceBeforeMutableUpdate } from "../cli/update-cli/up
 import { withEnvAsync } from "../test-utils/env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import type { ExecResult } from "./exec-file.js";
-import type { SystemdServiceReadTarget } from "./service-types.js";
+import type { SystemdGatewayInstallation, SystemdServiceReadTarget } from "./service-types.js";
+import * as systemdScope from "./systemd-scope.js";
 
 const exec = vi.hoisted(() => vi.fn<typeof import("./exec-file.js").execFileUtf8>());
 const discovery = vi.hoisted(() =>
@@ -199,6 +200,7 @@ it.each<ScopeCase>([
       KillMode: property("s", "control-group"),
       TasksCurrent: property("t", running ? 1 : 0),
       MemoryCurrent: property("t", 0),
+      ControlGroup: property("s", `/system.slice/${target.unitName}`),
     };
     const otherObject = "/org/freedesktop/systemd1/unit/other_2eservice";
     const otherProperties: Record<string, unknown> = {
@@ -365,6 +367,67 @@ it.each<ScopeCase>([
           },
           definitionMutationCapability: { kind: "sealed", reason: "system-owned" },
         });
+        if (file === "openclaw.service") {
+          const actualInstallationDiscovery = systemdScope.findSystemdGatewayInstallation;
+          const installationDiscovery = vi.spyOn(systemdScope, "findSystemdGatewayInstallation");
+          try {
+            for (const selection of [
+              "discovered",
+              "supplied",
+              "delegated",
+              "none",
+              "dueling",
+              "explicit",
+            ] as const) {
+              const supplied: SystemdGatewayInstallation | undefined =
+                selection === "none" || selection === "explicit"
+                  ? { kind: "none" }
+                  : selection === "dueling"
+                    ? { kind: "dueling", user: { ...target, scope: "user" }, system: target }
+                    : selection === "discovered"
+                      ? undefined
+                      : { kind: "system", system: target };
+              const service = { ...resolveGatewayService() };
+              if (selection === "delegated") {
+                const readCommand = service.readCommand;
+                service.readCommand = (...args) => readCommand(...args);
+              }
+              const shouldDiscover =
+                selection === "discovered" || selection === "none" || selection === "dueling";
+              installationDiscovery.mockReset();
+              if (shouldDiscover) {
+                installationDiscovery.mockImplementation(actualInstallationDiscovery);
+              } else {
+                installationDiscovery.mockRejectedValue(
+                  new Error("Supplied target must retain its scope"),
+                );
+              }
+              const selectedState = await readGatewayServiceState(service, {
+                requireEffective: true,
+                requireLoadedCommand: true,
+                systemdInstallation: supplied,
+                systemdReadTarget: selection === "explicit" ? target : undefined,
+              });
+              expect(installationDiscovery, selection).toHaveBeenCalledTimes(
+                shouldDiscover ? 1 : 0,
+              );
+              expect(selectedState, selection).toMatchObject({
+                systemdInstallation:
+                  selection === "explicit" ? { kind: "none" } : { kind: "system", system: target },
+                installed: true,
+                running: false,
+                loadState: { status: "loaded" },
+                runtime: {
+                  status: "stopped",
+                  systemd: { scope: "system", unit: target.unitName, managerUid: 0 },
+                },
+                definitionMutationCapability: { kind: "sealed", reason: "system-owned" },
+              });
+            }
+          } finally {
+            installationDiscovery.mockRestore();
+          }
+        }
         const admitted = await maybeStopManagedServiceBeforeMutableUpdate({
           root,
           updateInstallKind: "package",

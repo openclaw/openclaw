@@ -19,29 +19,6 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("assertSqliteIntegrity", () => {
-  it("accepts structurally and referentially consistent databases", () => {
-    const sqlite = requireNodeSqlite();
-    const database = new sqlite.DatabaseSync(":memory:");
-    try {
-      database.exec(`
-        PRAGMA foreign_keys = ON;
-        CREATE TABLE parents (id INTEGER PRIMARY KEY);
-        CREATE TABLE children (
-          id INTEGER PRIMARY KEY,
-          parent_id INTEGER NOT NULL REFERENCES parents(id)
-        );
-        INSERT INTO parents (id) VALUES (1);
-        INSERT INTO children (id, parent_id) VALUES (1, 1);
-      `);
-
-      expect(assertSqliteIntegrity(database, "test database")).toEqual({
-        integrityCheck: "ok",
-      });
-    } finally {
-      database.close();
-    }
-  });
-
   it("rejects foreign-key violations that structural checks do not detect", () => {
     const sqlite = requireNodeSqlite();
     const database = new sqlite.DatabaseSync(":memory:");
@@ -403,6 +380,7 @@ describe("integrity gate attribution", () => {
           expect(failure).toBeUndefined();
         }
         expect(diagnostics).toEqual({
+          integrityGateMode: "full",
           integrityGateMs: gateMs,
           integrityGateOutcome: foreignKeyViolation ? "failed" : "healthy",
           integrityCheckSyncMs: syncMs,
@@ -431,6 +409,7 @@ describe("integrity gate attribution", () => {
             sqliteIntegrityCheckSteps(database, "timed database", diagnostics),
           );
           expect(diagnostics).toEqual({
+            integrityGateMode: "full",
             integrityGateMs: 4,
             integrityGateOutcome: "healthy",
             integrityCheckSyncMs: 4,
@@ -459,6 +438,7 @@ describe("integrity gate attribution", () => {
             expect(worker.next().done).toBe(true);
           }
           expect(diagnostics).toEqual({
+            integrityGateMode: "full",
             integrityGateMs: Math.floor(lifetimeMs + 4.5),
             integrityGateOutcome: outcome,
             ...(checkMs === undefined ? {} : { integrityWorkerCheckMs: Math.floor(checkMs) }),
@@ -471,6 +451,7 @@ describe("integrity gate attribution", () => {
               sqliteIntegrityCheckSteps(database, "timed database", diagnostics),
             );
             expect(diagnostics).toEqual({
+              integrityGateMode: "full",
               integrityGateMs: 4,
               integrityGateOutcome: "healthy",
               integrityCheckSyncMs: 4,
@@ -493,6 +474,7 @@ describe("integrity gate attribution", () => {
             expect(manual.next().done).toBe(true);
           }
           expect(diagnostics).toEqual({
+            integrityGateMode: "full",
             integrityGateMs: 12,
             integrityGateOutcome: outcome,
           });

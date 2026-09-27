@@ -1,7 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { expressionBuilder, type SelectQueryBuilder } from "kysely";
-import type { UserProfile as UserProfileListItem } from "../../packages/gateway-protocol/src/schema/users.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -9,21 +8,30 @@ import {
   prepareSqliteQueryTakeFirstSync,
 } from "../infra/kysely-sync.js";
 import { generateSecureUuid } from "../infra/secure-random.js";
+import { parseSqliteTableDefinition } from "../infra/sqlite-schema-contract-assembly.js";
+import {
+  getAdmittedSqliteSchemaFacts,
+  type SqliteSchemaFacts,
+} from "../infra/sqlite-schema-facts.js";
+import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { USER_PROFILE_AVATAR_MIME_TYPES } from "../shared/avatar-limits.js";
 import { tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
-import {
-  openOpenClawStateDatabase,
-  type OpenClawStateDatabaseOptions,
-} from "./openclaw-state-db.js";
 import { stageUserProfileEmailBindingChange } from "./user-profile-events.js";
 import type { UserProfileMutationContext } from "./user-profile-mutation.js";
+import type {
+  UserProfileAvatar,
+  UserProfileAvatarInspection,
+  UserProfileAvatarReadCommand,
+  UserProfileAvatarRepresentation,
+} from "./user-profiles-avatar.types.js";
 import {
-  ensureUserProfilesSchema,
   hasEnsuredUserProfileRoleSchema,
   UserProfileNotFoundError,
 } from "./user-profiles-schema.js";
 import type {
+  PreparedUserProfileIdentity,
   ProfileDisplayRow,
+  UserProfile,
   UserProfileDisplay,
   UserProfileAvatarMime,
   UserProfileEmailBinding,
@@ -33,7 +41,6 @@ import type {
 
 export type UserProfileRow = UserProfilesDatabase["user_profiles"];
 export type UserProfileMetadataRow = Omit<UserProfileRow, "avatar">;
-export type UserProfile = Omit<UserProfileListItem, "emails" | "githubIdentity" | "hasAvatar">;
 
 const metadataReaders = new WeakMap<
   DatabaseSync,
@@ -79,15 +86,19 @@ export const userProfileAvatarPresence = expressionBuilder<UserProfilesDatabase,
   "is not",
   null,
 ).as("has_avatar");
-type UserProfileAvatar = {
-  bytes: Uint8Array;
-  mime: UserProfileAvatarMime;
-  sha256: string;
-  updatedAt: number;
-};
 
 export function userProfilesDb(db: DatabaseSync) {
   return getNodeSqliteKysely<UserProfilesDatabase>(db);
+}
+
+export function selectUserProfileEmailAlias(db: DatabaseSync, email: string) {
+  return executeSqliteQueryTakeFirstSync(
+    db,
+    userProfilesDb(db)
+      .selectFrom("user_profile_emails")
+      .select("profile_id")
+      .where("email", "=", email),
+  );
 }
 
 /** Keep each exact binding and its profile's email projection in the same committed update. */
@@ -170,7 +181,7 @@ export function selectProfileDisplayEntries(db: DatabaseSync, ids?: string[]) {
   return rows.map((row): [string, typeof row] => [row.id, { ...row }]);
 }
 
-export function normalizeUserProfileAvatarMime(value: string | null): UserProfileAvatarMime | null {
+function normalizeUserProfileAvatarMime(value: string | null): UserProfileAvatarMime | null {
   return USER_PROFILE_AVATAR_MIME_TYPES.find((candidate) => candidate === value) ?? null;
 }
 
@@ -277,16 +288,108 @@ export function formatUserProfileAvatarEtag(sha256: string, mime: UserProfileAva
   return `"${sha256}-${mime.slice("image/".length)}"`;
 }
 
-export function getProfileAvatar(
+const avatarRoleColumns = new WeakMap<SqliteSchemaFacts, boolean>();
+
+function selectProfileAvatarMetadata(db: DatabaseSync, profileId: string) {
+  const schema = getAdmittedSqliteSchemaFacts(db);
+  if (!schema) {
+    throw new Error("Profile avatar reads require admitted schema facts");
+  }
+  const sql = schema.tableSql.get("user_profiles");
+  if (!sql) {
+    return undefined;
+  }
+  let hasRole = avatarRoleColumns.get(schema);
+  if (hasRole === undefined) {
+    hasRole = parseSqliteTableDefinition(sql, "user_profiles").columns.has("role");
+    avatarRoleColumns.set(schema, hasRole);
+  }
+  return selectResolvedUserProfile(
+    db,
+    profileId,
+    userProfilesDb(db)
+      .selectFrom("user_profiles")
+      .select([...userProfileDisplaySelection, "created_at"])
+      .select((eb) => [
+        hasRole ? "role" : eb.val<string | null>(null).as("role"),
+        eb.fn<number | null>("length", ["avatar"]).as("avatar_byte_length"),
+      ]),
+  );
+}
+
+export function inspectProfileAvatarInDatabase(
+  db: DatabaseSync,
   profileId: string,
-  options: OpenClawStateDatabaseOptions = {},
+): UserProfileAvatarInspection {
+  return runSqliteDeferredTransactionSync(db, () => {
+    const profile = selectProfileAvatarMetadata(db, profileId);
+    const mime = normalizeUserProfileAvatarMime(profile?.avatar_mime ?? null);
+    const avatar =
+      profile?.has_avatar && mime && profile.avatar_sha256
+        ? {
+            mime,
+            sha256: profile.avatar_sha256,
+            updatedAt: profile.updated_at,
+            byteLength: profile.avatar_byte_length ?? 0,
+          }
+        : undefined;
+    return {
+      profile: profile && toUserProfile(profile),
+      hasAvatar: profile?.has_avatar === 1,
+      avatar,
+      emails:
+        profile && !avatar
+          ? executeSqliteQuerySync(
+              db,
+              userProfilesDb(db)
+                .selectFrom("user_profile_emails")
+                .select("email")
+                .where("profile_id", "=", profile.id)
+                .orderBy("email", "asc"),
+            ).rows.map(({ email }) => email)
+          : [],
+    };
+  });
+}
+
+function readProfileAvatarInDatabase(
+  db: DatabaseSync,
+  profileId: string,
+  expected: UserProfileAvatarRepresentation,
 ): UserProfileAvatar | undefined {
-  ensureUserProfilesSchema(options);
-  const profile = selectResolvedUserProfileById(openOpenClawStateDatabase(options).db, profileId);
-  const mime = normalizeUserProfileAvatarMime(profile?.avatar_mime ?? null);
-  return profile?.avatar && mime && profile.avatar_sha256
-    ? { bytes: profile.avatar, mime, sha256: profile.avatar_sha256, updatedAt: profile.updated_at }
-    : undefined;
+  return runSqliteDeferredTransactionSync(db, () => {
+    const profile = selectProfileAvatarMetadata(db, profileId);
+    const mime = normalizeUserProfileAvatarMime(profile?.avatar_mime ?? null);
+    if (
+      !profile?.has_avatar ||
+      !mime ||
+      !profile.avatar_sha256 ||
+      profile.id !== expected.canonicalProfileId ||
+      profile.avatar_sha256 !== expected.sha256 ||
+      mime !== expected.mime
+    ) {
+      return undefined;
+    }
+    const bytes = executeSqliteQueryTakeFirstSync(
+      db,
+      userProfilesDb(db).selectFrom("user_profiles").select("avatar").where("id", "=", profile.id),
+    )?.avatar;
+    return bytes
+      ? { bytes, mime, sha256: profile.avatar_sha256, updatedAt: profile.updated_at }
+      : undefined;
+  });
+}
+
+export function readUserProfileAvatarCommand(
+  db: DatabaseSync,
+  command: UserProfileAvatarReadCommand,
+) {
+  return command.type === "userProfiles.avatar.inspect"
+    ? { type: command.type, inspection: inspectProfileAvatarInDatabase(db, command.profileId) }
+    : {
+        type: command.type,
+        avatar: readProfileAvatarInDatabase(db, command.profileId, command.expected),
+      };
 }
 
 export function projectUserProfileDisplay(
@@ -345,4 +448,64 @@ export function projectCatalogUserProfileIdentity(
       ),
     }
   );
+}
+
+/** Bind a canonical account and its original email lifetimes to the retained catalog owner. */
+export function bindPreparedUserProfileIdentity(
+  profileId: string,
+  catalog: {
+    rows: Map<string, ProfileDisplayRow>;
+    bindings: UserProfileEmailBindingIndex;
+    assertCurrent: (profileId: string) => void;
+    release: () => void;
+  },
+): PreparedUserProfileIdentity {
+  const { rows, bindings } = catalog;
+  const initial = [...bindings.byEmail.values()].filter(
+    (binding) => binding.profileId === profileId,
+  );
+  const ids = Object.freeze(
+    initial.flatMap((binding) => (binding.bindingId ? [binding.bindingId] : [])).toSorted(),
+  );
+  const assertCurrent = (requiredEmailBindingIds: readonly string[] = []) => {
+    catalog.assertCurrent(profileId);
+    if (
+      resolveCatalogProfile(rows, profileId)?.id !== profileId ||
+      requiredEmailBindingIds.some((id) => bindings.byId.get(id) !== profileId)
+    ) {
+      throw new UserProfileNotFoundError(profileId);
+    }
+  };
+  function readCurrentProfile(this: void, requiredEmailBindingIds?: readonly string[]) {
+    assertCurrent(requiredEmailBindingIds);
+    return { profileId, assignedRole: rows.get(profileId)?.role || null };
+  }
+  return {
+    readCurrentProfile,
+    get emailBindingIds() {
+      assertCurrent();
+      if (initial.some((binding) => binding.bindingId === null)) {
+        throw new UserProfileNotFoundError(profileId);
+      }
+      return ids;
+    },
+    readCurrentFacts(this: void, requiredEmailBindingIds) {
+      const profile = readCurrentProfile(requiredEmailBindingIds);
+      const aliases = new Set([profileId]);
+      for (const row of rows.values()) {
+        if (row.merged_into === profileId) {
+          aliases.add(row.id);
+        }
+      }
+      return {
+        profile: {
+          profileId: profile.profileId,
+          emails: [...(bindings.emailsByProfile.get(profileId) ?? [])].toSorted(),
+          assignedRole: profile.assignedRole,
+        },
+        aliases,
+      };
+    },
+    release: catalog.release,
+  };
 }

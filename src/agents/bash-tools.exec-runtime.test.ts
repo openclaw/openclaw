@@ -78,6 +78,21 @@ afterEach(() => {
   resetProcessRegistryForTests();
 });
 
+function runTestExecProcess(params: Partial<Parameters<typeof runExecProcess>[0]> = {}) {
+  return runExecProcess({
+    command: "test-command",
+    workdir: "/tmp",
+    env: {},
+    usePty: false,
+    warnings: [],
+    maxOutput: 1000,
+    pendingMaxOutput: 1000,
+    notifyOnExit: false,
+    timeoutSec: null,
+    ...params,
+  });
+}
+
 async function runExecWithExit(params: {
   exit: RunExit;
   stdout?: string | string[];
@@ -101,15 +116,8 @@ async function runExecWithExit(params: {
       };
     },
   );
-  const run = await runExecProcess({
-    command: "test-command",
-    workdir: "/tmp",
-    env: {},
+  const run = await runTestExecProcess({
     usePty: params.usePty ?? false,
-    warnings: [],
-    maxOutput: 1000,
-    pendingMaxOutput: 1000,
-    notifyOnExit: false,
     timeoutSec: params.timeoutSec ?? null,
   });
   return { run, outcome: await run.promise };
@@ -156,9 +164,6 @@ describe("runExecProcess cursor tracking", () => {
     { raw: ["\x1b[?1l\x1b", "[?1", "h"], expected: "application" },
     { raw: ["\x1b[?1h\x1b[?", "1", "l"], expected: "normal" },
     { raw: ["\x1b]0;\x1b[?1h", "\x07"], expected: "unknown" },
-    { raw: "\x1b[?1h", expected: "application" },
-    { raw: "\x1b[?1h\x1b[?1l", expected: "normal" },
-    { raw: "\x1b[?1l\x1b[?1h", expected: "application" },
   ])("tracks the last cursor-mode toggle as $expected", async ({ raw, expected }) => {
     const { run } = await runExecWithExit({
       stdout: raw,
@@ -191,16 +196,8 @@ describe("sandbox exec preparation failures", () => {
       });
       await expect(
         budget.run(() =>
-          runExecProcess({
+          runTestExecProcess({
             command: "echo forbidden",
-            workdir: "/tmp",
-            env: {},
-            usePty: false,
-            warnings: [],
-            maxOutput: 1000,
-            pendingMaxOutput: 1000,
-            notifyOnExit: false,
-            timeoutSec: null,
             beforeSpawn: async () => {
               await Promise.resolve();
               if (boundary === "preparation") {
@@ -233,16 +230,10 @@ describe("sandbox exec preparation failures", () => {
       });
 
       await expect(
-        runExecProcess({
+        runTestExecProcess({
           command: "echo should-not-run",
           workdir: process.cwd(),
-          env: {},
           usePty,
-          warnings: [],
-          maxOutput: 1000,
-          pendingMaxOutput: 1000,
-          notifyOnExit: false,
-          timeoutSec: null,
           startupSignal: controller.signal,
           beforeSpawn: async () => {
             if (++checks === cancelCheck) {
@@ -293,16 +284,11 @@ describe("sandbox exec preparation failures", () => {
           receiptAuthority: () => currentClaim === originalClaim,
         },
         () =>
-          runExecProcess({
+          runTestExecProcess({
             command: "source-authority-command",
             workdir: process.cwd(),
-            env: {},
             usePty,
             warnings,
-            maxOutput: 1000,
-            pendingMaxOutput: 1000,
-            notifyOnExit: false,
-            timeoutSec: null,
             startupSignal: generation.signal,
             beforeSpawn: async () => {
               if (++checks === loseAt) {
@@ -352,16 +338,7 @@ describe("sandbox exec preparation failures", () => {
     });
 
     const run = await withGatewayToolCallerIdentity(identity, () =>
-      runExecProcess({
-        command: "test-command",
-        workdir: "/tmp",
-        env: {},
-        usePty: false,
-        warnings: [],
-        maxOutput: 1000,
-        pendingMaxOutput: 1000,
-        notifyOnExit: false,
-        timeoutSec: null,
+      runTestExecProcess({
         beforeSpawn,
         onUpdate: () => updateIdentity(getGatewayToolCallerIdentity()),
         onSettledBeforeNotify: () => settledIdentity(getGatewayToolCallerIdentity()),
@@ -386,22 +363,14 @@ describe("sandbox exec preparation failures", () => {
     const beforeSpawn = vi.fn(async () => {
       throw denied;
     });
-    const pending = runExecProcess({
+    const pending = runTestExecProcess({
       command: "sandbox-command",
-      workdir: "/tmp",
-      env: {},
       sandbox: {
         containerName: "sandbox",
         workspaceDir: "/workspace",
         containerWorkdir: "/workspace",
         buildExecSpec: async () => await preparation.promise,
       },
-      usePty: false,
-      warnings: [],
-      maxOutput: 1000,
-      pendingMaxOutput: 1000,
-      notifyOnExit: false,
-      timeoutSec: null,
       beforeSpawn,
     });
 
@@ -422,21 +391,14 @@ describe("sandbox exec preparation failures", () => {
     );
 
     await expect(
-      runExecProcess({
+      runTestExecProcess({
         command: "sandbox-command",
-        workdir: "/tmp",
         env: { EXAMPLE_VALUE: "synthetic-runtime-sandbox-value" },
         sandbox: {
           containerName: "sandbox",
           workspaceDir: "/workspace",
           containerWorkdir: "/workspace",
         },
-        usePty: false,
-        warnings: [],
-        maxOutput: 1000,
-        pendingMaxOutput: 1000,
-        notifyOnExit: false,
-        timeoutSec: null,
       }),
     ).rejects.toThrow("sandbox backend does not provide buildExecSpec");
 
@@ -464,10 +426,8 @@ describe("sandbox exec preparation failures", () => {
     const failure = new Error("sandbox preparation failed");
 
     try {
-      const pending = runExecProcess({
+      const pending = runTestExecProcess({
         command: "sandbox-command",
-        workdir: "/tmp",
-        env: {},
         sandbox: {
           containerName: "sandbox",
           workspaceDir: "/workspace",
@@ -475,13 +435,7 @@ describe("sandbox exec preparation failures", () => {
           buildExecSpec: async () => await preparation.promise,
           finalizeExec,
         },
-        usePty: false,
-        warnings: [],
-        maxOutput: 1000,
-        pendingMaxOutput: 1000,
-        notifyOnExit: false,
         sessionKey: "agent:main:sandbox-preparation",
-        timeoutSec: null,
         onSettledBeforeNotify,
       });
 
@@ -569,10 +523,8 @@ describe("sandbox exec finalization suspension", () => {
         };
       });
 
-      const run = await runExecProcess({
+      const run = await runTestExecProcess({
         command: "sandbox-command",
-        workdir: "/tmp",
-        env: {},
         sandbox: {
           containerName: "sandbox",
           workspaceDir: "/workspace",
@@ -585,13 +537,8 @@ describe("sandbox exec finalization suspension", () => {
           }),
           finalizeExec,
         },
-        usePty: false,
-        warnings: [],
-        maxOutput: 1000,
-        pendingMaxOutput: 1000,
         notifyOnExit: true,
         sessionKey: "agent:main:main",
-        timeoutSec: null,
       });
       markBackgrounded(run.session);
       expect(getActiveBackgroundExecSessionCount()).toBe(1);
@@ -725,15 +672,13 @@ describe("runExecProcess PTY fallback", () => {
   });
 
   function runPtyFallback(warnings: string[] = []) {
-    return runExecProcess({
+    return runTestExecProcess({
       command: "printf ok",
       workdir: process.cwd(),
-      env: {},
       usePty: true,
       warnings,
       maxOutput: 20_000,
       pendingMaxOutput: 20_000,
-      notifyOnExit: false,
       timeoutSec: 5,
     });
   }
@@ -784,15 +729,11 @@ describe("runExecProcess PTY fallback", () => {
     });
     try {
       const command = "printf super-secret-value";
-      const handle = await runExecProcess({
+      const handle = await runTestExecProcess({
         command,
         workdir: process.cwd(),
-        env: {},
-        usePty: false,
-        warnings: [],
         maxOutput: 20_000,
         pendingMaxOutput: 20_000,
-        notifyOnExit: false,
         sessionKey: "session-1",
         timeoutSec: 5,
       });

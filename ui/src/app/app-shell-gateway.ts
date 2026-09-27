@@ -273,7 +273,7 @@ export class ShellGatewayOwner {
       new CustomEvent(UI_COMMAND_EVENT, { detail: commandParams, cancelable: true }),
     );
     if (!handled && (command.kind === "navigate" || command.kind === "split")) {
-      this.host.selectChatSession(command.sessionKey);
+      this.host.selectChatSession(command.sessionKey, commandParams.agentId);
     }
   }
 

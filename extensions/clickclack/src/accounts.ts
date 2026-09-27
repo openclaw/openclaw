@@ -68,6 +68,9 @@ function mergeClickClackGroups(
       merged.set(key, {
         ...merged.get(key),
         ...(value.requireMention !== undefined ? { requireMention: value.requireMention } : {}),
+        ...(value.requireMentionInBotThreads !== undefined
+          ? { requireMentionInBotThreads: value.requireMentionInBotThreads }
+          : {}),
         ...(value.mentionPatterns !== undefined ? { mentionPatterns: value.mentionPatterns } : {}),
         ...(value.allowBots !== undefined ? { allowBots: value.allowBots } : {}),
         ...(mergedBotLoopProtection ? { botLoopProtection: mergedBotLoopProtection } : {}),
@@ -107,6 +110,38 @@ export function resolveClickClackAccountConfig(
     };
   }
   return mergedWithGroups;
+}
+
+function resolveClickClackAccountEndpoints(config: ClickClackAccountConfig) {
+  const baseUrl = config.baseUrl?.trim().replace(/\/$/, "") ?? "";
+  return { baseUrl, apiEndpoint: config.apiBaseUrl?.trim().replace(/\/$/, "") || baseUrl };
+}
+
+/** Pins inbound authority to the configured identity that started the transport. */
+export function isClickClackAccountCurrent(params: {
+  cfg: CoreConfig;
+  account: ResolvedClickClackAccount;
+}): boolean {
+  const { cfg, account } = params;
+  if (
+    !cfg.channels?.clickclack ||
+    cfg.channels.clickclack.enabled === false ||
+    !listClickClackAccountIds(cfg).includes(account.accountId)
+  ) {
+    return false;
+  }
+  const current = resolveClickClackAccountConfig(cfg, account.accountId);
+  const endpoints = resolveClickClackAccountEndpoints(current);
+  // Startup resolves workspace selectors and discovers optional bot identity.
+  // Compare the authored selectors, not those transport-resolved replacements.
+  return (
+    current.enabled !== false &&
+    Boolean(endpoints.baseUrl && current.workspace?.trim()) &&
+    endpoints.baseUrl === account.baseUrl &&
+    endpoints.apiEndpoint === account.apiEndpoint &&
+    current.workspace?.trim() === account.config.workspace?.trim() &&
+    normalizeOptionalString(current.botUserId) === normalizeOptionalString(account.config.botUserId)
+  );
 }
 
 function resolveClickClackToken(params: {
@@ -205,7 +240,7 @@ export function resolveClickClackAccount(params: {
   const merged = resolveClickClackAccountConfig(params.cfg, accountId);
   const baseEnabled = params.cfg.channels?.clickclack?.enabled !== false;
   const enabled = baseEnabled && merged.enabled !== false;
-  const baseUrl = merged.baseUrl?.trim().replace(/\/$/, "") ?? "";
+  const { baseUrl, apiEndpoint } = resolveClickClackAccountEndpoints(merged);
   const token = resolveClickClackToken({
     cfg: params.cfg,
     value: merged.token,
@@ -216,7 +251,6 @@ export function resolveClickClackAccount(params: {
   const workspace = merged.workspace?.trim() ?? "";
   const discussionsWorkspace = merged.discussions?.workspace?.trim() || workspace;
   const controlUrlBase = merged.discussions?.controlUrlBase?.trim();
-  const apiEndpoint = merged.apiBaseUrl?.trim().replace(/\/$/, "") || baseUrl;
   return {
     accountId,
     enabled,
@@ -253,6 +287,7 @@ export function resolveClickClackAccount(params: {
       section: merged.discussions?.section?.trim() || DEFAULT_DISCUSSIONS_SECTION,
     },
     requireMention: merged.requireMention === true,
+    requireMentionInBotThreads: merged.requireMentionInBotThreads,
     mentionPatterns: merged.mentionPatterns ?? [],
     allowBots: merged.allowBots ?? false,
     botLoopProtection: merged.botLoopProtection,

@@ -11,14 +11,19 @@ import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
+import * as stateWorkerContext from "../state/openclaw-state-worker-context.capture.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { holdStateDatabaseCoordinator } from "../test-utils/state-database-contention.js";
+import { holdStateDatabaseWriteTransaction } from "../test-utils/state-database-contention.js";
 import { getDetachedTaskLifecycleRuntime } from "./detached-task-runtime.js";
 import { getTaskExecutionObservation } from "./task-execution-observation.js";
 import { createRunningTaskRunCoreWithReceiptAsync } from "./task-executor-create.async.js";
@@ -27,6 +32,7 @@ import { loadTaskFlowRegistryStateFromSqliteReadOnly } from "./task-flow-registr
 import { createFlowRecord } from "./task-flow-registry.test-support.js";
 import { loadTaskAcpSessionCloser } from "./task-registry-acp-cleanup.js";
 import { taskAgentEventMutations } from "./task-registry-agent-events.js";
+import { TASK_MAINTENANCE_BATCH_SIZE } from "./task-registry-maintenance-snapshot.js";
 import { prepareTaskRegistryRead } from "./task-registry-read.js";
 import { tasks as residentTasks } from "./task-registry-state.js";
 import { getTaskById } from "./task-registry.js";
@@ -37,6 +43,7 @@ import {
   runTaskRegistryMaintenance,
 } from "./task-registry.maintenance.js";
 import { getTaskRegistryStore, onTaskRegistryChange } from "./task-registry.store.js";
+import { deleteTaskRowsWithDeliveryState } from "./task-registry.store.kernel.js";
 import { loadTaskRegistryStateFromSqliteReadOnly } from "./task-registry.store.sqlite.js";
 import {
   createTaskFixture,
@@ -74,6 +81,56 @@ afterEach(async () => {
 });
 
 describe("task maintenance session metadata", () => {
+  it("retains one worker context while refreshing event fences across maintenance batches", async () => {
+    await withMaintenanceState("openclaw-task-maintenance-context-", async () => {
+      resetTaskRegistryForTests({ persist: false });
+      const cleanupAfter = Date.now() + 86_400_000;
+      const retained = [
+        createTaskFixture("cli", {
+          task: "Retained task 0",
+          status: "succeeded",
+          cleanupAfter,
+          notifyPolicy: "silent",
+        }),
+      ];
+      await loadTaskAcpSessionCloser();
+      await prepareTaskRegistryRead();
+      await runTaskRegistryMaintenance();
+      const captureContext = vi.spyOn(
+        stateWorkerContext,
+        "captureOpenClawStateWorkerContextWithAdmission",
+      );
+      const captureFence = vi.spyOn(taskAgentEventMutations, "captureReadFence");
+      const expectedSummary = { reconciled: 0, recovered: 0, cleanupStamped: 0, pruned: 0 };
+      expect(await runTaskRegistryMaintenance()).toEqual(expectedSummary);
+      const initialContexts = captureContext.mock.calls.length;
+      const initialFences = captureFence.mock.calls.length;
+      expect(initialContexts).toBeGreaterThan(0);
+      expect(initialFences).toBeGreaterThan(0);
+
+      for (let index = 1; index <= TASK_MAINTENANCE_BATCH_SIZE; index += 1) {
+        retained.push(
+          createTaskFixture("cli", {
+            task: `Retained task ${index}`,
+            status: "succeeded",
+            cleanupAfter,
+            notifyPolicy: "silent",
+          }),
+        );
+      }
+      await prepareTaskRegistryRead();
+      captureContext.mockClear();
+      captureFence.mockClear();
+      expect(await runTaskRegistryMaintenance()).toEqual(expectedSummary);
+      expect(captureFence.mock.calls.length).toBeGreaterThan(initialFences);
+      expect(captureContext.mock.calls.length).toBe(initialContexts);
+      const durable = loadTaskRegistryStateFromSqliteReadOnly();
+      const expectedTasks = new Map(retained.map((task) => [task.taskId, task]));
+      expect(residentTasks).toEqual(expectedTasks);
+      expect(durable.tasks).toEqual(expectedTasks);
+    });
+  });
+
   it("retains a CLI task until its live run owner releases it", async () => {
     await withMaintenanceState("openclaw-task-maintenance-run-owner-", async () => {
       resetTaskRegistryForTests({ persist: false });
@@ -112,7 +169,7 @@ describe("task maintenance session metadata", () => {
     });
   });
 
-  it.each(["publication", "coordinator hold"] as const)(
+  it.each(["publication", "write transaction"] as const)(
     "retains task payloads without synchronous refreshes during %s",
     async (boundary) => {
       await withMaintenanceState("openclaw-task-maintenance-payloads-", async () => {
@@ -173,7 +230,7 @@ describe("task maintenance session metadata", () => {
         const syncSnapshots = vi.spyOn(store, "loadMutationSnapshot");
         const clone = vi.spyOn(globalThis, "structuredClone");
         const endedAt = Date.now();
-        let holder: ReturnType<typeof holdStateDatabaseCoordinator> | undefined;
+        let holder: ReturnType<typeof holdStateDatabaseWriteTransaction> | undefined;
         let acceptedRead: ReturnType<typeof prepareTaskRegistryRead> | undefined;
         let maintenance: ReturnType<typeof runTaskRegistryMaintenance> | undefined;
         let summary: Awaited<ReturnType<typeof runTaskRegistryMaintenance>> | undefined;
@@ -203,19 +260,15 @@ describe("task maintenance session metadata", () => {
             5_000,
             "Terminal publication did not pause",
           );
-          if (boundary === "coordinator hold") {
+          if (boundary === "write transaction") {
             const context = captureOpenClawStateWorkerContext();
             // The worker timeout only releases a regressed synchronous waiter.
-            holder = holdStateDatabaseCoordinator(
-              context.admission.databasePath,
-              context.coordinatorRuntime,
-              1_000,
-            );
+            holder = holdStateDatabaseWriteTransaction(context.admission.databasePath, 1_000);
             await holder.ready;
           }
-          const heldCoordinator = holder;
-          const checkpoint = heldCoordinator
-            ? sleep(0).then(() => Atomics.load(heldCoordinator.released, 0))
+          const heldWriter = holder;
+          const checkpoint = heldWriter
+            ? sleep(0).then(() => Atomics.load(heldWriter.released, 0))
             : setImmediate().then(() => undefined);
           maintenance = runTaskRegistryMaintenance();
           void maintenance.catch(recordFailure);
@@ -245,7 +298,7 @@ describe("task maintenance session metadata", () => {
           });
         }
 
-        if (boundary === "coordinator hold") {
+        if (boundary === "write transaction") {
           expect(releasedAtTimer).toBe(0);
         }
         expect(synchronousReadsDuringHold).toBe(0);
@@ -444,7 +497,9 @@ describe("task maintenance session metadata", () => {
             task,
             ...(deliveryState ? { deliveryState: { ...deliveryState, taskId: task.taskId } } : {}),
           });
-          store.deleteTaskWithDeliveryState(created.taskId);
+          runOpenClawStateWriteTransaction(() =>
+            deleteTaskRowsWithDeliveryState(openOpenClawStateDatabase().db, created.taskId),
+          );
           await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
         }
         await loadTaskAcpSessionCloser();

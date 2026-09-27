@@ -63,15 +63,15 @@ const actionPluginModule = `export default { id:"ui-fixture", activate(host) {
 } };`;
 
 async function selectView(page: Page, label: string, value: string) {
-  await openCustomizeUi(page);
+  await visitCustomizeUi(page);
   await page.getByRole("combobox", { name: label, exact: true }).selectOption(value);
-  await closeCustomizeUi(page);
+  await returnFromCustomizeUi(page);
 }
 
 const customizationOrigins = new WeakMap<Page, string>();
 
-async function openCustomizeUi(page: Page) {
-  const pluginsUrl = new URL("plugins", suite.server.baseUrl).href;
+async function visitCustomizeUi(page: Page) {
+  const pluginsUrl = new URL("settings/plugins?tab=advanced", suite.server.baseUrl).href;
   if (page.url() !== pluginsUrl) {
     customizationOrigins.set(page, page.url());
     await page.evaluate((url) => {
@@ -80,11 +80,11 @@ async function openCustomizeUi(page: Page) {
     }, pluginsUrl);
     await page.getByRole("heading", { name: "Plugins", exact: true }).waitFor();
   }
-  await page.getByRole("button", { name: "Customize UI", exact: true }).click();
+  await page.locator("openclaw-plugin-manager .settings-group").waitFor();
+  expect(await page.getByRole("dialog").count()).toBe(0);
 }
 
-async function closeCustomizeUi(page: Page) {
-  await page.getByRole("button", { name: "Close", exact: true }).last().click();
+async function returnFromCustomizeUi(page: Page) {
   const origin = customizationOrigins.get(page);
   if (origin) {
     customizationOrigins.delete(page);
@@ -397,14 +397,14 @@ suite.define(() => {
           });
           await gateway.waitForRequest("plugins.controlUi.list");
           await expectLoading();
-          // The sidebar owns manager registration and loads independently of the plugin page.
+          // Settings owns manager registration; plugin page startup leaves it unloaded.
           await page.getByRole("link", { name: "Plugins", exact: true }).waitFor();
           expect(
             await page.evaluate(() => ({
               contributions: Boolean(customElements.get("openclaw-plugin-contributions")),
               manager: Boolean(customElements.get("openclaw-plugin-manager")),
             })),
-          ).toEqual({ contributions: false, manager: true });
+          ).toEqual({ contributions: false, manager: false });
           await gateway.resolveDeferred("plugins.controlUi.list");
           await bootstrapRequested.promise;
           await expectLoading();
@@ -538,7 +538,7 @@ suite.define(() => {
         await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(false);
         await expectOneAccessory();
         await captureNativePluginUiProof(suite, page, "before.png", { fullPage: true });
-        expect(await page.getByRole("button", { name: "Customize UI", exact: true }).count()).toBe(
+        expect(await page.getByRole("heading", { name: "Customize UI", exact: true }).count()).toBe(
           0,
         );
         for (const replacement of [
@@ -563,11 +563,11 @@ suite.define(() => {
         await page
           .getByLabel("Fixture draft", { exact: true })
           .fill("Send through the canonical composer");
-        await openCustomizeUi(page);
+        await visitCustomizeUi(page);
         const composerSelect = page.getByRole("combobox", { name: "Composer", exact: true });
         expect(await composerSelect.inputValue()).toBe("ui-fixture/composer");
         await composerSelect.selectOption("");
-        await closeCustomizeUi(page);
+        await returnFromCustomizeUi(page);
         await expect
           .poll(() => page.locator(".agent-chat__composer-combobox textarea").inputValue())
           .toBe("Send through the canonical composer");
@@ -613,9 +613,9 @@ suite.define(() => {
         await selectView(page, "Workspace", "ui-fixture/workspace");
         await page.getByRole("heading", { name: "Custom workspace" }).waitFor();
         await captureNativePluginUiProof(suite, page, "custom-workspace.png", { fullPage: true });
-        await openCustomizeUi(page);
+        await visitCustomizeUi(page);
         await page.getByRole("combobox", { name: "Workspace", exact: true }).selectOption("");
-        await closeCustomizeUi(page);
+        await returnFromCustomizeUi(page);
         await page.getByRole("link", { name: "UI fixture", exact: true }).waitFor();
         await page.getByRole("link", { name: "UI fixture", exact: true }).click();
         await page.getByRole("heading", { name: "Fixture revision one" }).waitFor();
@@ -691,18 +691,18 @@ suite.define(() => {
           await gateway.emitGatewayEvent("plugins.controlUi.changed", { revision });
         };
         const readComposerSelection = async () => {
-          await openCustomizeUi(page);
+          await visitCustomizeUi(page);
           const selected = await page
             .getByRole("combobox", { name: "Composer", exact: true })
             .inputValue();
-          await closeCustomizeUi(page);
+          await returnFromCustomizeUi(page);
           return selected;
         };
         await gateway.setMethodResponse("plugins.controlUi.list", catalog("two"));
-        await openCustomizeUi(page);
+        await visitCustomizeUi(page);
         await page.getByRole("button", { name: "Reload plugin UI", exact: true }).click();
         await gateway.waitForRequest("plugins.controlUi.reload");
-        await closeCustomizeUi(page);
+        await returnFromCustomizeUi(page);
         await page.getByRole("heading", { name: "Fixture revision two" }).waitFor();
         expect(await page.getByRole("heading", { name: "Fixture revision one" }).count()).toBe(0);
         await page.getByRole("button", { name: "Call previous activation" }).click();
@@ -712,7 +712,7 @@ suite.define(() => {
         expect(await gateway.getRequests("fixture.stale")).toHaveLength(0);
         await selectView(page, "Composer", "ui-fixture/composer");
         const sameRevisionListed = (await gateway.getRequests("plugins.controlUi.list")).length;
-        await openCustomizeUi(page);
+        await visitCustomizeUi(page);
         const reloadButton = page.getByRole("button", { name: "Reload plugin UI", exact: true });
         await reloadButton.click();
         await gateway.waitForRequest("plugins.controlUi.list", { after: sameRevisionListed });
@@ -720,7 +720,7 @@ suite.define(() => {
         expect(
           await page.getByRole("combobox", { name: "Composer", exact: true }).inputValue(),
         ).toBe("ui-fixture/composer");
-        await closeCustomizeUi(page);
+        await returnFromCustomizeUi(page);
         await reload("broken");
         await expect
           .poll(async () =>
@@ -752,7 +752,7 @@ suite.define(() => {
           await expect
             .poll(() => page.getByLabel("Fixture outcome").textContent())
             .toBe("completed");
-          await openCustomizeUi(page);
+          await visitCustomizeUi(page);
           for (const surface of ["Composer", "Workspace"]) {
             expect(
               await page.getByRole("combobox", { name: surface, exact: true }).inputValue(),
@@ -775,7 +775,7 @@ suite.define(() => {
               fullPage: true,
             },
           );
-          await closeCustomizeUi(page);
+          await returnFromCustomizeUi(page);
         }
         await reload("pending");
         await gateway.waitForRequest("fixture.activationStarted");
@@ -902,7 +902,7 @@ suite.define(() => {
         });
         await gateway.setMethodResponse("plugins.controlUi.list", next);
         await gateway.setMethodResponse("plugins.controlUi.reload", next);
-        await openCustomizeUi(page);
+        await visitCustomizeUi(page);
         const reload = page.getByRole("button", { name: "Reload plugin UI", exact: true });
         await reload.click();
         await gateway.waitForRequest("fixture.peerStarted");
@@ -927,7 +927,7 @@ suite.define(() => {
         await captureNativePluginUiProof(suite, page, "peer-timeout-recovery.png", {
           fullPage: true,
         });
-        await closeCustomizeUi(page);
+        await returnFromCustomizeUi(page);
         await page.getByRole("heading", { name: "Fixture revision two" }).waitFor();
         await page.getByRole("button", { name: "Release pending initializer" }).click();
         await expect.poll(() => page.getByLabel("Fixture outcome").textContent()).toBe("released");

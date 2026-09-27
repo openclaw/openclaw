@@ -6,7 +6,6 @@ import {
 } from "../audit/execution-owner-binding.js";
 import { readSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
-import { withSharedStateWriteCoordinator } from "../state/openclaw-state-db-write-coordination.js";
 import {
   closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
@@ -16,8 +15,8 @@ import {
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import { getTaskRegistryProcessState } from "./task-registry.process-state.js";
 import {
-  deleteTaskRowsWithDeliveryState,
   listTaskRecordsByRuntimeSourceIdInDatabase,
   readTaskRegistrySnapshot,
   readTaskRegistryMutationSnapshotInDatabase,
@@ -43,10 +42,20 @@ export function loadTaskRegistryStateFromSqlite(): TaskRegistryStoreSnapshot {
 }
 
 export function withTaskRegistrySqliteMutation<T>(operation: () => T): T {
-  const database = openOpenClawStateDatabase();
-  return withSharedStateWriteCoordinator(
-    { databasePath: database.path, existing: database.db, operationLabel: "task.mutation" },
-    operation,
+  openOpenClawStateDatabase();
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const projection = getTaskRegistryProcessState().projection;
+      const previous = projection.nativeMutationDatabase;
+      projection.nativeMutationDatabase = db;
+      try {
+        return operation();
+      } finally {
+        projection.nativeMutationDatabase = previous;
+      }
+    },
+    undefined,
+    { operationLabel: "task.mutation" },
   );
 }
 
@@ -135,12 +144,6 @@ export function upsertTaskWithDeliveryStateToSqlite(params: {
   deliveryState?: TaskDeliveryState;
 }) {
   withWriteTransaction((database) => upsertTaskWithDeliveryStateInDatabase(database, params));
-}
-
-export function deleteTaskAndDeliveryStateFromSqlite(taskId: string) {
-  withWriteTransaction(({ db }) => {
-    deleteTaskRowsWithDeliveryState(db, taskId);
-  });
 }
 
 export function upsertTaskDeliveryStateToSqlite(state: TaskDeliveryState) {

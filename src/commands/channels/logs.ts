@@ -60,7 +60,7 @@ function parseChannelFilter(raw?: string): ChannelLogFilter {
 }
 
 function matchesChannelContext(value: string | undefined, channel: string) {
-  return [channel, `gateway/channels/${channel}`].some(
+  return [channel, `channels/${channel}`, `gateway/channels/${channel}`].some(
     (root) => value === root || value?.startsWith(`${root}/`) === true,
   );
 }

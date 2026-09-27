@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Root } from "@openclaw/fs-safe";
 import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
+import { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import {
   pinDirectory,
@@ -133,13 +134,15 @@ export class LegacyMigrationSourceClaim<
       if (
         !(error instanceof FsSafeError) ||
         error.code !== "helper-unavailable" ||
+        getFsSafeNativeConfig().mode === "require" ||
         path.dirname(from) !== path.dirname(to) ||
         root.defaults.assertBeforeMutation ||
         root.defaults.denyMutations ||
         root.defaults.mutationSymlinks ||
-        !["EINVAL", "ENOSYS", "ENOTSUP", "EOPNOTSUPP"].some((code) =>
-          hasErrnoCode(error.cause, code),
-        )
+        (error.cause !== undefined &&
+          !["EINVAL", "ENOSYS", "ENOTSUP", "EOPNOTSUPP"].some((code) =>
+            hasErrnoCode(error.cause, code),
+          ))
       ) {
         throw error;
       }

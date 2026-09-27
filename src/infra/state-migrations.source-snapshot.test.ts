@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { root, type Root } from "@openclaw/fs-safe";
+import { configureFsSafeNative } from "@openclaw/fs-safe/config";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -21,6 +22,7 @@ import {
 describe("doctor legacy migration source contract", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     afterEach(() => {
+      configureFsSafeNative({ mode: "auto" });
       __setFsSafeTestHooksForTest(undefined);
       vi.restoreAllMocks();
       cleanup();
@@ -156,6 +158,49 @@ describe("doctor legacy migration source contract", () => {
       expect(fs.existsSync(claim.claimPath)).toBe(false);
     },
   );
+
+  it("claims and restores the same inode when native helper is unavailable without cause", async () => {
+    const { sourcePath, stateDir } = createSource();
+    const stateRoot = await root(stateDir, { hardlinks: "reject", symlinks: "reject" });
+    vi.spyOn(stateRoot, "move").mockRejectedValue(
+      new FsSafeError("helper-unavailable", "native no-replace move is unavailable"),
+    );
+    const claim = createClaim(stateRoot, stateDir, sourcePath);
+    const snapshot = await claim.read();
+
+    const claimed = await claim.claim({ snapshot, mismatchMessage: "source changed" });
+
+    expect(legacyMigrationSourceSnapshotsMatch(claimed, snapshot)).toBe(true);
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(fs.statSync(claim.claimPath).nlink).toBe(1);
+    expect(await claim.restore()).toBeNull();
+    expect(fs.readFileSync(sourcePath)).toEqual(snapshot.buffer);
+    expect(fs.statSync(sourcePath).ino).toBe(snapshot.ino);
+    expect(fs.existsSync(claim.claimPath)).toBe(false);
+  });
+
+  it("refuses portable publication and leaves source untouched when native mode is require", async () => {
+    const { sourcePath, stateDir } = createSource();
+    const stateRoot = await root(stateDir, { hardlinks: "reject", symlinks: "reject" });
+    vi.spyOn(stateRoot, "move").mockRejectedValue(
+      new FsSafeError("helper-unavailable", "native no-replace move is unavailable"),
+    );
+    configureFsSafeNative({ mode: "require" });
+    try {
+      const claim = createClaim(stateRoot, stateDir, sourcePath);
+      const snapshot = await claim.read();
+
+      await expect(claim.claim({ snapshot, mismatchMessage: "source changed" })).rejects.toThrow(
+        "native no-replace move is unavailable",
+      );
+
+      expect(fs.existsSync(sourcePath)).toBe(true);
+      expect(fs.readFileSync(sourcePath)).toEqual(snapshot.buffer);
+      expect(fs.existsSync(claim.claimPath)).toBe(false);
+    } finally {
+      configureFsSafeNative({ mode: "auto" });
+    }
+  });
 
   it("preserves a competing claim created before portable publication", async () => {
     const { sourcePath, stateDir } = createSource();

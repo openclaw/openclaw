@@ -89,6 +89,7 @@ Notes:
 - Important: sandboxing is **off by default**. If sandboxing is off, implicit `host=auto` resolves to `gateway`. Explicit `host=sandbox` still fails closed instead of silently running on the gateway host. Enable sandboxing or use `host=gateway` with approvals.
 - Python script preflight checks for common shell-syntax mistakes only inspect files inside the effective `workdir` boundary. If a script path resolves outside `workdir`, the file check is skipped. JavaScript source is left to Node, which returns its normal diagnostics and exit code; statements before a runtime error may already have executed. Separate restrictions on ambiguous Python/Node interpreter commands still apply. Preflight skips entirely when `host=gateway` and the effective policy is `security=full` with `ask=off`.
 - For long-running work that starts now, start it once and rely on automatic completion wake when it is enabled and the command emits output or fails. Use `process` for logs, status, input, or intervention. Do not emulate scheduling with sleep loops, timeout loops, or repeated polling.
+- When `tools.exec.notifyOnExit=false`, a running result explicitly says that automatic completion wake is disabled, in both its text and structured `followUp`. If the task needs the result, collect it with `process poll` and a timeout before ending the turn, unless another continuation is already arranged. A running process or active session goal does not arrange that continuation.
 - When an approved async command completes, its continuation uses the normal agent run timeout from `agents.defaults.timeoutSeconds`. The follow-up observer can finish waiting while the accepted agent run continues.
 - Subagent sessions do not receive automatic background-exec wakes. Collect the result with `process poll` before yielding without another completion source.
 - Agent-started background commands appear in the Web, iOS, and Android background-task views until they finish. Each task shows a compact command preview with sensitive values redacted; long commands are truncated. The task ledger is finalized before the completion heartbeat wakes the agent again.
@@ -272,7 +273,7 @@ Background + poll:
 {"tool":"process","action":"poll","sessionId":"<id>"}
 ```
 
-Polling is for on-demand status, not waiting loops. If automatic completion wake is enabled, the command can wake the session when it emits output or fails.
+Use `process poll` for on-demand status and bounded waits when no automatic completion wake is available. Avoid rapid status loops; pass a timeout while waiting for a result the current task needs. If automatic completion wake is enabled, the command can wake the session when it emits output or fails.
 
 Send keys (tmux-style):
 

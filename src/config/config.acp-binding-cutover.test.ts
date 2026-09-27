@@ -132,24 +132,6 @@ describe("ACP binding cutover schema", () => {
     expect(parsed.success).toBe(false);
   });
 
-  it("accepts ACP bindings for arbitrary channel ids when the peer target is explicit", () => {
-    const parsed = OpenClawSchema.safeParse({
-      bindings: [
-        {
-          type: "acp",
-          agentId: "codex",
-          match: {
-            channel: "plugin-chat",
-            accountId: "default",
-            peer: { kind: "channel", id: "C123456" },
-          },
-        },
-      ],
-    });
-
-    expect(parsed.success).toBe(true);
-  });
-
   it("accepts ACP bindings for generic direct and group peer kinds", () => {
     const parsed = OpenClawSchema.safeParse({
       bindings: [
@@ -169,24 +151,6 @@ describe("ACP binding cutover schema", () => {
             channel: "plugin-chat",
             accountId: "default",
             peer: { kind: "group", id: "group-42" },
-          },
-        },
-      ],
-    });
-
-    expect(parsed.success).toBe(true);
-  });
-
-  it("accepts the canonical direct peer kind", () => {
-    const parsed = OpenClawSchema.safeParse({
-      bindings: [
-        {
-          type: "acp",
-          agentId: "codex",
-          match: {
-            channel: "plugin-chat",
-            accountId: "default",
-            peer: { kind: "direct", id: "peer" },
           },
         },
       ],

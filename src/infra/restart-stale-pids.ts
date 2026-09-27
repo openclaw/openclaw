@@ -10,6 +10,7 @@ import { readUnixProcessGroupMembers, signalProcessTree } from "../process/kill-
 import {
   collectProcessAncestorPids,
   getFileLockProcessStartTime,
+  isPidAlive,
   isPidDefinitelyDead,
   MAX_ANCESTOR_WALK_DEPTH,
 } from "../shared/pid-alive.js";
@@ -152,14 +153,14 @@ function readParentPidFromPs(pid: number, spawnTimeoutMs: number): number | null
  * Include PID 1 for container Gateways. process.ppid is always available; transitive
  * ancestry is best effort through /proc, ps, or one Windows process snapshot.
  */
-export function getSelfAndAncestorPidsSync(
+export function inspectSelfAndAncestorPidsSync(
   spawnTimeoutMs = PROCESS_INSPECTION_TIMEOUT_MS,
   options: { requireVerifiedParent?: boolean } = {},
-): Set<number> {
+): { pids: Set<number>; complete: boolean } {
   const pids = new Set<number>([process.pid]);
   const immediateParent = process.ppid;
   if (!Number.isFinite(immediateParent) || immediateParent <= 0) {
-    return pids;
+    return { pids, complete: process.platform !== "win32" && pids.has(1) };
   }
   // Windows retains an inherited PID after parent exit. Cleanup can exclude it
   // conservatively, but callers granting authority need the creation-ordered snapshot.
@@ -167,14 +168,15 @@ export function getSelfAndAncestorPidsSync(
     pids.add(immediateParent);
   }
   if (process.platform === "win32") {
-    for (const pid of readWindowsProcessAncestorsSync(
+    const ancestry = readWindowsProcessAncestorsSync(
       process.pid,
       MAX_ANCESTOR_WALK_DEPTH,
       spawnTimeoutMs,
-    )) {
+    );
+    for (const pid of ancestry.pids) {
       pids.add(pid);
     }
-    return pids;
+    return { pids, complete: ancestry.complete };
   }
   const readTransitiveParent =
     process.platform === "linux"
@@ -183,9 +185,18 @@ export function getSelfAndAncestorPidsSync(
         ? (pid: number) => readParentPidFromPs(pid, spawnTimeoutMs)
         : null;
   if (!readTransitiveParent) {
-    return pids;
+    return { pids, complete: pids.has(1) };
   }
-  return collectProcessAncestorPids(immediateParent, readTransitiveParent);
+  const ancestors = collectProcessAncestorPids(immediateParent, readTransitiveParent);
+  return { pids: ancestors, complete: ancestors.has(1) };
+}
+
+/** Cleanup protects every observed ancestor, even when the remaining chain is unknown. */
+export function getSelfAndAncestorPidsSync(
+  spawnTimeoutMs = PROCESS_INSPECTION_TIMEOUT_MS,
+  options: { requireVerifiedParent?: boolean } = {},
+): Set<number> {
+  return inspectSelfAndAncestorPidsSync(spawnTimeoutMs, options).pids;
 }
 
 function getExcludedGatewayPidsSync(spawnTimeoutMs: number, protectedPid?: number): Set<number> {
@@ -473,7 +484,7 @@ function terminateStaleProcessesSync(pids: number[], canSignal: () => boolean): 
   }
   sleepSync(STALE_SIGTERM_WAIT_MS);
   for (const pid of killed) {
-    if (isProcessAlive(pid)) {
+    if (isPidAlive(pid)) {
       if (!canSignal()) {
         break;
       }
@@ -519,12 +530,12 @@ function terminateStaleProcessesWindows(pids: number[], canSignal: () => boolean
       windowsHide: true,
     });
     const gracefulFailed = graceful.error != null || (graceful.status ?? 0) !== 0;
-    if (!gracefulFailed && !isProcessAlive(pid)) {
+    if (!gracefulFailed && !isPidAlive(pid)) {
       killed.push(pid);
       continue;
     }
     sleepSync(STALE_SIGTERM_WAIT_MS);
-    if (!isProcessAlive(pid)) {
+    if (!isPidAlive(pid)) {
       killed.push(pid);
       continue;
     }
@@ -540,20 +551,11 @@ function terminateStaleProcessesWindows(pids: number[], canSignal: () => boolean
       continue;
     }
     sleepSync(STALE_SIGKILL_WAIT_MS);
-    if (!isProcessAlive(pid)) {
+    if (!isPidAlive(pid)) {
       killed.push(pid);
     }
   }
   return killed;
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
 }
 
 /** Wait for a free port, a permanent inspection failure, or the wall-clock deadline. */

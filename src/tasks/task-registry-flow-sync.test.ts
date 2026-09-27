@@ -108,9 +108,7 @@ describe("restored task flow synchronization", () => {
   ] as const)("handles durable flow repair across %s", async (boundary) => {
     const maintenance =
       boundary === "closed maintenance scope"
-        ? createOpenClawDatabaseMaintenanceScope(() => {
-            throw new Error("Unexpected schema delegation in memory fixture");
-          })
+        ? createOpenClawDatabaseMaintenanceScope()
         : undefined;
     if (!maintenance) {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -224,6 +222,13 @@ describe("restored task flow synchronization", () => {
       store: {
         ...first.store,
         async syncTaskFlowAsync(this: TaskRegistryStore, context, params) {
+          const admission = context.admission;
+          context.admission = {
+            ...admission,
+            get identity() {
+              return admission.identity;
+            },
+          };
           let failure: unknown;
           try {
             retryCalls += 1;
