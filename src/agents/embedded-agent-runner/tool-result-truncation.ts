@@ -110,7 +110,7 @@ function cacheTtlMessageChars(message: AgentMessage): number {
     return 256;
   }
   const content: unknown[] = Array.isArray(message.content) ? message.content : [];
-  return content.reduce((chars, block) => {
+  return content.reduce<number>((chars, block) => {
     if (!isRecord(block)) {
       return chars;
     }

@@ -121,6 +121,25 @@ export function createCompactHooksAuthStorage() {
   } satisfies MockResolvedModel["authStorage"];
 }
 
+export function createCompactHooksResolvedModel(
+  provider?: string,
+  modelId?: string,
+): MockResolvedModel {
+  return {
+    logicalRef: { provider: provider ?? "openai", model: modelId ?? "fake" },
+    model: {
+      provider: provider ?? "openai",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      id: modelId ?? "fake",
+      input: [],
+    },
+    error: null,
+    authStorage: createCompactHooksAuthStorage(),
+    modelRegistry: {},
+  };
+}
+
 export const resolveCompactHooksApiKeyMock = vi.fn<
   typeof import("./stream-resolution.js").resolveEmbeddedAgentApiKey
 >(async ({ provider, resolvedApiKey, authStorage }) => {

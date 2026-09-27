@@ -310,15 +310,22 @@ async function runEmbeddedAgentInternal(
           model: requestedRuntimeSelection.modelId,
           requestedRouteResolution: params.requestedRouteResolution,
           fallbacksOverride: runtimePluginFallbacksOverride,
-        }).map((candidate, index) => ({
-          provider: candidate.provider,
-          modelId: candidate.model,
+        }).map((candidate, index) =>
+          requestedHarnessRuntime &&
           // Preparation hints apply only to the requested route; fallbacks resolve their own policy.
-          ...(requestedHarnessRuntime && (index === 0 || explicitHarnessRuntime)
-            ? { runtime: requestedHarnessRuntime }
-            : {}),
-          agentId: requestedWorkspaceResolution.agentId,
-        }));
+          (index === 0 || explicitHarnessRuntime)
+            ? {
+                provider: candidate.provider,
+                modelId: candidate.model,
+                runtime: requestedHarnessRuntime,
+                agentId: requestedWorkspaceResolution.agentId,
+              }
+            : {
+                provider: candidate.provider,
+                modelId: candidate.model,
+                agentId: requestedWorkspaceResolution.agentId,
+              },
+        );
         const preparedInput = {
           config,
           agentId: requestedWorkspaceResolution.agentId,
