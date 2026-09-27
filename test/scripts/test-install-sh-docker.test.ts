@@ -2562,7 +2562,7 @@ syncBuiltinESMExports();
     expect(script).toContain('source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"');
     expect(script).toContain("docker_e2e_restore_package_dist_from_image");
     expect(script).toContain(
-      'COMMAND_TIMEOUT_MS="$(read_positive_int_env OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_MS 180000)"',
+      'COMMAND_TIMEOUT_MS="$(docker_e2e_read_positive_int_env OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_MS 180000)"',
     );
     expect(script).toContain(
       'DOCKER_COMMAND_TIMEOUT="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_BUN_GLOBAL_SMOKE_DOCKER_COMMAND_TIMEOUT:-600s}}"',
