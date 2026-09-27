@@ -141,20 +141,23 @@ export function prepareProjectedSessionPresentation(
         ),
       );
     const sourceSwarm = record.materialized.row.swarm;
-    const swarm = sourceSwarm && {
-      ...sourceSwarm,
-      groups: sourceSwarm.groups.map((group) => ({
-        ...group,
-        children: group.children?.filter(
-          ({ sessionKey }) =>
-            !excludedChildKeys.has(sessionKey) &&
-            (client === undefined ||
-              !projection
-                .selectEntries({ key: sessionKey })
-                .some((child) => sharing.entryFilter?.(child.key, child.entry) === false)),
-        ),
-      })),
-    };
+    let swarm: GatewaySessionRow["swarm"];
+    if (sourceSwarm) {
+      swarm = { ...sourceSwarm, groups: [] };
+      for (const group of sourceSwarm.groups) {
+        swarm.groups.push({
+          ...group,
+          children: group.children?.filter(
+            ({ sessionKey }) =>
+              !excludedChildKeys.has(sessionKey) &&
+              (client === undefined ||
+                !projection
+                  .selectEntries({ key: sessionKey })
+                  .some((child) => sharing.entryFilter?.(child.key, child.entry) === false)),
+          ),
+        });
+      }
+    }
     const value = toProjectedSessionSharingTarget(record);
     const viewerFacts = client === undefined ? undefined : viewer(value);
     // Permission-pending and worker availability can change without a row publication.
