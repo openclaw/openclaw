@@ -1,8 +1,10 @@
+import { findLauncherTokens } from "./sentinel.mjs";
+
 /** @typedef {{name: string, sentinelStart?: number, sentinelEnd?: number, startMs?: number, endMs?: number, status?: string, exitCode?: number, stdout?: string, stderr?: string, output?: string, durationMs?: number}} Step */
 /** @typedef {{pid: number, cmdline: string}} Ancestor */
-/** @typedef {{index?: number, name: string, pid: number, ppid: number, cwd: string, argv: string[], ancestors: Ancestor[]}} SentinelRecord */
+/** @typedef {{index?: number, name: string, exe?: string, pid: number, ppid: number, cwd: string, argv: string[], ancestors: Ancestor[]}} SentinelRecord */
 /** @typedef {{pid: number, ppid: number, childPid?: number | null, errorCode?: string | null, ts: number | string, cmd: string[], cwd?: string, stack: string[]}} TraceRecord */
-/** @typedef {{step: string | null, argv: string[], pid: number, ppid: number, cwd?: string, ancestors: Ancestor[], stack: string[], sentinel?: SentinelRecord, trace?: TraceRecord}} Attempt */
+/** @typedef {{step: string | null, argv: string[], pid: number, ppid: number, cwd?: string, ancestors: Ancestor[], stack: string[], sentinel?: SentinelRecord, trace?: TraceRecord, shellPath?: string}} Attempt */
 /** @typedef {{id: string, feature: string, origin: string, owner: string, callSite: string, step: string | null, match?: {stack?: string[], argv?: string[]}, evidence: string | string[], failure?: string, notExercisedReason?: string}} Blocker */
 
 const basename = (value) => value.split("/").at(-1);
@@ -12,9 +14,9 @@ const isShell = (trace) => ["sh", "bash", "dash"].includes(basename(trace.cmd[0]
 /**
  * Each window extends from its start to the next step's start, including background
  * work after the step ends. Sentinels use decoded-record indexes; traces use epoch
- * milliseconds. Keep unmatched direct traces: ENOENT never reaches a sentinel. Known gap:
- * a shell script that runs an absent absolute Node path leaves neither a sentinel nor an
- * attempt; the real fallback paths are masked by sentinels, so this needs a hardcoded path.
+ * milliseconds. Keep unmatched direct traces: ENOENT never reaches a sentinel. In a shell,
+ * a bare launcher always reaches the PATH sentinel when it runs; a path-qualified launcher
+ * without a sentinel at that exact path is reported, which errs toward reporting probes.
  * @param {{sentinelRecords: SentinelRecord[], traceRecords: TraceRecord[], steps: Step[]}} input
  * @returns {Attempt[]}
  */
@@ -63,12 +65,41 @@ export function attributeSpawns({ sentinelRecords, traceRecords, steps }) {
     };
   });
   traceRecords.forEach((trace, index) => {
-    // Script text that mentions a launcher (`command -v node`) is not an execution;
-    // shell traces never stand alone as attempts.
-    if (used.has(index) || isShell(trace)) {
+    if (used.has(index)) {
       return;
     }
     const step = steps.findLast((candidate) => timestamp(trace.ts) >= candidate.startMs);
+    if (isShell(trace)) {
+      const paths = new Set(
+        trace.cmd
+          .slice(1)
+          .flatMap((arg) => findLauncherTokens(arg))
+          .filter((token) => token.includes("/")),
+      );
+      for (const shellPath of paths) {
+        const ran = sentinelRecords.some(
+          (sentinel) =>
+            sentinel.exe === shellPath &&
+            trace.childPid != null &&
+            (sentinel.pid === trace.childPid ||
+              sentinel.ancestors.some((ancestor) => ancestor.pid === trace.childPid)),
+        );
+        if (!ran) {
+          attempts.push({
+            step: step?.name ?? null,
+            argv: [shellPath],
+            pid: trace.pid,
+            ppid: trace.ppid,
+            cwd: trace.cwd,
+            ancestors: [],
+            stack: trace.stack,
+            trace,
+            shellPath,
+          });
+        }
+      }
+      return;
+    }
     attempts.push({
       step: step?.name ?? null,
       argv: trace.cmd,

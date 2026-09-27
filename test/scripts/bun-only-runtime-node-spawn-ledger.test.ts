@@ -221,6 +221,56 @@ describe("Bun-only Node spawn ledger", () => {
     expect(attribute([shellTrace], [])).toEqual([]);
   });
 
+  it.each([
+    ["/opt/node/bin/node --version || true"],
+    ['cd /tmp && "/opt/node/bin/node" x'],
+    ["for i in 1 2; do node -v; done; /opt/node/bin/node --version"],
+    ["/opt/node/bin/node>/dev/null 2>&1 || true"],
+    ["2>/dev/null </dev/null /opt/node/bin/node -v"],
+  ])("reports an absent path-qualified launcher in shell script %j", (script) => {
+    const shellTrace = { ...trace, childPid: 15, cmd: ["/bin/sh", "-c", script] };
+    const ancestors = [{ pid: 15, cmdline: "sh" }];
+    const loopSentinels = script.startsWith("for")
+      ? [
+          { ...sentinel, exe: "/sentinels/node", argv: ["-v"], ancestors },
+          { ...sentinel, pid: 21, exe: "/sentinels/node", argv: ["-v"], ancestors },
+        ]
+      : [];
+    const attempts = attribute([shellTrace], loopSentinels);
+    expect(attempts.filter((attempt) => attempt.shellPath)).toEqual([
+      expect.objectContaining({ argv: ["/opt/node/bin/node"], stack: trace.stack }),
+    ]);
+    const result = classifyNodeSpawns({ attempts, steps: [step], blockers: [] });
+    expect(result.ok).toBe(false);
+  });
+
+  it("finds a path-qualified launcher in any shell argument", () => {
+    const shellTrace = {
+      ...trace,
+      childPid: 15,
+      cmd: ["bash", "-c", "-e", "/opt/node/bin/node --version"],
+    };
+    expect(attribute([shellTrace], [])).toMatchObject([{ argv: ["/opt/node/bin/node"] }]);
+  });
+
+  it("covers a path-qualified launcher only with a sentinel at that exact path", () => {
+    const shellTrace = { ...trace, childPid: 15, cmd: ["sh", "-c", "/usr/local/bin/node -v"] };
+    const ancestors = [{ pid: 15, cmdline: "sh" }];
+    const masked = { ...sentinel, exe: "/usr/local/bin/node", argv: ["-v"], ancestors };
+    expect(attribute([shellTrace], [masked])).toHaveLength(1);
+    const elsewhere = { ...masked, exe: "/sentinels/node" };
+    expect(attribute([shellTrace], [elsewhere])).toHaveLength(2);
+  });
+
+  it("ignores lookalikes and bare lookups in shell scripts", () => {
+    const shellTrace = {
+      ...trace,
+      childPid: 15,
+      cmd: ["sh", "-c", "command -v node; which npm; /usr/bin/nodemon; node_modules/.bin/tool"],
+    };
+    expect(attribute([shellTrace], [])).toEqual([]);
+  });
+
   it("does not lend a shell stack to an unrelated sentinel under the same Bun parent", () => {
     const shellTrace = { ...trace, childPid: 15, cmd: ["/bin/sh", "-c", "node --version"] };
     const attempts = attribute([shellTrace]);

@@ -3,6 +3,20 @@ import path from "node:path";
 
 export const nodeLaunchers = ["node", "nodejs", "npm", "npx", "pnpm", "pnpx", "yarn", "corepack"];
 
+const launcherToken = new RegExp(
+  `(?:^|[\\s;&|()<>'"\`=])((?:[^\\s;&|()<>'"\`=]*/)?(?:${nodeLaunchers.join("|")}))(?=[\\s;&|()<>'"\`]|$)`,
+  "g",
+);
+
+/**
+ * Node launcher tokens in shell text, bare or path-qualified (`node`, "/opt/node/bin/node").
+ * @param {string} text
+ * @returns {string[]}
+ */
+export function findLauncherTokens(text) {
+  return Array.from(text.matchAll(launcherToken), (match) => match[1]);
+}
+
 /** @param {string} value */
 function shellQuote(value) {
   return "'" + value.replaceAll("'", "'\\''") + "'";
@@ -37,7 +51,7 @@ while [ "$depth" -lt 6 ] && [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null; do
   pid=$next
   depth=$((depth + 1))
 done
-line="{\\"v\\":1,\\"name\\":\\"$(b64 "\${0##*/}")\\",\\"pid\\":$$,\\"ppid\\":$PPID,\\"cwd\\":\\"$(b64 "$PWD")\\",\\"argv\\":[$argv],\\"ancestors\\":[$ancestors]}"
+line="{\\"v\\":1,\\"name\\":\\"$(b64 "\${0##*/}")\\",\\"exe\\":\\"$(b64 "$0")\\",\\"pid\\":$$,\\"ppid\\":$PPID,\\"cwd\\":\\"$(b64 "$PWD")\\",\\"argv\\":[$argv],\\"ancestors\\":[$ancestors]}"
 printf '%s\\n' "$line" >>"$ledger"
 printf '%s\\n' "openclaw bun-only smoke: \${0##*/} is not available in a Bun-only install (attempt recorded)" >&2
 exit 127
@@ -78,6 +92,8 @@ export function readSentinelLedger(ledgerPath) {
         v: record.v,
         index,
         name: decode(record.name),
+        // $0 is the exact path that was executed (PATH sentinel or a masked absolute fallback).
+        exe: typeof record.exe === "string" ? decode(record.exe) : undefined,
         pid: record.pid,
         ppid: record.ppid,
         cwd: decode(record.cwd),

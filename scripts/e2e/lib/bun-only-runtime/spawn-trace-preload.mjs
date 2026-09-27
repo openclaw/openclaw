@@ -1,11 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import { findLauncherTokens, nodeLaunchers } from "./sentinel.mjs";
 
-const launchers = new Set(["node", "nodejs", "npm", "npx", "pnpm", "pnpx", "yarn", "corepack"]);
+const launchers = new Set(nodeLaunchers);
 const shells = new Set(["sh", "bash", "dash"]);
-// Bare, absolute, or quoted launcher tokens; an absent absolute path never reaches a sentinel.
-const shellLauncher =
-  /(^|[\s;&|(])["']?(?:[^\s;&|()"']*\/)?(node|nodejs|npm|npx|pnpm|pnpx|yarn|corepack)["']?(?=[\s;&|)]|$)/;
 
 /** @param {string[]} cmd */
 function isNodeShaped(cmd) {
@@ -17,8 +15,8 @@ function isNodeShaped(cmd) {
   if (launchers.has(name)) {
     return true;
   }
-  const scriptIndex = cmd.indexOf("-c");
-  return shells.has(name) && scriptIndex !== -1 && shellLauncher.test(cmd[scriptIndex + 1] ?? "");
+  // Shell traces only attribute stacks; any argument may hold the script (`bash -c -e 'cmd'`).
+  return shells.has(name) && cmd.slice(1).some((arg) => findLauncherTokens(arg).length > 0);
 }
 
 function captureStack() {
