@@ -179,7 +179,10 @@ describe("AcpSessionManager actor epoch fencing", () => {
                 },
               },
               ...target,
-              deps: { getRuntimeBackend: () => ({ id: "acpx", runtime: runtime.runtime }) },
+              deps: {
+                getRuntimeBackend: () => ({ id: "acpx", runtime: runtime.runtime }),
+                requireRuntimeBackend: () => ({ id: "acpx", runtime: runtime.runtime }),
+              },
               ...services,
             });
       await expect(pending).rejects.toThrow();

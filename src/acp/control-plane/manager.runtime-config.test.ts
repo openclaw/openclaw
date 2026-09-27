@@ -120,6 +120,62 @@ describe("AcpSessionManager runtime config", () => {
     });
   });
 
+  it.each([
+    { closeFails: false, restart: false, reason: "terminal-task-cleanup" },
+    { closeFails: true, restart: false, reason: "terminal-task-cleanup" },
+    { closeFails: false, restart: true, reason: "orphan-task-cleanup" },
+  ])(
+    "closes the original oneshot after finalization ($closeFails, $restart, $reason)",
+    async ({ closeFails, restart, reason }) => {
+      const f = fixture({ mode: "oneshot" });
+      if (closeFails) {
+        f.state.close.mockRejectedValueOnce(new Error("close interrupted"));
+      }
+      f.state.ensureSession.mockResolvedValue({
+        sessionKey: f.target.sessionKey,
+        backend: "acpx",
+        runtimeSessionName: "runtime-oneshot",
+        acpxRecordId: "oneshot-record",
+        backendSessionId: "oneshot-session",
+      });
+      f.state.getStatus.mockResolvedValue({
+        summary: "status=done",
+        backendSessionId: "oneshot-session",
+        agentSessionId: "oneshot-agent",
+        details: { status: "done" },
+      });
+      await f.run();
+      expect(f.state.close).toHaveBeenCalledOnce();
+      expect(f.manager.getObservabilitySnapshot(baseCfg).runtimeCache.activeSessions).toBe(0);
+      if (restart) {
+        await disposeAcpSessionManagerInstance(f.manager, "gateway-shutdown");
+      }
+      const cleanupManager = restart ? new AcpSessionManager() : f.manager;
+      await expect(
+        cleanupManager.closeSession({
+          ...f.target,
+          reason,
+          clearMeta: true,
+          discardPersistentState: true,
+          allowBackendUnavailable: true,
+        }),
+      ).resolves.toEqual({ runtimeClosed: true, metaCleared: true });
+      expect(f.state.ensureSession).toHaveBeenCalledOnce();
+      expect(f.state.close).toHaveBeenCalledTimes(2);
+      expect(f.state.close).toHaveBeenLastCalledWith({
+        handle: expect.objectContaining({
+          sessionKey: f.target.sessionKey,
+          runtimeSessionName: "runtime-oneshot",
+          acpxRecordId: "oneshot-record",
+          backendSessionId: "oneshot-session",
+          agentSessionId: "oneshot-agent",
+        }),
+        reason,
+        discardPersistentState: false,
+      });
+    },
+  );
+
   it("persists prompt-learned agent identity when runtime status omits it", async () => {
     const f = fixture({
       agent: "gemini",
