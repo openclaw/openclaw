@@ -1652,10 +1652,7 @@ extension OpenClawSnapshotUITests {
     }
 
     private func waitForEnabled(_ element: XCUIElement) {
-        let expectation = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "enabled == true"),
-            object: element)
-        XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 5), .completed)
+        XCTAssertTrue(element.wait(for: \.isEnabled, toEqual: true, timeout: 5))
     }
 
     private func waitForHittable(_ isHittable: Bool, of element: XCUIElement) {
