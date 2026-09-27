@@ -89,6 +89,12 @@ extension OpenClawChatViewModel {
         self.liveUsageRunID.flatMap { self.liveRunStateByRunID[$0]?.outputTokens }
     }
 
+    var workingCommentary: ChatWorkingCommentary? {
+        guard let runID = self.liveUsageRunID else { return nil }
+        return ChatWorkingCommentary.latest(
+            runID: runID, messages: self.messages, live: self.liveWorkingCommentary)
+    }
+
     var hasAdvertisedLiveRun: Bool {
         !self.liveAdvertisedRunIDs.isEmpty
     }
@@ -155,6 +161,7 @@ extension OpenClawChatViewModel {
 
     func retireTerminalRun(_ runID: String?) {
         guard let runID = Self.normalizedRunID(runID) else { return }
+        if self.liveWorkingCommentary?.runID == runID { self.liveWorkingCommentary = nil }
         // Advertised-only runs must fence earlier history even after a later
         // session snapshot releases their terminal tombstone.
         self.invalidateRunSnapshots()

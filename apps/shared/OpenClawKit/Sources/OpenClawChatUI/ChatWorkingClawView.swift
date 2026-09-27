@@ -518,6 +518,7 @@ struct ChatWorkingStatusText: View {
     let startedAt: Date
     let seed: String
     let outputTokens: Int?
+    var showsPhrase = true
 
     var body: some View {
         Group {
@@ -547,7 +548,7 @@ struct ChatWorkingStatusText: View {
                     .font(OpenClawChatTypography.caption)
                     .monospacedDigit()
             }
-            if let index = ChatWorkingPhrase.index(
+            if self.showsPhrase, let index = ChatWorkingPhrase.index(
                 seed: self.seed,
                 elapsedMilliseconds: elapsedMilliseconds)
             {

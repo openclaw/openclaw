@@ -1669,6 +1669,31 @@ private actor SwarmCapabilityScript {
 }
 
 struct ChatViewModelTests {
+    @Test @MainActor func completedPreambleFollowsSelectedRunAndClearsOnTerminal() {
+        let vm = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        vm.pendingRuns.insert("active")
+        func item(_ runID: String, _ sequence: Int, _ text: String) -> OpenClawChatTransportEvent {
+            .agent(OpenClawAgentEventPayload(
+                runId: runID, seq: sequence, stream: "item", ts: 1000 + sequence,
+                data: ["kind": AnyCodable("preamble"), "itemId": AnyCodable("step-\(sequence)"),
+                       "progressText": AnyCodable(text), "phase": AnyCodable("end")] ))
+        }
+        vm.handleTransportEvent(item("sibling", 1, "Another run."))
+        #expect(vm.workingCommentary == nil)
+        vm.handleTransportEvent(item("active", 2, "Checking files."))
+        #expect(vm.workingCommentary?.text == "Checking files.")
+        vm.handleTransportEvent(item("active", 2, "Stale duplicate."))
+        #expect(vm.workingCommentary?.text == "Checking files.")
+        vm.handleTransportEvent(item("active", 3, "Checking tests."))
+        #expect(vm.workingCommentary?.text == "Checking tests.")
+        vm.handleTransportEvent(.chat(OpenClawChatEventPayload(
+            runId: "active", sessionKey: "main", state: "aborted", message: nil, errorMessage: nil)))
+        #expect(vm.workingCommentary == nil)
+        #expect(vm.liveWorkingCommentary == nil)
+    }
+
     @Test func `legacy plan renders only when progress card store is unavailable`() async throws {
         let (_, vm) = await makeViewModel(
             historyResponses: [historyPayload(canonicalKey: "agent:main:main", agentId: "main")],

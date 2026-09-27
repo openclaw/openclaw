@@ -892,6 +892,7 @@ struct ChatTypingIndicatorBubble: View {
     let showsAssistantAvatar: Bool
     let isClean: Bool
     let runIdentity: String
+    let commentary: String?
     let outputTokens: Int?
 
     var body: some View {
@@ -907,41 +908,52 @@ struct ChatTypingIndicatorBubble: View {
             HStack(spacing: 9) {
                 ChatWorkingIndicatorContent(
                     runIdentity: self.runIdentity,
+                    commentary: self.commentary,
                     outputTokens: self.outputTokens)
                     .id(self.runIdentity)
             }
             .padding(.vertical, self.isClean ? 5 : (self.style == .standard ? 10 : 9))
             .padding(.horizontal, self.isClean ? 4 : (self.style == .standard ? 12 : 14))
             .assistantBubbleContainerStyle(isClean: self.isClean, cornerRadius: 15)
-            .fixedSize(horizontal: true, vertical: false)
+            .fixedSize(horizontal: self.commentary == nil, vertical: false)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .focusable(false)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(
-            Text("Writing")
-                .font(OpenClawChatTypography.caption))
+            self.commentary.map { Text(verbatim: $0).font(OpenClawChatTypography.caption) } ??
+                Text("Writing").font(OpenClawChatTypography.caption))
     }
 }
 
 private struct ChatWorkingIndicatorContent: View {
     @State private var startedAt: Date
     let seed: String
+    let commentary: String?
     let outputTokens: Int?
 
-    init(runIdentity: String, outputTokens: Int?) {
+    init(runIdentity: String, commentary: String?, outputTokens: Int?) {
         _startedAt = State(initialValue: Date())
         self.seed = runIdentity
+        self.commentary = commentary
         self.outputTokens = outputTokens
     }
 
     var body: some View {
         HStack(spacing: 9) {
             ChatWorkingClawView(seed: self.seed)
-            ChatWorkingStatusText(
-                startedAt: self.startedAt,
-                seed: self.seed,
-                outputTokens: self.outputTokens)
+            VStack(alignment: .leading, spacing: 3) {
+                if let commentary = self.commentary {
+                    Text(verbatim: commentary)
+                        .font(OpenClawChatTypography.caption)
+                        .lineLimit(3)
+                }
+                ChatWorkingStatusText(
+                    startedAt: self.startedAt,
+                    seed: self.seed,
+                    outputTokens: self.outputTokens,
+                    showsPhrase: self.commentary == nil)
+            }
         }
     }
 }
@@ -1047,6 +1059,7 @@ extension ChatTypingIndicatorBubble: @MainActor Equatable {
             lhs.showsAssistantAvatar == rhs.showsAssistantAvatar &&
             lhs.isClean == rhs.isClean &&
             lhs.runIdentity == rhs.runIdentity &&
+            lhs.commentary == rhs.commentary &&
             lhs.outputTokens == rhs.outputTokens
     }
 }

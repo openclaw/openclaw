@@ -152,6 +152,8 @@ public final class OpenClawChatViewModel {
     }
 
     public private(set) var streamingAssistantText: String?
+    // Only the selected run's completed item is transient; canonical history stays in messages.
+    var liveWorkingCommentary: ChatWorkingCommentary?
 
     public private(set) var toolActivities: [OpenClawChatPendingToolCall] = []
     var subagentActivities: [ChatSubagentActivity] = []
@@ -1283,6 +1285,7 @@ extension OpenClawChatViewModel {
         self.sessionId = nil
         self.turnToolCallsById = [:]
         self.clearSubagentActivities()
+        self.liveWorkingCommentary = nil
         self.updateStreamingAssistantText(nil)
         self.clearProgressCard()
         self.updateActiveSessionRunWithoutChatSnapshot(false)
