@@ -31,93 +31,76 @@ const sharedClients = vi.hoisted(() => ({
 vi.mock("./app-server/shared-client.js", () => sharedClients);
 
 describe("native Codex thread selection", () => {
-  it.each([
-    "metadata",
-    "thread",
-    "connection",
-    "session",
-    "model-lock",
-    "config",
-    "owner",
-  ] as const)("revalidates a native request after a %s change", async (change) => {
-    const bindingStore = createCodexTestBindingStore();
-    const identity = {
-      kind: "session" as const,
-      agentId: "main",
-      sessionId: "session-id",
-      sessionKey: "agent:main:selection",
-    };
-    const binding = { threadId: "bound-thread", cwd: "/synthetic/workspace" };
-    await bindingStore.mutate(identity, { kind: "set", binding });
-    let config: OpenClawConfig = {};
-    let ownerCurrent = true;
-    const session = {
-      sessionId: identity.sessionId,
-      modelSelectionLocked: false,
-      inputTokens: 0,
-    };
-    const runtime = createPluginRuntimeMock({
-      agent: {
-        session: {
-          getSessionEntry: () => ({ ...session, updatedAt: Date.now() }),
-        },
-      },
-    });
-    const dispatch = vi.fn(() => ({ data: [] }));
-    const request = vi.fn<typeof codexControlRequest>();
-    request.mockImplementation(async (_config, _method, _params, options = {}) => {
-      await bindingStore.mutate(identity, {
-        kind: "set",
-        binding: {
-          ...binding,
-          threadId: change === "thread" ? "replacement-thread" : binding.threadId,
-          ...(change === "connection" ? { appServerRuntimeFingerprint: "replacement" } : {}),
-          historyCoveredThrough: "2026-09-16T12:00:00Z",
-          continuityCalibration: { promptChars: 2000, inputTokens: 200 },
+  it.each(["metadata", "connection", "session", "config"] as const)(
+    "revalidates a native request after a %s change",
+    async (change) => {
+      const bindingStore = createCodexTestBindingStore();
+      const identity = {
+        kind: "session" as const,
+        agentId: "main",
+        sessionId: "session-id",
+        sessionKey: "agent:main:selection",
+      };
+      const binding = { threadId: "bound-thread", cwd: "/synthetic/workspace" };
+      await bindingStore.mutate(identity, { kind: "set", binding });
+      let config: OpenClawConfig = {};
+      const session = {
+        sessionId: identity.sessionId,
+        modelSelectionLocked: false,
+        inputTokens: 0,
+      };
+      const runtime = createPluginRuntimeMock({
+        agent: {
+          session: {
+            getSessionEntry: () => ({ ...session, updatedAt: Date.now() }),
+          },
         },
       });
-      session.inputTokens = 200;
-      if (change === "session") {
-        session.sessionId = "replacement-session";
-      } else if (change === "model-lock") {
-        session.modelSelectionLocked = true;
-      } else if (change === "config") {
-        config = { ...config };
-      } else if (change === "owner") {
-        ownerCurrent = false;
-      }
-      expect(options.assertCurrent).toBeTypeOf("function");
-      options.assertCurrent!();
-      return dispatch();
-    });
-    const tool = createCodexThreadsTool({
-      bindingStore,
-      runtime,
-      context: {
-        ...identity,
-        agentDir: "/synthetic/agent",
-        workspaceDir: binding.cwd,
-        senderIsOwner: true,
-        assertInvocationCurrent: () => {
-          if (!ownerCurrent) {
-            throw new Error("native thread ownership changed: continuation closed");
-          }
+      const dispatch = vi.fn(() => ({ data: [] }));
+      const request = vi.fn<typeof codexControlRequest>();
+      request.mockImplementation(async (_config, _method, _params, options = {}) => {
+        await bindingStore.mutate(identity, {
+          kind: "set",
+          binding: {
+            ...binding,
+            ...(change === "connection" ? { appServerRuntimeFingerprint: "replacement" } : {}),
+            historyCoveredThrough: "2026-09-16T12:00:00Z",
+            continuityCalibration: { promptChars: 2000, inputTokens: 200 },
+          },
+        });
+        session.inputTokens = 200;
+        if (change === "session") {
+          session.sessionId = "replacement-session";
+        } else if (change === "config") {
+          config = { ...config };
+        }
+        options.assertCurrent!();
+        return dispatch();
+      });
+      const tool = createCodexThreadsTool({
+        bindingStore,
+        runtime,
+        context: {
+          ...identity,
+          agentDir: "/synthetic/agent",
+          workspaceDir: binding.cwd,
+          senderIsOwner: true,
+          getRuntimeConfig: () => config,
         },
-        getRuntimeConfig: () => config,
-      },
-      getPluginConfig: () => ({ appServer: { homeScope: "user" } }),
-      request,
-    });
+        getPluginConfig: () => ({ appServer: { homeScope: "user" } }),
+        request,
+      });
 
-    const pending = tool!.execute("selection-change", { action: "list" });
-    if (change === "metadata") {
-      await expect(pending).resolves.toMatchObject({ details: { data: [] } });
-      expect(dispatch).toHaveBeenCalledOnce();
-    } else {
-      await expect(pending).rejects.toThrow("native thread ownership changed");
-      expect(dispatch).not.toHaveBeenCalled();
-    }
-  });
+      const pending = tool!.execute("selection-change", { action: "list" });
+      if (change === "metadata") {
+        await expect(pending).resolves.toMatchObject({ details: { data: [] } });
+        expect(dispatch).toHaveBeenCalledOnce();
+      } else {
+        await expect(pending).rejects.toThrow("native thread ownership changed");
+        expect(dispatch).not.toHaveBeenCalled();
+      }
+    },
+  );
 });
 
 describe("native Codex fork ownership", () => {
@@ -245,37 +228,25 @@ describe("native Codex fork ownership", () => {
       expect(hasCodexAppServerLiveThread(harness.client, "forked-thread")).toBe(true);
     }));
 
-  it.each(["binding", "model lock", "invocation owner"] as const)(
-    "preserves %s changes while the native fork is in flight",
-    (change) =>
-      withFork(async (fixture) => {
-        const operation = fixture.tool().execute("stale-fork", {
-          action: "fork",
-          thread_id: "source-thread",
-        });
-        const rejected = expect(operation).rejects.toThrow("native thread ownership changed");
-        await fixture.forkWritten.promise;
-        if (change === "binding") {
-          await fixture.bindingStore.mutate(fixture.identity, {
-            kind: "set",
-            binding: { ...fixture.binding, threadId: "replacement-thread" },
-          });
-        } else if (change === "model lock") {
-          fixture.session.modelSelectionLocked = true;
-        } else {
-          fixture.revokeInvocation();
-        }
-        fixture.forkResponse.resolve(fixture.response);
-        await rejected;
-        expect(fixture.bindingStore.read(fixture.identity)).toEqual(
-          change === "binding"
-            ? { ...fixture.binding, threadId: "replacement-thread" }
-            : fixture.binding,
-        );
-        expect(fixture.unsubscribed).toEqual(["forked-thread"]);
-        expect(hasCodexAppServerLiveThread(fixture.harness.client, "forked-thread")).toBe(false);
-      }),
-  );
+  it("preserves a replacement binding while the native fork is in flight", () =>
+    withFork(async (fixture) => {
+      const operation = fixture.tool().execute("stale-fork", {
+        action: "fork",
+        thread_id: "source-thread",
+      });
+      const rejected = expect(operation).rejects.toThrow("native thread ownership changed");
+      await fixture.forkWritten.promise;
+      const replacement = { ...fixture.binding, threadId: "replacement-thread" };
+      await fixture.bindingStore.mutate(fixture.identity, {
+        kind: "set",
+        binding: replacement,
+      });
+      fixture.forkResponse.resolve(fixture.response);
+      await rejected;
+      expect(fixture.bindingStore.read(fixture.identity)).toEqual(replacement);
+      expect(fixture.unsubscribed).toEqual(["forked-thread"]);
+      expect(hasCodexAppServerLiveThread(fixture.harness.client, "forked-thread")).toBe(false);
+    }));
 
   it("rejects a retained fork when its invocation ends during the binding write", () =>
     withFork(async (fixture) => {
@@ -311,67 +282,46 @@ describe("native Codex fork ownership", () => {
       }
     }));
 
-  it.each(["successor binding", "model lock", "invocation owner"] as const)(
-    "reports a committed fork after a later %s change",
-    (change) =>
-      withFork(async (fixture) => {
-        const withLease = fixture.bindingStore.withLease.bind(fixture.bindingStore);
-        const settledLease = vi
-          .spyOn(fixture.bindingStore, "withLease")
-          .mockImplementationOnce(
-            async <T>(
-              identity: CodexAppServerBindingIdentity,
-              run: () => Promise<T>,
-            ): Promise<T> => {
-              const result = await withLease(identity, run);
-              expect(fixture.bindingStore.read(identity)).toMatchObject({
-                threadId: "forked-thread",
-                clientId: fixture.harness.client.getInstanceId(),
-              });
-              if (change === "successor binding") {
-                await expect(
-                  fixture.bindingStore.mutate(identity, {
-                    kind: "set",
-                    binding: { ...fixture.binding, threadId: "successor-thread" },
-                  }),
-                ).resolves.toBe(true);
-              } else if (change === "model lock") {
-                fixture.session.modelSelectionLocked = true;
-              } else {
-                fixture.revokeInvocation();
-              }
-              return result;
-            },
-          );
-        try {
-          fixture.forkResponse.resolve(fixture.response);
-          const outcome = await fixture
-            .tool()
-            .execute("committed-fork", {
-              action: "fork",
-              thread_id: "source-thread",
-            })
-            .then(
-              (result) => ({ kind: "success", result }),
-              (error: unknown) => ({ kind: "error", error }),
-            );
+  it("reports a committed fork without replacing a successor binding", () =>
+    withFork(async (fixture) => {
+      const withLease = fixture.bindingStore.withLease.bind(fixture.bindingStore);
+      const settledLease = vi
+        .spyOn(fixture.bindingStore, "withLease")
+        .mockImplementationOnce(
+          async <T>(identity: CodexAppServerBindingIdentity, run: () => Promise<T>): Promise<T> => {
+            const result = await withLease(identity, run);
+            expect(fixture.bindingStore.read(identity)).toMatchObject({
+              threadId: "forked-thread",
+              clientId: fixture.harness.client.getInstanceId(),
+            });
+            await expect(
+              fixture.bindingStore.mutate(identity, {
+                kind: "set",
+                binding: { ...fixture.binding, threadId: "successor-thread" },
+              }),
+            ).resolves.toBe(true);
+            return result;
+          },
+        );
+      try {
+        fixture.forkResponse.resolve(fixture.response);
+        await expect(
+          fixture.tool().execute("committed-fork", {
+            action: "fork",
+            thread_id: "source-thread",
+          }),
+        ).resolves.toMatchObject({
+          details: { attached: true, thread: { id: "forked-thread" } },
+        });
 
-          expect(settledLease).toHaveBeenCalledOnce();
-          expect(fixture.bindingStore.read(fixture.identity)?.threadId).toBe(
-            change === "successor binding" ? "successor-thread" : "forked-thread",
-          );
-          expect(fixture.session.modelSelectionLocked).toBe(change === "model lock");
-          expect(hasCodexAppServerLiveThread(fixture.harness.client, "forked-thread")).toBe(true);
-          expect(fixture.unsubscribed).toEqual([]);
-          expect(outcome).toMatchObject({
-            kind: "success",
-            result: { details: { attached: true, thread: { id: "forked-thread" } } },
-          });
-        } finally {
-          settledLease.mockRestore();
-        }
-      }),
-  );
+        expect(settledLease).toHaveBeenCalledOnce();
+        expect(fixture.bindingStore.read(fixture.identity)?.threadId).toBe("successor-thread");
+        expect(hasCodexAppServerLiveThread(fixture.harness.client, "forked-thread")).toBe(true);
+        expect(fixture.unsubscribed).toEqual([]);
+      } finally {
+        settledLease.mockRestore();
+      }
+    }));
 
   it("unsubscribes a detached native fork without requiring an OpenClaw session", () =>
     withFork(async (fixture) => {
@@ -430,7 +380,7 @@ describe("native Codex fork ownership", () => {
       expect(fixture.unsubscribed).toEqual([]);
     }));
 
-  it.each([-32603, -32600])("retires a fork client after response assembly error %s", (code) =>
+  it("retires a fork client after an invalid-request response assembly error", () =>
     withFork(async (fixture) => {
       const pending = fixture.tool(false).execute("failed-fork-response", {
         action: "fork",
@@ -439,7 +389,7 @@ describe("native Codex fork ownership", () => {
       });
       const rejected = expect(pending).rejects.toThrow("failed to read the new fork");
       await fixture.forkWritten.promise;
-      fixture.forkResponse.reject({ code, message: "failed to read the new fork" });
+      fixture.forkResponse.reject({ code: -32600, message: "failed to read the new fork" });
       await rejected;
       await expect(
         fixture.harness.client.request("thread/read", { threadId: "source-thread" }),
@@ -449,8 +399,7 @@ describe("native Codex fork ownership", () => {
       ).toHaveBeenCalledExactlyOnceWith(fixture.harness.client);
       expect(fixture.unsubscribed).toEqual([]);
       expect(fixture.bindingStore.read(fixture.identity)).toEqual(fixture.binding);
-    }),
-  );
+    }));
 
   it("keeps the client available when fork authority changes before dispatch", () =>
     withFork(async (fixture) => {

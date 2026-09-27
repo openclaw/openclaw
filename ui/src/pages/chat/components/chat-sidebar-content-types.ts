@@ -129,6 +129,8 @@ export type FileSidebarContent = {
   content: string;
   /** Stable per-session identity used to retain an unsaved in-memory draft. */
   draftKey?: string;
+  /** Captured display context; the draft key is opaque and never a UI label. */
+  draftContext?: { sessionKey: string; sessionTitle: string; paneLabel?: string };
   root?: string | null;
   mimeType?: string;
   language?: string;

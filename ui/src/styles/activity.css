@@ -251,6 +251,14 @@ a.activity-current-work__row:hover {
   background: var(--ok);
 }
 
+.activity-feed__presence-dot[data-presence-activity="idle"] {
+  background: var(--warn);
+}
+
+.activity-feed__presence-dot[data-presence-activity="unknown"] {
+  background: var(--muted);
+}
+
 .activity-feed__unknown-avatar {
   flex: none;
 }

@@ -34,11 +34,9 @@ export function registerMatrixDeviceCommands(root: Command): void {
     .option("--account <id>", "Account ID (for multi-account setups)")
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
-    .action(async (options: { account?: string; verbose?: boolean; json?: boolean }) => {
+    .action(async (options: cli.MatrixCliOptions) => {
       const { accountId, cfg } = cli.resolveMatrixCliAccountContext(options.account);
-      await cli.runMatrixCliCommand({
-        verbose: options.verbose === true,
-        json: options.json === true,
+      await cli.runMatrixCliCommand(options, {
         run: async () => await listMatrixOwnDevices({ accountId, cfg }),
         onText: (result) => {
           cli.printAccountLabel(accountId);
@@ -54,11 +52,9 @@ export function registerMatrixDeviceCommands(root: Command): void {
     .option("--account <id>", "Account ID (for multi-account setups)")
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
-    .action(async (options: { account?: string; verbose?: boolean; json?: boolean }) => {
+    .action(async (options: cli.MatrixCliOptions) => {
       const { accountId, cfg } = cli.resolveMatrixCliAccountContext(options.account);
-      await cli.runMatrixCliCommand({
-        verbose: options.verbose === true,
-        json: options.json === true,
+      await cli.runMatrixCliCommand(options, {
         run: async () => await pruneMatrixStaleGatewayDevices({ accountId, cfg }),
         onText: (result, verbose) => {
           cli.printAccountLabel(accountId);

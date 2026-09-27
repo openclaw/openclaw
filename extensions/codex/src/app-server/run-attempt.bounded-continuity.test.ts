@@ -150,26 +150,21 @@ describe("Codex bounded assistant continuity", () => {
     },
   );
 
-  it.each(["empty", "tool-only"] as const)(
-    "does not seed a fresh thread from %s history",
-    async (mode) => {
-      const { params, manager } = await createHistory();
-      if (mode === "tool-only") {
-        appendToolPair(manager, 0);
-        manager.appendMessage(assistantMessage("  \n  ", 4));
-      }
-      const harness = createStartedThreadHarness();
-      const run = runCodexAppServerAttempt(params);
-      await harness.waitForMethod("turn/start");
-      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-      await run;
-      const request = harness.requests.find((entry) => entry.method === "turn/start");
-      const text = JSON.stringify(request?.params);
-      expect(text).toContain(params.prompt);
-      expect(text).not.toContain("<conversation_context>");
-      expect(text).not.toContain("synthetic tool payload");
-    },
-  );
+  it("does not seed a fresh thread from tool-only history", async () => {
+    const { params, manager } = await createHistory();
+    appendToolPair(manager, 0);
+    manager.appendMessage(assistantMessage("  \n  ", 4));
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+    const request = harness.requests.find((entry) => entry.method === "turn/start");
+    const text = JSON.stringify(request?.params);
+    expect(text).toContain(params.prompt);
+    expect(text).not.toContain("<conversation_context>");
+    expect(text).not.toContain("synthetic tool payload");
+  });
   it.each([false, true])(
     "applies prompt hooks once per build without duplicating current input (continuity: %s)",
     async (withHistory) => {

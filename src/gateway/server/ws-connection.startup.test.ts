@@ -48,6 +48,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -833,12 +834,15 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
         { label: "gateway-startup-cloud-worker-invalid", layout: "state-only" },
         async (state) => {
           const { store } = await seedProvisioningNodeSetup();
-          const rateLimiter = createGatewayAuthRateLimiter({
-            maxAttempts: 1,
-            windowMs: 60_000,
-            lockoutMs: 60_000,
-            exemptLoopback: false,
-          });
+          const rateLimiter = createGatewayAuthRateLimiter(
+            {
+              maxAttempts: 1,
+              windowMs: 60_000,
+              lockoutMs: 60_000,
+              exemptLoopback: false,
+            },
+            { scheduler: createTestGatewayScheduler() },
+          );
           try {
             const harness = await attachStartupNodeConnect({
               bootstrapToken: "invalid-startup-token",

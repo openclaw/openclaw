@@ -240,6 +240,15 @@ checks still run. Standalone Doctor lint and explicitly selected `--only` checks
 keep their normal scope. The candidate recognizes the private-copy markers already
 set by the published 2026.9.4 updater, so this reduces work on that first hop too.
 
+The rehearsal repair Doctor also defers pure advisory inspections, including
+security, provider catalog, and runtime tool-schema diagnostics, and records their
+IDs in its output without consuming repair-warning slots. Contributions that also perform repairs stay in
+the rehearsal, including auth profiles, plugin health repairs, skills, memory
+recall, and session transcripts. The live post-swap Doctor and final readiness
+checks keep their existing scope. This saving applies to published 2026.9.3–2026.9.6
+updaters that supply the private-copy markers; older drivers keep their existing
+behavior.
+
 These checks do not run an agent turn or require a usable model-auth route.
 OAuth-only installations and installations without provider credentials can update.
 Auth diagnostics are advisory; optional inference repair runs through triage only
@@ -266,7 +275,18 @@ timeout replaces that derived allowance.
 Automatic and chat updates leave that runtime allowance derived from state.
 Their request and recovery watchdogs do not become update validation deadlines.
 Startup and readiness responses share their own allowance, including reading
-the response body.
+the response body. Completed candidate CLI and Gateway startup milestones from a
+fixed set of startup events renew that allowance once each; passing the original
+deadline records a warning while startup keeps progressing. Unknown names are
+ignored and logged at debug level. Probe responses do not renew the allowance.
+The total readiness wait cannot exceed four
+times its initial allowance, even while milestones advance. Reaching that ceiling
+refuses the candidate and records the elapsed time and milestones reached, leaving
+the previous Gateway untouched. A candidate that exits or stops advancing fails
+validation with its last startup evidence. Unreachable probes
+without startup evidence and configured proxy failures remain warnings.
+This progress-aware wait belongs to the installed updater. The published
+2026.9.4 updater retains its fixed five-minute cap when checking a newer candidate.
 
 During a copied update rehearsal, candidate Doctor publishes its lint report
 before disposing plugin inspections. Its private state stays owned until disposal
@@ -894,7 +914,7 @@ the sentinel.
 
   </Step>
   <Step id="validate-the-candidate" title="Check the update">
-    Runs Doctor health checks, config and plugin planning, and the isolated migration and test Gateway checks described above. Validation failure leaves the old Gateway serving.
+    Runs Doctor health checks, config and plugin planning, and the isolated migration and test Gateway checks described above. Validation failure leaves the old Gateway serving. If validation leaves source edits in the temporary worktree, progress reports a failed candidate clean check.
   </Step>
   <Step title="Activate and verify">
     Stops the managed service, checks out the exact staged commit SHA, publishes the prepared runtime, and runs required Doctor migrations. Core dependencies and the checkout build were prepared before downtime; plugin convergence follows while the service remains stopped.

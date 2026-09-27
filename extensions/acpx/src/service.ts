@@ -359,7 +359,6 @@ export function createAcpxRuntimeService(
         prepareAcpxCodexAuthConfig({
           pluginConfig: basePluginConfig,
           stateDir: ctx.stateDir,
-          logger: ctx.logger,
         }),
       );
       const wrapperRoot = path.join(ctx.stateDir, "acpx");

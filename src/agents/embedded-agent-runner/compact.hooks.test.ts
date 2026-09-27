@@ -124,7 +124,7 @@ import {
 
 let compactEmbeddedAgentSessionDirect: typeof import("./compact.js").compactEmbeddedAgentSessionDirect;
 let compactEmbeddedAgentSession: CompactHooksQueuedCompaction;
-let compactTesting: typeof import("./compact.js").testing;
+let compactTesting: typeof import("./compact.hooks.owner-test-support.js");
 let onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 let onInternalSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onInternalSessionTranscriptUpdate;
 let diagnosticEvents: typeof import("../../infra/diagnostic-events.js");
@@ -389,14 +389,14 @@ async function runCompactionHooks(params: { sessionKey: string; messageProvider?
 
 beforeAll(async () => {
   const loaded = await loadCompactHooksHarness();
-  [diagnosticEvents, diagnosticRunActivity] = await Promise.all([
+  [diagnosticEvents, diagnosticRunActivity, compactTesting] = await Promise.all([
     import("../../infra/diagnostic-events.js"),
     import("../../logging/diagnostic-run-activity.js"),
+    import("./compact.hooks.owner-test-support.js"),
   ]);
   compactEmbeddedAgentSessionDirect = (params) =>
     loaded.compactEmbeddedAgentSessionDirect({ agentId: "main", ...params });
   compactEmbeddedAgentSession = loaded.compactEmbeddedAgentSession;
-  compactTesting = loaded.testing;
   onSessionTranscriptUpdate = loaded.onSessionTranscriptUpdate;
   onInternalSessionTranscriptUpdate = loaded.onInternalSessionTranscriptUpdate;
   TEST_STORE_PATH = await compactionFixture.prepare();

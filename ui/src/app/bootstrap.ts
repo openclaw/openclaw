@@ -59,6 +59,7 @@ import { createConnectionBootstrapCoordinator } from "./connection-bootstrap.ts"
 import type { ApplicationNavigationOptions, ApplicationContext } from "./context.ts";
 import { createScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import { startGatewayPageActivation } from "./gateway-page-activation.ts";
+import { startGatewayPresenceActivity } from "./gateway-presence-activity.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { startLinkReaderRouting } from "./link-reader-routing.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
@@ -540,6 +541,7 @@ export function bootstrapApplication(): ApplicationRuntime {
           return () => gateway.stop();
         },
         () => startGatewayPageActivation(gateway, document, window),
+        () => startGatewayPresenceActivity(gateway, document),
         () => {
           plugins.start();
           return () => plugins.dispose();

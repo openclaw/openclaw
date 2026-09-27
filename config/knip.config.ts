@@ -26,6 +26,8 @@ const repositoryScriptEntries = [
   "src/node-host/mac-worker-entry.ts!",
   // CI imports this selector from its trusted harness inside an inline Node script.
   ".github/actions/git-owner/test-prerequisites.mjs!",
+  // The frozen Node compatibility action invokes this exact-candidate repair by path.
+  ".github/actions/frozen-node-test-compat/apply.mjs!",
   // The compiler below exposes this workflow's inline and generated-config imports.
   ".github/workflows/plugin-prerelease.yml!",
   // setup-node-env invokes this helper from composite-action YAML.
@@ -506,7 +508,6 @@ const bundledPluginIgnoredRuntimeDependencies = [
 const rootBundledPluginRuntimeDependencies = [
   "@anthropic-ai/sdk",
   "@google/genai",
-  "@grammyjs/runner",
   "@grammyjs/transformer-throttler",
   "@homebridge/ciao",
   "@mozilla/readability",

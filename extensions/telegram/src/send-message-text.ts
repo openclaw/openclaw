@@ -176,13 +176,7 @@ export function createTelegramTextSender(config: {
       }
     };
 
-    const record = async (params: {
-      messageId: number;
-      result: TelegramMessageLike;
-      acceptedParams?: TelegramThreadScopedParams | TelegramRichMessageContextParams;
-      plainText: string;
-      hasInlineKeyboard: boolean;
-    }) => {
+    const record = async (params: Omit<PendingChunk, "reportChatId">) => {
       const { messageId } = params;
       acceptedReplyToMessageId ??= resolveAcceptedReplyToMessageId(params.acceptedParams);
       if (sender.parts.length === start + 1) {
@@ -205,12 +199,8 @@ export function createTelegramTextSender(config: {
       );
       const previousChunk = pendingChunk;
       pendingChunk = {
-        result: params.result,
-        messageId,
-        acceptedParams: params.acceptedParams,
-        plainText: params.plainText,
+        ...params,
         reportChatId: params.result?.chat?.id ?? chatId,
-        hasInlineKeyboard: params.hasInlineKeyboard,
       };
       if (previousChunk) {
         await flushChunk(previousChunk, false);

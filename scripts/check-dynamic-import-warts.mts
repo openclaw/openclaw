@@ -72,9 +72,6 @@ function isIgnoredTestHelperPath(filePath: string) {
   );
 }
 
-/**
- * Finds dynamic import advisories in a single source file.
- */
 export function findDynamicImportAdvisories(
   _content: string,
   _fileName: string,
@@ -158,13 +155,9 @@ export function findDynamicImportAdvisories(
   return advisories;
 }
 
-/**
- * Collects dynamic import advisories across configured source roots.
- */
-async function collectDynamicImportAdvisories(options: { roots?: string[] } = {}) {
+async function collectDynamicImportAdvisories() {
   using parser = createNativeTypeScriptParser({ cwd: repoRoot });
-  const roots = options.roots ?? defaultRoots;
-  const files = await collectTypeScriptFilesFromRoots(roots, {
+  const files = await collectTypeScriptFilesFromRoots(defaultRoots, {
     extraTestSuffixes: [".suite.ts"],
   });
   const advisories: Array<DynamicImportAdvisory & { path: string }> = [];
@@ -190,9 +183,6 @@ async function collectDynamicImportAdvisories(options: { roots?: string[] } = {}
   return advisories;
 }
 
-/**
- * Runs the dynamic import advisory check.
- */
 export async function main(argv = process.argv.slice(2)) {
   const fail = argv.includes("--fail");
   const json = argv.includes("--json");

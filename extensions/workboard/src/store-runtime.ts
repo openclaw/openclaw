@@ -100,33 +100,23 @@ export class WorkboardStoreRuntime {
   }
 
   protected trackCardStore(store: WorkboardCardStore): WorkboardCardStore {
+    const trackConditionalMutation = (run: () => Promise<boolean>) =>
+      this.runOperation(async () => {
+        const changed = await run();
+        if (changed) {
+          this.mutationRevision += 1;
+        }
+        return changed;
+      });
     return {
       ...this.track(store),
       entries: (scope) => this.runOperation(() => store.entries(scope)),
       registerIfAbsent: (key, value) =>
-        this.runOperation(async () => {
-          const inserted = await store.registerIfAbsent(key, value);
-          if (inserted) {
-            this.mutationRevision += 1;
-          }
-          return inserted;
-        }),
+        trackConditionalMutation(() => store.registerIfAbsent(key, value)),
       registerIfUpdatedAt: (key, value, expectedUpdatedAt) =>
-        this.runOperation(async () => {
-          const updated = await store.registerIfUpdatedAt(key, value, expectedUpdatedAt);
-          if (updated) {
-            this.mutationRevision += 1;
-          }
-          return updated;
-        }),
+        trackConditionalMutation(() => store.registerIfUpdatedAt(key, value, expectedUpdatedAt)),
       deleteIfUpdatedAt: (key, expectedUpdatedAt) =>
-        this.runOperation(async () => {
-          const deleted = await store.deleteIfUpdatedAt(key, expectedUpdatedAt);
-          if (deleted) {
-            this.mutationRevision += 1;
-          }
-          return deleted;
-        }),
+        trackConditionalMutation(() => store.deleteIfUpdatedAt(key, expectedUpdatedAt)),
       claimIfOwnerAvailable: (key, value, expectedUpdatedAt, ownerId, now) =>
         this.runOperation(async () => {
           const result = await store.claimIfOwnerAvailable(

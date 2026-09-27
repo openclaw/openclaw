@@ -13,6 +13,7 @@ import {
   getFirstStreamEventTimeoutMs,
 } from "../utils/stream-first-event-timeout.js";
 import { buildGuardedModelFetch } from "./host-policy.js";
+import { prepareModelRequestBody } from "./model-request-body.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import { formatModelTransportDebugBaseUrl } from "./model-transport-url.js";
 import { isOpenAICodexResponsesModel } from "./openai-completions-compat.js";
@@ -198,6 +199,9 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
         const websocketMode = resolveNativeOpenAIResponsesWebSocketMode(
           model,
           responsesOptions?.transport,
+        );
+        const encodeBody = prepareModelRequestBody(
+          websocketMode || compactRequest ? undefined : options,
         );
         const turnState = resolveProviderTransportTurnState(model, {
           sessionId: options?.sessionId,
@@ -390,6 +394,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             request: initialRequest,
             requestOptions,
             model,
+            encodeBody,
             observePrompt,
             initialAttemptKind,
             initialRejectedCompaction,

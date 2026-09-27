@@ -224,7 +224,11 @@ class ChatPositionRailDirective extends AsyncDirective {
       this.disconnectVisibility();
       this.transcriptElement = root;
       this.stopTranscriptScroll = subscribeTranscriptScroll(root, (observation) => {
-        if (observation.type === "input") {
+        if (observation.type === "offset") {
+          // The reading position can cross a landmark without changing the
+          // rendered rows; follow it here instead of re-rendering the pane.
+          this.scheduleLayout();
+        } else if (observation.type === "input") {
           if (this.followingResize) {
             this.followActive = true;
             this.scheduleLayout();

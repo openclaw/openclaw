@@ -41,40 +41,29 @@ type GatewaySessionClassification = {
   isBackground: boolean;
 };
 
+const SESSION_CLASSIFICATION_PREFIXES: readonly (readonly [string, SessionClassification])[] = [
+  ["dashboard:", "dashboard"],
+  ["tui-", "tui"],
+  ["explicit:", "explicit"],
+  ["hook:", "hook"],
+  ["node-", "node"],
+  ["node:", "node"],
+  ["harness:", "harness"],
+  ["voice:", "voice"],
+  ["dreaming-narrative-", "dreaming"],
+  ["boot:", "system"],
+  ["internal-session-effects:", "system"],
+];
+
 function classifyRest(rest: string): SessionClassification {
   const normalized = normalizeLowercaseStringOrEmpty(rest);
-  if (normalized.startsWith("dashboard:")) {
-    return "dashboard";
-  }
-  if (normalized.startsWith("tui-")) {
-    return "tui";
-  }
-  if (normalized.startsWith("explicit:")) {
-    return "explicit";
-  }
-  if (normalized.startsWith("hook:")) {
-    return "hook";
-  }
-  if (normalized.startsWith("node-") || normalized.startsWith("node:")) {
-    return "node";
-  }
-  if (normalized.startsWith("harness:")) {
-    return "harness";
-  }
-  if (normalized.startsWith("voice:")) {
-    return "voice";
-  }
-  if (normalized.startsWith("dreaming-narrative-")) {
-    return "dreaming";
-  }
-  if (
-    normalized === "boot" ||
-    normalized.startsWith("boot:") ||
-    normalized.startsWith("internal-session-effects:")
-  ) {
+  if (normalized === "boot") {
     return "system";
   }
-  return "custom";
+  return (
+    SESSION_CLASSIFICATION_PREFIXES.find(([prefix]) => normalized.startsWith(prefix))?.[1] ??
+    "custom"
+  );
 }
 
 /**
@@ -129,11 +118,7 @@ export function sessionClassificationForRow(
     classification = "channel";
   } else if (hasDirectPeer) {
     classification = "direct";
-  } else if (
-    entry?.chatType === "direct" ||
-    entry?.chatType === "group" ||
-    entry?.chatType === "channel"
-  ) {
+  } else if (entry?.chatType === "group" || entry?.chatType === "channel") {
     classification = entry.chatType;
   } else {
     classification = classifyRest(rest);

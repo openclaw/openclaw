@@ -380,6 +380,7 @@ describe("integrity gate attribution", () => {
           expect(failure).toBeUndefined();
         }
         expect(diagnostics).toEqual({
+          integrityGateMode: "full",
           integrityGateMs: gateMs,
           integrityGateOutcome: foreignKeyViolation ? "failed" : "healthy",
           integrityCheckSyncMs: syncMs,
@@ -408,6 +409,7 @@ describe("integrity gate attribution", () => {
             sqliteIntegrityCheckSteps(database, "timed database", diagnostics),
           );
           expect(diagnostics).toEqual({
+            integrityGateMode: "full",
             integrityGateMs: 4,
             integrityGateOutcome: "healthy",
             integrityCheckSyncMs: 4,
@@ -436,6 +438,7 @@ describe("integrity gate attribution", () => {
             expect(worker.next().done).toBe(true);
           }
           expect(diagnostics).toEqual({
+            integrityGateMode: "full",
             integrityGateMs: Math.floor(lifetimeMs + 4.5),
             integrityGateOutcome: outcome,
             ...(checkMs === undefined ? {} : { integrityWorkerCheckMs: Math.floor(checkMs) }),
@@ -448,6 +451,7 @@ describe("integrity gate attribution", () => {
               sqliteIntegrityCheckSteps(database, "timed database", diagnostics),
             );
             expect(diagnostics).toEqual({
+              integrityGateMode: "full",
               integrityGateMs: 4,
               integrityGateOutcome: "healthy",
               integrityCheckSyncMs: 4,
@@ -470,6 +474,7 @@ describe("integrity gate attribution", () => {
             expect(manual.next().done).toBe(true);
           }
           expect(diagnostics).toEqual({
+            integrityGateMode: "full",
             integrityGateMs: 12,
             integrityGateOutcome: outcome,
           });

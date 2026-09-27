@@ -148,11 +148,10 @@ function parseTranscriptTurns(body: string): TranscriptTurn[] {
 }
 
 function firstParagraph(text: string): string | undefined {
-  const candidate = text
+  return text
     .split(/\n\s*\n/)
     .map((entry) => entry.trim())
     .find((entry) => entry.length > 0);
-  return candidate;
 }
 
 function shortenSentence(value: string, maxLength = 180): string {
@@ -193,11 +192,12 @@ function deriveCandidateSignals(params: {
   preferenceSignals: string[];
   correctionSignals: string[];
 }): string[] {
-  const output = new Set(params.preferenceSignals);
-  for (const correction of params.correctionSignals) {
-    output.add(`Correction detected: ${correction}`);
-  }
-  return [...output].slice(0, 4);
+  return [
+    ...new Set([
+      ...params.preferenceSignals,
+      ...params.correctionSignals.map((correction) => `Correction detected: ${correction}`),
+    ]),
+  ].slice(0, 4);
 }
 
 function deriveSummary(params: {
@@ -361,24 +361,23 @@ export function buildMemoryWikiImportInsights(
 
   const clusters = [...clustersByKey.entries()]
     .map(([key, clusterItems]) => {
-      const sortedItems = clusterItems.toSorted(compareItemsByUpdated);
-      const updatedAt = sortedItems
+      const updatedAt = clusterItems
         .map((item) => item.updatedAt ?? item.createdAt)
         .find((value): value is string => typeof value === "string" && value.length > 0);
       return Object.assign(
         {
           key,
-          label: sortedItems[0]?.topicLabel ?? humanizeLabelSuffix(key),
-          itemCount: sortedItems.length,
-          highRiskCount: sortedItems.filter((item) => item.riskLevel === `high`).length,
-          withheldCount: sortedItems.filter((item) => item.digestStatus === `withheld`).length,
-          preferenceSignalCount: sortedItems.reduce(
+          label: clusterItems[0]?.topicLabel ?? humanizeLabelSuffix(key),
+          itemCount: clusterItems.length,
+          highRiskCount: clusterItems.filter((item) => item.riskLevel === `high`).length,
+          withheldCount: clusterItems.filter((item) => item.digestStatus === `withheld`).length,
+          preferenceSignalCount: clusterItems.reduce(
             (sum, item) => sum + item.preferenceSignals.length,
             0,
           ),
         },
         updatedAt ? { updatedAt } : {},
-        { items: sortedItems },
+        { items: clusterItems },
       ) satisfies MemoryWikiImportInsightCluster;
     })
     .toSorted((left, right) => {

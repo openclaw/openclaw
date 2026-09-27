@@ -49,6 +49,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import {
   createFixture,
   createManagedOutgoingImageBlocks,
+  createManagedOutgoingImageBlocksWithoutHostSql,
   createPngDataUrl,
   expectPathMissing,
   prepareAgentSessionStore,
@@ -62,7 +63,7 @@ import {
   type RequestResult,
 } from "./managed-image-attachments.test-support.js";
 import {
-  attachManagedImageRecordToMessage,
+  attachManagedImageRecordsToMessage,
   listManagedImageRecordEntries,
   MANAGED_OUTGOING_ORIGINALS_SUBDIR,
   readManagedImageRecord,
@@ -1246,7 +1247,7 @@ describe("createManagedOutgoingImageBlocks", () => {
   });
 
   it("creates inline/open blocks that both point at the full image", async () => {
-    const blocks = await createManagedOutgoingImageBlocks({
+    const blocks = await createManagedOutgoingImageBlocksWithoutHostSql({
       sessionKey: "agent:main:main",
       mediaUrls: [`data:image/png;base64,${TINY_PNG_BASE64}`],
       stateDir,
@@ -2399,7 +2400,7 @@ describe("attachManagedOutgoingImagesToMessage", () => {
       stateDir,
     });
 
-    attachManagedOutgoingImagesToMessage({
+    await attachManagedOutgoingImagesToMessage({
       messageId: "msg-committed",
       blocks: blocks as Record<string, unknown>[],
       stateDir,
@@ -2457,9 +2458,8 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     expect(checkedSessionKeys).toEqual([fixture.sessionKey]);
     await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
     expect(
-      attachManagedImageRecordToMessage({
-        attachmentId: fixture.attachmentId,
-        sessionKey: fixture.sessionKey,
+      await attachManagedImageRecordsToMessage({
+        attachments: [fixture],
         messageId: "msg-late",
         updatedAt: new Date().toISOString(),
         stateDir,

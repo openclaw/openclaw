@@ -322,18 +322,25 @@ run_case_guided_skip_ui() {
   mock_openai_pid=""
 }
 
-run_case_local_basic() {
-  set_isolated_openclaw_env local-basic
-  openclaw_e2e_run_logged local-basic node "$OPENCLAW_ENTRY" onboard \
+run_local_onboard() {
+  local case_name="$1"
+  shift
+  openclaw_e2e_run_logged "$case_name" node "$OPENCLAW_ENTRY" onboard \
     --non-interactive \
     --accept-risk \
     --flow quickstart \
     --mode local \
+    "$@" \
     --skip-channels \
     --skip-skills \
     --skip-daemon \
     --skip-ui \
     --skip-health
+}
+
+run_case_local_basic() {
+  set_isolated_openclaw_env local-basic
+  run_local_onboard local-basic
 
   validate_local_basic_log "$OPENCLAW_E2E_LAST_LOG_PATH"
 
@@ -355,20 +362,11 @@ run_case_local_auth_refs() {
   export OPENAI_API_KEY="sk-openclaw-onboard-auth-ref-e2e"
   export OPENCLAW_GATEWAY_TOKEN="openclaw-onboard-gateway-ref-e2e"
 
-  openclaw_e2e_run_logged local-auth-refs node "$OPENCLAW_ENTRY" onboard \
-    --non-interactive \
-    --accept-risk \
-    --flow quickstart \
-    --mode local \
+  run_local_onboard local-auth-refs \
     --auth-choice openai-api-key \
     --secret-input-mode ref \
     --gateway-auth token \
-    --gateway-token-ref-env OPENCLAW_GATEWAY_TOKEN \
-    --skip-channels \
-    --skip-skills \
-    --skip-daemon \
-    --skip-ui \
-    --skip-health
+    --gateway-token-ref-env OPENCLAW_GATEWAY_TOKEN
 
   node scripts/e2e/lib/release-scenarios/assertions.mjs \
     assert-openai-env-ref \
@@ -380,19 +378,10 @@ run_case_local_auth_refs() {
 run_case_local_password() {
   set_isolated_openclaw_env local-password
 
-  openclaw_e2e_run_logged local-password node "$OPENCLAW_ENTRY" onboard \
-    --non-interactive \
-    --accept-risk \
-    --flow quickstart \
-    --mode local \
+  run_local_onboard local-password \
     --auth-choice skip \
     --gateway-auth password \
-    --gateway-password "openclaw-onboard-password-e2e" \
-    --skip-channels \
-    --skip-skills \
-    --skip-daemon \
-    --skip-ui \
-    --skip-health
+    --gateway-password "openclaw-onboard-password-e2e"
 
   assert_onboard_config local-password
   echo "QA_ASSERT cli.gateway-auth-storage.password pass"
@@ -402,17 +391,7 @@ run_case_multi_agent() {
   set_isolated_openclaw_env multi-agent
   node scripts/e2e/lib/onboard/write-config.mjs multi-agent "$OPENCLAW_CONFIG_PATH"
 
-  openclaw_e2e_run_logged multi-agent node "$OPENCLAW_ENTRY" onboard \
-    --non-interactive \
-    --accept-risk \
-    --flow quickstart \
-    --mode local \
-    --auth-choice skip \
-    --skip-channels \
-    --skip-skills \
-    --skip-daemon \
-    --skip-ui \
-    --skip-health
+  run_local_onboard multi-agent --auth-choice skip
 
   assert_onboard_config multi-agent
   echo "QA_ASSERT cli.multi-agent-onboarding pass"
@@ -436,17 +415,7 @@ run_case_reset() {
   set_isolated_openclaw_env reset-config
   node scripts/e2e/lib/onboard/write-config.mjs reset "$OPENCLAW_CONFIG_PATH"
 
-  openclaw_e2e_run_logged reset-config node "$OPENCLAW_ENTRY" onboard \
-    --non-interactive \
-    --accept-risk \
-    --flow quickstart \
-    --mode local \
-    --reset \
-    --skip-channels \
-    --skip-skills \
-    --skip-daemon \
-    --skip-ui \
-    --skip-health
+  run_local_onboard reset-config --reset
 
   assert_onboard_config reset
   echo "QA_ASSERT cli.targeted-reconfiguration.reset pass"

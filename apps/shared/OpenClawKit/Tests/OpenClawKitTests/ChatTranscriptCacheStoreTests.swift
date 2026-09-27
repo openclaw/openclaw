@@ -301,6 +301,45 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
         #expect(!messageRows[0].payloadJSON.hasPrefix("["))
     }
 
+    @Test(arguments: [
+        "",
+        #","senderId":42"#,
+        #","senderName":[]"#,
+        #","senderUsername":false"#,
+        #","senderProfileAvatarUrl":{}"#,
+    ])
+    func `legacy transcript rows survive reopening and retain their partition`(senderFields: String) async throws {
+        await store.storeTestTranscript(
+            sessionKey: "main",
+            messages: [cacheMessage(role: "assistant", text: "cached reply", timestamp: 1000)])
+        // Older readers ignored sender fields. Invalid optional attribution must not invalidate the row.
+        let legacyPayload = """
+        {"role":"assistant","content":[{"type":"text","text":"cached reply"}],"timestamp":1000,"__openclaw":{"runId":"old-run"\(senderFields)}}
+        """
+        try await databases.cacheQueue.write { db in
+            try db.execute(
+                sql: "UPDATE cached_messages SET payload_json = ? WHERE gateway_id = 'gw-a'",
+                arguments: [legacyPayload])
+        }
+        try databases.close()
+
+        let reopened = try OpenClawClientDatabases(directoryURL: directory)
+        defer { try? reopened.close() }
+        let messages = await reopened.store(gatewayID: "gw-a").loadTranscript(sessionKey: "main")
+        #expect(messageTexts(messages) == ["cached reply"])
+        let message = try #require(messages.first)
+        #expect(message.timestamp == 1000)
+        #expect(message.transcriptRunID == "old-run")
+        #expect(message.model == nil)
+        let counts = try await reopened.cacheQueue.read { db in
+            try (
+                Int.fetchOne(db, sql: "SELECT COUNT(*) FROM cached_messages WHERE gateway_id = 'gw-a'"),
+                Int.fetchOne(db, sql: "SELECT COUNT(*) FROM cached_transcripts WHERE gateway_id = 'gw-a'"))
+        }
+        #expect(counts.0 == 1)
+        #expect(counts.1 == 1)
+    }
+
     @Test func `agent session snapshots preserve another agents offline roster`() async throws {
         await store.storeSessions([
             cacheSessionEntry(key: "global", updatedAt: 1, agentID: "agent-a"),

@@ -4,7 +4,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { sanitizeTriageUpdateFailure } from "../../commands/triage-update.js";
 import { resolveStateDir } from "../../config/paths.js";
 import {
@@ -74,39 +73,26 @@ type PostCoreUpdateFailure = {
   failureFacts?: UpdateFailureFact[];
 };
 
-export async function postCoreUpdateParentOwnsCompletion(
-  resultPath: string | undefined,
-): Promise<boolean> {
-  if (!resultPath) {
-    return false;
-  }
-  // Transient handoff only; absent preserves the shipped child-owned completion contract.
-  const handoff = await readJsonIfExists<{ completionOwner?: string }>(
-    path.join(path.dirname(resultPath), "handoff.json"),
-  );
-  return handoff?.completionOwner === "parent";
-}
-
 /** Restore operator intent only when the private handoff matches this child command. */
-export async function resolvePostCoreUpdateOperatorOptions(params: {
+export async function resolvePostCoreUpdateHandoff(params: {
   opts: UpdateCommandOptions;
   resultPath: string | undefined;
-}): Promise<UpdateCommandOptions> {
-  if (!params.resultPath) {
-    return params.opts;
-  }
-  const handoff = await readJsonIfExists<{ sourceRuntimePrepared?: boolean }>(
-    path.join(path.dirname(params.resultPath), "handoff.json"),
-  );
-  const opts =
+}): Promise<{ opts: UpdateCommandOptions; parentOwnsCompletion: boolean }> {
+  // Transient handoff only; absent preserves the shipped child-owned completion contract.
+  const handoff = params.resultPath
+    ? await readJsonIfExists<{ completionOwner?: string; sourceRuntimePrepared?: boolean }>(
+        path.join(path.dirname(params.resultPath), "handoff.json"),
+      )
+    : undefined;
+  let opts =
     typeof handoff?.sourceRuntimePrepared === "boolean"
       ? { ...params.opts, sourceRuntimePrepared: handoff.sourceRuntimePrepared }
       : params.opts;
-  if (opts.timeout === undefined || !isOmittedUpdateTimeout(opts.timeout, handoff)) {
-    // Shipped parents have no provenance. Their received deadline remains explicit-looking.
-    return opts;
+  // Shipped parents have no provenance. Their received deadline remains explicit-looking.
+  if (opts.timeout !== undefined && isOmittedUpdateTimeout(opts.timeout, handoff)) {
+    opts = { ...opts, timeout: undefined };
   }
-  return { ...opts, timeout: undefined };
+  return { opts, parentOwnsCompletion: handoff?.completionOwner === "parent" };
 }
 
 export async function writePostCoreUpdateFailureFile(
@@ -194,43 +180,6 @@ export async function readPostCorePluginInstallRecordsFile(
       { cause: err },
     );
   }
-}
-
-async function execFileStdout(file: string, args: string[]): Promise<string | undefined> {
-  return await runExec(file, args, { logOutput: false, timeoutMs: 1000 }).then(
-    ({ stdout }) => stdout,
-    () => undefined,
-  );
-}
-
-async function readProcessStartTimeMs(pid: number): Promise<number | undefined> {
-  if (!Number.isInteger(pid) || pid <= 0) {
-    return undefined;
-  }
-  const raw =
-    process.platform === "win32"
-      ? await execFileStdout("powershell.exe", [
-          "-NoProfile",
-          "-NonInteractive",
-          "-Command",
-          `[Console]::Out.Write((Get-Process -Id ${pid}).StartTime.ToUniversalTime().ToString("o"))`,
-        ])
-      : await execFileStdout("ps", ["-o", "lstart=", "-p", String(pid)]);
-  if (!raw) {
-    return undefined;
-  }
-  const parsed = Date.parse(raw.trim().replace(/\s+/g, " "));
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-export async function resolvePostCoreUpdateStartedAtMs(
-  env: NodeJS.ProcessEnv,
-): Promise<number | undefined> {
-  const fromEnv = parseStrictPositiveInteger(env[POST_CORE_UPDATE_STARTED_AT_ENV] ?? "");
-  if (fromEnv !== undefined) {
-    return fromEnv;
-  }
-  return await readProcessStartTimeMs(process.ppid);
 }
 
 async function readPostCoreUpdateResultFile(

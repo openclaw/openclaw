@@ -5,11 +5,15 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
+import {
+  createSqliteLifecycleAggregateError,
+  throwSqliteLifecycleErrors,
+} from "../infra/sqlite-coordinator.js";
 import { publishSqliteWalCheckpointObservation } from "../infra/sqlite-wal-checkpoint.js";
 import type { SqliteWorkerCloseReceipt } from "../infra/sqlite-worker-contract.js";
 import {
   assertExistingDatabaseIdentity,
+  readDatabasePathIdentitySync,
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import type {
@@ -191,6 +195,18 @@ export function createAgentDatabaseNativeGeneration(
         if (!nativeIdentity || creatingIdentity) {
           assertCallerCurrent?.();
         }
+        if (
+          request.stage === "prepare" &&
+          isRecord(facts) &&
+          facts.kind === "agent-registration-start"
+        ) {
+          assertSourceCurrent();
+          if (!registration || !lease || !isDeepStrictEqual(facts.lease, lease)) {
+            throw new Error("Agent registration start differs from its admitted native owner");
+          }
+          registration.begin();
+          return undefined;
+        }
         if (request.stage === "prepare" && isRecord(facts) && facts.kind === "shared-owner") {
           if (!(facts.validationPort instanceof MessagePort)) {
             throw new Error("Agent worker lost its validation handoff port");
@@ -312,7 +328,14 @@ export function createAgentDatabaseNativeGeneration(
           const identity = authorizeNative(request);
           if (request.stage === "open" && registration) {
             assertSourceCurrent();
-            registration.begin();
+            const creating = creatingIdentity
+              ? creatingIdentity.key.startsWith("path:")
+              : !nativeIdentity &&
+                !expectedIdentity &&
+                readDatabasePathIdentitySync(pathname).key.startsWith("path:");
+            if (creating) {
+              registration.begin();
+            }
           }
           if (
             request.stage === "prepare" &&
@@ -520,14 +543,7 @@ export function createAgentDatabaseNativeGeneration(
             errors.push(error);
           }
         }
-        if (errors.length === 1) {
-          throw errors[0];
-        }
-        if (errors.length > 1) {
-          throw new AggregateError(errors, "Agent native close and lease cleanup failed", {
-            cause: errors[0],
-          });
-        }
+        throwSqliteLifecycleErrors(errors, "Agent native close and lease cleanup failed");
         publishCloseCheckpoint();
       })().catch((error: unknown) => {
         closing = undefined;

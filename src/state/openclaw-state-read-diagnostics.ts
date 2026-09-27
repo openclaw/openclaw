@@ -8,7 +8,7 @@ import {
 } from "../proxy-capture/store-readonly.js";
 import type {
   OpenClawStateReadCommand,
-  OpenClawStateReadReply,
+  OpenClawStateReadResult,
 } from "./openclaw-state-read.types.js";
 
 type StateDiagnosticCommand = Extract<
@@ -36,28 +36,24 @@ export function isStateDiagnosticCommand(
 export function readStateDiagnosticCommand(
   db: DatabaseSync,
   command: StateDiagnosticCommand,
-): OpenClawStateReadReply {
-  const admitted = { ok: true, sourceAdmitted: true } as const;
+): OpenClawStateReadResult {
   if (command.type === "capture.readOnlyEvents") {
     return {
-      ...admitted,
       type: command.type,
       events: readDebugProxyCaptureSessionEvents(db, command.sessionId, command.limit),
     };
   }
   if (command.type === "capture.readOnlyBlob") {
-    return { ...admitted, type: command.type, blob: readDebugProxyCaptureBlob(db, command.blobId) };
+    return { type: command.type, blob: readDebugProxyCaptureBlob(db, command.blobId) };
   }
   if (command.type === "config.snapshot.read") {
     return {
-      ...admitted,
       type: command.type,
       snapshot: readConfigSnapshotAuditRecordInDatabase(db),
     };
   }
   try {
     return {
-      ...admitted,
       type: command.type,
       result: {
         status: "inspected",
@@ -69,7 +65,6 @@ export function readStateDiagnosticCommand(
       throw error;
     }
     return {
-      ...admitted,
       type: command.type,
       result: { status: "invalid-cursor", message: error.message },
     };

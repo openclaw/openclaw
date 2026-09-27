@@ -171,17 +171,6 @@ async function ensureBrowserControlService(): Promise<void> {
   return sharedStartup;
 }
 
-function isProfileAllowed(params: { allowProfiles: string[]; profile?: string | null }) {
-  const { allowProfiles, profile } = params;
-  if (!allowProfiles.length) {
-    return true;
-  }
-  if (!profile) {
-    return false;
-  }
-  return allowProfiles.includes(profile.trim());
-}
-
 function collectBrowserProxyPaths(payload: unknown): string[] {
   const paths = new Set<string>();
   visitBrowserProxyFilePaths(payload, (filePath) => {
@@ -380,7 +369,8 @@ export async function runBrowserProxyCommand(
     const selected = profile?.name || effectiveProfile || requestedProfile;
     if (
       (path !== "/profiles" || selected) &&
-      !isProfileAllowed({ allowProfiles: current.allowProfiles, profile: selected })
+      current.allowProfiles.length > 0 &&
+      (!selected || !current.allowProfiles.includes(selected.trim()))
     ) {
       throw new Error("INVALID_REQUEST: browser profile not allowed");
     }

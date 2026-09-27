@@ -1,4 +1,3 @@
-// Openai provider module implements model/runtime integration.
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import { extensionForMime, type MediaKind } from "openclaw/plugin-sdk/media-mime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
@@ -69,11 +68,9 @@ function resolveSize(params: {
   resolution?: string;
 }): (typeof OPENAI_VIDEO_SIZES)[number] | undefined {
   const explicitSize = normalizeOptionalString(params.size);
-  if (
-    explicitSize &&
-    OPENAI_VIDEO_SIZES.includes(explicitSize as (typeof OPENAI_VIDEO_SIZES)[number])
-  ) {
-    return explicitSize as (typeof OPENAI_VIDEO_SIZES)[number];
+  const supportedSize = OPENAI_VIDEO_SIZES.find((size) => size === explicitSize);
+  if (supportedSize) {
+    return supportedSize;
   }
   switch (normalizeOptionalString(params.aspectRatio)) {
     case "9:16":
@@ -112,9 +109,7 @@ function resolveReferenceAsset(req: VideoGenerationRequest): OpenAIReferenceAsse
     normalizeOptionalString(asset.mimeType) || (kind === "video" ? "video/mp4" : "image/png");
   const extension =
     extensionForMime(mimeType)?.slice(1) ?? (mimeType.startsWith("video/") ? "mp4" : "png");
-  const fileName =
-    normalizeOptionalString(asset.fileName) ||
-    `${kind === "video" ? "reference-video" : "reference-image"}.${extension}`;
+  const fileName = normalizeOptionalString(asset.fileName) || `reference-${kind}.${extension}`;
   return {
     kind,
     file: new File([bufferToBlobPart(asset.buffer)], fileName, { type: mimeType }),
@@ -273,11 +268,7 @@ export function buildOpenAIVideoGenerationProvider({
 
       const model = normalizeOptionalString(req.model) ?? DEFAULT_OPENAI_VIDEO_MODEL;
       const seconds = resolveDurationSeconds(req.durationSeconds);
-      const size = resolveSize({
-        size: req.size,
-        aspectRatio: req.aspectRatio,
-        resolution: req.resolution,
-      });
+      const size = resolveSize(req);
       const referenceAsset = resolveReferenceAsset(req);
       const isVideoEdit = referenceAsset?.kind === "video";
       const form = new FormData();

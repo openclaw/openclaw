@@ -86,15 +86,11 @@ function createLazyBrowserTool(
     ...metadata,
     execute: async (toolCallId, args, signal, onUpdate) => {
       const { createBrowserTool } = await loadBrowserRegistrationRuntimeModule();
-      const tool = createBrowserTool(
-        binding
-          ? {
-              ...opts,
-              runToolBinding: binding,
-              toolCapabilities: capabilities,
-            }
-          : { ...opts, toolCapabilities: capabilities },
-      );
+      const tool = createBrowserTool({
+        ...opts,
+        ...(binding ? { runToolBinding: binding } : {}),
+        toolCapabilities: capabilities,
+      });
       return await tool.execute(toolCallId, args, signal, onUpdate);
     },
   };

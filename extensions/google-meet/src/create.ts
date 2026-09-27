@@ -6,7 +6,7 @@ import {
   type GoogleMeetAccessType,
   type GoogleMeetEntryPointAccess,
   type GoogleMeetSpaceConfig,
-} from "./meet.js";
+} from "./meet-api.js";
 import { resolveGoogleMeetTokenFromParams } from "./plugin-helpers.js";
 import { normalizeMode, normalizeTransport } from "./plugin-registration.js";
 import type { GoogleMeetRuntime } from "./runtime.js";

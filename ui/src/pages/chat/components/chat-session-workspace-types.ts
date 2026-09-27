@@ -86,6 +86,7 @@ export type SessionWorkspaceHost = {
   settings?: UiSettings;
   sessionWorkspaceState?: SessionWorkspaceState;
   sessionWorkspaceDraftScope?: string;
+  sessionWorkspaceDraftContext?: { sessionTitle?: string; paneLabel?: string };
   sidebarContent: SidebarSelection | null;
   requestUpdate?: () => void;
   handleOpenSidebar: (content: SidebarSelection | null) => void;

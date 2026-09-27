@@ -498,6 +498,48 @@ export function createConfigWriteCoordinator({
     reconcileAutoSaveDraftConnection();
     scheduleAutoSave();
   };
+  const submitExplicitDraft = (mode: "save" | "apply", canDispatch: () => boolean) =>
+    !canDispatch()
+      ? Promise.resolve(false)
+      : afterPendingWritesSettled(
+          async (onSubmitted) => {
+            bindDraftToExplicitSubmit();
+            cancelAppliedRefresh();
+            try {
+              // A drained raw Save may apply; a still-dirty raw draft remains manual-save-only.
+              if (mode === "apply" && state.configFormDirty && state.configFormMode === "raw") {
+                state.configAutoSaveStatus = "error";
+                state.lastError = t("configView.rawDraftBlocksApply");
+                return false;
+              }
+              const saved = await submitConfigDraft(
+                state,
+                mode,
+                (submission) => {
+                  if (mode === "save" && submission.ack === null) {
+                    patches.clear();
+                  }
+                  onSubmitted(submission);
+                },
+                () => {
+                  if (!canDispatch()) {
+                    return false;
+                  }
+                  if (mode === "apply") {
+                    patches.clear();
+                  }
+                  return true;
+                },
+              );
+              reconcileAutoSaveDraftConnection();
+              return saved;
+            } finally {
+              reconcileAppliedRefresh();
+            }
+          },
+          () => false,
+          { canDispatch },
+        );
   const writes: ConfigWriteCoordinator = {
     hasUnacknowledgedDraftWrite,
     applySnapshot,
@@ -561,75 +603,16 @@ export function createConfigWriteCoordinator({
         (state.configAutoSaveStatus === "saved" || state.configAutoSaveStatus === "idle")
       );
     },
-    save: (options = {}) => {
-      const canDispatch = () =>
-        canDispatchConfigMutation("config.set") && (options.canDispatch?.() ?? true);
-      return !canDispatch()
-        ? Promise.resolve(false)
-        : afterPendingWritesSettled(
-            async (onSubmitted) => {
-              bindDraftToExplicitSubmit();
-              cancelAppliedRefresh();
-              try {
-                const saved = await submitConfigDraft(
-                  state,
-                  "save",
-                  (submission) => {
-                    if (submission.ack === null) {
-                      patches.clear();
-                    }
-                    onSubmitted(submission);
-                  },
-                  canDispatch,
-                );
-                reconcileAutoSaveDraftConnection();
-                return saved;
-              } finally {
-                reconcileAppliedRefresh();
-              }
-            },
-            () => false,
-            { canDispatch },
-          );
-    },
+    save: (options = {}) =>
+      submitExplicitDraft(
+        "save",
+        () => canDispatchConfigMutation("config.set") && (options.canDispatch?.() ?? true),
+      ),
     retry: () =>
       patches.retry(() =>
         reconciliation.latestSubmission?.operation === "apply" ? writes.apply() : writes.save(),
       ),
-    apply: () =>
-      !canDispatchConfigMutation("config.apply")
-        ? Promise.resolve(false)
-        : afterPendingWritesSettled(
-            async (onSubmitted) => {
-              bindDraftToExplicitSubmit();
-              cancelAppliedRefresh();
-              // Checked after the drain: a raw draft whose explicit Save is in
-              // flight resolves clean and may apply. A raw draft that is STILL
-              // dirty here was never reviewed-saved — applying would implicitly
-              // write unreviewed raw text, so refuse and point at the Raw editor.
-              if (state.configFormDirty && state.configFormMode === "raw") {
-                state.configAutoSaveStatus = "error";
-                state.lastError = t("configView.rawDraftBlocksApply");
-                reconcileAppliedRefresh();
-                return false;
-              }
-              try {
-                const applied = await submitConfigDraft(state, "apply", onSubmitted, () => {
-                  if (!canDispatchConfigMutation("config.apply")) {
-                    return false;
-                  }
-                  patches.clear();
-                  return true;
-                });
-                reconcileAutoSaveDraftConnection();
-                return applied;
-              } finally {
-                reconcileAppliedRefresh();
-              }
-            },
-            () => false,
-            { canDispatch: () => canDispatchConfigMutation("config.apply") },
-          ),
+    apply: () => submitExplicitDraft("apply", () => canDispatchConfigMutation("config.apply")),
     stageDefaultAgent: (agentId) => {
       if (!canDispatchConfigMutation("config.set")) {
         return false;

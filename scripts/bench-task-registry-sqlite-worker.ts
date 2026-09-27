@@ -44,6 +44,15 @@ type TaskRegistryMaintenanceApi = Pick<
   "runTaskRegistryMaintenance"
 >;
 
+const EMPTY_COUNTS: RegistryLifecycleCounts = {
+  taskCount: 0,
+  deliveryStateCount: 0,
+  runningTasks: 0,
+  succeededTasks: 0,
+  pendingDeliveryTasks: 0,
+  succeededTerminalOutcomes: 0,
+};
+
 function parseInteger(raw: string | undefined, flag: string, min: number, max: number): number {
   const result = classifyBoundedUnsignedDecimal(raw, min, max);
   if (result.kind === "syntax") {
@@ -145,28 +154,20 @@ function retainedMemoryDelta(
   };
 }
 
-function assertLifecycleCounts(
-  actual: RegistryLifecycleCounts,
-  expected: RegistryLifecycleCounts,
-  phase: string,
-  surface: string,
-): void {
-  for (const field of Object.keys(expected) as Array<keyof RegistryLifecycleCounts>) {
-    if (actual[field] !== expected[field]) {
-      throw new Error(
-        `${phase} ${surface} invariant failed: ${JSON.stringify({ expected, actual })}`,
-      );
-    }
-  }
-}
-
 function assertSnapshot(
-  actual: RegistrySnapshot,
+  snapshot: RegistrySnapshot,
   expected: RegistryLifecycleCounts,
   phase: string,
 ): void {
   for (const surface of ["memory", "sqlite"] as const) {
-    assertLifecycleCounts(actual[surface], expected, phase, surface);
+    const actual = snapshot[surface];
+    for (const field of Object.keys(expected) as Array<keyof RegistryLifecycleCounts>) {
+      if (actual[field] !== expected[field]) {
+        throw new Error(
+          `${phase} ${surface} invariant failed: ${JSON.stringify({ expected, actual })}`,
+        );
+      }
+    }
   }
 }
 
@@ -217,14 +218,7 @@ async function createCountReader() {
       };
     };
     return {
-      memory: summarize(
-        [...state.tasks.values()].map((task) => ({
-          status: task.status,
-          deliveryStatus: task.deliveryStatus,
-          terminalOutcome: task.terminalOutcome,
-        })),
-        state.taskDeliveryStates.size,
-      ),
+      memory: summarize(state.tasks.values(), state.taskDeliveryStates.size),
       sqlite: summarize(
         taskRows.map((task) => ({
           status: task.status,
@@ -270,19 +264,11 @@ async function runCycle(
     taskIds.push(task.taskId);
   }
   const registrationMs = performance.now() - registrationStartedAt;
-  const emptyCounts: RegistryLifecycleCounts = {
-    taskCount: 0,
-    deliveryStateCount: 0,
-    runningTasks: 0,
-    succeededTasks: 0,
-    pendingDeliveryTasks: 0,
-    succeededTerminalOutcomes: 0,
-  };
   const registration = readSnapshot();
   assertSnapshot(
     registration,
     {
-      ...emptyCounts,
+      ...EMPTY_COUNTS,
       taskCount: size,
       deliveryStateCount: size,
       runningTasks: size,
@@ -310,7 +296,7 @@ async function runCycle(
   assertSnapshot(
     terminal,
     {
-      ...emptyCounts,
+      ...EMPTY_COUNTS,
       taskCount: size,
       deliveryStateCount: size,
       succeededTasks: size,
@@ -327,7 +313,7 @@ async function runCycle(
   }
   const teardownMs = performance.now() - teardownStartedAt;
   const teardown = readSnapshot();
-  assertSnapshot(teardown, emptyCounts, "teardown");
+  assertSnapshot(teardown, EMPTY_COUNTS, "teardown");
   return { registrationMs, terminalMs, teardownMs, registration, terminal, teardown };
 }
 
@@ -349,15 +335,7 @@ async function runBenchmark(options: WorkerOptions): Promise<WorkerResult> {
     import("../src/tasks/task-registry-record-api.js"),
     import("../src/tasks/task-registry.maintenance.js"),
   ]);
-  const emptyCounts: RegistryLifecycleCounts = {
-    taskCount: 0,
-    deliveryStateCount: 0,
-    runningTasks: 0,
-    succeededTasks: 0,
-    pendingDeliveryTasks: 0,
-    succeededTerminalOutcomes: 0,
-  };
-  assertSnapshot(readSnapshot(), emptyCounts, "initial");
+  assertSnapshot(readSnapshot(), EMPTY_COUNTS, "initial");
   const timingsMs = {
     registration: [] as number[],
     terminal: [] as number[],

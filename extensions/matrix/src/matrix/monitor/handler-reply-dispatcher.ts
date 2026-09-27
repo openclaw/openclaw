@@ -15,9 +15,9 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { resolveMatrixExtraContent } from "../../outbound.js";
 import type { CoreConfig, MatrixStreamingMode, ReplyToMode } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
+import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
 import type { createMatrixDraftController } from "./handler-draft-controller.js";
 import {
-  buildMatrixFinalizedPreviewContent,
   loadMatrixSendModule,
   matrixTextWouldActivateMentions,
   type MatrixDraftStreamHandle,
@@ -180,7 +180,9 @@ export function createMatrixReplyDispatcher(config: {
                     ? undefined
                     : resolveMatrixExtraContent(payload);
                   const extraContent = {
-                    ...(quietDraftStreaming ? buildMatrixFinalizedPreviewContent() : {}),
+                    ...(quietDraftStreaming
+                      ? { [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true }
+                      : {}),
                     ...presentationContent,
                   };
                   if (

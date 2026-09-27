@@ -4,6 +4,7 @@ import type {
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
+import { prepareModelRequestBody } from "../transports/model-request-body.js";
 import {
   buildOpenAIResponsesReasoningReplayMetadata,
   suppressOpenAIResponsesCompaction,
@@ -207,6 +208,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
   try {
     const model = params.resolveRequestModel?.(params.model) ?? params.model;
     const client = params.createClient(model);
+    const encodeBody = prepareModelRequestBody(options);
     const buildRequest = async (replayMode: OpenAIResponsesReplayMode) => {
       let request = params.buildParams(model, replayMode);
       const nextRequest = await options?.onPayload?.(request, model);
@@ -229,6 +231,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
         signal: firstEvent.signal,
       },
       model,
+      encodeBody,
       buildFullHistoryRequest: () => buildRequest("full-history"),
       onCompactionRejected: (checkpoint) =>
         suppressOpenAIResponsesCompaction(output, model, options, checkpoint),

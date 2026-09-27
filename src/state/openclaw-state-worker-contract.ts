@@ -14,6 +14,7 @@ import type {
 } from "../agents/workspace-state-store.kernel.js";
 import type { WorktreeRegistryReadOperations } from "../agents/worktrees/registry-read.worker.js";
 import type { WorktreeRetirementOperations } from "../agents/worktrees/registry-retirement.worker.js";
+import type { WorktreeRunLeaseRowInput } from "../agents/worktrees/run-lease-store.kernel.js";
 import type { AuditEventListQuery, AuditEventListPage } from "../audit/audit-event-types.js";
 import type { AuditWriterOperations } from "../audit/audit-event-writer.types.js";
 import type { ChannelIngressWorkerOperations } from "../channels/message/ingress-queue.worker-contract.js";
@@ -30,10 +31,7 @@ import type {
   RepositoryGitHubPublicationPendingQuery,
   RepositoryGitHubPublicationStatusRow,
 } from "../gateway/github-repository-publication.kernel.js";
-import type {
-  ManagedImageRecord,
-  ManagedImageRecordEntry,
-} from "../gateway/managed-image-record-store.types.js";
+import type { ManagedImageRecordWorkerOperations } from "../gateway/managed-image-record-store.types.js";
 import type { OperatorApprovalWorkerOperations } from "../gateway/operator-approval-store.worker-contract.js";
 import type {
   SessionGroupCatalogMutation,
@@ -151,8 +149,10 @@ export type OpenClawStateWorkerOperations = CaptureWorkerOperations &
   NodeWorkerJournalWorkerOperations &
   TaskRegistryWorkerOperations &
   SkillUploadWorkerOperations &
-  OpenClawStateLeaseLifecycleOperations & {
+  OpenClawStateLeaseLifecycleOperations &
+  ManagedImageRecordWorkerOperations & {
     "database.walMaintenance": { input: SqliteWalPeriodicRequest; output: SqliteWalPeriodicResult };
+    "worktrees.admitRunLease": { input: WorktreeRunLeaseRowInput; output: void };
     "worktrees.reapRunLeases": { input: { scopes: string[] }; output: void };
     "worktrees.releaseRunLease": {
       input: { worktreeId: string; token: string };
@@ -227,9 +227,6 @@ export type OpenClawStateWorkerOperations = CaptureWorkerOperations &
     };
     "promotions.markNotified": { input: { slugs: string[]; now: number }; output: true };
     "promotions.recordClaim": { input: PreparedPromotionClaim; output: void };
-    "managedImages.read": { input: { attachmentId: string }; output: ManagedImageRecord | null };
-    "managedImages.entries": { input: { sessionKey?: string }; output: ManagedImageRecordEntry[] };
-    "managedImages.originalMediaIds": { input: undefined; output: string[] };
     "doctor.databaseBloat": {
       input: undefined;
       output: ReturnType<typeof readSqliteDatabaseBloat>;

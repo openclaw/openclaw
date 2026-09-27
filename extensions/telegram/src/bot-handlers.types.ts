@@ -3,13 +3,11 @@ import type {
   ChannelGroupPolicy,
   OpenClawConfig,
   TelegramAccountConfig,
-  TelegramDirectConfig,
-  TelegramGroupConfig,
-  TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import type {
+  BuildTelegramMessageContextParams,
   TelegramMediaRef,
   TelegramMessageContextOptions,
   TelegramPromptContextEntry,
@@ -31,7 +29,7 @@ export type TelegramPendingInboundTarget = {
   senderId: string;
 };
 
-export type TelegramMessageProcessorTurnContext = {
+type TelegramMessageProcessorTurnContext = {
   cfg: OpenClawConfig;
   telegramCfg: TelegramAccountConfig;
   onDispatchStart?: () => Promise<void> | void;
@@ -61,10 +59,9 @@ type ProcessTelegramMessage = (
   options: ProcessTelegramMessageOptions,
 ) => Promise<TelegramMessageProcessingResult>;
 
-export type TelegramResolvedGroupConfig = {
-  groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
-  topicConfig?: TelegramTopicConfig;
-};
+export type TelegramResolvedGroupConfig = ReturnType<
+  BuildTelegramMessageContextParams["resolveTelegramGroupConfig"]
+>;
 
 export type TelegramNativeCommandCallbackDispatcher = (params: {
   botUser: Context["me"];
@@ -90,17 +87,9 @@ export type RegisterTelegramHandlerParams = {
   telegramCfg: TelegramAccountConfig;
   telegramDeps: TelegramBotDeps;
   resolveGroupPolicy: (chatId: string | number, cfg: OpenClawConfig) => ChannelGroupPolicy;
-  resolveGroupActivation: (params: {
-    agentId?: string;
-    sessionKey: string;
-    cfg: OpenClawConfig;
-  }) => boolean | undefined;
-  resolveGroupRequireMention: (chatId: string | number, cfg: OpenClawConfig) => boolean;
-  resolveTelegramGroupConfig: (
-    chatId: string | number,
-    messageThreadId: number | undefined,
-    cfg: OpenClawConfig,
-  ) => TelegramResolvedGroupConfig;
+  resolveGroupActivation: BuildTelegramMessageContextParams["resolveGroupActivation"];
+  resolveGroupRequireMention: BuildTelegramMessageContextParams["resolveGroupRequireMention"];
+  resolveTelegramGroupConfig: BuildTelegramMessageContextParams["resolveTelegramGroupConfig"];
   shouldSkipUpdate: (ctx: TelegramUpdateKeyContext) => boolean;
   processMessage: ProcessTelegramMessage;
   logger: TelegramHandlerLogger;

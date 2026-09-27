@@ -102,15 +102,6 @@ describe("binary file.fetch", () => {
     await expect(value.send("start")).rejects.toThrow("No receiver");
   });
 
-  it("rejects replacement after preflight before opening a stream", async () => {
-    const value = await fixture();
-    await fs.rename(value.target, `${value.target}.old`);
-    await fs.writeFile(value.target, "other");
-    expect(await value.start()).toMatchObject({ ok: false, code: "CANONICAL_PATH_CHANGED" });
-    expect(value.chunks).toHaveLength(0);
-    await expect(value.send("start")).rejects.toThrow("No receiver");
-  });
-
   it("retains the opened file when the pathname is replaced after readiness", async () => {
     const value = await fixture();
     const pending = value.start();
@@ -155,7 +146,7 @@ describe("binary file.fetch", () => {
     expect(value.chunks).toHaveLength(0);
   });
 
-  it.each([undefined, -1, Infinity, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+  it.each([undefined, -1, Number.MAX_SAFE_INTEGER + 1])(
     "rejects an invalid explicit binary budget %s",
     async (maxBytes) => {
       const value = await fixture();

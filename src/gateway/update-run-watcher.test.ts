@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { gatewayUpdateCampaign } from "../infra/update-campaign.js";
+import { UpdateCampaignController } from "../infra/update-campaign.js";
 import {
   createGatewayUpdateLifecycle,
   type UpdateCheckLifecycle,
@@ -56,10 +56,8 @@ beforeEach(() => {
 afterEach(async () => {
   await watcher?.stop();
   watcher = undefined;
-  gatewayUpdateCampaign.clear();
   await lifecycle.stop();
   await scheduler.stop();
-  vi.useRealTimers();
 });
 
 function beginRun() {
@@ -79,23 +77,24 @@ function currentRunEvent() {
 }
 
 describe("Gateway update run watcher", () => {
-  it("clears the matching campaign before publishing a terminal run", async () => {
-    vi.useFakeTimers();
+  it("clears a campaign created after watcher startup before publishing its terminal run", async () => {
     beginRun();
     const onChange = vi.fn();
-    gatewayUpdateCampaign.announce({
+    const campaign = new UpdateCampaignController(scheduler);
+    const broadcast = vi.fn(() => {
+      if (ledger.run!.status === "failed") {
+        expect(campaign.getState()).toBeUndefined();
+      }
+    });
+    watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn: vi.fn() } });
+    lifecycle.campaign = campaign;
+    campaign.announce({
       target: { kind: "package", version: "2026.9.6" },
       apply: async () => "applied",
       onChange,
     });
-    gatewayUpdateCampaign.adopt();
-    ledger.run!.origin = { campaignId: gatewayUpdateCampaign.getState()!.id };
-    const broadcast = vi.fn(() => {
-      if (ledger.run!.status === "failed") {
-        expect(gatewayUpdateCampaign.getState()).toBeUndefined();
-      }
-    });
-    watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn: vi.fn() } });
+    campaign.adopt();
+    ledger.run!.origin = { campaignId: campaign.getState()!.id };
     await clock.advanceBy(0);
     ledger.run = { ...ledger.run!, status: "failed", phase: "finished", updatedAtMs: 2 };
     await clock.advanceBy(2_000);

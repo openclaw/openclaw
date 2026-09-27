@@ -7,10 +7,8 @@ import type { AgentTool } from "../runtime/index.js";
 
 // We always pass tools via `customTools` so our policy filtering, sandbox integration,
 // and extended toolset remain consistent across providers.
-type AnyAgentTool = AgentTool;
-
 export function splitSdkTools(options: {
-  tools: AnyAgentTool[];
+  tools: AgentTool[];
   sandboxEnabled: boolean;
   toolHookContext?: HookContext;
   abortSignal?: AbortSignal;
