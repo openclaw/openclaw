@@ -15,10 +15,14 @@ import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { PluginHookRegistration } from "../plugins/types.js";
 import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import {
+  bindAgentToolActionDescriptor,
   bindAssembledAgentToolActionDescriptor,
   copyAgentToolMetadata,
 } from "./agent-tool-metadata.js";
-import { markToolDecisionRecorded } from "./agent-tools.before-tool-call.decision.js";
+import {
+  markToolDecisionRecorded,
+  recordGenericToolActionDecision,
+} from "./agent-tools.before-tool-call.decision.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
@@ -219,6 +223,42 @@ describe("generic tool action decision receipts", () => {
       enforcement: { coverageState: "attribution-only" },
     });
     expect(JSON.stringify(works)).not.toMatch(/sessions_list|SECRET_GATEWAY|private\/gateway/u);
+  });
+
+  it("keeps frozen tool attribution private and copied classifications stable across rebinding", async () => {
+    const source = assembledPluginTool({
+      pluginId: "memory-owner",
+      manifestKind: "memory",
+      execute: vi.fn(),
+    });
+    const copied = copyAgentToolMetadata(source, { ...source });
+    Object.freeze(source);
+    const keys = Reflect.ownKeys(source);
+    bindAgentToolActionDescriptor(source, { family: "tool", operation: "process" });
+    const forwarded = new Proxy(source, {
+      get() {
+        throw new Error("Attribution must not read tool properties");
+      },
+    });
+    const works: ExecutionDecisionWork[] = [];
+
+    await admittedRun({
+      works,
+      run: async () => {
+        expect(recordGenericToolActionDecision(source, "source", "allowed")).toBe(true);
+        expect(recordGenericToolActionDecision(copied, "copied", "allowed")).toBe(true);
+        expect(recordGenericToolActionDecision(forwarded, "forwarded", "allowed")).toBe(false);
+        bindAgentToolActionDescriptor(forwarded, { family: "data", operation: "filesystem" });
+        expect(recordGenericToolActionDecision(forwarded, "bound-proxy", "allowed")).toBe(true);
+      },
+    });
+
+    expect(works.map((work) => work.receipt.action)).toEqual([
+      { family: "tool", operation: "process" },
+      { family: "data", operation: "memory" },
+      { family: "data", operation: "filesystem" },
+    ]);
+    expect(Reflect.ownKeys(source)).toEqual(keys);
   });
 
   it("keeps an execution failure separate from its generic decision", async () => {
