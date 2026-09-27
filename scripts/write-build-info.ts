@@ -3,6 +3,8 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../src/state/openclaw-agent-db-contract.ts";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../src/state/openclaw-state-db-contract.ts";
 import { normalizeControlUiBuildInfo } from "../ui/src/build-info-normalizers.ts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 
@@ -20,11 +22,25 @@ type ExecFileSync = (
   },
 ) => string | Buffer;
 
+// Newest SQLite schema versions this build can open. Updaters and external
+// tools compare these with live `PRAGMA user_version` to refuse a downgrade
+// before stopping a gateway, instead of inferring limits from bundle text.
+export type SupportedSchemas = {
+  state: number;
+  agent: number;
+};
+
+export const SUPPORTED_SCHEMAS: SupportedSchemas = {
+  state: OPENCLAW_STATE_SCHEMA_VERSION,
+  agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+};
+
 export type BuildInfo = {
   version: string | null;
   commit: string | null;
   builtAt: string;
   buildId: string;
+  supportedSchemas: SupportedSchemas;
 };
 
 type ResolveBuildInfoOptions = {
@@ -126,6 +142,7 @@ export function resolveBuildInfo(options: ResolveBuildInfoOptions = {}): BuildIn
     commit,
     builtAt,
     buildId,
+    supportedSchemas: { ...SUPPORTED_SCHEMAS },
   };
 }
 

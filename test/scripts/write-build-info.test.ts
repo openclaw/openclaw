@@ -6,8 +6,11 @@ import {
   normalizeBuildCommit,
   normalizeBuildTimestamp,
   resolveBuildInfo,
+  SUPPORTED_SCHEMAS,
   writeBuildInfo,
 } from "../../scripts/write-build-info.ts";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../src/state/openclaw-agent-db-contract.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../src/state/openclaw-state-db-contract.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 describe("write-build-info", () => {
@@ -41,6 +44,23 @@ describe("write-build-info", () => {
       commit: "abcdef0123456789abcdef0123456789abcdef01",
       builtAt: "2026-07-10T12:34:56.000Z",
       buildId: "2026.7.10-abcdef012345-2026-07-10T12-34-56.000Z",
+      supportedSchemas: SUPPORTED_SCHEMAS,
+    });
+  });
+
+  it("publishes the newest state and agent schema versions this build can open", () => {
+    const rootDir = createPackage();
+    const outputPath = writeBuildInfo({
+      rootDir,
+      env: {
+        GIT_COMMIT: "abcdef0123456789abcdef0123456789abcdef01",
+        OPENCLAW_BUILD_TIMESTAMP: "2026-07-10T12:34:56Z",
+      },
+    });
+
+    expect(JSON.parse(fs.readFileSync(outputPath, "utf8")).supportedSchemas).toEqual({
+      state: OPENCLAW_STATE_SCHEMA_VERSION,
+      agent: OPENCLAW_AGENT_SCHEMA_VERSION,
     });
   });
 
@@ -60,6 +80,7 @@ describe("write-build-info", () => {
       commit: "1234567890abcdef1234567890abcdef12345678",
       builtAt: "2026-07-10T01:02:03.456Z",
       buildId: "2026.7.10-beta.1-1234567890ab-2026-07-10T01-02-03.456Z",
+      supportedSchemas: SUPPORTED_SCHEMAS,
     });
     expect(execFileSync).toHaveBeenCalledWith("git", ["rev-parse", "HEAD"], {
       cwd: rootDir,
