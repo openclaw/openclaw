@@ -260,7 +260,6 @@ public struct TalkAvatarWaveformView<Avatar: View>: View {
             self.capturedSamples.removeFirst(self.capturedSamples.count - 16)
         }
     }
-
 }
 
 /// A compact, center-origin voice envelope for constrained surfaces such as
@@ -338,7 +337,6 @@ struct TalkVoiceTraceView: View {
         .opacity(isActive ? 1 : 0)
         .accessibilityHidden(true)
     }
-
 }
 
 /// Pure waveform math, split from the view for unit testing and so the Android

@@ -138,7 +138,6 @@ enum ChatInlineMathScanner {
         }
         return lower
     }
-
 }
 
 /// Parsed math is stable after its delimiter closes. A bounded cache avoids

@@ -65,17 +65,17 @@ struct ChatTalkButton: View {
         }
     }
 
-    private func button<Label: View>(@ViewBuilder label: () -> Label) -> some View {
+    private func button(@ViewBuilder label: () -> some View) -> some View {
         Button {
             self.control.toggle(self.sessionKey)
         } label: { label() }
-        .buttonStyle(.plain)
-        .disabled(!self.control.isGatewayConnected && !self.control.isEnabled)
-        .accessibilityLabel(self.control.isEnabled ? "Stop realtime chat" : "Start realtime chat")
-        .accessibilityValue(self.accessibilityValue)
-        .accessibilityIdentifier("chat-realtime-control")
-        .help(self.helpText)
-        .chatTalkInputDeviceMenu(self.control)
+            .buttonStyle(.plain)
+            .disabled(!self.control.isGatewayConnected && !self.control.isEnabled)
+            .accessibilityLabel(self.control.isEnabled ? "Stop realtime chat" : "Start realtime chat")
+            .accessibilityValue(self.accessibilityValue)
+            .accessibilityIdentifier("chat-realtime-control")
+            .help(self.helpText)
+            .chatTalkInputDeviceMenu(self.control)
     }
 
     private var fullLabel: some View {

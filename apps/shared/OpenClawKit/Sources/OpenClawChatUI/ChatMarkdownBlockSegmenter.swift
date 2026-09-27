@@ -787,7 +787,6 @@ enum ChatMarkdownBlockSegmenter {
                 return .unsupportedSummary
             }
         }
-
     }
 
     private struct MathExtractionResult {
