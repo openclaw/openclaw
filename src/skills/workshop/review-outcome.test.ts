@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { assertSkillReviewRunSucceeded } from "./review-outcome.js";
+import {
+  assertSkillReviewRunSucceeded,
+  SkillReviewOversizedContextError,
+  SkillReviewOversizedRequestError,
+} from "./review-outcome.js";
 
 describe("Skill Workshop review outcome", () => {
   it("preserves actionable error payloads over the unresolved tool summary", () => {
@@ -31,5 +35,57 @@ describe("Skill Workshop review outcome", () => {
     expect(() =>
       assertSkillReviewRunSucceeded({ meta: { durationMs: 1 }, payloads: [{ text: "done" }] }),
     ).not.toThrow();
+  });
+
+  it("raises the typed oversized error only for the review preflight overflow", () => {
+    try {
+      assertSkillReviewRunSucceeded({
+        meta: {
+          durationMs: 1,
+          error: {
+            kind: "context_overflow",
+            message:
+              "Skill experience review prompt exceeds effective budget: estimatedPromptTokens=90000 promptBudgetBeforeReserve=32000",
+          },
+        },
+      });
+      throw new Error("expected oversized review error");
+    } catch (error) {
+      expect(error).toBeInstanceOf(SkillReviewOversizedRequestError);
+      expect(error).toMatchObject({
+        estimatedPromptTokens: 90_000,
+        promptBudgetBeforeReserve: 32_000,
+      });
+    }
+  });
+
+  it("routes a provider-level context overflow through the bounded-context skip type", () => {
+    try {
+      assertSkillReviewRunSucceeded({
+        meta: {
+          durationMs: 1,
+          error: { kind: "context_overflow", message: "provider rejected oversized prompt" },
+        },
+      });
+      throw new Error("expected bounded-context review error");
+    } catch (error) {
+      expect(error).toBeInstanceOf(SkillReviewOversizedContextError);
+      expect(error).not.toBeInstanceOf(SkillReviewOversizedRequestError);
+      expect((error as SkillReviewOversizedContextError).limitReason).toBe(
+        "provider rejected oversized prompt",
+      );
+    }
+  });
+
+  it("carries bounded-context extraction overflows with a distinct type", () => {
+    const error = new SkillReviewOversizedContextError(
+      "Required session context boundary exceeds the model-context limit",
+    );
+    expect(error).toBeInstanceOf(SkillReviewOversizedContextError);
+    expect(error.name).toBe("SkillReviewOversizedContextError");
+    expect(error.limitReason).toBe(
+      "Required session context boundary exceeds the model-context limit",
+    );
+    expect(error.message).toContain("exceeds the configured review limit");
   });
 });

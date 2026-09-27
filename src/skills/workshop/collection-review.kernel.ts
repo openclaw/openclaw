@@ -38,7 +38,7 @@ type SkillCollectionReviewStatus = {
 export type SkillExperienceReviewStatus = {
   attemptedAtMs: number;
   /** Completed normal maintenance does not claim that any particular file changed. */
-  outcome: "completed" | "applied" | "proposed" | "nothing" | "failed";
+  outcome: "completed" | "applied" | "proposed" | "nothing" | "skipped" | "failed";
   proposalId?: string;
   error?: string;
   usage?: { inputTokens: number; cachedInputTokens: number; outputTokens: number };

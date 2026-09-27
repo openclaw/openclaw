@@ -27,6 +27,10 @@ export type SkillsLimitsConfig = NonNullable<SkillsSchemaInput["limits"]>;
 /** Autonomous and approval settings for generated skill proposals. */
 export type SkillsWorkshopConfig = NonNullable<SkillsSchemaInput["workshop"]>;
 
+export type SkillsWorkshopOverflowPolicy = NonNullable<
+  NonNullable<SkillsWorkshopConfig["autonomous"]>["overflowPolicy"]
+>;
+
 export type SkillsWorkshopAutonomousMode = NonNullable<
   NonNullable<SkillsWorkshopConfig["autonomous"]>["mode"]
 >;

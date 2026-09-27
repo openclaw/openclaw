@@ -176,6 +176,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   contextEngine?: ContextEngine;
   /** Resolved model context window in tokens for assemble/compact budgeting. */
   contextTokenBudget?: number;
+  /** When set, applies review-specific overflow handling (e.g. skip/fail on preflight overflow). */
+  reviewOverflowPolicy?: "skip" | "fail";
   /** Native model context window before session or operator caps are applied. */
   modelContextWindow?: number;
   /** Per-model contextTokens cap authored by the operator; absent when none was authored. */

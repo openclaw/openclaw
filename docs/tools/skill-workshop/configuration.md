@@ -45,6 +45,16 @@ source permissions and shell approvals. Its `process` tool cannot control
 foreground jobs; the Workshop file root is not a shell sandbox.
 A failed review is recorded after one attempt; completed direct edits remain.
 
+Oversized background reviews never reach the provider by default. OpenClaw admits
+at most 32 MiB and 10,000 transcript events, then checks the assembled prompt
+against the effective context budget before submission. A review that still does
+not fit is recorded as `skipped` with an `oversized-request` reason and does not
+consume provider tokens. Set `skills.workshop.autonomous.maxReviewContextTokens`
+to cap the review below the model window, or set `overflowPolicy` to `fail` when
+an oversized review should surface as a failure instead of being skipped. This
+policy applies only to detached experience reviews; foreground sessions keep their
+normal compaction and recovery behavior.
+
 See [Self-learning](/tools/self-learning) for enablement, eligibility, privacy and cost details,
 the proposal threshold, and troubleshooting.
 
@@ -65,12 +75,15 @@ the proposal threshold, and troubleshooting.
 }
 ```
 
-| Setting           | Default  | Effect                                                                                                                                                              |
-| ----------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `autonomous.mode` | `"auto"` | `"off"` disables autonomous capture, `"propose"` creates pending proposals, and `"auto"` enables direct per-turn and weekly Workshop maintenance.                   |
-| `approvalPolicy`  | `"auto"` | `"auto"` skips an additional prompt for agent-initiated `apply`, `reject`, or `quarantine` (the agent still has to call the action). `"pending"` requires approval. |
-| `maxPending`      | `50`     | Caps pending and quarantined proposals per agent (1-200).                                                                                                           |
-| `maxSkillBytes`   | `40000`  | Caps proposal body size in bytes (1024-200000). Autonomous proposals also have a 10,000-character cap; direct maintenance does not use proposal limits.             |
+| Setting                             | Default        | Effect                                                                                                                                                              |
+| ----------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `autonomous.mode`                   | `"auto"`       | `"off"` disables autonomous capture, `"propose"` creates pending proposals, and `"auto"` enables direct per-turn and weekly Workshop maintenance.                   |
+| `autonomous.maxReviewContextTokens` | unset          | Optional token cap for one detached experience review. Values below 1,024 are ignored.                                                                              |
+| `autonomous.maxReviewContextBytes`  | unset (32 MiB) | Maximum transcript bytes admitted before review assembly. Values below 1,024 are ignored.                                                                           |
+| `autonomous.overflowPolicy`         | `"skip"`       | `"skip"` records an oversized review without a provider call; `"fail"` records and surfaces it.                                                                     |
+| `approvalPolicy`                    | `"auto"`       | `"auto"` skips an additional prompt for agent-initiated `apply`, `reject`, or `quarantine` (the agent still has to call the action). `"pending"` requires approval. |
+| `maxPending`                        | `50`           | Caps pending and quarantined proposals per agent (1-200).                                                                                                           |
+| `maxSkillBytes`                     | `40000`        | Caps proposal body size in bytes (1024-200000). Autonomous proposals also have a 10,000-character cap; direct maintenance does not use proposal limits.             |
 
 The selected model reviews retained evidence before deciding whether a durable
 procedure needs an update. Foreground work does not wait for that review. It

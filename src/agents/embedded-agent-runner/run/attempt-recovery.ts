@@ -253,6 +253,34 @@ export async function recoverEmbeddedRunAttempt(input: {
       }),
     };
   }
+  if (
+    params.reviewOverflowPolicy &&
+    promptError &&
+    promptErrorSource === "precheck" &&
+    attempt.preflightRecovery?.source !== "mid-turn" &&
+    !terminalInterrupted
+  ) {
+    // A detached review has no useful recovery: replaying the same one-shot
+    // assembly reproduces the same estimate, and compaction cannot shrink the
+    // current turn. The configured review overflow policy owns the outcome
+    // instead of admitting a doomed provider attempt.
+    recordRecoveryDecision("rejected", "overflow_unrecoverable");
+    const errorText = formatErrorMessage(promptError);
+    const replayInvalid = resolveReplayInvalidForAttempt();
+    setTerminalLifecycleMeta({ replayInvalid, livenessState: "blocked" });
+    return {
+      action: "complete",
+      result: buildEmbeddedRunBlockedResult({
+        text: errorText,
+        errorKind: "context_overflow",
+        errorMessage: errorText,
+        durationMs: Date.now() - runInput.startedAtMs,
+        agentMeta: buildAttemptErrorMeta(),
+        attempt,
+        replayInvalid,
+      }),
+    };
+  }
   const requestedSelection = shouldSwitchToLiveModel({
     cfg: params.config,
     sessionPersistence: params.sessionPersistence,
@@ -316,6 +344,36 @@ export async function recoverEmbeddedRunAttempt(input: {
             ))
         ? "timeout"
         : null;
+  // A detached review cannot retry or compact away a provider-side overflow:
+  // the same one-shot assembly would reproduce it, and compaction cannot shrink
+  // the current turn. Surface the measured cause instead of rotating models.
+  if (
+    params.reviewOverflowPolicy &&
+    !terminalInterrupted &&
+    !externalAbort &&
+    !outputLimitFailure &&
+    (retryFailure?.kind === "context_overflow" ||
+      assistantOverflowClassification?.kind === "context_overflow")
+  ) {
+    recordRecoveryDecision("rejected", "overflow_unrecoverable");
+    const overflowText = promptError
+      ? formatErrorMessage(promptError)
+      : (assistantOverflowCandidate?.errorMessage ?? "Skill review model run overflowed.");
+    const replayInvalid = resolveReplayInvalidForAttempt();
+    setTerminalLifecycleMeta({ replayInvalid, livenessState: "blocked" });
+    return {
+      action: "complete",
+      result: buildEmbeddedRunBlockedResult({
+        text: overflowText,
+        errorKind: "context_overflow",
+        errorMessage: overflowText,
+        durationMs: Date.now() - runInput.startedAtMs,
+        agentMeta: buildAttemptErrorMeta(),
+        attempt,
+        replayInvalid,
+      }),
+    };
+  }
   const compactionSelection = resolveCompactionLiveModelSelection({
     current: {
       provider: preparedRuntime.provider,

@@ -164,6 +164,8 @@ export type RunEmbeddedAgentParams = {
   provider?: string;
   /** Caller-owned upper bound for this run's effective context budget. */
   contextTokenBudget?: number;
+  /** When set, applies review-specific overflow handling (e.g. skip/fail on preflight overflow). */
+  reviewOverflowPolicy?: "skip" | "fail";
   /** Route-bound thinking capability resolved from the selected prepared catalog row. */
   modelThinkingCapability?: PreparedModelThinkingCapability;
   /** Effective model fallback chain for this session attempt. Undefined uses config defaults. */

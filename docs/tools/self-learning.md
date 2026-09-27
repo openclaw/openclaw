@@ -70,7 +70,7 @@ retain separate candidates. Experience reviews use one Workshop slot within the
 [shared background work budget](/concepts/queue#background-work).
 The foreground answer never waits for the model's review.
 
-OpenClaw records where the completed turn ends, then reads its full model context
+OpenClaw records where the completed turn ends, then reads that turn's model context
 asynchronously after the quiet period. The reviewer connects earlier requirements
 and corrections with observed results across that retained conversation, even
 when the latest turn is routine. Later messages are excluded. If the saved
