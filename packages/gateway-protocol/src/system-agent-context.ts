@@ -1,3 +1,5 @@
+import { asProtocolRecord } from "./protocol-value-normalization.js";
+
 /** Ephemeral, quoted UI references. These fields never carry configuration values. */
 export const SYSTEM_AGENT_PLUGIN_REFERENCE_MAX_CHARS = 1024;
 export const SYSTEM_AGENT_PLUGIN_ID_MAX_CHARS = 128;
@@ -130,4 +132,3 @@ export function normalizeSystemAgentPluginReference(
     ? reference
     : undefined;
 }
-import { asProtocolRecord } from "./protocol-value-normalization.js";

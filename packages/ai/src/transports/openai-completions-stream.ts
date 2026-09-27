@@ -664,7 +664,10 @@ export function shouldEmitOpenAICompletionsReasoning(
     return false;
   }
   const effort = options?.reasoningEffort ?? options?.reasoning ?? "high";
-  return Boolean(effort && isOpenAICompletionsThinkingEnabled(effort));
+  if (!effort || !isOpenAICompletionsThinkingEnabled(effort)) {
+    return false;
+  }
+  return true;
 }
 
 function hasOpenAICompletionsReasoningUsageActivity(
