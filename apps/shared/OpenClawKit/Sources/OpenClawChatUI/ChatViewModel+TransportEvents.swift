@@ -723,49 +723,53 @@ extension OpenClawChatViewModel {
         case "item":
             self.handleAgentActivityItem(evt)
         case "tool":
-            guard let phase = evt.data["phase"]?.value as? String else { return }
-            guard let name = evt.data["name"]?.value as? String else { return }
-            guard let toolCallId = evt.data["toolCallId"]?.value as? String else { return }
-            if phase == "start" {
-                self.updateActiveSessionRunWithoutChatSnapshot(false)
-                let args = evt.data["args"]
-                self.turnToolCallsById[toolCallId] = OpenClawChatPendingToolCall(
-                    toolCallId: toolCallId,
-                    name: name,
-                    args: args,
-                    startedAt: evt.ts.map(Double.init) ?? Date().timeIntervalSince1970 * 1000,
-                    isError: nil,
-                    diffStat: nil,
-                    activity: self.turnToolCallsById[toolCallId]?.activity,
-                    runID: evt.runId)
-            } else if phase == "input_delta",
-                      let pending = self.turnToolCallsById[toolCallId],
-                      let diff = evt.data["diff"]?.dictionaryValue,
-                      let added = diff["added"]?.intValue,
-                      let removed = diff["removed"]?.intValue,
-                      added >= 0,
-                      removed >= 0
-            {
-                self.turnToolCallsById[toolCallId] = OpenClawChatPendingToolCall(
-                    toolCallId: pending.toolCallId,
-                    name: pending.name,
-                    args: pending.args,
-                    startedAt: pending.startedAt,
-                    isError: pending.isError,
-                    diffStat: ChatToolDiffStat(added: added, removed: removed),
-                    activity: pending.activity,
-                    isComplete: pending.isComplete,
-                    runID: pending.runID)
-            } else if phase == "result" {
-                if var pending = self.turnToolCallsById[toolCallId], pending.activity != nil {
-                    pending.isComplete = true
-                    self.turnToolCallsById[toolCallId] = pending
-                } else {
-                    self.turnToolCallsById[toolCallId] = nil
-                }
-            }
+            self.handleAgentToolEvent(evt)
         default:
             break
+        }
+    }
+
+    private func handleAgentToolEvent(_ evt: OpenClawAgentEventPayload) {
+        guard let phase = evt.data["phase"]?.value as? String else { return }
+        guard let name = evt.data["name"]?.value as? String else { return }
+        guard let toolCallId = evt.data["toolCallId"]?.value as? String else { return }
+        if phase == "start" {
+            self.updateActiveSessionRunWithoutChatSnapshot(false)
+            let args = evt.data["args"]
+            self.turnToolCallsById[toolCallId] = OpenClawChatPendingToolCall(
+                toolCallId: toolCallId,
+                name: name,
+                args: args,
+                startedAt: evt.ts.map(Double.init) ?? Date().timeIntervalSince1970 * 1000,
+                isError: nil,
+                diffStat: nil,
+                activity: self.turnToolCallsById[toolCallId]?.activity,
+                runID: evt.runId)
+        } else if phase == "input_delta",
+                  let pending = self.turnToolCallsById[toolCallId],
+                  let diff = evt.data["diff"]?.dictionaryValue,
+                  let added = diff["added"]?.intValue,
+                  let removed = diff["removed"]?.intValue,
+                  added >= 0,
+                  removed >= 0
+        {
+            self.turnToolCallsById[toolCallId] = OpenClawChatPendingToolCall(
+                toolCallId: pending.toolCallId,
+                name: pending.name,
+                args: pending.args,
+                startedAt: pending.startedAt,
+                isError: pending.isError,
+                diffStat: ChatToolDiffStat(added: added, removed: removed),
+                activity: pending.activity,
+                isComplete: pending.isComplete,
+                runID: pending.runID)
+        } else if phase == "result" {
+            if var pending = self.turnToolCallsById[toolCallId], pending.activity != nil {
+                pending.isComplete = true
+                self.turnToolCallsById[toolCallId] = pending
+            } else {
+                self.turnToolCallsById[toolCallId] = nil
+            }
         }
     }
 
