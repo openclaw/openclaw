@@ -661,7 +661,11 @@ describe("same-monitor close assignment proof", () => {
               item: { ...directSpawnItem("v1", parentThreadId, childThreadId), id: "spawn-a" },
             },
           });
-          send(turnStartedNotification("assignment-a", { threadId: childThreadId, error: null }));
+          const initialTurn = turnStartedNotification("assignment-a", {
+            threadId: childThreadId,
+            error: null,
+          });
+          await settle(initialTurn, send(initialTurn));
           await vi.waitFor(() => {
             expect(taskRuntime.listTaskRecords()).toEqual(
               expect.arrayContaining([
