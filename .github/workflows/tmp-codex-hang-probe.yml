@@ -1,0 +1,196 @@
+name: Temporary Codex finalization probe
+
+on: pull_request
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  probe:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    name: ${{ matrix.variant }} / run ${{ matrix.run_index }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - v1-dts
+          - v2-readonly-schema
+          - v3-git-owner
+          - v4-tests-after
+          - v5-tests-no-codex
+          - v6-nested
+        run_index: [1, 2]
+    env:
+      PROBE_DIR: ${{ matrix.variant == 'v6-nested' && 'candidate' || '.' }}
+    steps:
+      - name: Checkout trusted controller
+        id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.variant == 'v6-nested' && github.workflow_sha || github.sha }}
+          persist-credentials: false
+
+      - name: Network after checkout
+        if: always()
+        run: |
+          getent hosts api.github.com >/dev/null && echo "DNS-OK checkout" || echo "DNS-FAIL checkout"
+          curl -sS -o /dev/null -w "HTTP %{http_code}\n" --max-time 10 https://api.github.com/zen || echo "HTTP-FAIL checkout"
+
+      - name: Checkout candidate
+        id: candidate
+        if: matrix.variant == 'v6-nested'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: candidate
+
+      - name: Network after candidate checkout
+        if: always() && steps.candidate.outcome != 'skipped'
+        run: |
+          getent hosts api.github.com >/dev/null && echo "DNS-OK candidate-checkout" || echo "DNS-FAIL candidate-checkout"
+          curl -sS -o /dev/null -w "HTTP %{http_code}\n" --max-time 10 https://api.github.com/zen || echo "HTTP-FAIL candidate-checkout"
+
+      - name: Prepare nested Git owner
+        id: nested-owner
+        if: matrix.variant == 'v6-nested'
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+
+      - name: Network after nested Git owner
+        if: always() && steps.nested-owner.outcome != 'skipped'
+        run: |
+          getent hosts api.github.com >/dev/null && echo "DNS-OK git-owner" || echo "DNS-FAIL git-owner"
+          curl -sS -o /dev/null -w "HTTP %{http_code}\n" --max-time 10 https://api.github.com/zen || echo "HTTP-FAIL git-owner"
+
+      - name: Setup Node environment
+        id: setup
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: ${{ matrix.variant == 'v6-nested' && 'off' || 'restore' }}
+          node-version: "24.x"
+          install-bun: "false"
+          install-deps: ${{ matrix.variant == 'v6-nested' && 'false' || 'true' }}
+
+      - name: Network after setup
+        if: always() && steps.setup.outcome != 'skipped'
+        run: |
+          getent hosts api.github.com >/dev/null && echo "DNS-OK setup" || echo "DNS-FAIL setup"
+          curl -sS -o /dev/null -w "HTTP %{http_code}\n" --max-time 10 https://api.github.com/zen || echo "HTTP-FAIL setup"
+
+      - name: Install candidate dependencies
+        id: install
+        if: matrix.variant == 'v6-nested'
+        working-directory: candidate
+        run: pnpm install --frozen-lockfile
+
+      - name: Network after candidate install
+        if: always() && steps.install.outcome != 'skipped'
+        run: |
+          getent hosts api.github.com >/dev/null && echo "DNS-OK candidate-install" || echo "DNS-FAIL candidate-install"
+          curl -sS -o /dev/null -w "HTTP %{http_code}\n" --max-time 10 https://api.github.com/zen || echo "HTTP-FAIL candidate-install"
+
+      - name: Prepare Git owner
+        id: owner
+        if: matrix.variant == 'v3-git-owner'
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+
+      - name: Network after Git owner
+        if: always() && steps.owner.outcome != 'skipped'
+        run: |
+          getent hosts api.github.com >/dev/null && echo "DNS-OK git-owner" || echo "DNS-FAIL git-owner"
+          curl -sS -o /dev/null -w "HTTP %{http_code}\n" --max-time 10 https://api.github.com/zen || echo "HTTP-FAIL git-owner"
+
+      - name: Write trivial prompt and artifact
+        id: prompt
+        run: |
+          printf '%s\n' 'Reply with exactly {"ok": true}' > "$PROBE_DIR/probe-prompt.txt"
+          printf '%s\n' 'Codex job-finalization probe' > "$PROBE_DIR/probe-artifact.txt"
+          getent hosts api.github.com >/dev/null && echo "DNS-OK prompt" || echo "DNS-FAIL prompt"
+          curl -sS -o /dev/null -w "HTTP %{http_code}\n" --max-time 10 https://api.github.com/zen || echo "HTTP-FAIL prompt"
+
+      - name: Run Codex dated TODO settings
+        id: codex-dts
+        if: matrix.variant == 'v1-dts'
+        timeout-minutes: 15
+        uses: openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e # v1.12
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: probe-prompt.txt
+          model: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
+          effort: low
+          sandbox: workspace-write
+          safety-strategy: drop-sudo
+
+      - name: Run Codex read-only schema
+        id: codex-schema
+        if: matrix.variant != 'v1-dts' && matrix.variant != 'v5-tests-no-codex'
+        timeout-minutes: 15
+        uses: openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e # v1.12
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          working-directory: ${{ env.PROBE_DIR }}
+          prompt-file: ${{ github.workspace }}/${{ env.PROBE_DIR }}/probe-prompt.txt
+          output-file: ${{ github.workspace }}/${{ env.PROBE_DIR }}/probe-output.json
+          model: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
+          effort: low
+          sandbox: read-only
+          safety-strategy: drop-sudo
+          output-schema: >-
+            {"type":"object","additionalProperties":false,"required":["ok"],"properties":{"ok":{"type":"boolean"}}}
+
+      - name: Network after Codex
+        if: always() && (steps.codex-dts.outcome != 'skipped' || steps.codex-schema.outcome != 'skipped')
+        run: |
+          getent hosts api.github.com >/dev/null && echo "DNS-OK codex" || echo "DNS-FAIL codex"
+          curl -sS -o /dev/null -w "HTTP %{http_code}\n" --max-time 10 https://api.github.com/zen || echo "HTTP-FAIL codex"
+
+      - name: Run API baseline test
+        id: tests
+        if: always() && steps.prompt.outcome == 'success' && (matrix.variant == 'v4-tests-after' || matrix.variant == 'v5-tests-no-codex' || matrix.variant == 'v6-nested')
+        working-directory: ${{ env.PROBE_DIR }}
+        run: pnpm test src/plugin-sdk/api-baseline.test.ts --maxWorkers=1
+
+      - name: Network after tests
+        if: always() && steps.tests.outcome != 'skipped'
+        run: |
+          getent hosts api.github.com >/dev/null && echo "DNS-OK tests" || echo "DNS-FAIL tests"
+          curl -sS -o /dev/null -w "HTTP %{http_code}\n" --max-time 10 https://api.github.com/zen || echo "HTTP-FAIL tests"
+
+      - name: Upload small artifact
+        id: upload
+        if: always() && steps.prompt.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: codex-hang-${{ matrix.variant }}-${{ matrix.run_index }}
+          path: ${{ env.PROBE_DIR }}/probe-artifact.txt
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Network after artifact upload
+        if: always() && steps.upload.outcome != 'skipped'
+        run: |
+          getent hosts api.github.com >/dev/null && echo "DNS-OK upload" || echo "DNS-FAIL upload"
+          curl -sS -o /dev/null -w "HTTP %{http_code}\n" --max-time 10 https://api.github.com/zen || echo "HTTP-FAIL upload"
+
+      - name: Final process and network state
+        if: always()
+        run: |
+          set +e
+          set +o pipefail
+          getent hosts api.github.com >/dev/null && echo "DNS-OK final" || echo "DNS-FAIL final"
+          curl -sS -o /dev/null -w "HTTP %{http_code}\n" --max-time 10 https://api.github.com/zen || echo "HTTP-FAIL final"
+          echo 'PROBE-PS-BEGIN'
+          ps -eo pid,ppid,pgid,user,stat,etime,rss,args --sort=-rss | head -40
+          echo 'PROBE-RESOLV-BEGIN'
+          cat /etc/resolv.conf
+          echo 'PROBE-RESOLVECTL-BEGIN'
+          resolvectl status 2>&1 | head -30
+          echo 'PROBE-SS-BEGIN'
+          ss -tlnp 2>&1 | head -20
+          echo 'PROBE-DUMP-END'
