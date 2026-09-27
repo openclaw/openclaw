@@ -20,6 +20,7 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./claws-packages.js").then((module) => module.clawsPackageHandlers),
   "agents-workspace": () =>
     import("./agents-workspace.js").then((module) => module.agentsWorkspaceHandlers),
+  "file-roots": () => import("./file-roots.js").then((module) => module.fileRootsHandlers),
   artifacts: () => import("./artifacts.js").then((module) => module.artifactsHandlers),
   board: () => import("./board.js").then((module) => module.boardHandlers),
   audit: () => import("./audit.js").then((module) => module.auditHandlers),
