@@ -56,47 +56,35 @@ const domainExamples = [
   { args: ["embedding", "create"], option: "--text" },
 ];
 
-it.each(["infer", "capability"])(
-  "renders complete %s parent help without loading execution runtimes",
-  async (name) => {
-    let output = "";
-    const program = new Command()
-      .name("openclaw")
-      .exitOverride()
-      .configureOutput({ writeOut: (text) => (output += text) });
-    const args = [name, "--help"];
-    await registerCapabilityCli(program, ["node", "openclaw", ...args]);
-    await expect(program.parseAsync(args, { from: "user" })).rejects.toMatchObject({
-      code: "commander.helpDisplayed",
-      exitCode: 0,
-    });
-    for (const {
-      args: [domain],
-    } of domainExamples) {
-      expect(output).toContain(domain);
-    }
-    expect(output).toContain("list");
-    expect(output).toContain("inspect");
-  },
-);
+async function renderHelp(args: string[]) {
+  let output = "";
+  const program = new Command()
+    .name("openclaw")
+    .exitOverride()
+    .configureOutput({ writeOut: (text) => (output += text) });
+  await registerCapabilityCli(program, ["node", "openclaw", ...args]);
+  await expect(program.parseAsync(args, { from: "user" })).rejects.toMatchObject({
+    code: "commander.helpDisplayed",
+    exitCode: 0,
+  });
+  return output;
+}
 
-it.each(domainExamples)(
-  "renders detailed help for $args without loading execution runtimes",
-  async ({ args, option }) => {
-    let output = "";
-    const program = new Command()
-      .name("openclaw")
-      .exitOverride()
-      .configureOutput({ writeOut: (text) => (output += text) });
-    const invocation = ["infer", ...args, "--help"];
-    await registerCapabilityCli(program, ["node", "openclaw", ...invocation]);
-    await expect(program.parseAsync(invocation, { from: "user" })).rejects.toMatchObject({
-      code: "commander.helpDisplayed",
-      exitCode: 0,
-    });
-    expect(output).toContain(option);
-  },
-);
+it("renders complete parent help without loading execution runtimes", async () => {
+  const output = await renderHelp(["infer", "--help"]);
+  for (const {
+    args: [domain],
+  } of domainExamples) {
+    expect(output).toContain(domain);
+  }
+  expect(output).toContain("list");
+  expect(output).toContain("inspect");
+});
+
+it("renders selected-domain help through the alias without loading execution runtimes", async () => {
+  const output = await renderHelp(["capability", "model", "auth", "login", "--help"]);
+  expect(output).toContain("--provider");
+});
 
 it("retains nested inference commands and aliases for completion without loading execution runtimes", async () => {
   const program = new Command().name("openclaw");

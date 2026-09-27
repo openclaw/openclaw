@@ -18,7 +18,7 @@ describe("cron webhook optional output", () => {
     "records $status with summary $summary without false delivery",
     async ({ status, summary }) => {
       const store = await makeStorePath();
-      const sendCronWebhook = vi.fn(async () => {});
+      const sendCronWebhook = vi.fn(async () => ({ status: "delivered" as const }));
       const events: CronEvent[] = [];
       const cron = new CronService({
         scheduler: createTestGatewayScheduler(),
