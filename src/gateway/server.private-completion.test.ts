@@ -245,6 +245,7 @@ describe("private subagent completion processing receipts", () => {
         agentParams: request(),
         privateCompletion: true,
         expectFinal: true,
+        signal,
         isExecutionAllowed: () => allowed,
         resolveGatewayContext: () => kernel.gatewayRequestContext,
       });
