@@ -20,8 +20,10 @@ const XAI_REALTIME_INPUT_SETTLE_MS = 1_500;
 export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
   private assistantTranscriptBuffer = "";
   private assistantTranscriptFinalized = false;
-  private pendingInputTranscript: { key: string; text: string } | undefined;
-  private finalizedInputTranscriptKeys = new Set<string>();
+  private pendingInputTranscript:
+    | { sourceKey: string; speechSequence: number; text: string }
+    | undefined;
+  private finalizedInputSpeechSequences = new Set<number>();
   private inputSpeechSequence = 0;
   private inputResponseStarted = false;
   private inputResponseFinished = false;
@@ -194,16 +196,14 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
         const key = this.inputTranscriptKey(event);
         const transcript = event.transcript ?? this.inputTranscriptReplacements.get(key);
         this.inputTranscriptReplacements.delete(key);
-        if (!transcript || this.finalizedInputTranscriptKeys.has(key)) {
+        if (!transcript || this.finalizedInputSpeechSequences.has(this.inputSpeechSequence)) {
           return;
         }
-        if (this.pendingInputTranscript && this.pendingInputTranscript.key !== key) {
-          this.flushPendingInputTranscript();
-          if (!this.acceptsEvent(connection)) {
-            return;
-          }
-        }
-        this.pendingInputTranscript = { key, text: transcript };
+        this.pendingInputTranscript = {
+          sourceKey: key,
+          speechSequence: this.inputSpeechSequence,
+          text: transcript,
+        };
         // xAI's completed events are cumulative snapshots, not utterance boundaries.
         // Preview immediately; commit once the response settles, so later corrections
         // cannot either duplicate the user message or truncate it permanently.
@@ -217,7 +217,7 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
       }
       case "conversation.item.input_audio_transcription.failed": {
         const key = this.inputTranscriptKey(event);
-        if (this.pendingInputTranscript?.key === key) {
+        if (this.pendingInputTranscript?.sourceKey === key) {
           this.pendingInputTranscript = undefined;
         }
         this.inputTranscriptReplacements.delete(key);
@@ -360,7 +360,7 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
   protected resetInputTranscripts(): void {
     this.flushPendingInputTranscript();
     this.inputTranscriptReplacements.clear();
-    this.finalizedInputTranscriptKeys.clear();
+    this.finalizedInputSpeechSequences.clear();
     this.inputResponseStarted = false;
     this.inputResponseFinished = false;
     this.outputResponse = undefined;
@@ -392,11 +392,11 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
     if (!pending) {
       return;
     }
-    this.finalizedInputTranscriptKeys.add(pending.key);
-    if (this.finalizedInputTranscriptKeys.size > 1_024) {
-      const oldest = this.finalizedInputTranscriptKeys.values().next().value;
+    this.finalizedInputSpeechSequences.add(pending.speechSequence);
+    if (this.finalizedInputSpeechSequences.size > 1_024) {
+      const oldest = this.finalizedInputSpeechSequences.values().next().value;
       if (oldest !== undefined) {
-        this.finalizedInputTranscriptKeys.delete(oldest);
+        this.finalizedInputSpeechSequences.delete(oldest);
       }
     }
     this.config.onTranscript?.("user", pending.text, true, { textMode: "snapshot" });
