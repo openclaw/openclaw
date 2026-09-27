@@ -285,12 +285,15 @@ export class SelectPicker<
     if (!(element instanceof WaPopup) || !this.trigger) {
       return;
     }
-    // A phone may have no room on either side; retain the same choice list
-    // above or below its row rather than letting a flyout leave the viewport.
-    element.flipFallbackPlacements =
+    // A narrow viewport may have no room on either side; retain the same choice
+    // list above or below its row rather than letting a flyout leave the viewport.
+    // The attribute converter is what splits this list into placements.
+    element.setAttribute(
+      "flip-fallback-placements",
       this.params.variant === "submenu"
         ? `${this.submenuSide === "right" ? "left" : "right"}-start bottom-start top-start`
-        : "";
+        : "",
+    );
     configureAnchoredPopup(
       element,
       this.trigger,
