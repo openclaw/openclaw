@@ -340,6 +340,7 @@ describe("Browser dashboard operation ordering", () => {
     "definition updated",
     "layout updated",
     "stop after cancellation",
+    "stop after resume",
     "stop after normal open",
     "stop after follower cancellation",
     "stop after cold cancellation",
@@ -352,6 +353,7 @@ describe("Browser dashboard operation ordering", () => {
     const cancelInitiator =
       failure === "initiator cancelled" ||
       failure === "stop after cancellation" ||
+      failure === "stop after resume" ||
       failure === "stop after cold cancellation";
     const cancelFollower =
       failure === "follower cancelled" || failure === "stop after follower cancellation";
@@ -384,7 +386,10 @@ describe("Browser dashboard operation ordering", () => {
       followerRead.resolve();
       return structuredClone({ sessionKey, widgets: fixture.widgets });
     });
-    const waiting = requestBrowserDashboard(request, { signal: follower.signal });
+    const waiting = requestBrowserDashboard(
+      { ...request, resume: failure === "stop after resume" },
+      { signal: follower.signal },
+    );
     const settled = Promise.allSettled([opening, waiting]);
     await followerRead.promise;
     await setImmediate();
