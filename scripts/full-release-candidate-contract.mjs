@@ -10,6 +10,9 @@ import {
   parseUpgradeSurvivorScenarios,
 } from "./lib/upgrade-survivor-policy.mjs";
 
+// Retained evidence must keep its producer schema so its immutable request and
+// manifest digests remain reproducible. Fresh candidate requests stay v2-only.
+const RETAINED_FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA = "openclaw.full-release-candidate-request/v1";
 const FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA = "openclaw.full-release-candidate-request/v2";
 const FULL_RELEASE_CANDIDATE_MANIFEST_SCHEMA = "openclaw.full-release-candidate/v2";
 const FULL_RELEASE_CANDIDATE_BINDING_SCHEMA = "openclaw.full-release-candidate-binding/v2";
@@ -161,18 +164,31 @@ export function buildFullReleaseCandidateRequest(input) {
 
 export function validateFullReleaseCandidateRequest(value) {
   const request = validateRecordedFullReleaseCandidateRequest(value);
+  if (request.schema !== FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA) {
+    fail("full release candidate request schema is invalid");
+  }
   parseUpgradeSurvivorScenarios(request.upgradeSurvivorScenarios.join(" "));
   return request;
 }
 
 export function validateRecordedFullReleaseCandidateRequest(value) {
+  if (!isRecord(value)) {
+    fail("full release candidate request must be an object");
+  }
+  const schema = value.schema;
+  if (
+    schema !== RETAINED_FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA &&
+    schema !== FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA
+  ) {
+    fail("full release candidate request schema is invalid");
+  }
   exactKeys(
     value,
     [
       "allowFrozenTargetScenarioOmissions",
       "allowUnreleasedChangelog",
       "contractVersions",
-      "packagePublished",
+      ...(schema === FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA ? ["packagePublished"] : []),
       "releaseProfile",
       "releaseSoak",
       "repository",
@@ -244,20 +260,21 @@ export function validateRecordedFullReleaseCandidateRequest(value) {
   ) {
     fail("full release candidate request upgradeSurvivorScenarios are not normalized");
   }
-  if (value.schema !== FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA) {
-    fail("full release candidate request schema is invalid");
-  }
   return {
-    schema: value.schema,
+    schema,
     repository: repository(value.repository, "full release candidate request repository"),
     targetSha: sha(value.targetSha, "full release candidate request targetSha"),
     toolingSha: sha(value.toolingSha, "full release candidate request toolingSha"),
     releaseProfile,
     releaseSoak: boolean(value.releaseSoak, "full release candidate request releaseSoak"),
-    packagePublished: boolean(
-      value.packagePublished,
-      "full release candidate request packagePublished",
-    ),
+    ...(schema === FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA
+      ? {
+          packagePublished: boolean(
+            value.packagePublished,
+            "full release candidate request packagePublished",
+          ),
+        }
+      : {}),
     upgradeSurvivorBaselines: baselines,
     upgradeSurvivorScenarios: scenarios,
     allowFrozenTargetScenarioOmissions: boolean(
