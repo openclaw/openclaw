@@ -405,10 +405,10 @@ describe("AppSidebar session ownership", () => {
     result.owners = undefined;
     harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
-    menu = await openOwnerMenu(sidebar);
-    expect(menu.querySelector('[value="sort:people"]')?.getAttribute("aria-checked")).toBe("true");
+    menu = await openSessionMenu(sidebar);
+    expect(sessionMenuChoice(menu, "sort:people")?.getAttribute("aria-selected")).toBe("true");
     expect(visibleSessionKeys(sidebar)).toEqual(peopleOrder);
-    menu.dispatchEvent(new Event("wa-after-hide", { bubbles: true }));
+    sidebar.dismissTransientMenus();
     await sidebar.updateComplete;
 
     result.owners = [

@@ -1,10 +1,10 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
+import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import {
   createGatewayHarness,
   createSessionsHarness,
   mountSidebar,
-  setupSidebarTest,
 } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import {
@@ -28,7 +28,7 @@ const ownerOptions = (root: Element) =>
     ...root
       .querySelector("#sidebar-sessions-owner")!
       .closest("openclaw-select-picker")!
-      .querySelectorAll<HTMLElement>(".picker-select__option .picker-select__label"),
+      .querySelectorAll<HTMLElement>(".picker-select__option:not([hidden]) .picker-select__label"),
   ].map((label) => label.textContent!.trim());
 
 async function mountFilters(width: number, teammates = 0) {

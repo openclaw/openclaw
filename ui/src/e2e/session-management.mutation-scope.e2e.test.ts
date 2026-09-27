@@ -18,6 +18,7 @@ import {
   sessionsListResponse,
   waitForPatch,
 } from "./session-management.test-support.ts";
+import { chooseSidebarMenuOption, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 
@@ -116,11 +117,8 @@ suite.define(() => {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, original.key));
         await rowFor(original.key).waitFor({ state: "visible" });
         if (filter === "All") {
-          await sidebar.getByRole("button", { name: "Filter & sort" }).click();
-          await page
-            .locator(".sidebar-session-sort-menu")
-            .getByRole("menuitemradio", { name: filter, exact: true })
-            .click();
+          await chooseSidebarMenuOption(page, "Status", filter);
+          await closeSidebarMenu(page);
           await gateway.waitForRequest("sessions.list", {
             match: { agentId: "main", archived: "all" },
           });
