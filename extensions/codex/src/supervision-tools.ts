@@ -828,21 +828,17 @@ function endpointResult(
   resolveRuntimeOptions: CodexSupervisionToolsOptions["resolveRuntimeOptions"],
 ): Record<string, unknown> {
   const start = endpoint.configured ?? resolveRuntimeOptions({ pluginConfig, env }).start;
-  const local =
-    start.transport === "stdio" ||
-    start.transport === "stdio-proxy" ||
-    start.transport === undefined;
+  const remote =
+    start.transport === "websocket" || start.transport === "unix"
+      ? {
+          url: redactEndpointUrl(start.url ?? (start.transport === "unix" ? "unix://" : "")),
+        }
+      : undefined;
   return {
     id: endpoint.id,
-    transport: local ? "stdio-proxy" : "websocket",
+    transport: remote ? "websocket" : "stdio-proxy",
     ...(endpoint.label ? { label: endpoint.label } : {}),
-    ...(local
-      ? {}
-      : {
-          url: redactEndpointUrl(
-            start.transport === "unix" ? (start.url ?? "unix://") : (start.url ?? ""),
-          ),
-        }),
+    ...remote,
   };
 }
 

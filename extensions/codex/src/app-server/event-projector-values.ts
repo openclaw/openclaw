@@ -74,7 +74,7 @@ export function readCodexProviderRefusal(
     : undefined;
 }
 
-export function codexProviderRefusalDetails(refusal: CodexProviderRefusal) {
+function codexProviderRefusalDetails(refusal: CodexProviderRefusal) {
   return {
     provider: "openai",
     category: refusal.category,
