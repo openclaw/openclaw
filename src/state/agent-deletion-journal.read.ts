@@ -11,7 +11,8 @@ import {
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { sessionChanges } from "../sessions/session-row-changes.js";
+import { isSessionStoreTopologyChange, sessionChanges } from "../sessions/session-row-changes.js";
+import { hasPreJournalStateSchema } from "./agent-deletion-journal-history.js";
 import { readAgentDeletionRecoveryHolds } from "./agent-deletion-journal-recovery.js";
 import type {
   AgentDatabaseDeletionSnapshot,
@@ -123,6 +124,9 @@ export function readRetainedAgentDeletionsFromDatabase(
     purpose === "maintenance" && tableExists(database, "migration_sources")
       ? readAgentDeletionRecoveryHolds({ db: database, path: statePath })
       : [];
+  if (missing && held.length === 0 && hasPreJournalStateSchema(database)) {
+    return { status: "empty" };
+  }
   if (missing || unreadableReason !== undefined) {
     return {
       status: "unavailable",
@@ -213,7 +217,7 @@ export function prepareAgentDatabaseDeletionSnapshotRead(
     async withCurrentSnapshot(consume) {
       let changed: boolean;
       const stop = sessionChanges.subscribeFacts((change) => {
-        if ("all" in change && change.scope === "stores") {
+        if (isSessionStoreTopologyChange(change)) {
           changed = true;
         }
       });

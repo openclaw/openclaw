@@ -84,9 +84,7 @@ export function attachModelProviderLocalService<TModel extends object>(
   if (!service) {
     return model;
   }
-  const next = { ...model } as TModel & ModelWithProviderLocalService;
-  next[MODEL_PROVIDER_LOCAL_SERVICE_SYMBOL] = service;
-  return next;
+  return { ...model, [MODEL_PROVIDER_LOCAL_SERVICE_SYMBOL]: service };
 }
 
 /** Read local-service startup metadata attached to a model. */
@@ -102,13 +100,12 @@ export async function ensureModelProviderLocalService(
   probeHeaders?: HeadersInit,
   signal?: AbortSignal | null,
 ): Promise<ProviderLocalServiceLease | undefined> {
-  const service = getModelProviderLocalService(model);
   return await ensureProviderLocalService(
     {
       providerId: model.provider,
       baseUrl: model.baseUrl,
-      headers: buildHealthProbeHeaders((model as { headers?: HeadersInit }).headers, probeHeaders),
-      service,
+      headers: buildHealthProbeHeaders(model.headers, probeHeaders),
+      service: getModelProviderLocalService(model),
       reconcile: getModelProviderLocalServiceReconciler(model),
     },
     signal,
@@ -146,7 +143,7 @@ async function acquireProviderLocalService(
 
   validateLocalServiceConfig(service, target.providerId);
   const healthUrl = resolveHealthUrl(service, target.baseUrl);
-  const healthHeaders = buildHealthProbeHeaders(target.headers, undefined);
+  const healthHeaders = buildHealthProbeHeaders(target.headers);
   const key = localServiceKey(target.providerId, service, healthUrl);
   installExitHandler();
   let current = services.get(key);
@@ -299,23 +296,18 @@ function hashStringRecord(record: Record<string, string> | undefined): string {
   return createHash("sha256").update(JSON.stringify(sorted)).digest("hex");
 }
 
-function buildHealthProbeHeaders(
-  providerHeaders: HeadersInit | undefined,
-  requestHeaders: HeadersInit | undefined,
-): Headers | undefined {
+function buildHealthProbeHeaders(...inputs: (HeadersInit | undefined)[]): Headers | undefined {
   const headers = new Headers();
-  const appendHeaders = (input: HeadersInit | undefined) => {
+  for (const input of inputs) {
     if (!input) {
-      return;
+      continue;
     }
     for (const [key, value] of new Headers(input)) {
       if (value.trim().length > 0 && value.trim().toLowerCase() !== "null") {
         headers.set(key, value);
       }
     }
-  };
-  appendHeaders(providerHeaders);
-  appendHeaders(requestHeaders);
+  }
   return [...headers].length > 0 ? headers : undefined;
 }
 

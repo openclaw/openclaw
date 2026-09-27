@@ -154,6 +154,14 @@ render; virtualizer and sidebar geometry changes retain their explicit sync path
 Rail labels are shared across mounted markers, so offscreen history does not add
 translation work on each stream update.
 
+Sidebar narration releases its session interests while hidden. Acquires and releases
+share bounded exponential retry backoff with full jitter and server delay hints.
+Failed releases retain their original handles, including late hidden acquisitions;
+returning interests cancel queued releases and reacquire before retiring those handles.
+The shared connection coordinator renews observers after uncertain unsubscribe timeouts
+and preserves other viewers' leases and approval delivery. DOM detachment pauses timers
+without dropping retained handles; connection closure retires them and cancels retries.
+
 ## Talk live smoke test
 
 Maintainers can exercise the browser Talk paths end to end from the repository

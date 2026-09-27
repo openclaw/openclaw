@@ -21,7 +21,6 @@ import type { ChatSendTimingEntry } from "./chat-send-ack.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatProps } from "./chat-view.ts";
-import type { BackgroundTasksHost } from "./components/chat-background-tasks.ts";
 import type { SessionWorkspaceHost } from "./components/chat-session-workspace.ts";
 import type { SidebarSelection } from "./components/chat-sidebar.ts";
 import type { ChatExportResult } from "./export.ts";
@@ -40,8 +39,7 @@ export type ChatPageHost = ChatHost &
   ChatState &
   ChatRealtimeState &
   PullRequestRefreshHost &
-  SessionWorkspaceHost &
-  BackgroundTasksHost & {
+  SessionWorkspaceHost & {
     reviewQueuedMessageEdit?: () => void;
     captureComposerRecoveryReload?: () => () => Promise<boolean>;
     chatMetadataIsPresented?: () => boolean;

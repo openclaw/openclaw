@@ -37,9 +37,6 @@ export async function prepareCodexAttemptContext(
   const {
     connection,
     runtimeParams,
-    activeSessionId,
-    activeSessionFile,
-    buildActiveRunAttemptParams,
     effectiveContextWindowInfo,
     effectiveContextTokenBudget,
     effectiveRuntimeProviderId,
@@ -63,8 +60,8 @@ export async function prepareCodexAttemptContext(
   const { toolBridge } = attemptTools;
   const activeTranscriptTarget = {
     agentId: sessionAgentId,
-    sessionFile: activeSessionFile,
-    sessionId: activeSessionId,
+    sessionFile: runtimeParams.sessionFile,
+    sessionId: runtimeParams.sessionId,
     sessionKey: contextSessionKey,
     sessionTarget: params.sessionTarget,
   };
@@ -129,7 +126,7 @@ export async function prepareCodexAttemptContext(
   const hookRunner = getAgentHarnessHookRunner();
   const buildActiveContextEngineRuntimeContext = () =>
     buildHarnessContextEngineRuntimeContext({
-      attempt: buildActiveRunAttemptParams(),
+      attempt: { ...runtimeParams },
       workspaceDir: effectiveWorkspace,
       cwd: effectiveCwd,
       agentDir,
@@ -141,9 +138,9 @@ export async function prepareCodexAttemptContext(
     await bootstrapHarnessContextEngine({
       hadSessionFile: hadSessionTranscriptState,
       contextEngine: activeContextEngine,
-      sessionId: activeSessionId,
+      sessionId: runtimeParams.sessionId,
       sessionKey: contextSessionKey,
-      sessionFile: activeSessionFile,
+      sessionFile: runtimeParams.sessionFile,
       sessionTarget: params.sessionTarget,
       runtimeContext: buildActiveContextEngineRuntimeContext(),
       transcriptReadFence: params.userTurnTranscriptRecorder?.getAdmissionReceipt(),

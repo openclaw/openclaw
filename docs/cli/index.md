@@ -32,7 +32,7 @@ Setup commands by intent:
 | Network and nodes            | [`connect`](/cli/connect) · [`directory`](/cli/directory) · [`nodes`](/cli/nodes) · [`node`](/cli/node) · [`worker`](/cli/worker)                                                                                                     |
 | Runtime and sandbox          | [`approvals`](/cli/approvals) · `exec-policy` (see [`approvals`](/cli/approvals)) · [`sandbox`](/cli/sandbox) · [`tui`](/cli/tui) · `chat`/`terminal` (aliases for [`tui --local`](/cli/tui)) · [`browser`](/cli/browser)             |
 | Worktrees                    | [`worktrees`](/concepts/managed-worktrees)                                                                                                                                                                                            |
-| Automation                   | [`cron`](/cli/cron) (alias `automations`) · [`tasks`](/cli/tasks) · [`hooks`](/cli/hooks) · [`webhooks`](/cli/webhooks) · [`transcripts`](/cli/transcripts)                                                                           |
+| Automation                   | [`cron`](/cli/cron) (alias `automations`) · [`hooks`](/cli/hooks) · [`webhooks`](/cli/webhooks) · [`transcripts`](/cli/transcripts)                                                                                                   |
 | Discovery and docs           | [`dns`](/cli/dns) · [`docs`](/cli/docs)                                                                                                                                                                                               |
 | Pairing and channels         | [`pairing`](/cli/pairing) · [`qr`](/cli/qr) · [`devices`](/cli/devices) · [`channels`](/cli/channels)                                                                                                                                 |
 | Security and plugins         | [`security`](/cli/security) · [`secrets`](/cli/secrets) · [`skills`](/cli/skills) · [`plugins`](/cli/plugins) · [`proxy`](/cli/proxy)                                                                                                 |
@@ -52,6 +52,8 @@ Setup commands by intent:
 | `-V`, `--version`, `-v` | Print version and exit                                                                                  |
 
 Place command-specific options after their command name, for example `openclaw status --json`. Global options such as `--profile` can precede the command.
+
+Unknown root options fail with an option error and a help hint instead of starting onboarding or the TUI.
 
 A named `--profile` replaces canonical state and config paths inherited from
 another profile, including a running Gateway service. Explicitly customized

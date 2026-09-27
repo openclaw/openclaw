@@ -29,6 +29,7 @@ import {
   resolveTargetSqlitePath,
   type ReadOnlySqliteValidationSnapshot,
 } from "../infra/session-sqlite-migration-readers.js";
+import { verifyCanonicalSessionTranscriptSources } from "../infra/session-sqlite-transcript-verification.js";
 import type { LegacySessionRecord } from "./doctor-session-sqlite-discovery.js";
 import type { collectRecoveryInventory } from "./doctor-session-sqlite-recovery-inventory.js";
 import type { DoctorSessionSqliteTargetReport } from "./doctor-session-sqlite-types.js";
@@ -76,6 +77,7 @@ export async function importLegacySessionRecords(
           report,
           importedTranscriptSources,
           existingSnapshot.ok ? existingSnapshot.snapshot : undefined,
+          env,
         );
         return prepared ? [{ ...prepared, params: { ...prepared.params, env }, record }] : [];
       });
@@ -91,8 +93,9 @@ export async function importLegacySessionRecords(
       );
       for (const [index, result] of imported.entries()) {
         const record = pending[index]?.record;
-        if (record && result.recovery) {
-          record.recovery = result.recovery;
+        const recovery = pending[index]?.recovery ?? result.recovery;
+        if (record && recovery) {
+          record.recovery = recovery;
         }
       }
       report.importedEntries += imported.length;
@@ -220,6 +223,7 @@ function prepareLegacySessionImport(
   report: DoctorSessionSqliteTargetReport,
   importedTranscriptSources: Set<string>,
   existingSnapshot: ReadOnlySqliteValidationSnapshot | undefined,
+  env: NodeJS.ProcessEnv,
 ) {
   if (
     record.historical &&
@@ -273,6 +277,7 @@ function prepareLegacySessionImport(
     sessionKey: record.sessionKey,
     storePath: target.sqlitePath ?? target.storePath,
   };
+  let recovery: LegacySessionRecord["recovery"];
   if (result.status === "missing") {
     if (markAlreadyMigratedTranscript(record, report, existingSnapshot)) {
       return undefined;
@@ -284,12 +289,55 @@ function prepareLegacySessionImport(
         sessionKey: record.sessionKey,
       },
       params,
+      recovery,
     };
+  }
+  if (
+    result.status === "ok" &&
+    transcriptFingerprint &&
+    record.transcriptPath &&
+    (existingSnapshot?.transcriptEventCountsBySessionId.get(record.entry.sessionId) ?? 0) > 0
+  ) {
+    try {
+      const verified = verifyCanonicalSessionTranscriptSources({
+        target: { ...target, sqlitePath: report.sqlitePath },
+        sources: [
+          {
+            path: record.transcriptPath,
+            sessionId: record.entry.sessionId,
+            originalPath: record.historical?.originalPath ?? record.transcriptPath,
+          },
+        ],
+        env,
+        mode: "appendable",
+      });
+      if (!verified) {
+        throw new Error(
+          "Missing history requires legacy format or branch repair before it can be appended",
+        );
+      }
+      if (verified.missingEvents === 0) {
+        recovery = {
+          complete: true,
+          repaired: false,
+          events: verified.events,
+          sqliteEvents: verified.sqliteEvents,
+        };
+      }
+    } catch (error) {
+      report.issues.push({
+        code: "sqlite_transcript_count_mismatch",
+        sessionKey: record.sessionKey,
+        message: `${record.transcriptPath}: ${formatErrorMessage(error)}. Original retained. Compare the named events with a verified backup, restore a corrected JSONL at this path, then rerun openclaw doctor --session-sqlite recover.`,
+      });
+      return undefined;
+    }
   }
   if (transcriptSourceKey) {
     importedTranscriptSources.add(transcriptSourceKey);
   }
   return {
+    recovery,
     ...(result.status === "malformed"
       ? {
           issue: {

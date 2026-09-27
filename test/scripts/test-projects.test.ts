@@ -966,6 +966,7 @@ describe("scripts/test-projects changed-target routing", () => {
     ["scripts/lib/failed-trailer.mts", ["run-oxlint", "run-tsgo", "run-vitest", "changed-lanes"]],
     ["scripts/lib/managed-child-process.mts", ["managed-child-process"]],
     ["scripts/lib/dist-artifact-ownership.mts", ["dist-artifact-ownership"]],
+    ["scripts/lib/dist-artifact-lock.mts", ["dist-artifact-ownership"]],
   ] as const)(
     "routes %s through the lint status boundary and existing owners",
     (source, owners) => {
@@ -3365,7 +3366,6 @@ describe("scripts/test-projects changed-target routing", () => {
       ["src/process", "test/vitest/vitest.process.config.ts"],
       ["src/secrets", "test/vitest/vitest.secrets.config.ts"],
       ["src/shared", "test/vitest/vitest.shared-core.config.ts"],
-      ["src/tasks", "test/vitest/vitest.tasks.config.ts"],
       ["src/tui", "test/vitest/vitest.tui.config.ts"],
       ["src/utils", "test/vitest/vitest.utils.config.ts"],
       ["src/wizard", "test/vitest/vitest.wizard.config.ts"],

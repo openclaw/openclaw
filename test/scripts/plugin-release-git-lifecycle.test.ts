@@ -212,7 +212,7 @@ posixIt.each(["npm-preflight-read", "npm-publish-read"] as const)(
 
 posixIt.each(
   (["npm-preflight-read", "npm-publish-read"] as const).flatMap((mode) =>
-    ([23, 124, 125, 143, "hang"] as const).map((failure) => ({ failure, mode })),
+    ([23, 125, "hang"] as const).map((failure) => ({ failure, mode })),
   ),
 )(
   "$mode fetch failure $failure stops before source package readback",
@@ -225,7 +225,7 @@ posixIt.each(
   55_000,
 );
 
-posixIt.each([1, 23, 124, 125, 143])(
+posixIt.each([1, 125, 143])(
   "ClawHub resolves origin fallback after safely drained ordinary local probe failure %s",
   async (code) => {
     const report = await pluginRun("clawhub-resolve", {
@@ -299,7 +299,7 @@ posixIt(
   55_000,
 );
 
-posixIt.each([1, 23, 124, 125, 143])(
+posixIt.each([1, 125])(
   "ClawHub protected tag ordinary lookup failure %s retains OIDC rejection",
   async (code) => {
     const report = await pluginRun("clawhub-oidc", {

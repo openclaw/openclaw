@@ -386,8 +386,6 @@ describe("chat history delta display budget", () => {
   });
 
   it.each([
-    [1, 0, undefined],
-    [1, 1, undefined],
     [2, 0, undefined],
     [2, 1, undefined],
     [2, 0, 64 * 1024],

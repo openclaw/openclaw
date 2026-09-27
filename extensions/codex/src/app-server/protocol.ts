@@ -582,6 +582,7 @@ export type CodexModel = {
   hidden: boolean;
   isDefault: boolean;
   inputModalities: string[];
+  serviceTiers?: { id: string; name: string; description: string }[];
   supportedReasoningEfforts: CodexReasoningEffortOption[];
   defaultReasoningEffort?: string | null;
   multiAgentVersion?: "disabled" | "v1" | "v2" | null;
@@ -689,9 +690,7 @@ type CodexAppServerRequestParamsOverride = {
 };
 
 type CodexAppServerRequestResultMap = {
-  "thread/backgroundTerminals/list": {
-    data: { itemId: string; processId: string; command: string; cwd: string }[];
-  };
+  "thread/backgroundTerminals/list": { data: { itemId: string; processId: string }[] };
   "thread/backgroundTerminals/terminate": { terminated: boolean };
   initialize: CodexInitializeResponse;
   "account/rateLimits/read": JsonValue;

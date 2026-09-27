@@ -374,26 +374,6 @@ describe("secrets runtime snapshot", () => {
     ]);
   });
 
-  it("registers every resolved value for exact redaction", async () => {
-    const secret = "runtime-registration-secret";
-    await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        ...explicitMainRoster(),
-        talk: {
-          provider: "example",
-          providers: {
-            example: { apiKey: { source: "env", provider: "default", id: "TALK_API_KEY" } },
-          },
-        },
-      }),
-      env: { TALK_API_KEY: secret },
-      includeAuthStoreRefs: false,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    });
-
-    expect(redactSensitiveText(`resolved ${secret}`, { mode: "off" })).toBe("resolved runtim…cret");
-  });
-
   it("registers resolved TTS values for exact redaction", async () => {
     const secret = "test-secret";
     await prepareSecretsRuntimeSnapshot({

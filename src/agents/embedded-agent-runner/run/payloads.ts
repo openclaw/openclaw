@@ -1,6 +1,3 @@
-/**
- * Builds embedded-agent payload objects from attempt inputs and outcomes.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import {
@@ -15,7 +12,6 @@ import {
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
   type ReplyPayload,
-  type ReplyPayloadMetadata,
 } from "../../../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
@@ -175,30 +171,23 @@ export function buildEmbeddedRunPayloads(params: {
       provider: oauthRefreshFailure?.provider ?? params.provider,
       oauthReason: oauthRefreshFailure?.reason,
     });
+    const errorContext = {
+      cfg: params.config,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      provider: params.provider,
+      providerOwner: params.providerOwner,
+      model: params.model,
+      authMode: params.authMode,
+    };
     const errorText =
       assistantForPayload && lastAssistantNeedsErrorSurface
         ? suppressFailureArtifacts
           ? undefined
           : lastAssistantErrored || rawErrorMessage
             ? (providerLoginRecovery?.hint ??
-              formatUserFacingAssistantErrorText(assistantForPayload, {
-                cfg: params.config,
-                sessionKey: params.sessionKey,
-                agentId: params.agentId,
-                provider: params.provider,
-                providerOwner: params.providerOwner,
-                model: params.model,
-                authMode: params.authMode,
-              }))
-            : formatAssistantErrorText(assistantForPayload, {
-                cfg: params.config,
-                sessionKey: params.sessionKey,
-                agentId: params.agentId,
-                provider: params.provider,
-                providerOwner: params.providerOwner,
-                model: params.model,
-                authMode: params.authMode,
-              })
+              formatUserFacingAssistantErrorText(assistantForPayload, errorContext))
+            : formatAssistantErrorText(assistantForPayload, errorContext)
         : undefined;
     const deferAssistantTimeoutError =
       params.deferAssistantTimeoutError === true &&
@@ -372,13 +361,9 @@ export function buildEmbeddedRunPayloads(params: {
     if (warningText) {
       const normalizedWarning = normalizeTextForComparison(warningText);
       const duplicateWarning = normalizedWarning
-        ? replyItems.some((item) => {
-            if (!item.text) {
-              return false;
-            }
-            const normalizedExisting = normalizeTextForComparison(item.text);
-            return normalizedExisting.length > 0 && normalizedExisting === normalizedWarning;
-          })
+        ? replyItems.some(
+            (item) => item.text && normalizeTextForComparison(item.text) === normalizedWarning,
+          )
         : false;
       if (!duplicateWarning) {
         const warning = {
@@ -477,28 +462,17 @@ export function buildEmbeddedRunPayloads(params: {
         // Source-reply mirrors are transcript artifacts, not channel sends.
         markReplyPayloadForSourceSuppressionDelivery(payload);
         if (params.sessionKey) {
-          const sourceReplyTranscriptMirror: NonNullable<
-            ReplyPayloadMetadata["sourceReplyTranscriptMirror"]
-          > = {
-            sessionKey: params.sessionKey,
-          };
-          if (params.agentId) {
-            sourceReplyTranscriptMirror.agentId = params.agentId;
-          }
-          if (payload.text) {
-            sourceReplyTranscriptMirror.text = payload.text;
-          }
-          if (payload.mediaUrls?.length) {
-            sourceReplyTranscriptMirror.mediaUrls = payload.mediaUrls;
-          }
-          if (item.sourceReplyMirror.idempotencyKey) {
-            sourceReplyTranscriptMirror.idempotencyKey = item.sourceReplyMirror.idempotencyKey;
-          }
-          if (item.sourceReplyMirror.transcriptOwner) {
-            sourceReplyTranscriptMirror.transcriptOwner = true;
-          }
           setReplyPayloadMetadata(payload, {
-            sourceReplyTranscriptMirror,
+            sourceReplyTranscriptMirror: {
+              sessionKey: params.sessionKey,
+              ...(params.agentId ? { agentId: params.agentId } : {}),
+              ...(payload.text ? { text: payload.text } : {}),
+              ...(payload.mediaUrls?.length ? { mediaUrls: payload.mediaUrls } : {}),
+              ...(item.sourceReplyMirror.idempotencyKey
+                ? { idempotencyKey: item.sourceReplyMirror.idempotencyKey }
+                : {}),
+              ...(item.sourceReplyMirror.transcriptOwner ? { transcriptOwner: true } : {}),
+            },
           });
         }
       }
@@ -512,13 +486,9 @@ export function buildEmbeddedRunPayloads(params: {
       }
       return payload;
     })
-    .filter((p) => {
-      if (!hasReplyPayloadContent(p) && !hasReplyPayloadSpeechContent(p)) {
-        return false;
-      }
-      if (p.text && isSilentReplyPayloadText(p.text, SILENT_REPLY_TOKEN)) {
-        return false;
-      }
-      return true;
-    });
+    .filter(
+      (p) =>
+        (hasReplyPayloadContent(p) || hasReplyPayloadSpeechContent(p)) &&
+        !(p.text && isSilentReplyPayloadText(p.text, SILENT_REPLY_TOKEN)),
+    );
 }

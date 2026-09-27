@@ -13,7 +13,9 @@ import android.content.res.Configuration
 import android.view.ContextThemeWrapper
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.InputMethodManager
 import android.webkit.RenderProcessGoneDetail
+import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -35,11 +37,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -49,6 +54,7 @@ import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import okio.ByteString.Companion.toByteString
 
 @Composable
 internal fun ControlUiScreenFrame(
@@ -113,10 +119,14 @@ internal fun ControlUiWebView(
   page: NodeRuntime.GatewayControlPage,
   url: String,
   modifier: Modifier = Modifier,
+  interactive: Boolean = true,
+  onExternalLink: ((String) -> Unit)? = null,
 ) {
   val context = LocalContext.current
+  val focusManager = LocalFocusManager.current
   val darkAppearance = LocalResolvedAppearanceIsDark.current
   var rendererGeneration by remember { mutableIntStateOf(0) }
+  val currentExternalLink by rememberUpdatedState(onExternalLink)
 
   // A WebView reads prefers-color-scheme from the Context it was built with, so an appearance
   // flip has to rebuild it; keying on the resolved boolean keeps that to real dark/light changes.
@@ -126,7 +136,13 @@ internal fun ControlUiWebView(
     AndroidView(
       modifier = modifier,
       factory = {
-        val webView = WebView(controlUiWebViewContext(context, darkAppearance))
+        val webView =
+          object : WebView(controlUiWebViewContext(context, darkAppearance)) {
+            override fun onDetachedFromWindow() {
+              releaseControlUiInputFocus(this, focusManager)
+              super.onDetachedFromWindow()
+            }
+          }
         // WRAP_CONTENT forces a zero-height CSS viewport even when Compose measures the view exactly.
         webView.layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         val webSettings = webView.settings
@@ -148,15 +164,40 @@ internal fun ControlUiWebView(
         // The native gateway connection already established this route's trust.
         // Reuse only that exact accepted fingerprint; every other SSL error cancels.
         // The same client protects both terminal and dashboard pages.
-        webView.webViewClient = ControlUiWebViewClient(page) { rendererGeneration += 1 }
+        webView.webViewClient =
+          ControlUiWebViewClient(
+            page = page,
+            navigationUrl = url.takeIf { onExternalLink != null },
+            onExternalLink = { currentExternalLink?.invoke(it) },
+            onRendererGone = { rendererGeneration += 1 },
+          )
         installControlUiAuthScript(webView, page)
         webView.loadUrl(url)
         webView
+      },
+      update = { webView ->
+        if (!interactive) releaseControlUiInputFocus(webView, focusManager)
+        webView.importantForAccessibility = if (interactive) View.IMPORTANT_FOR_ACCESSIBILITY_AUTO else View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+        webView.isFocusable = interactive
+        webView.isFocusableInTouchMode = interactive
       },
       onRelease = { webView ->
         (webView.webViewClient as? ControlUiWebViewClient)?.release(webView)
       },
     )
+  }
+}
+
+private fun releaseControlUiInputFocus(
+  webView: WebView,
+  focusManager: FocusManager,
+) {
+  val inputMethod = webView.context.getSystemService(InputMethodManager::class.java)
+  if (webView.hasFocus() || inputMethod?.isActive(webView) == true) {
+    inputMethod?.hideSoftInputFromWindow(webView.windowToken, 0)
+    // Clear the interop target before detach can restore focus to the chat editor.
+    focusManager.clearFocus()
+    webView.clearFocus()
   }
 }
 
@@ -222,9 +263,25 @@ private const val X509_CERTIFICATE_BUNDLE_KEY = "x509-certificate"
 @SuppressLint("MissingOnRenderProcessGone")
 private class ControlUiWebViewClient(
   private val page: NodeRuntime.GatewayControlPage,
+  private val navigationUrl: String? = null,
+  private val onExternalLink: (String) -> Unit = {},
   private val onRendererGone: () -> Unit,
 ) : WebViewClient() {
   private var released = false
+
+  override fun shouldOverrideUrlLoading(
+    view: WebView,
+    request: WebResourceRequest,
+  ): Boolean {
+    val expected = navigationUrl ?: return false
+    if (!request.isForMainFrame) return false
+    if (request.url.toString() == expected) return false
+    // The remote page is streamed, not navigated into this credential-bearing host.
+    if (request.hasGesture() && request.url.scheme in setOf("http", "https")) {
+      onExternalLink(request.url.toString())
+    }
+    return true
+  }
 
   fun release(view: WebView) {
     if (released) return
@@ -290,12 +347,7 @@ internal fun shouldProceedForPinnedControlUiSslError(
       ?: return false
   val certificate = encodedCertificate ?: return false
   if (!sameHttpsOrigin(pageBaseUrl, errorUrl)) return false
-  return java.security.MessageDigest
-    .getInstance("SHA-256")
-    .digest(certificate)
-    .joinToString(separator = "") { byte ->
-      "%02x".format(java.util.Locale.US, byte.toInt() and 0xff)
-    } == expected
+  return certificate.toByteString().sha256().hex() == expected
 }
 
 private fun sameHttpsOrigin(

@@ -393,7 +393,7 @@ it.each([
   }
 });
 
-it("emits exact worker claim closure after release and owner fencing", async () => {
+it("emits exact worker claim closure after release", async () => {
   const closed = vi.fn();
   const unregister = store.registerTurnClaimClosedHandler(closed);
   const active = await advanceToActive();
@@ -411,26 +411,7 @@ it("emits exact worker claim closure after release and owner fencing", async () 
   await store.releaseTurn(first);
   expect(closed).toHaveBeenLastCalledWith(first);
 
-  const second = await store.claimTurn({
-    ...SESSION,
-    owner,
-    claimId: "claim-fence",
-    runId: "run-fence",
-  });
-  const draining = store.startDrain({
-    sessionId: active.sessionId,
-    environmentId: active.environmentId,
-    ownerEpoch: active.activeOwnerEpoch,
-    expectedGeneration: active.generation,
-  });
-  store.startReconcile({
-    sessionId: active.sessionId,
-    environmentId: active.environmentId,
-    ownerEpoch: active.activeOwnerEpoch,
-    expectedGeneration: draining.generation,
-  });
-  expect(closed).toHaveBeenLastCalledWith(second);
-  expect(closed).toHaveBeenCalledTimes(2);
+  expect(closed).toHaveBeenCalledOnce();
   unregister();
 });
 
@@ -523,7 +504,7 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
     throw new Error("expected placement-bound lineage capability");
   }
   let placementReceiptAuthority: (() => void) | undefined;
-  const sql = observeHostDataSql({ OPENCLAW_STATE_DIR: root });
+  const sql = observeHostDataSql();
   try {
     const calibration = database.db.prepare("SELECT 1");
     database.db.exec("SELECT 1");

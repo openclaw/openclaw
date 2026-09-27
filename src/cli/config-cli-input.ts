@@ -27,6 +27,7 @@ import {
 } from "../shared/dot-path.js";
 import { formatCliCommand } from "./command-format.js";
 import {
+  formatConfigSetPath,
   parseConfigSetPath,
   parseConfigSetValue,
   type PathSegment,
@@ -597,8 +598,10 @@ function buildConfigPatchOperations(params: {
     (replacePath) => !matchedReplacePathKeys.has(pathKey(replacePath)),
   );
   if (unusedReplacePath) {
+    // The message names the argument to correct, so it must print the bracketed form this
+    // command's parser reads back; a dot join turns a quoted key into a path to different nodes.
     throw configPatchModeError(
-      `--replace-path ${toDotPath(unusedReplacePath)} did not match any value in the input patch.`,
+      `--replace-path ${formatConfigSetPath(unusedReplacePath)} did not match any value in the input patch.`,
     );
   }
   if (operations.length === 0) {

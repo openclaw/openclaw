@@ -47,11 +47,6 @@ const QUIET_SERVICE_STDOUT = new Writable({
   },
 });
 
-type PostUpdateGatewayHealthRecoveryDeps = {
-  recoverLaunchAgent?: typeof recoverInstalledLaunchAgentAfterUpdate;
-  waitForHealthy?: typeof waitForGatewayHealthyRestart;
-};
-
 export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   onGatewayStartAttempted?: () => void;
   updateRun?: UpdateCommandOptions["run"];
@@ -65,7 +60,6 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   expectedBuildId?: string;
   requirePluginHealth?: boolean;
   env?: NodeJS.ProcessEnv;
-  deps?: PostUpdateGatewayHealthRecoveryDeps;
 }): Promise<{
   health: GatewayRestartSnapshot;
   launchAgentRecovery: PostUpdateLaunchAgentRecoveryResult | null;
@@ -80,8 +74,6 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
     return { health: params.health, launchAgentRecovery: null };
   }
 
-  const recoverLaunchAgent =
-    params.deps?.recoverLaunchAgent ?? recoverInstalledLaunchAgentAfterUpdate;
   const startedAtMs = Date.now();
   const launchAgentRecovery = await withGatewayServiceOperationLock(
     params.env ?? process.env,
@@ -91,7 +83,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
         assertNative();
       };
       assertRecovery();
-      const recovery = await recoverLaunchAgent({
+      const recovery = await recoverInstalledLaunchAgentAfterUpdate({
         onGatewayStartAttempted: params.onGatewayStartAttempted,
         service: params.service,
         env: params.env,
@@ -125,8 +117,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
     return { health: params.health, launchAgentRecovery };
   }
 
-  const waitForHealthy = params.deps?.waitForHealthy ?? waitForGatewayHealthyRestart;
-  const health = await waitForHealthy({
+  const health = await waitForGatewayHealthyRestart({
     service: params.service,
     port: params.port,
     timeoutMs: params.timeoutMs,
@@ -141,7 +132,10 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   return { health, launchAgentRecovery };
 }
 
-function formatPostUpdateGatewayRecoveryLine(platform: NodeJS.Platform): string {
+export function formatPostUpdateGatewayRecoveryInstructions(
+  result: UpdateRunResult,
+  platform: NodeJS.Platform = process.platform,
+): string[] {
   const restartCommand = formatCliCommand("openclaw gateway restart");
   const installCommand = formatCliCommand("openclaw gateway install --force");
   const statusCommand = formatCliCommand("openclaw gateway status --deep");
@@ -154,14 +148,9 @@ function formatPostUpdateGatewayRecoveryLine(platform: NodeJS.Platform): string 
           ? "gateway Scheduled Task or Windows login item is missing, stale, or not running"
           : "local service manager reports the gateway service is missing, stale, or not running";
   const session = platform === "darwin" ? "logged-in macOS user session" : "same user account";
-  return `Recovery: run \`${restartCommand}\`; if the ${condition}, run \`${installCommand}\` from the ${session}, then rerun \`${statusCommand}\`.`;
-}
-
-export function formatPostUpdateGatewayRecoveryInstructions(
-  result: UpdateRunResult,
-  platform: NodeJS.Platform = process.platform,
-): string[] {
-  const lines = [formatPostUpdateGatewayRecoveryLine(platform)];
+  const lines = [
+    `Recovery: run \`${restartCommand}\`; if the ${condition}, run \`${installCommand}\` from the ${session}, then rerun \`${statusCommand}\`.`,
+  ];
   const beforeVersion = normalizeOptionalString(result.before?.version);
   if (isPackageManagerUpdateMode(result.mode) && beforeVersion) {
     lines.push(
@@ -303,7 +292,7 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
         {
           onGatewayStartAttempted: params.onGatewayStartAttempted,
           result: { root: original?.root ?? verdict.root },
-          opts: { json: params.jsonMode, run },
+          opts: { run },
           invocationEnv: serviceEnv,
           serviceEnv: current.env,
           nodeRunner: original?.nodeRunner ?? params.nodeRunner,

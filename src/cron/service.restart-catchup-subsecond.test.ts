@@ -1,5 +1,6 @@
-// Restart catch-up must include a missed cron slot throughout its first second.
 import { describe, expect, it, vi } from "vitest";
+// Restart catch-up must include a missed cron slot throughout its first second.
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "./service.test-harness.js";
 
@@ -37,6 +38,8 @@ describe("CronService restart catch-up within a cron slot's first second", () =>
     });
 
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
       storePath: store.storePath,
       cronEnabled: true,
       log: logger,
@@ -104,6 +107,8 @@ describe("CronService restart catch-up within a cron slot's first second", () =>
     });
 
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
       storePath: store.storePath,
       cronEnabled: true,
       log: logger,

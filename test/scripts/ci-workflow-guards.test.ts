@@ -37,6 +37,7 @@ import {
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { pnpmLockfileDocuments } from "../../scripts/lib/pnpm-lockfile-documents.mjs";
+import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import { resolveRunVitestSpawnEnv } from "../../scripts/lib/vitest-process-env.mts";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
 import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
@@ -3486,13 +3487,13 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
         );
         const selection = expectDefined(
           job.steps.find((step: WorkflowStep) =>
-            ["Select Xcode 27", "Verify Xcode"].includes(step.name ?? ""),
+            ["Select Xcode", "Verify Xcode"].includes(step.name ?? ""),
           ),
           `${workflowPath}: ${jobName} toolchain selection`,
         );
         const toolingRoot = workflowPath === ".github/workflows/ci.yml" ? ".ci-harness/" : "";
         expect(selection.run).toContain(`source ${toolingRoot}scripts/lib/swift-toolchain.sh`);
-        expect(selection.run).toContain("select_xcode_toolchain 27.0");
+        expect(selection.run).toContain("select_xcode_toolchain");
       }
     }
   });
@@ -7964,7 +7965,7 @@ server.listen(0, "127.0.0.1", () => {
       "actionlint install",
     );
 
-    expect(setupGo.with).toEqual({ "go-version": "1.25.0", cache: false });
+    expect(setupGo.with).toEqual({ "go-version": "1.27.1", cache: false });
     expect(steps.indexOf(setupGo)).toBeLessThan(steps.indexOf(install));
     expect(install.run).toContain(`ACTIONLINT_REVISION="${revision}"`);
     expect(install.run).toContain('export GOBIN="$RUNNER_TEMP/actionlint-bin"');
@@ -9592,7 +9593,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
               ) {
                 expect(includeFile).toBeTruthy();
                 const included = JSON.parse(readFileSync(includeFile!, "utf8"));
-                const nodeFiles = ["ui/src/pages/usage/usage-page-details.test.ts"];
+                const nodeFiles = [
+                  "ui/src/pages/chat/chat-thread.test.ts",
+                  "ui/src/pages/usage/usage-page-details.test.ts",
+                ];
                 if (childEnv.OPENCLAW_VITEST_RUNTIME === "node") {
                   expect(included.toSorted()).toEqual(nodeFiles);
                 } else {
@@ -10591,6 +10595,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     for (const sparsePath of sparseCheckoutPaths) {
       expect({ sparsePath, exists: existsSync(sparsePath) }).toEqual({ sparsePath, exists: true });
     }
+    const runtimeFiles = collectRuntimeImportClosure(process.cwd(), [
+      "scripts/ci-run-node-test-shard.mts",
+    ]).filter((file) => file.startsWith("scripts/"));
+    expect(runtimeFiles.toSorted()).toEqual(sparseCheckoutPaths.toSorted());
+    expect(runtimeFiles).not.toContain("scripts/lib/vitest-worker-run.mts");
   });
 
   it("routes admitted RunsOn rows with unique Spot labels and portable cache readers", () => {
@@ -11003,10 +11012,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         CRABBOX_COORDINATOR_TOKEN:
           "${{ secrets.CRABBOX_COORDINATOR_TOKEN || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN }}",
         GH_APP_TOKEN:
-          "${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}",
+          "${{ steps.publish-app-token.outputs.token || steps.publish-app-token-fallback.outputs.token }}",
         GH_TOKEN: "${{ github.token }}",
       },
-      run: "node scripts/pr-crabbox-gate-publisher.mjs",
+      run: "node scripts/pr-crabbox-gate-publisher.mjs --publish",
     });
     expect(job.steps[2].run).toContain("crabbox_0.46.0_linux_amd64.tar.gz");
     expect(job.steps[2].run).toContain(
@@ -12938,5 +12947,29 @@ describe("frozen CI compatibility contracts", () => {
     );
     expect(source).not.toContain('"control-ui-chat-flow-playwright",');
     expect(source).toContain("if (!source.includes(marker)) process.exit(0);");
+  });
+});
+
+describe("workflow file size", () => {
+  // GitHub refuses workflow files above 500 KiB: it creates a run named after
+  // the file that fails with no jobs, so CI stops without reporting a failure.
+  const GITHUB_WORKFLOW_MAX_BYTES = 512_000;
+  const WORKFLOW_SOFT_LIMIT_BYTES = 480_000;
+
+  it("keeps every workflow file well below GitHub's size limit", () => {
+    const oversized = readdirSync(".github/workflows")
+      .filter((name) => /\.ya?ml$/u.test(name))
+      .map((name) => `.github/workflows/${name}`)
+      .map((file) => ({ file, bytes: statSync(file).size }))
+      .filter(({ bytes }) => bytes > WORKFLOW_SOFT_LIMIT_BYTES)
+      .map(({ file, bytes }) => `${file}: ${bytes} bytes`);
+
+    expect(
+      oversized,
+      `Workflow files must stay at or below ${WORKFLOW_SOFT_LIMIT_BYTES} bytes. GitHub's hard limit is ` +
+        `${GITHUB_WORKFLOW_MAX_BYTES} bytes (500 KiB); above it, GitHub creates a run named after the ` +
+        `file that fails immediately with no jobs, so all PR and main CI silently stops. Shrink the file ` +
+        `(for example, YAML anchors/aliases for byte-identical expressions) before raising this limit.`,
+    ).toEqual([]);
   });
 });

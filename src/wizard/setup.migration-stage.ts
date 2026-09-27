@@ -104,19 +104,11 @@ async function makePrivateStageNear(target: string, label: string): Promise<stri
   return staged;
 }
 
-function replacePathPrefix(value: string, from: string, to: string): string {
-  if (value === from) {
-    return to;
-  }
-  const prefix = `${from}${path.sep}`;
-  return value.startsWith(prefix) ? `${to}${value.slice(from.length)}` : value;
-}
-
 function projectPath(value: string, mappings: ReadonlyArray<readonly [string, string]>): string {
   const mapping = mappings
     .filter(([from]) => value === from || value.startsWith(`${from}${path.sep}`))
     .toSorted(([left], [right]) => right.length - left.length)[0];
-  return mapping ? replacePathPrefix(value, mapping[0], mapping[1]) : value;
+  return mapping ? `${mapping[1]}${value.slice(mapping[0].length)}` : value;
 }
 
 function projectValue(value: unknown, mappings: ReadonlyArray<readonly [string, string]>): unknown {
@@ -140,10 +132,10 @@ function projectPlanTargets(
 ): MigrationPlan {
   return {
     ...plan,
-    ...(plan.target ? { target: projectValue(plan.target, mappings) as string } : {}),
+    ...(plan.target ? { target: projectPath(plan.target, mappings) } : {}),
     items: plan.items.map((item) => ({
       ...item,
-      ...(item.target ? { target: projectValue(item.target, mappings) as string } : {}),
+      ...(item.target ? { target: projectPath(item.target, mappings) } : {}),
     })),
     ...(plan.metadata
       ? { metadata: projectValue(plan.metadata, mappings) as Record<string, unknown> }

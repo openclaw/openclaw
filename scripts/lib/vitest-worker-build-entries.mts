@@ -26,6 +26,7 @@ import { bashOutputSpillEntrypoints } from "../../src/agents/sessions/bash-outpu
 import { managedWorktreeGcEntrypoint } from "../../src/agents/worktrees/service-gc-runtime.test-support.ts";
 import { clawProjectBuildEntrypoint } from "../../src/claws/project-runtime.test-support.ts";
 import {
+  cliMessageExitEntrypoints,
   cliRecoveryEntrypoints,
   gatewayDirectStopEntrypoints,
   updateExecutorEntrypoints,
@@ -131,6 +132,7 @@ export const preservedModuleBuildSources = [
   "scripts/run-additional-boundary-checks.mts",
   "scripts/run-with-env.mts",
   "scripts/plugin-sdk-api-diff.mts",
+  "scripts/lib/native-declaration-subprocess.mts",
   "scripts/test-projects.mts",
   "scripts/lib/vitest-build-prerequisites.mts",
   "scripts/lib/vitest-batch-runner.mts",
@@ -316,6 +318,7 @@ export const vitestWorkerBuildEntries = {
     pluginRuntimeRetentionEntrypoint,
     ...groqSetupSdkEntrypoints,
     ...Object.values(cliRecoveryEntrypoints),
+    ...Object.values(cliMessageExitEntrypoints),
     ...Object.values(updateCandidateExitEntrypoints),
     ...Object.values(updateExecutorNativeEntrypoints),
     ...Object.values(updateExecutorEntrypoints),

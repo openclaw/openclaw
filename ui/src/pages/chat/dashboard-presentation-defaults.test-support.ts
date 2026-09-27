@@ -14,7 +14,6 @@ import {
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import { createPageState } from "./chat-state-page.ts";
-import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import { isSidebarSlotVisible, type SidebarLayout } from "./sidebar-layout.ts";
 
@@ -146,7 +145,6 @@ export function createDashboardHarness(
     render(
       pane.renderPaneHeader(
         createSessionWorkspaceProps(state),
-        createBackgroundTasksProps(state),
         state.sessionsResult?.sessions[0],
         false,
         undefined,

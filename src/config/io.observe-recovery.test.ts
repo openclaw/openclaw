@@ -576,21 +576,6 @@ describe("config observe recovery", () => {
     },
   );
 
-  it("loadConfig auto-restores tiny valid clobbers before using defaults", async () => {
-    await withSuiteHome(async (home) => {
-      const { io, configPath, warn } = createTestConfigIO(home);
-      await seedConfigBackup(configPath, recoverableCoreConfig);
-      await writeConfigRaw(configPath, {
-        meta: { lastTouchedVersion: "2026.5.28" },
-      });
-
-      const config = io.loadConfig();
-
-      expect(config.gateway?.mode).toBe("local");
-      expectWarnContaining(warn, "Config auto-restored from backup:");
-    });
-  });
-
   it("loadConfig skips health observation when observation is disabled", async () => {
     await withSuiteHome(async (home) => {
       const { io, configPath } = createTestConfigIO(home, vi.fn(), { observe: false });
@@ -1037,26 +1022,14 @@ describe("config observe recovery", () => {
 
   it.each([
     {
-      name: "records atomic replace failure instead of falsely claiming restore succeeded",
-      mode: "async",
-      retry: false,
-    },
-    {
-      name: "sync recovery records atomic replace failure instead of falsely claiming restore succeeded",
-      mode: "sync",
-      retry: false,
-    },
-    {
       name: "retries recovery on next launch after a failed atomic replace",
       mode: "async",
-      retry: true,
     },
     {
       name: "sync recovery retries on next launch after a failed atomic replace",
       mode: "sync",
-      retry: true,
     },
-  ] as const)("$name", async ({ mode, retry }) => {
+  ] as const)("$name", async ({ mode }) => {
     await withSuiteHome(async (home) => {
       const { deps, configPath, auditPath, warn } = makeDeps(home);
       await seedConfigBackup(configPath, recoverableTelegramConfig);
@@ -1100,7 +1073,7 @@ describe("config observe recovery", () => {
       await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(clobbered.raw);
       expectWarnContaining(warn, "Config auto-restore from backup failed:");
       expectWarnNotContaining(warn, "Config auto-restored from backup:");
-      if (mode === "sync" && !retry) {
+      if (mode === "sync") {
         expectWarnContaining(warn, "EACCES: permission denied");
       }
 
@@ -1112,14 +1085,12 @@ describe("config observe recovery", () => {
         restoreErrorCode: "EACCES",
         restoreErrorMessage: "EACCES: permission denied",
       });
-      if (retry) {
-        const retryResult = await recover(deps);
-        expect((retryResult.parsed as { gateway?: { mode?: string } }).gateway?.mode).toBe("local");
-        await expect(fsp.readFile(configPath, "utf-8")).resolves.not.toBe(clobbered.raw);
-        const retryEvents = await readObserveEvents(auditPath);
-        expect(retryEvents).toHaveLength(2);
-        expect(retryEvents[1]?.restoredFromBackup).toBe(true);
-      }
+      const retryResult = await recover(deps);
+      expect((retryResult.parsed as { gateway?: { mode?: string } }).gateway?.mode).toBe("local");
+      await expect(fsp.readFile(configPath, "utf-8")).resolves.not.toBe(clobbered.raw);
+      const retryEvents = await readObserveEvents(auditPath);
+      expect(retryEvents).toHaveLength(2);
+      expect(retryEvents[1]?.restoredFromBackup).toBe(true);
     });
   });
 

@@ -121,8 +121,8 @@ export type SqliteArchiveSessionResponse = {
   operationId: number;
   settled: true;
 } & (
-  | { type: "done"; results: TranscriptArchiveWorkerResult[] }
-  | { type: "published"; results: TranscriptArchivePublishResult[] }
+  | TranscriptArchiveWorkerMessage
+  | TranscriptArchivePublishWorkerMessage
   | { type: "page-read"; results: Array<TranscriptArchivePageResult | undefined> }
   | { type: "final-read"; results: TranscriptArchiveReadResult[] }
 );

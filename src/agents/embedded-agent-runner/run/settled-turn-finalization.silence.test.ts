@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import {
   prepareSystemAgentRunAdmission,
@@ -16,7 +17,9 @@ const transcriptMocks = vi.hoisted(() => ({ appendAssistantMirrorMessageByIdenti
 
 vi.mock("./backend.js", () => ({
   resolveRuntimeModelAttempt: vi.fn(),
-  runEmbeddedSettledTurnFinalizationWithBackend: backendMocks.runSettledFinalization,
+}));
+vi.mock("../../harness/selection.js", () => ({
+  runAgentHarnessSettledTurnFinalization: backendMocks.runSettledFinalization,
 }));
 vi.mock("../../../plugin-sdk/session-transcript-runtime.js", () => ({
   appendAssistantMirrorMessageByIdentity: transcriptMocks.appendAssistantMirrorMessageByIdentity,
@@ -34,7 +37,6 @@ describe("prepareTerminalWithSettledTurnFinalization canonical silence", () => {
   afterEach(() => admission.close());
 
   it.each([
-    { name: "required confirmation", expectation: "required", delivery: "missing", phased: false },
     {
       name: "required phased confirmation",
       expectation: "required",
@@ -82,7 +84,7 @@ describe("prepareTerminalWithSettledTurnFinalization canonical silence", () => {
         content: [
           {
             type: "text",
-            text: earlierText ?? "",
+            text: earlierText,
             textSignature: JSON.stringify({ v: 1, id: "earlier-answer", phase: "final_answer" }),
           },
         ],
@@ -106,14 +108,7 @@ describe("prepareTerminalWithSettledTurnFinalization canonical silence", () => {
       attempt.messagesSnapshot = [
         { role: "user", content: "Save the note and confirm when it is saved.", timestamp: 0 },
         toolAssistant,
-        {
-          role: "toolResult",
-          toolCallId: "reaction",
-          toolName: "message",
-          content: [{ type: "text", text: "Reaction added" }],
-          isError: false,
-          timestamp: 1,
-        },
+        makeTextToolResult("reaction", "message", "Reaction added", false, 1),
         earlierAnswer,
         assistant,
       ];

@@ -689,6 +689,14 @@ h3.settings-row__title {
   object-fit: contain;
 }
 
+.plugins-tile--white {
+  background: var(--brand-logo-chip-bg);
+}
+
+.plugins-tile--white img {
+  padding: 10%;
+}
+
 .plugins-tile--fallback {
   background: linear-gradient(135deg, var(--plugins-art-a), var(--plugins-art-b));
   color: rgb(255 255 255 / 92%);

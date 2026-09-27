@@ -41,6 +41,7 @@ import {
   resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
   tryResolveSessionCompatibilityOwnerAgentId,
 } from "../session-request-agent.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
 import {
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,
@@ -227,10 +228,10 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
       scopedRequestedKey ??
       scopedActiveRunSessionKey ??
       (requestedRunId
-        ? resolveSessionKeyForRun(
-            requestedRunId,
-            requestedRunAgentId ? { agentId: requestedRunAgentId } : undefined,
-          )
+        ? resolveSessionKeyForRun(requestedRunId, {
+            agentId: requestedRunAgentId,
+            projection: getSessionRowProjection(context),
+          })
         : undefined) ??
       workerRunTarget?.sessionKey ??
       embeddedRunSessionKey;

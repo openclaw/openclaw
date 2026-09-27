@@ -64,7 +64,6 @@ struct RootTabs: View {
     // Swipe-up hides the toast only until the next problem report.
     @State private var isGatewayToastSwipeDismissed: Bool = false
     @State private var showOnboarding: Bool = false
-    @State private var onboardingAllowSkip: Bool = true
     @State private var didEvaluateOnboarding: Bool = false
     @State private var didAutoOpenSettings: Bool = false
     @State private var didApplyInitialChatSession: Bool = false
@@ -194,7 +193,7 @@ struct RootTabs: View {
                 contentSize: proxy.size,
                 windowSize: self.foregroundKeyWindowSize())
             let isDrawerLayout = self.shouldUseSidebarDrawer(containerSize: layoutContainerSize)
-            let sidebarWidth = self.sidebarWidth(
+            let sidebarWidth = Self.sidebarWidth(
                 containerWidth: layoutContainerSize.width,
                 isDrawerLayout: isDrawerLayout)
             RootSidebarShell(
@@ -329,7 +328,6 @@ struct RootTabs: View {
             AgentProTab(
                 directRoute: .agents,
                 headerSidebarAction: self.sidebarHeaderAction,
-                headerTitle: "Agents",
                 openSettings: { self.selectSidebarDestination(.gateway) })
                 .id(self.selectedSidebarDestination.id)
         case .sessions:
@@ -340,7 +338,6 @@ struct RootTabs: View {
             AgentProTab(
                 directRoute: .files,
                 headerSidebarAction: self.sidebarHeaderAction,
-                headerTitle: "Files",
                 openSettings: { self.selectSidebarDestination(.gateway) })
                 .id(self.selectedSidebarDestination.id)
         case .desktop:
@@ -447,10 +444,6 @@ struct RootTabs: View {
 
     private func shouldUseSidebarDrawer(containerSize: CGSize) -> Bool {
         self.sidebarLayoutMode(containerSize: containerSize) == .drawer
-    }
-
-    private func sidebarWidth(containerWidth: CGFloat, isDrawerLayout: Bool) -> CGFloat {
-        Self.sidebarWidth(containerWidth: containerWidth, isDrawerLayout: isDrawerLayout)
     }
 
     private func foregroundKeyWindowSize() -> CGSize? {
@@ -732,7 +725,7 @@ struct RootTabs: View {
             }
             .fullScreenCover(isPresented: self.$showOnboarding) {
                 OnboardingWizardView(
-                    allowSkip: self.onboardingAllowSkip,
+                    allowSkip: true,
                     onRequestLocalNetworkAccess: { reason in
                         self.requestLocalNetworkAccess(reason: reason)
                     },
@@ -922,7 +915,6 @@ extension RootTabs {
 
     private func evaluateOnboardingPresentation(force: Bool) {
         if force {
-            self.onboardingAllowSkip = true
             self.showOnboarding = true
             return
         }
@@ -939,7 +931,6 @@ extension RootTabs {
         case .none:
             self.maybeRequestLocalNetworkAccess(reason: "root_appear")
         case .onboarding:
-            self.onboardingAllowSkip = true
             self.showOnboarding = true
         case .settings:
             self.didAutoOpenSettings = true

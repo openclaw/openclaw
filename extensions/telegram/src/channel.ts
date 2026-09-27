@@ -808,7 +808,8 @@ export const telegramPlugin = createChatChannelPlugin({
         const previousToken = resolveTelegramAccount({ cfg: prevCfg, accountId }).token.trim();
         const nextToken = resolveTelegramAccount({ cfg: nextCfg, accountId }).token.trim();
         if (previousToken !== nextToken) {
-          await clearTelegramAccountRuntimeCache(accountId);
+          // Startup needs the previous identity to reset that bot's ingress before replacement.
+          await deleteStartupBotInfoCache(accountId);
         }
       },
       onAccountRemoved: async ({ accountId }) => {
@@ -1039,8 +1040,7 @@ export const telegramPlugin = createChatChannelPlugin({
           webhookUrl: account.config.webhookUrl,
           webhookSecret: account.config.webhookSecret,
           webhookPath: account.config.webhookPath,
-          webhookHost: account.config.webhookHost,
-          webhookPort: account.config.webhookPort,
+          legacyWebhook: account.config.legacyWebhook,
           webhookCertPath: account.config.webhookCertPath,
           botInfo,
           setStatus,

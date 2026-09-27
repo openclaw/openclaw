@@ -13,9 +13,10 @@ import {
   readActiveGatewayLockIdentity,
   readActiveGatewayLockPort,
 } from "./gateway-lock.js";
-import { acquireGatewayLifecycleCoordinator } from "./state-database-coordinator.js";
+import { acquireGatewayStateOwner } from "./gateway-state-owner.js";
 
 const lifecycleChildren = new Map<ChildProcess, Promise<unknown[]>>();
+const lifecycleDatabases = new Set<string>();
 const fixtureRootTracker = createSuiteTempRootTracker({
   prefix: "openclaw-gateway-lock-workshop-",
 });
@@ -24,21 +25,24 @@ let fixtureRoot = "";
 async function holdLifecycleCoordinator() {
   const stateDir = await fixtureRootTracker.make("lifecycle-handoff");
   const env = { OPENCLAW_STATE_DIR: stateDir };
-  const coordinator = acquireGatewayLifecycleCoordinator({
-    databasePath: path.join(stateDir, "state", "openclaw.sqlite"),
-  });
+  const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+  const coordinator = acquireGatewayStateOwner({ databasePath });
+  lifecycleDatabases.add(databasePath);
   coordinator.release();
   const child = spawn(
     process.execPath,
     [
       "--input-type=module",
       "--eval",
-      `import { DatabaseSync } from "node:sqlite";
-       const db = new DatabaseSync(process.argv[1]);
-       db.exec("PRAGMA journal_mode=MEMORY; BEGIN EXCLUSIVE");
-       process.on("message", () => setTimeout(() => {
-         db.exec("ROLLBACK"); db.close(); process.disconnect();
-       }, 2000));
+      `import { acquireFileLockSync } from "@openclaw/fs-safe/file-lock";
+       const pathname = process.argv[1];
+       const lock = acquireFileLockSync(pathname, {
+         lockPath: pathname, retry: { retries: 0 },
+         payload: () => ({ pid: process.pid, createdAt: new Date().toISOString(), configPath: "synthetic", role: "gateway" }),
+       });
+       process.on("message", () => {
+         lock.release(); process.disconnect();
+       });
        process.send("held");`,
       coordinator.path,
     ],
@@ -70,24 +74,33 @@ describe("Gateway lock roles", () => {
     }
     await Promise.all(lifecycleChildren.values());
     lifecycleChildren.clear();
+    for (const databasePath of lifecycleDatabases) {
+      acquireGatewayStateOwner({ databasePath }).release();
+    }
+    lifecycleDatabases.clear();
   });
 
-  it("acquires when the predecessor releases two seconds after startup", async () => {
+  it("acquires when the predecessor releases during the startup wait", async () => {
     const { child, options } = await holdLifecycleCoordinator();
-    child.send("release-after-delay");
-    const lock = await acquireGatewayLock(options);
+    const lock = await acquireGatewayLock({
+      ...options,
+      sleep: async () => {
+        child.send("release");
+        await lifecycleChildren.get(child);
+      },
+    });
     expect(lock).not.toBeNull();
     await lock?.release();
   });
 
-  it("bounds a live owner's wait at five minutes and names the coordinator", async () => {
+  it("bounds a live owner's wait at five minutes and names state ownership", async () => {
     const { options } = await holdLifecycleCoordinator();
     let elapsedMs = 0;
     const sleep = vi.fn(async (ms: number) => {
       elapsedMs += ms;
     });
     await expect(acquireGatewayLock({ ...options, now: () => elapsedMs, sleep })).rejects.toThrow(
-      "failed to acquire gateway state ownership; waited 300000ms for gateway-lifecycle ownership",
+      "failed to acquire gateway state ownership; waited 300000ms for Gateway state ownership",
     );
     expect(elapsedMs).toBe(300_000);
     expect(sleep).toHaveBeenCalled();
@@ -175,7 +188,7 @@ describe("Gateway lock roles", () => {
     }
 
     const payload = JSON.parse(await fs.readFile(lock.lockPath, "utf8")) as Record<string, unknown>;
-    await fs.writeFile(lock.lockPath, JSON.stringify({ ...payload, role: "gateway" }), "utf8");
+    expect(payload.role).toBe("gateway");
     try {
       await expect(
         readActiveGatewayLockPort({
@@ -240,9 +253,7 @@ describe("Gateway lock roles", () => {
           sleep: nativeSleep,
           timeoutMs: 15,
         }),
-      ).rejects.toThrow(
-        `another embedded OpenClaw state writer is active (pid ${process.pid}); lock timeout after 15ms`,
-      );
+      ).rejects.toThrow("failed to acquire gateway state ownership");
     } finally {
       await lock.release();
     }

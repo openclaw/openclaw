@@ -70,31 +70,6 @@ async function rejectUnsafeWebCredsPath(authDir: string): Promise<void> {
   await assertWebCredsPathRegularFileOrMissing(resolveWebCredsPath(authDir));
 }
 
-function enqueueSaveCreds(
-  authDir: string,
-  saveCreds: () => Promise<void> | void,
-  logger: ReturnType<typeof getChildLogger>,
-  options?: {
-    beforeCredentialPersistence?: () => Promise<void>;
-    onError?: (error: unknown) => void;
-  },
-): void {
-  enqueueCredsSave(
-    authDir,
-    () =>
-      safeSaveCreds({
-        authDir,
-        saveCreds,
-        logger,
-        beforeCredentialPersistence: options?.beforeCredentialPersistence,
-      }),
-    (err) => {
-      logger.warn({ error: String(err) }, "WhatsApp creds save queue error");
-      options?.onError?.(err);
-    },
-  );
-}
-
 async function safeSaveCreds(params: {
   authDir: string;
   saveCreds: () => Promise<void> | void;
@@ -368,10 +343,20 @@ async function createWaSocketInternal(
   }
 
   sock.ev.on("creds.update", () =>
-    enqueueSaveCreds(authDir, saveCreds, sessionLogger, {
-      beforeCredentialPersistence: opts.beforeCredentialPersistence,
-      onError: reportCredentialPersistenceError,
-    }),
+    enqueueCredsSave(
+      authDir,
+      () =>
+        safeSaveCreds({
+          authDir,
+          saveCreds,
+          logger: sessionLogger,
+          beforeCredentialPersistence: opts.beforeCredentialPersistence,
+        }),
+      (err) => {
+        sessionLogger.warn({ error: String(err) }, "WhatsApp creds save queue error");
+        reportCredentialPersistenceError(err);
+      },
+    ),
   );
   sock.ev.on("connection.update", (update: Partial<import("baileys").ConnectionState>) => {
     try {

@@ -1,5 +1,6 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 
 /** Identifies the gateway chat that owns transient composer state and async results. */
@@ -8,7 +9,16 @@ internal data class ChatComposerOwner(
   val agentId: String,
   val sessionKey: String,
   val routingVerified: Boolean = true,
-)
+) {
+  fun agentDisplayName(agents: List<GatewayAgentSummary>): String? {
+    if (!routingVerified) return null
+    return agents
+      .firstOrNull { it.id == agentId }
+      ?.name
+      ?.trim()
+      ?.takeIf { it.isNotEmpty() } ?: agentId
+  }
+}
 
 /** Last routing owner proven for one gateway, retained while that gateway reconnects. */
 internal data class GatewayDefaultAgentOwner(

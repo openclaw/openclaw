@@ -1,5 +1,4 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-// Control UI view renders usage metrics screen content.
 import { html } from "lit";
 import {
   addCostUsageTotals,
@@ -647,13 +646,11 @@ const buildAggregatesFromSessions = (
 };
 
 type UsageInsightStats = {
-  durationSumMs: number;
   durationCount: number;
   avgDurationMs: number;
   throughputTokensPerMin?: number;
   throughputCostPerMin?: number;
   errorRate: number;
-  peakErrorDay?: { date: string; errors: number; messages: number; rate: number };
 };
 
 const buildUsageInsightStats = (
@@ -680,34 +677,13 @@ const buildUsageInsightStats = (
   const errorRate = aggregates.messages.total
     ? aggregates.messages.errors / aggregates.messages.total
     : 0;
-  let peakErrorDay: UsageInsightStats["peakErrorDay"];
-  for (const day of aggregates.daily) {
-    if (day.messages <= 0 || day.errors <= 0) {
-      continue;
-    }
-    const candidate = {
-      date: day.date,
-      errors: day.errors,
-      messages: day.messages,
-      rate: day.errors / day.messages,
-    };
-    if (
-      !peakErrorDay ||
-      candidate.rate > peakErrorDay.rate ||
-      (candidate.rate === peakErrorDay.rate && candidate.errors > peakErrorDay.errors)
-    ) {
-      peakErrorDay = candidate;
-    }
-  }
 
   return {
-    durationSumMs,
     durationCount,
     avgDurationMs,
     throughputTokensPerMin,
     throughputCostPerMin,
     errorRate,
-    peakErrorDay,
   };
 };
 

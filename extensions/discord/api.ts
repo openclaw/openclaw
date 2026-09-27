@@ -1,4 +1,3 @@
-// Discord API module exposes the plugin public contract.
 export { discordPlugin } from "./src/channel.js";
 export { discordSetupPlugin } from "./src/channel.setup.js";
 export {

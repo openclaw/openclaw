@@ -570,9 +570,7 @@ export async function runPackageInstallUpdate(
     });
   }
   const pkgRoot = installTarget.packageRoot;
-  const packageName =
-    (pkgRoot ? await readPackageName(pkgRoot) : await readPackageName(params.root)) ??
-    DEFAULT_PACKAGE_NAME;
+  const packageName = (await readPackageName(pkgRoot || params.root)) ?? DEFAULT_PACKAGE_NAME;
   const installSpec =
     params.installSpec ??
     resolveGlobalInstallSpec({

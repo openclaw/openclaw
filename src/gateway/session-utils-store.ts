@@ -328,13 +328,15 @@ export async function listAgentsForGateway(
     const avatar = normalizeOptionalString(entry.identity?.avatar);
     const httpAvatar =
       avatar && options?.httpAvatarBasePath !== undefined
-        ? resolveGatewayAssistantAvatar({
-            cfg,
-            identity: { agentId, avatar },
-            httpBasePath: options.httpAvatarBasePath,
-          }).avatar
+        ? (
+            await resolveGatewayAssistantAvatar({
+              cfg,
+              identity: { agentId, avatar },
+              httpBasePath: options.httpAvatarBasePath,
+            })
+          ).avatar
         : undefined;
-    const avatarUrl = httpAvatar ?? resolveAgentAvatarUrlFromSource(cfg, agentId, avatar);
+    const avatarUrl = httpAvatar ?? (await resolveAgentAvatarUrlFromSource(cfg, agentId, avatar));
     const identity = entry.identity
       ? {
           name: normalizeOptionalString(entry.identity.name),

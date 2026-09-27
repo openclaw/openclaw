@@ -209,14 +209,7 @@ describe("createChatRunState", () => {
     },
   );
 
-  it.each([
-    "waiting_for_state",
-    "naming_worktree",
-    "creating_worktree",
-    "running_setup",
-    "preparing_context",
-    "memory_flushing",
-  ])(
+  it.each(["waiting_for_state", "preparing_context", "memory_flushing"])(
     "retains only the latest startup status (%s) until observable run activity begins",
     (phase) => {
       const state = createChatRunState();
@@ -884,7 +877,10 @@ describe("createSessionMessageSubscriberRegistry", () => {
       expect([...subscribers.getApprovals("agent:main:main")]).toEqual(
         includeApprovals ? ["conn"] : [],
       );
-      expect(onChange.mock.calls).toEqual([["agent:main:main"], ["agent:main:child"]]);
+      expect(onChange.mock.calls).toEqual([
+        ["agent:main:main", "conn"],
+        ["agent:main:child", "conn"],
+      ]);
     },
   );
 

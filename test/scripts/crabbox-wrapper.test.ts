@@ -24,6 +24,7 @@ import {
 } from "node:fs";
 import { constants as osConstants, homedir, tmpdir } from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { getSystemErrorMap } from "node:util";
@@ -656,6 +657,82 @@ type WrapperCleanupProof =
 type WrapperFixtureIdentity = { pid: number; parentPid: number; cwd: string };
 type WrapperReadinessPhase = { phase: string; at: number; pid?: number; parentPid?: number };
 
+function expectMirrorDirectories(syncRoot: string, repository: string, allocation?: string) {
+  const key = createHash("sha256").update(realpathSync(repository)).digest("hex");
+  const mirrors = path.join(syncRoot, "mirrors");
+  expect(readdirSync(mirrors).toSorted()).toEqual([".allocation.lock", key].toSorted());
+  const slot = path.join(mirrors, key);
+  expect(readdirSync(slot).toSorted()).toEqual(["lock", "stage"]);
+  for (const file of [path.join(mirrors, ".allocation.lock"), path.join(slot, "lock")]) {
+    const stat = lstatSync(file);
+    expect(stat.isFile()).toBe(true);
+    expect(stat.nlink).toBe(1);
+    expect(stat.size).toBe(0);
+    const lock = new DatabaseSync(file, { timeout: 0 });
+    try {
+      lock.exec("PRAGMA journal_mode=MEMORY; BEGIN EXCLUSIVE; ROLLBACK");
+    } finally {
+      lock.close();
+    }
+  }
+  const id = readFileSync(path.join(slot, "stage"), "utf8").trim();
+  expect(id).toMatch(/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u);
+  if (allocation) {
+    expect(path.basename(allocation)).toBe(`openclaw-crabbox-sync-${id}`);
+  }
+  const cursorName = "openclaw-crabbox-sync-discovery";
+  const cursor = path.join(syncRoot, cursorName);
+  if (existsSync(cursor)) {
+    expect(readdirSync(cursor)).toEqual(["position.json"]);
+    const identity = (directory: string) => {
+      const stat = lstatSync(directory, { bigint: true });
+      return { dev: String(stat.dev), ino: String(stat.ino) };
+    };
+    expect(JSON.parse(readFileSync(path.join(cursor, "position.json"), "utf8"))).toMatchObject({
+      version: 1,
+      rootIdentity: identity(syncRoot),
+      cursorIdentity: identity(cursor),
+    });
+  }
+  expect(readdirSync(syncRoot).toSorted()).toEqual(
+    [
+      "mirrors",
+      ...(allocation ? [path.basename(allocation)] : []),
+      ...(existsSync(cursor) ? [cursorName] : []),
+    ].toSorted(),
+  );
+  return { key, id };
+}
+
+function expectIdleSourceMirror(source: string, repository: string, syncRoot: string) {
+  const allocation = path.dirname(path.dirname(source));
+  const { key, id } = expectMirrorDirectories(syncRoot, repository, allocation);
+  expect(lstatSync(source).isDirectory()).toBe(true);
+  const receipt = JSON.parse(readFileSync(path.join(allocation, "staging.json"), "utf8"));
+  expect(receipt).toMatchObject({
+    version: 2,
+    id,
+    repository: realpathSync(repository),
+    kind: "capsule",
+    durable: true,
+    users: "settled",
+    state: "preserved",
+    mirror: { key, idle: true },
+  });
+  expect(receipt.hold).toBeUndefined();
+  expect(receipt.manifest).toBe(
+    createHash("sha256")
+      .update(readFileSync(path.join(allocation, "manifest.json")))
+      .digest("hex"),
+  );
+  expect(receipt.mirror.database).toBe(
+    createHash("sha256")
+      .update(JSON.stringify(receipt.witness ?? null) + "\0")
+      .update(readFileSync(path.join(allocation, "mirror.sqlite")))
+      .digest("hex"),
+  );
+}
+
 async function runWrapperCleanupProof(proof: WrapperCleanupProof): Promise<void> {
   const entrypoint = proof.kind === "signal" ? proof.entrypoint : "node";
   const cooperative = proof.kind === "signal" && proof.cooperative;
@@ -804,6 +881,13 @@ if (entry === ${JSON.stringify(implementationPath)}) {
           : {}),
         OPENCLAW_FAKE_CRABBOX_ARTIFACTS: JSON.stringify({
           [capturePath]: captureBytes.toString("base64"),
+          // Unknown native state requires full disposal after artifact preservation.
+          ...(proof.kind === "removal" && proof.target === "source"
+            ? {
+                ".crabbox/state/removal-proof":
+                  Buffer.from("discard this mirror\n").toString("base64"),
+              }
+            : {}),
         }),
       };
       const git = (...args: string[]) => {
@@ -1079,12 +1163,14 @@ child.once("exit", (code, signal) => {
             expect(JSON.parse(readFileSync(removalFailurePath, "utf8"))).toEqual({
               path: payload,
             });
-            expect(readdirSync(syncRoot)).toEqual([path.basename(allocation)]);
+            expectMirrorDirectories(syncRoot, producer, allocation);
             expect(readFileSync(path.join(preparationIdentity!.cwd, "fixture.txt"), "utf8")).toBe(
               "original source\n",
             );
             expect(output).toContain("fixture removal denied");
             expect(output).toContain(allocation);
+          } else if (blacksmith && existsSync(syncRoot)) {
+            expectMirrorDirectories(syncRoot, producer);
           } else {
             expect(existsSync(syncRoot) ? readdirSync(syncRoot) : []).toEqual([]);
           }
@@ -1136,7 +1222,7 @@ child.once("exit", (code, signal) => {
             expect(output).toContain("fixture removal denied");
             if (proof.target === "source") {
               expect(output).toContain(`temporary checkout cleanup failed at ${identity!.cwd}`);
-              expect(readdirSync(syncRoot)).toEqual([path.basename(path.dirname(failedPath))]);
+              expectMirrorDirectories(syncRoot, producer, path.dirname(failedPath));
               expect(readFileSync(path.join(identity!.cwd, "fixture.txt"), "utf8")).toBe(
                 "original source\n",
               );
@@ -1148,7 +1234,11 @@ child.once("exit", (code, signal) => {
               expect(readdirSync(syncRoot)).toEqual([]);
             }
           } else {
-            expect(readdirSync(syncRoot), output).toEqual([]);
+            expectIdleSourceMirror(identity!.cwd, producer, syncRoot);
+            expect(readFileSync(path.join(identity!.cwd, "fixture.txt"), "utf8")).toBe(
+              "original source\n",
+            );
+            expect(existsSync(path.join(identity!.cwd, ".crabbox"))).toBe(false);
           }
         }
         expect(readFileSync(path.join(producer, "fixture.txt"), "utf8")).toBe("original source\n");
@@ -4799,8 +4889,15 @@ process.on("exit", () => {
           expect(native.changed).toContain(".openclaw-crabbox-changed-gate.bundle");
           changed = native.changed;
         }
-        expect(existsSync(run.output.cwd)).toBe(false);
-        expect(readdirSync(path.join(root, "sync"))).toEqual([]);
+        if (provider === "blacksmith-testbox") {
+          expectIdleSourceMirror(run.output.cwd, producer, path.join(root, "sync"));
+          expect(readFileSync(path.join(run.output.cwd, "owner.txt"))).toEqual(
+            readFileSync(path.join(producer, "owner.txt")),
+          );
+        } else {
+          expect(existsSync(run.output.cwd)).toBe(false);
+          expect(readdirSync(path.join(root, "sync"))).toEqual([]);
+        }
         return {
           remoteCommand: run.output.scriptContent || run.remoteCommand,
           sourceFlags: run.output.args
@@ -4934,6 +5031,7 @@ process.on("exit", () => {
           ...env,
           CI: "true",
           PATH: [path.dirname(process.execPath), env.PATH].join(path.delimiter),
+          COREPACK_HOME: path.join(dependencyRoot, "corepack"),
           PNPM_CONFIG_STORE_DIR: path.join(dependencyRoot, "store"),
           PNPM_CONFIG_CACHE_DIR: path.join(dependencyRoot, "cache"),
         };
@@ -5071,7 +5169,7 @@ process.on("exit", () => {
           frozen.remoteCommand,
           frozen.bundle,
           origin,
-          dependencyEnv,
+          { ...dependencyEnv, COREPACK_ENABLE_NETWORK: "0" },
           true,
           [],
           (receiver) => {
@@ -6847,7 +6945,11 @@ cp.spawnSync = (command, args, options) => {
         } else {
           expect(output.cwd).not.toBe(producer);
           expect(existsSync(output.cwd)).toBe(false);
-          expect(readdirSync(syncRoot)).toEqual([]);
+          if (mode === "capsule" && process.platform !== "win32") {
+            expectMirrorDirectories(syncRoot, producer);
+          } else {
+            expect(readdirSync(syncRoot)).toEqual([]);
+          }
           if (files.length === 0) {
             expect(existsSync(retainedRoot)).toBe(false);
           } else {

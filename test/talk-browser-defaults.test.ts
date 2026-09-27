@@ -60,7 +60,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
   },
 }));
 vi.mock("../src/agents/realtime-bootstrap-context.js", () => ({
-  resolveRealtimeBootstrapContextInstructions: async () => undefined,
+  resolveRealtimeVoiceAgentContextInstructions: async () => "Agent context.",
 }));
 vi.mock("../src/gateway/talk/client-agent-consult.js", () => ({
   createTalkClientAgentConsultRunner: () => ({

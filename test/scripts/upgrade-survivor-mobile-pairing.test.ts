@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, createPublicKey, verify } from "node:crypto";
 import { EventEmitter } from "node:events";
 import {
   chmodSync,
@@ -34,7 +34,6 @@ import {
   parseQrBootstrapJson,
   persistHelloCredential,
   validatePairingAudit,
-  verifyDeviceAuthPayloadSignature,
 } from "../../scripts/e2e/lib/upgrade-survivor/mobile-pairing-client.mts";
 
 const CLIENT_PATH = "scripts/e2e/lib/upgrade-survivor/mobile-pairing-client.mts";
@@ -73,18 +72,38 @@ function bootstrapHello(nodeToken: string, operatorToken: string) {
 }
 
 describe("upgrade survivor mobile pairing client", () => {
-  it("closes the WebSocket when the connect response times out", async () => {
+  it.each([
+    {
+      failure: "the connect response times out",
+      stage: "response",
+      error: "Gateway response timed out",
+    },
+    {
+      failure: "WebSocket opening fails",
+      stage: "open",
+      error: "Gateway WebSocket open failed",
+    },
+    {
+      failure: "sending the connect request fails",
+      stage: "send",
+      error: "fixture send failed",
+    },
+  ])("closes the WebSocket and releases waiters when $failure", async ({ stage, error }) => {
     vi.useFakeTimers();
-    class SilentResponseSocket extends EventEmitter {
+    class FailureSocket extends EventEmitter {
       static CLOSED = 3;
-      static instances: SilentResponseSocket[] = [];
+      static instances: FailureSocket[] = [];
       readyState = 0;
       closeCalls = 0;
 
       constructor(_url: string) {
         super();
-        SilentResponseSocket.instances.push(this);
+        FailureSocket.instances.push(this);
         queueMicrotask(() => {
+          if (stage === "open") {
+            this.emit("error", new Error("connect ECONNREFUSED"));
+            return;
+          }
           this.readyState = 1;
           this.emit("open");
           this.emit(
@@ -98,31 +117,37 @@ describe("upgrade survivor mobile pairing client", () => {
         });
       }
 
-      send(_value: string): void {}
+      send(_value: string): void {
+        if (stage === "send") {
+          throw new Error("fixture send failed");
+        }
+      }
 
       close(): void {
         this.closeCalls += 1;
-        this.readyState = SilentResponseSocket.CLOSED;
+        this.readyState = FailureSocket.CLOSED;
         this.emit("close", 1000);
       }
     }
 
     const connectAttempt = expect(
       attemptConnect({
-        WebSocket: SilentResponseSocket,
+        WebSocket: FailureSocket,
         url: "ws://127.0.0.1:18789",
         client: MOBILE_PAIRING_CLIENT,
         mode: "node",
         role: "node",
         scopes: [],
       }),
-    ).rejects.toThrow("Gateway response timed out");
-    await vi.advanceTimersByTimeAsync(15_000);
+    ).rejects.toThrow(error);
+    await vi.advanceTimersByTimeAsync(stage === "response" ? 15_000 : 0);
     await connectAttempt;
 
-    expect(SilentResponseSocket.instances).toHaveLength(1);
-    expect(SilentResponseSocket.instances[0]?.closeCalls).toBe(1);
-    expect(SilentResponseSocket.instances[0]?.readyState).toBe(SilentResponseSocket.CLOSED);
+    expect(FailureSocket.instances).toHaveLength(1);
+    expect(FailureSocket.instances[0]?.closeCalls).toBe(1);
+    expect(FailureSocket.instances[0]?.readyState).toBe(FailureSocket.CLOSED);
+    expect(FailureSocket.instances[0]?.listenerCount("message")).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("requires the Gateway health RPC to report ok", () => {
@@ -247,11 +272,12 @@ describe("upgrade survivor mobile pairing client", () => {
     expect(nodeParams.auth).not.toHaveProperty("deviceToken");
     expect(operatorParams.auth).not.toHaveProperty("deviceToken");
     expect(
-      verifyDeviceAuthPayloadSignature({
-        publicKeyPem: identity.publicKeyPem,
-        payload,
-        signature: nodeParams.device.signature,
-      }),
+      verify(
+        null,
+        Buffer.from(payload),
+        createPublicKey(identity.publicKeyPem),
+        Buffer.from(nodeParams.device.signature, "base64url"),
+      ),
     ).toBe(true);
   });
 
@@ -709,57 +735,6 @@ done
     expect(source).toContain(
       '-e OPENCLAW_DOCKER_E2E_SELECTED_SHA="${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-}"',
     );
-  });
-
-  it.each(["watchos-direct-node", "mobile-pairing-reconnect"])(
-    "skips generic plugin fixture phases for the %s companion survivor",
-    (scenario) => {
-      const source = readFileSync(RUNNER_PATH, "utf8");
-      const helpers = source.slice(
-        source.indexOf("companion_survivor_scenario()"),
-        source.indexOf("\npackage_root()"),
-      );
-      const result = execFileSync(
-        "bash",
-        [
-          "-c",
-          `set -eu
-SCENARIO="$1"
-${helpers}
-phase() { printf '%s\\n' "$1"; }
-run_plugin_fixture_phase fixture-phase true
-`,
-          "companion-plugin-phase",
-          scenario,
-        ],
-        { encoding: "utf8" },
-      );
-
-      expect(result).toBe("");
-    },
-  );
-
-  it("keeps generic plugin fixtures in non-companion upgrade survivor scenarios", () => {
-    const source = readFileSync(RUNNER_PATH, "utf8");
-    const helpers = source.slice(
-      source.indexOf("companion_survivor_scenario()"),
-      source.indexOf("\npackage_root()"),
-    );
-    const result = execFileSync(
-      "bash",
-      [
-        "-c",
-        `set -eu
-SCENARIO=base
-${helpers}
-phase() { printf '%s\\n' "$1"; }
-run_plugin_fixture_phase fixture-phase true
-`,
-      ],
-      { encoding: "utf8" },
-    );
-
-    expect(result).toBe("fixture-phase\n");
   });
 
   it("routes every generic plugin fixture phase through the companion guard", () => {

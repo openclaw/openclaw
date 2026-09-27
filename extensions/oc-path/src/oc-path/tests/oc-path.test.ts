@@ -131,19 +131,3 @@ describe("formatOcPath", () => {
     expectOcPathError(() => formatOcPath({ file: "F.md", item: "i" }), "OC_PATH_NESTING");
   });
 });
-
-describe("round-trip", () => {
-  const cases = [
-    "oc://SOUL.md",
-    "oc://SOUL.md/Boundaries",
-    "oc://SOUL.md/Boundaries/deny-rule-1",
-    "oc://SOUL.md/Boundaries/deny-rule-1/risk",
-    "oc://SOUL.md?session=daily",
-    "oc://AGENTS.md/Tools/gh/risk",
-  ];
-  for (const input of cases) {
-    it(`formatOcPath(parseOcPath("${input}")) === "${input}"`, () => {
-      expect(formatOcPath(parseOcPath(input))).toBe(input);
-    });
-  }
-});

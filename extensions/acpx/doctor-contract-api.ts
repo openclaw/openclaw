@@ -168,13 +168,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         return { changes, warnings };
       }
 
-      if (canAdoptLegacyGateway && canonicalGatewayInstanceId) {
-        await gatewayStore.register(ACPX_GATEWAY_INSTANCE_KEY, {
-          instanceId: canonicalGatewayInstanceId,
-          createdAt: Date.now(),
-        });
-        changes.push("Migrated ACPX gateway instance id -> plugin state");
-      } else if (canonicalGatewayInstanceId && !existingGateway) {
+      if (canonicalGatewayInstanceId && (canAdoptLegacyGateway || !existingGateway)) {
         await gatewayStore.register(ACPX_GATEWAY_INSTANCE_KEY, {
           instanceId: canonicalGatewayInstanceId,
           createdAt: Date.now(),

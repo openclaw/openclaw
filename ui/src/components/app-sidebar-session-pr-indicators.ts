@@ -26,7 +26,7 @@ type SessionPullRequestIndicatorsOptions = {
   getSessions: () => SessionCapability | undefined;
 };
 
-/** Projects pushed PR snapshots for the currently visible worktree rows. */
+/** Projects last-known PR snapshots without making sidebar rows poll their checkouts. */
 export class SessionPullRequestIndicatorsController implements ReactiveController {
   private readonly states = new Map<string, IndicatorEntry>();
   private gateway: ApplicationGateway | null = null;
@@ -194,6 +194,7 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
     this.store?.watch(
       this,
       eligibleRows.map((session) => this.scopedKey(session.key)),
+      { passive: true },
     );
     this.applySnapshots(eligibleRows);
   }

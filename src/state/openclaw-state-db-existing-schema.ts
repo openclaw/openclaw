@@ -13,6 +13,7 @@ import {
   assertCurrentStateRuntimeSchema,
   assertNoLegacyStateRuntimeRepair,
 } from "./openclaw-state-db-fast-path.js";
+import { classifySqliteTableReadError } from "./openclaw-state-db-schema-helpers.js";
 import {
   assertSupportedStateSchemaVersion,
   readStateSchemaMigrationVersion,
@@ -37,14 +38,24 @@ export function assertExistingOpenClawStateRuntimeSchema(
         `Existing shared-state database ${pathname} requires schema migration by its owning installation before this node can use it.`,
       );
     }
-    const metadata = executeSqliteQueryTakeFirstSync(
-      database,
-      getNodeSqliteKysely<Pick<DB, "schema_meta">>(database)
-        .selectFrom("schema_meta")
-        .select(["role", "schema_version"])
-        .where("meta_key", "=", "primary")
-        .limit(1),
-    );
+    let metadata;
+    try {
+      metadata = executeSqliteQueryTakeFirstSync(
+        database,
+        getNodeSqliteKysely<Pick<DB, "schema_meta">>(database)
+          .selectFrom("schema_meta")
+          .select(["role", "schema_version"])
+          .where("meta_key", "=", "primary")
+          .limit(1),
+      );
+    } catch (error) {
+      throw classifySqliteTableReadError(
+        database,
+        "schema_meta",
+        ["meta_key", "role", "schema_version"],
+        error,
+      );
+    }
     if (metadata?.role !== "global" || metadata.schema_version !== version) {
       throw new Error(
         `Existing shared-state database ${pathname} has inconsistent ownership or schema metadata.`,

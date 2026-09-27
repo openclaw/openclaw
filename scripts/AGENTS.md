@@ -27,7 +27,7 @@ This directory owns local tooling, script wrappers, and generated-artifact helpe
 
 ## PR Prepare Gates
 
-- The default agent handoff uses `OPENCLAW_PR_GATES_REMOTE=github` and `merge-run --auto-merge`. Preparation records `github_pending` bound to the published head without successful-proof stamps. Merge requires completed review, the exact prepared head, and the enforced `openclaw/ci-gate`; it rejects known failed required checks, accepts pending checks, and skips separate hosted workflow verification and its synchronous CI watcher. GitHub enforces required CI/security checks and reviews; the agent retains responsibility for follow-through. This mode replaces separate scheduled Testbox evidence with the PR's enforced gate; existing completed-evidence modes remain available. Accepted requests return pending, not completion. Follow the maintainer skill's polling cadence, investigate failures and conflicts, and reconcile through native recovery until merge and cleanup are verified. Preserve accepted or uncertain outcome records; never blindly re-arm a request. No admin or REST fallback applies to pending-gate admission.
+- The default agent handoff uses `OPENCLAW_PR_GATES_REMOTE=github` and `merge-run --auto-merge`. Preparation records `github_pending` bound to the published head without successful-proof stamps. Merge requires completed review, the exact prepared head, and the enforced `openclaw/ci-gate`; it rejects known failed required checks, accepts pending checks, and skips separate hosted workflow verification and its synchronous CI watcher. GitHub enforces required CI/security checks and reviews; the agent retains responsibility for follow-through. This mode replaces separate scheduled Testbox evidence with the PR's enforced gate; existing completed-evidence modes remain available. Accepted requests return pending, not completion. Follow the maintainer skill's polling cadence, investigate failures and conflicts, and reconcile through native recovery until merge and cleanup are verified. Preserve accepted or uncertain outcome records; never blindly re-arm a request. No implicit admin or REST fallback applies to pending-gate admission; explicitly authorized prior-CI admin admission is a separate mode below.
 - Gate-mode validation for `prepare-run`, `prepare-gates`, and `prepare-push` happens before PR reads, lock acquisition, or preparation evidence retirement. Select one mode: the GitHub-pending invocation clears `OPENCLAW_TESTBOX`; completed hosted proof clears `OPENCLAW_PR_GATES_REMOTE`. Unknown or contradictory selectors must fail without replacing saved evidence. This validation does not block merge-outcome reconciliation, whose retained intent owns recovery.
 - Normal `prepare-init` requires incoming-head READY. To resolve a validated incoming NEEDS WORK review with BLOCKER/IMPORTANT findings, explicitly use `scripts/pr prepare-correction-init <PR>`. This initializes correction preparation only, preserving the incoming review and contributor ancestry. Commit the fixes, then use `prepare-correction-review-init` to create a separate exact-candidate JSON review template. JSON alone is authoritative; validation renders its summary. Independently review the full corrected candidate and explain resolution of every required incoming finding. Gates, push, sync and merge require that candidate's READY review; changing the candidate or incoming review invalidates it. Discussion/rejection verdicts cannot use this route. This does not change canonical-wrapper trust or permit use of an unlanded wrapper on another PR. Correction publication does not accept `github_pending`; use a completed exact-candidate gate mode or the separately authorized protected Crabbox pending route.
 - PR source acquisition fetches the full head SHA authenticated by live PR metadata from the canonical origin, verifies the fetched commit, and checks that head SHA, branch, and repository identity stayed unchanged across the fetch. GitHub's asynchronous `refs/pull/<PR>/head` projection is not source authority. All review, prepare, publication, and merge fetches use this owner without changing the private main checkpoint or shared tracking refs.
@@ -40,9 +40,25 @@ This directory owns local tooling, script wrappers, and generated-artifact helpe
   Explicit `OPENCLAW_TEST_PROJECTS_PARALLEL` and `OPENCLAW_VITEST_MAX_WORKERS` values are validated as positive integers and forwarded to the remote test command. Empty values preserve the remote scheduler defaults; other caller environment variables are not forwarded by this adapter.
 - `OPENCLAW_PR_GATES_REMOTE=crabbox-aws` is an explicit active-org-admin fallback, never the default. `prepare-gates` records a pending handle; after `prepare-push` proves the exact remote head, `scripts/pr-lib/ci-dispatch.mjs --backend crabbox` synchronously dispatches the protected-main publisher and waits for its exact-head check. That trusted workflow checksum-installs released Crabbox v0.46, resolves its `/v1/whoami` service principal, and creates sanitized direct AWS proof under the same token with `umask 022`, trusted `scripts/crabbox-untrusted-bootstrap.sh`, `pnpm build`, `pnpm check`, and the fail-closed PR-derived test plan from the repository's changed-test owner. Every executable changed path must independently resolve to concrete matched test files; broad fallback, partial plans, deleted executable paths, and unmatched/config targets are refused. Only explicit docs and `AGENTS.md`/`CLAUDE.md` instruction surfaces may produce zero tests. The canonical broker command binds the exact PR base, head, bootstrap hash, and plan digest. The publisher requires the PR base to be the merge base of its immutable workflow SHA and proves that each protected-main snapshot is identical to or descended from that workflow SHA, with an unchanged reread around each comparison. Main may advance during the long remote run, but not inside either validation window. It validates its newly created immutable broker run, ordered complete events, exact broker-resolved owner/org correlation between `/v1/whoami` and the run, canonical bootstrap hash, exact command/base/head/plan, active admin actor, and open same-repository PR target before GitHub Actions adds the workflow SHA to the strict summary and publishes the distinct `openclaw/crabbox-gate`; draft rejection remains a merge-time rule. Only after that success does `.local/gates.env` record provider/run/lease/URL recovery metadata from the trusted check. Retained logs are checked when present but are optional because released v0.46 can retain zero log bytes for a successful run. Normal `openclaw/ci-gate` semantics stay unchanged. Native merge may add `--admin` only when the exact Crabbox check is successful from GitHub Actions, its immutable workflow SHA is an ancestor of a stable final protected-main snapshot, the actor is still an active organization admin, and the sole unsatisfied required check is a normal CI gate with GitHub-owned workflow `startup_failure` or a recognized hosted, unacquired, zero-step `failure`/`timed_out` job; cancellation, action-required, stale, an assigned runner, job log text, and any failed or executed workflow step never authorize bypass. The flow repeats this verification immediately before the pinned-head merge request; GitHub has no expected-base-OID merge precondition, so the Crabbox path compares the landed squash parent with that final main snapshot in `.local/merge-crabbox-parent-audit.json` and reports a match or intervening main movement after the completed merge. Normal merge paths do not perform this audit.
 
+An interrupted protected Crabbox preparation resumes with
+`scripts/pr prepare-push <PR> --resume-crabbox-run <Actions run ID>` after the
+existing exact-token lock recovery, when required. This observes one pinned
+publisher attempt; it never refreshes, pushes, or dispatches another proof.
+Pending dispatch intent and selected run/controller/attempt stay in `gates.env`
+until the trusted exact-head check succeeds. An accepted dispatch without a
+recorded run requires explicit run selection; ordinary prepare-push refuses to
+redispatch. Legacy pending preparations use the retained review base and fail
+if the publisher proof does not match; current main is never substituted.
+Pre-change completed stamps additionally require their retained broker run and
+lease to match the trusted check. Their missing controller/attempt is pinned from
+the selected Actions run, not treated as historical receipt evidence. A retained
+base mismatch requires investigation of the original dispatch; resume refuses
+without changing the receipt or substituting today's main or the check's base.
+
 `OPENCLAW_PR_TOOLING_ROOT` selects a full checkout of the same repository for
 materialized wrappers' third-party dependencies; otherwise `openclaw.pr.toolingRoot` in the
 canonical checkout's Git config applies, then the canonical checkout itself.
+The standalone CI watcher resolves missing packages from the same tooling root when its checkout has no `node_modules`, with the same explicit-root identity checks and exact package versions.
 The wrapper still selects and verifies code against the existing trust anchor.
 Installed package versions must exactly match the anchor manifest. On mismatch,
 an explicitly selected, separate, clean `main` checkout is fetched, fast-forwarded,
@@ -122,11 +138,25 @@ intact. Octopool 0.6.10 and `641ce3c` do not support that auto shape.
 Prepare's reviewer assignment uses the exact issue-assignee POST with raw
 `assignees[]` fields. Fork commit publication declares its GraphQL JSON with
 `--input`, so the guard can inspect it; Octopool's aggregate input bound still
-applies. Native admin, non-squash, queue, and auto-cancellation variants are not
+applies. Native CLI admin, non-squash, queue, and auto-cancellation variants are not
 covered by the accepted shapes above. Do not replace them with an immediate REST
 merge, which changes admission semantics. A blocked dispatch still follows the
 retained-outcome recovery rules below; the generic guard error is not authority
 to clear or retry an intent.
+
+The explicit `merge-run --admin-evidence <file> --confirmed-operator-admin` mode
+is a separate immediate-squash admission, not a fallback from auto/queue or a
+failed request. It verifies a prior successful CI attempt and its PR/head
+provenance, binds the reviewed prior-to-prepared delta and scoped-check
+attestations, and revalidates active organization/repository-admin authority and
+effective review rules. Only pending/skipped `openclaw/ci-gate` may be waived;
+failed checks, other required checks, and required reviews remain blocking.
+Exact-head `github_pending` preparation remains pending. GraphQL owns
+observations and reconciliation; the protected REST PUT above owns the SHA-pinned
+dispatch. The existing retained outcome owns `priorCiAdmin` evidence and retains
+its prior head object. Admin snapshot stability and the landing-parent audit
+still apply. See the [landing workflow](../.agents/skills/openclaw-pr-maintainer/references/landing.md#explicit-prior-ci-admin-landing)
+for the evidence fields and supported policy limits.
 
 ## Generated Outputs
 

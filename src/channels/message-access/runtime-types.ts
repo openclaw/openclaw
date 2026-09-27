@@ -23,9 +23,6 @@ import type {
   RouteGateFacts,
 } from "./types.js";
 
-/** Normalized allowlist entry material produced by a channel identity adapter. */
-export type ChannelIngressAdapterEntry = InternalNormalizedEntry;
-
 /** Adapter used by the ingress resolver to normalize entries and match subjects. */
 export type ChannelIngressAdapter = InternalChannelIngressAdapter;
 
@@ -71,7 +68,7 @@ export type ChannelIngressIdentityDescriptor = {
   /** Optional custom match hook for platform-specific identity equivalence. */
   matchEntry?: (params: {
     subject: InternalChannelIngressSubject;
-    entry: ChannelIngressAdapterEntry;
+    entry: InternalNormalizedEntry;
     context: "dm" | "group" | "route" | "command";
   }) => boolean | undefined;
   /** Generates stable redacted entry ids for diagnostics. */

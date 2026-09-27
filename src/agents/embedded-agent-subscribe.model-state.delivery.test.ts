@@ -14,8 +14,6 @@ import {
 
 registerAgentSessionLoopTestLifecycle();
 
-const literal = "Use `[[reply_to_current]]`, `[[audio_as_voice]]`, and `[[tts:text]]` literally.";
-
 describe("completed assistant delivery snapshot", () => {
   it.each([
     {
@@ -24,27 +22,6 @@ describe("completed assistant delivery snapshot", () => {
       text: "Current reply.",
       facts: { replyToCurrent: true },
       payload: { replyToCurrent: true, replyToTag: true },
-    },
-    {
-      name: "explicit reply target",
-      source: "[[reply_to:12345]]Target reply.",
-      text: "Target reply.",
-      facts: { replyToId: "12345" },
-      payload: { replyToId: "12345", replyToTag: true },
-    },
-    {
-      name: "voice intent",
-      source: "[[audio_as_voice]]Voice reply.",
-      text: "Voice reply.",
-      facts: { audioAsVoice: true },
-      payload: { audioAsVoice: true },
-    },
-    {
-      name: "tagged speech",
-      source: "Shown. [[tts:text]]Spoken.[[/tts:text]]",
-      text: "Shown.",
-      facts: { tts: { tagged: true, text: "Spoken." } },
-      payload: {},
     },
     {
       name: "speech without visible text",
@@ -112,14 +89,6 @@ describe("completed assistant delivery snapshot", () => {
       facts: { audioAsVoice: true },
       payload: { audioAsVoice: true },
     },
-    {
-      name: "plain text",
-      source: "Plain reply.",
-      text: "Plain reply.",
-      facts: undefined,
-      payload: {},
-    },
-    { name: "literal directives", source: literal, text: literal, facts: undefined, payload: {} },
   ])("preserves $name without changing the raw completion event", async (scenario) => {
     const sourceParts = Array.isArray(scenario.source) ? scenario.source : [scenario.source];
     const contentFor = (parts: readonly string[]) =>

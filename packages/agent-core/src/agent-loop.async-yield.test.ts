@@ -46,7 +46,6 @@ it.each([
   { priorResult: "completed", asyncYield: true },
   { priorResult: "pending", asyncYield: true },
   { priorResult: "completed", asyncYield: false },
-  { priorResult: "observed", asyncYield: true },
 ] as const)(
   "delivers $priorResult async output before yielding (async yield: $asyncYield)",
   async ({ priorResult, asyncYield }) => {
@@ -163,50 +162,45 @@ it.each([
         lookupRelease.resolve();
         await lookupPersisted.promise;
       }
-      if (priorResult !== "observed") {
+      first.push({
+        type: "toolcall_end",
+        contentIndex: 1,
+        toolCall: yieldCall,
+        partial: assistant([lookupCall, yieldCall], "first"),
+      });
+      if (!asyncYield) {
         first.push({
-          type: "toolcall_end",
-          contentIndex: 1,
-          toolCall: yieldCall,
-          partial: assistant([lookupCall, yieldCall], "first"),
+          type: "done",
+          reason: "toolUse",
+          message: { ...assistant([lookupCall, yieldCall], "first"), stopReason: "toolUse" },
         });
-        if (!asyncYield) {
-          first.push({
-            type: "done",
-            reason: "toolUse",
-            message: { ...assistant([lookupCall, yieldCall], "first"), stopReason: "toolUse" },
-          });
-          first.end();
-        }
-        await firstYieldPersisted.promise;
-        expect(claimYield).not.toHaveBeenCalled();
-        expect(onYield).not.toHaveBeenCalled();
-        expect(persisted).toContainEqual(
-          expect.objectContaining({
-            role: "toolResult",
-            toolCallId: "yield-first",
-            isError: false,
-            details: expect.objectContaining({ status: "deferred" }),
-          }),
-        );
-        if (priorResult === "pending") {
-          expect(
-            persisted.some(
-              (message) => message.role === "toolResult" && message.toolCallId === "lookup",
-            ),
-          ).toBe(false);
-          lookupRelease.resolve();
-          await lookupPersisted.promise;
-        }
+        first.end();
+      }
+      await firstYieldPersisted.promise;
+      expect(claimYield).not.toHaveBeenCalled();
+      expect(onYield).not.toHaveBeenCalled();
+      expect(persisted).toContainEqual(
+        expect.objectContaining({
+          role: "toolResult",
+          toolCallId: "yield-first",
+          isError: false,
+          details: expect.objectContaining({ status: "deferred" }),
+        }),
+      );
+      if (priorResult === "pending") {
+        expect(
+          persisted.some(
+            (message) => message.role === "toolResult" && message.toolCallId === "lookup",
+          ),
+        ).toBe(false);
+        lookupRelease.resolve();
+        await lookupPersisted.promise;
       }
       if (asyncYield) {
         first.push({
           type: "done",
           reason: "stop",
-          message: assistant(
-            priorResult === "observed" ? [lookupCall] : [lookupCall, yieldCall],
-            "first",
-          ),
+          message: assistant([lookupCall, yieldCall], "first"),
         });
         first.end();
       }

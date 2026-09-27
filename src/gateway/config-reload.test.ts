@@ -1638,48 +1638,6 @@ describe("startGatewayConfigReloader", () => {
     vi.restoreAllMocks();
   });
 
-  it("applies transcript changes through the plugin reload transaction without a plugin policy", async () => {
-    const registry = createTestRegistry([]);
-    setActivePluginRegistry(registry);
-    const config: OpenClawConfig = {
-      transcripts: { autoStart: [{ providerId: "capture", channelId: "old-room" }] },
-    };
-    const nextConfig: OpenClawConfig = {
-      transcripts: { autoStart: [{ providerId: "capture", channelId: "new-room" }] },
-    };
-    const runtime = { operationId: "transcript-reload", generation: 2, pluginIds: ["notes"] };
-    const harness = createReloaderHarness(
-      async () => makeSnapshot({ config: nextConfig, sourceConfig: nextConfig, hash: "next" }),
-      {
-        initialConfig: config,
-        initialCompareConfig: config,
-        onHotReload: async (plan, next, ownership) => {
-          ownership.markRuntimeCommitted(next, plan);
-          return { status: "applied", runtime };
-        },
-      },
-    );
-    await harness.reloader.ready;
-    try {
-      const applied = harness.reloader.applyPluginLifecycleChange({
-        config: nextConfig,
-        pluginIds: ["notes"],
-        reason: "reload",
-      });
-      await expect(applied).resolves.toEqual(runtime);
-      expect(harness.onHotReload).toHaveBeenCalledOnce();
-      expect(harness.onHotReload.mock.calls[0]?.[0]).toMatchObject({
-        reloadPlugins: true,
-        restartGateway: false,
-        changedPaths: ["transcripts.autoStart"],
-      });
-      expect(harness.onHotReload.mock.calls[0]?.[1]).toEqual(nextConfig);
-      expect(harness.onRestart).not.toHaveBeenCalled();
-    } finally {
-      await harness.reloader.stop();
-    }
-  });
-
   it.each(["off", "restart"] as const)(
     "finishes a committed plugin reload after its invoker closes in %s mode",
     async (mode) => {

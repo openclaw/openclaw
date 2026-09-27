@@ -5,7 +5,7 @@ import { createPresencePublisher } from "./presence-events.js";
 
 afterEach(() => vi.useRealTimers());
 
-it("publishes the latest roster once per turn while authoritative reads stay current", () => {
+it("combines cross-turn changes in a fixed window while authoritative reads stay current", () => {
   vi.useFakeTimers();
   const broadcast = vi.fn();
   let version = 6;
@@ -18,13 +18,19 @@ it("publishes the latest roster once per turn while authoritative reads stay cur
   try {
     upsertPresence("coalesced-person", { watchedSessions: ["agent:main:first"] });
     publisher.publish();
+    vi.advanceTimersByTime(10);
+    expect(broadcast).not.toHaveBeenCalled();
+    upsertPresence("coalesced-person", { watchedSessions: ["agent:main:middle"] });
+    publisher.publish();
+    vi.advanceTimersByTime(39);
+    expect(broadcast).not.toHaveBeenCalled();
     upsertPresence("coalesced-person", { watchedSessions: ["agent:main:latest"] });
     publisher.publish();
     expect(broadcast).not.toHaveBeenCalled();
     expect(
       listSystemPresence().some((row) => row.watchedSessions?.includes("agent:main:latest")),
     ).toBe(true);
-    vi.runAllTimers();
+    vi.advanceTimersByTime(1);
     expect(broadcast).toHaveBeenCalledExactlyOnceWith(
       "presence",
       {
@@ -32,7 +38,7 @@ it("publishes the latest roster once per turn while authoritative reads stay cur
           expect.objectContaining({ watchedSessions: ["agent:main:latest"] }),
         ]),
       },
-      { dropIfSlow: true, stateVersion: { presence: 8, health: 11 } },
+      { dropIfSlow: true, stateVersion: { presence: 9, health: 11 } },
     );
     upsertPresence("coalesced-person", { reason: "disconnect", watchedSessions: undefined });
     publisher.publish();
@@ -52,11 +58,20 @@ it("publishes the latest roster once per turn while authoritative reads stay cur
     publisher.publish();
     vi.runAllTimers();
     expect(broadcast).toHaveBeenCalledTimes(4);
+    broadcast.mockImplementationOnce(() => publisher.publish());
+    publisher.publish();
+    vi.advanceTimersByTime(50);
+    expect(broadcast).toHaveBeenCalledTimes(5);
+    vi.advanceTimersByTime(49);
+    expect(broadcast).toHaveBeenCalledTimes(5);
+    vi.advanceTimersByTime(1);
+    expect(broadcast).toHaveBeenCalledTimes(6);
+    expect(broadcast.mock.lastCall?.[2].stateVersion).toEqual({ presence: 14, health: 11 });
     publisher.publish();
     publisher.stop();
     publisher.publish();
     vi.runAllTimers();
-    expect(broadcast).toHaveBeenCalledTimes(4);
+    expect(broadcast).toHaveBeenCalledTimes(6);
   } finally {
     publisher.stop();
     upsertPresence("coalesced-person", { watchedSessions: undefined });

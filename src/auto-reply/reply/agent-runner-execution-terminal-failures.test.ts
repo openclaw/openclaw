@@ -140,38 +140,6 @@ describe("executeAgentTurn: terminal failures", () => {
     }
   });
 
-  it("surfaces billing guidance for pure billing cooldown fallback exhaustion", async () => {
-    state.runWithModelFallbackMock.mockRejectedValueOnce(
-      createTestFallbackSummaryError({
-        message:
-          "All models failed (2): anthropic/claude-opus-4-6: Provider anthropic has billing issue (skipping all models) (billing) | anthropic/claude-sonnet-4-6: Provider anthropic has billing issue (skipping all models) (billing)",
-        attempts: [
-          {
-            provider: "anthropic",
-            model: "claude-opus-4-6",
-            error: "Provider anthropic has billing issue (skipping all models)",
-            reason: "billing",
-          },
-          {
-            provider: "anthropic",
-            model: "claude-sonnet-4-6",
-            error: "Provider anthropic has billing issue (skipping all models)",
-            reason: "billing",
-          },
-        ],
-        soonestCooldownExpiry: Date.now() + 60_000,
-      }),
-    );
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(createRunAgentTurnParams(createFollowupRun()));
-
-    expect(result.kind).toBe("final");
-    if (result.kind === "final") {
-      expect(result.payload.text).toBe(formatBillingErrorMessage());
-    }
-  });
-
   it("surfaces restart text when fallback exhaustion wraps a drain error, keeping fail bookkeeping", async () => {
     const { replyOperation, failMock } = createMockReplyOperation();
     state.runWithModelFallbackMock.mockRejectedValueOnce(

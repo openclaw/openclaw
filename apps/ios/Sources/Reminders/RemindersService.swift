@@ -26,7 +26,7 @@ final class RemindersService: RemindersServicing {
         let statusFilter = params.status ?? .incomplete
 
         let predicate = store.predicateForReminders(in: nil)
-        let payload: [OpenClawReminderPayload] = try await withCheckedThrowingContinuation { cont in
+        let payload: [OpenClawReminderPayload] = await withCheckedContinuation { cont in
             store.fetchReminders(matching: predicate) { items in
                 let formatter = ISO8601DateFormatter()
                 let filtered = (items ?? []).filter { reminder in
@@ -39,8 +39,7 @@ final class RemindersService: RemindersServicing {
                         !reminder.isCompleted
                     }
                 }
-                let selected = Array(filtered.prefix(limit))
-                let payload = selected.map { reminder in
+                let payload = filtered.prefix(limit).map { reminder in
                     let due = Self.date(fromDueComponents: reminder.dueDateComponents)
                     return OpenClawReminderPayload(
                         identifier: reminder.calendarItemIdentifier,

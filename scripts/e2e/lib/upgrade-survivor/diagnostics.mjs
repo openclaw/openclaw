@@ -5,6 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { publishedBackupRollback } from "./backup-rollback-summary.mjs";
+import { publishedNativeAssignments } from "./native-assignment-summary.mjs";
 import { publishedPluginPolicy } from "./plugin-policy-summary.mjs";
 
 // Capture and snapshot validation stay plain Node. The host entrypoint owns
@@ -45,6 +46,19 @@ const backupRollbackLogs = [
   "backup-rollback-restore.json",
   "backup-rollback-restore.json.err",
 ];
+const nativeAssignmentLogs = [
+  "native-assignment-eligibility.json",
+  "native-assignment-baseline.json",
+  "native-assignment-first-hop.json",
+  "native-assignment-proof.json",
+  "native-assignment-messages.jsonl",
+  "native-assignment-server.log",
+  "native-recover.out",
+  "native-recover.err",
+  "native-recover-wait.out",
+  "native-recover-wait.err",
+];
+
 const pluginPolicyLogs = [
   "webhooks-only-policy/result.json",
   "webhooks-only-policy/update.json",
@@ -57,6 +71,8 @@ const logNames = [
   "install.log",
   "update.json",
   "update.err",
+  "update-noop.json",
+  "update-noop.err",
   ...siblingRefusalLogs,
   ...restoredIndexLogs,
   ...backupRollbackLogs,
@@ -93,6 +109,7 @@ const logNames = [
   "physical-candidate-repair.json",
   "legacy-operator-cron-history-proof.json",
   ...pluginPolicyLogs,
+  ...nativeAssignmentLogs,
   "webhooks-only-policy/update.err",
   "webhooks-only-policy/gateway.log",
   "webhooks-only-policy/baseline-gateway.log",
@@ -103,10 +120,23 @@ const logNames = [
   "legacy-operator-baseline-turn.err",
   "legacy-operator-candidate-turn.out",
   "legacy-operator-candidate-turn.err",
+  "legacy-operator-add-survivor-default-owner.out",
+  "legacy-operator-add-survivor-default-owner.err",
+  "legacy-operator-add-survivor-ops-owner.out",
+  "legacy-operator-add-survivor-ops-owner.err",
   "legacy-operator-run-survivor-default-owner.out",
   "legacy-operator-run-survivor-default-owner.err",
   "legacy-operator-run-survivor-ops-owner.out",
   "legacy-operator-run-survivor-ops-owner.err",
+  ...["post-update", "candidate"].flatMap((stage) =>
+    [0, 1].flatMap((index) =>
+      ["", "-earlier"].flatMap((page) =>
+        ["out", "err"].map(
+          (extension) => `legacy-operator-${stage}-transcript-${index}${page}.${extension}`,
+        ),
+      ),
+    ),
+  ),
   "gateway.log",
   "gateway.log.doctor",
   "missing-load-path/baseline-gateway.log",
@@ -1642,6 +1672,7 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
     throw new Error();
   }
   const pluginPolicy = publishedPluginPolicy(snapshot, { sanitize, boundedList });
+  const nativeAssignments = publishedNativeAssignments(snapshot);
   for (const value of [
     snapshot.baseline?.spec,
     snapshot.baseline?.version,
@@ -1695,11 +1726,29 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
       reason: sanitize(companion.reason, "baseline companion"),
     };
   }
+  let missingLoadPath = null;
+  const applicability = snapshot.missingLoadPath;
+  if (applicability !== null && applicability !== undefined) {
+    if (
+      !(applicability.applicability === "supported" && applicability.reason === null) &&
+      !(
+        applicability.applicability === "unsupported-driver" &&
+        applicability.reason === "published-cli-rejects-invalid-config-before-staging"
+      )
+    ) {
+      throw new Error();
+    }
+    missingLoadPath = {
+      applicability: applicability.applicability,
+      reason: applicability.reason,
+    };
+  }
   return {
     status: "passed",
     baseline: textFields(snapshot.baseline, ["spec", "version"], sanitize),
     candidate: textFields(snapshot.candidate, ["kind", "version"], sanitize),
     baselineCompanion,
+    missingLoadPath,
     ...textFields(
       snapshot,
       [
@@ -1716,6 +1765,7 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
     firstHopPostCore: publishedPostCore(snapshot.firstHopPostCore, sanitize),
     backupRollback: publishedBackupRollback(snapshot, { sanitize, boundedList, textFields }),
     ...(pluginPolicy ? { pluginPolicy } : {}),
+    ...(nativeAssignments ? { nativeAssignments } : {}),
     timings,
     phases: boundedList(snapshot.phases).map((event) => {
       if (
@@ -1737,6 +1787,11 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
         ...(snapshot.scenario === "custom-plugin-siblings" ? siblingRefusalLogs : []),
         ...(snapshot.scenario === "legacy-operator-state" ? backupRollbackLogs : []),
         ...(pluginPolicy ? pluginPolicyLogs : []),
+        ...(nativeAssignments?.status === "not-applicable"
+          ? ["native-assignment-eligibility.json"]
+          : nativeAssignments
+            ? nativeAssignmentLogs
+            : []),
         ...(snapshot.scenario === "workshop-doctor-recovery"
           ? [
               "workshop-doctor-recovery.json",
@@ -1802,7 +1857,7 @@ export function publishDiagnostics(
       publishedSuccessSummary(artifactRoot, sanitize),
       publicLimit,
     );
-    return;
+    return undefined;
   }
   if (outcome !== "failed") {
     throw new Error();
@@ -1857,8 +1912,10 @@ export function publishDiagnostics(
       throw new Error();
     }
     const redacted = redactSensitiveText(text, { mode: "tools" });
-    // Keep the last completed startup spans, after redacting the whole input.
-    const tail = label === "missing-load-path/baseline-gateway.log";
+    // Keep the latest startup/native events after redacting the whole input.
+    const tail =
+      label === "missing-load-path/baseline-gateway.log" ||
+      label === "native-assignment-messages.jsonl";
     const lines = redacted.split(/(?<=\n)/u);
     if (tail) {
       lines.reverse();
@@ -1989,6 +2046,12 @@ export function publishDiagnostics(
       "Upgrade survivor diagnostics: some inputs omitted; see failure.json omissions.\n",
     );
   }
+  // Return only published failure coordinates; logs and configuration stay in the artifact.
+  return {
+    phase: sanitize(report.phase, "phase"),
+    exitStatus: report.exitStatus,
+    signal: report.signal,
+  };
 }
 
 if (import.meta.main) {

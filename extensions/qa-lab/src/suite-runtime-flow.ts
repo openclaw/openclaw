@@ -8,11 +8,11 @@ import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-st
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-host-core";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { extractToolPayload as extractQaToolPayload } from "openclaw/plugin-sdk/tool-payload";
 import * as browserRuntime from "./browser-runtime.js";
 import * as cronRunWait from "./cron-run-wait.js";
 import * as discoveryEval from "./discovery-eval.js";
 import { QaSuiteScenarioSkipError } from "./errors.js";
-import * as extractToolPayload from "./extract-tool-payload.js";
 import { assertNoGatewayLogSentinels, scanGatewayLogSentinels } from "./gateway-log-sentinel.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
 import * as modelSwitchEval from "./model-switch-eval.js";
@@ -26,6 +26,7 @@ import * as suiteRuntimeTransport from "./suite-runtime-transport.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import type { QaSuiteScenarioResult, QaSuiteStep } from "./suite-types.js";
 import { resolveQaGatewayTimeoutWithGraceMs } from "./timer-timeouts.js";
+import { projectQaToolMessages } from "./tool-activity.js";
 import * as webRuntime from "./web-runtime.js";
 
 type QaSuiteScenarioFlowEnv = {
@@ -39,10 +40,11 @@ const qaSuiteScenarioIdentityDeps = {
   path,
   sleep,
   randomUUID,
+  projectQaToolMessages,
   ...suiteRuntimeAgent,
   ...suiteRuntimeGateway,
   ...suiteRuntimeTransport,
-  ...extractToolPayload,
+  extractQaToolPayload,
   waitForCronRunCompletion: cronRunWait.waitForCronRunCompletion,
   hasDiscoveryLabels: discoveryEval.hasDiscoveryLabels,
   reportsDiscoveryScopeLeak: discoveryEval.reportsDiscoveryScopeLeak,
@@ -117,24 +119,14 @@ type QaSuiteScenarioDepsParams = {
   env: QaSuiteScenarioFlowEnv;
   runScenario: (name: string, steps: QaSuiteStep[]) => Promise<QaSuiteScenarioResult>;
   splitModelRef: (ref: string) => { provider: string; model: string } | null;
-  formatErrorMessage: (error: unknown) => string;
-  liveTurnTimeoutMs: (
-    env: Pick<QaSuiteRuntimeEnv, "providerMode" | "primaryModel" | "alternateModel">,
-    fallbackMs: number,
-  ) => number;
-  resolveQaLiveTurnTimeoutMs: (
-    env: Pick<QaSuiteRuntimeEnv, "providerMode" | "primaryModel" | "alternateModel">,
-    fallbackMs: number,
-  ) => number;
+  formatErrorMessage: typeof formatQaErrorMessage;
+  liveTurnTimeoutMs: typeof resolveQaLiveTurnTimeoutMs;
+  resolveQaLiveTurnTimeoutMs: typeof resolveQaLiveTurnTimeoutMs;
 };
 
 type QaSuiteScenarioFlowApiParams = QaSuiteScenarioDepsParams & {
   scenario: QaSeedScenarioWithSource;
-  constants: {
-    imageUnderstandingPngBase64: string;
-    imageUnderstandingLargePngBase64: string;
-    imageUnderstandingValidPngBase64: string;
-  };
+  constants: Parameters<typeof createQaScenarioRuntimeApi>[0]["constants"];
 };
 
 function createQaSuiteScenarioDeps(

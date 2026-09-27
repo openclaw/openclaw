@@ -14,13 +14,9 @@ import {
   resolveTelegramRestartDelayMs,
 } from "./polling-session-restart-policy.js";
 import { TelegramPollingTransportState } from "./polling-transport-state.js";
-import { TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS } from "./request-timeouts.js";
 import { createTelegramTransportIngressMonitor } from "./telegram-ingress-drain-factory.js";
 import { resolveTelegramAdoptionStallTimeoutMs } from "./telegram-ingress-drain.js";
-import {
-  resolveTelegramIngressSpoolDir,
-  resolveTelegramUpdateId,
-} from "./telegram-ingress-spool.js";
+import { resolveTelegramUpdateId } from "./telegram-ingress-spool.js";
 import {
   createTelegramIngressWorker,
   type TelegramIngressWorkerFactory,
@@ -38,10 +34,6 @@ const TELEGRAM_DELIVERY_DRAIN_INTERVAL_MS = 5_000;
 const MAX_POLL_STALL_THRESHOLD_MS = 600_000;
 const POLL_WATCHDOG_INTERVAL_MS = 30_000;
 const POLL_STOP_GRACE_MS = 15_000;
-// Status-only backlog note threshold (unrelated to adoption timeout).
-const TELEGRAM_POLLING_CLIENT_TIMEOUT_FLOOR_SECONDS = Math.ceil(
-  TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS / 1000,
-);
 
 function normalizeTelegramAccountId(accountId?: string | null): string {
   return accountId?.trim() || "default";
@@ -102,7 +94,7 @@ type TelegramPollingSessionOpts = {
     timeoutSeconds?: number;
     proxy?: string;
     network?: TelegramNetworkConfig;
-    spoolDir?: string;
+    stateDir?: string;
     createWorker?: TelegramIngressWorkerFactory;
     drainIntervalMs?: number;
     spooledUpdateHandlerTimeoutMs?: number;
@@ -145,11 +137,7 @@ export class TelegramPollingSession {
           continue;
         }
 
-        const cleanupState = await this.#ensureWebhookCleanup(bot);
-        if (cleanupState === "retry") {
-          continue;
-        }
-        if (cleanupState === "exit") {
+        if ((await this.#ensureWebhookCleanup(bot)) === "exit") {
           return;
         }
 
@@ -269,7 +257,6 @@ export class TelegramPollingSession {
         ...(this.opts.abortSignal ? { fetchAbortSignal: this.opts.abortSignal } : {}),
         ...(this.opts.abortSignal ? { accountAbortSignal: this.opts.abortSignal } : {}),
         mediaAbortSignal: cycleAbortSignal,
-        minimumClientTimeoutSeconds: TELEGRAM_POLLING_CLIENT_TIMEOUT_FLOOR_SECONDS,
         updateOffset,
         telegramTransport,
       });
@@ -282,7 +269,7 @@ export class TelegramPollingSession {
     }
   }
 
-  async #ensureWebhookCleanup(bot: TelegramBot): Promise<"ready" | "retry" | "exit"> {
+  async #ensureWebhookCleanup(bot: TelegramBot): Promise<"ready" | "exit"> {
     if (this.#webhookCleared) {
       return "ready";
     }
@@ -301,11 +288,10 @@ export class TelegramPollingSession {
         );
         return "ready";
       }
-      const shouldRetry = await this.#waitBeforeRetryOnRecoverableSetupError(
-        err,
-        "Telegram webhook cleanup failed",
-      );
-      return shouldRetry ? "retry" : "exit";
+      if (this.opts.abortSignal?.aborted) {
+        return "exit";
+      }
+      throw err;
     }
   }
 
@@ -331,8 +317,6 @@ export class TelegramPollingSession {
     // A pre-probed or cached bot may already be initialized; admission and replay
     // must share grammY's actual capability snapshot instead of a second source.
     const botInfo = bot.botInfo;
-    const spoolDir =
-      ingress.spoolDir ?? resolveTelegramIngressSpoolDir({ accountId: this.opts.accountId });
     const drainIntervalMs = Math.max(100, Math.floor(ingress.drainIntervalMs ?? 500));
     const ingressAbortSignal = cycleAbortController
       ? this.opts.abortSignal
@@ -340,7 +324,7 @@ export class TelegramPollingSession {
         : cycleAbortController.signal
       : this.opts.abortSignal;
     const ingressMonitor = createTelegramTransportIngressMonitor({
-      spoolDir,
+      stateDir: ingress.stateDir,
       bot,
       accountId: this.opts.accountId,
       botInfo,
@@ -358,7 +342,6 @@ export class TelegramPollingSession {
       token: this.opts.token,
       accountId: this.opts.accountId,
       initialUpdateId: this.opts.getCommittedUpdateId(),
-      spoolDir,
       apiRoot: ingress.apiRoot,
       timeoutSeconds: ingress.timeoutSeconds,
       network: ingress.network,
@@ -373,7 +356,9 @@ export class TelegramPollingSession {
     };
     // Readiness contract: test/e2e/qa-lab telegram-bot-token-runtime waits for
     // this marker on the injected runtime log; do not demote it to verbose.
-    this.opts.log(`[telegram][diag] isolated polling ingress started spool=${spoolDir}`);
+    this.opts.log(
+      `[telegram][diag] isolated polling ingress started account=${this.opts.accountId}`,
+    );
     const pollState: {
       startedAt: number | null;
       offset: number | null;

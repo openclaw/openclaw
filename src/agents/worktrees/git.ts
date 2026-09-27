@@ -28,6 +28,7 @@ export const WORKTREE_CHECKOUT_TIMEOUT_MS = 300_000;
 type WorktreeListEntry = {
   path: string;
   lockedReason?: string;
+  branch?: string | null;
 };
 
 function withNoGlob(value: string | undefined): string {
@@ -273,6 +274,10 @@ function parseWorktreeList(output: string): WorktreeListEntry[] {
       current.lockedReason = "";
     } else if (current && field.startsWith("locked ")) {
       current.lockedReason = field.slice("locked ".length);
+    } else if (current && field.startsWith("branch ")) {
+      current.branch = field.slice("branch ".length);
+    } else if (current && field === "detached") {
+      current.branch = null;
     }
   }
   if (current) {

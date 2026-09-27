@@ -15,6 +15,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { assertCdpEndpointAllowed, redactCdpUrl } from "./cdp.helpers.js";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
+import type { BrowserDeleteProfileResult } from "./client.js";
 import {
   createBrowserProfileConfig,
   deleteBrowserProfileConfig,
@@ -33,7 +34,7 @@ import {
 } from "./errors.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import { isValidProfileName } from "./profiles.js";
-import type { BrowserRouteContext, ProfileStatus } from "./server-context.js";
+import type { BrowserRouteContext } from "./server-context.js";
 import { beginProfileTransition, getOrCreateProfileRuntime } from "./server-context.lifecycle.js";
 import {
   recordSystemProfileImport,
@@ -70,21 +71,8 @@ type CreateProfileResult = {
   isRemote: boolean;
 };
 
-/** Result returned after deleting a browser profile. */
-type DeleteProfileResult = {
-  ok: true;
-  profile: string;
-  deleted: boolean;
-};
-
-const HEX_COLOR_RE = /^#[0-9A-Fa-f]{6}$/;
-
 /** Create a profile service bound to one browser route context. */
 export function createBrowserProfilesService(ctx: BrowserRouteContext) {
-  const listProfiles = async (): Promise<ProfileStatus[]> => {
-    return await ctx.listProfiles();
-  };
-
   const createProfile = async (params: CreateProfileParams): Promise<CreateProfileResult> => {
     const name = params.name.trim();
     const rawCdpUrl = normalizeOptionalString(params.cdpUrl);
@@ -109,9 +97,6 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
     if (getOwnBrowserProfile(rawProfiles, name)) {
       throw new BrowserConflictError(`profile "${name}" already exists`);
     }
-
-    const explicitProfileColor =
-      params.color && HEX_COLOR_RE.test(params.color) ? params.color : undefined;
 
     let parsedCdpUrl: string | undefined;
     if (normalizedUserDataDir && driver !== "existing-session") {
@@ -139,7 +124,6 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
     const profileConfig = await createBrowserProfileConfig({
       name,
       resolved: state.resolved,
-      ...(explicitProfileColor ? { color: explicitProfileColor } : {}),
       ...(parsedCdpUrl ? { parsedCdpUrl } : {}),
       ...(normalizedUserDataDir ? { userDataDir: normalizedUserDataDir } : {}),
       ...(driver ? { driver } : {}),
@@ -211,7 +195,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
     const [systemProfiles, state, profiles] = await Promise.all([
       enabled ? listSystemProfiles() : Promise.resolve([]),
       readSystemProfileImportState(),
-      listProfiles(),
+      ctx.listProfiles(),
     ]);
     return {
       enabled,
@@ -224,7 +208,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
     };
   };
 
-  const deleteProfile = async (nameRaw: string): Promise<DeleteProfileResult> => {
+  const deleteProfile = async (nameRaw: string): Promise<BrowserDeleteProfileResult> => {
     const name = nameRaw.trim();
     if (!name) {
       throw new BrowserValidationError("profile name is required");
@@ -302,7 +286,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
   };
 
   return {
-    listProfiles,
+    listProfiles: () => ctx.listProfiles(),
     listSystemProfiles,
     createProfile,
     importSystemProfile,

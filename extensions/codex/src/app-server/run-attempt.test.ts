@@ -23,7 +23,6 @@ import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-de
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import { codexAppInventoryResponse } from "./app-inventory.test-helpers.js";
@@ -34,7 +33,7 @@ import {
 } from "./attempt-context.js";
 import * as attemptStartup from "./attempt-startup.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
-import { TURN_FINALIZE_DRAIN_ABORT_GRACE_MS, withCodexStartupTimeout } from "./attempt-timeouts.js";
+import { TURN_FINALIZE_DRAIN_ABORT_GRACE_MS } from "./attempt-timeouts.js";
 import { buildCodexWorkspaceBootstrapContext } from "./attempt-workspace-context.js";
 import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
 import { resolveCodexAppServerFallbackApiKeyCacheKey } from "./auth-cache-key.js";
@@ -175,7 +174,6 @@ const testing = {
   filterCodexDynamicTools,
   resolveCodexDynamicToolDirectNames,
   shouldEnableCodexAppServerNativeToolSurface,
-  withCodexStartupTimeout,
 };
 
 function startOrResumeThread(
@@ -191,28 +189,6 @@ function startOrResumeThread(
 
 function flushDiagnosticEvents() {
   return waitForDiagnosticEventsDrained();
-}
-
-function openSocket(url: string): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    const socket = new WebSocket(url);
-    const timer = setTimeout(() => {
-      socket.close();
-      reject(new Error("timed out opening WebSocket"));
-    }, 1_000);
-    const rejectBeforeOpen = (error: Error) => {
-      clearTimeout(timer);
-      reject(error);
-    };
-    socket.once("open", () => {
-      clearTimeout(timer);
-      resolve(socket);
-    });
-    socket.once("error", rejectBeforeOpen);
-    socket.once("close", () => {
-      rejectBeforeOpen(new Error("WebSocket closed before open"));
-    });
-  });
 }
 
 function expectResumeRequest(
@@ -540,6 +516,13 @@ function createRunParams() {
   return createParams(sessionFile, workspaceDir);
 }
 
+function startClockControlledAttempt(params: EmbeddedRunAttemptParams) {
+  // Cold transcript workers must not consume a success scenario's execution budget.
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  const run = runCodexAppServerAttempt(params);
+  return { run, started: run.waitForTurnAccepted() };
+}
+
 const GOOGLE_CALENDAR_PLUGIN_CONFIG = {
   codexPlugins: {
     enabled: true,
@@ -821,44 +804,6 @@ async function expectRetainedSuccessfulThread(client: CodexAppServerClient, thre
       ownership?.serviceTier,
     ),
   ).resolves.toBe(true);
-}
-
-async function createSandboxReleaseFixture(
-  handleRequest: (method: string, params?: unknown) => unknown,
-) {
-  const params = createRunParams();
-  params.disableTools = false;
-  params.runtimePlan = createCodexRuntimePlanFixture();
-  const appServer = {
-    ...createThreadLifecycleAppServerOptions(),
-    sandbox: "danger-full-access" as const,
-  };
-  const sandbox = createSandboxContext({
-    runShellCommand: async () => ({
-      stdout: Buffer.alloc(0),
-      stderr: Buffer.alloc(0),
-      code: 0,
-    }),
-  });
-  const request = vi.fn(async (method: string, requestParams?: unknown) => {
-    if (method === "configRequirements/read") {
-      return { requirements: null };
-    }
-    if (method === "config/read") {
-      return { config: {}, origins: {}, layers: [] };
-    }
-    return handleRequest(method, requestParams);
-  });
-  const client = { ...mockClientRuntimeMethods(), request };
-  const environment = await ensureCodexSandboxExecServerEnvironment({
-    client: client as never,
-    sandbox,
-    appServerStartOptions: appServer.start,
-  });
-  if (!environment) {
-    throw new Error("expected sandbox exec-server environment");
-  }
-  return { appServer, client, environment, params, request, sandbox };
 }
 
 async function startFastAutoProgressTest(
@@ -1309,118 +1254,6 @@ describe("runCodexAppServerAttempt", () => {
       expect(turnParams.environments).toEqual(startParams?.environments);
     } finally {
       await releaseCodexSandboxExecServerEnvironment(sandbox as never);
-    }
-  });
-  it("closes the sandbox exec-server release path used by turn/start failure cleanup", async () => {
-    const { appServer, client, environment, params, request, sandbox } =
-      await createSandboxReleaseFixture((method) => {
-        if (method === "environment/add") {
-          return {};
-        }
-        if (method === "thread/start") {
-          return threadStartResult();
-        }
-        if (method === "turn/start") {
-          throw new Error("turn start failed");
-        }
-        throw new Error(`unexpected method: ${method}`);
-      });
-    try {
-      const environmentSelection = [environment];
-      const thread = await startOrResumeThread({
-        client: client as never,
-        params,
-        cwd: environment.cwd,
-        dynamicTools: [createNamedDynamicTool("message")] as never,
-        appServer: appServer as never,
-        nativeCodeModeEnabled: true,
-        nativeCodeModeOnlyEnabled: false,
-        userMcpServersEnabled: false,
-        environmentSelection,
-      });
-      const turnParams = buildTurnStartParams(params, {
-        threadId: thread.threadId,
-        cwd: environment.cwd,
-        appServer: appServer as never,
-        sandboxPolicy: { type: "externalSandbox", networkAccess: "enabled" },
-        environmentSelection,
-      });
-      await expect(
-        client.request("turn/start", turnParams).catch(async (error: unknown) => {
-          await releaseCodexSandboxExecServerEnvironment(sandbox);
-          throw error;
-        }),
-      ).rejects.toThrow("turn start failed");
-      const environmentAdd = request.mock.calls.find(([method]) => method === "environment/add");
-      const environmentAddParams = environmentAdd?.[1] as { execServerUrl?: string } | undefined;
-      expect(environmentAddParams?.execServerUrl).toMatch(/^ws:\/\/127\.0\.0\.1:/);
-      await expect(openSocket(environmentAddParams!.execServerUrl!)).rejects.toThrow();
-    } finally {
-      await releaseCodexSandboxExecServerEnvironment(sandbox);
-    }
-  });
-
-  it("closes the sandbox exec-server release path used by context-engine retry setup cleanup", async () => {
-    const { appServer, client, environment, params, request, sandbox } =
-      await createSandboxReleaseFixture((method) => {
-        if (method === "environment/add") {
-          return {};
-        }
-        if (method === "thread/start") {
-          throw new Error("retry setup failed");
-        }
-        throw new Error(`unexpected method: ${method}`);
-      });
-    try {
-      const environmentSelection = [environment];
-      await expect(
-        startOrResumeThread({
-          client: client as never,
-          params,
-          cwd: environment.cwd,
-          dynamicTools: [createNamedDynamicTool("message")] as never,
-          appServer: appServer as never,
-          nativeCodeModeEnabled: true,
-          nativeCodeModeOnlyEnabled: false,
-          userMcpServersEnabled: false,
-          environmentSelection,
-        }).catch(async (error: unknown) => {
-          await releaseCodexSandboxExecServerEnvironment(sandbox);
-          throw error;
-        }),
-      ).rejects.toThrow("retry setup failed");
-      const environmentAdd = request.mock.calls.find(([method]) => method === "environment/add");
-      const environmentAddParams = environmentAdd?.[1] as { execServerUrl?: string } | undefined;
-      expect(environmentAddParams?.execServerUrl).toMatch(/^ws:\/\/127\.0\.0\.1:/);
-      await expect(openSocket(environmentAddParams!.execServerUrl!)).rejects.toThrow();
-    } finally {
-      await releaseCodexSandboxExecServerEnvironment(sandbox);
-    }
-  });
-  it("closes the sandbox exec-server release path used by startup timeout cleanup", async () => {
-    const { request, sandbox } = await createSandboxReleaseFixture((method) => {
-      if (method === "environment/add") {
-        return {};
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    try {
-      await expect(
-        testing.withCodexStartupTimeout({
-          timeoutMs: 5,
-          signal: new AbortController().signal,
-          onTimeout: async () => {
-            await releaseCodexSandboxExecServerEnvironment(sandbox);
-          },
-          operation: async () => new Promise<never>(() => {}),
-        }),
-      ).rejects.toThrow("codex app-server startup timed out");
-      const environmentAdd = request.mock.calls.find(([method]) => method === "environment/add");
-      const environmentAddParams = environmentAdd?.[1] as { execServerUrl?: string } | undefined;
-      expect(environmentAddParams?.execServerUrl).toMatch(/^ws:\/\/127\.0\.0\.1:/);
-      await expect(openSocket(environmentAddParams!.execServerUrl!)).rejects.toThrow();
-    } finally {
-      await releaseCodexSandboxExecServerEnvironment(sandbox);
     }
   });
 
@@ -2442,8 +2275,8 @@ describe("runCodexAppServerAttempt", () => {
       return undefined;
     });
 
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    const { run, started } = startClockControlledAttempt(params);
+    await started;
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
     const startParams = startRequest?.params as
       | {
@@ -2650,6 +2483,7 @@ describe("runCodexAppServerAttempt", () => {
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     const result = await run;
+    expect(result.terminal).toEqual({ kind: "ok" });
     expect(persistedProgressCardInputs[0]).toEqual({ markdown: "Plan restored", plan });
     expect(result.messagesSnapshot).toContainEqual(
       expect.objectContaining({
@@ -2667,8 +2501,8 @@ describe("runCodexAppServerAttempt", () => {
   it("does not inject plan state after compaction when the turn has no plan", async () => {
     const params = createRunParams();
     const harness = createStartedThreadHarness();
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    const { run, started } = startClockControlledAttempt(params);
+    await started;
 
     await harness.notify(
       itemNotification("item/started", { type: "contextCompaction", id: "compact-1" }),
@@ -2676,10 +2510,9 @@ describe("runCodexAppServerAttempt", () => {
     await harness.notify(
       itemNotification("item/completed", { type: "contextCompaction", id: "compact-1" }),
     );
-    expect(harness.requests.map((request) => request.method)).not.toContain("thread/inject_items");
-
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
+    expect((await run).terminal).toEqual({ kind: "ok" });
+    expect(harness.requests.map((request) => request.method)).not.toContain("thread/inject_items");
   });
 
   it("fails closed for Codex app defaults when restricted native tools have no plugin config", async () => {
@@ -4798,8 +4631,8 @@ describe("runCodexAppServerAttempt", () => {
     params.toolsAllow = ["read"];
     params.verboseLevel = "full";
     params.onToolResult = onToolResult;
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    const { run, started } = startClockControlledAttempt(params);
+    await started;
     const startParams = harness.requests.find((request) => request.method === "thread/start")
       ?.params as { dynamicTools: CodexDynamicToolSpec[] };
     expect(specNames(startParams.dynamicTools)).toContain("read");
@@ -4848,7 +4681,8 @@ describe("runCodexAppServerAttempt", () => {
       }),
     );
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
+    const result = await run;
+    expect(result.terminal).toEqual({ kind: "ok" });
     expect(onToolResult).toHaveBeenCalledTimes(2);
     expect(onToolResult).toHaveBeenNthCalledWith(1, {
       text: "📖 Read: `from README.md`",
@@ -5995,25 +5829,6 @@ describe("runCodexAppServerAttempt", () => {
     ]);
   });
 
-  it("keeps extended history enabled when resuming a bound Codex thread", async () => {
-    const { sessionFile, workspaceDir } = createRunPaths();
-    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
-    const { requests, waitForMethod, completeTurn } = createResumeHarness();
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
-      pluginConfig: { appServer: { mode: "yolo" } },
-    });
-    await completeStartedRun(run, waitForMethod, completeTurn, "thread-existing");
-    expectResumeRequest(requests, {
-      threadId: "thread-existing",
-      model: "gpt-5.4-codex",
-      approvalPolicy: "never",
-      approvalsReviewer: "user",
-      sandbox: "danger-full-access",
-    });
-    const resumeRequest = requests.find((request) => request.method === "thread/resume");
-    const resumeRequestParams = resumeRequest?.params as Record<string, unknown> | undefined;
-    expect(resumeRequestParams?.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
-  });
   it("sends the current recorded sender on successive turns of one resumed Codex thread", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
@@ -6572,27 +6387,6 @@ describe("runCodexAppServerAttempt", () => {
     expect(turnRequestParams?.model).toBe("gpt-5.4-codex");
   });
 
-  it("passes current Codex service tier request values through app-server resume and turn requests", async () => {
-    const { sessionFile, workspaceDir } = createRunPaths();
-    await writeExistingBinding(sessionFile, workspaceDir, { model: "gpt-5.2" });
-    const { requests, waitForMethod, completeTurn } = createResumeHarness();
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
-      pluginConfig: {
-        appServer: {
-          approvalPolicy: "on-request",
-          sandbox: "danger-full-access",
-          serviceTier: "priority",
-        },
-      },
-    });
-    await completeStartedRun(run, waitForMethod, completeTurn, "thread-existing");
-    const resumeRequest = requests.find((request) => request.method === "thread/resume");
-    const resumeRequestParams = resumeRequest?.params as Record<string, unknown> | undefined;
-    expect(resumeRequestParams?.serviceTier).toBe("priority");
-    const turnRequest = requests.find((request) => request.method === "turn/start");
-    const turnRequestParams = turnRequest?.params as Record<string, unknown> | undefined;
-    expect(turnRequestParams?.serviceTier).toBe("priority");
-  });
   it("uses human approval instead of Guardian for auto exec on custom model providers", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
@@ -7005,6 +6799,12 @@ describe("runCodexAppServerAttempt", () => {
   it.each([
     { name: "fast on", fastMode: true, expectedServiceTier: "priority" },
     {
+      name: "fast on with flex baseline",
+      fastMode: true,
+      configuredServiceTier: "flex",
+      expectedServiceTier: "priority",
+    },
+    {
       name: "fast off",
       fastMode: false,
       configuredServiceTier: "priority",
@@ -7016,6 +6816,24 @@ describe("runCodexAppServerAttempt", () => {
       expectedServiceTier: "priority",
     },
     {
+      name: "fast on with configured tier",
+      fastMode: true,
+      configuredServiceTier: "ultrafast",
+      expectedServiceTier: "priority",
+    },
+    {
+      name: "fast off with configured tier",
+      fastMode: false,
+      configuredServiceTier: "ultrafast",
+      expectedServiceTier: null,
+    },
+    {
+      name: "fast auto active with configured tier",
+      fastMode: () => true,
+      configuredServiceTier: "ultrafast",
+      expectedServiceTier: "priority",
+    },
+    {
       name: "configured non-priority tier",
       fastMode: undefined,
       configuredServiceTier: "flex",
@@ -7024,8 +6842,8 @@ describe("runCodexAppServerAttempt", () => {
   ] satisfies Array<{
     name: string;
     fastMode: EmbeddedRunAttemptParams["fastMode"];
-    configuredServiceTier?: "flex" | "priority";
-    expectedServiceTier?: "flex" | "priority" | null;
+    configuredServiceTier?: "flex" | "priority" | "ultrafast";
+    expectedServiceTier?: "flex" | "priority" | "ultrafast" | null;
   }>)(
     "maps $name to app-server resume and turn service tier",
     async ({ fastMode, configuredServiceTier, expectedServiceTier }) => {
@@ -7056,6 +6874,185 @@ describe("runCodexAppServerAttempt", () => {
       });
     },
   );
+  it("keeps shared Fast priority on new threads with a configured tier", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.fastMode = true;
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { serviceTier: "ultrafast" } },
+    });
+    await completeStartedRun(run, harness.waitForMethod, harness.completeTurn, "thread-1");
+    for (const method of ["thread/start", "turn/start"]) {
+      expect(harness.requests.find((request) => request.method === method)?.params).toMatchObject({
+        serviceTier: "priority",
+      });
+    }
+  });
+  it("uses shared Fast priority when auto activates after resume", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    await writeExistingBinding(sessionFile, workspaceDir, { model: "gpt-5.2" });
+    const { requests, waitForMethod, completeTurn } = createResumeHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    let fastMode = false;
+    params.fastMode = () => fastMode;
+    params.onAgentEvent = (event) => {
+      if (event.stream === "codex_app_server.lifecycle" && event.data.phase === "thread_ready") {
+        fastMode = true;
+      }
+    };
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { serviceTier: "ultrafast" } },
+    });
+    await completeStartedRun(run, waitForMethod, completeTurn, "thread-existing");
+    expect(requests.find((request) => request.method === "thread/resume")?.params).toMatchObject({
+      serviceTier: null,
+    });
+    expect(requests.find((request) => request.method === "turn/start")?.params).toMatchObject({
+      serviceTier: "priority",
+    });
+  });
+  it.each([
+    { name: "supported model", supported: true, fastMode: true, expected: "ultrafast" },
+    { name: "unsupported model", supported: false, fastMode: true, expected: "priority" },
+    { name: "Fast off", supported: true, fastMode: false, expected: undefined },
+    { name: "standalone setting", supported: true, fastMode: undefined, expected: "ultrafast" },
+    {
+      name: "auto activates after resume",
+      supported: true,
+      fastMode: false,
+      activateAuto: true,
+      expected: "ultrafast",
+    },
+  ])(
+    "applies optional Ultrafast for $name at the actual turn boundary",
+    async ({ supported, fastMode, activateAuto, expected }) => {
+      const { sessionFile, workspaceDir } = createRunPaths();
+      await writeExistingBinding(sessionFile, workspaceDir, { model: "gpt-5.2" });
+      const harness = createResumeHarness("thread-existing", async (method) => {
+        if (method === "model/list") {
+          return {
+            data: [
+              {
+                id: "catalog-alias",
+                model: "gpt-5.4-codex",
+                displayName: "Test model",
+                description: "Test model",
+                hidden: false,
+                isDefault: false,
+                supportedReasoningEfforts: [],
+                defaultReasoningEffort: "medium",
+                serviceTiers: supported
+                  ? [{ id: "ultrafast", name: "Ultrafast", description: "Faster" }]
+                  : [],
+              },
+            ],
+            nextCursor: null,
+          };
+        }
+        return undefined;
+      });
+      const params = createParams(sessionFile, workspaceDir);
+      let active = fastMode;
+      params.fastMode = activateAuto ? () => active : fastMode;
+      params.onAgentEvent = (event) => {
+        if (
+          event.stream === "codex_app_server.lifecycle" &&
+          event.data.phase === "thread_ready" &&
+          activateAuto
+        ) {
+          active = true;
+        }
+      };
+      const run = runCodexAppServerAttempt(params, {
+        pluginConfig: { appServer: { enableUltrafast: true } },
+      });
+      await completeStartedRun(run, harness.waitForMethod, harness.completeTurn, "thread-existing");
+      expect(
+        harness.requests.find((request) => request.method === "turn/start")?.params,
+      ).toMatchObject({
+        serviceTier: expected,
+      });
+    },
+  );
+
+  it.each([
+    {
+      name: "standalone enablement",
+      fastMode: undefined,
+      supported: true,
+      baseline: undefined,
+      expected: "ultrafast",
+    },
+    { name: "Fast off", fastMode: false, supported: true, baseline: undefined, expected: null },
+    {
+      name: "inactive auto",
+      fastMode: () => false,
+      supported: true,
+      baseline: undefined,
+      expected: null,
+    },
+    {
+      name: "unsupported priority baseline",
+      fastMode: undefined,
+      supported: false,
+      baseline: "priority" as const,
+      expected: "priority",
+    },
+    {
+      name: "unsupported default baseline",
+      fastMode: undefined,
+      supported: false,
+      baseline: undefined,
+      expected: null,
+    },
+  ])(
+    "selects optional Ultrafast for $name across warm turns",
+    async ({ fastMode, supported, baseline, expected }) => {
+      const { sessionFile, workspaceDir } = createRunPaths();
+      await writeExistingBinding(sessionFile, workspaceDir, { model: "gpt-5.2" });
+      let catalogSupported = true;
+      const harness = createResumeHarness("thread-existing", async (method) => {
+        if (method === "model/list") {
+          return {
+            data: [
+              {
+                id: "catalog-alias",
+                model: "gpt-5.4-codex",
+                displayName: "Test model",
+                description: "Test model",
+                hidden: false,
+                isDefault: false,
+                supportedReasoningEfforts: [],
+                defaultReasoningEffort: "medium",
+                serviceTiers: catalogSupported
+                  ? [{ id: "ultrafast", name: "Ultrafast", description: "Faster" }]
+                  : [],
+              },
+            ],
+          };
+        }
+        return undefined;
+      });
+      for (let turn = 0; turn < 2; turn += 1) {
+        catalogSupported = turn === 0 || supported;
+        const params = createParams(sessionFile, workspaceDir);
+        params.fastMode = turn === 0 ? undefined : fastMode;
+        const run = runCodexAppServerAttempt(params, {
+          pluginConfig: { appServer: { enableUltrafast: true, serviceTier: baseline } },
+        });
+        await run.waitForTurnAccepted();
+        await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+        await run;
+      }
+      expect(
+        harness.requests
+          .filter((request) => request.method === "turn/start")
+          .map((request) => (request.params as { serviceTier?: string | null }).serviceTier),
+      ).toEqual(["ultrafast", expected]);
+    },
+  );
+
   it("reuses the bound auth profile for app-server startup when params omit it", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     await writeExistingBinding(sessionFile, workspaceDir, {

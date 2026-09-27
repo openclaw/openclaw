@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { vi } from "vitest";
 import { createQaBusState } from "../src/bus-state.js";
 import { createQaChannelTransport } from "../src/qa-channel-transport.js";
@@ -150,6 +152,43 @@ async function runMockRuntimeToolFixture(params: {
       runAgentPrompt: params.runAgentPrompt,
     }),
   );
+}
+
+export async function writeQaSessionTranscript(
+  env: QaSuiteRuntimeEnv,
+  sessionKey: string,
+  messages: Array<Record<string, unknown>>,
+) {
+  const sessionId = sessionKey.replace(/[^a-z0-9]+/giu, "-");
+  const sessionEnv = {
+    ...process.env,
+    OPENCLAW_STATE_DIR: path.join(env.gateway.tempRoot, "state"),
+  };
+  await upsertSessionEntry({
+    agentId: "qa",
+    env: sessionEnv,
+    sessionKey,
+    entry: { sessionId, updatedAt: Date.now() },
+  });
+  for (const message of messages) {
+    await appendSessionTranscriptMessageByIdentity({
+      agentId: "qa",
+      env: sessionEnv,
+      sessionId,
+      sessionKey,
+      message,
+    });
+  }
+}
+
+export async function writeRuntimeToolTranscripts(
+  env: QaSuiteRuntimeEnv,
+  toolName: string,
+  happyMessages: Array<Record<string, unknown>>,
+  failureMessages: Array<Record<string, unknown>>,
+) {
+  await writeQaSessionTranscript(env, `agent:qa:runtime-tool:${toolName}:happy`, happyMessages);
+  await writeQaSessionTranscript(env, `agent:qa:runtime-tool:${toolName}:failure`, failureMessages);
 }
 
 export async function cleanupRuntimeToolFixtureTempRoots() {

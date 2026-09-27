@@ -1,4 +1,5 @@
 import type { Result } from "@openclaw/normalization-core/result";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -13,13 +14,13 @@ import {
   killAllControlledSubagentRuns,
   resolveSubagentController,
 } from "../../agents/subagents/registry/subagent-control.js";
+import { SUBAGENT_KILL_TASK_ERROR } from "../../agents/subagents/registry/subagent-control.types.js";
 import {
   getLatestLiveSubagentRunByChildSessionKey,
   isSubagentRunQueued,
 } from "../../agents/subagents/registry/subagent-registry-read.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../../infra/agent-events.js";
-import { SUBAGENT_KILL_TASK_ERROR } from "../../tasks/detached-task-runtime-contract.js";
 import { createChatAbortOps } from "../chat-abort-ops.js";
 import {
   abortChatRunById,
@@ -56,10 +57,6 @@ import {
   type ChatAbortOrigin,
   type ChatAbortSessionSnapshot,
 } from "./chat-aborted-partial.js";
-import {
-  normalizeOptionalChatText as normalizeOptionalText,
-  normalizeUnknownChatText as normalizeUnknownText,
-} from "./chat-text-normalization.js";
 import { persistAbortedPartials } from "./chat-transcript-persistence.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -350,7 +347,7 @@ export function captureWorkerInferenceForSession(params: {
   sessionId?: string;
   runId?: string;
 }): WorkerInferenceCancellation | undefined {
-  const sessionId = normalizeOptionalText(params.sessionId);
+  const sessionId = normalizeOptionalString(params.sessionId);
   if (!sessionId) {
     return undefined;
   }
@@ -617,7 +614,7 @@ function prepareChatSessionAbort(
           runId,
           stopReason,
           endedAt,
-          attemptId: normalizeUnknownText(payload.attemptId),
+          attemptId: normalizeOptionalString(payload.attemptId),
           expectedPayload: payload,
         })
       ) {

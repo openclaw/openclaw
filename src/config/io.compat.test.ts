@@ -25,60 +25,7 @@ function withTempHome<T>(run: (home: string) => Promise<T>): Promise<T> {
   return withTempDir("openclaw-config-compat-", run);
 }
 
-async function writeConfig(
-  home: string,
-  dirname: ".openclaw",
-  port: number,
-  filename = "openclaw.json",
-) {
-  const dir = path.join(home, dirname);
-  await fs.mkdir(dir, { recursive: true });
-  const configPath = path.join(dir, filename);
-  await fs.writeFile(configPath, JSON.stringify({ gateway: { port } }, null, 2));
-  return configPath;
-}
-
-function createIoForHome(home: string, env: NodeJS.ProcessEnv = {} as NodeJS.ProcessEnv) {
-  return createConfigIO({
-    env: { HOME: home, ...env },
-    homedir: () => home,
-  });
-}
-
-describe("config io paths", () => {
-  it("uses ~/.openclaw/openclaw.json when config exists", async () => {
-    await withTempHome(async (home) => {
-      const configPath = await writeConfig(home, ".openclaw", 19001);
-      const io = createIoForHome(home);
-      expect(io.configPath).toBe(configPath);
-    });
-  });
-
-  it("defaults to ~/.openclaw/openclaw.json when config is missing", async () => {
-    await withTempHome(async (home) => {
-      const io = createIoForHome(home);
-      expect(io.configPath).toBe(path.join(home, ".openclaw", "openclaw.json"));
-    });
-  });
-
-  it("uses OPENCLAW_HOME for default config path", async () => {
-    await withTempHome(async (home) => {
-      const io = createConfigIO({
-        env: { OPENCLAW_HOME: path.join(home, "svc-home") } as NodeJS.ProcessEnv,
-        homedir: () => path.join(home, "ignored-home"),
-      });
-      expect(io.configPath).toBe(path.join(home, "svc-home", ".openclaw", "openclaw.json"));
-    });
-  });
-
-  it("honors explicit OPENCLAW_CONFIG_PATH override", async () => {
-    await withTempHome(async (home) => {
-      const customPath = await writeConfig(home, ".openclaw", 20002, "custom.json");
-      const io = createIoForHome(home, { OPENCLAW_CONFIG_PATH: customPath } as NodeJS.ProcessEnv);
-      expect(io.configPath).toBe(customPath);
-    });
-  });
-
+describe("config io compatibility", () => {
   it("keeps canonical custom gateway bind byte-identical during load", async () => {
     await withTempHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");

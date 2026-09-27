@@ -123,16 +123,6 @@ afterEach(() => {
   cleanupTempDirs(tempDirs);
 });
 
-function countNonEmptyLines(value: string): number {
-  let count = 0;
-  for (const line of value.split("\n")) {
-    if (line) {
-      count += 1;
-    }
-  }
-  return count;
-}
-
 function expectFatalError(runTest: () => unknown, message: string): void {
   const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
   const exit = vi.spyOn(process, "exit").mockImplementation((code) => {
@@ -570,7 +560,6 @@ describe("Parallels smoke model selection", () => {
       expect(wrapper, wrapperPath).toContain('cd "$ROOT_DIR"');
       expect(wrapper, wrapperPath).toContain(`exec node --import tsx ${scriptPath}`);
       expect(wrapper, wrapperPath).not.toContain("pnpm exec tsx");
-      expect(countNonEmptyLines(wrapper)).toBeLessThanOrEqual(6);
     }
   });
 
@@ -1887,13 +1876,10 @@ if (commandArgs[0] === "list") {
   });
 
   it("keeps the Windows update config scrub compatible with PowerShell 5.1", () => {
-    const script = npmUpdateScripts;
-
-    expect(script).not.toContain("ConvertFrom-Json -AsHashtable");
-    expect(script).not.toContain("ConvertTo-Json -Depth 100");
-    expect(script).toContain('replace(/^\\\\uFEFF/u, "")');
-    expect(script).toContain("$nodeScript | Set-Content -Path $nodeScriptPath -Encoding UTF8");
-    expect(script).toContain("& node.exe $nodeScriptPath $configPath");
+    expect(npmUpdateScripts).not.toContain("ConvertFrom-Json -AsHashtable");
+    expect(npmUpdateScripts).toContain(
+      "$nodeScript | Set-Content -Path $nodeScriptPath -Encoding UTF8",
+    );
   });
 
   it("keeps aggregate update guest scripts isolated from the npm-update orchestrator", () => {

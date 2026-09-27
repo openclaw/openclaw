@@ -88,7 +88,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     var hasCurrentBrowserSession: Bool {
-        // Renewals revoke the lease before awaited WebKit cleanup replaces the document.
+        // Account changes revoke the lease before awaited WebKit cleanup replaces the document.
         guard self.browserSessionLease?.isCurrent != false else { return false }
         do {
             try self.browserSession?.validate(for: self.currentURL)
@@ -103,8 +103,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private var updateBridgeEnabled: Bool
     private let requestBrowserProfileImportOffer:
         @MainActor (@escaping @MainActor () -> Bool) async -> Bool
-    private var canGoBackObservation: NSKeyValueObservation?
-    private var canGoForwardObservation: NSKeyValueObservation?
+    private var historyObservations: [NSKeyValueObservation] = []
     private var didRequestBrowserProfileImportOffer = false
     private var browserProfileImportOfferIsArmed = false
     private var browserProfileImportOfferRequestIsInFlight = false
@@ -370,10 +369,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
     func invalidateBrowserSession(error: GatewayBrowserSessionError? = nil) {
         self.invalidateGatewayHealth()
-        if let route = self.browserSignInRoute, let url = self.webView.url,
-           Self.isTrustedLinkSource(url, dashboardURL: route.baseURL)
-        {
-            self.browserSignInRoute = (route.baseURL, url)
+        if let url = self.webView.url, Self.isTrustedLinkSource(url, dashboardURL: self.currentURL) {
+            self.browserSignInRoute = (self.currentURL, url)
         }
         if self.signedOut != nil {
             self.signedOutNeedsRefresh = true
@@ -704,20 +701,11 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     private func installHistoryStateBridge() {
-        self.canGoBackObservation = self.webView.observe(\.canGoBack, options: [
-            .initial,
-            .new,
-        ]) { [weak self] _, _ in
-            Task { @MainActor in
-                self?.publishNativeHistoryState()
-            }
-        }
-        self.canGoForwardObservation = self.webView.observe(\.canGoForward, options: [
-            .initial,
-            .new,
-        ]) { [weak self] _, _ in
-            Task { @MainActor in
-                self?.publishNativeHistoryState()
+        self.historyObservations = [\DashboardWebView.canGoBack, \.canGoForward].map { keyPath in
+            self.webView.observe(keyPath, options: [.initial, .new]) { [weak self] _, _ in
+                Task { @MainActor in
+                    self?.publishNativeHistoryState()
+                }
             }
         }
     }

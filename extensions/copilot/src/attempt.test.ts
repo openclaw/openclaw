@@ -18,8 +18,6 @@ import {
   type AnyAgentTool,
   type SandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import * as agentHarnessTaskRuntime from "openclaw/plugin-sdk/agent-harness-task-runtime";
-import type { AgentHarnessTaskRuntimeScope } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -29,10 +27,10 @@ import {
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerCopilotCleanupTests } from "./attempt-cleanup.test-support.js";
 import { runCopilotAttempt } from "./attempt.js";
 import {
   makeAssistantMessageEvent,
-  makeFailingNativeTaskRuntime,
   makeFakePool,
   makeFakeSdk,
   projectAgentRunAttemptTerminal,
@@ -3001,93 +2999,7 @@ describe("runCopilotAttempt", () => {
     );
   });
 
-  it("cleanup on success", async () => {
-    const sdk = makeFakeSdk();
-    const pool = makeFakePool(sdk);
-
-    await runCopilotAttempt(makeParams(), { pool });
-
-    const session = requireSession(sdk);
-    expect(session.off).toHaveBeenCalledTimes(session.on.mock.calls.length);
-    expect(session.disconnect).toHaveBeenCalledTimes(1);
-    expect(pool["release"]).toHaveBeenCalledTimes(1);
-  });
-
-  it("cleanup on send error", async () => {
-    const error = new Error("send failed");
-    const sdk = makeFakeSdk((session) => {
-      session.sendAndWait.mockImplementationOnce(async () => {
-        session.emit("user.message", { content: "hello" });
-        throw error;
-      });
-    });
-    const pool = makeFakePool(sdk);
-
-    const result = await runCopilotAttempt(makeParams(), { pool });
-    const session = requireSession(sdk);
-
-    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBe(error);
-    expect(
-      (result as AgentHarnessAttemptResult & { journalValidated?: boolean }).journalValidated,
-    ).toBe(false);
-    expect(session.off).toHaveBeenCalledTimes(session.on.mock.calls.length);
-    expect(session.disconnect).toHaveBeenCalledTimes(1);
-    expect(pool["release"]).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([false, true])(
-    "cleans up after native task finalization fails (deferred: %s)",
-    async (deferred) => {
-      const failure = new Error("native task persistence failed");
-      const runtime = makeFailingNativeTaskRuntime(failure);
-      vi.spyOn(agentHarnessTaskRuntime, "createAgentHarnessTaskRuntime").mockReturnValue(runtime);
-      const sdk = makeFakeSdk((session) => {
-        session.sendAndWait.mockImplementationOnce(async () => {
-          session.emit("user.message", { content: "hello" });
-          session.emit("subagent.started", {
-            agentDescription: "inspect",
-            agentDisplayName: "Worker",
-            agentName: "worker",
-            toolCallId: "call-1",
-          });
-          if (deferred) {
-            session.emit("session.compaction_start", {});
-          }
-          return makeAssistantMessageEvent("done");
-        });
-      });
-      const pool = makeFakePool(sdk);
-      const onDeferredCompaction = vi.fn<(params: { cleanup: Promise<unknown> }) => void>();
-      const outcome = await runCopilotAttempt(
-        makeParams({
-          agentHarnessTaskRuntimeScope: {} as AgentHarnessTaskRuntimeScope,
-        }),
-        { pool, onDeferredCompaction },
-      ).then(
-        (result) => ({ result, error: undefined }),
-        (error: unknown) => ({ result: undefined, error }),
-      );
-      const session = requireSession(sdk);
-      if (deferred) {
-        const cleanup = expectDefined(
-          onDeferredCompaction.mock.calls[0]?.[0].cleanup,
-          "deferred cleanup",
-        );
-        session.emit("session.compaction_complete", { success: true });
-        session.emit("session.idle", {});
-        await expect(cleanup).rejects.toBe(failure);
-      } else {
-        expect(outcome.error).toBeUndefined();
-        expect(
-          projectAgentRunAttemptTerminal(expectDefined(outcome.result, "attempt result").terminal)
-            .promptError,
-        ).toBe(failure);
-      }
-      expect(session.disconnect).toHaveBeenCalledOnce();
-      expect(pool.release).toHaveBeenCalledOnce();
-      expect(session.off).toHaveBeenCalledTimes(session.on.mock.calls.length);
-    },
-  );
+  registerCopilotCleanupTests({ makeParams, requireSession });
 
   it("cleanup on disconnect throw", async () => {
     const primaryError = new Error("send failed");

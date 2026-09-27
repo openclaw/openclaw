@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "CLI reference for `openclaw update` (updates, repair, and recovery cleanup)"
 read_when:
   - You want to update a source checkout safely
@@ -183,6 +184,9 @@ When replacement is needed, the updater retains its running worker files before
 changing the installed package. Linux OverlayFS installations use private copies
 so hard-link copy-up cannot invalidate the retained files’ identity checks.
 Other supported filesystems keep the hard-link fast path and copy fallback.
+
+Source updates retain a retired workspace dependency link when only its ignored `node_modules` directory remains.
+An older installed updater that fails at `updater-runtime-retention` needs this correction in its running code before retrying; a newer candidate cannot repair that earlier step.
 
 The installed updater reads the candidate's `package.json` before running its
 pending lifecycle scripts. `openclaw.updateAdmissionProtocol: 1` advertises the

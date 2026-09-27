@@ -8,11 +8,8 @@ import {
   type GoogleMeetCalendarLookupResult,
 } from "./calendar.js";
 import type { GoogleMeetConfig } from "./config.js";
-import {
-  fetchGoogleMeetArtifacts,
-  fetchGoogleMeetAttendance,
-  fetchGoogleMeetSpace,
-} from "./meet.js";
+import { fetchGoogleMeetSpace } from "./meet-api.js";
+import { fetchGoogleMeetArtifacts, fetchGoogleMeetAttendance } from "./meet.js";
 import { resolveMeetingInput } from "./plugin-registration.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
 
@@ -201,7 +198,7 @@ export async function exportGoogleMeetBundleFromParams(
 
 export { buildGoogleMeetCalendarDayWindow, listGoogleMeetCalendarEvents } from "./calendar.js";
 export {
-  buildGoogleMeetPreflightReport,
   endGoogleMeetActiveConference,
   fetchLatestGoogleMeetConferenceRecord,
-} from "./meet.js";
+} from "./meet-api.js";
+export { buildGoogleMeetPreflightReport } from "./meet.js";

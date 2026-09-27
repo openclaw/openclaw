@@ -351,12 +351,18 @@ export function readDevicePairingStoreStateFromDatabase(db: DatabaseSync): Devic
   ).rows) {
     pendingById[row.request_id] = fromPendingRow(row);
   }
-  const pairedByDeviceId = Object.fromEntries(
+  return { pendingById, pairedByDeviceId: readPairedDevicePairingRecordsFromDatabase(db) };
+}
+
+export function readPairedDevicePairingRecordsFromDatabase(
+  db: DatabaseSync,
+): Record<string, PairedDevice> {
+  const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
+  return Object.fromEntries(
     executeSqliteQuerySync(db, kysely.selectFrom("device_pairing_paired").selectAll()).rows.map(
       (row) => [row.device_id, fromPairedRow(row)],
     ),
   );
-  return { pendingById, pairedByDeviceId };
 }
 
 /** Load the full pending + paired device snapshot from the shared state DB. */

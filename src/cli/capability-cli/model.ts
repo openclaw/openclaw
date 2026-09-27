@@ -25,8 +25,8 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { collectOption } from "../program/helpers.js";
 import type { CapabilityEnvelope, CapabilityTransport } from "./metadata.js";
-import { emitJsonOrText, formatEnvelopeForText, providerSummaryText } from "./output.js";
-import { registerLocalProvidersCommand } from "./providers-command.js";
+import { formatEnvelopeForText, providerSummaryText } from "./output.js";
+import { registerLocalProvidersCommand, runCapabilityCommand } from "./providers-command.js";
 
 const LOCAL_MODEL_RUN_SYSTEM_PROMPT = "You are a personal assistant running inside OpenClaw.";
 const HEIC_MODEL_RUN_MIMES = new Set([
@@ -461,8 +461,8 @@ export function registerModelCapabilityCommands(capability: Command): void {
       "Agent whose model and credentials own the run (default: agents.defaults.systemAgent.agentId, then the sole agent)",
     )
     .option("--json", "Output JSON", false)
-    .action(async (opts, command) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
+    .action((opts, command) =>
+      runCapabilityCommand(opts.json, formatEnvelopeForText, async () => {
         const { resolveCapabilityAgentOption, resolveTransport } = await import("./shared.js");
         const prompt = requireModelRunPrompt(opts.prompt);
         const thinking = normalizeModelRunThinking(opts.thinking);
@@ -472,7 +472,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
           supported: ["local", "gateway"],
           defaultTransport: "local",
         });
-        const result = await runModelRun({
+        return runModelRun({
           prompt,
           agent: resolveCapabilityAgentOption(command, opts.agent),
           files: opts.file as string[] | undefined,
@@ -480,33 +480,31 @@ export function registerModelCapabilityCommands(capability: Command): void {
           thinking,
           transport,
         });
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
-      });
-    });
+      }),
+    );
 
   model
     .command("list")
     .description("List known models")
     .option("--json", "Output JSON", false)
-    .action(async (opts, command) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
+    .action((opts, command) =>
+      runCapabilityCommand(opts.json, providerSummaryText, async () => {
         const { resolveCapabilityAgentOption } = await import("./shared.js");
         const { getRuntimeConfig } = await import("../../config/config.js");
-        const result = await loadModelCatalogForInspection(
+        return loadModelCatalogForInspection(
           getRuntimeConfig(),
           resolveCapabilityAgentOption(command, opts.agent),
         );
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, providerSummaryText);
-      });
-    });
+      }),
+    );
 
   model
     .command("inspect")
     .description("Inspect one model catalog entry")
     .requiredOption("--model <provider/model>", "Model id")
     .option("--json", "Output JSON", false)
-    .action(async (opts, command) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
+    .action((opts, command) =>
+      runCapabilityCommand(opts.json, undefined, async () => {
         const { resolveCapabilityAgentOption } = await import("./shared.js");
         const { getRuntimeConfig } = await import("../../config/config.js");
         const target = normalizeStringifiedOptionalString(opts.model) ?? "";
@@ -520,11 +518,9 @@ export function registerModelCapabilityCommands(capability: Command): void {
         if (!entry) {
           throw new Error(`Model not found: ${target}`);
         }
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), entry, (value) =>
-          JSON.stringify(value, null, 2),
-        );
-      });
-    });
+        return entry;
+      }),
+    );
 
   registerLocalProvidersCommand(
     model,
@@ -579,31 +575,25 @@ export function registerModelCapabilityCommands(capability: Command): void {
       "Agent id (default: agents.defaults.systemAgent.agentId, then the sole agent)",
     )
     .option("--json", "Output JSON", false)
-    .action(async (opts, command) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = await runModelAuthLogout(
+    .action((opts, command) =>
+      runCapabilityCommand(opts.json, undefined, async () => {
+        return runModelAuthLogout(
           String(opts.provider),
           await resolveModelAuthAgent(command, opts.agent, "infer model auth logout"),
         );
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, (value) =>
-          JSON.stringify(value, null, 2),
-        );
-      });
-    });
+      }),
+    );
 
   modelAuth
     .command("status")
     .description("Show configured auth state")
     .option("--agent <id>", "Agent id (default: configured default agent)")
     .option("--json", "Output JSON", false)
-    .action(async (opts, command) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = await runModelAuthStatus(
+    .action((opts, command) =>
+      runCapabilityCommand(opts.json, undefined, async () => {
+        return runModelAuthStatus(
           await resolveModelAuthAgent(command, opts.agent, "infer model auth status"),
         );
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, (value) =>
-          JSON.stringify(value, null, 2),
-        );
-      });
-    });
+      }),
+    );
 }

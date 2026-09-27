@@ -50,46 +50,40 @@ describe("worker placement terminal persistence", () => {
     executionMode: "worker-turn" | "remote-exec" = "worker-turn",
   ) {
     let placement = await store.startDispatch({ ...identity, executionMode });
-    placement = store.transition({
-      sessionId: identity.sessionId,
-      from: "requested",
-      to: "provisioning",
-      expectedGeneration: placement.generation,
-      patch: { environmentId },
-    });
-    placement = store.transition({
-      sessionId: identity.sessionId,
-      from: "provisioning",
-      to: "syncing",
-      expectedGeneration: placement.generation,
-      patch: { workerBundleHash: "a".repeat(64) },
-    });
-    placement = store.transition({
-      sessionId: identity.sessionId,
-      from: "syncing",
-      to: "starting",
-      expectedGeneration: placement.generation,
-      patch: {
-        workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
-        remoteWorkspaceDir: `/workspace/${identity.sessionId}`,
+    for (const step of [
+      { to: "provisioning", patch: { environmentId } },
+      { to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },
+      {
+        to: "starting",
+        patch: {
+          workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
+          remoteWorkspaceDir: `/workspace/${identity.sessionId}`,
+        },
       },
-    });
+    ] as const) {
+      placement = store.transition({
+        sessionId: identity.sessionId,
+        from: placement.state,
+        expectedGeneration: placement.generation,
+        ...step,
+      });
+    }
     seedAttachedPlacementEnvironment(database, {
       environmentId,
       sessionId: identity.sessionId,
       ownerEpoch: 7,
     });
-    const active = store.transition({
+    placement = store.transition({
       sessionId: identity.sessionId,
       from: "starting",
       to: "active",
       expectedGeneration: placement.generation,
       patch: { activeOwnerEpoch: 7 },
     });
-    if (active.state !== "active") {
+    if (placement.state !== "active") {
       throw new Error("expected active worker placement");
     }
-    return active;
+    return placement;
   }
 
   async function pendingResult(identity = SESSION) {

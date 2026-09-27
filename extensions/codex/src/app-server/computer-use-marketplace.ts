@@ -2,7 +2,7 @@
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { hasNodeErrorCode } from "@openclaw/fs-safe/path";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import {
@@ -149,7 +149,7 @@ async function publishManagedWrapper(params: {
     assertCurrent?.();
     await assertDirectoryIdentityStable(parent, "managed bundled marketplace parent");
     const existing = await fs.lstat(physicalTargetPath).catch((error: unknown) => {
-      if (hasNodeErrorCode(error, "ENOENT")) {
+      if (extractErrorCode(error) === "ENOENT") {
         return undefined;
       }
       throw error;

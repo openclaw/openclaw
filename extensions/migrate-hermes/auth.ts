@@ -1,4 +1,3 @@
-// Migrate Hermes plugin module implements auth behavior.
 import { createHash } from "node:crypto";
 import {
   loadAuthProfileStoreWithoutExternalProfiles,
@@ -10,6 +9,7 @@ import {
   markMigrationItemError,
   markMigrationItemSkipped,
 } from "openclaw/plugin-sdk/migration";
+import type { PlannedMigrationTargets } from "openclaw/plugin-sdk/migration-runtime";
 import type { MigrationItem, MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   buildOpenAICodexCredentialExtra,
@@ -49,7 +49,6 @@ import {
   HERMES_REASON_SECRET_NO_LONGER_PRESENT,
 } from "./items.js";
 import type { HermesSource } from "./source.js";
-import type { PlannedTargets } from "./targets.js";
 
 const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_CODEX_DEFAULT_MODEL = "openai/gpt-6-astra";
@@ -332,7 +331,7 @@ function findPlannedAuthProfile(params: {
 export async function buildAuthItems(params: {
   ctx: MigrationProviderContext;
   source: HermesSource;
-  targets: PlannedTargets;
+  targets: PlannedMigrationTargets;
 }): Promise<MigrationItem[]> {
   const items: MigrationItem[] = [];
   items.push(...(await buildReauthenticationItems(params.source)));
@@ -395,7 +394,7 @@ export async function buildAuthItems(params: {
 export async function applyAuthItem(
   ctx: MigrationProviderContext,
   item: MigrationItem,
-  targets: PlannedTargets,
+  targets: PlannedMigrationTargets,
 ): Promise<MigrationItem> {
   if (item.status !== "planned") {
     return item;

@@ -10,15 +10,14 @@ import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session
 import { resolveGatewayAssistantAvatar } from "../assistant-avatar.js";
 import { resolveAssistantIdentity } from "../assistant-identity.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-export const agentIdentityGetHandler: GatewayRequestHandlers["agent.identity.get"] = ({
-  params,
-  respond,
-  context,
-  client,
-}) => {
+export const agentIdentityGetHandler: GatewayRequestHandlers["agent.identity.get"] = async (
+  options,
+) => {
+  const { params, respond, context, client } = options;
   if (!assertValidParams(params, validateAgentIdentityParams, "agent.identity.get", respond)) {
     return;
   }
@@ -45,8 +44,9 @@ export const agentIdentityGetHandler: GatewayRequestHandlers["agent.identity.get
     }
     agentId = resolved.agentId;
   }
-  const identity = resolveAssistantIdentity({ cfg, agentId });
-  const avatarProjection = resolveGatewayAssistantAvatar({
+  const authority = readGatewayRequestMutationAuthority(options);
+  const identity = await resolveAssistantIdentity({ cfg, agentId });
+  const avatarProjection = await resolveGatewayAssistantAvatar({
     cfg,
     identity,
     httpBasePath:
@@ -54,6 +54,7 @@ export const agentIdentityGetHandler: GatewayRequestHandlers["agent.identity.get
         ? (cfg.gateway?.controlUi?.basePath ?? "")
         : undefined,
   });
+  authority.assertCurrent();
   const avatarResolution = avatarProjection.resolution;
   respond(
     true,

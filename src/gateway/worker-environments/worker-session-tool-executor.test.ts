@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { configureRuntimeActionDecisionSink } from "../../audit/runtime-action-decision.js";
 import { claimAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
@@ -15,6 +16,7 @@ import {
 import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { readAgentRuntimeExecutionLineage } from "../agent-runtime-execution-lineage.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
@@ -71,6 +73,81 @@ describe("worker session tool topology", () => {
   });
 
   afterEach(() => resetGlobalHookRunner());
+
+  it.each(["active", "run-ended", "operator-revoked"] as const)(
+    "reads presence as the original operator only while its authority is live (%s)",
+    async (authorityState) => {
+      setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+      placements.authorizeWorkerTurnTools(sourceClaim, ["presence"]);
+      const entered = createDeferred();
+      const release = createDeferred();
+      const snapshot = { status: "ok", people: [{ name: "Ada" }] };
+      gatewayRequest.mockImplementationOnce(async (request) => {
+        expect(request).toMatchObject({
+          method: "presence.query",
+          params: { action: "person", person: "me", include: ["devices"] },
+        });
+        expect(request.params).not.toHaveProperty("toolCallId");
+        expect(getGatewayToolCallerIdentity()?.operatorAuthority).toMatchObject({
+          profileId: "profile-worker-requester",
+          scopes: ["operator.write"],
+        });
+        entered.resolve();
+        await release.promise;
+        return snapshot;
+      });
+      const pending = execute({
+        identity,
+        toolName: "presence",
+        request: {
+          toolCallId: "presence-read",
+          action: "person",
+          person: "me",
+          include: ["devices"],
+        },
+      });
+      await entered.promise;
+      if (authorityState === "run-ended") {
+        getFixture().closeSourceRun();
+      } else if (authorityState === "operator-revoked") {
+        getFixture().revokeOperatorAuthority();
+      }
+      release.resolve();
+      if (authorityState === "run-ended") {
+        await expect(pending).rejects.toThrow("source worker run ended");
+      } else if (authorityState === "operator-revoked") {
+        await expect(pending).rejects.toThrow(/operator.*(revoked|no longer active)/);
+      } else {
+        expect(JSON.parse((await pending).resultJson).details).toEqual(snapshot);
+        placements.authorizeWorkerTurnTools(sourceClaim, []);
+        await expect(
+          execute({ identity, toolName: "presence", request: { toolCallId: "revoked-presence" } }),
+        ).rejects.toThrow("Worker presence is not authorized");
+      }
+      expect(gatewayRequest).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("applies worker presence policy before querying the roster", async () => {
+    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+    placements.authorizeWorkerTurnTools(sourceClaim, ["presence"]);
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_tool_call",
+          matcher: ["presence"],
+          handler: () => ({ block: true, blockReason: "presence is disabled here" }),
+        },
+      ]),
+    );
+    const result = await execute({
+      identity,
+      toolName: "presence",
+      request: { toolCallId: "blocked-presence" },
+    });
+    expect(result.resultJson).toContain("presence is disabled here");
+    expect(gatewayRequest).not.toHaveBeenCalled();
+  });
 
   it("blocks a worker spawn before child effects and replays the decision", async () => {
     setEntry(SOURCE.sessionKey, SOURCE.sessionId);
@@ -217,9 +294,6 @@ describe("worker session tool topology", () => {
   it.each([
     { label: "default", mode: undefined },
     { label: "read-only", mode: "read-only" },
-    { label: "guarded", mode: "guarded" },
-    { label: "workspace", mode: "workspace" },
-    { label: "full", mode: "full" },
   ] as const)("inherits the parent's $label permission mode in a cloud child", async ({ mode }) => {
     setEntry(SOURCE.sessionKey, SOURCE.sessionId);
     if (mode) {
@@ -564,6 +638,77 @@ describe("worker session tool topology", () => {
   });
 });
 
+describe.each([
+  {
+    source: "unverified",
+    admissionSource: undefined,
+    operatorProfileId: undefined,
+    operatorScopes: undefined,
+    deniedReason:
+      "Presence requires authenticated Gateway read access or a trusted operator source.",
+  },
+  {
+    source: "authenticated reader",
+    admissionSource: undefined,
+    operatorProfileId: "profile-presence-reader",
+    operatorScopes: ["operator.read"],
+    deniedReason: undefined,
+  },
+  {
+    source: "session-only operator",
+    admissionSource: undefined,
+    operatorProfileId: "profile-session-reader",
+    operatorScopes: ["operator.sessions.read"],
+    deniedReason: "Presence requires operator.read access.",
+  },
+  {
+    source: "operator schedule",
+    admissionSource: "operator-schedule",
+    operatorProfileId: undefined,
+    operatorScopes: undefined,
+    deniedReason: undefined,
+  },
+  {
+    source: "requester schedule",
+    admissionSource: "requester-schedule",
+    operatorProfileId: undefined,
+    operatorScopes: undefined,
+    deniedReason:
+      "Presence requires authenticated Gateway read access or a trusted operator source.",
+  },
+] as const)("worker presence source authorization ($source)", (source) => {
+  const getFixture = installWorkerSessionToolTestFixture(fixtureMocks, source);
+
+  it("requires the source's read authority before querying the roster", async () => {
+    const { placements, sourceClaim, setEntry, execute, identity } = getFixture();
+    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+    placements.authorizeWorkerTurnTools(sourceClaim, ["presence"]);
+    const snapshot = { status: "ok", people: [{ name: "Ada" }] };
+    gatewayRequest.mockResolvedValueOnce(snapshot);
+
+    const pending = execute({
+      identity,
+      toolName: "presence",
+      request: { toolCallId: "source-presence", include: ["network", "location"] },
+    });
+
+    if (source.deniedReason) {
+      await expect(pending).rejects.toThrow(source.deniedReason);
+      expect(gatewayRequest).not.toHaveBeenCalled();
+    } else {
+      expect(JSON.parse((await pending).resultJson).details).toEqual(snapshot);
+      expect(gatewayRequest).toHaveBeenCalledOnce();
+      if (source.admissionSource === "operator-schedule") {
+        getFixture().closeSourceRun();
+        await expect(
+          execute({ identity, toolName: "presence", request: { toolCallId: "closed-schedule" } }),
+        ).rejects.toThrow("worker turn authority changed");
+        expect(gatewayRequest).toHaveBeenCalledOnce();
+      }
+    }
+  });
+});
+
 describe("worker spawn startup composition", () => {
   const getFixture = installWorkerSessionToolTestFixture(fixtureMocks);
 
@@ -581,6 +726,7 @@ describe("worker spawn startup composition", () => {
           const startup = await loadGatewayWorkerEnvironmentStartupState();
           const registry = createEmptyPluginRegistry();
           const runtime = await createGatewayWorkerEnvironmentRuntime({
+            scheduler: createTestGatewayScheduler(),
             getPluginRegistry: () => registry,
             getPortalRuntime: () => undefined,
             resolveGatewayContext,

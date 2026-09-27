@@ -877,49 +877,20 @@ describe("repository checkpoint GitHub publication", () => {
   it.each(["placement_generation", "environment_id", "owner_epoch"] as const)(
     "does not bind, process, or defer a request whose %s belongs to a different claim",
     async (column) => {
-      const f = await repositoryFixture();
-      seedAttachedPlacementEnvironment(openOpenClawStateDatabase(), {
-        environmentId: "publication-worker",
-        sessionId: SESSION_ID,
-        ownerEpoch: 7,
-      });
-      let placement = await f.placements.startDispatch({
-        sessionId: SESSION_ID,
-        sessionKey: SESSION_KEY,
-        agentId: "main",
-        executionMode: "worker-turn",
-      });
-      for (const step of [
-        { to: "provisioning", patch: { environmentId: "publication-worker" } },
-        { to: "syncing", patch: { workerBundleHash: "b".repeat(64) } },
-        {
-          to: "starting",
-          patch: {
-            workspaceBaseManifestRef: "sha256:" + "1".repeat(64),
-            remoteWorkspaceDir: "/worker/workspace",
-          },
-        },
-        { to: "active", patch: { activeOwnerEpoch: 7 } },
-      ] as const) {
-        placement = f.placements.transition({
-          sessionId: SESSION_ID,
-          from: placement.state,
-          expectedGeneration: placement.generation,
-          ...step,
-        });
-      }
+      const f = await repositoryFixture(undefined, REQUEST);
+      await seedPublicationWorker(f.placements, "publication-worker");
       const claim = await f.placements.claimTurn({
-        sessionId: SESSION_ID,
-        sessionKey: SESSION_KEY,
-        agentId: "main",
+        sessionId: REQUEST.sessionId,
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
         claimId: "publication-claim",
         runId: "publication-run",
         owner: { kind: "worker", environmentId: "publication-worker", ownerEpoch: 7 },
       });
       const accepted = await f.coordinator.requestForClaim({
         claim,
-        sessionKey: SESSION_KEY,
-        agentId: "main",
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
         idempotencyKey: "different-claim",
       });
       const db = openOpenClawStateDatabase().db;

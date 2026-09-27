@@ -6,6 +6,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -131,6 +132,7 @@ test.each([false, true])(
       throw new Error("Archive fixture must not start provider or inference work");
     };
     const environments = createWorkerEnvironmentService({
+      scheduler: createTestGatewayScheduler(),
       store: environmentStore,
       getConfig: () => ({}),
       resolveProvider: () => undefined,

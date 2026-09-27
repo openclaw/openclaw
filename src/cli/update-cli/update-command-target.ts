@@ -471,8 +471,19 @@ export async function resolveUpdateCommandTarget(
           target: { kind: updateInstallKind, tag },
           step: { step: "target-resolution", status: "in_progress", startedAtMs: Date.now() },
         });
-        const npmMetadataCommand =
-          packageInstallTarget?.manager === "npm" ? packageInstallTarget.command : undefined;
+        const npmMetadataOptions = {
+          command:
+            packageInstallTarget?.manager === "npm" ? packageInstallTarget.command : undefined,
+          cwd: invocationCwd,
+          env: packageInstallEnv,
+        };
+        const packageSpec = (targetTag: string) =>
+          resolveGlobalInstallSpec({
+            packageName: DEFAULT_PACKAGE_NAME,
+            tag: targetTag,
+            env: packageInstallEnv,
+          });
+        let targetMetadata: Awaited<ReturnType<typeof fetchNpmPackageTargetStatus>> | undefined;
         if (channel === "extended-stable") {
           const extendedStable = await resolveExtendedStablePackage({
             installKind: updateInstallKind,
@@ -487,38 +498,28 @@ export async function resolveUpdateCommandTarget(
           tag = extendedStable.version;
           packageInstallSpec = extendedStable.packageSpec;
         } else if (explicitTag) {
-          targetVersion = await resolveTargetVersion(tag, timeoutMs, {
-            spec: resolveGlobalInstallSpec({
-              packageName: DEFAULT_PACKAGE_NAME,
-              tag,
-              env: packageInstallEnv,
-            }),
-            command: npmMetadataCommand,
-            cwd: invocationCwd,
-            env: packageInstallEnv,
+          const resolved = await resolveTargetVersion(tag, timeoutMs, {
+            spec: packageSpec(tag),
+            ...npmMetadataOptions,
           });
+          targetVersion = resolved.version;
+          targetMetadata = resolved.metadata;
         } else {
-          targetVersion = await resolveNpmChannelTag({
+          const resolved = await resolveNpmChannelTag({
             channel,
             timeoutMs,
-            command: npmMetadataCommand,
-            cwd: invocationCwd,
-            env: packageInstallEnv,
-          }).then((resolved) => {
-            tag = resolved.tag;
-            fallbackToLatest = channel === "beta" && resolved.tag === "latest";
-            return resolved.version;
+            ...npmMetadataOptions,
           });
+          tag = resolved.tag;
+          fallbackToLatest = channel === "beta" && resolved.tag === "latest";
+          targetVersion = resolved.version;
+          targetMetadata = resolved.metadata;
         }
         const cmp =
           currentVersion && targetVersion
             ? compareSemverStrings(currentVersion, targetVersion)
             : null;
-        packageInstallSpec ??= resolveGlobalInstallSpec({
-          packageName: DEFAULT_PACKAGE_NAME,
-          tag,
-          env: packageInstallEnv,
-        });
+        packageInstallSpec ??= packageSpec(tag);
         packageAlreadyCurrent =
           !managedServiceRoot &&
           updateInstallKind === "package" &&
@@ -534,17 +535,15 @@ export async function resolveUpdateCommandTarget(
           currentVersion != null &&
           (targetVersion == null ? tag !== "latest" : cmp != null && cmp > 0);
         if (targetVersion) {
-          const targetMetadata = await fetchNpmPackageTargetStatus({
+          // A package-spec override may select a different artifact or a mutable tag.
+          if (packageSpec(targetVersion) !== `${DEFAULT_PACKAGE_NAME}@${targetVersion}`) {
+            targetMetadata = undefined;
+          }
+          targetMetadata ??= await fetchNpmPackageTargetStatus({
             target: targetVersion,
-            spec: resolveGlobalInstallSpec({
-              packageName: DEFAULT_PACKAGE_NAME,
-              tag: targetVersion,
-              env: packageInstallEnv,
-            }),
-            command: npmMetadataCommand,
             timeoutMs,
-            cwd: invocationCwd,
-            env: packageInstallEnv,
+            spec: packageSpec(targetVersion),
+            ...npmMetadataOptions,
           });
           if (targetMetadata.error || targetMetadata.version !== targetVersion) {
             const failure = createUpdatePreflightFailure(
@@ -555,19 +554,14 @@ export async function resolveUpdateCommandTarget(
             return undefined;
           }
           packageTargetSchemaVersions = targetMetadata.schemaVersions;
-          // Runtime and schema checks must use the same exact package that will be
-          // installed; rereading a mutable dist-tag can inspect a different release.
+          // Keep the selected version and its metadata together when a dist-tag moves.
           packageRuntimeTarget = { version: targetVersion, nodeEngine: targetMetadata.nodeEngine };
           // Always install the exact inspected version: a dist-tag can move between
           // this lookup and the install, and an uninspected version would bypass
           // the schema and runtime decisions made here. Missing schema metadata
           // only means the schema preflight cannot run (legacy target).
           if (updateInstallKind === "package" && canResolveRegistryVersionForPackageTarget(tag)) {
-            packageInstallSpec = resolveGlobalInstallSpec({
-              packageName: DEFAULT_PACKAGE_NAME,
-              tag: targetVersion,
-              env: packageInstallEnv,
-            });
+            packageInstallSpec = packageSpec(targetVersion);
           }
         }
       }

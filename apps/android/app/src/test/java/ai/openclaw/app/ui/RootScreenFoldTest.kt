@@ -237,6 +237,8 @@ class RootScreenFoldTest {
   @Test
   fun tabletopRelocationRetiresHeldRowMovementWithoutUndoingAnAcceptedMove() {
     withRoot(completed = true, destination = HomeDestination.Chat) { model ->
+      model.setSidebarPageOrder(listOf("settings"))
+      model.setSidebarVisiblePages(model.sidebarPageOrder.value)
       composeRule.onNodeWithContentDescription("Show Sidebar").performClick()
       val row = composeRule.onNode(hasText("Settings") and hasAnyAncestor(hasTestTag("sidebar-drawer")))
       val initialOrder = model.sidebarPageOrder.value
@@ -293,6 +295,8 @@ class RootScreenFoldTest {
   @Test
   fun tabletopRelocationBeforeLongPressRejectsOldDownAndAcceptsFreshGesture() {
     withRoot(completed = true, destination = HomeDestination.Chat) { model ->
+      model.setSidebarPageOrder(listOf("settings"))
+      model.setSidebarVisiblePages(model.sidebarPageOrder.value)
       composeRule.onNodeWithContentDescription("Show Sidebar").performClick()
       val row = composeRule.onNode(hasText("Settings") and hasAnyAncestor(hasTestTag("sidebar-drawer")))
       val order = model.sidebarPageOrder.value
@@ -407,7 +411,9 @@ class RootScreenFoldTest {
 
   @Test
   fun tabletopKeepsNativeDrawerDragsAndPredictiveBackAcrossPositiveRelocation() {
-    withRoot(completed = true, destination = HomeDestination.Chat) {
+    withRoot(completed = true, destination = HomeDestination.Chat) { model ->
+      model.setSidebarPageOrder(listOf("settings"))
+      model.setSidebarVisiblePages(model.sidebarPageOrder.value)
       composeRule.onNodeWithContentDescription("Show Sidebar").performClick()
       val sheet = composeRule.onNodeWithTag("sidebar-drawer")
       val original = windowBounds(sheet)
@@ -705,7 +711,7 @@ class RootScreenFoldTest {
       composeRule.onNode(hasText("Home") and hasAnyAncestor(hasTestTag("sidebar-permanent"))).performScrollTo().performClick()
       composeRule.onNodeWithTag("chat-composer-surface").assertIsDisplayed()
       composeRule.onNodeWithTag("sidebar-permanent").assertIsDisplayed()
-      composeRule.onNode(hasText("Settings") and hasAnyAncestor(hasTestTag("sidebar-permanent"))).performScrollTo().performClick()
+      composeRule.onNodeWithContentDescription("Settings").assertIsDisplayed().performClick()
       composeRule
         .onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex))
         .performScrollToNode(hasText("Appearance"))

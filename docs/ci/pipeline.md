@@ -118,6 +118,12 @@ the job's uploaded artifacts.
 | `openclaw-performance`           | Separate workflow: daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.6 live lanes                                                                                                                                                                             | Scheduled and manual dispatch                         |
 | `docs-external-links`            | Separate workflow: Docs External Link Audit checks external documentation links with lychee and uploads a report; it reports findings without failing, so it never blocks a pull request                                                                                                                 | Scheduled and manual dispatch                         |
 
+Partial workflow reruns reuse successful screenshot shards from earlier attempts
+of the same run. The reducer still requires matching source and workflow SHAs,
+run ID, pinned tooling, artifact digests, and successful captures. It preserves
+each family's producer attempt and records the reducer attempt separately;
+future-attempt artifacts remain invalid.
+
 ### Test runtime selection
 
 Linux test shards select Bun through `scripts/lib/ci-test-runtime.mts`. The
@@ -155,6 +161,19 @@ than one retain the complete Node stripe. Dual-runtime validation keeps the
 complete original stripe on Node and adds the client portion on Bun. The shared
 Vitest config resolves `ws` to the installed package so its imports and mocks use
 the same module identity on both runtimes.
+
+The complete memory plugin config (`memory-lancedb` and `memory-wiki`) also
+supports Bun, with its existing isolated workers and database-worker exclusions.
+A paired Linux Testbox comparison with two workers passed the same 53 files,
+474 tests, and one platform skip on each runtime. Bun reduced complete test-command
+wall time from 58.72s to 52.79s cold and from 43.51s to 38.68s with warm caches
+and reversed runtime order: 10–11% faster, with warm aggregate RSS near 3.94 GiB
+on both. PR selections use Bun. Full Release Validation's plugin prerelease
+batch retains its complete Node inventory and adds Bun after each qualified
+memory group in the same worker slot. Separate database-worker tests remain
+on Node. Both runtimes preserve the selected files, exclusions, and worker caps;
+either failing fails the job. Historical targets without dual batch support
+retain their original Node execution.
 
 Pull requests and their release-gate fallback run compatible selections on Bun.
 Ordinary manual CI, including Full Release Validation's `normal_ci` child, runs
@@ -416,6 +435,50 @@ GitHub requires both the check and the commit status when both share a required
 context. Missing approval, failed CI, or evaluation errors fail the review status.
 Missing or running CI leaves it pending and keeps merging blocked. CI completion
 automatically evaluates it again. Approval comments do not rerun the test suite.
+
+Every ten minutes, the resolver reconciles CI completions
+from five minutes before the previous successful scheduled pass started until
+five minutes ago (sixty-minute fallback, twelve-hour cap). Passes tile without gaps;
+late or dropped cron ticks only widen the next window, up to the cap. Run listing
+covers creation times from three hours before the window through the current time.
+GitHub caps each filtered query at 1,000 results, so the resolver bisects ranges
+whose reported total exceeds that limit. Each smaller range is paged until a short
+page, and its distinct run count must cover the total reported on its first page.
+Ten full pages or fewer distinct runs than reported fail the pass before any
+status publication or matrix output, retaining the anchor for a complete retry.
+Inclusive range endpoints are separated by one second, and run IDs are deduplicated
+across pages and slices. A range shorter than ten minutes that still exceeds
+1,000 runs fails before status publication or matrix output, so the covered window
+does not advance. The next pass rescans from the last successful pass.
+Scheduled resolver passes share one
+concurrency group without canceling an active pass; GitHub keeps one
+pending pass, which still starts from the last successful window.
+Each pass selects at most 100 PR heads, oldest CI completion first, with run ID
+breaking ties, and stops reading statuses when the cap is reached. If candidates
+remain, the `reconcile-backlog` job fails the workflow after the selected reviews
+finish. This keeps the same anchor: reviewed heads have fresh statuses, allowing
+the next scheduled pass to select the remainder from the same window.
+
+After a reconciler outage longer than twelve hours, older lost completions need
+a new push or a Security Review rerun.
+
+A CI rerun keeps its original creation time. A rerun of a run created more than
+three hours before the window relies on its own completion delivery; if that is
+lost, a new push or a Security Review rerun recovers it.
+
+The resolver reads each head's status history in reverse chronological order and
+uses only the newest `openclaw/ci-gate` status from `github-actions[bot]` with creator
+type `Bot`. Other publishers are ignored. It schedules normal review when that
+Actions-owned status is missing, older than CI completion, or pending. Only a
+non-pending status created at or after CI completion is settled and stops
+reselection. Every pending status remains eligible, including a review wait
+published after a pre-completion CI read. Tiled windows bound the harmless extra
+review when a head legitimately waits on newer in-progress CI. Wholly skipped
+runs are ignored. It never checks out PR code.
+Each pass costs one hosted `ubuntu-24.04` resolver job,
+run-list reads plus paginated status-history reads per newly completed head,
+and no Blacksmith registrations.
+
 The Security Review Actions job succeeds when evaluation completes, including
 when the required commit status blocks merging for missing approval or failed CI.
 This prevents an earlier evaluation from leaving a stale failed job after automatic
@@ -584,7 +647,8 @@ that CI bypass.
 
 Results apply to the PR head evaluated by the workflow. New PR heads, base-branch
 retargeting, command comment events, and CI completion reevaluate automatically;
-unrelated pushes to `main` do not. Sensitive-path policy and permission changes
+ten-minute reconciliation recovers lost CI-completion deliveries. Unrelated pushes
+to `main` do not. Sensitive-path policy and permission changes
 take effect on the next automatic evaluation. Guard execution does not require
 manual dispatches or manual reruns.
 

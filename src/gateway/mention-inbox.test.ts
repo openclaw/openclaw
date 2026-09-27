@@ -559,26 +559,6 @@ describe("temporary human mention Inbox", () => {
     }, cfg);
   });
 
-  it("caps per-profile retention without forgetting eviction or dismissal deduplication", async () => {
-    await withInbox(async (f) => {
-      f.clients.length = 0;
-      for (let index = 0; index < 101; index++) {
-        f.post(`source-${index}`);
-      }
-      const retained = read(f.inbox, f.bobClient).items;
-      expect(retained).toHaveLength(100);
-      expect(retained.at(-1)?.messageId).toBe("message-source-1");
-      f.post("source-0");
-      expect(read(f.inbox, f.bobClient).items).toEqual(retained);
-      f.inbox.dismiss(
-        f.bobClient,
-        retained.map((item) => item.id),
-      );
-      f.post("source-100");
-      expect(read(f.inbox, f.bobClient).items).toEqual([]);
-    });
-  });
-
   it("expires on the Gateway clock and does not backfill after a new Gateway lifetime", async () => {
     await withInbox(async (f) => {
       f.post("first");

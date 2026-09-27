@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import { CronService, type CronEvent } from "./service.js";
 import { createFinishedBarrier, setupCronServiceSuite } from "./service.test-harness.js";
@@ -13,6 +17,7 @@ describe("CronService persists delivery suppression", () => {
     "persists %s delivery suppression in job state, history, and the finished event",
     async (mode) => {
       const { storePath } = await makeStorePath();
+      const schedulerClock = createGatewaySchedulerClock(Date.now());
       const events: CronEvent[] = [];
       const finished = createFinishedBarrier();
       const runIsolatedAgentJob = vi.fn<CronServiceDeps["runIsolatedAgentJob"]>();
@@ -23,6 +28,7 @@ describe("CronService persists delivery suppression", () => {
         deliverySuppressionReason: "channel_transform",
       });
       const cron = new CronService({
+        scheduler: createTestGatewayScheduler(schedulerClock.clock),
         storePath,
         cronEnabled: true,
         log: logger,
@@ -49,7 +55,7 @@ describe("CronService persists delivery suppression", () => {
         });
         if (mode === "scheduled") {
           const done = finished.waitForOk(job.id);
-          await vi.advanceTimersByTimeAsync(job.state.nextRunAtMs! - Date.now());
+          await schedulerClock.advanceTo(job.state.nextRunAtMs!);
           await done;
         } else {
           await cron.run(job.id, "force");
@@ -76,7 +82,7 @@ describe("CronService persists delivery suppression", () => {
           .toEqual([expect.objectContaining({ deliverySuppressionReason: "channel_transform" })]);
 
         runIsolatedAgentJob.mockResolvedValue({ status: "ok", delivered: true });
-        vi.setSystemTime(Date.now() + 1);
+        schedulerClock.setTime(schedulerClock.clock.now() + 1);
         await cron.run(job.id, "force");
         expect(
           (await loadCronStore(storePath)).jobs[0]?.state.deliverySuppressionReason,

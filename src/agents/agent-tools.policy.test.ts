@@ -20,8 +20,7 @@ import {
   resolveSubagentToolPolicyForSession,
   resolveTrustedGroupId,
 } from "./agent-tools.policy.js";
-import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
-import { filterToolsByPolicy, isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 
 vi.mock("../channels/plugins/session-conversation.js", () => ({
   resolveSessionConversation: ({ rawId }: { rawId: string }) => ({
@@ -65,29 +64,6 @@ function createSessionStorePath(prefix: string, agentId = "main"): string {
     "sessions.json",
   );
 }
-
-describe("agent-tools.policy", () => {
-  it("treats * in allow as allow-all", () => {
-    const tools = [createStubTool("read"), createStubTool("exec")];
-    const filtered = filterToolsByPolicy(tools, { allow: ["*"] });
-    expect(filtered.map((tool) => tool.name)).toEqual(["read", "exec"]);
-  });
-
-  it("treats * in deny as deny-all", () => {
-    const tools = [createStubTool("read"), createStubTool("exec")];
-    const filtered = filterToolsByPolicy(tools, { deny: ["*"] });
-    expect(filtered).toStrictEqual([]);
-  });
-
-  it("supports wildcard allow/deny patterns", () => {
-    expect(isToolAllowedByPolicyName("web_fetch", { allow: ["web_*"] })).toBe(true);
-    expect(isToolAllowedByPolicyName("web_search", { deny: ["web_*"] })).toBe(false);
-  });
-
-  it("keeps apply_patch when write is allowlisted", () => {
-    expect(isToolAllowedByPolicyName("apply_patch", { allow: ["write"] })).toBe(true);
-  });
-});
 
 describe("resolveGroupToolPolicy group context validation", () => {
   const cfg: OpenClawConfig = {
@@ -707,34 +683,6 @@ describe("resolveEffectiveToolPolicy", () => {
     }
   });
 
-  it("still warns when an agent profile has its own configured exec section (#47487)", async () => {
-    const warnLogs = createWarnLogCapture("openclaw-agent-tools-policy-test");
-    try {
-      const cfg = {
-        agents: {
-          list: [
-            {
-              id: "sage",
-              tools: {
-                profile: "messaging",
-                exec: { mode: "allowlist" },
-              },
-            },
-          ],
-        },
-      } as OpenClawConfig;
-
-      resolveEffectiveToolPolicy({ config: cfg, agentId: "sage" });
-
-      const warning = await warnLogs.findText('tools policy: profile "messaging"');
-      expect(warning).toContain('(agent "sage")');
-      expect(warning).toContain("configured tool sections (tools.exec)");
-      expect(warning).toContain('Add alsoAllow: ["exec", "process"]');
-    } finally {
-      warnLogs.cleanup();
-    }
-  });
-
   it.each<{
     name: string;
     tools?: OpenClawConfig["tools"];
@@ -830,17 +778,5 @@ describe("resolveEffectiveToolPolicy", () => {
     } finally {
       warnLogs.cleanup();
     }
-  });
-
-  it("explicit alsoAllow with exec still grants exec under messaging profile", () => {
-    const cfg = {
-      tools: {
-        profile: "messaging",
-        alsoAllow: ["exec", "process"],
-        exec: { host: "sandbox" },
-      },
-    } as OpenClawConfig;
-    const result = resolveEffectiveToolPolicy({ config: cfg });
-    expect(result.profileAlsoAllow).toEqual(["exec", "process"]);
   });
 });

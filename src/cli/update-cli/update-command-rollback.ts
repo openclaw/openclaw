@@ -55,7 +55,6 @@ import { readGatewayServiceStateForUpdate } from "./update-command-service-plan.
 import { compensateOriginalManagedService } from "./update-command-service-recovery.js";
 import {
   maybeRestartService,
-  maybeResumeWindowsTaskAutoStartAfterPackageUpdate,
   maybeStopManagedServiceBeforeMutableUpdate,
   resolveUpdatedGatewayRestartPort,
   type PreManagedServiceStop,
@@ -101,6 +100,18 @@ export async function rollbackFailedUpdate(params: {
     executor?.assertCurrent();
   };
   const env = before?.serviceEnv ?? opts.run?.env ?? process.env;
+  const pendingRecovery = (result: UpdateRunResult, pendingRecoveryReason: string) => ({
+    result: {
+      ...result,
+      status: "error" as const,
+      recovery: {
+        serviceRestartSafe: false as const,
+        reason: "runtime-verification-failed" as const,
+      },
+    },
+    rolledBack: false,
+    pendingRecoveryReason,
+  });
   if (!opts.recovery) {
     try {
       assertCurrent();
@@ -116,30 +127,16 @@ export async function rollbackFailedUpdate(params: {
         assertCurrent();
       }
     } catch (error) {
-      return {
-        result: {
-          ...params.result,
-          status: "error",
-          recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-        },
-        rolledBack: false,
-        pendingRecoveryReason: formatErrorMessage(error),
-      };
+      return pendingRecovery(params.result, formatErrorMessage(error));
     }
   }
   if (opts.recovery) {
     // Retained full-state recovery is inspection-only in this delivery. Never
     // downgrade its claim to package-only rollback or rewrite its journal.
-    return {
-      result: {
-        ...params.result,
-        status: "error",
-        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-      },
-      rolledBack: false,
-      pendingRecoveryReason:
-        "Full-state checkpoint recovery is deferred; the retained record and artifacts were left unchanged.",
-    };
+    return pendingRecovery(
+      params.result,
+      "Full-state checkpoint recovery is deferred; the retained record and artifacts were left unchanged.",
+    );
   }
   // A's original service is independent of B's package transaction. Keep the
   // existing admission and explicit recovery refusals above this selection.
@@ -514,8 +511,7 @@ export async function rollbackFailedUpdate(params: {
     if (stopped.windowsTaskAutoStartRecovery) {
       params.onGatewayStartAttempted?.();
     }
-    await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
-      stopped,
+    await stopped.windowsTaskAutoStartRecovery?.restore(
       true,
       createWindowsTaskAutoStartGuard({
         root: serviceRoot,
@@ -633,14 +629,8 @@ export async function rollbackFailedUpdate(params: {
       assertCurrent();
     } catch (cause) {
       return {
-        result: {
-          ...result,
-          status: "error",
-          recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-        },
-        rolledBack: false,
+        ...pendingRecovery(result, formatErrorMessage(cause)),
         stoppedForRollback,
-        pendingRecoveryReason: formatErrorMessage(cause),
       };
     }
     if (error instanceof NativePackageRollbackError) {

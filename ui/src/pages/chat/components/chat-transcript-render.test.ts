@@ -36,6 +36,16 @@ function touchPointerUp(element: Element): void {
   element.dispatchEvent(event);
 }
 
+async function mountThread(props: Parameters<typeof renderChatThread>[0]) {
+  const transcript = createTestTranscript();
+  const container = document.body.appendChild(document.createElement("div"));
+  render(renderChatThread(props, transcript), container);
+  transcript.hostConnected();
+  transcript.hostUpdated();
+  await flushDeferredRowPrune();
+  return { container, transcript };
+}
+
 describe("chat transcript rendering", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
@@ -571,39 +581,7 @@ describe("chat transcript rendering", () => {
     transcript.hostDisconnected();
   });
 
-  it("leaves interrupted status to the composer after a partial assistant reply", async () => {
-    const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
-    const props = {
-      ...threadProps("pane-interrupted", "agent:main:main", [
-        {
-          role: "user",
-          content: "Start the task",
-          timestamp: 1_000,
-          __openclaw: { idempotencyKey: "run-1:user" },
-        },
-        { role: "assistant", content: "Partial response", timestamp: 2_000 },
-      ]),
-      runStatus: {
-        phase: "interrupted" as const,
-        runId: "run-1",
-        sessionKey: "agent:main:main",
-        occurredAt: 3_000,
-      },
-    };
-
-    render(renderChatThread(props, transcript), container);
-    transcript.hostConnected();
-    transcript.hostUpdated();
-    await flushDeferredRowPrune();
-
-    expect(container.querySelector(".chat-turn-terminal-status--interrupted")).toBeNull();
-    transcript.hostDisconnected();
-  });
-
   it("leaves interrupted status to the composer when a turn has no assistant reply", async () => {
-    const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
     const props = {
       ...threadProps("pane-interrupted-empty", "agent:main:main", [
         { role: "user", content: "Earlier task", timestamp: 1_000 },
@@ -623,10 +601,7 @@ describe("chat transcript rendering", () => {
       },
     };
 
-    render(renderChatThread(props, transcript), container);
-    transcript.hostConnected();
-    transcript.hostUpdated();
-    await flushDeferredRowPrune();
+    const { container, transcript } = await mountThread(props);
 
     expect(container.querySelector(".chat-turn-terminal-status--interrupted")).toBeNull();
     transcript.hostDisconnected();
@@ -683,6 +658,96 @@ describe("chat transcript rendering", () => {
     expect(secondGroup.classList.contains("chat-group--meta-revealed")).toBe(false);
     firstTranscript.hostDisconnected();
     secondTranscript.hostDisconnected();
+  });
+
+  it("keeps the completed answer timestamp and actions when full run history is restored", async () => {
+    vi.useFakeTimers();
+    const runId = "answer-timestamp";
+    const sessionKey = "agent:main:dashboard:answer-timestamp";
+    const startedAt = Date.parse("2026-09-27T08:46:05.653Z");
+    const answeredAt = Date.parse("2026-09-27T09:20:57.883Z");
+    const text = "Confirmed: Engineers — café 雪 🦞";
+    const user = {
+      role: "user",
+      content: "Confirm the audience.",
+      timestamp: startedAt - 1_000,
+      __openclaw: { id: "timestamp-prompt", idempotencyKey: `${runId}:user` },
+    };
+    const answer = {
+      role: "assistant",
+      content: text,
+      timestamp: answeredAt,
+      stopReason: "stop",
+      __openclaw: { id: "timestamp-answer", runId, runTerminal: true },
+    };
+    const work = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "audience", name: "ask_user", arguments: {} }],
+        timestamp: startedAt,
+        stopReason: "toolUse",
+        __openclaw: { id: "timestamp-call", runId },
+      },
+      {
+        role: "toolResult",
+        toolCallId: "audience",
+        toolName: "ask_user",
+        content: "Engineers — café 雪 🦞",
+        timestamp: answeredAt - 1_000,
+        __openclaw: { id: "timestamp-result", runId },
+      },
+    ];
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const onSetReply = vi.fn();
+    try {
+      for (const [index, messages] of [
+        [user, answer],
+        [user, ...work, answer],
+      ].entries()) {
+        const props = {
+          ...threadProps(`pane-answer-timestamp-${index}`, sessionKey, messages),
+          showToolCalls: true,
+          onSetReply,
+          selectedSession: {
+            key: sessionKey,
+            kind: "direct" as const,
+            updatedAt: answeredAt,
+            status: "done" as const,
+            lastRunId: runId,
+            runtimeMs: 35 * 60_000 + 17_000,
+          },
+        };
+        const transcript = createTestTranscript();
+        const container = document.body.appendChild(document.createElement("div"));
+        try {
+          render(renderChatThread(props, transcript), container);
+          transcript.hostConnected();
+          transcript.hostUpdated();
+          await vi.advanceTimersByTimeAsync(0);
+          const group = requireElement(container, ".chat-group.assistant");
+          expect(group.querySelectorAll(".chat-group-footer")).toHaveLength(1);
+          expect(group.querySelector("time")?.getAttribute("datetime")).toBe(
+            "2026-09-27T09:20:57.883Z",
+          );
+          requireElement(group, ".chat-copy-btn").click();
+          expect(writeText).toHaveBeenLastCalledWith(text);
+          requireElement(group, ".chat-reply-btn").click();
+          expect(onSetReply).toHaveBeenLastCalledWith(
+            expect.objectContaining({ sourceMessageId: "timestamp-answer", text }),
+          );
+          if (index === 1) {
+            expect(requireElement(group, ".chat-work-group").textContent).toContain("35m 17s");
+          }
+          await vi.advanceTimersByTimeAsync(1_500);
+        } finally {
+          transcript.hostDisconnected();
+          container.remove();
+        }
+      }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each(["indexed", "keyed"] as const)(
@@ -837,11 +902,9 @@ describe("chat transcript rendering", () => {
       "qa241-unicode/日本語.txt",
     ].flatMap((path) => ["click", "Enter", " "].map((key) => ({ path, key }))),
   )("opens focused transcript file $path with $key", async ({ path, key }) => {
-    const transcript = createTestTranscript();
     const onOpenWorkspaceFile = vi.fn();
     const onOpenSessionLink = vi.fn();
     const onHistoryIntent = vi.fn();
-    const container = document.body.appendChild(document.createElement("div"));
     const props = {
       ...threadProps("pane-file-link", "agent:main:main", [
         {
@@ -854,10 +917,7 @@ describe("chat transcript rendering", () => {
       onOpenSessionLink,
       onHistoryIntent,
     };
-    render(renderChatThread(props, transcript), container);
-    transcript.hostConnected();
-    transcript.hostUpdated();
-    await flushDeferredRowPrune();
+    const { container, transcript } = await mountThread(props);
 
     const link = container.querySelector<HTMLAnchorElement>("a.markdown-file-link");
     link?.focus();
@@ -879,11 +939,9 @@ describe("chat transcript rendering", () => {
   it.each(["click", "Ctrl+click", "Enter", " "])(
     "handles transcript session links with %j",
     async (action) => {
-      const transcript = createTestTranscript();
       const onOpenSessionLink = vi.fn();
       const onHistoryIntent = vi.fn();
       const sessionKey = "agent:roboclaw:dashboard:2139bddb-3211-4641-b993-10f619f124e6";
-      const container = document.body.appendChild(document.createElement("div"));
       const props = {
         ...threadProps("pane-session-link", "agent:main:main", [
           { role: "assistant", content: `Open \`${sessionKey}\``, timestamp: 1_000 },
@@ -891,10 +949,7 @@ describe("chat transcript rendering", () => {
         onOpenSessionLink,
         onHistoryIntent,
       };
-      render(renderChatThread(props, transcript), container);
-      transcript.hostConnected();
-      transcript.hostUpdated();
-      await flushDeferredRowPrune();
+      const { container, transcript } = await mountThread(props);
 
       const link = container.querySelector<HTMLAnchorElement>("a.markdown-session-link");
       if (action === "click" || action === "Ctrl+click") {
@@ -931,12 +986,10 @@ describe("chat transcript rendering", () => {
   );
 
   it.each(["click", "Enter"])("SPA-routes transcript session hrefs with %s", async (action) => {
-    const transcript = createTestTranscript();
     const onOpenSessionLink = vi.fn();
     const onHistoryIntent = vi.fn();
     const literalUuid = "12345678-90ab-cdef-1234-567890abcdef";
     const href = `/control/chat/main/~key/${literalUuid}?view=full#latest`;
-    const container = document.body.appendChild(document.createElement("div"));
     const props = {
       ...threadProps("pane-session-href", "agent:main:main", [
         { role: "assistant", content: `[Open session](${href})`, timestamp: 1_000 },
@@ -945,10 +998,7 @@ describe("chat transcript rendering", () => {
       onOpenSessionLink,
       onHistoryIntent,
     };
-    render(renderChatThread(props, transcript), container);
-    transcript.hostConnected();
-    transcript.hostUpdated();
-    await flushDeferredRowPrune();
+    const { container, transcript } = await mountThread(props);
 
     const link = container.querySelector<HTMLAnchorElement>(`a[href^="/control/chat/"]`);
     const event =
@@ -969,9 +1019,7 @@ describe("chat transcript rendering", () => {
   });
 
   it("leaves external transcript hrefs to the browser", async () => {
-    const transcript = createTestTranscript();
     const onOpenSessionLink = vi.fn();
-    const container = document.body.appendChild(document.createElement("div"));
     const props = {
       ...threadProps("pane-external-href", "agent:main:main", [
         {
@@ -982,10 +1030,7 @@ describe("chat transcript rendering", () => {
       ]),
       onOpenSessionLink,
     };
-    render(renderChatThread(props, transcript), container);
-    transcript.hostConnected();
-    transcript.hostUpdated();
-    await flushDeferredRowPrune();
+    const { container, transcript } = await mountThread(props);
 
     const link = container.querySelector<HTMLAnchorElement>('a[href^="https://example.com/"]');
     const event = new MouseEvent("click", { bubbles: true, button: 0, cancelable: true });

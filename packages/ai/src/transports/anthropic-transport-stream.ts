@@ -1,10 +1,5 @@
 import type { AssistantMessageEvent, Context, Model, StreamFn } from "@openclaw/llm-core";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-/**
- * Native Anthropic Messages streaming transport.
- * Converts OpenClaw contexts/tools into Anthropic payloads, streams SSE events
- * back into runtime output blocks, and applies provider request policy.
- */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getEnvApiKey } from "../env-api-keys.js";
@@ -57,11 +52,7 @@ import {
   type AnthropicTransportOptions,
 } from "./anthropic-transport-options.js";
 import { createAssistantOutput } from "./assistant-output.js";
-import {
-  buildGuardedModelFetch,
-  resolveProviderEndpoint,
-  transformTransportMessages,
-} from "./host-policy.js";
+import { buildGuardedModelFetch, resolveProviderEndpoint } from "./host-policy.js";
 import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
 import {
   createWritableTransportEventStream,
@@ -390,7 +381,8 @@ function createAnthropicTransportClient(params: {
     isKimiAnthropicProvider(model.provider) && options?.thinkingEnabled === true
       ? buildGuardedModelFetch(model, undefined, { sanitizeSse: false })
       : buildGuardedModelFetch(model);
-  if (model.provider === "github-copilot") {
+  const copilot = model.provider === "github-copilot";
+  if (copilot || usesFoundryBearerAuth(resolveModelHeaderSentinels(model))) {
     const betaFeatures = needsInterleavedBeta ? ["interleaved-thinking-2025-05-14"] : [];
     return {
       client: createAnthropicMessagesClient({
@@ -403,29 +395,8 @@ function createAnthropicTransportClient(params: {
             "anthropic-dangerous-direct-browser-access": "true",
             ...(betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {}),
           },
-          model.headers,
-          getAiTransportHost().buildCopilotDynamicHeaders(context.messages),
-          optionHeaders,
-        ),
-        fetch,
-      }),
-      isOAuthToken: false,
-    };
-  }
-  if (usesFoundryBearerAuth(resolveModelHeaderSentinels(model))) {
-    const betaFeatures = needsInterleavedBeta ? ["interleaved-thinking-2025-05-14"] : [];
-    return {
-      client: createAnthropicMessagesClient({
-        apiKey: null,
-        authToken: apiKey,
-        baseURL: model.baseUrl,
-        defaultHeaders: mergeTransportHeaders(
-          {
-            accept: "application/json",
-            "anthropic-dangerous-direct-browser-access": "true",
-            ...(betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {}),
-          },
-          omitFoundryBearerCredentialHeaders(model.headers),
+          copilot ? model.headers : omitFoundryBearerCredentialHeaders(model.headers),
+          copilot ? getAiTransportHost().buildCopilotDynamicHeaders(context.messages) : undefined,
           optionHeaders,
         ),
         fetch,
@@ -516,7 +487,12 @@ async function buildAnthropicParams(
   });
   const cacheBreakpointOptOutMessageIndexes = new Set<number>();
   const messages = await convertAnthropicMessages(
-    transformTransportMessages(replayPlan.messages, model, normalizeAnthropicToolCallId),
+    getAiTransportHost().transformTransportMessages(
+      replayPlan.messages,
+      model,
+      normalizeAnthropicToolCallId,
+      undefined,
+    ),
     model,
     isOAuthToken,
     {

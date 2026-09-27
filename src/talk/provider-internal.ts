@@ -17,6 +17,7 @@ import type {
   RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceProviderCapabilities,
   RealtimeVoiceProviderConfig,
+  RealtimeVoiceProviderConfiguredContext,
 } from "./provider-types.js";
 
 const INTERNAL_REALTIME_VOICE_PROVIDER = Symbol.for("openclaw.internal.realtime-voice-provider.v1");
@@ -46,24 +47,15 @@ export type InternalRealtimeVoiceBrowserSessionCreateRequest =
   };
 
 type InternalRealtimeVoiceProviderApi = {
-  isBrowserSessionConfigured: (ctx: {
-    cfg?: OpenClawConfig;
-    providerConfig: RealtimeVoiceProviderConfig;
-    agentId?: string;
-  }) => boolean;
-  resolveBrowserSessionCapabilities?: (ctx: {
-    cfg?: OpenClawConfig;
-    providerConfig: RealtimeVoiceProviderConfig;
-    agentId?: string;
-    /** Effective per-session model after request overrides. */
-    model?: string;
-    clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
-  }) => InternalRealtimeVoiceProviderCapabilities;
-  isGatewayRelayConfigured?: (ctx: {
-    cfg?: OpenClawConfig;
-    providerConfig: RealtimeVoiceProviderConfig;
-    agentId?: string;
-  }) => boolean | undefined;
+  isBrowserSessionConfigured: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean;
+  resolveBrowserSessionCapabilities?: (
+    ctx: RealtimeVoiceProviderConfiguredContext & {
+      /** Effective per-session model after request overrides. */
+      model?: string;
+      clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
+    },
+  ) => InternalRealtimeVoiceProviderCapabilities;
+  isGatewayRelayConfigured?: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean | undefined;
   resolveGatewayRelayCapabilities?: (ctx: {
     cfg?: OpenClawConfig;
     providerConfig: RealtimeVoiceProviderConfig;
@@ -98,12 +90,11 @@ function readInternalRealtimeVoiceProviderApi(
     : undefined;
 }
 
-export function isInternalRealtimeVoiceBrowserSessionConfigured(params: {
-  provider: RealtimeVoiceProviderPlugin;
-  cfg?: OpenClawConfig;
-  providerConfig: RealtimeVoiceProviderConfig;
-  agentId?: string;
-}): boolean | undefined {
+export function isInternalRealtimeVoiceBrowserSessionConfigured(
+  params: RealtimeVoiceProviderConfiguredContext & {
+    provider: RealtimeVoiceProviderPlugin;
+  },
+): boolean | undefined {
   return readInternalRealtimeVoiceProviderApi(params.provider)?.isBrowserSessionConfigured({
     cfg: params.cfg,
     providerConfig: params.providerConfig,
@@ -111,14 +102,13 @@ export function isInternalRealtimeVoiceBrowserSessionConfigured(params: {
   });
 }
 
-export function resolveInternalRealtimeVoiceBrowserSessionCapabilities(params: {
-  provider: RealtimeVoiceProviderPlugin;
-  cfg?: OpenClawConfig;
-  providerConfig: RealtimeVoiceProviderConfig;
-  agentId?: string;
-  model?: string;
-  clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
-}): InternalRealtimeVoiceProviderCapabilities | undefined {
+export function resolveInternalRealtimeVoiceBrowserSessionCapabilities(
+  params: RealtimeVoiceProviderConfiguredContext & {
+    provider: RealtimeVoiceProviderPlugin;
+    model?: string;
+    clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
+  },
+): InternalRealtimeVoiceProviderCapabilities | undefined {
   return readInternalRealtimeVoiceProviderApi(params.provider)?.resolveBrowserSessionCapabilities?.(
     {
       cfg: params.cfg,
@@ -130,12 +120,11 @@ export function resolveInternalRealtimeVoiceBrowserSessionCapabilities(params: {
   );
 }
 
-export function isInternalRealtimeVoiceGatewayRelayConfigured(params: {
-  provider: RealtimeVoiceProviderPlugin;
-  cfg?: OpenClawConfig;
-  providerConfig: RealtimeVoiceProviderConfig;
-  agentId?: string;
-}): boolean | undefined {
+export function isInternalRealtimeVoiceGatewayRelayConfigured(
+  params: RealtimeVoiceProviderConfiguredContext & {
+    provider: RealtimeVoiceProviderPlugin;
+  },
+): boolean | undefined {
   return readInternalRealtimeVoiceProviderApi(params.provider)?.isGatewayRelayConfigured?.({
     cfg: params.cfg,
     providerConfig: params.providerConfig,

@@ -1,4 +1,8 @@
-import { compareReleaseVersions, parseReleaseVersion } from "./release-version.mjs";
+import {
+  classifyReleaseTrain,
+  compareReleaseVersions,
+  parseReleaseVersion,
+} from "./release-version.mjs";
 import catalog from "./upgrade-survivor-scenarios.json" with { type: "json" };
 
 const UPGRADE_SURVIVOR_SCENARIOS = Object.freeze(catalog.scenarios);
@@ -28,7 +32,6 @@ const TRUSTED_HARNESS_OWNED_SCENARIOS = new Set([
   "projects-doctor",
   "channel-owner-policy",
   "projects-startup-migration",
-  "taskflow-restoration",
   "workshop-doctor-recovery",
   "update-report-recovery",
   "dreaming-cron-doctor",
@@ -50,7 +53,6 @@ const aggregateScenarios = UPGRADE_SURVIVOR_SCENARIOS.filter(
     scenario !== "projects-doctor" &&
     scenario !== "channel-owner-policy" &&
     scenario !== "projects-startup-migration" &&
-    scenario !== "taskflow-restoration" &&
     scenario !== "workshop-doctor-recovery" &&
     scenario !== "update-report-recovery" &&
     scenario !== "dreaming-cron-doctor" &&
@@ -164,6 +166,21 @@ function comparePublishedReleaseVersion(a, b) {
 }
 
 export function supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec) {
+  if (scenario === "missing-load-path") {
+    const release = parseReleaseVersion((baselineSpec ?? "").replace(/^openclaw@/u, ""));
+    // Floating tags are checked again against the installed baseline before seeding.
+    if (!release) {
+      return true;
+    }
+    // #113324 first shipped in beta.5; July's frozen line retained the older CLI guard.
+    const train = classifyReleaseTrain(release);
+    const frozenJuly =
+      release.year === 2026 &&
+      release.month === 7 &&
+      (train === "extended-stable" || train === "unsupported-extended-stable-correction");
+    const comparison = compareReleaseVersions(release.version, "2026.7.2-beta.5");
+    return !frozenJuly && comparison !== null && comparison >= 0;
+  }
   const version = parsePublishedReleaseVersion(baselineSpec);
   if (scenario === "dreaming-cron-doctor") {
     return baselineSpec === "openclaw@2026.9.6";
@@ -171,8 +188,7 @@ export function supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec
   if (
     scenario === "projects-doctor" ||
     scenario === "channel-owner-policy" ||
-    scenario === "projects-startup-migration" ||
-    scenario === "taskflow-restoration"
+    scenario === "projects-startup-migration"
   ) {
     return baselineSpec === "openclaw@2026.9.4";
   }

@@ -651,7 +651,7 @@ beforeEach(() => {
   }));
   findLegacyGatewayServices.mockReset().mockResolvedValue([]);
   uninstallLegacyGatewayServices.mockReset().mockResolvedValue([]);
-  findExtraGatewayServices.mockReset().mockResolvedValue([]);
+  findExtraGatewayServices.mockReset().mockResolvedValue({ services: [], errors: [] });
   renderGatewayServiceCleanupHints.mockReset().mockReturnValue(["cleanup"]);
   auditGatewayServiceConfig.mockReset().mockResolvedValue({ ok: true, issues: [] });
   buildGatewayInstallPlan.mockReset().mockResolvedValue({

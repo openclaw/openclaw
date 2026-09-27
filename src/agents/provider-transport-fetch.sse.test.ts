@@ -1,5 +1,6 @@
 import { Stream } from "openai/streaming";
 import { describe, expect, it, vi } from "vitest";
+import { prepareModelRequestBody } from "../../packages/ai/src/transports/model-request-body.js";
 import {
   buildGuardedModelFetch,
   fetchWithSsrFGuardMock,
@@ -9,6 +10,52 @@ import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.
 
 describe("buildGuardedModelFetch SSE readability", () => {
   installProviderTransportFetchTestHooks();
+
+  it.each(["string", "prepared"])(
+    "rejects successful streamed OpenAI-compatible responses with HTML content (%s body)",
+    async (encoding) => {
+      const release = vi.fn(async () => undefined);
+      const model = makeProviderModelFixture<"openai-completions">({
+        id: "private-model",
+        provider: "custom-openai",
+        api: "openai-completions",
+        baseUrl: "https://proxy.example.com",
+      });
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response("<html>not the API</html>", {
+          status: 200,
+          headers: { "content-type": "text/html; charset=utf-8" },
+        }),
+        finalUrl: "https://proxy.example.com/chat/completions",
+        release,
+      });
+
+      let error: unknown;
+      try {
+        await buildGuardedModelFetch(model)("https://proxy.example.com/chat/completions", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body:
+            encoding === "prepared"
+              ? (await prepareModelRequestBody(undefined)({ model: "private-model", stream: true }))
+                  .body
+              : JSON.stringify({ model: "private-model", stream: true }),
+        });
+      } catch (caught) {
+        error = caught;
+      }
+
+      expect(error).toMatchObject({
+        name: "ProviderHttpError",
+        status: 200,
+        code: "invalid_provider_content_type",
+        errorType: "invalid_response",
+      });
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(/baseUrl.*\/v1 path prefix/);
+      expect(release).toHaveBeenCalled();
+    },
+  );
 
   it("drops event-only SSE frames before the OpenAI SDK stream parser sees them", async () => {
     const encoder = new TextEncoder();

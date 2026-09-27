@@ -6,8 +6,13 @@ import {
   setDiagnosticsEnabledForProcess,
 } from "../../infra/diagnostic-events.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
+import {
+  createGatewayUpdateLifecycle,
+  type UpdateCheckLifecycle,
+} from "../../infra/update-check-lifecycle.js";
 import * as ledger from "../../infra/update-run-ledger.js";
 import * as stageTiming from "../../shared/stage-timing.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 
 type TestUpdateAvailable = {
   currentVersion: string;
@@ -65,12 +70,16 @@ vi.mock("./validation.js", () => ({
 }));
 
 let previousDiagnostics: boolean;
-afterEach(() => {
+let lifecycle: UpdateCheckLifecycle;
+afterEach(async () => {
+  await lifecycle.stop();
+  await lifecycle.scheduler.stop();
   vi.restoreAllMocks();
   setDiagnosticsEnabledForProcess(previousDiagnostics);
 });
 
 beforeEach(() => {
+  lifecycle = createGatewayUpdateLifecycle(createTestGatewayScheduler());
   previousDiagnostics = areDiagnosticsEnabledForProcess();
   getUpdateAvailableMock.mockReset();
   getUpdateAvailableMock.mockReturnValue(null);

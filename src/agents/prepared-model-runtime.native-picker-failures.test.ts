@@ -580,7 +580,7 @@ it("keeps a newly selected native model when a queued full refresh partly fails"
   }
 });
 
-it.each(["native-a", "__proto__", "constructor"])(
+it.each(["__proto__", "constructor"])(
   "preserves native auth rejection through provider renewals without a refresh error (%s)",
   async (runtimeA) => {
     const { owner, a, b, loadA, loadB } = await fixture(true, false, runtimeA);

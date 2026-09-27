@@ -1,7 +1,3 @@
-/**
- * Tracks prompt and abort settlement, then finalizes session-owned resources.
- * It may assume the active session and transcript lifecycle are established.
- */
 import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
 import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
@@ -18,8 +14,6 @@ import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-trajectory-flu
 import type { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 import type { EmbeddedAttemptDeferredLifecycleOwner } from "./deferred-lifecycle-owner.js";
 import type { EmbeddedAttemptExecutionState, EmbeddedRunAttemptParams } from "./types.js";
-
-/** Tracks native prompt and abort settlement through attempt cleanup. */
 
 export function createEmbeddedAttemptSessionSettleTracker(
   activeSession: Pick<AgentSession, "abort">,
@@ -60,10 +54,6 @@ export function createEmbeddedAttemptSessionSettleTracker(
     trackPromptSettlePromise: trackSettlePromise,
   };
 }
-
-/**
- * Finalizes trajectory and session-owned resources for one embedded attempt.
- */
 
 type AttemptTranscriptLifecycle = ReturnType<typeof createEmbeddedAttemptTranscriptLifecycle>;
 type TrajectoryRecorder = ReturnType<typeof createTrajectoryRuntimeRecorder>;

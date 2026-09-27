@@ -16,13 +16,14 @@ import {
   configIncludeOwnsAgentRoster,
   hasResolvedRosterBeforeMigrations,
 } from "../config/agent-roster-provenance.js";
+import { getConfigValueAtPath } from "../config/config-paths.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime, writeRuntimeJson } from "../runtime.js";
 import { createLazyPromise } from "../shared/lazy-promise.js";
-import { shortenHomePath } from "../utils.js";
+import { isRecord, shortenHomePath } from "../utils.js";
 
 // Keep setup's cold path small; load each owner only when the command needs it.
 const loadAgentWorkspaceModule = createLazyPromise(() => import("../agents/workspace.js"));
@@ -31,7 +32,7 @@ const loadConfigLoggingModule = createLazyPromise(() => import("../config/loggin
 
 /** Prepares config, workspace, and session directories for a usable installation. */
 export async function setupCommand(
-  opts?: { workspace?: string; json?: boolean },
+  opts?: { workspace?: string; skipBootstrap?: boolean; json?: boolean },
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const desiredWorkspace =
@@ -71,6 +72,35 @@ export async function setupCommand(
     : snapshot.sourceConfig;
   const authoredDefaults = cfg.agents?.defaults ?? {};
   const resolvedDefaults = resolvedConfig.agents?.defaults ?? authoredDefaults;
+  const skipBootstrap = opts?.skipBootstrap === true || resolvedDefaults.skipBootstrap === true;
+  const shouldWriteSkipBootstrap =
+    opts?.skipBootstrap === true && resolvedDefaults.skipBootstrap !== true;
+  const skipBootstrapPath = ["agents", "defaults", "skipBootstrap"];
+  if (
+    shouldWriteSkipBootstrap &&
+    snapshot.includeProvenance?.some(
+      ({ path }) =>
+        path.length === skipBootstrapPath.length &&
+        path.every((part, index) => part === skipBootstrapPath[index]),
+    )
+  ) {
+    throw new Error(
+      "Baseline setup cannot override an included agents.defaults.skipBootstrap value. Edit the included file directly.",
+    );
+  }
+  const isInheritedPath = (defaultPath: string[]) => {
+    return (
+      isRecord(snapshot.parsed) &&
+      getConfigValueAtPath(snapshot.parsed, defaultPath) === undefined &&
+      snapshot.includeProvenance?.some(
+        ({ path }) =>
+          path.length < defaultPath.length &&
+          path.every((part, index) => part === defaultPath[index]),
+      ) === true
+    );
+  };
+  const writeInheritedSkipBootstrapOverride =
+    shouldWriteSkipBootstrap && isInheritedPath(skipBootstrapPath);
   const selectedAgentId = resolveAmbientOwnerAgentId(resolvedConfig, undefined, {
     surface: "baseline setup",
     hint: "Set agents.defaults.systemAgent.agentId.",
@@ -88,11 +118,13 @@ export async function setupCommand(
   const shouldWriteWorkspace =
     !snapshot.exists || (desiredWorkspace !== undefined && configuredWorkspace !== workspace);
   const shouldWriteGatewayMode = resolvedConfig.gateway?.mode === undefined;
+  const writeInheritedGatewayModeOverride =
+    shouldWriteGatewayMode && isInheritedPath(["gateway", "mode"]);
   const writeInheritedWorkspaceOverride =
     snapshot.exists &&
     shouldWriteWorkspace &&
     !defaultEntryWorkspace &&
-    configIncludeOwnsAgentRoster(snapshot);
+    isInheritedPath(["agents", "defaults", "workspace"]);
 
   // Keep the candidate runtime-shaped. replaceConfigFile persists only its
   // diff against snapshot.parsed, never resolved include/env values wholesale.
@@ -132,8 +164,14 @@ export async function setupCommand(
       };
     }
   }
-  if (shouldWriteGatewayMode) {
+  if (shouldWriteGatewayMode && !writeInheritedGatewayModeOverride) {
     next = { ...next, gateway: { ...next.gateway, mode: "local" } };
+  }
+  if (shouldWriteSkipBootstrap && !writeInheritedSkipBootstrapOverride) {
+    next = {
+      ...next,
+      agents: { ...next.agents, defaults: { ...next.agents?.defaults, skipBootstrap: true } },
+    };
   }
 
   let creationConfigHash: string | undefined;
@@ -153,11 +191,27 @@ export async function setupCommand(
   }
 
   const configChanged =
-    !snapshot.exists || shouldPersistRoster || shouldWriteWorkspace || shouldWriteGatewayMode;
+    !snapshot.exists ||
+    shouldPersistRoster ||
+    shouldWriteWorkspace ||
+    shouldWriteGatewayMode ||
+    shouldWriteSkipBootstrap;
   let configStatus: "created" | "updated" | "unchanged";
   if (configChanged) {
-    // Preserve all existing config fields and touch only workspace/gateway mode
-    // defaults that this command owns.
+    const explicitSetPaths: string[][] = [];
+    if (snapshot.exists && shouldPersistRoster) {
+      explicitSetPaths.push(["agents", "entries"]);
+    }
+    if (writeInheritedWorkspaceOverride) {
+      explicitSetPaths.push(["agents", "defaults", "workspace"]);
+    }
+    if (shouldWriteSkipBootstrap) {
+      explicitSetPaths.push(skipBootstrapPath);
+    }
+    if (shouldWriteGatewayMode) {
+      explicitSetPaths.push(["gateway", "mode"]);
+    }
+    // Preserve inherited values in the candidate; explicit leaves become local overrides.
     await replaceConfigFile({
       nextConfig: next,
       // Agent creation advanced the revision; keep rejecting foreign writes after it.
@@ -165,19 +219,19 @@ export async function setupCommand(
       afterWrite: { mode: "auto" },
       writeOptions: {
         ...prepared.writeOptions,
-        ...(snapshot.exists && shouldPersistRoster
-          ? {
-              explicitSetPaths: [["agents", "entries"]],
-              explicitSetValueSource: cfg,
-            }
-          : {}),
-        ...(writeInheritedWorkspaceOverride
-          ? {
-              allowIncludeAncestorExplicitSetPaths: true,
-              explicitSetPaths: [["agents", "defaults", "workspace"]],
-              explicitSetValueSource: { agents: { defaults: { workspace } } },
-            }
-          : {}),
+        explicitSetPaths,
+        explicitSetValueSource: {
+          ...(shouldWriteGatewayMode ? { gateway: { mode: "local" } } : {}),
+          agents: {
+            ...(snapshot.exists && shouldPersistRoster ? { entries: cfg.agents?.entries } : {}),
+            defaults: {
+              ...(writeInheritedWorkspaceOverride ? { workspace } : {}),
+              ...(shouldWriteSkipBootstrap ? { skipBootstrap: true } : {}),
+            },
+          },
+        },
+        allowIncludeAncestorExplicitSetPaths:
+          writeInheritedWorkspaceOverride || shouldWriteSkipBootstrap || shouldWriteGatewayMode,
       },
     });
     configStatus = snapshot.exists ? "updated" : "created";
@@ -190,6 +244,9 @@ export async function setupCommand(
       }
       if (shouldWriteGatewayMode) {
         updates.push("set gateway.mode");
+      }
+      if (shouldWriteSkipBootstrap) {
+        updates.push("set agents.defaults.skipBootstrap");
       }
       const suffix = updates.length > 0 ? `(${updates.join(", ")})` : undefined;
       (await loadConfigLoggingModule()).logConfigUpdated(runtime, {
@@ -210,7 +267,7 @@ export async function setupCommand(
     await loadAgentWorkspaceModule()
   ).ensureAgentWorkspace({
     dir: workspace,
-    ensureBootstrapFiles: !resolvedDefaults.skipBootstrap,
+    ensureBootstrapFiles: !skipBootstrap,
     skipOptionalBootstrapFiles: resolvedDefaults.skipOptionalBootstrapFiles,
   });
   if (!opts?.json) {

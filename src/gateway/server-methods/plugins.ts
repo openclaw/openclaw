@@ -244,8 +244,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
       const local = await listManagedPlugins({ config: context.getRuntimeConfig() });
       const query = params.query?.trim();
       const intent = params.intent ?? "all";
-      const includeBundledOnly =
-        intent === "bundled" || intent === "official" || (intent === "all" && Boolean(query));
+      const includeBundledOnly = intent === "bundled" || intent === "official" || intent === "all";
       const catalogOptions = {
         local,
         includeBundledOnly,
@@ -275,6 +274,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
         const items = joinClawHubPluginCatalog({
           ...catalogOptions,
           remote: remote.items,
+          categories: remote.categories,
         });
         registerClawHubCatalogIconUrls(items.map((item) => item.catalog.imageUrl));
         respond(
@@ -293,10 +293,10 @@ export const pluginsHandlers: GatewayRequestHandlers = {
             items: joinClawHubPluginCatalog({ ...catalogOptions, remote: [] }),
             ...(params.cursor ? { nextCursor: params.cursor } : {}),
             remoteError: `ClawHub is unavailable: ${formatErrorMessage(error)}.${
-              includeBundledOnly
-                ? " Bundled plugins remain available."
-                : intent === "all"
-                  ? " Installed plugins remain available."
+              intent === "all"
+                ? " Installed plugins remain available."
+                : includeBundledOnly
+                  ? " Bundled plugins remain available."
                   : ""
             }`,
           },

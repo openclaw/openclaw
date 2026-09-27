@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   type ResponsesInputItem,
@@ -98,13 +99,9 @@ export function isCanonicalCompactionRetryWriteResult(toolOutput: string): boole
   if (!parsed || parsed.status !== "completed" || parsed.replaySafe !== false) {
     return false;
   }
-  const value = parsed.value;
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-  const result = value as Record<string, unknown>;
+  const result = asOptionalRecord(parsed.value);
   return (
-    result.changed === true &&
+    result?.changed === true &&
     result.created === true &&
     result.firstChangedLine === 1 &&
     isCompactionRetryWritePatch(result.patch)
@@ -157,12 +154,7 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
         ? JSON.stringify(toolJson.results)
         : scenarioToolOutput;
   const orbitCode = extractOrbitCode(memorySnippet) ?? extractOrbitCode(allInputText);
-  const mediaPath =
-    typeof toolJson?.details === "object" &&
-    toolJson.details !== null &&
-    !Array.isArray(toolJson.details)
-      ? readFirstMediaPath((toolJson.details as { media?: unknown }).media)
-      : "";
+  const mediaPath = readFirstMediaPath(asOptionalRecord(toolJson?.details)?.media);
   const promptExactReplyDirective = extractExactReplyDirective(prompt);
   const promptExactMarkerDirective = extractExactMarkerDirective(prompt);
   const allUserText = userTexts.join("\n");

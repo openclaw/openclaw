@@ -10,6 +10,7 @@ import {
   COMPUTER_STALE_OBSERVATION,
   COMPUTER_USE_V2_ACTION_NAMES,
 } from "../../plugins/computer-use-contract.js";
+import { isStringOption } from "../../utils/string-readers.js";
 import { readFiniteNumberParam, readPositiveIntegerParam, readToolStringParam } from "./common.js";
 import type { ComputerObservationState, ComputerToolAction } from "./computer-tool-shared.js";
 import { COMPUTER_REF_WIDTH, MAX_HOLD_SECONDS } from "./computer-tool-shared.js";
@@ -56,10 +57,6 @@ const ESCALATION_REASONS = new Set([
 ]);
 const SCROLL_DIRECTIONS = ["up", "down", "left", "right"] as const;
 
-function isScrollDirection(value: string): value is (typeof SCROLL_DIRECTIONS)[number] {
-  return SCROLL_DIRECTIONS.some((direction) => direction === value);
-}
-
 export function isComputerActAction(action: ComputerToolAction): boolean {
   return INPUT_ACTIONS.has(action);
 }
@@ -87,13 +84,7 @@ function readCoordinate(
   if (
     !Array.isArray(raw) ||
     raw.length !== 2 ||
-    raw.some(
-      (entry) =>
-        typeof entry !== "number" ||
-        !Number.isFinite(entry) ||
-        !Number.isInteger(entry) ||
-        entry < 0,
-    )
+    raw.some((entry) => typeof entry !== "number" || !Number.isInteger(entry) || entry < 0)
   ) {
     throw new Error(`${key} must be a pair of non-negative integers`);
   }
@@ -116,14 +107,16 @@ function readModifiers(params: Record<string, unknown>, action: ComputerToolActi
   return text ? text : undefined;
 }
 
-function copyOptionalStringParam(
+function copyOptionalStringParams(
   target: Record<string, unknown>,
   input: Record<string, unknown>,
-  key: string,
+  ...keys: string[]
 ): void {
-  const value = readToolStringParam(input, key);
-  if (value !== undefined) {
-    target[key] = value;
+  for (const key of keys) {
+    const value = readToolStringParam(input, key);
+    if (value !== undefined) {
+      target[key] = value;
+    }
   }
 }
 
@@ -240,7 +233,7 @@ export function buildComputerActParams(params: {
     }
     case "scroll": {
       const direction = normalizeOptionalLowercaseString(input.scrollDirection);
-      if (!direction || !isScrollDirection(direction)) {
+      if (!isStringOption(direction, SCROLL_DIRECTIONS)) {
         throw new Error("scrollDirection up|down|left|right required for scroll");
       }
       wire.scrollDirection = direction;
@@ -287,7 +280,7 @@ export function buildComputerActParams(params: {
           delete wire.includeScreenshot;
         }
       }
-      copyOptionalStringParam(wire, input, "query");
+      copyOptionalStringParams(wire, input, "query");
       copyOptionalIntegerParam(wire, input, "depth", { min: 0, max: 64 });
       copyOptionalIntegerParam(wire, input, "maxElements", { min: 1, max: 2_000 });
       break;
@@ -330,26 +323,24 @@ export function buildComputerActParams(params: {
       for (const key of BROWSER_REFS) {
         wire[key] = readToolStringParam(input, key, { required: true });
       }
-      for (const key of [
+      copyOptionalStringParams(
+        wire,
+        input,
         "snapshotFormat",
         "elementRef",
         "observationId",
         "query",
         "continuation",
-      ] as const) {
-        copyOptionalStringParam(wire, input, key);
-      }
+      );
       copyOptionalBooleanParam(wire, input, "includeScreenshot");
       break;
     }
     case "browser_prepare": {
-      copyOptionalStringParam(wire, input, "profile");
-      copyOptionalStringParam(wire, input, "profileName");
+      copyOptionalStringParams(wire, input, "profile", "profileName");
       break;
     }
     case "browser_click": {
-      copyOptionalStringParam(wire, input, "elementRef");
-      copyOptionalStringParam(wire, input, "inputRoute");
+      copyOptionalStringParams(wire, input, "elementRef", "inputRoute");
       const coordinate = readCoordinate(input, "coordinate");
       if (coordinate) {
         wire.x = coordinate[0];
@@ -359,13 +350,12 @@ export function buildComputerActParams(params: {
     }
     case "browser_type": {
       wire.text = readToolStringParam(input, "text", { required: true, allowEmpty: true });
-      copyOptionalStringParam(wire, input, "mode");
+      copyOptionalStringParams(wire, input, "mode");
       copyOptionalBooleanParam(wire, input, "replace");
       break;
     }
     case "browser_dialog": {
-      copyOptionalStringParam(wire, input, "dialogRef");
-      copyOptionalStringParam(wire, input, "promptText");
+      copyOptionalStringParams(wire, input, "dialogRef", "promptText");
       copyDeliveryMode(wire, input);
       break;
     }
@@ -383,9 +373,7 @@ export function buildComputerActParams(params: {
       break;
     }
     case "browser_pointer": {
-      for (const key of ["inputRoute", "elementRef", "destinationElementRef"] as const) {
-        copyOptionalStringParam(wire, input, key);
-      }
+      copyOptionalStringParams(wire, input, "inputRoute", "elementRef", "destinationElementRef");
       const coordinate = readCoordinate(input, "coordinate");
       if (coordinate) {
         wire.x = coordinate[0];
@@ -433,9 +421,7 @@ export function buildComputerActParams(params: {
       break;
   }
   if (POINTER_OR_KEYBOARD_ACTIONS.has(action)) {
-    for (const key of ["windowRef", "elementRef", "observationId"] as const) {
-      copyOptionalStringParam(wire, input, key);
-    }
+    copyOptionalStringParams(wire, input, "windowRef", "elementRef", "observationId");
     copyDeliveryMode(wire, input);
   }
   return wire as ComputerActParams;

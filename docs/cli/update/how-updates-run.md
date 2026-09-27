@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "How `openclaw update` switches channels, checks the new version, hands off the restart, and updates a Git checkout"
 read_when:
   - You want to know what an update does before you run one
@@ -31,17 +32,15 @@ replacement. Choose an empty `OPENCLAW_GIT_DIR` and retry.
 
 ### Validation and activation
 
-If the resolved registry package version equals the installed version without changing
-the selected channel or installation method, or the Git target SHA equals
-`HEAD` and the recorded build commit matches it, plugin convergence still runs; if plugins and runtime artifacts remain unchanged, the run finishes `skipped` with reason `already-current`. Runtime maintenance can therefore succeed without changing the Git revision. A same-version
-explicit `--channel` or installation-method change finishes successfully.
+If the resolved registry package version equals the installed version without changing the selected channel or installation method, or the Git target SHA equals `HEAD` and the installed runtime passes artifact verification, plugin convergence still runs; if plugins and runtime artifacts remain unchanged, the run finishes `skipped` with reason `already-current`.
+Runtime maintenance can therefore succeed without changing the Git revision.
+A same-version explicit `--channel` or installation-method change finishes successfully.
 Changed plugins restart a running managed Gateway unless `--no-restart` is set; retained exact pins produce the same advisories as a core update without requiring a restart.
 
-If a Git checkout advanced without rebuilding or its runtime has no recorded
-build commit, the matching source revision still needs an update. OpenClaw builds
-and validates a separate candidate, then stops the managed Gateway before
-replacing the runtime and restarting it. The new build records its commit, so
-the next update can finish as already current.
+If a Git checkout advanced without rebuilding or its runtime has missing or unverified artifacts, the matching source revision still needs an update.
+Verification checks the build commit, both build stamps, runtime entry, Control UI assets, version, and build identity.
+OpenClaw builds and validates a separate candidate, then stops the managed Gateway before replacing the runtime and restarting it.
+The new build records its commit, so the next update can finish as already current.
 `--no-restart` cannot replace runtime files used by a running Gateway in the same
 installation; the update leaves those files intact and reports the process and
 the stop/retry action.
@@ -183,9 +182,9 @@ Path aliases that resolve to a running package's bundled plugin use the staged
 bundled plugin with the same ID when
 available, preserving bundled trust. External path installs keep their existing
 classification. The live plugin files and host links stay unchanged. Channels,
-cron, automatic updates, background task maintenance, and other side services are
-suppressed in this canary. Copied task records remain available for startup
-validation without recovery or pruning.
+cron, automatic updates, and other side services are suppressed in this canary.
+The copied databases undergo the same schema checks and migrations without
+reviving the removed Tasks registry.
 The canary also defers session catalog hydration, worker recovery, and startup
 maintenance until activation, recording a warning. Required configuration,
 database ownership, schema, and migration checks still run before readiness;
@@ -242,6 +241,15 @@ checks still run. Standalone Doctor lint and explicitly selected `--only` checks
 keep their normal scope. The candidate recognizes the private-copy markers already
 set by the published 2026.9.4 updater, so this reduces work on that first hop too.
 
+The rehearsal repair Doctor also defers pure advisory inspections, including
+security, provider catalog, and runtime tool-schema diagnostics, and records their
+IDs in its output without consuming repair-warning slots. Contributions that also perform repairs stay in
+the rehearsal, including auth profiles, plugin health repairs, skills, memory
+recall, and session transcripts. The live post-swap Doctor and final readiness
+checks keep their existing scope. This saving applies to published 2026.9.3–2026.9.6
+updaters that supply the private-copy markers; older drivers keep their existing
+behavior.
+
 These checks do not run an agent turn or require a usable model-auth route.
 OAuth-only installations and installations without provider credentials can update.
 Auth diagnostics are advisory; optional inference repair runs through triage only
@@ -268,7 +276,18 @@ timeout replaces that derived allowance.
 Automatic and chat updates leave that runtime allowance derived from state.
 Their request and recovery watchdogs do not become update validation deadlines.
 Startup and readiness responses share their own allowance, including reading
-the response body.
+the response body. Completed candidate CLI and Gateway startup milestones from a
+fixed set of startup events renew that allowance once each; passing the original
+deadline records a warning while startup keeps progressing. Unknown names are
+ignored and logged at debug level. Probe responses do not renew the allowance.
+The total readiness wait cannot exceed four
+times its initial allowance, even while milestones advance. Reaching that ceiling
+refuses the candidate and records the elapsed time and milestones reached, leaving
+the previous Gateway untouched. A candidate that exits or stops advancing fails
+validation with its last startup evidence. Unreachable probes
+without startup evidence and configured proxy failures remain warnings.
+This progress-aware wait belongs to the installed updater. The published
+2026.9.4 updater retains its fixed five-minute cap when checking a newer candidate.
 
 During a copied update rehearsal, candidate Doctor publishes its lint report
 before disposing plugin inspections. Its private state stays owned until disposal
@@ -612,7 +631,7 @@ not a completed update. The acknowledging CLI exits with code `75` (`EX_TEMPFAIL
 so scripts cannot mistake accepted background work for a completed update. The
 detached helper remains the settlement authority; use the printed status and
 health commands to retrieve its terminal result. The helper launches staging and validation outside the
-Gateway process tree while the old Gateway keeps serving. It parks the Gateway
+Gateway's service boundary while the old Gateway keeps serving. It parks the Gateway
 only when the orchestrator reaches `activating`, then completes the existing
 commit-or-cancel handoff. Keep stdout connected to the agent: stopping the service
 can terminate the surrounding exec shell (SIGTERM or exit 143), including commands
@@ -867,7 +886,8 @@ the sentinel.
     Requires no uncommitted changes. Local edits fail the clean check before installation or service shutdown; the checkout is preserved. Commit your changes and retry, or run `openclaw triage` for help.
   </Step>
   <Step title="Resolve the target">
-    Selects the channel's tag or branch and fetches upstream as needed. If the resolved target SHA equals `HEAD`, finishes `skipped` with reason `already-current` before staging or stopping the service.
+    Selects the channel's tag or branch and fetches upstream as needed.
+    If the resolved target SHA equals `HEAD` and the installed runtime passes artifact verification, finishes `skipped` with reason `already-current` before staging or stopping the service.
 
     Dev updates fetch only the configured tracking remote for `main`, or the remote identified by an explicit tracked target. Unrelated remotes remain untouched, with a scope warning in update history; their availability cannot fail the update. When no local `main` exists, or an explicit commit or tag needs discovery, candidate remotes may be tried. Failed optional attempts are warnings, and stale refs from failed fetches cannot select a branch. A failed fetch from the configured authority still reports `fetch-failed` before activation. Fetching does not rewrite Git configuration.
 
@@ -895,7 +915,7 @@ the sentinel.
 
   </Step>
   <Step id="validate-the-candidate" title="Check the update">
-    Runs Doctor health checks, config and plugin planning, and the isolated migration and test Gateway checks described above. Validation failure leaves the old Gateway serving.
+    Runs Doctor health checks, config and plugin planning, and the isolated migration and test Gateway checks described above. Validation failure leaves the old Gateway serving. If validation leaves source edits in the temporary worktree, progress reports a failed candidate clean check.
   </Step>
   <Step title="Activate and verify">
     Stops the managed service, checks out the exact staged commit SHA, publishes the prepared runtime, and runs required Doctor migrations. Core dependencies and the checkout build were prepared before downtime; plugin convergence follows while the service remains stopped.
@@ -905,6 +925,8 @@ the sentinel.
     The previous checkout and runtime remain available until final verification completes. A late verification failure restores the original configuration, source, and runtime and restarts a previously verified running service when the state-safety checks permit rollback. Incompatible state changes or independent source edits refuse destructive restoration and retain the named backups for recovery.
 
     If restoring the previous Git runtime fails, the Gateway stays stopped and the failed rollback step records the filesystem error. Pending originals remain in sibling `<runtime>.openclaw-update-<id>.tmp/previous` directories. Preserve those backups and repair the installation before restarting; cleanup does not delete an unrestored original.
+
+    Plugin loading and artifact inventory exclude these transaction directories from incidental source scans. Retained rollback dependencies do not become plugin inputs or prevent the updated plugin from loading. Explicitly selected package dependencies still receive their normal validation; only the updater retires its rollback trees after verification. This loading repair runs in the candidate, including when an older updater created the transaction directories.
 
     The installed updater owns fresh-process selection and backup retention. The published 2026.9.5 driver can still keep its old module graph after a same-commit rebuild and discard its previous runtime before verification. Installing newer candidate code cannot change that first hop. Use the [source-checkout manual update procedure](/install/updating/update-methods#source-checkout-servers-reference-script) to install the repaired driver, stopping the Gateway through its service manager before rebuilding. Subsequent updates use fresh verification and retained rollback.
 

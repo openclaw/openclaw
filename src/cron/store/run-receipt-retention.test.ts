@@ -5,6 +5,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "../service.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
 import type { CronServiceDeps } from "../service/state.js";
@@ -16,6 +17,7 @@ import {
   prepareCronRunReceiptClaim,
 } from "./run-receipt-store.js";
 import { inspectActiveCronRunReceipt } from "./run-receipt-store.test-support.js";
+import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-pending-retention-" });
 
@@ -34,6 +36,8 @@ describe("pending cron receipt retention", () => {
       });
     const makeService = (cronEnabled = true) =>
       new CronService({
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => Date.now(),
         storePath,
         cronEnabled,
         log: logger,
@@ -67,6 +71,7 @@ describe("pending cron receipt retention", () => {
       const receipt = runOpenClawStateWriteTransaction(({ db }) =>
         claimCronRunReceiptInDatabase({
           database: db,
+          receiptSchema: prepareCronRunReceiptWriteSchema(db),
           prepared,
           resolveAgentId: (current) => current.agentId!,
         }),

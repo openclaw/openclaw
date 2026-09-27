@@ -1,4 +1,3 @@
-// Shared update command primitives for channel resolution, install roots, and subprocess steps.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -44,12 +43,11 @@ import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";
 import { UPDATE_INSTALL_SKIP_GUIDANCE } from "../../shared/update-outcome.js";
 import { pathExists } from "../../utils.js";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../completion-runtime.js";
-import { isJsonOutputModeActive } from "../json-output-mode.js";
 import { resolveNodeRunner } from "./node-runner.js";
 
 export { resolveNodeRunner } from "./node-runner.js";
 
-export type UpdateCommandOptions = {
+export type UpdateCommandOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"> & {
   /** Doctor's accepted source update targets dev without changing the saved channel. */
   sourceUpdate?: { root: string };
   /** In-process reporting only, after the update owner settles. Never serialized. */
@@ -76,6 +74,7 @@ export type UpdateCommandOptions = {
     requesterAuthority?: UpdateRequesterAuthority;
     /** Live local executor only. A child must independently acquire its owner. */
     executorFence?: UpdateRecoveryFence;
+    sourceArtifactLock?: import("@openclaw/fs-safe/file-lock").FileLockHandle;
   };
   acceptCapabilities?: boolean;
   admission?: "auto" | "installed";
@@ -107,7 +106,6 @@ export type UpdateFinalizeOptions = {
   channel?: string;
   timeout?: string;
   yes?: boolean;
-  restart?: boolean;
   /** Internal external-supervisor handshake; public repair always leaves this false. */
   deferCompletionCache?: boolean;
 };
@@ -159,31 +157,15 @@ export function parseUpdateTimeoutMs(timeout?: string): number | undefined {
   return milliseconds;
 }
 
-/** Parse a CLI timeout in seconds, exiting through the runtime on invalid input. */
-export function parseTimeoutMsOrExit(timeout?: string): number | undefined | null {
-  try {
-    return parseUpdateTimeoutMs(timeout);
-  } catch (error) {
-    if (isJsonOutputModeActive(process.argv)) {
-      throw error;
-    }
-    defaultRuntime.error(INVALID_TIMEOUT_ERROR);
-    defaultRuntime.exit(1);
-    return null;
-  }
-}
-
 const UPSTREAM_REPOSITORY_URL = "https://github.com/openclaw/openclaw.git";
 // Keep the full commit graph for dev ref switching while deferring historical blobs.
 // A shallow clone would make older or non-default dev targets unreachable.
 const GIT_CLONE_BLOB_FILTER = "--filter=blob:none";
 
 export const DEFAULT_PACKAGE_NAME = "openclaw";
-const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME]);
 
-/** Normalize a CLI tag/version/spec into the npm target form accepted by update flows. */
 export function normalizeTag(value?: string | null): string | null {
-  return normalizePackageTagInput(value, ["openclaw", DEFAULT_PACKAGE_NAME]);
+  return normalizePackageTagInput(value, [DEFAULT_PACKAGE_NAME]);
 }
 
 function normalizeVersionTag(tag: string): string | null {
@@ -197,18 +179,17 @@ function normalizeVersionTag(tag: string): string | null {
 
 export { readPackageName, readPackageVersion };
 
-/** Resolve an npm dist-tag or explicit version into a concrete package version. */
 export async function resolveTargetVersion(
   tag: string,
   timeoutMs?: number,
   options: { spec?: string; command?: string; cwd?: string; env?: NodeJS.ProcessEnv } = {},
-): Promise<string | null> {
+): Promise<Pick<Awaited<ReturnType<typeof fetchNpmTagVersion>>, "version" | "metadata">> {
   if (!canResolveRegistryVersionForPackageTarget(tag)) {
-    return null;
+    return { version: null };
   }
   const direct = normalizeVersionTag(tag);
   if (direct) {
-    return direct;
+    return { version: direct };
   }
   const res = await fetchNpmTagVersion({
     tag,
@@ -218,10 +199,9 @@ export async function resolveTargetVersion(
     cwd: options.cwd,
     env: options.env,
   });
-  return res.version ?? null;
+  return res;
 }
 
-/** Return true when `root` is a local git checkout directory. */
 export async function isGitCheckout(root: string): Promise<boolean> {
   try {
     await fs.stat(path.join(root, ".git"));
@@ -231,12 +211,6 @@ export async function isGitCheckout(root: string): Promise<boolean> {
   }
 }
 
-async function isCorePackage(root: string): Promise<boolean> {
-  const name = await readPackageName(root);
-  return Boolean(name && CORE_PACKAGE_NAMES.has(name));
-}
-
-/** Return true only for existing directories with no entries. */
 export async function isEmptyDir(targetPath: string): Promise<boolean> {
   try {
     const entries = await fs.readdir(targetPath);
@@ -246,7 +220,6 @@ export async function isEmptyDir(targetPath: string): Promise<boolean> {
   }
 }
 
-/** Resolve the checkout path used by source-based self-update. */
 export function resolveGitInstallDir(): string {
   const override = process.env.OPENCLAW_GIT_DIR?.trim();
   if (override) {
@@ -259,7 +232,6 @@ export function resolveGitInstallDir(): string {
   return path.join(home, "openclaw");
 }
 
-/** Locate the installed OpenClaw package root that should receive update operations. */
 export async function resolveUpdateRoot(context?: { root: string }): Promise<string> {
   if (context) {
     return path.resolve(context.root);
@@ -276,7 +248,6 @@ export async function resolveUpdateRoot(context?: { root: string }): Promise<str
   );
 }
 
-/** Run one update subprocess and report bounded stdout/stderr tails to progress listeners. */
 export async function runUpdateStep(params: {
   name: string;
   argv: string[];
@@ -408,9 +379,8 @@ async function cloneGitCheckoutTransactionally(params: {
         );
       }
 
-      const expectedEntries = preserveDir ? [path.basename(storageRoot)] : [];
       const destinationEntries = await fs.readdir(targetDir);
-      if (destinationEntries.toSorted().join("\0") !== expectedEntries.toSorted().join("\0")) {
+      if (destinationEntries.length !== 1 || destinationEntries[0] !== path.basename(storageRoot)) {
         throw new Error(
           `OPENCLAW_GIT_DIR appeared while cloning: ${params.dir}. The existing path was left unchanged; move it or choose another OPENCLAW_GIT_DIR, then retry.`,
         );
@@ -483,7 +453,6 @@ async function cloneGitCheckoutTransactionally(params: {
   }
 }
 
-/** Ensure the configured source-update directory exists and points at an OpenClaw checkout. */
 export async function ensureGitCheckout(params: {
   dir: string;
   timeoutMs: number;
@@ -509,7 +478,7 @@ export async function ensureGitCheckout(params: {
     });
   }
 
-  if (!(await isCorePackage(params.dir))) {
+  if ((await readPackageName(params.dir)) !== DEFAULT_PACKAGE_NAME) {
     throw new UpdatePreMutationError(
       "invalid-git-directory",
       `OPENCLAW_GIT_DIR does not look like a core checkout: ${params.dir}.`,
@@ -519,7 +488,6 @@ export async function ensureGitCheckout(params: {
   return { checkoutDir: await fs.realpath(params.dir), step: null };
 }
 
-/** Detect the package manager that owns a global/package OpenClaw install. */
 export async function resolveGlobalManager(params: {
   root: string;
   installKind: "git" | "package" | "unknown";
@@ -575,6 +543,7 @@ export async function tryWriteCompletionCache(
   root: string,
   jsonMode: boolean,
   timeoutMs = COMPLETION_CACHE_WRITE_TIMEOUT_MS,
+  nodeRunner = resolveNodeRunner(),
 ): Promise<"completed" | "failed" | "skipped"> {
   const binPath = path.join(root, "openclaw.mjs");
   if (!(await pathExists(binPath))) {
@@ -584,7 +553,7 @@ export async function tryWriteCompletionCache(
   let failure: string;
   try {
     const result = await runCommandWithTimeout(
-      [resolveNodeRunner(), binPath, "completion", "--write-state"],
+      [nodeRunner, binPath, "completion", "--write-state"],
       {
         cwd: root,
         env: { ...process.env, [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: "1" },

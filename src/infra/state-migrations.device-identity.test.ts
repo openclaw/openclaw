@@ -843,7 +843,7 @@ describe("legacy device identity Doctor migration", () => {
       await gatewayLock.release();
     }
 
-    expect(result.warnings.join("\n")).toContain("Gateway or another SQLite maintenance command");
+    expect(result.warnings.join("\n")).toContain("OpenClaw state database is busy");
     expect(fs.existsSync(sourcePath)).toBe(true);
   });
 

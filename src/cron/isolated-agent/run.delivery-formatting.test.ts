@@ -7,6 +7,7 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { mockCall } from "../../test-utils/mock-call-assertions.js";
+import { resolveCronDeliveryContext } from "./run-delivery-trace.js";
 import {
   clearFastTestEnv,
   loadRunCronIsolatedAgentTurn,
@@ -48,7 +49,14 @@ function bootstrapTelegramWithFormattingHints() {
         pluginId: "telegram",
         source: "test",
         plugin: {
-          ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+          ...createChannelTestPluginBase({
+            id: "telegram",
+            label: "Telegram",
+            config: {
+              listAccountIds: (config: OpenClawConfig) =>
+                Object.keys(config.channels?.telegram?.accounts ?? {}),
+            },
+          }),
           outbound: { deliveryMode: "direct", sendText: async () => ({ messageId: "1" }) },
           agentPrompt: {
             inboundFormattingHints: (params: { cfg: OpenClawConfig; accountId?: string | null }) =>
@@ -62,7 +70,19 @@ function bootstrapTelegramWithFormattingHints() {
   );
 }
 
-async function runCron(delivery: Record<string, unknown>, accountId?: string) {
+type EmbeddedRunFormatting = {
+  extraSystemPrompt?: string;
+  finalizePromptForResolvedTools?: (params: {
+    prompt: string;
+    messageToolAvailable: boolean;
+  }) => string;
+};
+
+async function runCron(
+  delivery: Record<string, unknown>,
+  accountId?: string,
+  job: Record<string, unknown> = {},
+) {
   mockRunCronFallbackPassthrough();
   resolveCronDeliveryPlanMock.mockReturnValue({
     requested: delivery.mode === "announce",
@@ -86,11 +106,15 @@ async function runCron(delivery: Record<string, unknown>, accountId?: string) {
       sessionTarget: "isolated",
       payload: { kind: "agentTurn", message: "post the digest" },
       delivery,
+      ...job,
     } as never,
     message: "post the digest",
     sessionKey: "cron:daily-digest",
   });
-  return (mockCall(runEmbeddedAgentMock)[0] as { extraSystemPrompt?: string }).extraSystemPrompt;
+  const run = mockCall(runEmbeddedAgentMock)[0] as EmbeddedRunFormatting;
+  const finalize = (messageToolAvailable: boolean) =>
+    run.finalizePromptForResolvedTools?.({ prompt: "post the digest", messageToolAvailable });
+  return { prompt: run.extraSystemPrompt, finalize };
 }
 
 describe("runCronIsolatedAgentTurn delivery formatting hints", () => {
@@ -109,7 +133,7 @@ describe("runCronIsolatedAgentTurn delivery formatting hints", () => {
   });
 
   it("gives an announce run the delivering account's rich formatting contract", async () => {
-    const prompt = await runCron(
+    const { prompt } = await runCron(
       { mode: "announce", channel: "telegram", to: "-100123", accountId: "rich" },
       "rich",
     );
@@ -121,7 +145,7 @@ describe("runCronIsolatedAgentTurn delivery formatting hints", () => {
   });
 
   it("gives an announce run the rich OFF rules when the account has richMessages off", async () => {
-    const prompt = await runCron(
+    const { prompt } = await runCron(
       { mode: "announce", channel: "telegram", to: "-100123", accountId: "plain" },
       "plain",
     );
@@ -131,12 +155,60 @@ describe("runCronIsolatedAgentTurn delivery formatting hints", () => {
     expect(prompt).toContain("Telegram rich OFF.");
   });
 
-  it("adds no channel hints when the run does not deliver to a chat", async () => {
-    const prompt = await runCron(
-      { mode: "none", channel: "telegram", to: "-100123", accountId: "rich" },
-      "rich",
+  it("gives a message-tool-only run its sending account's contract once the tool is available", async () => {
+    const { prompt, finalize } = await runCron(
+      { mode: "none", channel: "telegram", to: "-100123", accountId: "plain" },
+      "plain",
     );
 
     expect(prompt).toBeUndefined();
+    const withTool = finalize(true);
+    expect(withTool?.split("### Delivery Format")).toHaveLength(2);
+    expect(withTool).toContain("with the message tool");
+    expect(withTool).toContain("Telegram rich OFF.");
+    expect(finalize(false)).not.toContain("### Delivery Format");
+  });
+
+  it("withholds the contract when the sending account is not fixed and accounts disagree", async () => {
+    const { finalize } = await runCron(
+      { mode: "none", channel: "telegram", to: "-100123" },
+      undefined,
+    );
+
+    expect(finalize(true)).not.toContain("### Delivery Format");
+  });
+
+  it("uses the scheduled owner's account, which the message tool sends through", async () => {
+    const ownerSessionKey = "agent:main:telegram:group:-100123";
+    const delivery = { mode: "none", channel: "telegram", to: "-100123" };
+    resolveCronDeliveryPlanMock.mockReturnValue({ requested: false, ...delivery });
+    resolveDeliveryTargetMock.mockResolvedValue({
+      ok: true,
+      channel: "telegram",
+      to: "-100123",
+      accountId: "plain",
+      mode: "explicit",
+    });
+    const context = await resolveCronDeliveryContext({
+      cfg,
+      agentId: "main",
+      job: {
+        id: "daily-digest",
+        name: "Daily digest",
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        owner: { agentId: "main", sessionKey: ownerSessionKey, accountId: "rich" },
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
+          ownerSessionKey,
+          ownerAccountId: "rich",
+        },
+        payload: { kind: "agentTurn", message: "post the digest", toolsAllow: ["message"] },
+        delivery,
+      } as never,
+    });
+
+    expect(context.messageToolFormatPrompt).toContain("Telegram rich ON.");
   });
 });

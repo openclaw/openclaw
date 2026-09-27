@@ -1,10 +1,4 @@
-// Control UI module implements file kind classification.
-
-// Canonical extension/name -> presentation kind mapping for workspace files.
-// Both file-facing surfaces resolve their glyph through this one map: the file
-// preview modal picks a Lit icon, chat markdown picks a CSS mask (see
-// styles/chat/text.css). Adding a kind here is the only place a new file glyph
-// starts, so the two surfaces cannot drift apart.
+// Shared glyph categories for file previews and Markdown file links.
 export type FileKind =
   | "skill"
   | "markdown"
@@ -111,12 +105,7 @@ type SuffixTrieNode = {
   children: Map<string, SuffixTrieNode>;
 };
 
-// One reversed-segment trie indexes every path's suffixes together, so the
-// per-path depth search below never rescans the other paths: it descends one
-// child lookup per depth instead of comparing against every other path at
-// every depth. Model-controlled Markdown can carry thousands of distinct
-// paths, so this keeps label derivation near-linear in total path length
-// rather than quadratic in path count.
+// A reversed-segment trie keeps suffix resolution linear in total path length.
 function insertReversedSegments(root: SuffixTrieNode, segments: readonly string[]): void {
   let node = root;
   for (let i = segments.length - 1; i >= 0; i--) {

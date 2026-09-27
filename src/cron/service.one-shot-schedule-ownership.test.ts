@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   clearCommandLane,
@@ -7,6 +7,10 @@ import {
 } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
@@ -21,7 +25,11 @@ import type { CronJob } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-one-shot-schedule-ownership-",
-  baseTimeIso: "2026-07-27T12:00:00.000Z",
+  fakeTimers: false,
+});
+let clock: ReturnType<typeof createGatewaySchedulerClock>;
+beforeEach(() => {
+  clock = createGatewaySchedulerClock(Date.parse("2026-07-27T12:00:00.000Z"));
 });
 
 type IsolatedOutcome =
@@ -30,11 +38,13 @@ type IsolatedOutcome =
   | { status: "skipped"; error: string };
 
 function createCron(params: {
+  scheduler: CronServiceDeps["scheduler"];
   storePath: string;
   runIsolatedAgentJob: CronServiceDeps["runIsolatedAgentJob"];
   onEvent?: (event: CronEvent) => void;
 }) {
   return new CronService({
+    scheduler: params.scheduler,
     storePath: params.storePath,
     cronEnabled: true,
     log: logger,
@@ -120,6 +130,7 @@ describe("cron one-shot schedule ownership", () => {
       const finished = createDeferred();
       const events: CronEvent[] = [];
       const cron = createCron({
+        scheduler: createTestGatewayScheduler(clock.clock),
         storePath: store.storePath,
         runIsolatedAgentJob: vi.fn(async () => {
           started.resolve();
@@ -135,7 +146,7 @@ describe("cron one-shot schedule ownership", () => {
 
       try {
         await cron.start();
-        const atMs = Date.now() + 60 * 60_000;
+        const atMs = clock.clock.now() + 60 * 60_000;
         const original = await addOneShot({
           cron,
           id: `removed-active-${mode}-${deleteAfterRun}`,
@@ -250,6 +261,7 @@ describe("cron one-shot schedule ownership", () => {
       const store = await makeStorePath();
       const events: CronEvent[] = [];
       const cron = createCron({
+        scheduler: createTestGatewayScheduler(clock.clock),
         storePath: store.storePath,
         runIsolatedAgentJob: vi.fn(async () => outcome),
         onEvent: (event) => events.push(event),
@@ -257,7 +269,7 @@ describe("cron one-shot schedule ownership", () => {
 
       try {
         await cron.start();
-        const atMs = Date.now() + 60 * 60_000;
+        const atMs = clock.clock.now() + 60 * 60_000;
         const job = await addOneShot({ cron, name: `manual ${outcome.status}`, atMs, enabled });
 
         await expect(cron.run(job.id, "force")).resolves.toEqual({ ok: true, ran: true });
@@ -286,6 +298,7 @@ describe("cron one-shot schedule ownership", () => {
       const finished = createDeferred();
       const events: CronEvent[] = [];
       const cron = createCron({
+        scheduler: createTestGatewayScheduler(clock.clock),
         storePath: store.storePath,
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const, summary: "done" })),
         onEvent: (event) => {
@@ -298,7 +311,7 @@ describe("cron one-shot schedule ownership", () => {
 
       try {
         await cron.start();
-        const atMs = Date.now() + 60 * 60_000;
+        const atMs = clock.clock.now() + 60 * 60_000;
         const job = await addOneShot({ cron, name: "queued manual one-shot", atMs, enabled });
 
         await expect(cron.enqueueRun(job.id, "force")).resolves.toMatchObject({
@@ -339,6 +352,7 @@ describe("cron one-shot schedule ownership", () => {
       const releaseBlocker = createDeferred();
       const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const, summary: "done" }));
       const options = {
+        scheduler: createTestGatewayScheduler(clock.clock),
         storePath: store.storePath,
         runIsolatedAgentJob,
         onEvent: (event: CronEvent) => {
@@ -363,7 +377,7 @@ describe("cron one-shot schedule ownership", () => {
         await blockerStarted.promise;
         await cron.start();
         cron.pauseScheduling();
-        const atMs = Date.now() + 1_000;
+        const atMs = clock.clock.now() + 1_000;
         const job = await addOneShot({
           cron,
           name: "manual queued across deadline",
@@ -375,7 +389,7 @@ describe("cron one-shot schedule ownership", () => {
           ok: true,
           enqueued: true,
         });
-        vi.setSystemTime(new Date(atMs + 1));
+        clock.setTime(atMs + 1);
         releaseBlocker.resolve();
         await blocker;
         await finished.promise;
@@ -413,7 +427,7 @@ describe("cron one-shot schedule ownership", () => {
           });
           expect(resumed.state.nextRunAtMs).toBe(editSchedule ? undefined : atMs);
           cron.resumeScheduling();
-          await vi.advanceTimersByTimeAsync(MIN_REFIRE_GAP_MS);
+          await clock.advanceBy(MIN_REFIRE_GAP_MS);
           if (!editSchedule) {
             await removed.promise;
           }
@@ -451,6 +465,7 @@ describe("cron one-shot schedule ownership", () => {
           return { status: "ok" as const, summary: "manual" };
         });
       const options = {
+        scheduler: createTestGatewayScheduler(clock.clock),
         storePath: store.storePath,
         runIsolatedAgentJob,
         onEvent: (event: CronEvent) => {
@@ -471,7 +486,7 @@ describe("cron one-shot schedule ownership", () => {
         await blockerStarted.promise;
         await cron.start();
         cron.pauseScheduling();
-        const atMs = Date.now() + 1_000;
+        const atMs = clock.clock.now() + 1_000;
         const job = await addOneShot({
           cron,
           name: "enable while manual run crosses deadline",
@@ -482,11 +497,11 @@ describe("cron one-shot schedule ownership", () => {
           ok: true,
           enqueued: true,
         });
-        vi.setSystemTime(new Date(atMs + startOffsetMs));
+        clock.setTime(atMs + startOffsetMs);
         releaseBlocker.resolve();
         await blocker;
         await payloadStarted.promise;
-        vi.setSystemTime(new Date(atMs + 10));
+        clock.setTime(atMs + 10);
         if (editSchedule) {
           await cron.update(job.id, { schedule: { kind: "every", everyMs: 60_000 } });
           await cron.update(job.id, {
@@ -514,7 +529,7 @@ describe("cron one-shot schedule ownership", () => {
         } else {
           expect(cron.getJob(job.id)?.state.nextRunAtMs).toEqual(expect.any(Number));
         }
-        await vi.advanceTimersByTimeAsync(
+        await clock.advanceBy(
           DEFAULT_STARTUP_DEFERRED_MISSED_AGENT_JOB_DELAY_MS + MIN_REFIRE_GAP_MS,
         );
         if (!editSchedule) {
@@ -545,6 +560,7 @@ describe("cron one-shot schedule ownership", () => {
         summary: "done",
       }));
       const cron = createCron({
+        scheduler: createTestGatewayScheduler(clock.clock),
         storePath: store.storePath,
         runIsolatedAgentJob,
         onEvent: (event) => {
@@ -556,7 +572,7 @@ describe("cron one-shot schedule ownership", () => {
 
       try {
         await cron.start();
-        const atMs = Date.now() + 1_000;
+        const atMs = clock.clock.now() + 1_000;
         const job = await addOneShot({
           cron,
           name: "manual then scheduled one-shot",
@@ -579,7 +595,7 @@ describe("cron one-shot schedule ownership", () => {
           expect(resumed.state.nextRunAtMs).toBe(atMs);
         }
 
-        await vi.advanceTimersByTimeAsync(1_000);
+        await clock.advanceBy(1_000);
         await removed.promise;
         await cron.status();
 
@@ -600,6 +616,7 @@ describe("cron one-shot schedule ownership", () => {
     const store = await makeStorePath();
     const completions = new Map<string, ReturnType<typeof createDeferred<void>>>();
     const cron = createCron({
+      scheduler: createTestGatewayScheduler(clock.clock),
       storePath: store.storePath,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const, summary: "done" })),
       onEvent: (event) => {
@@ -611,7 +628,7 @@ describe("cron one-shot schedule ownership", () => {
 
     try {
       await cron.start();
-      const atMs = Date.now() + 60 * 60_000;
+      const atMs = clock.clock.now() + 60 * 60_000;
       const jobs = [];
       for (let index = 0; index < 24; index += 1) {
         const job = await addOneShot({ cron, name: `queued one-shot ${index}`, atMs });
@@ -651,7 +668,7 @@ describe("cron one-shot schedule ownership", () => {
     "catches up a replacement that became overdue during an interrupted restart (deleteAfterRun=%s)",
     async (deleteAfterRun) => {
       const store = await makeStorePath();
-      const now = Date.now();
+      const now = clock.clock.now();
       const interruptedAt = now - 30_000;
       const replacementAt = now - 5_000;
       const job: CronJob = {
@@ -673,6 +690,7 @@ describe("cron one-shot schedule ownership", () => {
       const requestHeartbeat = vi.fn();
       const onEvent = vi.fn((event: CronEvent) => event);
       const cron = new CronService({
+        scheduler: createTestGatewayScheduler(clock.clock),
         storePath: store.storePath,
         cronEnabled: true,
         log: logger,
@@ -725,7 +743,7 @@ describe("cron one-shot schedule ownership", () => {
 
   it("preserves every rescheduled one-shot in a concurrent interrupted restart batch", async () => {
     const store = await makeStorePath();
-    const now = Date.now();
+    const now = clock.clock.now();
     const interruptedAt = now - 30 * 60_000;
     const firstReplacementAt = now + 60 * 60_000;
     const jobs: CronJob[] = Array.from({ length: 32 }, (_, index) => {
@@ -748,7 +766,12 @@ describe("cron one-shot schedule ownership", () => {
 
     const onEvent = vi.fn((event: CronEvent) => event);
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const, summary: "done" }));
-    const cron = createCron({ storePath: store.storePath, runIsolatedAgentJob, onEvent });
+    const cron = createCron({
+      scheduler: createTestGatewayScheduler(clock.clock),
+      storePath: store.storePath,
+      runIsolatedAgentJob,
+      onEvent,
+    });
 
     try {
       await cron.start();

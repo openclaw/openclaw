@@ -7,6 +7,10 @@ const observedGroupHistoryHint = {
 const observedDmHistoryHint = {
   help: "Automatic observed-DM context uses a default of 0 and a maximum of 200 messages; 0 disables that extra context. The JSON integer maximum selects the 0-message default. Session transcript trimming separately counts user turns, where 0 means no trimming. The observed-message cap does not rewrite saved values.",
 };
+const botThreadMentionHint = {
+  label: "Require Mention in Bot Threads",
+  help: "Override mention gating in threads whose root message was sent by this bot. False allows unmentioned replies; true requires a mention even when implicit reply or participation signals are enabled. Omit to preserve the existing mention policy. Channel settings override account settings; access restrictions still apply.",
+};
 
 export const slackChannelConfigUiHints = {
   historyLimit: observedGroupHistoryHint,
@@ -15,6 +19,10 @@ export const slackChannelConfigUiHints = {
   "accounts.*.dmHistoryLimit": observedDmHistoryHint,
   "dms.*.historyLimit": observedDmHistoryHint,
   "accounts.*.dms.*.historyLimit": observedDmHistoryHint,
+  requireMentionInBotThreads: botThreadMentionHint,
+  "accounts.*.requireMentionInBotThreads": botThreadMentionHint,
+  "channels.*.requireMentionInBotThreads": botThreadMentionHint,
+  "accounts.*.channels.*.requireMentionInBotThreads": botThreadMentionHint,
   "": {
     label: "Slack",
     help: "Slack channel provider configuration for bot/app tokens, streaming behavior, and DM policy controls. Keep token handling and thread behavior explicit to avoid noisy workspace interactions.",
