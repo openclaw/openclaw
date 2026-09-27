@@ -177,6 +177,8 @@ struct ChatAssistantRunFrame<Content: View>: View {
                 .assistantBubbleContainerStyle(isClean: self.isClean)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        // Include disclosure and action rows in the container's accessibility bounds.
+        .contentShape(.accessibility, Rectangle())
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("chat-assistant-run")
     }
