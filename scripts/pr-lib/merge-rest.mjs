@@ -98,7 +98,7 @@ function pageArrays(pages) {
   return pages.flat();
 }
 
-function readPolicy(repo) {
+export function readMergePolicy(repo) {
   let response;
   try {
     response = execPrGh(
@@ -237,7 +237,7 @@ function beginRead(repo, pr, observe) {
     receipt || authority.permissions?.admin === true,
     "policy-reader admin access changed",
   );
-  const policy = receipt ? null : readPolicy(repo);
+  const policy = receipt ? null : readMergePolicy(repo);
   return { authority, main: mainSha, record, policy };
 }
 
@@ -383,9 +383,9 @@ function latestRequiredChecks(repo, head, checks) {
   return [...unique, ...groups.values()];
 }
 
-function requiredChecks(repo, snapshot) {
+export function readRequiredMergeChecks(repo, head, policy) {
   const requirements = new Map();
-  for (const rule of snapshot.policy.rules) {
+  for (const rule of policy.rules) {
     if (rule.type !== "required_status_checks") {
       continue;
     }
@@ -402,7 +402,6 @@ function requiredChecks(repo, snapshot) {
     required.some(
       ({ context, app }) => check.name === context && (app === null || check.app.id === app),
     );
-  const head = snapshot.record.head.sha;
   const contexts = new Set(required.map(({ context }) => context));
   const nameFilter =
     contexts.size === 1 ? `&check_name=${encodeURIComponent(required[0].context)}` : "";
@@ -566,7 +565,7 @@ function main([mode, repository, prValue, head, bodySnapshot, expectedObservatio
   const snapshot = beginRead(repo, pr, observing);
   const checks =
     mode === "checks" || ((observing || mode === "merge") && snapshot.record.state === "open")
-      ? requiredChecks(repo, snapshot)
+      ? readRequiredMergeChecks(repo, snapshot.record.head.sha, snapshot.policy)
       : undefined;
   if (mode !== "checks" && checks !== undefined) {
     requireEvidence(

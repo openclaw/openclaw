@@ -3,6 +3,13 @@ import { formatCliProcessFailure, runCliProcessChild } from "./cli-process-child
 
 const diagnosticPrefix = "[cli-process-diagnostics] ";
 
+function runDiagnostic(source: string) {
+  return runCliProcessChild({
+    nodeArgs: ["--trace-exit", "-e", source],
+    env: { ...process.env, NODE_OPTIONS: undefined },
+  });
+}
+
 function exitBoundaries(stderr: string): unknown[] {
   return stderr
     .split("\n")
@@ -14,19 +21,12 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
   "CLI process exit diagnostics",
   () => {
     it.each(["natural", "explicit"])("preserves %s process exit", async (mode) => {
-      const result = await runCliProcessChild({
-        nodeArgs: [
-          "--trace-exit",
-          "-e",
-          `
+      const result = await runDiagnostic(`
 process.on('exit', function fixtureExit(code) {
   console.log(JSON.stringify({ pid: process.pid, code, receiver: this === process }));
 });
 ${mode === "explicit" ? "process.exit(3);" : "process.exitCode = 3;"}
-`,
-        ],
-        env: { ...process.env, NODE_OPTIONS: undefined },
-      });
+`);
       const failure = formatCliProcessFailure({ reason: `${mode} exit diagnostics`, ...result });
       expect(result.signal, failure).toBeNull();
       expect(result.code, failure).toBe(3);
@@ -50,11 +50,7 @@ ${mode === "explicit" ? "process.exit(3);" : "process.exitCode = 3;"}
     });
 
     it("forwards borrowed receivers, arguments, return values, and thrown errors without exit diagnostics", async () => {
-      const result = await runCliProcessChild({
-        nodeArgs: [
-          "--trace-exit",
-          "-e",
-          `
+      const result = await runDiagnostic(`
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const receiver = new EventEmitter();
@@ -82,10 +78,7 @@ process.on(event, function (value) {
 assert.equal(process.emit(event, payload), true);
 assert.equal(process.emit('fixture-missing'), false);
 console.log('forwarded');
-`,
-        ],
-        env: { ...process.env, NODE_OPTIONS: undefined },
-      });
+`);
       const failure = formatCliProcessFailure({ reason: "borrowed emit diagnostics", ...result });
       expect(result.signal, failure).toBeNull();
       expect(result.code, failure).toBe(0);
@@ -98,11 +91,7 @@ console.log('forwarded');
     });
 
     it("records throwing process exit listeners without replacing their error", async () => {
-      const result = await runCliProcessChild({
-        nodeArgs: [
-          "--trace-exit",
-          "-e",
-          `
+      const result = await runDiagnostic(`
 const assert = require('node:assert/strict');
 const failure = new Error('fixture-exit-failed');
 process.once('exit', function fixtureThrow() {
@@ -111,10 +100,7 @@ process.once('exit', function fixtureThrow() {
 });
 assert.throws(() => process.emit('exit', 9), (error) => error === failure);
 console.log('preserved error');
-`,
-        ],
-        env: { ...process.env, NODE_OPTIONS: undefined },
-      });
+`);
       const failure = formatCliProcessFailure({ reason: "throwing exit diagnostics", ...result });
       expect(result.signal, failure).toBeNull();
       expect(result.code, failure).toBe(0);

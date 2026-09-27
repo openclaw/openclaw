@@ -38,6 +38,19 @@ Refresh only for a conflict, failing guard, explicit request, or material stale
 base risk. An explicitly requested landing of one's own draft includes marking
 it ready when needed.
 
+For a conflict repair, record the last passing run and tested head, the resolved
+delta, and the affected contracts in the existing preparation evidence. Reuse
+proof for unchanged inputs; run the affected checks instead of restarting every
+completed suite. A passing older run is not current-head CI and does not itself
+waive enforced gates. Once admission succeeds, merge before optional proof polish
+or unrelated cleanup.
+
+Keep source PRs within their generation owners: UI/native translation memory and
+locale metadata normally belong to the post-merge locale workflows. Check a
+hosted review bundle's size before submission; remove accidentally included
+generated outputs through their owning workflow, not by truncating review input
+or silently excluding authored changes.
+
 ## Evidence media
 
 Read the [media upload reference](media.md) for feature detection, endpoint
@@ -121,6 +134,41 @@ The merge workflow still owns later main-drift policy. For explicitly
 owner-approved reviewed fork code without hosted Testbox, use the documented
 `OPENCLAW_PR_GATES_REMOTE=testbox` path.
 
+### Explicit prior-CI admin landing
+
+When the operator explicitly authorizes landing after a prior successful CI run
+and reviewed conflict repairs, prepare the current head with `github_pending`
+and use the native exception below. Ordinary land authority alone does not select
+this exception. Keep the completed review and current prepared-head bindings.
+
+```bash
+node scripts/pr-lib/merge-prior-ci.mjs delta <prior-green-head> <prepared-head>
+scripts/pr merge-run <pr> --admin-evidence <evidence.json> --confirmed-operator-admin
+```
+
+The delta command reports both heads, `deltaSha256`, and `changedPaths`. Inspect
+that delta, use the changed-check planner to select affected checks, and record
+their actual results. The evidence JSON requires `version: 1`, `repository`,
+numeric `pr`, `head`, `priorHead`, numeric `runId` and `runAttempt`, `deltaSha256`,
+`changeKind: "conflict-resolution"`, an operator `reason`, affected `contracts`
+as strings, and `checks` entries with `command`, `result: "passed"`, and an
+`evidence` description. These scoped results are explicit operator attestations,
+not synthesized current-head CI success.
+
+The tool verifies the earlier successful attempt's PR/head provenance, including
+its CI gate. PR runs need the matching PR association; manually dispatched runs
+need the current same-repository PR branch and an ancestor tested head. It
+rechecks the current writer's repository and active organization-admin authority
+and permits only pending/skipped normal CI. Failed required checks, security
+requirements, enforced reviews and unresolved required review
+threads still block. This mode supports immediate squash on github.com with
+known ruleset policy, not classic protection, queues, auto-merge, or recovery.
+It dispatches the protected REST merge with the exact head pinned and retains
+the prior run, inspected delta, scoped evidence, and operator in the existing
+merge outcome. Accepted or uncertain outcomes still require reconciliation.
+
+### Completed-evidence follow-through
+
 For a requested diagnosis or the completed-evidence path, watch one exact head
 with `node scripts/watch-pr-ci.mjs <pr> <head-sha>`; use narrow JSON check/run reads
 and fetch failed logs once. Address substantive human/bot findings and resolve
@@ -176,6 +224,12 @@ A failed operation can retain a lock. Verify no owned child tools remain, then
 recover only with the exact token and command the wrapper printed. Never remove
 locks by hand or start competing retries. After throttling, inspect quota before
 retrying native prepare/merge.
+
+After two identical pre-dispatch failures without new evidence, stop invoking
+the same blocked route. Inspect the failure and select an already-authorized
+supported route with the exact reviewed head pinned, or report the concrete
+missing capability. A transport change never waives admission or authorizes
+replaying an accepted or uncertain request.
 
 A failed or timed-out merge response can still mean GitHub merged it. Reconcile
 remote state and ancestry before retrying. Verify the final merge commit is on

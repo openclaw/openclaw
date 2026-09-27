@@ -32,6 +32,11 @@ Hourly iOS retains `ios-build (tests)` with Rust, voice, native Access, and focu
 
 Eligible core-source and core-test PRs use targeted type checks when every selected path exists in the checkout. GitHub and hybrid profiles distribute the selected consumers across their existing core stripes; the Blacksmith profile checks them in the central row. Ambiguous ownership and deleted core tests keep the full type-check coverage.
 
+Preflight passes the complete changed-path manifest between steps as a local JSON
+file, so large PRs do not lose test-planning inputs to Actions output or environment
+size limits. Frozen targets that predate this transport retain their bounded JSON
+output contract. Missing or invalid inputs still reject current PR Node planning.
+
 The [Testbox check workflow](/ci/local-proof#testbox-validation) defaults to a four-hour outer job budget for delegated full-suite proof. Individual test deadlines remain unchanged.
 
 Full GitHub and hybrid type checks run the five core stripes independently, retaining two compiler children per job. Current hybrid runs also split extension lint across six hosted jobs. Trusted hybrid first attempts place the heavy first packed core-lint row on the Blacksmith 16-class, the second on the 8-class, and the final gate on the 4-class to avoid serial hosted assignment delays. Frozen targets keep their earlier layout; see [static checks](/ci/runners#runner-backend-modes).
