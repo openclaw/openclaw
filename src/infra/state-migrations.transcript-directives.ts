@@ -40,7 +40,7 @@ import {
   transcriptDirectiveArchivesNeedMigration,
 } from "./state-migrations.transcript-directives-archives.js";
 import {
-  parseTranscriptEvent,
+  parseDirectiveMigrationTranscriptEvent,
   transformHistoricalTranscriptEvent,
 } from "./state-migrations.transcript-directives-transform.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
@@ -195,7 +195,10 @@ function planTranscriptSession(
   sessionId: string,
 ): TranscriptRowPlan[] {
   return readTranscriptSessionRows(database, sessionId).map((row) => {
-    const event = parseTranscriptEvent(row.event_json, `${pathname}:${sessionId}:${row.seq}`);
+    const event = parseDirectiveMigrationTranscriptEvent(
+      row.event_json,
+      `${pathname}:${sessionId}:${row.seq}`,
+    );
     const transformed = transformHistoricalTranscriptEvent(event);
     return {
       eventJson: row.event_json,

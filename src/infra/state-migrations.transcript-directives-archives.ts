@@ -20,7 +20,7 @@ import {
 } from "./kysely-sync.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import {
-  parseTranscriptEvent,
+  parseDirectiveMigrationTranscriptEvent,
   transformHistoricalTranscriptEvent,
 } from "./state-migrations.transcript-directives-transform.js";
 
@@ -76,7 +76,7 @@ function transformArchiveContent(
     if (!line) {
       throw new Error(`${owner} contains a blank JSONL record at line ${index + 1}`);
     }
-    const event = parseTranscriptEvent(line, `${owner}:${index + 1}`);
+    const event = parseDirectiveMigrationTranscriptEvent(line, `${owner}:${index + 1}`);
     const transformed = transformHistoricalTranscriptEvent(event);
     changed ||= transformed.changed;
     return transformed.changed ? JSON.stringify(transformed.event) : line;

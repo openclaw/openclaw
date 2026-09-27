@@ -7,7 +7,10 @@ import { replaceOutsideCodeRegions } from "../utils/directive-tags.js";
 const LEGACY_REACTION_DIRECTIVE_RE =
   /\[\[\s*(?:react|react_to_current)\s*:\s*([^\]\n]+?)\s*\]\]/giu;
 
-export function parseTranscriptEvent(raw: string, owner: string): TranscriptEvent {
+export function parseDirectiveMigrationTranscriptEvent(
+  raw: string,
+  owner: string,
+): TranscriptEvent {
   try {
     return JSON.parse(raw);
   } catch (error) {
