@@ -16,11 +16,9 @@ A pasted ref is context, not permission to publish or expand the task.
   or close unless separately authorized.
 - **Fix only:** investigate, repair locally, and validate. Publishing still
   requires ship/land or equivalent scoped authority.
-- **Create/publish/checkpoint/handoff only:** publish the authorized state, with
-  unfinished validation disclosed. Do not turn a request to push work for another
-  agent into autonomous repair or merge preparation. Follow the publication-only
-  path in [landing](references/landing.md#publication-only-and-unfinished-handoffs);
-  creation/publication authority does not itself authorize merge or deployment.
+- **Publish or hand off unfinished work:** deliver the authorized checkpoint,
+  with validation gaps disclosed; do not expand into merge preparation. Follow
+  [publication scope](references/landing.md#open-or-update-the-pr).
 - **Land/ship or autonomous repair:** finish the authorized scope through current
   source proof, review, native merge submission, and verified remote merge.
   Keep checking pending requests and repair CI failures or conflicts under the
