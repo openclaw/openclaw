@@ -1838,7 +1838,7 @@ async function printFailureSummary(failures: LaneResult[], tailLines: number) {
     if (process.env.GITHUB_ACTIONS === "true") {
       const status = Number.isInteger(failure.status) ? failure.status : "unknown";
       console.error(
-        `::error title=Docker lane failure::status=${status}; timedOut=${failure.timedOut === true}; noOutputTimedOut=${failure.noOutputTimedOut === true}`,
+        `::error title=Docker lane failure::status=${status}; timedOut=${failure.timedOut}; noOutputTimedOut=${failure.noOutputTimedOut}`,
       );
     }
     console.error(`---- ${failure.name} failed (status=${failure.status}): ${failure.logFile}`);
