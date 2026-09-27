@@ -3,19 +3,19 @@ import { expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
+import { retireSessionPaneHandoffs } from "./chat-pane-handoff-lifecycle.ts";
 import {
   clearPaneSessionHandoffs,
   consumePaneSessionHandoff,
   preparePaneSessionHandoff,
-  retireSessionPaneHandoffs,
 } from "./chat-pane-shared.ts";
 
 it.each(["gateway", "principal"] as const)(
-  "retires only the deleted session's captured %s handoffs",
+  "retires only the deleted session's current %s handoffs",
   (change) => {
     vi.useFakeTimers();
     vi.setSystemTime(100);
-    const principal = { recoveryScope: "original" };
+    const principal = { recoveryScope: "original", recoveryScopeReady: true };
     const owner = principal as GatewayBrowserClient;
     const fixture = createApplicationGateway();
     const { gateway } = fixture;
@@ -30,10 +30,17 @@ it.each(["gateway", "principal"] as const)(
         fixture.publish({ ...gateway.snapshot, client: { ...principal } as GatewayBrowserClient });
       }
       preparePaneSessionHandoff(context, "other", key, { draft: "keep", attachments: [] });
-
-      retireSessionPaneHandoffs(context, [{ key, retireBeforeRevision: 200 }], owner, "original");
+      const otherOwner = gateway.snapshot.client;
+      principal.recoveryScope = "original";
+      fixture.publish({ ...gateway.snapshot, client: owner });
+      retireSessionPaneHandoffs(context, [{ key, retireBeforeRevision: 200 }]);
 
       expect(consumePaneSessionHandoff(context, "original", key)).toBeNull();
+      expect(consumePaneSessionHandoff(context, "other", key)).toBeNull();
+      if (change === "principal") {
+        principal.recoveryScope = "other";
+      }
+      fixture.publish({ ...gateway.snapshot, client: otherOwner });
       expect(consumePaneSessionHandoff(context, "other", key)).toEqual({
         draft: "keep",
         attachments: [],

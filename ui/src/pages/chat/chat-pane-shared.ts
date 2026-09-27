@@ -1,6 +1,7 @@
 import { asNullableRecord as catalogRawRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { capturePlacementStartupConnection } from "../../app/session-placement-startup.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
@@ -11,6 +12,12 @@ import type {
   HumanMention,
 } from "../../lib/chat/chat-types.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
+import {
+  PANE_SESSION_HANDOFF_TTL_MS,
+  paneSessionHandoffs,
+  removePaneSessionHandoffs,
+  type PendingPaneSessionHandoff,
+} from "./chat-pane-handoff-lifecycle.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
 export type PaneSessionChangeOptions = { replace?: boolean };
@@ -23,31 +30,7 @@ export type PaneSessionHandoff = {
   mentions?: readonly HumanMention[];
   send?: boolean;
 };
-type PendingPaneSessionHandoff = PaneSessionHandoff & {
-  expiresAt: number;
-  sessionKey: string;
-  owner: GatewayBrowserClient | null;
-  recoveryScope: string | undefined;
-};
-// A retained pane owns one session for life, so creation/fork adoption crosses
-// component instances. The application context scopes that one-shot transfer.
-const PANE_SESSION_HANDOFF_TTL_MS = 30_000;
 const PANE_SESSION_HANDOFF_LIMIT = 4;
-const paneSessionHandoffs = new WeakMap<
-  ApplicationContext,
-  Map<string, PendingPaneSessionHandoff[]>
->();
-
-function removePaneSessionHandoffs(
-  pending: PendingPaneSessionHandoff[] | undefined,
-  matches: (handoff: PendingPaneSessionHandoff) => boolean,
-): void {
-  for (let index = (pending?.length ?? 0) - 1; index >= 0; index -= 1) {
-    if (matches(pending![index]!)) {
-      pending!.splice(index, 1);
-    }
-  }
-}
 
 function paneHandoffs(
   context: ApplicationContext,
@@ -82,11 +65,14 @@ export function preparePaneSessionHandoff(
     areUiSessionKeysEquivalent(candidate.sessionKey, sessionKey),
   );
   const owner = context.gateway.snapshot.client;
+  const sameConnection = capturePlacementStartupConnection(context.gateway, {
+    gatewayUrl: context.gateway.connection.gatewayUrl,
+    recoveryScope: owner?.recoveryScope || undefined,
+  });
   const stored = {
     sessionKey,
-    ...handoff,
-    owner,
-    recoveryScope: owner?.recoveryScope,
+    value: { ...handoff },
+    isCurrent: () => context.gateway.snapshot.client === owner && sameConnection(),
     expiresAt: Date.now() + PANE_SESSION_HANDOFF_TTL_MS,
   };
   pending.push(stored);
@@ -104,21 +90,14 @@ export function consumePaneSessionHandoff(
   sessionKey: string,
 ): PaneSessionHandoff | null {
   const pending = paneHandoffs(context, paneId, false);
-  const index = pending?.findIndex((candidate) =>
-    areUiSessionKeysEquivalent(candidate.sessionKey, sessionKey),
+  const index = pending?.findIndex(
+    (candidate) =>
+      candidate.isCurrent() && areUiSessionKeysEquivalent(candidate.sessionKey, sessionKey),
   );
   if (!pending || index === undefined || index < 0) {
     return null;
   }
-  const handoff = pending.splice(index, 1)[0]!;
-  const {
-    expiresAt: _expiresAt,
-    sessionKey: _sessionKey,
-    owner: _owner,
-    recoveryScope: _recoveryScope,
-    ...value
-  } = handoff;
-  return value;
+  return pending.splice(index, 1)[0]!.value;
 }
 
 export function clearPaneSessionHandoff(
@@ -129,27 +108,6 @@ export function clearPaneSessionHandoff(
   removePaneSessionHandoffs(paneHandoffs(context, paneId, false), (handoff) =>
     areUiSessionKeysEquivalent(handoff.sessionKey, sessionKey),
   );
-}
-
-export function retireSessionPaneHandoffs(
-  context: ApplicationContext,
-  targets: readonly { key: string; retireBeforeRevision: number }[],
-  owner: GatewayBrowserClient,
-  recoveryScope: string | undefined,
-): void {
-  for (const pending of paneSessionHandoffs.get(context)?.values() ?? []) {
-    removePaneSessionHandoffs(
-      pending,
-      (handoff) =>
-        handoff.owner === owner &&
-        handoff.recoveryScope === recoveryScope &&
-        targets.some(
-          ({ key, retireBeforeRevision }) =>
-            areUiSessionKeysEquivalent(handoff.sessionKey, key) &&
-            handoff.expiresAt - PANE_SESSION_HANDOFF_TTL_MS < retireBeforeRevision,
-        ),
-    );
-  }
 }
 
 export function clearPaneSessionHandoffs(context: ApplicationContext, paneId: string): void {

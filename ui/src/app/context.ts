@@ -111,12 +111,7 @@ export type ApplicationChatAttachmentHandoff = {
     newSessionDraft?: NewSessionDraftHandoff;
   } | null;
   retainedAttachmentIds(attachments: readonly ChatAttachment[]): ReadonlySet<string>;
-  retireScope(
-    scopeKey: string,
-    beforeRevision: number,
-    owner: NonNullable<ChatAttachmentHandoffKey["owner"]>,
-    recoveryScope: string | undefined,
-  ): void;
+  retireScope(scopeKey: string, beforeRevision: number): void;
   clearPane(paneId: string): void;
   dispose(): void;
 };

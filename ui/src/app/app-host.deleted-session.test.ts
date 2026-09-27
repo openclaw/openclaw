@@ -108,123 +108,144 @@ afterEach(() => {
 });
 
 describe("OpenClaw shell deleted-session recovery", () => {
-  it.each(["initial readiness", "reconnect", "late readiness", "late principal change"] as const)(
-    "keeps draft cleanup scoped through %s",
-    async (transition) => {
-      const storage = createStorageMock();
-      const indexedDb = new IDBFactory();
-      vi.stubGlobal("sessionStorage", storage);
-      vi.stubGlobal("indexedDB", indexedDb);
-      const scopeKey = storedChatOutboxScopeKey({ sessionKey: deletedKey, agentId: "main" });
-      const owner = {
-        gatewayOwner: "ws://gateway.example.test",
-        recoveryScope: "original-principal",
-        scopeKey: `chat:v3:${scopeKey}`,
-      };
-      const client = {
-        gatewayUrl: owner.gatewayOwner,
-        recoveryScope: owner.recoveryScope,
-        recoveryScopeReady: true,
-      };
-      const { shell, publishGateway } = createSessionRecoveryShell({
-        activeSessionKey: deletedKey,
-        sessionKeys: [deletedKey],
-        deletedSessionKeys: [deletedKey],
-      });
-      const context = shell.runtime.context;
-      context.gateway.snapshot.client = client as GatewayBrowserClient;
-      const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
-      try {
-        expect(
-          await writeDurableComposerDraft(
-            owner,
-            { text: "retire me", attachments: [], revision: 1 },
-            { expectedRevision: 0, writeId: "readiness" },
-          ),
-        ).toMatchObject({ status: "persisted" });
-        writeStoredOutboxStore(storage, storageTargetForGateway(owner.gatewayOwner), {
-          version: 4,
-          recovery: {},
-          gatewayOwner: owner.gatewayOwner,
-          sessions: {
-            [scopeKey]: {
-              draft: "retire queued draft",
-              draftRevision: 1,
-              queue: [{ id: "queued", text: "queued", createdAt: 1 }],
-              updatedAt: 1,
-            },
+  it.each([
+    "initial readiness",
+    "reconnect",
+    "late readiness",
+    "late principal change",
+    "stalled readiness",
+  ] as const)("keeps draft cleanup scoped through %s", async (transition) => {
+    const storage = createStorageMock();
+    const indexedDb = new IDBFactory();
+    vi.stubGlobal("sessionStorage", storage);
+    vi.stubGlobal("indexedDB", indexedDb);
+    const scopeKey = storedChatOutboxScopeKey({ sessionKey: deletedKey, agentId: "main" });
+    const owner = {
+      gatewayOwner: "ws://gateway.example.test",
+      recoveryScope: "original-principal",
+      scopeKey: `chat:v3:${scopeKey}`,
+    };
+    const client = {
+      gatewayUrl: owner.gatewayOwner,
+      recoveryScope: owner.recoveryScope,
+      recoveryScopeReady: true,
+    };
+    const { shell, publishGateway } = createSessionRecoveryShell({
+      activeSessionKey: deletedKey,
+      sessionKeys: [deletedKey],
+      deletedSessionKeys: [deletedKey],
+    });
+    const context = shell.runtime.context;
+    context.gateway.snapshot.client = client as GatewayBrowserClient;
+    const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
+    try {
+      expect(
+        await writeDurableComposerDraft(
+          owner,
+          { text: "retire me", attachments: [], revision: 1 },
+          { expectedRevision: 0, writeId: "readiness" },
+        ),
+      ).toMatchObject({ status: "persisted" });
+      writeStoredOutboxStore(storage, storageTargetForGateway(owner.gatewayOwner), {
+        version: 4,
+        recovery: {},
+        gatewayOwner: owner.gatewayOwner,
+        sessions: {
+          [scopeKey]: {
+            draft: "retire queued draft",
+            draftRevision: 1,
+            queue: [{ id: "queued", text: "queued", createdAt: 1 }],
+            updatedAt: 1,
           },
-        });
-        const stored = storage.getItem(storageTargetForGateway(owner.gatewayOwner).key);
-        if (transition !== "initial readiness") {
-          preparePaneSessionHandoff(context, "retained", deletedKey, {
-            draft: "retire pane draft",
-            attachments: [],
-          });
-          context.chatAttachmentHandoff.prepare({
-            reviewPrivateDraft: reviewPrivateComposerDraft,
+        },
+      });
+      const stored = storage.getItem(storageTargetForGateway(owner.gatewayOwner).key);
+      if (transition === "initial readiness") {
+        client.recoveryScope = "";
+        client.recoveryScopeReady = false;
+      }
+      preparePaneSessionHandoff(context, "retained", deletedKey, {
+        draft: "retire pane draft",
+        attachments: [],
+      });
+      context.chatAttachmentHandoff.prepare({
+        reviewPrivateDraft: reviewPrivateComposerDraft,
+        owner: client as GatewayBrowserClient,
+        paneId: "retained",
+        scopeKey,
+        message: "retire attachment handoff",
+        attachments: [],
+        fallbacks: {},
+      });
+      if (transition === "stalled readiness") {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      }
+      if (transition !== "late principal change") {
+        client.recoveryScope = "";
+      }
+      client.recoveryScopeReady = false;
+      shell.observeDeletedSessions({
+        ...context.sessions.state,
+        deletedSessions: [
+          { key: deletedKey, agentId: "main", retireBeforeRevision: Date.now() + 1 },
+        ],
+      });
+      expect.soft(consumePaneSessionHandoff(context, "retained", deletedKey)).toBeNull();
+      expect
+        .soft(
+          context.chatAttachmentHandoff.consume({
             owner: client as GatewayBrowserClient,
             paneId: "retained",
             scopeKey,
-            message: "retire attachment handoff",
-            attachments: [],
-            fallbacks: {},
-          });
-        }
-        if (transition !== "late principal change") {
-          client.recoveryScope = "";
-        }
-        client.recoveryScopeReady = false;
-        shell.observeDeletedSessions({
-          ...context.sessions.state,
-          deletedSessions: [
-            { key: deletedKey, agentId: "main", retireBeforeRevision: Date.now() + 1 },
-          ],
-        });
-        const late = transition === "late readiness" || transition === "late principal change";
-        if (late) {
-          await vi.dynamicImportSettled();
-          expect.soft(await readDurableComposerDraft(owner)).toMatchObject({ status: "found" });
-          expect
-            .soft(storage.getItem(storageTargetForGateway(owner.gatewayOwner).key))
-            .toBe(stored);
-          expect.soft(toast.textContent).toBe("");
-        }
-        client.recoveryScope =
-          transition === "late principal change" ? "other-principal" : owner.recoveryScope;
+          }),
+        )
+        .toBeNull();
+      if (transition === "stalled readiness") {
+        await vi.dynamicImportSettled();
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect
+          .soft(toast.textContent)
+          .toContain("Session deleted; browser draft remains. Clear site data.");
+        expect.soft(toast.querySelectorAll(".app-toast")).toHaveLength(1);
+        expect.soft(storage.getItem(storageTargetForGateway(owner.gatewayOwner).key)).toBe(stored);
+        expect.soft(await readDurableComposerDraft(owner)).toMatchObject({ status: "found" });
+        vi.useRealTimers();
+        client.recoveryScope = owner.recoveryScope;
         client.recoveryScopeReady = true;
         publishGateway();
         await vi.dynamicImportSettled();
-
-        const pane = consumePaneSessionHandoff(context, "retained", deletedKey);
-        const handoff = context.chatAttachmentHandoff.consume({
-          owner: client as GatewayBrowserClient,
-          paneId: "retained",
-          scopeKey,
-        });
-        if (transition === "late principal change") {
-          expect.soft(await readDurableComposerDraft(owner)).toMatchObject({ status: "found" });
-          expect
-            .soft(storage.getItem(storageTargetForGateway(owner.gatewayOwner).key))
-            .toBe(stored);
-          expect.soft(pane?.draft).toBe("retire pane draft");
-          expect.soft(handoff?.message).toBe("retire attachment handoff");
-          expect
-            .soft(toast.textContent)
-            .toContain("Session deleted; browser draft remains. Clear site data.");
-        } else {
-          expect.soft(await readDurableComposerDraft(owner)).toMatchObject({ status: "not-found" });
-          expect.soft(pane).toBeNull();
-          expect.soft(handoff).toBeNull();
-          expect.soft(toast.textContent).toBe("");
-        }
-      } finally {
-        clearPaneSessionHandoffs(context, "retained");
-        context.chatAttachmentHandoff.dispose();
-        await requestResult(indexedDb.deleteDatabase("openclaw-control-ui"));
+        expect.soft(await readDurableComposerDraft(owner)).toMatchObject({ status: "found" });
+        return;
       }
-    },
-  );
+      const late = transition === "late readiness" || transition === "late principal change";
+      if (late) {
+        await vi.dynamicImportSettled();
+        expect.soft(await readDurableComposerDraft(owner)).toMatchObject({ status: "found" });
+        expect.soft(storage.getItem(storageTargetForGateway(owner.gatewayOwner).key)).toBe(stored);
+        expect.soft(toast.textContent).toBe("");
+      }
+      client.recoveryScope =
+        transition === "late principal change" ? "other-principal" : owner.recoveryScope;
+      client.recoveryScopeReady = true;
+      publishGateway();
+      await vi.dynamicImportSettled();
+
+      if (transition === "late principal change") {
+        expect.soft(await readDurableComposerDraft(owner)).toMatchObject({ status: "found" });
+        expect.soft(storage.getItem(storageTargetForGateway(owner.gatewayOwner).key)).toBe(stored);
+        expect
+          .soft(toast.textContent)
+          .toContain("Session deleted; browser draft remains. Clear site data.");
+      } else {
+        expect.soft(await readDurableComposerDraft(owner)).toMatchObject({ status: "not-found" });
+        expect.soft(toast.textContent).toBe("");
+      }
+    } finally {
+      clearPaneSessionHandoffs(context, "retained");
+      context.chatAttachmentHandoff.dispose();
+      await requestResult(indexedDb.deleteDatabase("openclaw-control-ui"));
+    }
+  });
 
   it.each(["gateway switch", "principal change", "disconnect", "credentials change"] as const)(
     "preserves drafts and reports failed cleanup after a %s during import",

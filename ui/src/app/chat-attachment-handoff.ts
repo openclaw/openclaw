@@ -16,7 +16,6 @@ type PendingChatAttachmentHandoff = NonNullable<
   ReturnType<ApplicationChatAttachmentHandoff["consume"]>
 > & {
   owner: NonNullable<Parameters<ApplicationChatAttachmentHandoff["prepare"]>[0]["owner"]>;
-  recoveryScope: string | undefined;
   paneId: string;
   scopeKey: string;
   message: string;
@@ -232,11 +231,10 @@ export function createChatAttachmentHandoff(
       }
       pending.set(key, {
         owner,
-        recoveryScope: owner.recoveryScope,
         reviewPrivateDraft,
         isConnectionCurrent: capturePlacementStartupConnection(gateway, {
           gatewayUrl: gateway.connection.gatewayUrl,
-          recoveryScope: owner.recoveryScope ?? "",
+          recoveryScope: owner.recoveryScope || undefined,
         }),
         preparedAt: Date.now(),
         paneId,
@@ -269,7 +267,7 @@ export function createChatAttachmentHandoff(
       const match = take(entryKey(paneId, scopeKey));
       // A Gateway mismatch is terminal for this exact presentation. Other
       // retained session scopes under the same logical pane remain independent.
-      if (match?.owner === owner) {
+      if (match?.owner === owner && match.isConnectionCurrent()) {
         return {
           attachments: match.attachments,
           fallbacks: match.fallbacks,
@@ -296,13 +294,13 @@ export function createChatAttachmentHandoff(
       }
       return retained;
     },
-    retireScope: (scopeKey, beforeRevision, owner, recoveryScope) => {
+    retireScope: (scopeKey, beforeRevision) => {
       // Optimistic navigation may unmount the pane before deletion confirms.
       // Retire that package without touching a later edit or another session.
       for (const [key, handoff] of pending) {
         if (
-          handoff.owner === owner &&
-          handoff.recoveryScope === recoveryScope &&
+          handoff.owner === gateway.snapshot.client &&
+          handoff.isConnectionCurrent() &&
           handoff.scopeKey === scopeKey &&
           handoff.preparedAt < beforeRevision
         ) {
