@@ -50,8 +50,17 @@ import {
 
 export type PlacementRecoveryDeps = {
   placements: WorkerDispatchPlacementStore;
-  environments: WorkerDispatchEnvironmentService;
-  failure: PlacementFailureActions;
+  environments: Pick<
+    WorkerDispatchEnvironmentService,
+    | "get"
+    | "destroy"
+    | "startTunnel"
+    | "stopTunnel"
+    | "reconcileEnvironment"
+    | "reconcileOnce"
+    | "supportsProviderExecutionMode"
+  >;
+  failure: Omit<PlacementFailureActions, "cancelProvisioning">;
   workspaceOperations: WorkerWorkspaceOperationCoordinator;
   resolveWorkspace: (params: WorkerSessionPlacementIdentity) => Promise<WorkerSessionWorkspace>;
   withPreparedRecovery: WithPreparedWorkerWorkspaceRecovery;

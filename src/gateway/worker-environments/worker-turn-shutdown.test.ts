@@ -1,239 +1,210 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { waitForGatewayActiveWork } from "../../infra/gateway-active-work.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
-  tryBeginGatewayRootWorkAdmission,
+  runWithGatewayIndependentRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../../state/openclaw-state-db.js";
 import { createPlacementRecoveryActions } from "./placement-dispatch-recovery.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import { getWorkerTurnExecutionIdentityCapability } from "./placement-turn-claim-events.js";
-import {
-  ENVIRONMENT_ID,
-  OWNER_EPOCH,
-  SESSION_ID,
-  SESSION_KEY,
-  attachedEnvironment,
-  cleanupWorkerTurnLauncherTest,
-  createWorkerSessionTurnPlacementProvider,
-  credential,
-  database,
-  measureLaunchTurn,
-  placements,
-  root,
-  seedActivePlacement,
-  setupWorkerTurnLauncherTest,
-  turn,
-  unusedEnvironments,
-  type WorkerTurnEnvironmentService,
-} from "./worker-turn-launcher.test-support.js";
+import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
+import { WorkerTurnExecutionError } from "./worker-turn-failure.js";
+import * as fixture from "./worker-turn-launcher.test-support.js";
+import { captureWorkspaceSnapshot } from "./workspace-manifest-worker.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
+import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
+import {
+  applyStagedWorkerWorkspaceResult,
+  workerWorkspaceResultStaging,
+} from "./workspace-result-staging.js";
 
 const unexpected = (): never => {
   throw new Error("Unexpected shutdown recovery operation");
 };
+beforeEach(fixture.setupWorkerTurnLauncherTest);
+afterEach(async () => {
+  resetGatewayWorkAdmission();
+  await fixture.cleanupWorkerTurnLauncherTest();
+});
 
-describe("worker turn Gateway shutdown", () => {
-  beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(async () => {
-    resetGatewayWorkAdmission();
-    await cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true });
+it("accepts an interrupted worker's completed edit before a fresh turn reuses its machine", async () => {
+  const { placements, root, database, ENVIRONMENT_ID, OWNER_EPOCH, SESSION_ID, SESSION_KEY } =
+    fixture;
+  const remote = path.join(root, "node-workspace");
+  const accepted = path.join(root, "accepted-workspace");
+  await Promise.all([fs.mkdir(remote), fs.mkdir(accepted)]);
+  const base = await captureWorkspaceSnapshot({ root: remote, baseCommit: null });
+  await fixture.seedActivePlacement("worker-turn", remote, base.manifestRef);
+  const edited = createDeferred();
+  const finish = createDeferred();
+  const environment = {
+    ...fixture.attachedEnvironment(),
+    nodeDeviceId: "paired-worker",
+    sshEndpoint: null,
+  };
+  const launchTurn = vi.fn<NonNullable<WorkerTurnTunnelHandle["launchTurn"]>>(async (request) => {
+    request.onDispatchReady?.();
+    await fs.writeFile(
+      path.join(request.plan.assignment.workspaceDir, "restart-proof.txt"),
+      "slept-ok\n",
+    );
+    fixture
+      .openSessionManager()
+      .appendMessage(makeTextToolResult("sleep", "exec", "slept-ok", false, 1));
+    edited.resolve();
+    await finish.promise;
+    return {
+      stdout: "",
+      stderr: "worker admission deadline exceeded: Unexpected server response: 503",
+      code: 1,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    };
   });
-  afterAll(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-  });
-
-  it.each([
-    { reason: "stop (SIGTERM)", pending: false, resetBeforeSettlement: false },
-    { reason: "restart", pending: false, resetBeforeSettlement: true },
-    { reason: "restart", pending: true, resetBeforeSettlement: false },
-  ] as const)(
-    "retires $reason work without failing its placement (pending result: $pending)",
-    async ({ reason, pending, resetBeforeSettlement }) => {
-      await seedActivePlacement();
-      const launched = createDeferred();
-      const finish = createDeferred();
-      let workerSignal: AbortSignal | undefined;
-      const environment = {
-        ...attachedEnvironment(),
-        nodeDeviceId: "paired-worker",
-        sshEndpoint: null,
-      };
-      const launchTurn = vi.fn<
-        NonNullable<Awaited<ReturnType<WorkerTurnEnvironmentService["startTunnel"]>>["launchTurn"]>
-      >(async (request) => {
-        request.onDispatchReady?.();
-        workerSignal = request.signal;
-        launched.resolve();
-        await finish.promise;
-        return {
-          stdout: "",
-          stderr: "worker admission deadline exceeded: Unexpected server response: 503",
-          code: 1,
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
-      });
-      const environments: WorkerTurnEnvironmentService = {
-        ...unusedEnvironments(),
-        get: () => environment,
-        acquireTurnCredential: async () => credential(),
-        acknowledgeCredentialDelivery: async () => true,
-        startTunnel: async () => ({
-          environmentId: ENVIRONMENT_ID,
-          ownerEpoch: OWNER_EPOCH,
-          runWorkspaceCommand: vi.fn(),
-          quiesceWorkspace: vi.fn(),
-          syncWorkspace: vi.fn(),
-          reconcileWorkspace: vi.fn(),
-          stop: vi.fn(),
-          measureLaunchTurn,
-          launchTurn,
-        }),
-        stopTunnel: vi.fn(async () => {}),
-        destroy: vi.fn(async () => environment),
-      };
-      const reconcileActivePlacement = vi.fn(unexpected);
-      const provider = createWorkerSessionTurnPlacementProvider({
-        environments,
-        placements,
-        reconcileActivePlacement,
-      });
-      const rootAdmission = tryBeginGatewayRootWorkAdmission("test:worker-turn");
-      if (!rootAdmission) {
-        throw new Error("Expected root admission");
+  const tunnel: WorkerTurnTunnelHandle = {
+    environmentId: ENVIRONMENT_ID,
+    ownerEpoch: OWNER_EPOCH,
+    measureLaunchTurn: fixture.measureLaunchTurn,
+    launchTurn,
+    runWorkspaceCommand: unexpected,
+    syncWorkspace: unexpected,
+    stop: unexpected,
+    quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
+    reconcileWorkspace: async ({ remoteWorkspaceDir, baseManifestRef, source }) => {
+      if (source.kind !== "local" || !source.stagedResult) {
+        throw new Error("Expected staged local result");
       }
-      const runId = "interrupted-turn";
-      const attempt = rootAdmission
-        .run(() =>
-          provider.executeTurn(
-            { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId },
-            turn(runId),
-            unexpected,
-          ),
-        )
-        .catch((error: unknown) => error)
-        .finally(() => rootAdmission.release());
-      try {
-        await launched.promise;
-        const active = placements.get(SESSION_ID);
-        const claim = active && projectWorkerSessionTurnClaim(active);
-        if (!claim) {
-          throw new Error("Expected live worker claim");
-        }
-        const authority = getWorkerTurnExecutionIdentityCapability(placements, claim);
-        if (!authority) {
-          throw new Error("Expected execution authority");
-        }
-        if (pending) {
-          placements.markWorkspaceResultPending(claim);
-        }
-        markGatewayRestartDraining(reason);
-        if (resetBeforeSettlement) {
-          resetGatewayWorkAdmission();
-        }
-        finish.resolve();
-        const error = await attempt;
-        expect(isAgentRunRestartAbortReason(error)).toBe(true);
-        expect(workerSignal?.aborted).toBe(true);
-        await expect(authority.run(async () => "late tool")).rejects.toThrow();
-        expect(placements.get(SESSION_ID)).toMatchObject({
-          state: "active",
-          environmentId: ENVIRONMENT_ID,
-          activeOwnerEpoch: OWNER_EPOCH,
-          remoteWorkspaceDir: "/worker/workspace",
-          turnClaim: { claimId: claim.claimId },
-        });
-        expect(placements.listPendingWorkspaceResults()).toHaveLength(pending ? 1 : 0);
-        expect(environments.destroy).not.toHaveBeenCalled();
-        expect(reconcileActivePlacement).not.toHaveBeenCalled();
-        await expect(waitForGatewayActiveWork(0)).resolves.toMatchObject({ drained: true });
-        expect(launchTurn).toHaveBeenCalledTimes(1);
-        if (pending) {
-          return;
-        }
-
-        resetGatewayWorkAdmission();
-        const recovered = createWorkerSessionPlacementStore({ database });
-        const recovery = createPlacementRecoveryActions({
-          placements: recovered,
-          environments: {
-            ...environments,
-            attachSession: unexpected,
-            bindPreparedWorkspace: unexpected,
-            prepareProjectIntent: unexpected,
-            assertPreparedIntentCurrent: () => {
-              throw new Error("Unexpected preparation");
-            },
-            getPreparedCandidates: () => [],
-            schedulePreparedRefill: () => {},
-            createWithRequest: unexpected,
-            reconcileEnvironment: async () => {},
-            reconcileOnce: async () => {},
-            supportsProviderExecutionMode: () => true,
-          },
-          failure: {
-            cancelProvisioning: unexpected,
-            failActive: unexpected,
-            failDraining: unexpected,
-            reclaimActive: unexpected,
-            retryFailedTeardown: unexpected,
-            teardownEnvironment: unexpected,
-          },
-          workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
-          resolveWorkspace: async () => ({ kind: "local", path: root }),
-          withPreparedRecovery: unexpected,
-        });
-        await recovery.reconcile("startup");
-        expect(environments.stopTunnel).toHaveBeenCalledWith(ENVIRONMENT_ID, OWNER_EPOCH);
-        expect(recovered.get(SESSION_ID)).toMatchObject({
-          state: "active",
-          turnClaim: null,
-          environmentId: ENVIRONMENT_ID,
-        });
-        expect(recovered.validateTurnClaim(claim)).toBe(false);
-        const nextLaunched = createDeferred();
-        const cancelNext = new AbortController();
-        launchTurn.mockImplementationOnce(async (request) => {
-          request.onDispatchReady?.();
-          expect(request.turnClaim.claimId).not.toBe(claim.claimId);
-          expect(recovered.validateTurnClaim(request.turnClaim)).toBe(true);
-          expect(request.signal?.aborted).toBe(false);
-          nextLaunched.resolve();
-          await new Promise<void>((resolve) => {
-            request.signal?.addEventListener("abort", () => resolve(), { once: true });
-          });
-          throw new Error("next turn cancelled by user");
-        });
-        const next = createWorkerSessionTurnPlacementProvider({
-          environments,
-          placements: recovered,
-        })
-          .executeTurn(
-            { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId: "next-turn" },
-            { ...turn("next-turn"), abortSignal: cancelNext.signal },
-            unexpected,
-          )
-          .catch((nextError: unknown) => nextError);
-        await nextLaunched.promise;
-        cancelNext.abort();
-        await next;
-        expect(launchTurn).toHaveBeenCalledTimes(2);
-        expect(recovered.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
-        expect(environments.destroy).not.toHaveBeenCalled();
-      } finally {
-        finish.resolve();
-        await attempt;
-      }
+      const current = await captureWorkspaceSnapshot({
+        root: remoteWorkspaceDir,
+        baseCommit: null,
+      });
+      await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
+        root: source.path,
+        stagingRoot: remoteWorkspaceDir,
+        stagedResultRef: source.stagedResult.ref,
+        baseManifestRef,
+        currentManifestRef: current.manifestRef,
+        baseManifestRaw: base.rawManifest,
+        currentManifestRaw: current.rawManifest,
+        assertCurrent: source.assertCurrent,
+      });
+      source.stagedResult.record(source.stagedResult.ref);
+      const applied = await applyStagedWorkerWorkspaceResult({
+        root: source.path,
+        stagedResultRef: source.stagedResult.ref,
+        expectedBaseManifestRef: baseManifestRef,
+        journal: source.journal,
+        assertCurrent: source.assertCurrent,
+      });
+      return { ...applied, verifyStable: async () => {}, getAppliedWorkspaceResult: () => applied };
     },
-  );
+  };
+  const environments = {
+    ...fixture.unusedEnvironments(),
+    get: () => environment,
+    acquireTurnCredential: async () => fixture.credential(),
+    acknowledgeCredentialDelivery: async () => true,
+    startTunnel: async () => tunnel,
+    stopTunnel: vi.fn(async () => {}),
+    destroy: vi.fn(async () => environment),
+  };
+  const resolveWorkspace = async () => ({ kind: "local" as const, path: accepted });
+  const execute = (store: typeof placements, runId: string) =>
+    fixture
+      .createWorkerSessionTurnPlacementProvider({
+        environments,
+        placements: store,
+        resolveWorkspace,
+      })
+      .executeTurn(
+        { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId },
+        fixture.turn(runId),
+        unexpected,
+      );
+  const attempt = runWithGatewayIndependentRootWorkAdmission(() =>
+    execute(placements, "interrupted-turn"),
+  ).catch((error: unknown) => error);
+  try {
+    await edited.promise;
+    const initial = placements.get(SESSION_ID);
+    const claim = initial && projectWorkerSessionTurnClaim(initial);
+    if (!claim) {
+      throw new Error("Expected live worker claim");
+    }
+    expect(placements.listPendingWorkspaceResults()).toEqual([]); // No finishing ACK yet.
+    await expect(fs.readFile(path.join(accepted, "restart-proof.txt"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    markGatewayRestartDraining("stop (SIGTERM)");
+    finish.resolve();
+    expect(isAgentRunRestartAbortReason(await attempt)).toBe(true);
+    await expect(waitForGatewayActiveWork(0)).resolves.toMatchObject({ drained: true });
+    expect(placements.get(SESSION_ID)).toMatchObject({
+      state: "active",
+      turnClaim: { claimId: claim.claimId },
+    });
+
+    resetGatewayWorkAdmission();
+    const recovered = createWorkerSessionPlacementStore({ database });
+    const published = vi.fn(async () => {
+      expect(recovered.listPendingWorkspaceResults()[0]?.workspaceAcceptedAtMs).toEqual(
+        expect.any(Number),
+      );
+    });
+    const recovery = createPlacementRecoveryActions({
+      placements: recovered,
+      environments: {
+        ...environments,
+        reconcileEnvironment: async () => {},
+        reconcileOnce: async () => {},
+        supportsProviderExecutionMode: () => true,
+      },
+      failure: {
+        failActive: unexpected,
+        failDraining: unexpected,
+        reclaimActive: unexpected,
+        retryFailedTeardown: unexpected,
+        teardownEnvironment: unexpected,
+      },
+      workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
+      ...createWorkerWorkspaceRecoveryFixture({ resolveWorkspace, reportFailure: unexpected }),
+      publishAcceptedWorkspace: published,
+    });
+    await recovery.reconcile("startup");
+    await expect(fs.readFile(path.join(accepted, "restart-proof.txt"), "utf8")).resolves.toBe(
+      "slept-ok\n",
+    );
+    expect(published).toHaveBeenCalledOnce();
+    expect(recovered.listPendingWorkspaceResults()).toEqual([]);
+    expect(recovered.get(SESSION_ID)).toMatchObject({
+      state: "active",
+      turnClaim: null,
+      environmentId: ENVIRONMENT_ID,
+      remoteWorkspaceDir: remote,
+    });
+    expect(environments.stopTunnel).toHaveBeenCalledWith(ENVIRONMENT_ID, OWNER_EPOCH);
+    launchTurn.mockImplementationOnce(async (request) => {
+      request.onDispatchReady?.();
+      expect(request.turnClaim.claimId).not.toBe(claim.claimId);
+      await expect(
+        fs.readFile(path.join(request.plan.assignment.workspaceDir, "restart-proof.txt"), "utf8"),
+      ).resolves.toBe("slept-ok\n");
+      throw new WorkerTurnExecutionError("fresh turn read the retained edit");
+    });
+    await expect(execute(recovered, "next-turn")).rejects.toThrow(
+      "fresh turn read the retained edit",
+    );
+    expect(launchTurn).toHaveBeenCalledTimes(2);
+    expect(environments.destroy).not.toHaveBeenCalled();
+  } finally {
+    finish.resolve();
+    await attempt;
+  }
 });

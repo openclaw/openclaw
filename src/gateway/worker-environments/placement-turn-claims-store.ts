@@ -36,7 +36,11 @@ function isReceipt(value: unknown): value is PlacementTurnClaimReceipt {
   );
 }
 
-export function createPlacementTurnClaimWorkerOps(runtime: { path: string; now?: () => number }) {
+export function createPlacementTurnClaimWorkerOps(runtime: {
+  path: string;
+  instanceId: string;
+  now?: () => number;
+}) {
   const context = captureOpenClawStateWorkerContext({ path: runtime.path });
   async function execute(
     input: SqliteWorkerCommand<PlacementTurnClaimWorkerOperations>,
@@ -74,17 +78,26 @@ export function createPlacementTurnClaimWorkerOps(runtime: { path: string; now?:
               },
             },
           }
-        : {
-            type: input.type,
-            input: {
-              nowMs: input.input.nowMs,
-              claim: { ...claim, placementGeneration: input.input.claim.placementGeneration },
-            },
-          };
+        : input.type === "placementTurns.recoverWorkspace"
+          ? {
+              type: input.type,
+              input: {
+                nowMs: input.input.nowMs,
+                gatewayInstanceId: input.input.gatewayInstanceId,
+                claim: { ...claim, placementGeneration: input.input.claim.placementGeneration },
+              },
+            }
+          : {
+              type: input.type,
+              input: {
+                nowMs: input.input.nowMs,
+                claim: { ...claim, placementGeneration: input.input.claim.placementGeneration },
+              },
+            };
     const close =
-      command.type === "placementTurns.claim"
-        ? undefined
-        : prepareWorkerTurnClaimClosed(runtime.path, command.input.claim);
+      command.type === "placementTurns.release" || command.type === "placementTurns.releaseIfOwned"
+        ? prepareWorkerTurnClaimClosed(runtime.path, command.input.claim)
+        : undefined;
     let reportedContention = false;
     for (;;) {
       let admission: SqliteWorkerOperationAdmission | undefined;
@@ -152,6 +165,12 @@ export function createPlacementTurnClaimWorkerOps(runtime: { path: string; now?:
         if (!granted || admission?.settlement?.kind === "completed") {
           publication?.rollback();
         } else {
+          if (command.type === "placementTurns.recoverWorkspace") {
+            // An unchanged claim does not prove its result fence committed. Recovery
+            // rereads pending results on the next pass; never release an uncertain owner.
+            publication?.rollback();
+            throw error;
+          }
           // Native settlement precedes readback. Never replay an uncertain claim or release.
           const reply = await (async () => {
             try {
@@ -235,6 +254,18 @@ export function createPlacementTurnClaimWorkerOps(runtime: { path: string; now?:
     }
   }
   return {
+    async retainInterruptedTurnWorkspace(
+      claim: Parameters<Claims["releaseTurn"]>[0],
+      assertCurrent: () => void,
+    ) {
+      await execute(
+        {
+          type: "placementTurns.recoverWorkspace",
+          input: { claim, gatewayInstanceId: runtime.instanceId, nowMs: runtime.now?.() },
+        },
+        assertCurrent,
+      );
+    },
     async claimTurn(input: Parameters<Claims["claimTurn"]>[0], assertCurrent?: () => void) {
       const receipt = await execute(
         { type: "placementTurns.claim", input: { claim: input, nowMs: runtime.now?.() } },
