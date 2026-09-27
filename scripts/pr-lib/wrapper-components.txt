@@ -146,6 +146,7 @@ scripts/lib/vitest-cli-mode.mts
 scripts/lib/vitest-cli.mts
 scripts/lib/vitest-home-selection.mts
 scripts/lib/vitest-local-scheduling.mts
+scripts/lib/vitest-plan-scheduling.mts
 scripts/lib/vitest-process-env.mts
 scripts/lib/vitest-process.mts
 scripts/lib/vitest-resource-ownership.mts

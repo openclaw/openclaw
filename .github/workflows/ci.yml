@@ -4438,6 +4438,10 @@ jobs:
             scripts/lib/direct-run.mjs
             scripts/lib/local-check-runtime.mts
             scripts/lib/numeric-options.mjs
+            scripts/lib/vitest-plan-scheduling.mts
+            scripts/lib/vitest-local-scheduling.mts
+            scripts/lib/arg-utils.mts
+            scripts/lib/arg-utils.runtime.mjs
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
