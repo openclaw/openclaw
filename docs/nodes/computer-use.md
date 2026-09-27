@@ -61,6 +61,8 @@ node --import ./scripts/tsx.mjs scripts/dev/computer-use-gateway-live-proof.ts \
 
 Use an empty output directory. The proof starts an isolated Gateway and managed desktop with no paired nodes, captures screenshots, types into Mousepad and reads the text back, then verifies generation fencing and joined process cleanup. It requires no model credentials and leaves screenshots, a redacted log, and `result.json` in the output directory.
 
+Add `--runtime <executable>` to start the built Gateway on another runtime, such as Bun, and run the proof with no `node` on `PATH`. The proof fails if the Gateway or its computer helper runs on another executable or any owned process runs Node, and records each owned process's executable in `result.json`.
+
 ## The `computer` agent tool
 
 The built-in `computer` tool takes one action per call. Choose `target: "gateway"` for the Gateway desktop or `target: "node"` for a paired node. Supplying `node` also selects the node route. With neither selector, the first call uses the configured Gateway computer, otherwise the sole connected computer-capable node. A configured but unavailable Gateway computer reports its error; it never silently redirects input to a node. Later calls retain the selected host unless explicitly changed. Cloud sessions retain their fixed desktop and reject host overrides.
