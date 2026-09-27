@@ -418,72 +418,68 @@ export class SelectPicker<
               tabindex=${this.mode === "compact" ? 0 : -1}
               aria-activedescendant=${this.mode === "compact" && active ? this.optionId(active.value) : nothing}
             >
-              ${repeat(
-                sections,
-                (section) => section.group?.id,
-                (section, groupIndex) => {
-                  const options = section.expanded
-                    ? repeat(
-                        this.params.groupBy ? section.options : allOptions,
-                        (option) => option.value,
-                        (option) =>
-                          this.renderOption(
-                            option,
-                            Boolean(section.group),
-                            !visibleValues.has(option.value),
-                          ),
-                      )
-                    : nothing;
-                  const group = section.group;
-                  const groupId = sectionIds[groupIndex];
-                  if (!group) {
-                    return this.params.groupBy
-                      ? html`<div id=${groupId} role="listbox" aria-label=${this.params.label}>
-                          ${options}
-                        </div>`
-                      : options;
-                  }
-                  return html`<div
-                    class="picker-select__group"
-                    role="group"
+              ${sections.map((section, groupIndex) => {
+                const options = section.expanded
+                  ? repeat(
+                      this.params.groupBy ? section.options : allOptions,
+                      (option) => option.value,
+                      (option) =>
+                        this.renderOption(
+                          option,
+                          Boolean(section.group),
+                          !visibleValues.has(option.value),
+                        ),
+                    )
+                  : nothing;
+                const group = section.group;
+                const groupId = sectionIds[groupIndex];
+                if (!group) {
+                  return this.params.groupBy
+                    ? html`<div id=${groupId} role="listbox" aria-label=${this.params.label}>
+                        ${options}
+                      </div>`
+                    : options;
+                }
+                return html`<div
+                  class="picker-select__group"
+                  role="group"
+                  aria-label=${group.label}
+                >
+                  <button
+                    class="picker-select__group-toggle"
+                    type="button"
+                    tabindex=${open ? 0 : -1}
+                    aria-expanded=${String(section.expanded)}
+                    aria-controls=${groupId}
+                    ?disabled=${Boolean(this.query.trim())}
+                    @click=${() => {
+                      const collapsed = new Set(this.collapsedGroups);
+                      if (collapsed.has(group.id)) {
+                        collapsed.delete(group.id);
+                      } else {
+                        collapsed.add(group.id);
+                      }
+                      this.collapsedGroups = collapsed;
+                    }}
+                  >
+                    ${group.leading ?? nothing}<span class="picker-select__group-label"
+                      >${group.label}</span
+                    >
+                    <span>${section.options.length}</span
+                    ><span class="picker-select__chevron" aria-hidden="true"
+                      >${icons.chevronDown}</span
+                    >
+                  </button>
+                  <div
+                    id=${groupId}
+                    class="picker-select__group-options"
+                    role="listbox"
                     aria-label=${group.label}
                   >
-                    <button
-                      class="picker-select__group-toggle"
-                      type="button"
-                      tabindex=${open ? 0 : -1}
-                      aria-expanded=${String(section.expanded)}
-                      aria-controls=${groupId}
-                      ?disabled=${Boolean(this.query.trim())}
-                      @click=${() => {
-                        const collapsed = new Set(this.collapsedGroups);
-                        if (collapsed.has(group.id)) {
-                          collapsed.delete(group.id);
-                        } else {
-                          collapsed.add(group.id);
-                        }
-                        this.collapsedGroups = collapsed;
-                      }}
-                    >
-                      ${group.leading ?? nothing}<span class="picker-select__group-label"
-                        >${group.label}</span
-                      >
-                      <span>${section.options.length}</span
-                      ><span class="picker-select__chevron" aria-hidden="true"
-                        >${icons.chevronDown}</span
-                      >
-                    </button>
-                    <div
-                      id=${groupId}
-                      class="picker-select__group-options"
-                      role="listbox"
-                      aria-label=${group.label}
-                    >
-                      ${options}
-                    </div>
-                  </div>`;
-                },
-              )}
+                    ${options}
+                  </div>
+                </div>`;
+              })}
             </div>
             <div
               class="picker-select__empty"

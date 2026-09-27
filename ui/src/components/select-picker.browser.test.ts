@@ -55,6 +55,10 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
     await page.getByRole("combobox", { name: "Search", exact: true }).fill("Aurora Large");
     expect(onChange).not.toHaveBeenCalled();
     await picker.updateComplete;
+    expect(
+      picker.querySelector<HTMLElement>('[data-value="fixture/anchor"]')?.checkVisibility() ??
+        false,
+    ).toBe(false);
     await page
       .elementLocator(picker.querySelector<HTMLElement>('[data-value="fixture/aurora-large"]')!)
       .click();
@@ -300,22 +304,24 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
       host.style.cssText = "position:fixed;right:12px;top:32px;width:90px";
       document.body.append(host);
       const onChange = vi.fn();
-      render(
-        html`${renderDecisionModelPicker({
-            id: "decisions",
-            models: [
-              { provider: "alpha", id: "one", name: "Alpha decision model", pluginId: "alpha" },
-              { provider: "beta", id: "two", name: "Beta decision model", pluginId: "beta" },
-            ],
-            value: "alpha/one",
-            disabled: false,
-            onChange,
-          })}<button id="after-picker">Next field</button>`,
-        host,
-      );
+      const renderDecision = (value: string) =>
+        render(
+          html`${renderDecisionModelPicker({
+              id: "decisions",
+              models: [
+                { provider: "alpha", id: "one", name: "Alpha decision model", pluginId: "alpha" },
+                { provider: "beta", id: "two", name: "Beta decision model", pluginId: "beta" },
+              ],
+              value,
+              disabled: false,
+              onChange,
+            })}<button id="after-picker">Next field</button>`,
+          host,
+        );
+      renderDecision("alpha/one");
       const picker = host.querySelector<SelectPicker>("openclaw-select-picker")!;
       await picker.updateComplete;
-      const trigger = page.getByRole("button", {
+      let trigger = page.getByRole("button", {
         name: "Decision Model: Alpha decision model",
         exact: true,
       });
@@ -340,6 +346,17 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
       )) {
         expect(label.scrollWidth).toBeLessThanOrEqual(label.clientWidth);
       }
+      renderDecision("beta/two");
+      await picker.updateComplete;
+      trigger = page.getByRole("button", {
+        name: "Decision Model: Beta decision model",
+        exact: true,
+      });
+      expect(document.activeElement).toBe(
+        picker.querySelector('[role="group"][aria-label="Beta"] button'),
+      );
+      await expect.element(trigger).toHaveAttribute("aria-expanded", "true");
+      expect(onChange).not.toHaveBeenCalled();
       await userEvent.keyboard("{Tab}{Tab}");
       await expect
         .element(page.getByRole("button", { name: "Next field", exact: true }))

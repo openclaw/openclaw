@@ -80,12 +80,7 @@ describe("renderPicker", () => {
       const p = await mount({
         options: choices,
         value: "atlas-0",
-        groupBy: grouped
-          ? (option) => ({
-              id: option.value === "other" ? "other" : "atlas",
-              label: option.value === "other" ? "Other" : "Atlas",
-            })
-          : undefined,
+        groupBy: grouped ? () => ({ id: "models", label: "Models" }) : undefined,
       });
       await p.open();
       const retained = p.rows().find((row) => row.dataset.value === "atlas-3")!;
