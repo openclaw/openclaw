@@ -46,6 +46,51 @@ function writeChannelStateFixtures(pluginRoot: string) {
 }
 
 describe("external plugin local dist build", () => {
+  it.each([
+    ["dist/extensions", "demo/node_modules/sentinel.txt", "junction"],
+    ["dist/extensions/demo", "node_modules/sentinel.txt", "junction"],
+    ["dist/extensions/demo/skills", "example/SKILL.md", "junction"],
+    ["dist/extensions/demo/assets", "icon.png", "junction"],
+    ["dist/extensions/demo/package.json", "package.json", "file"],
+    ["dist/extensions/demo/openclaw.plugin.json", "openclaw.plugin.json", "file"],
+  ] as const)(
+    "preserves outside files behind a linked metadata output %s",
+    (output, sentinel, type) => {
+      const repoRoot = fs.realpathSync(tempDirs.make("openclaw-plugin-metadata-boundary-"));
+      const outside = tempDirs.make("openclaw-plugin-metadata-outside-");
+      const pluginRoot = path.join(repoRoot, "extensions", "demo");
+      fs.mkdirSync(path.join(pluginRoot, "skills", "example"), { recursive: true });
+      fs.writeFileSync(
+        path.join(repoRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "1.0.0", type: "module" }),
+      );
+      fs.writeFileSync(
+        path.join(pluginRoot, "package.json"),
+        JSON.stringify({
+          name: "@openclaw/demo",
+          version: "1.0.0",
+          openclaw: { extensions: ["./index.ts"] },
+        }),
+      );
+      fs.writeFileSync(
+        path.join(pluginRoot, "openclaw.plugin.json"),
+        JSON.stringify({ id: "demo", skills: ["./skills/example"] }),
+      );
+      fs.writeFileSync(path.join(pluginRoot, "index.ts"), "export {};\n");
+      fs.writeFileSync(path.join(pluginRoot, "skills", "example", "SKILL.md"), "new skill\n");
+      const sentinelPath = path.join(outside, sentinel);
+      fs.mkdirSync(path.dirname(sentinelPath), { recursive: true });
+      fs.writeFileSync(sentinelPath, "outside data\n");
+      const linkPath = path.join(repoRoot, output);
+      fs.mkdirSync(path.dirname(linkPath), { recursive: true });
+      fs.symlinkSync(type === "file" ? sentinelPath : outside, linkPath, type);
+
+      expect(() => copyBundledPluginMetadata({ repoRoot, env: {} })).toThrow("symbolic link");
+      expect(fs.readFileSync(sentinelPath, "utf8")).toBe("outside data\n");
+      expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
+    },
+  );
+
   it("keeps excluded plugin graphs isolated and their runtime metadata loadable", async () => {
     const repoRoot = fs.realpathSync(tempDirs.make("openclaw-isolated-plugin-graphs-"));
     const plugins = [

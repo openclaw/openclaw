@@ -622,9 +622,18 @@ describe("FaceTime helper RPC", () => {
     const rpc = await startDefaultHelper(port);
     const client = await connectClient(port);
     const closed = waitForSocketEvent(client, "close");
+    const socketErrors: Error[] = [];
+    // A drip in flight at peer rejection can turn the expected close into a TCP reset.
+    client.on("error", (error) => socketErrors.push(error));
     const drip = setInterval(() => client?.write(" "), 250);
-    await closed;
-    clearInterval(drip);
+    try {
+      await closed;
+    } finally {
+      clearInterval(drip);
+    }
+    for (const error of socketErrors) {
+      expect(error).toMatchObject({ code: "ECONNRESET" });
+    }
     expect(rpc.connectedSockets).toBe(0);
   }, 5_000);
 

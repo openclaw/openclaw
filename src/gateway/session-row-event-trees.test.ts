@@ -277,7 +277,28 @@ it("publishes fresh ancestor rows through private intermediates with list visibi
       await assertListParity(peers[0]!);
 
       const newcomer = createPeer(profiles[0]!, "tree-events-newcomer");
-      await publishChild();
+      const stringify = JSON.stringify;
+      let normalizations = 0;
+      const serialization = vi.spyOn(JSON, "stringify").mockImplementation((...args) => {
+        const value: unknown = args[0];
+        if (
+          typeof value === "object" &&
+          value !== null &&
+          "snapshotAt" in value &&
+          value.snapshotAt === 0 &&
+          "key" in value &&
+          (value.key === root || value.key === parent)
+        ) {
+          normalizations++;
+        }
+        return stringify(...args);
+      });
+      try {
+        await publishChild();
+      } finally {
+        serialization.mockRestore();
+      }
+      expect(normalizations).toBe(3);
       expectFull(newcomer, [parent, root]);
       expect(payloadFor(peers[0]!).ancestorSessions).toEqual([]);
       await assertListParity(newcomer);

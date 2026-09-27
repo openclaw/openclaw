@@ -2,6 +2,7 @@ import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveExistingSessionActTimeouts } from "../act-policy.js";
+import type { ChromeMcpTargetOperation } from "../chrome-mcp-contracts.js";
 import {
   clickChromeMcpElement,
   clickChromeMcpCoords,
@@ -27,7 +28,6 @@ import {
   assertExistingSessionPostInteractionNavigationAllowed,
   createExistingSessionDeadline,
   waitForExistingSessionCondition,
-  type ExistingSessionOperation,
 } from "./agent.act.existing-session.js";
 import { registerBrowserAgentActHookRoutes } from "./agent.act.hooks.js";
 import { canonicalizeActTargetIds, normalizeActRequest } from "./agent.act.normalize.js";
@@ -216,7 +216,7 @@ export function registerBrowserAgentActRoutes(
                   admission.error,
                 );
               }
-              const existingSessionTarget: ExistingSessionOperation = {
+              const existingSessionTarget: ChromeMcpTargetOperation = {
                 profileName,
                 profile: profileCtx.profile,
                 targetId: tab.targetId,
@@ -232,7 +232,7 @@ export function registerBrowserAgentActRoutes(
                   : new Set<string>();
               const runGuardedAction = async <T>(
                 execute: (
-                  target: ExistingSessionOperation,
+                  target: ChromeMcpTargetOperation,
                   checkDeadline: () => void,
                 ) => Promise<T>,
               ): Promise<T> => {

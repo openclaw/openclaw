@@ -26,7 +26,7 @@ it.each(
       ...(await prepare(opts)),
       timeoutMs: shared.parseUpdateTimeoutMs(opts.timeout),
     }));
-    vi.mocked(shared.resolveTargetVersion).mockResolvedValue("2026.9.4");
+    vi.mocked(shared.resolveTargetVersion).mockResolvedValue({ version: "2026.9.4" });
     vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockResolvedValue({
       target: "2026.9.4",
       version: "2026.9.4",

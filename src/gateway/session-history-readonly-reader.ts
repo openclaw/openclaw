@@ -19,6 +19,7 @@ import {
   isSubagentCoordinationHistoryInput,
   type SubagentCoordinationDisplayResolver,
 } from "./chat-display-projection.history.js";
+import type { SessionArtifactReadQuery } from "./session-artifact-read.js";
 import type { PreparedSessionHistoryReadTarget } from "./session-history-read.types.js";
 import { createBoundSessionHistorySubagentSource } from "./session-history-subagent-sources.js";
 import { createSessionTranscriptReader } from "./session-transcript-read-kernel.js";
@@ -113,6 +114,10 @@ export function createReadonlySessionHistoryReader(
     return result.value.value;
   };
   return {
+    readArtifactSummaries: async (query: Extract<SessionArtifactReadQuery, { kind: "list" }>) => {
+      const { readArtifactSummariesFromProjection } = await import("./session-artifact-read.js");
+      return readSnapshot((projection) => readArtifactSummariesFromProjection(projection, query));
+    },
     readTranscriptBinding: (run?: { id: string; maxBytes: number }) =>
       readSnapshot((projection) => readSessionTranscriptBindingFromProjection(projection, run)),
     readTranscriptDisplayDelta: (limits: SessionTranscriptRawDeltaLimits) =>

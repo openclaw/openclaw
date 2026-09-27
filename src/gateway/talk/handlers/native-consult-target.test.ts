@@ -6,6 +6,7 @@ import {
   setActiveEmbeddedRun,
 } from "../../../agents/embedded-agent-runner/runs.js";
 import { testing as embeddedRunTesting } from "../../../agents/embedded-agent-runner/runs.test-support.js";
+import { REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS } from "../../../agents/realtime-bootstrap-context.test-support.js";
 import { replyRunRegistry } from "../../../auto-reply/reply/reply-run-registry.js";
 import {
   listSessionEntriesReadOnly,
@@ -21,7 +22,6 @@ import { setActivePluginRegistry } from "../../../plugins/runtime.js";
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
-import { REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS } from "../../../talk/agent-consult-tool.js";
 import { controlRealtimeVoiceAgentRun } from "../../../talk/agent-run-control.js";
 import {
   createOrResumeClientVoiceSession,
@@ -77,8 +77,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../../agents/embedded-agent.js", () => ({ runEmbeddedAgent: mocks.runEmbeddedAgent }));
-vi.mock("../../../agents/realtime-bootstrap-context.js", () => ({
-  resolveRealtimeBootstrapContextInstructions: async () => undefined,
+vi.mock("../../../agents/bootstrap-files.js", () => ({
+  resolveBootstrapFilesForRun: async () => [],
 }));
 vi.mock("../../../talk/provider-resolver.js", () => ({
   resolveConfiguredRealtimeVoiceProvider: mocks.resolveProvider,

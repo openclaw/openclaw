@@ -15,7 +15,7 @@ import {
   assertSqliteIntegrityInWorker,
   withSqliteIntegrityWorkerScope,
 } from "./sqlite-integrity-worker.js";
-import type { SqliteIntegrityCheckTiming } from "./sqlite-integrity.js";
+import type { SqliteIntegrityCheckTiming, SqliteIntegrityTableCheck } from "./sqlite-integrity.js";
 import * as inspectionBudget from "./sqlite-readonly-worker.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -27,6 +27,79 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("SQLite integrity child", () => {
   afterEach(() => vi.restoreAllMocks());
+  it.each(["healthy", "quick_check", "integrity_check"] as const)(
+    "settles bounded table readers and detects non-ok rows: %s",
+    async (damage) => {
+      const source = path.join(tempDirs.make("openclaw-integrity-tables-"), "source.sqlite");
+      const database = new (requireNodeSqlite().DatabaseSync)(source);
+      const tables: SqliteIntegrityTableCheck[] = Array.from({ length: 9 }, (_, index) => ({
+        table: `records_${index}`,
+        check: index === 0 ? "quick_check" : "integrity_check",
+      }));
+      let damagedCellOffset: number | undefined;
+      let pageSize = 0;
+      try {
+        for (const { table } of tables) {
+          database.exec(`CREATE TABLE ${table}(value INTEGER); INSERT INTO ${table} VALUES(1)`);
+        }
+        if (damage !== "healthy") {
+          const table = damage === "quick_check" ? "records_0" : "records_1";
+          const root = Number(
+            database.prepare("SELECT rootpage FROM sqlite_schema WHERE name = ?").get(table)
+              ?.rootpage,
+          );
+          pageSize = Number(database.prepare("PRAGMA page_size").get()?.page_size);
+          damagedCellOffset = (root - 1) * pageSize + 8;
+        }
+      } finally {
+        database.close();
+      }
+      if (damagedCellOffset !== undefined) {
+        // Point the first leaf cell outside its valid content range: both pragmas report non-ok rows.
+        const bytes = fs.readFileSync(source);
+        bytes.writeUInt16BE(pageSize - 1, damagedCellOffset);
+        fs.writeFileSync(source, bytes);
+      }
+      const timing: SqliteIntegrityCheckTiming = {};
+      vi.mocked(fork).mockClear();
+      const check = withSqliteIntegrityWorkerScope(
+        () => {},
+        () =>
+          assertSqliteIntegrityInWorker(
+            source,
+            250,
+            new AbortController().signal,
+            undefined,
+            timing,
+            tables,
+          ),
+      );
+      if (damage === "healthy") {
+        await expect(check).resolves.toBeUndefined();
+        expect(timing.tables).toHaveLength(tables.length);
+        expect(timing.tables).toEqual(
+          expect.arrayContaining(
+            tables.map(({ table, check: pragma }) => ({
+              table,
+              check: pragma,
+              elapsedMs: expect.any(Number),
+            })),
+          ),
+        );
+      } else {
+        await expect(check).rejects.toMatchObject({
+          name: "SqliteIntegrityError",
+          message: expect.stringMatching(new RegExp(`${damage} failed[\\s\\S]*out of range`)),
+        });
+      }
+      expect(fork).toHaveBeenCalledTimes(4);
+      for (const result of vi.mocked(fork).mock.results) {
+        expect(result.type).toBe("return");
+        expect(result.value.exitCode).toBe(0);
+      }
+    },
+  );
+
   it("reports a SIGTERM close without an integrity verdict as an interruption", async () => {
     const root = tempDirs.make("openclaw-integrity-signal-");
     const source = path.join(root, "source.sqlite");

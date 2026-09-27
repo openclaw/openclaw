@@ -1,4 +1,3 @@
-// Discord plugin module dispatches inbound messages into the processing queue.
 import {
   createChannelInboundDebouncer,
   resolveInboundDebounceMs,

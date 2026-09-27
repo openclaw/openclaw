@@ -38,6 +38,9 @@ The full native chat window is a split view:
 
 The anchored compact chat panel from the menu bar keeps the compact single-column layout with the same model, thinking, verbosity, and Fast controls inline, plus starter prompts, Talk Mode, voice notes, and Listen. Assistant reasoning and tool activity remain hidden in this compact surface.
 
+Native chat preserves Markdown paragraph breaks, including before lists and
+while responses are streaming.
+
 In the full macOS chat window, completed commentary, reasoning, and tool work
 collapse into a **Worked for…** disclosure above the answer. Expand it to inspect
 the work; final text, images, and other attachments stay visible. Active turns,

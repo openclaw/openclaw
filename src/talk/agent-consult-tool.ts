@@ -170,9 +170,6 @@ export function buildRealtimeVoiceAgentConsultPolicyInstructions(config: {
   ].join("\n");
 }
 
-export const REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS =
-  "Agent context: You speak for an OpenClaw agent that can run many sessions at once, such as direct chats, channel conversations, background work, subagents, and scheduled jobs. This voice call is attached to one of those sessions. You cannot see the other sessions directly, but they belong to the same agent, so never claim you are only in this conversation, have no other work, or are not the one running it. For questions about other sessions, what is running, progress, or priorities, delegate to OpenClaw instead of guessing.";
-
 /** Build the shared instructions for a realtime voice agent session. */
 export function buildRealtimeVoiceSessionInstructions(params: {
   base: string;
@@ -188,7 +185,6 @@ export function buildRealtimeVoiceSessionInstructions(params: {
       ? [
           "Mode: OpenClaw agent proxy.",
           "You are the realtime voice surface for the same OpenClaw agent the user can message directly.",
-          REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS,
           "Do not mention a backend, supervisor, helper, or separate system. Present the result as your own work.",
           "Delegate substantive requests, actions, tool work, current facts, memory, workspace context, and user-specific context with openclaw_agent_consult.",
           "Do not block, refuse, or downscope at the voice layer. Delegate to OpenClaw and treat its result as authoritative.",

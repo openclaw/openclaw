@@ -7,7 +7,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveRealtimeBootstrapContextInstructions } from "../../agents/realtime-bootstrap-context.js";
+import { resolveRealtimeVoiceAgentContextInstructions } from "../../agents/realtime-bootstrap-context.js";
 import type { TalkRealtimeConfig } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import type { RealtimeVoiceProviderPlugin } from "../../plugins/types.js";
@@ -16,10 +16,7 @@ import {
   listRealtimeTranscriptionProviders,
 } from "../../realtime-transcription/provider-registry.js";
 import type { RealtimeTranscriptionProviderConfig } from "../../realtime-transcription/provider-types.js";
-import {
-  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-  REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS,
-} from "../../talk/agent-consult-tool.js";
+import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME } from "../../talk/agent-run-control-shared.js";
 import { resolveInternalRealtimeVoiceGatewayRelayLaunchError } from "../../talk/provider-internal.js";
 import { listRealtimeVoiceProviders } from "../../talk/provider-registry.js";
@@ -72,12 +69,7 @@ export async function resolveTalkRealtimeProviderInstructions(params: {
   sessionKey: string;
   warn: (message: string) => void;
 }): Promise<string> {
-  const bootstrapContext = await resolveRealtimeBootstrapContextInstructions(params);
-  return [
-    params.configuredInstructions,
-    REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS,
-    bootstrapContext,
-  ]
+  return [params.configuredInstructions, await resolveRealtimeVoiceAgentContextInstructions(params)]
     .filter((entry): entry is string => Boolean(entry?.trim()))
     .join("\n\n");
 }

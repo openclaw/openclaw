@@ -128,6 +128,7 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
   diagnostics?: SqliteIntegrityDiagnostics,
   verification?: OpenClawAgentIntegrityVerification,
   reuseRuntimeIntegrity = false,
+  runtimeAdmission = false,
 ): SqliteIntegrityOperation<boolean> {
   database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
   const userVersion = readSqliteUserVersion(database);
@@ -149,6 +150,13 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
     hasPendingCurrentVersionAgentDatabaseMigration(database);
   if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && !hasPendingCurrentVersionMigration) {
     const startedAt = performance.now();
+    const reuseIntegrity =
+      reuseRuntimeIntegrity ||
+      canReuseOpenClawAgentIntegrityVerification(
+        pathname,
+        verification,
+        migrationPending || hasPendingCurrentVersionMigration,
+      );
     const rebuiltIndexes = yield* verifyAndRepairCanonicalSqliteIndexSteps(
       database,
       pathname,
@@ -158,13 +166,20 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
         validateAfterRepair: () =>
           assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname }),
         diagnostics,
-        reuseIntegrity:
-          reuseRuntimeIntegrity ||
-          canReuseOpenClawAgentIntegrityVerification(
-            pathname,
-            verification,
-            migrationPending || hasPendingCurrentVersionMigration,
-          ),
+        // Include sqlite_schema for the freelist check and every discovered shadow/extension table.
+        integrityTables:
+          runtimeAdmission && !reuseIntegrity
+            ? [
+                { name: "sqlite_schema" },
+                ...database
+                  .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name")
+                  .all(),
+              ].map(({ name }) => ({
+                table: String(name),
+                check: name === "transcript_events" ? "quick_check" : "integrity_check",
+              }))
+            : undefined,
+        reuseIntegrity,
       },
     );
     if (rebuiltIndexes.length > 0) {

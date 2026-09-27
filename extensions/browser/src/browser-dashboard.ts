@@ -211,9 +211,7 @@ async function releaseTab(
   const released = tab.dashboard?.state === "released" ? tab : changeTabState(tab, "released");
   const closed = released ? await closeBrowserDashboardTabs([released], params) : 0;
   return {
-    released: !readBrowserDashboardTabs(tab.storageKey).some(
-      (current) => current.storageKey === tab.storageKey,
-    ),
+    released: readBrowserDashboardTabs(tab.storageKey).length === 0,
     closed,
   };
 }
@@ -261,7 +259,7 @@ async function closeStoppingTab(
   const closed = await closeBrowserDashboardTabs([tab], params);
   if (
     readBrowserDashboardTabs(tab.storageKey).some(
-      (current) => current.storageKey === tab.storageKey && current.dashboard?.state === "stopped",
+      (current) => current.dashboard?.state === "stopped",
     )
   ) {
     emitDashboardChanged(definition);
@@ -294,9 +292,7 @@ async function materialize(
     const observation = await observeExistingTab(definition, tab, authority);
     if (observation === "present") {
       await assertDefinitionCurrent(definition, authority);
-      const current = tabsForDefinition(definition, tab.storageKey).find(
-        (candidate) => candidate.storageKey === tab.storageKey,
-      );
+      const current = tabsForDefinition(definition, tab.storageKey)[0];
       if (!current || current.dashboard?.state !== "active") {
         throw new Error("Dashboard tab stopped during this operation");
       }
@@ -341,8 +337,7 @@ async function materialize(
         await closeStoppingTab(candidate.tab, definition);
         assertAuthority(authority);
         const stopped = tabsForDefinition(definition, candidate.tab.storageKey).find(
-          (tab) =>
-            tab.storageKey === candidate.tab.storageKey && tab.dashboard?.state === "stopped",
+          (tab) => tab.dashboard?.state === "stopped",
         );
         if (!stopped) {
           throw new Error(
@@ -489,10 +484,7 @@ export async function assertBrowserDashboardTargetCurrent(
     });
     await assertDefinitionCurrent(definition, authority);
     const retained = tabsForDefinition(definition, current.storageKey).find(
-      (tab) =>
-        tab.storageKey === current.storageKey &&
-        tab.dashboard?.state === "active" &&
-        definitionOwnsTab(definition, tab),
+      (tab) => tab.dashboard?.state === "active" && definitionOwnsTab(definition, tab),
     );
     assertAuthority(authority);
     if (
@@ -635,8 +627,7 @@ async function stopMaterializedDashboard(
       assertAuthority(authority);
       if (
         readBrowserDashboardTabs(stopping.storageKey).some(
-          (current) =>
-            current.storageKey === stopping.storageKey && current.dashboard?.state === "stopping",
+          (current) => current.dashboard?.state === "stopping",
         )
       ) {
         throw new Error(

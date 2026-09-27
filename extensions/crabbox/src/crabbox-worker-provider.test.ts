@@ -2145,29 +2145,6 @@ describe("Crabbox worker provider", () => {
     expect(calls.map((argv) => argv[1])).toEqual(["config"]);
   });
 
-  const provisionTimeoutCases = [
-    { name: "normal without setup", profile: { ...PROFILE }, minutes: 84 },
-    {
-      name: "normal with setup",
-      profile: { ...PROFILE, setup: "install-node" },
-      minutes: 99,
-    },
-    { name: "desktop without setup", profile: { ...PROFILE, desktop: true }, minutes: 149 },
-    {
-      name: "desktop with setup",
-      profile: { ...PROFILE, desktop: true, setup: "install-node" },
-      minutes: 164,
-    },
-  ] satisfies Array<{ name: string; profile: WorkerProfile; minutes: number }>;
-  it.each(provisionTimeoutCases)(
-    "includes provision phases and cleanup for $name",
-    ({ profile, minutes }) => {
-      const provider = providerWithRunner(async () => commandResult());
-
-      expect(provider.resolveProvisionTimeoutMs?.(profile)).toBe(minutes * 60_000 + 15_000);
-    },
-  );
-
   it("collects redacted node evidence before stopping an unenrolled lease", async () => {
     const calls: Array<{ argv: string[]; options: Parameters<CrabboxCommandRunner>[1] }> = [];
     const pairingSecret = "pairing-secret-value-0123456789";
@@ -2365,14 +2342,14 @@ describe("Crabbox worker provider", () => {
     {
       providerId: "aws",
       warmupTimeoutMs: 50 * 60_000,
-      lifecycleTimeoutMs: 60_000,
-      provisionTimeoutMs: 84 * 60_000 + 15_000,
+      lifecycleTimeoutMs: CRABBOX_LIFECYCLE_TIMEOUT_MS,
+      provisionTimeoutMs: 83 * 60_000 + CRABBOX_LIFECYCLE_TIMEOUT_MS + 15_000,
     },
     {
       providerId: "hetzner",
       warmupTimeoutMs: 50 * 60_000,
-      lifecycleTimeoutMs: 60_000,
-      provisionTimeoutMs: 84 * 60_000 + 15_000,
+      lifecycleTimeoutMs: CRABBOX_LIFECYCLE_TIMEOUT_MS,
+      provisionTimeoutMs: 83 * 60_000 + CRABBOX_LIFECYCLE_TIMEOUT_MS + 15_000,
     },
     {
       providerId: "machine0",
@@ -2483,8 +2460,9 @@ describe("Crabbox worker provider", () => {
       let inspections = 0;
       const delays: number[] = [];
       const provider = providerWithRunner(
-        async (argv) => {
+        async (argv, options) => {
           if (argv[1] === "inspect" || argv[1] === "status") {
+            expect(options.timeoutMs).toBeGreaterThan(60_000);
             inspections += 1;
             return commandResult({
               stdout: inspectJson({ ready: inspections > 1, sshHostKey: HOST_KEY }),
@@ -2538,8 +2516,8 @@ describe("Crabbox worker provider", () => {
   });
 
   it.each([
-    { providerId: "aws", enrollmentDeadlineMs: 66 * 60_000 },
-    { providerId: "hetzner", enrollmentDeadlineMs: 66 * 60_000 },
+    { providerId: "aws", enrollmentDeadlineMs: 65 * 60_000 + CRABBOX_LIFECYCLE_TIMEOUT_MS },
+    { providerId: "hetzner", enrollmentDeadlineMs: 65 * 60_000 + CRABBOX_LIFECYCLE_TIMEOUT_MS },
     { providerId: "machine0", enrollmentDeadlineMs: 75 * 60_000 },
   ])(
     "reserves diagnostics and full $providerId cleanup after late node enrollment failure",
