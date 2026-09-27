@@ -5,7 +5,6 @@
  * Runtime callers import this barrel instead of storage-specific modules.
  */
 export * from "./session-history.js";
-export type { SessionTranscriptInstance } from "./session-accessor.sqlite-contract.js";
 export {
   bindSessionPendingInputSources,
   listSessionPendingInputReceipts,
