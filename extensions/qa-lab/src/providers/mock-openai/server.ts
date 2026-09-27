@@ -1,3 +1,4 @@
+// QA Lab mock Responses dispatcher, HTTP transport, and debug endpoints.
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { createServer } from "node:http";
@@ -2369,7 +2370,6 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
       }
       if (url.pathname === "/v1/embeddings") {
         const inputs = extractEmbeddingInputTexts(body.input);
-        const tokens = inputs.reduce((sum, text) => sum + countApproxTokens(text), 0);
         writeJson(res, 200, {
           object: "list",
           data: inputs.map((text, index) => ({
@@ -2382,8 +2382,8 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
               ? body.model
               : "text-embedding-3-small",
           usage: {
-            prompt_tokens: tokens,
-            total_tokens: tokens,
+            prompt_tokens: inputs.reduce((sum, text) => sum + countApproxTokens(text), 0),
+            total_tokens: inputs.reduce((sum, text) => sum + countApproxTokens(text), 0),
           },
         });
         return;

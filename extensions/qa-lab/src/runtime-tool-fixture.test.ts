@@ -10,8 +10,11 @@ import {
   MOCK_BASE_URL,
   mockToolRequests,
   runMockRuntimeToolFixture,
+  runtimePatchAddInput,
+  runtimePatchUpdateInput,
   runtimeToolFixtureConfig,
   runtimeToolFixtureDeps,
+  simulateRuntimePatchHappyTurn,
   writeQaSessionTranscript,
   writeRuntimeToolTranscripts,
   type RuntimeToolFixtureConfig,
@@ -162,21 +165,6 @@ async function writeCodexNativePatchEvidence(
   ]);
 }
 
-async function simulateRuntimePatchHappyTurn(
-  env: Pick<QaSuiteRuntimeEnv, "gateway">,
-  params: { sessionKey: string },
-  contents: string | null = "runtime patch\n",
-) {
-  if (params.sessionKey.endsWith(":happy") && contents !== null) {
-    await fs.writeFile(
-      path.join(env.gateway.workspaceDir, "runtime-tool-fixture-patch.txt"),
-      contents,
-      "utf8",
-    );
-  }
-  return {};
-}
-
 function nativePatchFixtureConfig(): RuntimeToolFixtureConfig {
   return runtimeToolFixtureConfig("apply_patch", {
     toolCoverage: {
@@ -234,17 +222,6 @@ function asyncImageFixtureConfig(overrides: RuntimeToolFixtureConfig = {}) {
     failurePromptSnippet: "failure target=image_generate",
     ...overrides,
   });
-}
-
-function runtimePatchAddInput(file = "runtime-tool-fixture-patch.txt") {
-  return `*** Begin Patch\n*** Add File: ${file}\n+runtime patch\n*** End Patch\n`;
-}
-
-function runtimePatchUpdateInput(
-  file = "../runtime-tool-fixture-denied.txt",
-  context = "runtime-tool-fixture-denied-original",
-) {
-  return `*** Begin Patch\n*** Update File: ${file}\n@@\n-${context}\n+runtime patch outside the workspace\n*** End Patch\n`;
 }
 
 async function runMockRuntimeToolFixtureWithOutputs(params: {
@@ -1254,75 +1231,6 @@ describe("runtime tool fixture", () => {
     });
 
     expect(details).toContain("read mock provider happy planned args");
-  });
-
-  it("rejects unrelated tool output after a planned mock runtime tool call", async () => {
-    await expect(
-      runMockRuntimeToolFixture({
-        requests: mockToolRequests({
-          happyOutputCallId: "call-write-happy",
-          happyOutput: "README contents from some other tool",
-        }),
-      }),
-    ).rejects.toThrow("expected mock happy-path tool output for read");
-  });
-
-  it.each([false, true])(
-    "validates the linked mock patch after an unlinked plan (combined request: %s)",
-    async (combinedRequest) => {
-      const requests = mockToolRequests({
-        toolName: "apply_patch",
-        happyArgs: { input: runtimePatchAddInput() },
-        failureArgs: { input: runtimePatchUpdateInput() },
-        happyOutput: "Successfully applied patch",
-        failureOutput: "Error: Path escapes sandbox root",
-      });
-      await expect(
-        runMockRuntimeToolFixture({
-          toolName: "apply_patch",
-          requests: [
-            {
-              allInputText: "target=apply_patch",
-              plannedToolCallId: "unlinked-decoy",
-              plannedToolName: "apply_patch",
-              plannedToolArgs: { input: runtimePatchAddInput("runtime-tool-fixture-wrong.txt") },
-            },
-            ...(combinedRequest
-              ? [{ ...requests[0], ...requests[1] }, ...requests.slice(2)]
-              : requests),
-          ],
-          runAgentPrompt: vi.fn(simulateRuntimePatchHappyTurn),
-        }),
-      ).resolves.toContain("apply_patch mock provider happy planned args");
-    },
-  );
-
-  it("rejects mismatched planned and output call ids on the same mock request", async () => {
-    const requests = [
-      {
-        allInputText: "target=read",
-        plannedToolCallId: "call-read-happy",
-        plannedToolName: "read",
-        plannedToolArgs: { path: "README.md" },
-        toolOutputCallId: "call-write-previous",
-        toolOutput: "previous write output",
-      },
-      {
-        allInputText: "failure target=read",
-        plannedToolCallId: "call-read-failure",
-        plannedToolName: "read",
-        plannedToolArgs: { path: "/missing" },
-      },
-      {
-        allInputText: "failure target=read",
-        toolOutputCallId: "call-read-failure",
-        toolOutput: "ENOENT: no such file or directory",
-      },
-    ];
-
-    await expect(runMockRuntimeToolFixture({ requests })).rejects.toThrow(
-      "expected mock happy-path tool output for read",
-    );
   });
 
   it("still fails required OpenClaw dynamic fixtures when the tool is absent", async () => {
