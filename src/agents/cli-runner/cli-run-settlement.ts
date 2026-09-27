@@ -141,28 +141,61 @@ export async function settleCliPreparationError(
   error: unknown,
   params: RunCliAgentParams,
 ): Promise<void> {
-  if (!(error instanceof CliAuthProfilePreparationError)) {
+  try {
+    params.assertCurrent?.();
+    if (!(error instanceof CliAuthProfilePreparationError)) {
+      return;
+    }
+    const store = cliRunSettlementDeps.loadAuthProfileStoreForRuntime(error.agentDir, {
+      externalCli: externalCliDiscoveryForProviderAuth({
+        cfg: params.config,
+        provider: error.provider,
+        profileId: error.profileId,
+      }),
+    });
+    await settleCliAuthProfile({
+      store,
+      profileId: error.profileId,
+      provider: error.provider,
+      agentDir: error.agentDir,
+      terminal: {
+        outcome: "failure",
+        error,
+        config: params.config,
+        runId: params.runId,
+        modelId: params.model,
+      },
+    });
+  } finally {
+    const reportCleanupError = (cleanupError: unknown) => {
+      recordAgentCleanupFailure();
+      log.warn(`bundle-mcp preparation cleanup failed: ${formatErrorMessage(cleanupError)}`);
+    };
+    try {
+      await retireCliRunMcpRuntime(params, reportCleanupError);
+    } catch (cleanupError) {
+      reportCleanupError(cleanupError);
+    }
+  }
+}
+
+async function retireCliRunMcpRuntime(
+  params: RunCliAgentParams,
+  onError: (error: unknown) => void,
+): Promise<void> {
+  if (params.cleanupBundleMcpOnRunEnd !== true) {
     return;
   }
-  const store = cliRunSettlementDeps.loadAuthProfileStoreForRuntime(error.agentDir, {
-    externalCli: externalCliDiscoveryForProviderAuth({
-      cfg: params.config,
-      provider: error.provider,
-      profileId: error.profileId,
-    }),
-  });
-  await settleCliAuthProfile({
-    store,
-    profileId: error.profileId,
-    provider: error.provider,
-    agentDir: error.agentDir,
-    terminal: {
-      outcome: "failure",
-      error,
-      config: params.config,
-      runId: params.runId,
-      modelId: params.model,
-    },
+  // Preparation can open native-policy transports before an execution context exists.
+  // The exact run session owns retirement even if its admission was revoked.
+  const { retireSessionMcpRuntime } = await import("../agent-bundle-mcp-tools.js");
+  await runCliCleanup(params, "cli-bundle-mcp-retire", async () => {
+    await retireSessionMcpRuntime({
+      sessionId: params.sessionId,
+      reason: "cli-run-end",
+      preserveActiveLeases: true,
+      onError,
+    });
   });
 }
 
@@ -194,21 +227,10 @@ export async function settlePreparedCliRun(params: {
       recordCleanupError(error);
     }
   }
-  if (runParams.cleanupBundleMcpOnRunEnd === true) {
-    // The run's session ID is immutable; its session key can already belong to
-    // a newer run. Never retire the newer runtime or close the shared listener.
-    try {
-      const { retireSessionMcpRuntime } = await import("../agent-bundle-mcp-tools.js");
-      await runCliCleanup(runParams, "cli-bundle-mcp-retire", async () => {
-        await retireSessionMcpRuntime({
-          sessionId: runParams.sessionId,
-          reason: "cli-run-end",
-          onError: recordCleanupError,
-        });
-      });
-    } catch (error) {
-      recordCleanupError(error);
-    }
+  try {
+    await retireCliRunMcpRuntime(runParams, recordCleanupError);
+  } catch (error) {
+    recordCleanupError(error);
   }
   if (cleanupError) {
     if (runError || result?.didSendViaMessagingTool === true) {

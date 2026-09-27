@@ -289,9 +289,19 @@ Managed outgoing image metadata lookups and cleanup inventories read through the
 shared-state worker, retaining their writable, creating database-open behavior.
 Typed columns, ordering, cleanup claims, and original-media references are unchanged.
 Downloads retain ticket or owner authorization and current transcript membership;
-verified descriptors and post-render thumbnail checks remain in place. Inserts, message-commit
-promotion, cleanup claim/deletion transactions, Doctor imports, and native session
-metadata reads keep their existing owners and remain separate worker migrations.
+verified descriptors and post-render thumbnail checks remain in place. Inserts,
+message-commit promotion, and cleanup claim/deletion transactions also run in that
+worker. Promotion reserves its records synchronously at transcript commit, then
+the transcript owner joins the accepted work before publication or release. Each
+record retains its transaction and replay behavior, including partial promotion.
+Cleanup cannot overtake an accepted promotion of the same record. Native commit
+receipts survive a lost ordinary reply; an unknown insert outcome retains its
+original bytes without accepting a revoked channel result. The channel read owner
+settles the original descriptor together with metadata custody, preserving file
+identity checks. Cleanup retains the insert's captured database admission; retirement
+preserves committed bytes without accepting the result or adopting a replacement store.
+Schemas, retention, and update behavior are unchanged. Doctor
+imports and native session metadata reads keep their existing owners.
 
 Delivery queue maintenance expires tombstones and reads media custody in the
 shared-state worker. Stage expiry retains its existing transaction and unfinished

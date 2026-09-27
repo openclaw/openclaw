@@ -200,6 +200,21 @@ describe("attempt trajectory status", () => {
     });
   });
 
+  it.each([
+    ["stop", { status: "success" }],
+    ["toolUse", { status: "error", terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON }],
+    ["length", { status: "error", terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON }],
+  ] as const)(
+    "classifies cron-only progress after a %s stop",
+    (lastAssistantStopReason, expected) => {
+      expect(
+        resolveAttemptTrajectoryTerminal(
+          baseParams({ lastAssistantStopReason, successfulCronAdds: 1 }),
+        ),
+      ).toEqual(expected);
+    },
+  );
+
   it("keeps heartbeat responses as success", () => {
     expect(
       resolveAttemptTrajectoryTerminal(

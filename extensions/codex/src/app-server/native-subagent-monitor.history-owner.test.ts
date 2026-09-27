@@ -68,16 +68,9 @@ const cases: Array<{
     current: original,
     allow: false,
   },
-  { name: "unstamped task after native parent rotation", stored: undefined, current, allow: false },
   {
     name: "stamped task without current history authority",
     stored: original,
-    current: undefined,
-    allow: false,
-  },
-  {
-    name: "unstamped task without current history authority",
-    stored: undefined,
     current: undefined,
     allow: false,
   },

@@ -13,6 +13,7 @@ import {
 } from "../../harness/gateway-question.js";
 import type { CurrentInboundPromptContext } from "../../internal-runtime-context.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import type { AgentSession } from "../../sessions/index.js";
 import { retireQueuedUserMessage } from "../../sessions/queued-user-message-retirement.js";
 import {
   getSteeringMessageIdentity,
@@ -34,16 +35,7 @@ type EmbeddedAgentActiveSessionSteerTarget = {
       predicate: (message: AgentMessage) => boolean,
     ) => AgentMessage | undefined;
   };
-  steer(
-    text: string,
-    images?: ImageContent[],
-    userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
-    media?: MediaFact[],
-    imageOrder?: PromptImageOrderEntry[],
-    queueIdentity?: string,
-    canInject?: () => boolean,
-    currentInboundContext?: CurrentInboundPromptContext,
-  ): Promise<void>;
+  steer: AgentSession["steer"];
   subscribe(listener: (event: unknown) => void): () => void;
 };
 
@@ -136,7 +128,7 @@ async function cancelQueuedSteeringMessage(
     return false;
   }
   try {
-    if (!retireQueuedUserMessage(message as AgentMessage)) {
+    if (!retireQueuedUserMessage(message)) {
       log.warn("failed to retire queued steering display entry during cancellation");
     }
   } catch (error) {
@@ -416,11 +408,10 @@ export async function claimEmbeddedPendingUserInputAnswer(
   if (options?.isInboundUserMessage !== true || hasPromptImageInput(options)) {
     return false;
   }
-  const claimed = await claimPendingAgentQuestionAnswer({
+  return await claimPendingAgentQuestionAnswer({
     sessionKey,
     text,
     authority: resolveQuestionAuthority(canInject, authority),
     sourceRecorder: options.userTurnTranscriptRecorder,
   });
-  return claimed;
 }

@@ -43,7 +43,7 @@ import {
 } from "./ingress.js";
 
 const loadTelegramNativeCommandDeliveryRuntime = createLazyRuntimeModule(
-  () => import("./bot-native-commands.delivery.runtime.js"),
+  () => import("./bot/delivery.js"),
 );
 const loadTelegramNativeCommandRuntime = createLazyRuntimeModule(
   () => import("./bot-native-commands.runtime.js"),

@@ -1,7 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import { useIsolatedStateGuard } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -28,10 +27,11 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
     },
   };
 });
+import { createSessionExecServer } from "./sandbox-exec-server-session.test-support.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import { httpRequest } from "./sandbox-exec-server/http.js";
 import { startProcess, terminateProcess, writeProcess } from "./sandbox-exec-server/processes.js";
-import type { ManagedProcess, OpenClawExecServer } from "./sandbox-exec-server/types.js";
+import type { ManagedProcess } from "./sandbox-exec-server/types.js";
 
 function createFakeChild(): ChildProcessWithoutNullStreams {
   // SAFETY: Only the intercepted spawn path consumes this event/stream fixture; no OS child is created.
@@ -42,25 +42,6 @@ function createFakeChild(): ChildProcessWithoutNullStreams {
     pid: 42_424,
     kill: vi.fn(() => true),
   }) as unknown as ChildProcessWithoutNullStreams;
-}
-function createExecServer(sandbox: SandboxContext): OpenClawExecServer {
-  if (!sandbox.backend || !sandbox.fsBridge) {
-    throw new Error("Sandbox fixture requires an execution and filesystem owner");
-  }
-  return {
-    environmentId: "workspace-test",
-    authPath: "/workspace-test",
-    refCount: 1,
-    closed: false,
-    url: "http://127.0.0.1",
-    server: { clients: [], close: (callback) => callback() },
-    networkIsolated: true,
-    sandbox,
-    backend: sandbox.backend,
-    fsBridge: sandbox.fsBridge,
-    children: new Set(),
-    cleanupTasks: new Set(),
-  };
 }
 function processStartParams(processId: string) {
   return {
@@ -100,7 +81,7 @@ describe("Codex managed workspace process authority", () => {
       return { env, terminate, interrupt: async () => false };
     };
     const processes = new Map<string, ManagedProcess>();
-    const server = createExecServer(sandbox);
+    const server = createSessionExecServer(sandbox);
     await startProcess(
       server,
       processes,
@@ -130,7 +111,7 @@ describe("Codex managed workspace process authority", () => {
     });
     await expect(
       startProcess(
-        createExecServer(sandbox),
+        createSessionExecServer(sandbox),
         new Map(),
         vi.fn<ManagedProcess["emitNotification"]>(),
         processStartParams("retired"),
@@ -192,7 +173,7 @@ describe("Codex managed workspace process authority", () => {
         terminate,
         interrupt: async () => false,
       });
-      const server = createExecServer(sandbox);
+      const server = createSessionExecServer(sandbox);
       const processes = new Map<string, ManagedProcess>();
       await startProcess(server, processes, vi.fn<ManagedProcess["emitNotification"]>(), {
         ...processStartParams("input-owner"),
@@ -251,7 +232,7 @@ describe("Codex managed workspace process authority", () => {
         terminate,
         interrupt: async () => false,
       });
-      const server = createExecServer(sandbox);
+      const server = createSessionExecServer(sandbox);
       const operations = new Set<Promise<void>>();
       const processes = new Map<string, ManagedProcess>();
       const request =

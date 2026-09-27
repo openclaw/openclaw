@@ -550,7 +550,8 @@ vi.mock("../../media/store.js", async () => {
     deleteMediaBuffer: vi.fn(async (id: string, subdir?: string) => {
       mockState.deleteMediaBufferCalls.push({ id, subdir });
     }),
-    saveMediaBuffer: vi.fn(async (buffer: Buffer, contentType?: string, subdir?: string) => {
+    saveMediaBuffer: vi.fn(async (...args: Parameters<typeof original.saveMediaBuffer>) => {
+      const [buffer, contentType, subdir] = args;
       mockState.activeSaveMediaCalls += 1;
       mockState.maxActiveSaveMediaCalls = Math.max(
         mockState.maxActiveSaveMediaCalls,
@@ -566,6 +567,9 @@ vi.mock("../../media/store.js", async () => {
       mockState.savedMediaCalls.push({ contentType, subdir, size: buffer.byteLength });
       const next = mockState.savedMediaResults.shift();
       try {
+        if (subdir === "outgoing/originals") {
+          return await original.saveMediaBuffer(...args);
+        }
         return {
           id: next?.id ?? "saved-media",
           path: next?.path ?? `/tmp/${mockState.savedMediaCalls.length}.png`,

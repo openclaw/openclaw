@@ -69,9 +69,11 @@ describe("canonical shared-state resource drainage", () => {
     const pathname = databasePath();
     const source = prepareOpenClawStateReadSource({ path: pathname });
     const absent = source.current();
+    const coordinationKey = absent.admission.coordinationKey;
     writeFileSync(pathname, "");
     const created = source.current();
     expect(created.admission.identity.key).toMatch(/^file:/);
+    expect(created.admission.coordinationKey).toBe(coordinationKey);
     absent.admission.assertCurrent();
     await closeOpenClawStateDatabaseByPathAsync(pathname);
     const renewed = source.current();
@@ -174,11 +176,16 @@ describe("canonical shared-state resource drainage", () => {
     const alias = path.join(path.dirname(pathname), "created-alias.sqlite");
     const original = lifecycle.capture(pathname);
     expect(original.identity.key).toMatch(/^path:/);
+    const coordinationKey = original.coordinationKey;
+    expect(coordinationKey).toBe(original.identity.key);
     writeFileSync(pathname, "");
     linkSync(pathname, alias);
     const observed = lifecycle.capture(alias);
     expect(original.identity.key).toBe(observed.identity.key);
+    expect(original.coordinationKey).toBe(coordinationKey);
+    expect(observed.coordinationKey).toBe(coordinationKey);
     lifecycle.publish(pathname);
+    expect(lifecycle.capture(pathname).coordinationKey).toBe(coordinationKey);
     original.assertCurrent();
     observed.assertCurrent();
     const closing = lifecycle.close(alias, () => false);
@@ -224,6 +231,7 @@ describe("canonical shared-state resource drainage", () => {
     const originalAdmission = captureOpenClawStateDatabaseReadAdmission(pathname);
     const aliasAdmission = captureOpenClawStateDatabaseReadAdmission(alias);
     expect(aliasAdmission.identity.key).toBe(originalAdmission.identity.key);
+    expect(aliasAdmission.coordinationKey).toBe(originalAdmission.coordinationKey);
     expect(aliasAdmission.databasePath).toBe(alias);
     const identityReads = vi.spyOn(databaseIdentity, "readDatabasePathIdentitySync");
     const resolvePath = vi.spyOn(path, "resolve");

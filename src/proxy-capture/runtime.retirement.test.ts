@@ -22,6 +22,7 @@ const fixture = vi.hoisted(() => ({
 vi.mock("../state/openclaw-state-worker-context.js", () => ({
   captureOpenClawStateWorkerContext: (): OpenClawStateWorkerContext => ({
     admission: {
+      coordinationKey: "synthetic-capture",
       databasePath: "/synthetic/capture.sqlite",
       identity: { key: "synthetic-capture", canonicalPath: "/synthetic/capture.sqlite" },
       assertCurrent: () => {},

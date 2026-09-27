@@ -51,29 +51,14 @@ import {
   logMessageQueued,
   logSessionStateChange,
   markDiagnosticSessionProgress,
-  startDiagnosticHeartbeat as startDiagnosticHeartbeatImpl,
 } from "./diagnostic.js";
 import {
   resetDiagnosticStateForTest,
   resolveStuckSessionAbortMs,
   resolveStuckSessionWarnMs,
+  startDiagnosticHeartbeatForTest as startDiagnosticHeartbeat,
+  startEnabledDiagnosticHeartbeatForTest as startEnabledDiagnosticHeartbeat,
 } from "./diagnostic.test-support.js";
-
-function startDiagnosticHeartbeat(
-  config?: Parameters<typeof startDiagnosticHeartbeatImpl>[0],
-  opts?: Parameters<typeof startDiagnosticHeartbeatImpl>[1],
-) {
-  return startDiagnosticHeartbeatImpl(config, {
-    testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 60_000 },
-    ...opts,
-  });
-}
-
-function startEnabledDiagnosticHeartbeat(
-  opts?: Parameters<typeof startDiagnosticHeartbeatImpl>[1],
-) {
-  return startDiagnosticHeartbeat({ diagnostics: { enabled: true } }, opts);
-}
 
 function createEmitMemorySampleMock() {
   return vi.fn(() => ({
