@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   emitAgentEventForRunContext,
   onAgentRuntimeEvent,
@@ -154,7 +155,7 @@ describe("agent model roster publications", () => {
     const { changes, observe, sessionEventSubscribers } = createHarness();
     sessionEventSubscribers.subscribe("conn-model");
     observe();
-    const ready = Promise.withResolvers<void>();
+    const ready = createDeferred();
     const preparation = vi
       .spyOn(sessionEventRows, "withPreparedSessionEventRow")
       .mockImplementationOnce(async (_projection, _key, _agentId, publish) => {
