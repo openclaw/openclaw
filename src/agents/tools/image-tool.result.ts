@@ -50,9 +50,8 @@ export async function buildNativeImageToolResult(
       media: { outbound: false },
     },
   };
-  return await sanitizeToolResultImages(
-    result,
-    "image:native",
-    resolveImageSanitizationLimits(config),
-  );
+  return await sanitizeToolResultImages(result, "image:native", {
+    ...resolveImageSanitizationLimits(config),
+    verifyDecodability: true,
+  });
 }
