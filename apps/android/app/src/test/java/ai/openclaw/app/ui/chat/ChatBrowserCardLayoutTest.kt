@@ -45,7 +45,7 @@ class ChatBrowserCardLayoutTest {
               ChatBrowserCard(
                 tab = ChatBrowserTab("host", null, "openclaw", "travel", "https://example.test/travel", "Travel checklist"),
                 sessionKey = "agent:main:travel",
-                page = NodeRuntime.GatewayControlPage("https://gateway.example.test", null, null, null),
+                page = NodeRuntime.GatewayControlPage("https://gateway.example.test", null, null, null, browserFocusAvailable = true),
                 connected = connected.value,
                 canControl = canControl.value,
                 availableHeight = availableHeight,

@@ -509,9 +509,11 @@ removes its controls until the connection returns. A stopped or closed remote ta
 stays unavailable rather than creating a replacement.
 
 This uses the Gateway's existing Browser panel and `operator.admin` browser
-permission. The connected Gateway must serve the browser focus view; older
-Gateways without that view cannot provide embedded control. No additional browser
-service or session-sharing permission is created.
+permission. The connected Gateway must advertise browser-focus support and use
+its bundled Control UI. Older Gateways, disabled Control UI, and custom UI roots
+show an unavailable notice instead of loading an unsupported page; update the
+Gateway and use its bundled UI to enable embedded control. The card remains
+closable. No additional browser service or session-sharing permission is created.
 
 ### 7. Camera
 

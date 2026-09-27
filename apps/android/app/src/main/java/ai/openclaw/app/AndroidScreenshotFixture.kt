@@ -37,6 +37,7 @@ internal object AndroidScreenshotFixture {
     get() = scene in setOf(AndroidScreenshotScene.CompletedWork, AndroidScreenshotScene.ActiveWork, AndroidScreenshotScene.WorkBoundaries)
 
   const val gatewayId = "android-screenshot-gateway"
+  val browserFocusAvailable: Boolean get() = scene == AndroidScreenshotScene.Browser
   const val controlUiBaseUrl = "http://127.0.0.1:18789"
   val mainSessionKey: String get() = if (workScene) "agent:main:node-work-proof" else "agent:main:node-screenshot"
   val sourcePreviewConfig: GatewaySourcePreviewConfig?

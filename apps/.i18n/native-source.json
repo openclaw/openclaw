@@ -271,6 +271,7 @@
     {"id":"native.android.c742ed7454485c72","source":"Browse Threads","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt"}]},
     {"id":"native.android.4baf0d2548eeb836","source":"Browser control is unavailable with your current Gateway permissions.","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatBrowserCard.kt"}]},
     {"id":"native.android.8a287ec82b616d94","source":"Browser offline. Reconnect to continue in this tab.","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatBrowserCard.kt"}]},
+    {"id":"native.android.4a0afb99faaec7a5","source":"Browser view unavailable. Update your Gateway and use its bundled Control UI.","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatBrowserCard.kt"}]},
     {"id":"native.android.8f234ab364a0d7e7","source":"Bubbling","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt"}]},
     {"id":"native.android.9606dbd99eeb307c","source":"Build date %1$s","surface":"android","sites":[{"kind":"resource-string","path":"apps/android/app/src/main/res/values/strings.xml"}]},
     {"id":"native.android.770f46c3592dd3c6","source":"Build timestamp copied","surface":"android","sites":[{"kind":"resource-string","path":"apps/android/app/src/main/res/values/strings.xml"}]},

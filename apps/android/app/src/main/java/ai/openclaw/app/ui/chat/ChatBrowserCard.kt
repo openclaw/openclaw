@@ -98,7 +98,7 @@ internal fun ChatBrowserCard(
           icon = if (expanded) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
           contentDescription = if (expanded) nativeString("Collapse browser") else nativeString("Control browser"),
           onClick = { expanded = !expanded },
-          enabled = connected && canControl && page != null,
+          enabled = connected && canControl && page?.browserFocusAvailable == true,
         )
         ClawPlainIconButton(
           icon = Icons.Default.Close,
@@ -119,6 +119,15 @@ internal fun ChatBrowserCard(
         !canControl -> {
           Text(
             nativeString("Browser control is unavailable with your current Gateway permissions."),
+            modifier = Modifier.padding(12.dp),
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
+          )
+        }
+
+        !page.browserFocusAvailable -> {
+          Text(
+            nativeString("Browser view unavailable. Update your Gateway and use its bundled Control UI."),
             modifier = Modifier.padding(12.dp),
             style = ClawTheme.type.caption,
             color = ClawTheme.colors.textMuted,

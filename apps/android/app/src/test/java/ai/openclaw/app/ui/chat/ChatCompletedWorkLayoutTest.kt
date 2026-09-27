@@ -30,6 +30,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
@@ -221,6 +222,9 @@ class ChatCompletedWorkLayoutTest {
     val original = browserResult("browser-first")
     showToolResults(listOf(original))
     composeRule.onNodeWithText("Agent browser").assertIsDisplayed()
+    capture("browser-unavailable")
+    composeRule.onNodeWithText("Browser view unavailable. Update your Gateway and use its bundled Control UI.").assertIsDisplayed()
+    composeRule.onNodeWithContentDescription("Control browser").assertIsNotEnabled()
     val reader = composeRule.onNode(hasScrollToIndexAction())
     val boundsWithBrowser = reader.getUnclippedBoundsInRoot()
     composeRule.onNodeWithContentDescription("Close").performTouchInput { click() }
