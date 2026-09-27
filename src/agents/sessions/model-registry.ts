@@ -13,8 +13,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   AnthropicMessagesCompat,
   Api,
-  AssistantMessageEventStreamContract,
-  Context,
   Model,
   OpenAICompletionsCompat,
   OpenAIResponsesCompat,
@@ -46,6 +44,7 @@ import {
 } from "../plugin-model-catalog.js";
 import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
 import type { AuthStatus, AuthStorage } from "./auth-storage.js";
+import type { ProviderConfig } from "./extensions/types.js";
 import {
   getModelRegistryRuntime,
   initializeModelRegistryRuntime,
@@ -1068,38 +1067,17 @@ export class ModelRegistry {
 /**
  * Input type for registerProvider API.
  */
-export interface ProviderConfigInput {
-  name?: string;
-  baseUrl?: string;
-  apiKey?: string;
+export interface ProviderConfigInput extends Omit<ProviderConfig, "models" | "oauth"> {
   auth?: ProviderAuthMode;
-  api?: Api;
-  streamSimple?: (
-    model: Model,
-    context: Context,
-    options?: SimpleStreamOptions,
-  ) => AssistantMessageEventStreamContract;
-  headers?: Record<string, string>;
-  authHeader?: boolean;
   /** OAuth provider for /login support */
   oauth?: Omit<OAuthProviderInterface, "id">;
-  models?: Array<{
-    id: string;
-    name: string;
-    api?: Api;
-    baseUrl?: string;
-    reasoning: boolean;
-    thinkingLevelMap?: Model["thinkingLevelMap"];
-    input: ("text" | "image")[];
-    cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
-    contextWindow: number;
-    contextTokens?: number;
-    contextWindows?: ModelCatalogContextWindowOption[];
-    contextWindowDefault?: string;
-    maxTokens: number;
-    params?: Record<string, unknown>;
-    headers?: Record<string, string>;
-    compat?: Model["compat"];
-  }>;
+  models?: Array<
+    NonNullable<ProviderConfig["models"]>[number] & {
+      contextTokens?: number;
+      contextWindows?: ModelCatalogContextWindowOption[];
+      contextWindowDefault?: string;
+      params?: Record<string, unknown>;
+    }
+  >;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

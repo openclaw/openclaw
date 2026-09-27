@@ -24,6 +24,7 @@ import type {
   ToolCall,
 } from "../../llm/types.js";
 import { EventStream } from "../../llm/utils/event-stream.js";
+import { makeZeroUsageSnapshot } from "../usage.js";
 
 const PROXY_ERROR_BODY_MAX_BYTES = 16 * 1024 * 1024;
 const PROXY_SSE_STREAM_MAX_BYTES = 16 * 1024 * 1024;
@@ -262,14 +263,7 @@ export function streamProxy(
       api: model.api,
       provider: model.provider,
       model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: makeZeroUsageSnapshot(),
       timestamp: Date.now(),
     };
 

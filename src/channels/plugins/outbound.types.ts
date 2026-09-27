@@ -1,55 +1,27 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 import type { OutboundDeliveryResult } from "../../infra/outbound/deliver-types.js";
 import type { OutboundDeliveryFormattingOptions } from "../../infra/outbound/formatting.js";
 import type { OutboundIdentity } from "../../infra/outbound/identity-types.js";
-import type { OutboundSendDeps } from "../../infra/outbound/send-deps.js";
 import type { MessagePresentation, ReplyPayloadDeliveryPin } from "../../interactive/payload.js";
-import type { OutboundMediaAccess } from "../../media/load-options.js";
+import type {
+  ChannelMessageSendMediaContext,
+  DurableFinalDeliveryRequirementMap,
+} from "../message/types.js";
 import type {
   ChannelOutboundTargetMode,
   ChannelPollContext,
   ChannelPollResult,
 } from "./types.core.js";
 
-export type ChannelOutboundContext = {
-  cfg: OpenClawConfig;
-  to: string;
-  text: string;
+export type ChannelOutboundContext = Omit<
+  ChannelMessageSendMediaContext,
+  "mediaUrl" | "onDeliveryResult"
+> & {
   mediaUrl?: string;
-  audioAsVoice?: boolean;
-  mediaAccess?: OutboundMediaAccess;
-  mediaLocalRoots?: readonly string[];
-  mediaReadFile?: (filePath: string) => Promise<Buffer>;
-  gifPlayback?: boolean;
-  /** Send image, GIF, or video as document to avoid channel compression. */
-  forceDocument?: boolean;
-  replyToId?: string | null;
-  replyToIdSource?: "explicit" | "implicit";
-  replyToMode?: ReplyToMode;
   formatting?: OutboundDeliveryFormattingOptions;
-  threadId?: string | number | null;
-  accountId?: string | null;
   identity?: OutboundIdentity;
-  deps?: OutboundSendDeps;
-  silent?: boolean;
-  /** Live cancellation signal; check before each physical send and after awaited preparation. */
-  signal?: AbortSignal;
-  gatewayClientScopes?: readonly string[];
-  /** @internal Opaque durable intent id for exact provider-side send reconciliation. */
-  deliveryQueueId?: string;
-  /** @internal Stable platform-send index within one durable payload. */
-  deliveryPartIndex?: number;
-  /** @internal Exact platform-send count within one durable payload. */
-  deliveryPartCount?: number;
-  /** @internal Channel-valid id reserved before a correlated conversation turn is sent. */
-  preparedMessageId?: string;
-  /** @internal Refresh durable timing before recipient-visible or finalizing platform I/O. */
-  onPlatformSendDispatch?: () => Promise<void>;
-  /** @internal Synchronously fence custody after refresh and immediately before provider I/O. */
-  assertDirectAdapterHandoff?: () => void;
   /** @internal Report each completed platform sub-send before starting another fallible step. */
   onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
 };
@@ -116,21 +88,7 @@ export type ChannelPresentationCapabilities = {
 
 export type ChannelDeliveryCapabilities = {
   pin?: boolean;
-  durableFinal?: {
-    text?: boolean;
-    media?: boolean;
-    poll?: boolean;
-    payload?: boolean;
-    silent?: boolean;
-    replyTo?: boolean;
-    thread?: boolean;
-    nativeQuote?: boolean;
-    messageSendingHooks?: boolean;
-    batch?: boolean;
-    reconcileUnknownSend?: boolean;
-    afterSendSuccess?: boolean;
-    afterCommit?: boolean;
-  };
+  durableFinal?: DurableFinalDeliveryRequirementMap;
 };
 
 export type ChannelOutboundPayloadHint =

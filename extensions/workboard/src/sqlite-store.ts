@@ -31,6 +31,11 @@ type WorkboardSqliteStores = {
   runWithWriteAuthority: WorkboardWriteAuthority;
 };
 
+type StoreOperation = Exclude<
+  keyof WorkboardSqliteOperations,
+  "connection.open" | "connection.close" | "dataVersion"
+>;
+
 export function createWorkboardSqliteStores(options: {
   dbPath?: string;
   env?: NodeJS.ProcessEnv;
@@ -153,6 +158,10 @@ export function createWorkboardSqliteStores(options: {
       operations.delete(pending);
     }
   }
+  function bindOperation<K extends StoreOperation>(type: K, writes = false) {
+    return (...args: WorkboardSqliteOperations[K]["input"]["args"]) =>
+      run(args, (connection, captured) => execute(type, { connection, args: captured }, writes));
+  }
   return {
     async runWithWriteAuthority(assertCurrent, operation) {
       const authority: { active: boolean; assertCurrent?: () => void } = {
@@ -168,108 +177,36 @@ export function createWorkboardSqliteStores(options: {
     ready,
     dataVersion: () => run(undefined, (connection) => execute("dataVersion", { connection })),
     cards: {
-      register: (...args) =>
-        run(args, (connection, captured) =>
-          execute("cards.register", { connection, args: captured }, true),
-        ),
-      registerIfAbsent: (...args) =>
-        run(args, (connection, captured) =>
-          execute("cards.registerIfAbsent", { connection, args: captured }, true),
-        ),
-      registerIfUpdatedAt: (...args) =>
-        run(args, (connection, captured) =>
-          execute("cards.registerIfUpdatedAt", { connection, args: captured }, true),
-        ),
-      claimIfOwnerAvailable: (...args) =>
-        run(args, (connection, captured) =>
-          execute("cards.claimIfOwnerAvailable", { connection, args: captured }, true),
-        ),
-      deleteIfUpdatedAt: (...args) =>
-        run(args, (connection, captured) =>
-          execute("cards.deleteIfUpdatedAt", { connection, args: captured }, true),
-        ),
-      lookup: (...args) =>
-        run(args, (connection, captured) =>
-          execute("cards.lookup", { connection, args: captured }),
-        ),
-      delete: (...args) =>
-        run(args, (connection, captured) =>
-          execute("cards.delete", { connection, args: captured }, true),
-        ),
-      entries: (...args) =>
-        run(args, (connection, captured) =>
-          execute("cards.entries", { connection, args: captured }),
-        ),
-      listCardStatuses: (...args) =>
-        run(args, (connection, captured) =>
-          execute("cards.listCardStatuses", { connection, args: captured }),
-        ),
-      listBoardAggregates: (...args) =>
-        run(args, (connection, captured) =>
-          execute("cards.listBoardAggregates", { connection, args: captured }),
-        ),
-      listStatsAggregates: (...args) =>
-        run(args, (connection, captured) =>
-          execute("cards.listStatsAggregates", { connection, args: captured }),
-        ),
-      hasCards: (...args) =>
-        run(args, (connection, captured) =>
-          execute("cards.hasCards", { connection, args: captured }),
-        ),
+      register: bindOperation("cards.register", true),
+      registerIfAbsent: bindOperation("cards.registerIfAbsent", true),
+      registerIfUpdatedAt: bindOperation("cards.registerIfUpdatedAt", true),
+      claimIfOwnerAvailable: bindOperation("cards.claimIfOwnerAvailable", true),
+      deleteIfUpdatedAt: bindOperation("cards.deleteIfUpdatedAt", true),
+      lookup: bindOperation("cards.lookup"),
+      delete: bindOperation("cards.delete", true),
+      entries: bindOperation("cards.entries"),
+      listCardStatuses: bindOperation("cards.listCardStatuses"),
+      listBoardAggregates: bindOperation("cards.listBoardAggregates"),
+      listStatsAggregates: bindOperation("cards.listStatsAggregates"),
+      hasCards: bindOperation("cards.hasCards"),
     },
     boards: {
-      register: (...args) =>
-        run(args, (connection, captured) =>
-          execute("boards.register", { connection, args: captured }, true),
-        ),
-      lookup: (...args) =>
-        run(args, (connection, captured) =>
-          execute("boards.lookup", { connection, args: captured }),
-        ),
-      delete: (...args) =>
-        run(args, (connection, captured) =>
-          execute("boards.delete", { connection, args: captured }, true),
-        ),
-      entries: (...args) =>
-        run(args, (connection, captured) =>
-          execute("boards.entries", { connection, args: captured }),
-        ),
+      register: bindOperation("boards.register", true),
+      lookup: bindOperation("boards.lookup"),
+      delete: bindOperation("boards.delete", true),
+      entries: bindOperation("boards.entries"),
     },
     subscriptions: {
-      register: (...args) =>
-        run(args, (connection, captured) =>
-          execute("subscriptions.register", { connection, args: captured }, true),
-        ),
-      lookup: (...args) =>
-        run(args, (connection, captured) =>
-          execute("subscriptions.lookup", { connection, args: captured }),
-        ),
-      delete: (...args) =>
-        run(args, (connection, captured) =>
-          execute("subscriptions.delete", { connection, args: captured }, true),
-        ),
-      entries: (...args) =>
-        run(args, (connection, captured) =>
-          execute("subscriptions.entries", { connection, args: captured }),
-        ),
+      register: bindOperation("subscriptions.register", true),
+      lookup: bindOperation("subscriptions.lookup"),
+      delete: bindOperation("subscriptions.delete", true),
+      entries: bindOperation("subscriptions.entries"),
     },
     attachments: {
-      register: (...args) =>
-        run(args, (connection, captured) =>
-          execute("attachments.register", { connection, args: captured }, true),
-        ),
-      lookup: (...args) =>
-        run(args, (connection, captured) =>
-          execute("attachments.lookup", { connection, args: captured }),
-        ),
-      delete: (...args) =>
-        run(args, (connection, captured) =>
-          execute("attachments.delete", { connection, args: captured }, true),
-        ),
-      entries: (...args) =>
-        run(args, (connection, captured) =>
-          execute("attachments.entries", { connection, args: captured }),
-        ),
+      register: bindOperation("attachments.register", true),
+      lookup: bindOperation("attachments.lookup"),
+      delete: bindOperation("attachments.delete", true),
+      entries: bindOperation("attachments.entries"),
     },
     close() {
       sealed = true;

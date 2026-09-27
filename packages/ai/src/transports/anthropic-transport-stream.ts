@@ -57,11 +57,7 @@ import {
   type AnthropicTransportOptions,
 } from "./anthropic-transport-options.js";
 import { createAssistantOutput } from "./assistant-output.js";
-import {
-  buildGuardedModelFetch,
-  resolveProviderEndpoint,
-  transformTransportMessages,
-} from "./host-policy.js";
+import { buildGuardedModelFetch, resolveProviderEndpoint } from "./host-policy.js";
 import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
 import {
   createWritableTransportEventStream,
@@ -496,7 +492,12 @@ async function buildAnthropicParams(
   });
   const cacheBreakpointOptOutMessageIndexes = new Set<number>();
   const messages = await convertAnthropicMessages(
-    transformTransportMessages(replayPlan.messages, model, normalizeAnthropicToolCallId),
+    getAiTransportHost().transformTransportMessages(
+      replayPlan.messages,
+      model,
+      normalizeAnthropicToolCallId,
+      undefined,
+    ),
     model,
     isOAuthToken,
     {

@@ -16,7 +16,7 @@ import { appendAssistantTranscriptRoleText, appendImageAlternative } from "./ir-
 import {
   appendHtmlTags,
   attachBlockMetadata,
-  attachListItemMetadata,
+  copyMarkdownListItem,
   copyHtmlTags,
   defineMetadata,
   RAW_HTML_TOKEN_TYPE,
@@ -1135,28 +1135,14 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
           const markerOnly = !state.text
             .slice(markerEnd, markerContentEnd)
             .replace(/[ \t\r\n]/gu, "");
-          const listItem: MarkdownListItemMarker = {
-            kind: item.kind,
-            ...(item.listMarker ? { listMarker: item.listMarker } : {}),
-            ...(item.task ? { task: true } : {}),
-            ...(item.taskMarker ? { taskMarker: item.taskMarker } : {}),
-            ...(item.listId !== undefined ? { listId: item.listId } : {}),
-            ...(item.parentListId !== undefined ? { parentListId: item.parentListId } : {}),
-            ...(item.depth !== undefined ? { depth: item.depth } : {}),
-            ...(item.start !== undefined ? { start: item.start } : {}),
-            end,
-          };
           state.listItems.push(
-            attachListItemMetadata(listItem, {
+            copyMarkdownListItem(item, {
+              listMarker: item.listMarker,
+              taskMarker: item.taskMarker,
+              start: item.start,
+              end,
               ...(contentEnd > contentStart ? { contentStart, contentEnd } : {}),
-              ...((item.sourceMarker ? item.markerOnly : markerOnly)
-                ? { markerOnly: true as const }
-                : {}),
-              sourceMarker: item.sourceMarker,
-              sourceContent: item.sourceContent,
-              sourceIndent: item.sourceIndent,
-              sourceStartLine: item.sourceStartLine,
-              sourceEndLine: item.sourceEndLine,
+              markerOnly: (item.sourceMarker ? item.markerOnly : markerOnly) ? true : undefined,
             }),
           );
         }
@@ -1439,33 +1425,19 @@ export function markdownToIRWithMeta(
       : undefined;
     return listMarker || taskMarker
       ? [
-          attachListItemMetadata(
-            {
-              kind: item.kind,
-              ...(listMarker ? { listMarker } : {}),
-              ...(item.task ? { task: true as const } : {}),
-              ...(taskMarker ? { taskMarker } : {}),
-              ...(item.listId !== undefined ? { listId: item.listId } : {}),
-              ...(item.parentListId !== undefined ? { parentListId: item.parentListId } : {}),
-              ...(item.depth !== undefined ? { depth: item.depth } : {}),
-              ...(item.start !== undefined ? { start: Math.min(item.start, finalLength) } : {}),
-              ...(item.end !== undefined ? { end: Math.min(item.end, finalLength) } : {}),
-            },
-            {
-              ...(item.contentStart !== undefined
-                ? { contentStart: Math.min(item.contentStart, finalLength) }
-                : {}),
-              ...(item.contentEnd !== undefined
-                ? { contentEnd: Math.min(item.contentEnd, finalLength) }
-                : {}),
-              ...(item.markerOnly ? { markerOnly: true as const } : {}),
-              sourceMarker: item.sourceMarker,
-              sourceContent: item.sourceContent,
-              sourceIndent: item.sourceIndent,
-              sourceStartLine: item.sourceStartLine,
-              sourceEndLine: item.sourceEndLine,
-            },
-          ),
+          copyMarkdownListItem(item, {
+            listMarker,
+            taskMarker,
+            start: item.start !== undefined ? Math.min(item.start, finalLength) : undefined,
+            end: item.end !== undefined ? Math.min(item.end, finalLength) : undefined,
+            contentStart:
+              item.contentStart !== undefined
+                ? Math.min(item.contentStart, finalLength)
+                : undefined,
+            contentEnd:
+              item.contentEnd !== undefined ? Math.min(item.contentEnd, finalLength) : undefined,
+            markerOnly: item.markerOnly,
+          }),
         ]
       : [];
   });

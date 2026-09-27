@@ -14,7 +14,7 @@ import {
 } from "./runtime/load-context.js";
 
 /** Shared options for resolving plugin-backed web providers. */
-type ResolvePluginWebProvidersParams = {
+export type ResolvePluginWebProvidersParams = {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
@@ -26,6 +26,11 @@ type ResolvePluginWebProvidersParams = {
   sandboxed?: boolean;
   manifestRecords?: readonly PluginManifestRecord[];
 };
+
+export type ResolveRuntimeWebProvidersParams = Omit<
+  ResolvePluginWebProvidersParams,
+  "activate" | "cache" | "mode" | "sandboxed"
+>;
 
 export type WebProviderRuntimeResolution<TEntry> = {
   resolveBundledResolutionConfig: (

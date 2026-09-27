@@ -4,23 +4,12 @@
 import { basenameFromAnyPath } from "@openclaw/media-core/file-name";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import type { ReplyMediaAttachment } from "../shared/reply-payload.types.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 
 // Shared helpers for generated media/file attachments returned by tools or
 // subagents. They normalize paths/URLs for prompt text and delivery routing.
-export type AgentGeneratedAttachment = {
-  type?: "image" | "audio" | "video" | "file";
-  path?: string;
-  url?: string;
-  mediaUrl?: string;
-  filePath?: string;
-  mimeType?: string;
-  name?: string;
-  sizeBytes?: number;
-  durationMs?: number;
-  width?: number;
-  height?: number;
-};
+export type AgentGeneratedAttachment = Omit<ReplyMediaAttachment, "trustedLocalMedia">;
 
 function generatedAttachmentReference(attachment: AgentGeneratedAttachment): string | undefined {
   return normalizeOptionalString(

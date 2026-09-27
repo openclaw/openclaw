@@ -1,5 +1,6 @@
 /** Session MCP config loading, filtering, and catalog fingerprints. */
 import crypto from "node:crypto";
+import { normalizeMcpToolDenials } from "../config/sessions/session-tool-overrides.js";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
@@ -23,22 +24,6 @@ function digestSafeServerNameAssignments(
   return Object.fromEntries(
     [...safeServerNamesByServer.entries()].toSorted(([a], [b]) => a.localeCompare(b)),
   );
-}
-
-function digestMcpToolDenials(
-  value?: Record<string, string[]>,
-): Record<string, string[]> | undefined {
-  const entries = Object.entries(value ?? {})
-    .map(
-      ([serverName, toolNames]) =>
-        [
-          serverName,
-          [...new Set(toolNames)].toSorted((left, right) => left.localeCompare(right)),
-        ] as const,
-    )
-    .filter(([, toolNames]) => toolNames.length > 0)
-    .toSorted(([left], [right]) => left.localeCompare(right));
-  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
 function createCatalogFingerprint(params: {
@@ -119,7 +104,7 @@ export function loadSessionMcpConfig(params: {
     params.safeServerNamesByServer ?? assignSafeServerNames(Object.keys(loaded.mcpServers));
   const safeServerNames = digestSafeServerNameAssignments(safeServerNamesByServer);
   const mcpAppsEnabled = params.cfg?.mcp?.apps?.enabled === true;
-  const mcpToolsDeny = digestMcpToolDenials(params.toolOverrides?.mcpToolsDeny);
+  const mcpToolsDeny = normalizeMcpToolDenials(params.toolOverrides?.mcpToolsDeny);
   const mcpServers = filterMcpServers(loaded.mcpServers, {
     includeServerNames: params.includeServerNames,
     excludeServerNames: params.excludeServerNames,
