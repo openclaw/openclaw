@@ -26,12 +26,16 @@ would find. Doctor and the daily verifier retain full-file `integrity_check`;
 pending migrations, repairs, and copied-file verification also retain full checks.
 No schema, stored data, or configuration changes are required.
 
-Each executed admission gate logs its mode, outcome, per-table durations, process,
-thread, and reason: `revoked` for invalidated proof, `no-proof` for unavailable or
-nonmatching proof, or `lease-class` when a foreign or unknown lease owner prevents
-runtime reuse. Slow-open summaries include the same facts. A dirty restart receipt
-alone does not distinguish a crashed process from a live lease; both use this
-admission gate when no reusable proof remains.
+Each executed admission gate logs its mode, outcome, ten slowest table checks,
+total count and duration per check kind, process, thread, and reason. Reasons are
+`stale-lease` when a previous process left an unreleased lease, `revoked` for other
+invalidated proof, `dirty-receipt` when verification remains without a certified
+final checkpoint and close, `no-proof` for unavailable or nonmatching proof, and
+`lease-class` when a foreign or unknown lease owner prevents runtime reuse.
+Slow-open summaries include the same facts. A dirty receipt alone does not
+distinguish an incomplete checkpoint from a live lease; neither permits restart
+reuse. A process exiting with status zero after its shutdown deadline can still
+leave a stale lease and require the admission gate.
 
 | When                                        | Check                                                                                                                                           |
 | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -60,8 +64,10 @@ with matching process ID and start time do not consume or block publication of
 that receipt; each handle retains its own lease until cleanup finishes.
 Explicit invalidation revokes shared runtime proof as well as durable metadata,
 including stale admission and unsettled Worker cleanup. A successful native close
-with a reader-blocked checkpoint removes restart metadata but preserves live
-runtime proof; failed close or uncertain storage errors revoke both. Cold opens and restarts
+with a reader-blocked checkpoint keeps verification dirty and preserves live
+runtime proof. A later last writer can certify that verification after a completed
+checkpoint and native close; failed close or uncertain storage errors revoke both.
+Cold opens and restarts
 still require matching clean-close metadata or the admission gate.
 Cleanup workers and native agent execution workers borrow that proof under their
 existing writer admission. Cleanup workers return new verification to the Gateway

@@ -66,6 +66,7 @@ import {
   agentDatabaseLifecycle as cache,
   assertAgentDatabaseTerminalOpenAllowed,
   startAgentDatabaseOpenTiming,
+  resolveAgentDatabaseIntegrityGateReason,
   closeCachedOpenClawAgentDatabase,
   closeMaintenanceAgentDatabase,
   closeOpenClawAgentDatabaseByPath,
@@ -102,7 +103,6 @@ import {
   clearOpenClawAgentDatabaseValidationCache,
   adoptOpenClawAgentDatabaseValidation,
   getOpenClawAgentDatabaseValidation,
-  hasRevokedOpenClawAgentDatabaseValidation,
   invalidateOpenClawAgentDatabaseValidation,
   setOpenClawAgentDatabaseValidation,
 } from "./openclaw-agent-db-validation-cache.js";
@@ -373,12 +373,10 @@ function* openOpenClawAgentDatabaseSteps(
         assertExistingAgentSchemaOwner(existingSchema, agentId, pathname);
         // Runtime proof survives last-lease close; cold opens require clean-close proof.
         // Runtime proof carries owner revocation; every open still checks schema convergence.
-        diagnostics.integrityGateReason =
-          integrityRevoked || hasRevokedOpenClawAgentDatabaseValidation(pathname, validation)
-            ? "revoked"
-            : !reuseIntegrity
-              ? "lease-class"
-              : "no-proof";
+        diagnostics.integrityGateReason = resolveAgentDatabaseIntegrityGateReason(
+          validationDatabase,
+          { verification, validation, integrityRevoked, reuseIntegrity },
+        );
         const requiresCurrentVersionConvergence = yield* agentDatabaseIntegrityBeforeMutationSteps(
           db,
           agentId,

@@ -12949,3 +12949,27 @@ describe("frozen CI compatibility contracts", () => {
     expect(source).toContain("if (!source.includes(marker)) process.exit(0);");
   });
 });
+
+describe("workflow file size", () => {
+  // GitHub refuses workflow files above 500 KiB: it creates a run named after
+  // the file that fails with no jobs, so CI stops without reporting a failure.
+  const GITHUB_WORKFLOW_MAX_BYTES = 512_000;
+  const WORKFLOW_SOFT_LIMIT_BYTES = 480_000;
+
+  it("keeps every workflow file well below GitHub's size limit", () => {
+    const oversized = readdirSync(".github/workflows")
+      .filter((name) => /\.ya?ml$/u.test(name))
+      .map((name) => `.github/workflows/${name}`)
+      .map((file) => ({ file, bytes: statSync(file).size }))
+      .filter(({ bytes }) => bytes > WORKFLOW_SOFT_LIMIT_BYTES)
+      .map(({ file, bytes }) => `${file}: ${bytes} bytes`);
+
+    expect(
+      oversized,
+      `Workflow files must stay at or below ${WORKFLOW_SOFT_LIMIT_BYTES} bytes. GitHub's hard limit is ` +
+        `${GITHUB_WORKFLOW_MAX_BYTES} bytes (500 KiB); above it, GitHub creates a run named after the ` +
+        `file that fails immediately with no jobs, so all PR and main CI silently stops. Shrink the file ` +
+        `(for example, YAML anchors/aliases for byte-identical expressions) before raising this limit.`,
+    ).toEqual([]);
+  });
+});

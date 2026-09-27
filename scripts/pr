@@ -472,8 +472,9 @@ is_supervised_pr_process() {
     [ "${OPENCLAW_PR_LOCK_SUPERVISOR_PID:-}" = "$PPID" ]
 }
 
-# The supervisor changes cwd to the canonical repo. Resolve an explicit body
-# relative to the operator's caller before crossing that boundary; do not read it.
+# The supervisor changes cwd to the canonical repo. Resolve explicit body and
+# evidence paths relative to the operator's caller before crossing that
+# boundary; do not read them.
 if [ "${1-}" = merge-run ] || [ "${1-}" = merge-recover ]; then
   merge_cli_args=() merge_cli_body_next=false
   for merge_cli_arg in "$@"; do
@@ -482,7 +483,7 @@ if [ "${1-}" = merge-run ] || [ "${1-}" = merge-recover ]; then
     fi
     merge_cli_args+=("$merge_cli_arg")
     merge_cli_body_next=false
-    if [ "$merge_cli_arg" = --body-file ] || [ "$merge_cli_arg" = --legacy-refusal ] || [ "$merge_cli_arg" = --pre-dispatch-refusal ]; then merge_cli_body_next=true; fi
+    if [ "$merge_cli_arg" = --body-file ] || [ "$merge_cli_arg" = --legacy-refusal ] || [ "$merge_cli_arg" = --pre-dispatch-refusal ] || [ "$merge_cli_arg" = --admin-evidence ]; then merge_cli_body_next=true; fi
   done
   set -- "${merge_cli_args[@]}"
 fi

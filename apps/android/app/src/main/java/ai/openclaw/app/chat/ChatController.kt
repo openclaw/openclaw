@@ -8412,6 +8412,7 @@ private fun parseToolActivityContent(
         result = result,
         isError = isChatToolError(obj),
         arguments = toolPresentationArguments(args),
+        browserTab = if (resultBlock && name == "browser" && !isChatToolError(obj)) parseChatBrowserTab(obj["details"]) else null,
       ),
   )
 }
@@ -8420,7 +8421,7 @@ private fun parseTopLevelToolResult(obj: JsonObject): ChatMessageContent? {
   val synthetic =
     buildMap<String, JsonElement> {
       put("type", JsonPrimitive("toolResult"))
-      listOf("toolCallId", "tool_call_id", "toolUseId", "tool_use_id", "callId", "name", "toolName", "tool_name", "isError", "is_error", "content", "result", "text").forEach { key ->
+      listOf("toolCallId", "tool_call_id", "toolUseId", "tool_use_id", "callId", "name", "toolName", "tool_name", "isError", "is_error", "content", "result", "text", "details").forEach { key ->
         obj[key]?.let { put(key, it) }
       }
     }

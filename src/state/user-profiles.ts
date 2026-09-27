@@ -6,6 +6,7 @@ import { sql } from "kysely";
 import {
   GATEWAY_OWNER_PROFILE_ID,
   type UserProfile as UserProfileListItem,
+  type UsersMergeResult,
 } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
@@ -18,6 +19,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
+import { CHANNEL_IDENTITY_PROVIDER } from "./user-channel-identities.js";
 import { ensureUserPreferencesSchema } from "./user-preferences.store.js";
 import {
   ensureProfileForEmailInDatabase,
@@ -55,6 +57,7 @@ import {
   ensureUserProfilesSchema,
   hasEnsuredUserProfileRoleSchema,
   UserProfileNotFoundError,
+  UserProfileMergeError,
   UserProfileOwnerError,
 } from "./user-profiles-schema.js";
 import {
@@ -392,6 +395,85 @@ export function ensureProfileForTailscaleIdentity(
           options,
         });
   return adoptDisplayNameIfEmpty(resolved.id, displayName, options);
+}
+
+/** Explicit administration keeps both selected IDs exact; only an exact repeat may follow a tombstone. */
+export function mergeProfiles(
+  sourceProfileId: string,
+  targetProfileId: string,
+  options: UserProfileMutationOptions = {},
+): UsersMergeResult {
+  ensureUserProfilesSchema(options);
+  return runUserProfileWriteTransaction(
+    ({ db }) => {
+      const source = requireResolvedUserProfileMetadataById(db, sourceProfileId);
+      const target = requireResolvedUserProfileMetadataById(db, targetProfileId);
+      if (
+        [sourceProfileId, targetProfileId, source.id, target.id].includes(GATEWAY_OWNER_PROFILE_ID)
+      ) {
+        throw new UserProfileOwnerError("merge");
+      }
+      if (sourceProfileId === targetProfileId) {
+        throw new UserProfileMergeError("source and target profiles must differ");
+      }
+      if (target.id !== targetProfileId) {
+        throw new UserProfileMergeError(
+          `target profile ${targetProfileId} is merged into ${target.id}; choose the current merge head`,
+        );
+      }
+      if (source.id !== sourceProfileId) {
+        if (source.id === target.id) {
+          return { profile: selectUserProfileListItemById(db, target.id), movedAliasKinds: [] };
+        }
+        throw new UserProfileMergeError(
+          `source profile ${sourceProfileId} is already merged into ${source.id}`,
+        );
+      }
+      const kysely = userProfilesDb(db);
+      const cohort = kysely
+        .selectFrom("user_profiles")
+        .select("id")
+        .where((eb) => eb.or([eb("id", "=", source.id), eb("merged_into", "=", source.id)]));
+      const email = executeSqliteQueryTakeFirstSync(
+        db,
+        kysely
+          .selectFrom("user_profile_emails")
+          .select("email")
+          .where("profile_id", "in", cohort)
+          .limit(1),
+      );
+      const identities = executeSqliteQuerySync(
+        db,
+        kysely
+          .selectFrom("user_profile_identities")
+          .select((eb) =>
+            eb
+              .case()
+              .when("provider", "=", CHANNEL_IDENTITY_PROVIDER)
+              .then("channel" as const)
+              .else("provider" as const)
+              .end()
+              .as("kind"),
+          )
+          .distinct()
+          .where("profile_id", "in", cohort),
+      ).rows;
+      const movedAliasKinds: UsersMergeResult["movedAliasKinds"] = [];
+      if (email) {
+        movedAliasKinds.push("email");
+      }
+      for (const kind of ["provider", "channel"] as const) {
+        if (identities.some((identity) => identity.kind === kind)) {
+          movedAliasKinds.push(kind);
+        }
+      }
+      mergeUserProfiles(db, source.id, target.id, Date.now(), options.mutation);
+      publishUserProfilesChange(db, target.id);
+      return { profile: selectUserProfileListItemById(db, target.id), movedAliasKinds };
+    },
+    options,
+    { operationLabel: "user-profiles.merge" },
+  );
 }
 
 /** Links an email to a profile and retains an aliasless prior profile as a merge tombstone. */

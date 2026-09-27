@@ -101,46 +101,50 @@ export async function rewriteAssistantTranscriptMessageForRun(params: {
   return await runExclusiveSqliteSessionWrite(
     resolved,
     async () =>
-      runOpenClawAgentWriteTransaction((database) => {
-        assertSessionTranscriptHot(database.db, resolved.sessionId);
-        assertOwnedTranscriptWriteCommit(scope);
-        const current = readSessionEntryRow(database, resolved.sessionKey)?.entry;
-        if (
-          !transcriptWriteScopeIsCurrent(current, resolved.sessionId, scope) ||
-          current?.lifecycleRevision !== (params.expectedLifecycleRevision ?? undefined)
-        ) {
-          throw new SessionTranscriptWriterClaimReboundError();
-        }
-        const found = findTranscriptEventInDatabase(database, resolved.sessionId, (event) => {
-          if (!isRecord(event) || !isRecord(event.message)) {
-            return false;
+      runOpenClawAgentWriteTransaction(
+        (database) => {
+          assertSessionTranscriptHot(database.db, resolved.sessionId);
+          assertOwnedTranscriptWriteCommit(scope);
+          const current = readSessionEntryRow(database, resolved.sessionKey)?.entry;
+          if (
+            !transcriptWriteScopeIsCurrent(current, resolved.sessionId, scope) ||
+            current?.lifecycleRevision !== (params.expectedLifecycleRevision ?? undefined)
+          ) {
+            throw new SessionTranscriptWriterClaimReboundError();
           }
-          return (
-            readSessionTranscriptRunId(event.message) === params.runId &&
-            resolveTerminalAssistantTranscriptRunId(event.message, params.runId) !== undefined
-          );
-        });
-        const event = found?.event;
-        if (!isRecord(event) || typeof event.id !== "string" || !isRecord(event.message)) {
-          return null;
-        }
-        const identity = readTranscriptIdentityByEventId(database, resolved.sessionId, event.id);
-        if (!identity) {
-          return null;
-        }
-        const message = params.rewriteMessage(event.message);
-        const changed = !isDeepStrictEqual(message, event.message);
-        if (changed) {
-          rewriteSqliteTranscriptEventRowsInTransaction(database, resolved, [
-            {
-              event: { ...event, message },
-              expectedEventJson: JSON.stringify(event),
-              seq: identity.seq,
-            },
-          ]);
-        }
-        return { messageId: event.id };
-      }, toDatabaseOptions(resolved)),
+          const found = findTranscriptEventInDatabase(database, resolved.sessionId, (event) => {
+            if (!isRecord(event) || !isRecord(event.message)) {
+              return false;
+            }
+            return (
+              readSessionTranscriptRunId(event.message) === params.runId &&
+              resolveTerminalAssistantTranscriptRunId(event.message, params.runId) !== undefined
+            );
+          });
+          const event = found?.event;
+          if (!isRecord(event) || typeof event.id !== "string" || !isRecord(event.message)) {
+            return null;
+          }
+          const identity = readTranscriptIdentityByEventId(database, resolved.sessionId, event.id);
+          if (!identity) {
+            return null;
+          }
+          const message = params.rewriteMessage(event.message);
+          const changed = !isDeepStrictEqual(message, event.message);
+          if (changed) {
+            rewriteSqliteTranscriptEventRowsInTransaction(database, resolved, [
+              {
+                event: { ...event, message },
+                expectedEventJson: JSON.stringify(event),
+                seq: identity.seq,
+              },
+            ]);
+          }
+          return { messageId: event.id };
+        },
+        toDatabaseOptions(resolved),
+        { operationLabel: "session.transcript.assistant-rewrite" },
+      ),
     "session.transcript.message-rewrite",
   );
 }

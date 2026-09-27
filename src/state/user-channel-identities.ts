@@ -51,7 +51,7 @@ import type {
 } from "./user-profiles.types.js";
 
 // The dot keeps administrator-attested channel links outside Tailscale login namespaces.
-const CHANNEL_IDENTITY_PROVIDER = "channel.identity";
+export const CHANNEL_IDENTITY_PROVIDER = "channel.identity";
 const POLICY_KEY = "operator.channelPolicy";
 const referenceSchema = z.strictObject({ version: z.literal(1), id: z.uuid() });
 const configuredReferenceSchema = referenceSchema.extend({ version: z.literal(2) });

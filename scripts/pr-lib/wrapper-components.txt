@@ -337,6 +337,7 @@ src/commands/doctor/shared/legacy-config-migrations.runtime.system-agent.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.tier-eval.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.tool-names.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.tool-policy-conflicts.ts
+src/commands/doctor/shared/legacy-config-migrations.runtime.tool-search.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.tts.ts
 src/commands/doctor/shared/legacy-config-migrations.ts
@@ -969,6 +970,7 @@ src/plugins/host-hook-cleanup-timeout.ts
 src/plugins/host-hook-json.ts
 src/plugins/host-hook-runtime.ts
 src/plugins/host-hooks.ts
+src/plugins/http-path-prefix.ts
 src/plugins/http-path.ts
 src/plugins/http-route-owner.ts
 src/plugins/install-channel-specs.ts
