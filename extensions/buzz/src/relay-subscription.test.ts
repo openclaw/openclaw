@@ -67,7 +67,9 @@ describe("openBuzzRelaySubscription", () => {
 });
 
 describe("queryBuzzRelaySnapshot", () => {
-  it("shares the three reserved query slots and skips an aborted queued query", async () => {
+  it("cancels a queued query while all three slots stay occupied and preserves capacity", async () => {
+    vi.useFakeTimers();
+    const cleanup = new AbortController();
     const replacementStarted = createDeferred<void>();
     const ready: Array<() => void> = [];
     const send = vi.fn(async () => {});
@@ -84,7 +86,7 @@ describe("queryBuzzRelaySnapshot", () => {
       send,
       prepareSubscription,
     } as unknown as Relay;
-    const query = (id: number, signal?: AbortSignal) =>
+    const query = (id: number, signal = cleanup.signal) =>
       queryBuzzRelaySnapshot({
         relay,
         filters: [{ ids: [String(id)] }],
@@ -101,17 +103,30 @@ describe("queryBuzzRelaySnapshot", () => {
     const abort = new AbortController();
     const aborted = query(4, abort.signal);
     const queued = query(5);
-    const abortedResult = expect(aborted).rejects.toThrow("cancelled before query");
-    abort.abort(new Error("cancelled before query"));
-    expect(prepareSubscription).toHaveBeenCalledTimes(3);
-    ready[0]?.();
-    await replacementStarted.promise;
-    await abortedResult;
-    expect(prepareSubscription).toHaveBeenCalledTimes(4);
-    expect(send).toHaveBeenLastCalledWith('["REQ","4",{"ids":["5"]}]');
-    for (const finish of ready.slice(1)) {
-      finish();
+    const reason = new Error("cancelled before query");
+    const onAborted = vi.fn();
+    const abortedResult = aborted.catch(onAborted);
+    try {
+      const beforeAbort = Date.now();
+      abort.abort(reason);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(Date.now()).toBe(beforeAbort);
+      expect(onAborted).toHaveBeenCalledExactlyOnceWith(reason);
+      expect(prepareSubscription).toHaveBeenCalledTimes(3);
+      ready[0]?.();
+      await replacementStarted.promise;
+      await abortedResult;
+      expect(prepareSubscription).toHaveBeenCalledTimes(4);
+      expect(send).toHaveBeenLastCalledWith('["REQ","4",{"ids":["5"]}]');
+      for (const finish of ready.slice(1)) {
+        finish();
+      }
+      await expect(Promise.all([...active, queued])).resolves.toEqual([1, 2, 3, 5]);
+    } finally {
+      cleanup.abort(new Error("test cleanup"));
+      abort.abort(reason);
+      await Promise.allSettled([...active, aborted, queued]);
+      vi.useRealTimers();
     }
-    await expect(Promise.all([...active, queued])).resolves.toEqual([1, 2, 3, 5]);
   });
 });

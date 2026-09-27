@@ -171,3 +171,8 @@ This override changes mention admission only. Preserve the existing sender
 allowlists, channel access policy, and command authorization. Channels without
 reliable native ownership evidence should not infer ownership from cached
 participation or expose an override they cannot enforce.
+
+Recheck mutable admission rules before handing the turn to shared dispatch.
+After admission, retain the turn's captured policy for its replies rather than
+using mention or sender gates to cancel delivery. Account, run, and transport
+liveness remain separate responsibilities of their existing owners.

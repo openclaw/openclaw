@@ -72,8 +72,28 @@ export async function queryBuzzRelaySnapshot<TResult>(
   snapshotQueries.set(params.relay, queries);
   // Thread lookups share the reserved slots with membership, history, and directory queries.
   if (queries.active >= BUZZ_RELAY_MAX_CONCURRENT_QUERY_SUBSCRIPTIONS) {
-    await new Promise<void>((resolve) => {
-      queries.waiting.push(resolve);
+    await new Promise<void>((resolve, reject) => {
+      const grant = () => {
+        params.signal?.removeEventListener("abort", onAbort);
+        resolve();
+      };
+      const onAbort = () => {
+        const index = queries.waiting.indexOf(grant);
+        if (index < 0) {
+          return;
+        }
+        queries.waiting.splice(index, 1);
+        params.signal?.removeEventListener("abort", onAbort);
+        const reason: unknown = params.signal?.reason ?? new Error(params.abortMessage);
+        reject(
+          reason instanceof Error ? reason : new Error(params.failureMessage, { cause: reason }),
+        );
+      };
+      queries.waiting.push(grant);
+      params.signal?.addEventListener("abort", onAbort, { once: true });
+      if (params.signal?.aborted) {
+        onAbort();
+      }
     });
   } else {
     queries.active += 1;

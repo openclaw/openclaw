@@ -104,6 +104,10 @@ limits. A bot replying in someone else's thread does not make it the creator.
 Sender, channel, and bot-access restrictions still apply. Explicit session
 bindings retain their own route activation rules.
 
+These rules govern new message admissions. An already admitted turn keeps its
+captured policy; changing mention rules or sender allowlists does not suppress
+its reply.
+
 The transport must deliver unmentioned messages before OpenClaw can apply the
 policy:
 
