@@ -23,6 +23,7 @@ import {
 } from "./attempt-timeouts.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
+import { CodexNativeProcessAuthority } from "./native-process-authority.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { itemNotification, rawItemCompleted, turnCompleted } from "./protocol.test-helpers.js";
 import { readRecentCodexRateLimits } from "./rate-limit-cache.js";
@@ -412,6 +413,12 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
 
   it("joins queued image projection when timeout aborts the turn", async () => {
     vi.useFakeTimers();
+    const cleanupStarted = createDeferred<void>();
+    const cancelTurn = vi
+      .spyOn(CodexNativeProcessAuthority.prototype, "cancelTurn")
+      .mockImplementation(async () => {
+        cleanupStarted.resolve();
+      });
     const harness = createStartedThreadHarness();
     const projection = createDeferred<void>();
     const mediaPath = path.join(tempDir, "queued-image.png");
@@ -434,7 +441,8 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
       );
       await vi.waitFor(() => expect(saveMedia).toHaveBeenCalledOnce(), fastWait);
       await vi.advanceTimersByTimeAsync(60_000);
-      await harness.waitForMethod("thread/backgroundTerminals/list");
+      await Promise.race([cleanupStarted.promise, run]);
+      expect(cancelTurn).toHaveBeenCalledExactlyOnceWith(harness.client, "thread-1", "turn-1");
       expect(settled).not.toHaveBeenCalled();
       expect(harness.requests.some(({ method }) => method === "thread/unsubscribe")).toBe(false);
 

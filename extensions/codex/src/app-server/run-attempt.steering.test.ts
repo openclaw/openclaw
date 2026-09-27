@@ -10,6 +10,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import type { CodexSteeringQueueOptions } from "./attempt-steering.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
+import { CodexNativeProcessAuthority } from "./native-process-authority.js";
 import type { JsonObject } from "./protocol.js";
 import { seedRunSessionOwnerForTest } from "./run-attempt-session-owners.test-support.js";
 import {
@@ -46,24 +47,22 @@ describe("runCodexAppServerAttempt steering", () => {
     { incognito: false, interruptFails: true, terminationFails: false },
     { incognito: false, interruptFails: false, terminationFails: true },
   ])(
-    "joins permission-change cleanup without cancelling the enclosing run (incognito: $incognito, interrupt failure: $interruptFails, terminal failure: $terminationFails)",
+    "joins permission-change cleanup without cancelling the enclosing run (incognito: $incognito, interrupt failure: $interruptFails, process cleanup failure: $terminationFails)",
     async ({ incognito, interruptFails, terminationFails }) => {
-      const terminalCleanup = createDeferred<void>();
-      let terminalRunning = true;
-      const { requests, waitForMethod } = createStartedThreadHarness(async (method) => {
+      const cleanupStarted = createDeferred<void>();
+      const processCleanup = createDeferred<void>();
+      const cancelTurn = vi
+        .spyOn(CodexNativeProcessAuthority.prototype, "cancelTurn")
+        .mockImplementation(async () => {
+          cleanupStarted.resolve();
+          await processCleanup.promise;
+          if (terminationFails) {
+            throw new Error("source-owned process cleanup unavailable");
+          }
+        });
+      const { client, requests } = createStartedThreadHarness(async (method) => {
         if (method === "turn/interrupt" && interruptFails) {
           throw new Error("native interrupt unavailable");
-        }
-        if (method === "thread/backgroundTerminals/list") {
-          return { data: terminalRunning ? [{ processId: "42" }] : [], nextCursor: null };
-        }
-        if (method === "thread/backgroundTerminals/terminate") {
-          await terminalCleanup.promise;
-          if (terminationFails) {
-            throw new Error("native terminal cleanup unavailable");
-          }
-          terminalRunning = false;
-          return { terminated: true };
         }
         return undefined;
       });
@@ -120,35 +119,26 @@ describe("runCodexAppServerAttempt steering", () => {
         void applied.then(acknowledged);
         expect(revokeApprovals).toHaveBeenCalledOnce();
         if (!interruptFails) {
-          await waitForMethod("thread/backgroundTerminals/terminate");
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          });
+          await Promise.race([cleanupStarted.promise, outcome]);
+          expect(cancelTurn).toHaveBeenCalledExactlyOnceWith(client, "thread-1", "turn-1");
           expect(settled).not.toHaveBeenCalled();
           expect(requests.some((request) => request.method === "thread/unsubscribe")).toBe(false);
-          terminalCleanup.resolve();
+          processCleanup.resolve();
         }
         const error = await outcome;
         if (interruptFails) {
           expect(error).toMatchObject({
             message: "Permission change could not confirm the previous Codex turn stopped.",
           });
-          expect(requests.some((request) => request.method.includes("backgroundTerminals"))).toBe(
-            false,
-          );
+          expect(cancelTurn).not.toHaveBeenCalled();
         } else if (terminationFails) {
           expect(error).toMatchObject({
-            message:
-              "Codex background-terminal cleanup failed; inspect the thread's running terminals before starting more work.",
+            message: "source-owned process cleanup unavailable",
           });
         } else {
           expect(error).toBeUndefined();
-          expect(terminalRunning).toBe(false);
-          expect(requests).toContainEqual({
-            method: "thread/backgroundTerminals/terminate",
-            params: { threadId: "thread-1", processId: "42" },
-          });
         }
+        expect(requests.some(({ method }) => method.includes("backgroundTerminals"))).toBe(false);
         expect(acknowledged).not.toHaveBeenCalled();
         expect(onAttemptAbort).not.toHaveBeenCalled();
         expect(
@@ -173,7 +163,7 @@ describe("runCodexAppServerAttempt steering", () => {
         acknowledgeApplied?.(shouldApply);
         await expect(applied).resolves.toBe(shouldApply);
       } finally {
-        terminalCleanup.resolve();
+        processCleanup.resolve();
         handle?.abort();
         acknowledgeApplied?.(false);
         await outcome;

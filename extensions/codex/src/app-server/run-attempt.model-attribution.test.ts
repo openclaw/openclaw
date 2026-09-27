@@ -19,6 +19,7 @@ import { describe, expect, it, vi } from "vitest";
 import plugin from "../../index.js";
 import { CodexAppServerClient } from "./client.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
+import { CodexNativeProcessAuthority } from "./native-process-authority.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import { isJsonObject } from "./protocol.js";
 import {
@@ -47,6 +48,7 @@ describe("registered Codex harness model attribution", () => {
   it.each(["completed", "timed out"] as const)("attributes models (%s)", async (outcome) => {
     // Protocol events own completion; host load must not spend the attempt watchdog.
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const cancelTurn = vi.spyOn(CodexNativeProcessAuthority.prototype, "cancelTurn");
     const params = createTestParams();
     // Supervision replaces the helper model; this fixture supplies no host tools.
     params.hostCapabilities = Object.freeze({
@@ -179,9 +181,6 @@ describe("registered Codex harness model attribution", () => {
               }),
             );
             break;
-          case "thread/backgroundTerminals/list":
-            result = { data: [], nextCursor: null };
-            break;
           case "thread/unsubscribe":
             result = { status: "unsubscribed" };
             break;
@@ -279,10 +278,12 @@ describe("registered Codex harness model attribution", () => {
         expect(result).toHaveProperty("terminal", { kind: "ok" });
       } else {
         expect(result).toMatchObject({ terminal: { kind: "timeout", aborted: true } });
-        expect(requests).toContainEqual({
-          method: "thread/backgroundTerminals/list",
-          params: { threadId: "native-thread" },
-        });
+        expect(cancelTurn).toHaveBeenCalledExactlyOnceWith(
+          transport.client,
+          "native-thread",
+          "turn-1",
+        );
+        expect(requests.some(({ method }) => method.includes("backgroundTerminals"))).toBe(false);
       }
       expect(result.runtimeModelSelection).toEqual({
         provider: "openai",

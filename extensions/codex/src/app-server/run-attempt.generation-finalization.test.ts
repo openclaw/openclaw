@@ -15,6 +15,7 @@ import { describe, expect, it, vi } from "vitest";
 import { readMirroredSessionHistoryMessages } from "./attempt-context.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
+import { CodexNativeProcessAuthority } from "./native-process-authority.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
   createParams,
@@ -408,7 +409,8 @@ describe("Codex finalization generation ownership", () => {
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
   });
 
-  it("settles an explicitly aborted resumed attempt after native terminal cleanup", async () => {
+  it("settles an explicitly aborted resumed attempt after source-owned process cleanup", async () => {
+    const cancelTurn = vi.spyOn(CodexNativeProcessAuthority.prototype, "cancelTurn");
     const sessionFile = path.join(tempDir, "resumed-abort.jsonl");
     const workspaceDir = path.join(tempDir, "resumed-abort-workspace");
     const params = createParams(sessionFile, workspaceDir);
@@ -456,10 +458,14 @@ describe("Codex finalization generation ownership", () => {
       await expect(outcome).resolves.toMatchObject({
         terminal: { aborted: true, timedOut: false, promptError: null },
       });
-      expect(harness.requests).toContainEqual({
-        method: "thread/backgroundTerminals/list",
-        params: { threadId: "thread-existing" },
-      });
+      expect(cancelTurn).toHaveBeenCalledExactlyOnceWith(
+        harness.client,
+        "thread-existing",
+        "turn-1",
+      );
+      expect(harness.requests.some(({ method }) => method.includes("backgroundTerminals"))).toBe(
+        false,
+      );
       expect(harness.requests.some(({ method }) => method === "thread/resume")).toBe(true);
       expect(harness.requests.some(({ method }) => method === "thread/start")).toBe(false);
     } finally {
