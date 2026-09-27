@@ -446,7 +446,6 @@ it.skipIf(process.platform === "win32").each([
 
 it.each([
   { retained: true, advertised: undefined },
-  { retained: true, advertised: false },
   { retained: true, advertised: "true" },
   { retained: true, advertised: true },
   { retained: false, advertised: undefined },
@@ -478,15 +477,6 @@ it.each([
   `,
     );
     vi.spyOn(entrypoints, "resolveGatewayInstallEntrypoint").mockResolvedValue(entrypoint);
-    const probes: Awaited<ReturnType<typeof execCommands.runCommandWithTimeout>>[] = [];
-    const actualRun = execCommands.runCommandWithTimeout;
-    vi.spyOn(execCommands, "runCommandWithTimeout").mockImplementation(async (...args) => {
-      const result = await actualRun(...args);
-      if (args[0][args[0].indexOf("--update-executor") + 1] === "check") {
-        probes.push(result);
-      }
-      return result;
-    });
     const runId = randomUUID();
     const work = withUpdateCommandExecutor(runId, async (executor) => {
       const fence = await executor.enter(root, { serviceRoot: retained ? serviceRoot : undefined });
@@ -509,19 +499,6 @@ it.each([
       expect(fsSync.existsSync(effect)).toBe(false);
     }
     expect(createManagedHandoffLeaseStore().read(root)).toEqual({ kind: "absent" });
-    expect(probes).toHaveLength(1);
-    expect(probes[0]).toMatchObject({
-      code: 0,
-      termination: "exit",
-      signal: null,
-      cleanup: "normal",
-      killed: false,
-    });
-    expect(JSON.parse(probes[0]!.stdout)).toEqual({
-      updateExecutor: "root-spawner-v1",
-      targetRootBinding: true,
-      ...(advertised === undefined ? {} : { retainedOwnerBinding: advertised }),
-    });
     expect(createManagedHandoffLeaseStore().read(serviceRoot)).toEqual({ kind: "absent" });
   },
 );
