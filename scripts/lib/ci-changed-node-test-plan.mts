@@ -93,6 +93,54 @@ type ChangedTargetValidation = {
   dedicatedNativeChecks?: { macos: boolean; ios: boolean; android: boolean };
   onFallback?: PlanDiagnostic;
 };
+type SelectionEvidence = {
+  importDepths: Map<string, number>;
+  nonImportTargets: Set<string>;
+  nonImportRows: ChangedNodeTestShard[];
+};
+export type ChangedNodeTestSelectionEvidence = {
+  importDepths: ReadonlyMap<string, number>;
+  nonImportTargets: ReadonlySet<string>;
+  nonImportRows: readonly ChangedNodeTestShard[];
+};
+
+export function classifyChangedNodeTestCandidates(
+  changedPaths: readonly string[],
+  candidates: readonly string[],
+  evidence: ChangedNodeTestSelectionEvidence,
+  nonImportRowFiles: ReadonlySet<string>,
+) {
+  const changedTests = new Set(changedPaths.filter(isTestFileTarget));
+  const changedDirectories = new Set(
+    changedPaths.filter((file) => !isTestFileTarget(file)).map((file) => path.posix.dirname(file)),
+  );
+  const floor: string[] = [];
+  const prunable: string[] = [];
+  const floorReasons: Record<string, 1 | 2 | 3 | 4 | 5> = {};
+  for (const candidate of candidates) {
+    const depth = evidence.importDepths.get(candidate);
+    const reason = changedTests.has(candidate)
+      ? 1
+      : depth === 1
+        ? 2
+        : changedDirectories.has(path.posix.dirname(candidate))
+          ? 3
+          : evidence.nonImportTargets.has(candidate) ||
+              isBoundaryTestFile(candidate) ||
+              isCiProofTestFile(candidate)
+            ? 4
+            : nonImportRowFiles.has(candidate) || depth === undefined || depth < 2
+              ? 5
+              : undefined;
+    if (reason) {
+      floor.push(candidate);
+      floorReasons[candidate] = reason;
+    } else {
+      prunable.push(candidate);
+    }
+  }
+  return { floor, prunable, floorReasons };
+}
 
 /** Ordinary UI unit entries retain their unit owner; fixtures and their consumers retain E2E. */
 export function hasUiE2eAffectingChange(changedPaths: string[], options: CwdOptions = {}) {
@@ -367,13 +415,22 @@ function resolvePreciseChangedTargets(
   documentationPaths: ReadonlySet<string>,
   additionalTargets: string[] = [],
   validation: ChangedTargetValidation = {},
+  evidence?: SelectionEvidence,
 ) {
+  const onNonImportTargets = evidence
+    ? (targets: readonly string[]) => {
+        for (const target of targets) {
+          evidence.nonImportTargets.add(target);
+        }
+      }
+    : undefined;
   const resolveTargetPlan = (paths: string[]) => {
     const consumers = resolveAffectedTestsFromImportGraph(paths, cwd, {
       tooling: true,
       forceFull: true,
       resolveAliases: true,
       runtimeOnly: true,
+      onNonImportTargets,
     });
     const plan = resolveChangedTestTargetPlan(paths, {
       broad: true,
@@ -383,6 +440,7 @@ function resolvePreciseChangedTargets(
       includeExtensionImpact: false,
       resolveAliases: true,
       runtimeOnly: true,
+      onNonImportTargets,
     });
     // UI routing can return the source itself; instruction pages are not test targets.
     return {
@@ -610,9 +668,20 @@ export function createChangedNodeTestShards(
       dedicatedBuildArtifacts?: boolean;
       dedicatedUiE2e?: boolean;
       dedicatedMaxLinesRatchet?: boolean;
+      onSelectionEvidence?: (evidence: ChangedNodeTestSelectionEvidence) => void;
     } = {},
 ): ChangedNodeTestShard[] | null {
   const cwd = options.cwd ?? process.cwd();
+  const evidence: SelectionEvidence | undefined = options.onSelectionEvidence
+    ? { importDepths: new Map(), nonImportTargets: new Set(), nonImportRows: [] }
+    : undefined;
+  const onNonImportTargets = evidence
+    ? (targets: readonly string[]) => {
+        for (const target of targets) {
+          evidence.nonImportTargets.add(target);
+        }
+      }
+    : undefined;
   const fallback = (reason: string) => {
     options.onFallback?.(reason);
     return null;
@@ -787,6 +856,9 @@ export function createChangedNodeTestShards(
     dependencyConsumers.sources.length === 0 &&
     configPaths.length === 0
   ) {
+    if (evidence) {
+      options.onSelectionEvidence?.(evidence);
+    }
     return [];
   }
   const configOwnedInputs = configPaths.length
@@ -831,10 +903,12 @@ export function createChangedNodeTestShards(
             resolveAliases: true,
             runtimeOnly: true,
             forceFull: true,
+            onNonImportTargets,
           }),
           ...resolveChangedTestTargetPlan([...configPaths, ...configOwnedInputs], {
             cwd,
             broad: false,
+            onNonImportTargets,
           }).targets.filter(isTestFileTarget),
         ]),
       ]
@@ -928,34 +1002,33 @@ export function createChangedNodeTestShards(
       : [];
   });
   const wholeOwnerShards = [...uiShards, ...configShards];
+  const ownedTargetsBeforeGuards = [
+    ...policyTargets,
+    ...dependencyConsumers.tests,
+    ...resolveAffectedTestsFromImportGraph([...pluginMetadataPaths], cwd, {
+      tooling: true,
+      forceFull: true,
+      resolveAliases: true,
+      runtimeOnly: true,
+    }),
+  ];
+  const ownedTargetsAfterGuards = [
+    ...(options.dedicatedBuildArtifacts === false && configPaths.includes(TUI_PTY_NODE_TEST_CONFIG)
+      ? [TUI_PTY_ASSERTION_TEST]
+      : []),
+    ...uiConsumers,
+    ...(resolutionPaths.some((changedPath) => changedPath.startsWith("extensions/copilot/"))
+      ? ["src/agents/prepared-model-runtime.copilot.integration.test.ts"]
+      : []),
+  ];
+  onNonImportTargets?.([...ownedTargetsBeforeGuards, ...ownedTargetsAfterGuards]);
   const resolvedTargetPlans = resolvePreciseChangedTargets(
     regularPaths.filter((file) => !uiPaths.includes(file) && !configOwnedInputs.includes(file)),
     cwd,
     documentationPaths,
-    [
-      ...policyTargets,
-      ...dependencyConsumers.tests,
-      ...resolveAffectedTestsFromImportGraph([...pluginMetadataPaths], cwd, {
-        tooling: true,
-        forceFull: true,
-        resolveAliases: true,
-        runtimeOnly: true,
-      }),
-      ...configGuardTargets,
-      ...(options.dedicatedBuildArtifacts === false &&
-      configPaths.includes(TUI_PTY_NODE_TEST_CONFIG)
-        ? [TUI_PTY_ASSERTION_TEST]
-        : []),
-      // Host consumers use the same exact-file owner as other precise targets;
-      // a packed tooling neighbor is not part of the UI area contract.
-      ...uiConsumers,
-      // Plugin changes normally select only extension suites. This host-owned
-      // proof also exercises the real Copilot entrypoint and manifest discovery.
-      ...(resolutionPaths.some((changedPath) => changedPath.startsWith("extensions/copilot/"))
-        ? ["src/agents/prepared-model-runtime.copilot.integration.test.ts"]
-        : []),
-    ],
+    [...ownedTargetsBeforeGuards, ...configGuardTargets, ...ownedTargetsAfterGuards],
     options,
+    evidence,
   );
   if (resolvedTargetPlans === null) {
     return null;
@@ -970,6 +1043,9 @@ export function createChangedNodeTestShards(
     regularPaths.length > 0 &&
     changedPaths.every((file) => livePaths.includes(file) || documentationPaths.has(file))
   ) {
+    if (evidence) {
+      options.onSelectionEvidence?.(evidence);
+    }
     return [];
   }
   const targetPlans = resolvedTargetPlans.filter(
@@ -1159,14 +1235,15 @@ export function createChangedNodeTestShards(
         }),
     );
 
+  const extensionOwnershipShards = packChangedExtensionConfigShards(
+    createChangedExtensionConfigShardsForPaths(extensionFallbackPaths, cwd, runtimeSelection),
+  );
   const shards = [
     ...uiShards,
     ...configShards,
     ...channelShards,
     ...canonicalShards.map((shard) => Object.assign({}, shard, { configs: [] })),
-    ...packChangedExtensionConfigShards(
-      createChangedExtensionConfigShardsForPaths(extensionFallbackPaths, cwd, runtimeSelection),
-    ),
+    ...extensionOwnershipShards,
     ...packChangedExtensionConfigShards(
       createChangedExtensionConfigShards(
         resolveChangedExtensionRoots(
@@ -1203,7 +1280,50 @@ export function createChangedNodeTestShards(
     ...boundaryShards,
   ];
   // Covered source targets keep build-artifacts ownership even with no Node rows.
-  return shards.length > 0 || targets.length < resolvedTargetPlans.length
-    ? shards
-    : fallback("no executable Node owner");
+  if (shards.length === 0 && targets.length >= resolvedTargetPlans.length) {
+    return fallback("no executable Node owner");
+  }
+  if (evidence) {
+    // Packed rows can contain graph consumers omitted from the precise target
+    // list. Trace the original changed paths across the complete graph once.
+    resolveAffectedTestsFromImportGraph(changedPaths, cwd, {
+      tooling: true,
+      forceFull: true,
+      resolveAliases: true,
+      runtimeOnly: true,
+      onNonImportTargets,
+      onImportDepths: (depths) => {
+        evidence.importDepths = new Map(depths);
+      },
+    });
+    onNonImportTargets?.(
+      resolveAffectedTestsFromImportGraph(dependencyConsumers.sources, cwd, {
+        tooling: true,
+        forceFull: true,
+        resolveAliases: true,
+        runtimeOnly: true,
+      }),
+    );
+    const nonImportConfigInputs = [...directConfigPaths, ...dependencyConsumers.sources];
+    const nonImportConfigs = new Set(
+      configPaths.filter(
+        (config) =>
+          directConfigPaths.includes(config) ||
+          hasImportGraphImpactOnTargets(nonImportConfigInputs, [config], cwd, graphOptions),
+      ),
+    );
+    evidence.nonImportRows = [
+      ...uiShards,
+      ...extensionOwnershipShards,
+      ...configShards.flatMap((shard) => {
+        const groups = shard.groups.flatMap((group) => {
+          const configs = group.configs.filter((config) => nonImportConfigs.has(config));
+          return configs.length ? [{ ...group, configs }] : [];
+        });
+        return groups.length ? [{ ...shard, groups }] : [];
+      }),
+    ];
+    options.onSelectionEvidence?.(evidence);
+  }
+  return shards;
 }

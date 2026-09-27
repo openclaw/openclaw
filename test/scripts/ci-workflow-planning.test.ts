@@ -2392,6 +2392,7 @@ describe("ci workflow guards", () => {
       outputs: Record<string, string>,
       overrides: Partial<Parameters<typeof evaluateWorkflowExpression>[1]> = {},
       allSelected = false,
+      includeShadow = false,
     ) {
       const context = {
         // Count full-manifest rows after admission, not a default security-only push.
@@ -2413,6 +2414,9 @@ describe("ci workflow guards", () => {
       const rows: string[] = [];
       const hostedLabels = new Set(["ubuntu-24.04", "windows-2025", "macos-15", "xcode-27"]);
       for (const [name, job] of Object.entries(readCiWorkflow().jobs)) {
+        if (!includeShadow && name === "codex-test-selection") {
+          continue;
+        }
         const definition = job as {
           if?: string;
           "runs-on": string;
@@ -2585,6 +2589,83 @@ describe("ci workflow guards", () => {
           baseRows <= 40 ? 1 : 0,
         );
       }
+    });
+
+    it("accounts for shadow rows without displacing checks at the hosted admission boundary", () => {
+      const options = {
+        eventName: "pull_request" as const,
+        changedPaths: ["src/runtime.ts"],
+        scopeEnv: { OPENCLAW_CI_RUN_MACOS: "false", OPENCLAW_CI_RUN_NATIVE_I18N: "false" },
+      };
+      const baseline = manifestWithHostedNodeRows(0, options);
+      expect(baseline.status, baseline.output).toBe(0);
+      const count = 40 - Number(baseline.outputs.hybrid_hosted_base_rows);
+      const enabled = manifestWithHostedNodeRows(count, options);
+      const disabled = manifestWithHostedNodeRows(count, {
+        ...options,
+        scopeEnv: { ...options.scopeEnv, OPENCLAW_CI_CODEX_SELECTION: "off" },
+      });
+      expect(enabled.status, enabled.output).toBe(0);
+      expect(disabled.status, disabled.output).toBe(0);
+      for (const key of [
+        "hybrid_hosted_base_rows",
+        "hybrid_hosted_total_rows",
+        "hybrid_hosted_offload",
+        "hybrid_hosted_checks",
+        "checks_node_core_nondist_matrix",
+        "pr_job_count",
+      ]) {
+        expect(enabled.outputs[key], key).toBe(disabled.outputs[key]);
+      }
+      expect(enabled.outputs.hybrid_hosted_base_rows).toBe("40");
+      expect(enabled.outputs.hybrid_hosted_offload).toBe("true");
+      expect(enabled.outputs.codex_selection_hosted_rows).toBe("1");
+      expect(disabled.outputs.codex_selection_hosted_rows).toBe("0");
+      const actual = emittedHostedRows(
+        enabled.outputs,
+        {
+          eventName: "pull_request",
+        },
+        false,
+        true,
+      );
+      expect(Number(enabled.outputs.hybrid_hosted_total_with_shadow_rows)).toBe(actual.length);
+      expect(actual.filter((name) => name === "codex-test-selection")).toHaveLength(1);
+      const context = JSON.parse(enabled.outputs.codex_selection_context_json!);
+      expect(context).not.toHaveProperty("changedPaths");
+      expect(Object.keys(context).toSorted()).toEqual(["fallbackReason", "options"]);
+      expect(JSON.parse(enabled.outputs.codex_selection_check_names_json!)).toEqual(
+        JSON.parse(enabled.outputs.checks_node_core_nondist_matrix!)
+          .include.map((row: { check_name: string }) => row.check_name)
+          .toSorted(),
+      );
+      expect(context.options).not.toHaveProperty("onFallback");
+      const consumedOptions = enabled.output
+        .split("\n")
+        .find((line) => line.startsWith("changed-node-plan-options:"));
+      expect(context.options).toEqual(
+        JSON.parse(consumedOptions!.slice("changed-node-plan-options:".length)),
+      );
+    });
+
+    it("replaces oversized selection context with a small skip marker", () => {
+      const manifest = manifestWithHostedNodeRows(2, {
+        eventName: "pull_request",
+        changedPaths: ["src/runtime.ts"],
+        changedPlannerSource: `
+          export const createChangedNodeTestShards = (_paths, options) => {
+            options.onFallback("é".repeat(17_000));
+            return null;
+          };
+          export const createChangedExtensionFallbackShards = () => [];
+        `,
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      expect(manifest.outputs.codex_selection_context_json).toBe('{"oversized":true}');
+      expect(JSON.parse(manifest.outputs.codex_selection_check_names_json!)).toEqual([
+        "hosted-node-0",
+        "hosted-node-1",
+      ]);
     });
 
     it("runs the hosted health step from the current checkout without a sparse harness helper", () => {
@@ -9704,10 +9785,13 @@ describe("ci workflow guards", () => {
     expect(workflow.on.pull_request).not.toHaveProperty("paths-ignore");
     expect(gate.name).toBe("openclaw/ci-gate");
     expect(gate.needs).toEqual([...requiredJobs, ...selectedJobs]);
-    // Every workload is gated; the release-only receipt sealer runs after this gate.
+    // Shadow observations and the release-only receipt sealer do not gate tests.
     expect(gate.needs.toSorted()).toEqual(
       Object.keys(workflow.jobs)
-        .filter((job) => job !== "ci-gate" && job !== "seal_release_child_evidence")
+        .filter(
+          (job) =>
+            !["ci-gate", "seal_release_child_evidence", "codex-test-selection"].includes(job),
+        )
         .toSorted(),
     );
     expect(gate.permissions).toEqual({ contents: "read" });

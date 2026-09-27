@@ -5236,6 +5236,7 @@ describe("test selector native source facts", () => {
           file,
           imports: [],
           typeOnlyImports: [],
+          nonImportSpecifiers: [],
           matches: terms.filter((term) => source.includes(term)),
           references: terms.filter((term) => tokens.has(term)),
         };
@@ -5243,6 +5244,31 @@ describe("test selector native source facts", () => {
       expect(readTestSelectorSourceFacts(cwd, files, terms, 1024 * 1024)).toEqual(expected);
     });
   });
+
+  it.each([
+    'import "./runtime.js"; const view = <div />;',
+    'import type { Value } from "./runtime.js"; enum Mode { Active };',
+  ])(
+    "retains uncertain import reachability without inventing file-reader provenance: %s",
+    (source) => {
+      withTinyFileTree(
+        {
+          "consumer.tsx": `${source}\nnew URL("./fixture.ts", import.meta.url);\nrequire.resolve("./resolved.ts");`,
+        },
+        (cwd) => {
+          const [facts] = readTestSelectorSourceFacts(
+            cwd,
+            [{ file: "consumer.tsx", parseImports: true }],
+            [],
+            1024 * 1024,
+          );
+          expect(facts?.imports).toEqual(["./runtime.js", "./fixture.ts", "./resolved.ts"]);
+          expect(facts?.typeOnlyImports).toEqual([]);
+          expect(facts?.nonImportSpecifiers).toEqual(["./fixture.ts", "./resolved.ts"]);
+        },
+      );
+    },
+  );
 
   it("reads complete files without installed packages, inherited hooks, or reparsing cached imports", () => {
     withTinyFileTree(
@@ -5256,7 +5282,13 @@ describe("test selector native source facts", () => {
           { file: "unterminated.ts", parseImports: true },
           { file: "deleted.ts", parseImports: true },
         ];
-        const unterminatedFacts = { imports: [], typeOnlyImports: [], matches: [], references: [] };
+        const unterminatedFacts = {
+          imports: [],
+          typeOnlyImports: [],
+          nonImportSpecifiers: [],
+          matches: [],
+          references: [],
+        };
         const expectedFacts = {
           imports: [
             "./barrel.js",
@@ -5267,6 +5299,11 @@ describe("test selector native source facts", () => {
             "other-dependency",
           ],
           typeOnlyImports: ["./barrel.js"],
+          nonImportSpecifiers: [
+            "./native-fixture.mjs",
+            "dependency/package.json",
+            "other-dependency",
+          ],
           matches: ["scripts/tool.mts", "scripts/tool"],
           references: ["scripts/tool.mts"],
         };
@@ -5321,6 +5358,7 @@ describe("test selector native source facts", () => {
               file: "large.mts",
               imports: [],
               typeOnlyImports: [],
+              nonImportSpecifiers: [],
               matches: ["scripts/tool.mts"],
               references: ["scripts/tool.mts"],
             },

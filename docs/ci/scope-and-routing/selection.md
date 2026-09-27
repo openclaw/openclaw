@@ -89,6 +89,75 @@ selected on every admitted canonical main run, so it does not depend on a later
 owner-path match. Ordinary manual CI and Full Release Validation also select it
 independently of changed paths, subject to the target's Docker seed capability.
 
+## Codex test selection shadow
+
+Trusted same-repository pull requests on their first attempt also record a
+Codex proposal for the existing nondist Node test plan. One hosted job waits for
+the Node shards and PR failure monitor, then prepares the proposal, runs Codex,
+finalizes selection, and reports failures. It survives cancellation only when
+the monitor recorded a failure cause for the current attempt; superseded or
+manually canceled runs skip it. The full deterministic plan still runs, and
+shadow collection neither gates merging nor triggers PR fail-fast. Set
+`OPENCLAW_CI_CODEX_SELECTION=off` to disable the job; an unset variable enables it.
+
+The deterministic floor includes changed tests, direct importers, tests in the
+changed source's directory, and every non-import owner: policy watches,
+filesystem scanners, manifest and file readers, and boundary proofs. Rows selected
+for configuration, dependency, packing-policy, or unresolved ownership reasons
+also stay in the floor. Compact and plugin bundles selected through import
+reachability remain eligible: every candidate at depth two or greater without a
+floor reason can be proposed for pruning. The existing runtime import graph
+resolves SDK and workspace-package aliases and supplies depth and provenance;
+Vitest supplies whole-config file inventories. Parser uncertainty preserves
+conservative import reachability without inventing a non-import selection reason.
+Broad fallbacks, diffs exceeding
+320,000 characters, planner contexts exceeding 32 KiB, and plans without prunable files skip Codex. Prompt diffs
+are limited to 80,000 characters and explicitly marked when truncated.
+
+Missing or invalid output, a failed or timed-out proposal, and low confidence
+keep every candidate. Unknown keep entries are counted and ignored; directory
+prefixes expand only when they appeared in the prompt. Selection artifacts
+contain `selection.json`, the prepared inventory with each floor file's first
+matching reason (changed test, direct import, same directory, non-import file,
+or non-import row), prompt, output, and a short summary. The same
+`codex-test-selection-<attempt>` artifact contains `report.json`, failing test
+classifications, and the report summary, with 14-day retention. Per-file timing estimates appear
+only when the existing timing source covers every pruned file; these are test
+seconds, not expected workflow wall-time savings.
+
+The report reads only the current run attempt's Node job logs. A failing file
+proposed for pruning is a **MISS**. Cancelled, skipped, missing, or unreadable
+jobs remain unknown. Codex sees only the diff and candidate inventory; result
+logs are fetched afterward by the report step, whose read-only Actions token is
+not passed to Codex. These observations inform a later decision about enforcement.
+
+`node scripts/ci-codex-test-selection.mjs prepare --base <base> --head <head>` produces the prompt and an all-candidate selection without calling Codex.
+The head must match the current checkout. `--output-dir` chooses the artifact
+directory. CI passes only preflight's planner options and fallback reason, capped
+at 32 KiB, plus its sorted nondist Node check names. Prepare derives changed paths
+from the Git diff and recomputes candidates with those options. A check-name set
+mismatch records `fallback:plan-mismatch`, retains the recomputed candidates and
+floor for reporting, and skips Codex. An oversized context records
+`skipped:context-too-large`. If preparation fails before writing an inventory,
+finalization preserves check names for reporting and marks the inventory unavailable.
+
+`node scripts/ci-codex-test-selection.mjs summarize --limit 200` summarizes the
+latest 200 `pull_request` CI runs by default. `--repo owner/name` selects another
+repository, and `--cache-dir <path>` chooses a reusable scratch cache. It uses
+bare `gh` with at most four calls in flight and caches each archive by artifact
+ID. If multiple selection attempts exist, each run contributes its latest
+available selection and matching report once.
+
+The JSON summary includes ready/skipped/fallback status counts, median and p90
+prune ratios, available estimated pruned seconds, Codex duration distributions,
+failure classifications, and every MISS with its run URL and file. `ready`
+counts completed shadow proposals. Prune ratios include skipped and fallback
+selections with nonzero candidate counts; durations include positive recorded
+durations. Medians average the middle pair and p90 uses nearest rank. Missing
+timing estimates remain unknown, and missing/expired artifacts, missing reports,
+partial reports, and unknown jobs grouped by reason (including canceled shards
+and unavailable logs) are reported separately.
+
 ## Process proof tier
 
 Pull requests and exact-head `release_gate` fallbacks omit Docker seed, QA Smoke,

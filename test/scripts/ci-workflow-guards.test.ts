@@ -3785,6 +3785,143 @@ setImmediate(() => {
     },
   );
 
+  it("keeps CI within GitHub's 500 KB workflow file limit", () => {
+    expect(readFileSync(".github/workflows/ci.yml").byteLength).toBeLessThanOrEqual(500 * 1024);
+  });
+
+  it("keeps Codex selection observational and limited to same-repository PR first attempts", () => {
+    const workflow = readCiWorkflow();
+    const selection = workflow.jobs["codex-test-selection"];
+    expect(workflow.jobs).not.toHaveProperty("codex-test-selection-report");
+    const context = {
+      eventName: "pull_request" as const,
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+      preflightOutputs: { run_checks_node_core_nondist: "true" },
+    };
+    const eligible = (overrides: Partial<Parameters<typeof evaluateWorkflowExpression>[1]> = {}) =>
+      evaluateWorkflowExpression(`\${{ ${selection.if} }}`, { ...context, ...overrides });
+    expect(eligible()).toBe(true);
+    for (const overrides of [
+      { eventName: "push" },
+      { eventName: "workflow_dispatch" },
+      { headRepository: "contributor/openclaw" },
+      { runAttempt: 2 },
+      { preflightResult: "failure" },
+      { preflightOutputs: { run_checks_node_core_nondist: "false" } },
+      { codexSelection: "off" },
+    ] as const) {
+      expect(eligible(overrides), JSON.stringify(overrides)).toBe(false);
+    }
+    const failFastOutputs = { failure_run_attempt: "1", failure_job_id: "123" };
+    for (const result of ["success", "failure", "cancelled", "skipped"]) {
+      const jobResults = { "checks-node-core-test-nondist-shard": result };
+      expect(eligible({ jobResults }), result).toBe(result === "success" || result === "failure");
+      // User/supersession cancellation has no monitor-owned cause, even after tests finish.
+      expect(eligible({ jobResults, cancelled: true }), result).toBe(false);
+      expect(eligible({ jobResults, cancelled: true, failFastResult: "failure" }), result).toBe(
+        false,
+      );
+      expect(eligible({ jobResults, cancelled: true, failFastOutputs }), result).toBe(true);
+      expect(
+        eligible({
+          jobResults,
+          cancelled: true,
+          failFastOutputs: { ...failFastOutputs, failure_run_attempt: "2" },
+        }),
+        result,
+      ).toBe(false);
+      expect(
+        eligible({
+          jobResults,
+          cancelled: true,
+          failFastOutputs: { ...failFastOutputs, failure_job_id: "" },
+        }),
+        result,
+      ).toBe(false);
+    }
+    expect(selection.needs).toEqual([
+      "preflight",
+      "checks-node-core-test-nondist-shard",
+      "pr-fail-fast",
+    ]);
+    expect(selection.permissions).toEqual({ actions: "read", contents: "read" });
+    expect(selection["runs-on"]).toBe("ubuntu-24.04");
+    expect(selection["timeout-minutes"]).toBe(15);
+    expect(workflow.jobs["ci-gate"].needs).not.toContain("codex-test-selection");
+    expect(workflow.jobs["pr-fail-fast"].needs).not.toContain("codex-test-selection");
+    const steps: WorkflowStep[] = selection.steps;
+    expect(JSON.stringify([selection.env, ...steps.map((step) => step.env)])).not.toContain(
+      "checks_node_core_nondist_matrix",
+    );
+    expect(steps.map((step) => step.name)).toEqual([
+      "Checkout",
+      "Setup Node environment",
+      "Prepare shadow test selection",
+      "Run Codex shadow test selection",
+      "Finalize shadow test selection",
+      "Report shadow test selection",
+      "Upload shadow test selection",
+    ]);
+    const stepEnabled = (
+      step: WorkflowStep,
+      outcomes: Parameters<typeof evaluateWorkflowExpression>[1]["steps"],
+    ) =>
+      evaluateWorkflowExpression(`\${{ ${step.if} }}`, {
+        ...context,
+        cancelled: true,
+        failed: true,
+        steps: outcomes,
+      });
+    for (const [index, prerequisite] of [
+      [1, "checkout"],
+      [2, "setup"],
+      [3, "prepare"],
+    ] as const) {
+      for (const outcome of ["success", "failure", "cancelled", "skipped"] as const) {
+        expect(
+          stepEnabled(steps[index]!, {
+            [prerequisite]: { outcome, outputs: { eligible: "true" } },
+          }),
+          `${prerequisite}: ${outcome}`,
+        ).toBe(outcome === "success");
+      }
+    }
+    expect(
+      stepEnabled(steps[3]!, { prepare: { outcome: "success", outputs: { eligible: "false" } } }),
+    ).toBe(false);
+    for (const index of [0, 4, 5, 6]) {
+      expect(stepEnabled(steps[index]!, {}), steps[index]!.name).toBe(true);
+    }
+    const codex = selection.steps.find((step: WorkflowStep) => step.id === "codex");
+    expect(codex).toMatchObject({
+      uses: "openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e",
+      "continue-on-error": true,
+      "timeout-minutes": 8,
+      with: {
+        sandbox: "read-only",
+        "safety-strategy": "drop-sudo",
+        "output-schema-file": ".github/codex/prompts/ci-test-selection.schema.json",
+      },
+    });
+    expect(selection.env).not.toHaveProperty("GITHUB_TOKEN");
+    expect(selection.env).not.toHaveProperty("GH_TOKEN");
+    expect(codex.env).toBeUndefined();
+    expect(JSON.stringify(codex.with)).not.toMatch(/github\.token|GITHUB_TOKEN|GH_TOKEN|needs\./u);
+    expect(
+      steps.filter((step) => step.env?.GITHUB_TOKEN !== undefined).map((step) => step.name),
+    ).toEqual(["Report shadow test selection"]);
+    expect(steps.some((step) => step.uses?.startsWith("actions/download-artifact@"))).toBe(false);
+    expect(steps[6]!.with).toMatchObject({
+      name: "codex-test-selection-${{ github.run_attempt }}",
+      path: "artifacts/codex-test-selection/",
+      "retention-days": 14,
+    });
+    expect(selection.steps[0].env.CHECKOUT_SHA).toBe(
+      "${{ needs.preflight.outputs.checkout_revision }}",
+    );
+  });
+
   it("keeps CodeQL critical quality scans off Blacksmith registrations", () => {
     const source = readCriticalQualityWorkflow();
     const workflow = parse(source);

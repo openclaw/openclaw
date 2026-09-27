@@ -15,6 +15,7 @@ import * as changedDependencies from "../../scripts/lib/changed-dependencies.mts
 import { listAvailableExtensionIds } from "../../scripts/lib/changed-extensions.mts";
 import * as changedExtensions from "../../scripts/lib/changed-extensions.mts";
 import {
+  classifyChangedNodeTestCandidates,
   createChangedExtensionFallbackShards,
   createChangedNodeTestShards,
   hasBuildArtifactAffectingChange,
@@ -25,6 +26,7 @@ import {
   hasSqliteSessionLifecycleAffectingChange,
   hasUiE2eAffectingChange,
   resolveReleaseFastLaneScope,
+  type ChangedNodeTestSelectionEvidence,
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
 import {
@@ -2011,13 +2013,146 @@ describe("CI changed Node test plan", () => {
       writeFileSync(path.join(cwd, file), source);
     }
     for (const changedPath of [helper, direct]) {
-      const shards = createChangedNodeTestShards([changedPath], { cwd });
+      const onSelectionEvidence = vi.fn<(evidence: ChangedNodeTestSelectionEvidence) => void>();
+      const shards = createChangedNodeTestShards([changedPath], { cwd, onSelectionEvidence });
       expect(shards).not.toBeNull();
       expect(selectedFiles(shards).toSorted()).toEqual([direct, indirect]);
+      const evidence = expectDefined(onSelectionEvidence.mock.lastCall?.[0], "selection evidence");
+      expect(
+        classifyChangedNodeTestCandidates(
+          [changedPath],
+          selectedFiles(shards),
+          evidence,
+          new Set(selectedFiles([...evidence.nonImportRows])),
+        ).prunable,
+      ).toEqual(changedPath === helper ? [indirect] : []);
     }
     const explicit = createChangedNodeTestShards([helper, e2e], { cwd });
     expect(explicit).not.toBeNull();
     expect(selectedFiles(explicit).toSorted()).toEqual([e2e, direct, indirect].toSorted());
+  });
+
+  it("reports only transitive import-only targets while preserving overlapping floor owners", () => {
+    const cwd = argvTempDirs.make("changed-selection-evidence-");
+    const source = "src/example/runtime.ts";
+    const transitive = "src/consumers/transitive.test.ts";
+    materializeSourcePolicyFixtures(cwd);
+    for (const [file, content] of Object.entries({
+      [source]: "export const value = 1;\n",
+      "src/middle/barrel.ts": 'export * from "../example/runtime.js";\n',
+      "src/middle/reader.ts": 'new URL("../example/runtime.ts", import.meta.url);\n',
+      "src/middle/wrapper.ts": 'import "./reader.js";\n',
+      "src/consumers/direct.test.ts": 'import "../example/runtime.js";\n',
+      [transitive]: 'import "../middle/barrel.js";\n',
+      "src/example/neighbor.test.ts": 'import "../middle/barrel.js";\n',
+      "src/consumers/reader.test.ts": 'import "../middle/reader.js";\n',
+      "src/consumers/mixed.test.ts":
+        'import "../middle/barrel.js";\nimport "../middle/wrapper.js";\n',
+      [taskBoundaryTest]: 'import "../middle/barrel.js";\n',
+    })) {
+      mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
+      writeFileSync(path.join(cwd, file), content);
+    }
+    const onSelectionEvidence = vi.fn<(evidence: ChangedNodeTestSelectionEvidence) => void>();
+    const shards = createChangedNodeTestShards([source], { cwd, onSelectionEvidence });
+    expect(shards).not.toBeNull();
+    expect(selectedFiles(shards)).toEqual(
+      expect.arrayContaining([
+        transitive,
+        "src/consumers/direct.test.ts",
+        "src/example/neighbor.test.ts",
+        "src/consumers/reader.test.ts",
+        "src/consumers/mixed.test.ts",
+        taskBoundaryTest,
+      ]),
+    );
+    const evidence = expectDefined(onSelectionEvidence.mock.lastCall?.[0], "selection evidence");
+    const classification = classifyChangedNodeTestCandidates(
+      [source],
+      selectedFiles(shards),
+      evidence,
+      new Set(selectedFiles([...evidence.nonImportRows])),
+    );
+    expect(classification.prunable).toEqual([transitive]);
+    expect(classification.floorReasons).toMatchObject({
+      "src/consumers/direct.test.ts": 2,
+      "src/example/neighbor.test.ts": 3,
+      "src/consumers/reader.test.ts": 4,
+      "src/consumers/mixed.test.ts": 4,
+      [taskBoundaryTest]: 4,
+      [gatewayCallsitesGuard]: 4,
+    });
+    expect(createChangedNodeTestShards([source], { cwd })).toEqual(shards);
+    const changedShards = createChangedNodeTestShards([source, transitive], {
+      cwd,
+      onSelectionEvidence,
+    });
+    expect(
+      classifyChangedNodeTestCandidates(
+        [source, transitive],
+        selectedFiles(changedShards),
+        expectDefined(onSelectionEvidence.mock.lastCall?.[0], "changed-test selection evidence"),
+        new Set(),
+      ),
+    ).toMatchObject({ prunable: [], floorReasons: { [transitive]: 1 } });
+  });
+
+  it("distinguishes SDK import bundles from extension ownership fallback", () => {
+    const cwd = argvTempDirs.make("changed-extension-selection-evidence-");
+    const source = "src/example/runtime.ts";
+    const transitive = "extensions/msteams/src/consumer.test.ts";
+    const otherBundleConsumer = "extensions/discord/src/consumer.test.ts";
+    const direct = "extensions/msteams/src/direct.test.ts";
+    const opaque = "extensions/msteams/opaque.ts";
+    materializeSourcePolicyFixtures(cwd);
+    for (const [file, content] of Object.entries({
+      "tsconfig.json": JSON.stringify({
+        compilerOptions: { paths: { "openclaw/plugin-sdk/*": ["src/plugin-sdk/*.ts"] } },
+      }),
+      [source]: "export const value = 1;\n",
+      "src/plugin-sdk/public.ts": 'export * from "../example/runtime.js";\n',
+      [transitive]: 'import "openclaw/plugin-sdk/public";\n',
+      [otherBundleConsumer]: 'import "openclaw/plugin-sdk/public";\n',
+      [direct]: 'import "../../../src/example/runtime.js";\n',
+      [opaque]: "export const opaque = 1;\n",
+    })) {
+      mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
+      writeFileSync(path.join(cwd, file), content);
+    }
+    for (const changedPaths of [[source], [source, opaque]]) {
+      const onSelectionEvidence = vi.fn<(evidence: ChangedNodeTestSelectionEvidence) => void>();
+      const shards = createChangedNodeTestShards(changedPaths, { cwd, onSelectionEvidence });
+      expect(shards).not.toBeNull();
+      expect(selectedFiles(shards)).toEqual(expect.arrayContaining([transitive, direct]));
+      if (!changedPaths.includes(opaque)) {
+        expect(
+          shards?.some((shard) => {
+            const files = shard.groups?.flatMap((group) => group.includePatterns ?? []) ?? [];
+            return files.includes(transitive) && files.includes(otherBundleConsumer);
+          }),
+        ).toBe(true);
+      }
+      const evidence = expectDefined(
+        onSelectionEvidence.mock.lastCall?.[0],
+        "bundle selection evidence",
+      );
+      const classification = classifyChangedNodeTestCandidates(
+        changedPaths,
+        selectedFiles(shards),
+        evidence,
+        new Set(selectedFiles([...evidence.nonImportRows])),
+      );
+      expect(evidence.importDepths.get(transitive)).toBe(2);
+      expect(classification.floorReasons[direct]).toBe(2);
+      expect(classification.floorReasons[gatewayCallsitesGuard]).toBe(4);
+      if (changedPaths.includes(opaque)) {
+        expect(classification.floorReasons[transitive]).toBe(5);
+        expect(classification.prunable).toEqual([otherBundleConsumer]);
+      } else {
+        expect(classification.prunable.toSorted()).toEqual([otherBundleConsumer, transitive]);
+      }
+      expect(createChangedNodeTestShards(changedPaths, { cwd })).toEqual(shards);
+    }
   });
 
   it("keeps task boundary scanning beside ordinary importers without claiming unowned sources", () => {

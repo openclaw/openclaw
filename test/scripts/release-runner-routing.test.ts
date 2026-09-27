@@ -93,9 +93,9 @@ describe("release runner reservation", () => {
         if (!job["runs-on"]) {
           continue;
         }
-        if (name === "ci" && jobName === "pr-fail-fast") {
+        if (name === "ci" && (jobName === "pr-fail-fast" || jobName === "codex-test-selection")) {
           expect(
-            evaluateWorkflowExpression(job.if!, {
+            evaluateWorkflowExpression(job.if!.startsWith("${{") ? job.if! : `\${{ ${job.if} }}`, {
               ...context,
               eventName: "workflow_dispatch",
               repository: "openclaw/openclaw",
@@ -136,9 +136,13 @@ describe("release runner reservation", () => {
       }
       for (const eventName of ["pull_request", "push", "schedule", "workflow_dispatch"] as const) {
         const ordinary = { ...context, eventName, releaseGate: true };
-        if (name === "ci" && jobName === "pr-fail-fast" && eventName !== "pull_request") {
+        if (
+          name === "ci" &&
+          (jobName === "pr-fail-fast" || jobName === "codex-test-selection") &&
+          eventName !== "pull_request"
+        ) {
           expect(
-            evaluateWorkflowExpression(job.if!, {
+            evaluateWorkflowExpression(job.if!.startsWith("${{") ? job.if! : `\${{ ${job.if} }}`, {
               ...ordinary,
               repository: "openclaw/openclaw",
               runAttempt: 1,
