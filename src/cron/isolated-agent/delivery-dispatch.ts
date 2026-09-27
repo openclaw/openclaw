@@ -354,6 +354,9 @@ export async function dispatchCronDelivery(
           payloads: linkedPayloadsForDelivery,
           session: deliverySession,
           identity,
+          ...(params.undeliveredRunStatus === "ok"
+            ? { runId: params.sessionId, replyKind: "final" as const }
+            : {}),
           bestEffort: params.deliveryBestEffort,
           durability: params.deliveryBestEffort ? "best_effort" : "required",
           deliveryIntentId: deliveryIdempotencyKey,

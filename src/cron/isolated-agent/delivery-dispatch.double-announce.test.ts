@@ -386,6 +386,8 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       to: "123456",
       payloads: [{ text: "Fallback cron summary." }],
       deliveryIntentId: expect.stringContaining("cron-direct-delivery:v1:"),
+      runId: params.sessionId,
+      replyKind: "final",
     });
     expect(state.deliveryAttempted).toBe(true);
     expect(state.delivered).toBe(true);
