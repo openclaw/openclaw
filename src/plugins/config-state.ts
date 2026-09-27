@@ -2,6 +2,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /** Normalizes plugin config and resolves effective enablement, slots, and activation sources. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginEntryConfig } from "../config/types.plugins.js";
+import { mergeDeep } from "../infra/deep-merge.js";
 import {
   resolveMemorySlotDecisionShared,
   resolvePluginActivationDecisionShared,
@@ -83,6 +85,98 @@ export function resolveSelectedContextEnginePluginIdFromConfig(
     return undefined;
   }
   return pluginId;
+}
+
+/**
+ * Merges every raw entry resolving to one plugin id into a single persisted entry.
+ *
+ * Two precedences, because two different things are being merged.
+ *
+ * Policy (`enabled`, `hooks`, `subagent`, `llm`) folds in **file order**, which is how runtime
+ * normalization resolves it: the last raw entry that sets `enabled` or a policy object wins, and
+ * a policy object is taken whole, never merged field by field. Anything else rewrites live policy.
+ * A later legacy alias denying `allowConversationAccess` or an LLM override is the effective
+ * setting, so folding canonical-last would write the grant back and hand the plugin a
+ * permission it is currently being refused.
+ *
+ * The config payload, and any other key runtime does not read, folds with the canonical entry
+ * **last**, so canonical values win a key
+ * clash whichever order the two sit in the file, and nothing is dropped from either side.
+ *
+ * Raw entries are the base throughout. The normalized entry is runtime policy rather than
+ * persisted config: it carries derived keys such as `hasAllowedModelsConfig` that the strict
+ * schema forbids, and it replaces the `allowedModels` list they were derived from.
+ */
+export function mergePluginEntryAliases(
+  config: OpenClawConfig,
+  pluginId: string,
+): PluginEntryConfig {
+  const resolvedId = normalizePluginId(pluginId);
+  const inFileOrder = Object.entries(config.plugins?.entries ?? {}).filter(
+    ([entryId]) => normalizePluginId(entryId) === resolvedId,
+  );
+  const canonicalLast = inFileOrder.toSorted(([leftId], [rightId]) => {
+    if (leftId === resolvedId) {
+      return rightId === resolvedId ? 0 : 1;
+    }
+    if (rightId === resolvedId) {
+      return -1;
+    }
+    return leftId.localeCompare(rightId, "en");
+  });
+
+  // Keys runtime does not read are persisted settings like `config`, so they share its order.
+  let other: Record<string, unknown> = {};
+  for (const [, entry] of canonicalLast) {
+    const {
+      config: _payload,
+      enabled: _enabled,
+      hooks: _hooks,
+      subagent: _subagent,
+      llm: _llm,
+      ...rest
+    } = entry;
+    const merged = mergeDeep(other, rest);
+    if (isRecord(merged)) {
+      other = merged;
+    }
+  }
+
+  const policy: PluginEntryConfig = { ...other };
+  for (const [entryId, entry] of inFileOrder) {
+    const { enabled, hooks, subagent, llm } = entry;
+    if (typeof enabled === "boolean") {
+      policy.enabled = enabled;
+    }
+    // Runtime takes `hooks`, `subagent` and `llm` whole from the last entry that sets them, it
+    // does not merge fields across aliases. So a later alias holding only part of `llm` drops the
+    // earlier grant, and folding field by field here would write that grant back on save.
+    const effective = normalizePluginsConfig({ entries: { [entryId]: entry } }).entries[resolvedId];
+    if (effective?.hooks !== undefined) {
+      policy.hooks = hooks;
+    }
+    if (effective?.subagent !== undefined) {
+      policy.subagent = subagent;
+    }
+    if (effective?.llm !== undefined) {
+      policy.llm = llm;
+    }
+  }
+
+  let payload: Record<string, unknown> = {};
+  for (const [, entry] of canonicalLast) {
+    if (isRecord(entry.config)) {
+      const merged = mergeDeep(payload, entry.config);
+      if (isRecord(merged)) {
+        payload = merged;
+      }
+    }
+  }
+
+  return {
+    ...policy,
+    ...(Object.keys(payload).length > 0 ? { config: payload } : {}),
+  };
 }
 
 /** Canonicalizes one plugin entry and its policy-list ids before a targeted mutation. */

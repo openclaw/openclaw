@@ -2460,6 +2460,7 @@ src/gateway/server-methods/open-path.ts	1
 src/gateway/server-methods/plugin-approval.ts	2
 src/gateway/server-methods/plugin-host-hooks.ts	1
 src/gateway/server-methods/restart-request.ts	8
+src/gateway/server-methods/send.ts	1
 src/gateway/server-methods/session-catalog-terminal-start.ts	1
 src/gateway/server-methods/session-create-initial-turn.ts	2
 src/gateway/server-methods/session-recovery-continuation.ts	1
@@ -2985,7 +2986,7 @@ src/plugins/schema-validator.ts	6
 src/plugins/session-catalog-history-import.ts	1
 src/plugins/setup-registry.ts	11
 src/plugins/slots.ts	3
-src/plugins/toggle-config.ts	3
+src/plugins/toggle-config.ts	2
 src/plugins/tools.ts	1
 src/plugins/trusted-tool-policy.ts	1
 src/plugins/uninstall-package-config.ts	2

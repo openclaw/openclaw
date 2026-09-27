@@ -136,7 +136,9 @@ function applyPluginAutoEnableForActivation(params: {
   });
 }
 
-function resolvePluginActivationInputs(params: PluginActivationParams): PluginActivationInputs {
+export function resolvePluginActivationInputs(
+  params: PluginActivationParams,
+): PluginActivationInputs {
   const env = params.env ?? process.env;
   const rawConfig = params.rawConfig ?? params.resolvedConfig;
   let resolvedConfig = params.resolvedConfig ?? params.rawConfig;
