@@ -203,6 +203,10 @@ async function getApiClientForReference(
 
 type TeamsGetById = (teamId: string) => Promise<{ aadGroupId?: string }>;
 
+function getStructuralApiClient(app: MSTeamsApp): MSTeamsApiClient {
+  return app.api as MSTeamsApiClient;
+}
+
 /** Team lookup follows the stored conversation endpoint when it is not the app endpoint. */
 export async function resolveReferenceScopedTeamsGetById(
   app: MSTeamsApp,
