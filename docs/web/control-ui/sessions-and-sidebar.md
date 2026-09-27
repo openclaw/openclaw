@@ -133,10 +133,10 @@ enablement and sizing.
 The **Filter & sort** popover keeps **Filters** and **Display** in one panel.
 **Filters** controls owner, status, automation, and system sessions. **Display**
 controls grouping, sorting, message previews, and empty groups. Choices take
-effect immediately. The filter button counts only **Owners** and **Status** when
-they differ from the default; automation, system, preview, and empty-group
-choices never count. **Reset** clears Owners and Status and keeps every other
-choice. Tab moves between rows; Left and Right choose within a segmented
+effect immediately. The filter button shows a dot while **Owners** or **Status**
+differs from the default. **Reset** appears at the right of the Filters header
+whenever any Filters row differs from its default, and clears Owners, Status, and
+the automation and system toggles while keeping every Display choice. Tab moves between rows; Left and Right choose within a segmented
 status control. **Owners** opens a picker with owner avatars and a search field;
 type to filter owners by name, and Escape clears the search before closing.
 **Group by**, **Sort by**, and **Hide empty groups** show their current choices
