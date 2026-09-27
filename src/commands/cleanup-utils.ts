@@ -210,7 +210,9 @@ async function existingPaths(paths: readonly string[]): Promise<string[]> {
 }
 
 // Service-manager status is advisory; the state lock also covers externally supervised Gateways.
-async function acquireStateCleanupOwnership(cleanup: CleanupResolvedPaths) {
+async function acquireStateCleanupOwnership(
+  cleanup: Pick<CleanupResolvedPaths, "configPath" | "stateDir">,
+) {
   const env = {
     ...process.env,
     OPENCLAW_CONFIG_PATH: cleanup.configPath,
@@ -613,19 +615,44 @@ export async function removeWorkspaceDirs(
   return [...failures];
 }
 
-/** List per-agent session directories beneath a state directory. */
-export async function listAgentSessionDirs(stateDir: string): Promise<string[]> {
-  const root = path.join(stateDir, "agents");
+/** Reset canonical session history while preserving each database's unrelated state. */
+export async function removeAgentSessions(
+  cleanup: Pick<CleanupResolvedPaths, "configPath" | "stateDir"> & { cfg: OpenClawConfig },
+  runtime: RuntimeEnv,
+  opts?: { dryRun?: boolean },
+): Promise<void> {
+  const { previewSessionStoreReset, resetSessionStore } =
+    await import("../config/sessions/session-accessor.sqlite-reset.js");
+  const { resolveAllAgentSessionStoreTargetsSync } = await import("../config/sessions/targets.js");
+  const lock = opts?.dryRun ? undefined : await acquireStateCleanupOwnership(cleanup);
   try {
-    const entries = await fs.readdir(root, { withFileTypes: true });
-    return entries
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => path.join(root, entry.name, "sessions"))
-      .toSorted();
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
+    const failures: string[] = [];
+    for (const target of resolveAllAgentSessionStoreTargetsSync(cleanup.cfg)) {
+      try {
+        const preview = previewSessionStoreReset(target);
+        const label = shortenHomePath(preview.databasePath);
+        if (opts?.dryRun) {
+          runtime.log(
+            `[dry-run] remove session history from ${label}: ${preview.sessionKeys.length} sessions, ${preview.transcriptCount} transcripts, ${preview.archiveCount} retained archives`,
+          );
+          for (const sessionKey of preview.sessionKeys) {
+            runtime.log(`[dry-run] remove session ${sessionKey}`);
+          }
+          for (const artifact of preview.artifactPaths) {
+            runtime.log(`[dry-run] remove ${shortenHomePath(artifact)}`);
+          }
+        } else {
+          await resetSessionStore(target);
+          runtime.log(`Removed session history from ${label}`);
+        }
+      } catch (error) {
+        failures.push(`${shortenHomePath(target.storePath)}: ${String(error)}`);
+      }
     }
-    throw error;
+    if (failures.length > 0) {
+      throw new Error(failures.join("\n"));
+    }
+  } finally {
+    await lock?.release();
   }
 }
