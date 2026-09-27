@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import {
   asFiniteNumber,
   normalizeOptionalString,
@@ -81,6 +82,19 @@ export function codexProviderRefusalDetails(refusal: CodexProviderRefusal) {
     ...(refusal.nativeThreadId ? { nativeThreadId: refusal.nativeThreadId } : {}),
     ...(refusal.nativeTurnId ? { nativeTurnId: refusal.nativeTurnId } : {}),
   };
+}
+
+export function codexProviderRefusalDiagnostics(
+  refusal: CodexProviderRefusal | undefined,
+  timestamp: number,
+): Pick<AssistantMessage, "diagnostics"> {
+  return refusal
+    ? {
+        diagnostics: [
+          { type: "provider_refusal", timestamp, details: codexProviderRefusalDetails(refusal) },
+        ],
+      }
+    : {};
 }
 
 export { normalizeOptionalString as normalizeNonEmptyString };

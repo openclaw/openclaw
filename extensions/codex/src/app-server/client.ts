@@ -73,6 +73,13 @@ type RequestOptions = {
   attemptWaiterFinished?: CodexRequestWaiterFinished;
 };
 
+type ThreadSessionRequestGuard = (options: {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  timeoutMessage: string;
+  abortMessage: string;
+}) => Promise<() => void>;
+
 /** Process-local generation fence for bindings tied to one app-server client instance. */
 export function getCodexAppServerClientInstanceId(client: object): string {
   const current = CODEX_APP_SERVER_CLIENT_INSTANCE_IDS.get(client);
@@ -240,14 +247,7 @@ export class CodexAppServerClient {
   private nativeExecutionObserved = false;
   private closeError: Error | undefined;
   private runtimeIdentity: CodexAppServerRuntimeIdentity | undefined;
-  private threadSessionRequestGuard:
-    | ((options: {
-        signal?: AbortSignal;
-        timeoutMs?: number;
-        timeoutMessage: string;
-        abortMessage: string;
-      }) => Promise<() => void>)
-    | undefined;
+  private threadSessionRequestGuard: ThreadSessionRequestGuard | undefined;
   private retireAfterIndeterminateThreadRequest: (() => boolean) | undefined;
   private stderrTail = "";
   private readonly privateTransportSecrets = new Set<string>();
@@ -383,14 +383,7 @@ export class CodexAppServerClient {
 
   /** Installs the spawn-owner guard and retirement for config-loading thread requests. */
   setThreadSessionRequestGuard(
-    guard:
-      | ((options: {
-          signal?: AbortSignal;
-          timeoutMs?: number;
-          timeoutMessage: string;
-          abortMessage: string;
-        }) => Promise<() => void>)
-      | undefined,
+    guard: ThreadSessionRequestGuard | undefined,
     retireAfterIndeterminateRequest?: () => boolean,
   ): void {
     this.threadSessionRequestGuard = guard;
@@ -710,8 +703,6 @@ export class CodexAppServerClient {
     const result = attempt.wait<T>(
       {
         ...options,
-        assertCurrent: undefined,
-        disposition: "new",
         overloadAttemptOrdinal,
       },
       deadline,
@@ -998,7 +989,6 @@ export class CodexAppServerClient {
 
   private rejectPendingRequests(error: Error): void {
     for (const pending of this.pending.values()) {
-      pending.cleanup();
       pending.close(error);
     }
     this.pending.clear();

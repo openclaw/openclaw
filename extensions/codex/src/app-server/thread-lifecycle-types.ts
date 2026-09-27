@@ -7,21 +7,17 @@ import type { CodexAppServerClient } from "./client.js";
 import type { CodexInferenceProxy } from "./inference-proxy.js";
 import type { CodexInferenceProviderRoutes } from "./inference-routing.js";
 import type { CodexNativeModelInputTools } from "./native-model-input-tools.js";
-import type { CodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
 import type { CodexDynamicToolSpec, JsonObject } from "./protocol.js";
 import type {
   CodexAppServerBindingIdentity,
   CodexAppServerBindingStore,
-  CodexAppServerContextEngineBinding,
   CodexAppServerThreadBinding,
 } from "./session-binding.js";
 import type { CodexThreadConfigurationOptions } from "./thread-configuration-options.js";
 import type { CodexContextEngineThreadBootstrapProjection } from "./thread-context-engine.js";
-import type {
-  CodexThreadLifecycleTimingTracker,
-  CodexThreadLifecycleTimingOptions,
-} from "./thread-lifecycle-timing.js";
+import type { prepareCodexThreadLifecyclePreflight } from "./thread-lifecycle-preflight.js";
+import type { CodexThreadLifecycleTimingOptions } from "./thread-lifecycle-timing.js";
 import type { resolveCodexAppServerThreadModelSelection } from "./thread-model-selection.js";
 
 type CodexAppServerThreadLifecycle = {
@@ -105,28 +101,12 @@ export type CodexStartOrResumeThreadParams = Omit<
   timing?: CodexThreadLifecycleTimingOptions;
 };
 
-export type CodexThreadRequestContext = {
-  nativeModelInputTools?: CodexNativeModelInputTools;
+export type CodexThreadRequestContext = Awaited<
+  ReturnType<typeof prepareCodexThreadLifecyclePreflight>
+> & {
   bindingIdentity: CodexAppServerBindingIdentity;
   startModelSelection: ReturnType<typeof resolveCodexAppServerThreadModelSelection>;
   startModelProvider?: string;
-  userMcpServersConfigPatch?: JsonObject;
-  dynamicToolsFingerprint: string;
-  dynamicToolsContainDeferred: boolean;
-  webSearchThreadConfigFingerprint?: string;
-  nativeSkillIsolationFingerprint?: string;
-  userMcpServersFingerprint?: string;
-  ringZeroConfigFingerprint?: string;
-  ringZeroClientInstanceId?: string;
-  networkProxyConfigFingerprint?: string;
-  contextEngineBinding?: CodexAppServerContextEngineBinding;
-  environmentSelectionFingerprint?: string;
-  hostSystemAgentActive: boolean;
-  ringZeroActive: boolean;
-  restrictedToolSurface: boolean;
-  restrictedToolSurfaceInheritedMcpServerNames: string[];
-  nativeSkillIsolation?: CodexNativeSkillIsolation;
-  lifecycleTiming: CodexThreadLifecycleTimingTracker;
   normalizeBindingModelProvider: (
     authProfileId: string | undefined,
     modelProvider: string | undefined,
