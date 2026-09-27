@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resetConfigRuntimeState } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
@@ -16,14 +15,6 @@ import {
 } from "./session-meta.js";
 import { withAcpSessionTestDir as withTestDir } from "./session-meta.test-support.js";
 
-async function seedAcpSessionEntry(params: {
-  storePath: string;
-  sessionKey: string;
-  entry: SessionEntry;
-}) {
-  await replaceSessionEntry({ agentId: "codex", ...params }, params.entry);
-}
-
 describe("ACP session listing", () => {
   afterEach(async () => {
     await closeOpenClawAgentDatabasesAsync();
@@ -32,23 +23,23 @@ describe("ACP session listing", () => {
 
   it("lists SQLite ACP rows while joining current session-store entries", async () => {
     await withTestDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
-      const storePath = path.join(dir, "sessions.json");
+      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+      const storePath = path.join(dir, "agents", "codex", "sessions", "sessions.json");
       const databasePath = path.join(dir, "state", "openclaw.sqlite");
-      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const cfg = {};
+      const scope = { cfg, env, databasePath };
       const sessionKey = "agent:codex:acp:s1";
-      await seedAcpSessionEntry({
-        storePath,
-        sessionKey,
-        entry: {
+      await replaceSessionEntry(
+        { agentId: "codex", storePath, sessionKey },
+        {
           sessionId: "sess-acp",
           updatedAt: 100,
           model: "gpt-5.5",
           skillsSnapshot: { prompt: "Saved prompt", skills: [{ name: "fixture-skill" }] },
         },
-      });
+      );
       await upsertAcpSessionMeta({
-        cfg,
-        databasePath,
+        ...scope,
         sessionKey,
         mutate: () => ({
           backend: "acpx",
@@ -65,7 +56,7 @@ describe("ACP session listing", () => {
       const sql = observeMainThreadSql();
       let entries;
       try {
-        entries = await listAcpSessionEntries({ cfg, databasePath, clone: false });
+        entries = await listAcpSessionEntries({ ...scope, clone: false });
         sql.expectIdle();
       } finally {
         sql.restore();
@@ -95,12 +86,11 @@ describe("ACP session listing", () => {
       }
       returned.skillsSnapshot.skills[0]!.name = "changed-return-value";
       await upsertAcpSessionMeta({
-        cfg,
-        databasePath,
+        ...scope,
         sessionKey,
         mutate: (current) => current && { ...current, runtimeSessionName: "updated-runtime" },
       });
-      const fresh = await listAcpSessionEntries({ cfg, databasePath });
+      const fresh = await listAcpSessionEntries(scope);
       expect(fresh[0]?.entry?.skillsSnapshot?.skills[0]?.name).toBe("fixture-skill");
       expect(fresh[0]?.acp?.runtimeSessionName).toBe("updated-runtime");
     });
@@ -178,47 +168,6 @@ describe("ACP session listing", () => {
       expect(fs.existsSync(path.join(env.OPENCLAW_STATE_DIR, "agents"))).toBe(false);
       if (missing === "state") {
         expect(fs.existsSync(env.OPENCLAW_STATE_DIR)).toBe(false);
-      }
-    });
-  });
-
-  it("honors OPENCLAW_STATE_DIR when joining listed SQLite rows to session stores", async () => {
-    await withTestDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: dir } as NodeJS.ProcessEnv;
-      const cfg = {} as OpenClawConfig;
-      const sessionKey = "agent:codex:acp:s1";
-      const storePath = path.join(dir, "agents", "codex", "sessions", "sessions.json");
-      try {
-        await seedAcpSessionEntry({
-          storePath,
-          sessionKey,
-          entry: {
-            sessionId: "sess-acp",
-            updatedAt: 100,
-          },
-        });
-        await upsertAcpSessionMeta({
-          cfg,
-          env,
-          sessionKey,
-          mutate: () => ({
-            backend: "acpx",
-            agent: "codex",
-            runtimeSessionName: "codex-s1",
-            mode: "persistent",
-            state: "idle",
-            lastActivityAt: 321,
-          }),
-        });
-
-        const entries = await listAcpSessionEntries({ cfg, env });
-
-        expect(entries).toHaveLength(1);
-        expect(entries[0]?.storePath).toBe(storePath);
-        expect(entries[0]?.entry?.sessionId).toBe("sess-acp");
-      } finally {
-        await closeOpenClawAgentDatabasesAsync();
-        await closeOpenClawStateDatabaseAsync();
       }
     });
   });
