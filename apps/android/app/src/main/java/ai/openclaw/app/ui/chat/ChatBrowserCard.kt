@@ -4,6 +4,7 @@ import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.chat.ChatBrowserTab
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.ControlUiWebView
+import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawTheme
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
@@ -18,9 +19,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -60,6 +64,7 @@ internal fun ChatBrowserCard(
   connected: Boolean,
   canControl: Boolean,
   availableHeight: Dp,
+  onClose: () -> Unit,
 ) {
   val identity = listOf(sessionKey, tab.target, tab.node, tab.profile, tab.targetId)
   var expanded by rememberSaveable(page, identity) { mutableStateOf(false) }
@@ -78,18 +83,28 @@ internal fun ChatBrowserCard(
         verticalAlignment = Alignment.CenterVertically,
       ) {
         Column(Modifier.weight(1f)) {
-          Text(nativeString("Agent browser"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
-          Text(
-            tab.title?.takeIf { it.isNotBlank() } ?: tab.profile,
-            style = ClawTheme.type.body,
-            color = ClawTheme.colors.text,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
+          Text(nativeString("Agent browser"), style = ClawTheme.type.body, color = ClawTheme.colors.text)
+          tab.title?.takeIf { it.isNotBlank() }?.let { title ->
+            Text(
+              title,
+              style = ClawTheme.type.caption,
+              color = ClawTheme.colors.textMuted,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+          }
         }
-        TextButton(onClick = { expanded = !expanded }, enabled = connected && canControl && page != null) {
-          Text(if (expanded) nativeString("Collapse browser") else nativeString("Control browser"))
-        }
+        ClawPlainIconButton(
+          icon = if (expanded) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
+          contentDescription = if (expanded) nativeString("Collapse browser") else nativeString("Control browser"),
+          onClick = { expanded = !expanded },
+          enabled = connected && canControl && page != null,
+        )
+        ClawPlainIconButton(
+          icon = Icons.Default.Close,
+          contentDescription = nativeString("Close"),
+          onClick = onClose,
+        )
       }
       when {
         !connected || page == null -> {
@@ -112,8 +127,9 @@ internal fun ChatBrowserCard(
 
         url != null -> {
           key(page, url) {
-            val expandedHeight = (availableHeight * 0.6f - 64.dp).coerceIn(0.dp, 420.dp)
-            Box(Modifier.fillMaxWidth().height(if (expanded) expandedHeight else expandedHeight.coerceAtMost(180.dp))) {
+            val expandedHeight = (availableHeight * 0.6f).coerceIn(0.dp, 420.dp)
+            val previewHeight = (availableHeight * 0.3f).coerceIn(0.dp, 180.dp)
+            Box(Modifier.fillMaxWidth().height(if (expanded) expandedHeight else previewHeight)) {
               ControlUiWebView(
                 page = page,
                 url = url,

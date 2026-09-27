@@ -141,6 +141,36 @@ describe("Browser panel text and touch input", () => {
     expect(input.value).toBe("");
   });
 
+  it("does not append a local autocorrection to text already sent remotely", async () => {
+    const { panel, request } = await mount();
+    const input = panel.renderRoot.querySelector<HTMLTextAreaElement>(".bp-input")!;
+    input.dispatchEvent(
+      new InputEvent("beforeinput", {
+        inputType: "insertText",
+        data: "teh",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await flushBrowserResponses();
+    input.value = "the";
+    input.dispatchEvent(
+      new InputEvent("input", {
+        inputType: "insertReplacementText",
+        data: "the",
+        bubbles: true,
+      }),
+    );
+    await flushBrowserResponses();
+    await panel.updateComplete;
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(input.value).toBe("");
+    expect(input.getAttribute("autocorrect")).toBe("off");
+    expect(panel.renderRoot.querySelector('[role="status"]')?.textContent).toContain(
+      "Edit the text directly",
+    );
+  });
+
   it("scrolls a touch swipe in remote coordinates without clicking its end point", async () => {
     const { panel, request } = await mount();
     vi.spyOn(panel.renderRoot.querySelector(".bp-stage")!, "getBoundingClientRect").mockReturnValue(

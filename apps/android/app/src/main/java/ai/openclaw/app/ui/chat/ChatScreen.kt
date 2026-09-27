@@ -11,6 +11,7 @@ import ai.openclaw.app.ProviderAuthController
 import ai.openclaw.app.R
 import ai.openclaw.app.SHARED_AUDIO_DOCUMENT_MIME_TYPES
 import ai.openclaw.app.SessionCatalog
+import ai.openclaw.app.chat.ChatBrowserTab
 import ai.openclaw.app.chat.ChatCommandEntry
 import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.ChatController
@@ -157,6 +158,7 @@ import androidx.compose.material.icons.filled.GppMaybe
 import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Mic
@@ -332,6 +334,11 @@ private class ChatBranchOpening(
   val selectionGeneration: Long,
 )
 
+private data class ChatBrowserPresentation(
+  val identity: List<String>,
+  val tab: ChatBrowserTab,
+)
+
 /** Full chat surface that wires MainViewModel state to messages, attachments, voice, and composer actions. */
 @Composable
 internal fun ChatScreen(
@@ -347,7 +354,21 @@ internal fun ChatScreen(
   features: List<DisplayFeature> = emptyList(),
 ) {
   val messages by viewModel.chatMessages.collectAsState()
-  val browserTab = remember(messages) { messages.asReversed().firstNotNullOfOrNull { message -> message.content.asReversed().firstNotNullOfOrNull { it.toolActivity?.browserTab } } }
+  val browserPresentation =
+    remember(messages) {
+      messages.asReversed().firstNotNullOfOrNull { message ->
+        message.content.indices.reversed().firstNotNullOfOrNull { index ->
+          val activity = message.content[index].toolActivity
+          activity?.browserTab?.let { tab ->
+            ChatBrowserPresentation(
+              identity = activity.toolCallId?.let { listOf("tool", it) } ?: listOf("message", message.id, index.toString()),
+              tab = tab,
+            )
+          }
+        }
+      }
+    }
+  val dismissedBrowserPresentations by viewModel.chatBrowserDismissals.collectAsState()
   val controlPage by viewModel.gatewayControlPage.collectAsState()
   val sourcePreviewConfig by viewModel.gatewaySourcePreviewConfig.collectAsState()
   val transcriptAnchor by viewModel.chatTranscriptAnchor.collectAsState()
@@ -919,6 +940,13 @@ internal fun ChatScreen(
         dismissDetails()
         onOpenDashboard(sessionKey)
       },
+      onOpenBrowser =
+        browserPresentation?.takeIf { composerOwnerReady }?.let {
+          {
+            dismissDetails()
+            viewModel.reopenChatBrowser(composerOwner)
+          }
+        },
       onOpenReviewDiff = {
         dismissDetails()
         reviewDiff.open(composerOwner, sessionKey)
@@ -1048,16 +1076,17 @@ internal fun ChatScreen(
     features = features,
     conversationStatus = conversationStatus,
     browser = { availableHeight ->
-      if (composerOwnerReady) {
-        browserTab?.let { tab ->
+      if (composerOwnerReady && dismissedBrowserPresentations[composerOwner] != browserPresentation?.identity) {
+        browserPresentation?.let { presentation ->
           key(composerOwner, selectionGeneration) {
             ChatBrowserCard(
-              tab = tab,
+              tab = presentation.tab,
               sessionKey = sessionKey,
               page = controlPage,
               connected = gatewayConnectionDisplay.isConnected,
               canControl = operatorScopesAllowAdmin(operatorScopes),
               availableHeight = availableHeight,
+              onClose = { viewModel.dismissChatBrowser(composerOwner, presentation.identity) },
             )
           }
         }
@@ -1523,6 +1552,7 @@ private fun ChatHeader(
   onNewChatInWorktree: () -> Unit,
   onRefresh: () -> Unit,
   onOpenDashboard: () -> Unit,
+  onOpenBrowser: (() -> Unit)?,
   onOpenReviewDiff: () -> Unit,
   onOpenBranchSwitcher: () -> Unit,
 ) {
@@ -1687,6 +1717,7 @@ private fun ChatHeader(
                 add(FoldAwareMenuItem("review-diff", nativeString("Review changes"), onOpenReviewDiff, Icons.Default.Difference))
               }
               add(FoldAwareMenuItem("dashboard", nativeString("Dashboard"), onOpenDashboard, Icons.Default.Dashboard))
+              onOpenBrowser?.let { add(FoldAwareMenuItem("browser", nativeString("Agent browser"), it, Icons.Default.Language)) }
               if (workspaceGit) {
                 add(FoldAwareMenuItem("worktree", newChatInWorktreeLabel, onNewChatInWorktree, enabled = newChatEnabled))
               }

@@ -301,10 +301,10 @@ export class BrowserPanelInputController {
     event.stopPropagation();
     const input = event.currentTarget;
     const text = event.data ?? (input instanceof HTMLTextAreaElement ? input.value : "");
-    if (
-      ["insertText", "insertReplacementText", "insertFromPaste"].includes(event.inputType) &&
-      text
-    ) {
+    if (event.inputType === "insertReplacementText") {
+      // The empty proxy cannot identify the remote range a local correction would replace.
+      this.host.setState("noticeText", t("browser.manualTextCorrection"));
+    } else if (["insertText", "insertFromPaste"].includes(event.inputType) && text) {
       this.runAfterClick((client, targetId) => insertBrowserText(client, { targetId, text }));
     } else {
       const key =

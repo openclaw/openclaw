@@ -489,10 +489,18 @@ Open **Home** from the sidebar's **Pages** menu to chat, or select an existing s
 #### Agent browser in chat
 
 When the Browser plugin returns an identifiable tab, Chat shows a preview of
-the session's latest browser tab. Tap **Control browser** to interact without
-leaving the conversation or replacing your draft. **Collapse browser** or Android
-Back returns to the preview. **Open in your browser** is a separate, explicit action.
+the session's latest browser tab under **Agent browser**. Tap the upward chevron
+to interact without leaving the conversation or replacing your draft. The
+downward chevron or Android Back returns to the preview. Collapsing dismisses
+the browser's keyboard without changing your chat draft. **Open in your browser**
+is a separate, explicit action.
 Ordinary website links and **Desktop** keep their existing behavior.
+
+The close icon removes the card from chat without closing the agent's remote
+tab. To restore it, choose **Chat actions > Agent browser**. Refreshing the same
+browser result does not reopen a dismissed card; a new browser-tool presentation
+can show it again. Closing is also available while the browser is offline or
+unavailable.
 
 The preview uses the connected Gateway and the exact browser profile, host or
 node, and tab from the tool result. It never starts another browser or substitutes

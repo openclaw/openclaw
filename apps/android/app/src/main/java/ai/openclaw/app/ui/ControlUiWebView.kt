@@ -13,6 +13,7 @@ import android.content.res.Configuration
 import android.view.ContextThemeWrapper
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.InputMethodManager
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
@@ -40,8 +41,10 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -120,6 +123,7 @@ internal fun ControlUiWebView(
   onExternalLink: ((String) -> Unit)? = null,
 ) {
   val context = LocalContext.current
+  val focusManager = LocalFocusManager.current
   val darkAppearance = LocalResolvedAppearanceIsDark.current
   var rendererGeneration by remember { mutableIntStateOf(0) }
   val currentExternalLink by rememberUpdatedState(onExternalLink)
@@ -132,7 +136,13 @@ internal fun ControlUiWebView(
     AndroidView(
       modifier = modifier,
       factory = {
-        val webView = WebView(controlUiWebViewContext(context, darkAppearance))
+        val webView =
+          object : WebView(controlUiWebViewContext(context, darkAppearance)) {
+            override fun onDetachedFromWindow() {
+              releaseControlUiInputFocus(this, focusManager)
+              super.onDetachedFromWindow()
+            }
+          }
         // WRAP_CONTENT forces a zero-height CSS viewport even when Compose measures the view exactly.
         webView.layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         val webSettings = webView.settings
@@ -166,15 +176,28 @@ internal fun ControlUiWebView(
         webView
       },
       update = { webView ->
+        if (!interactive) releaseControlUiInputFocus(webView, focusManager)
         webView.importantForAccessibility = if (interactive) View.IMPORTANT_FOR_ACCESSIBILITY_AUTO else View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         webView.isFocusable = interactive
         webView.isFocusableInTouchMode = interactive
-        if (!interactive) webView.clearFocus()
       },
       onRelease = { webView ->
         (webView.webViewClient as? ControlUiWebViewClient)?.release(webView)
       },
     )
+  }
+}
+
+private fun releaseControlUiInputFocus(
+  webView: WebView,
+  focusManager: FocusManager,
+) {
+  val inputMethod = webView.context.getSystemService(InputMethodManager::class.java)
+  if (webView.hasFocus() || inputMethod?.isActive(webView) == true) {
+    inputMethod?.hideSoftInputFromWindow(webView.windowToken, 0)
+    // Clear the interop target before detach can restore focus to the chat editor.
+    focusManager.clearFocus()
+    webView.clearFocus()
   }
 }
 

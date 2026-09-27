@@ -90,7 +90,10 @@ function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
   return html`
     <div class="bp-toolbar">
       ${
-        !nativeTab && !controller.host.dashboardTarget?.sessionScoped && controller.operations.route
+        !nativeTab &&
+        !controller.host.fixedTab &&
+        !controller.host.dashboardTarget?.sessionScoped &&
+        controller.operations.route
           ? html`<span
               class="bp-profile"
               title=${t("browser.profile", { profile: controller.operations.route.profile })}
@@ -375,6 +378,7 @@ function renderViewportContent(controller: BrowserPanelController) {
               class="bp-overlay bp-input"
               aria-label=${t("browser.inputLabel")}
               autocomplete="off"
+              autocorrect="off"
               autocapitalize="off"
               spellcheck="false"
               @click=${(event: MouseEvent) => controller.handleStageClick(event)}
