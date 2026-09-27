@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { installInMemoryTaskRegistryRuntime } from "../../test-utils/task-registry-runtime.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import {
@@ -51,6 +52,7 @@ const mockLog: SubsystemLogger = {
 function createParams(): SubscriptionParams {
   const chatRunState = createChatRunState();
   return {
+    scheduler: createTestGatewayScheduler(),
     signal: new AbortController().signal,
     log: mockLog,
     broadcast: vi.fn(),

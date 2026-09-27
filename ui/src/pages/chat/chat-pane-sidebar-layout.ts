@@ -157,6 +157,7 @@ export function sidebarRegionCallbacks(params: {
 
 export function renderSidebarRegion(params: {
   presentationId: string;
+  conversationTab?: Pick<SidebarPanelDefinition, "label" | "icon">;
   fetchFavicon?: LinkFaviconFetcher;
   availableWidth: number;
   callbacks: SidebarRegionCallbacks;
@@ -214,6 +215,7 @@ export function renderSidebarRegion(params: {
           : null
         : html`<openclaw-chat-sidebar-region
             .panelIdPrefix=${panelIdPrefix}
+            .conversationTab=${params.conversationTab}
             .layout=${params.layout}
             .fetchFavicon=${params.fetchFavicon}
             .panelDefinitions=${panelDefinitions}

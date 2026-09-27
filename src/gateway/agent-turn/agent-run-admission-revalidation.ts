@@ -15,7 +15,7 @@ import type { AgentTurnContext, AgentTurnPrincipal } from "./types.js";
 export function createAgentRunAdmissionRevalidator(options: {
   source: {
     context: AgentTurnContext;
-    agentDedupeKeys: readonly string[];
+    getOwnedAgentDedupeKeys: () => readonly string[];
     admissionAgentId: () => string | undefined;
     runId: string;
     assertGatewayWorkAdmissionAllowed: () => void;
@@ -41,7 +41,7 @@ export function createAgentRunAdmissionRevalidator(options: {
     if (activeRunAbort.controller.signal.aborted) {
       setAbortedAgentDedupeEntries({
         dedupe: params.context.dedupe,
-        keys: params.agentDedupeKeys,
+        keys: params.getOwnedAgentDedupeKeys(),
         agentId: params.admissionAgentId(),
         runId: params.runId,
         stopReason: activeRunAbort.entry?.abortStopReason ?? "rpc",

@@ -595,7 +595,7 @@ export function renderApplicationShell(host: ShellViewHost) {
     </div>
   `;
   // Keep plugin settings reachable when a replacement owns the workspace.
-  if (activeRoute === "plugins") {
+  if (activeRoute === "plugins" || activeRoute === "plugin-settings") {
     return workspace;
   }
   return renderPluginSurface(

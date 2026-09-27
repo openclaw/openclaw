@@ -26,10 +26,7 @@ import {
   progressCardRefreshRunProjection,
 } from "../sessions/input-provenance.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
-import {
-  emitSessionTranscriptUpdate,
-  type InternalSessionTranscriptUpdate,
-} from "../sessions/transcript-events.js";
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { installInMemoryTaskRegistryRuntime } from "../test-utils/task-registry-runtime.js";
 import {
@@ -814,21 +811,6 @@ describe("startGatewayEventSubscriptions", () => {
       }
     },
   );
-
-  it("logs transcript handler failures", async () => {
-    unsubs = startGatewayEventSubscriptions(createParams());
-
-    emitSessionTranscriptUpdate({
-      sessionFile: "/tmp/sess.jsonl",
-      sessionKey: "agent:main:main",
-    } as InternalSessionTranscriptUpdate);
-
-    await waitForFast(() => expect(warn).toHaveBeenCalledTimes(1));
-    expect(warn).toHaveBeenCalledWith(
-      "Transcript update dispatch failed",
-      expect.objectContaining({ sessionKey: "agent:main:main" }),
-    );
-  });
 
   it("logs real asynchronous transcript failures and recovers the broadcast queue", async () => {
     transcriptBroadcastMocks.useActualHandler = true;

@@ -7,6 +7,10 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import * as stateCoordinator from "../infra/state-database-coordinator.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { withTimeout } from "../utils/with-timeout.js";
 import { CronService } from "./service.js";
 import { writeCronStoreSnapshot } from "./service.test-harness.js";
@@ -81,10 +85,8 @@ function createDeferredIsolatedRun() {
       try {
         await run;
       } finally {
-        await vi.waitFor(() => {
-          expect(getSuspensionVisibleCronTaskRunCount()).toBe(0);
-          expect(getActiveGatewayRootWorkCount()).toBe(0);
-        });
+        expect(getSuspensionVisibleCronTaskRunCount()).toBe(0);
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
       }
     },
   };
@@ -126,6 +128,7 @@ describe("CronService read ops while job is running", () => {
     const jobs = Array.from({ length: 100 }, (_, index) => futureJob(`stable-${index}`, nowMs));
     await writeCronStoreSnapshot({ storePath: store.storePath, jobs });
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
@@ -168,6 +171,7 @@ describe("CronService read ops while job is running", () => {
     const job = futureJob("unstarted-missing-next", nowMs, false);
     await writeCronStoreSnapshot({ storePath: store.storePath, jobs: [job] });
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
@@ -207,30 +211,23 @@ describe("CronService read ops while job is running", () => {
   ] as const)(
     "preserves a rescheduled active one-shot after $status and restart (deleteAfterRun=$deleteAfterRun)",
     async ({ deleteAfterRun, status }) => {
-      vi.useFakeTimers();
       const startedAt = Date.parse("2025-12-13T00:00:01.000Z");
       const rescheduledAt = startedAt + 5 * 60_000;
-      vi.setSystemTime(startedAt - 1_000);
+      const clock = createGatewaySchedulerClock(startedAt - 1_000);
+      const scheduler = createTestGatewayScheduler(clock.clock);
       const store = await makeStorePath();
       const isolatedRun = createDeferredIsolatedRun();
-      let resolveFinished: (() => void) | undefined;
-      const finished = new Promise<void>((resolve) => {
-        resolveFinished = resolve;
-      });
       const cron = new CronService({
+        scheduler,
         storePath: store.storePath,
         cronEnabled: true,
         log: noopLogger,
         enqueueSystemEvent: vi.fn(),
         requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: isolatedRun.runIsolatedAgentJob,
-        onEvent: (event) => {
-          if (event.action === "finished" && event.status === status) {
-            resolveFinished?.();
-          }
-        },
       });
       let restartedCron: CronService | undefined;
+      let tick: Promise<void> | undefined;
 
       try {
         await cron.start();
@@ -245,8 +242,7 @@ describe("CronService read ops while job is running", () => {
           delivery: { mode: "none" },
         });
 
-        vi.setSystemTime(startedAt);
-        await vi.advanceTimersByTimeAsync(1_000);
+        tick = Promise.resolve(clock.advanceTo(startedAt));
         await isolatedRun.runStarted;
 
         await cron.update(job.id, {
@@ -256,7 +252,7 @@ describe("CronService read ops while job is running", () => {
           status,
           ...(status === "error" ? { error: "original invocation failed" } : {}),
         });
-        await finished;
+        await tick;
         await cron.status();
 
         const expected = {
@@ -271,6 +267,7 @@ describe("CronService read ops while job is running", () => {
 
         cron.stop();
         restartedCron = new CronService({
+          scheduler,
           storePath: store.storePath,
           cronEnabled: true,
           log: noopLogger,
@@ -286,40 +283,30 @@ describe("CronService read ops while job is running", () => {
       } finally {
         cron.stop();
         restartedCron?.stop();
-        await isolatedRun.settle();
-        vi.clearAllTimers();
-        vi.useRealTimers();
+        await isolatedRun.settle(tick);
         await store.cleanup();
       }
     },
   );
 
   it("keeps list and status responsive during a long isolated run", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2025-12-13T00:00:00.000Z"));
+    const clock = createGatewaySchedulerClock(Date.parse("2025-12-13T00:00:00.000Z"));
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
-    let resolveFinished: (() => void) | undefined;
-    const finished = new Promise<void>((resolve) => {
-      resolveFinished = resolve;
-    });
 
     const isolatedRun = createDeferredIsolatedRun();
 
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(clock.clock),
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
       enqueueSystemEvent,
       requestHeartbeat,
       runIsolatedAgentJob: isolatedRun.runIsolatedAgentJob,
-      onEvent: (evt) => {
-        if (evt.action === "finished" && evt.status === "ok") {
-          resolveFinished?.();
-        }
-      },
     });
+    let tick: Promise<void> | undefined;
 
     try {
       await cron.start();
@@ -339,8 +326,7 @@ describe("CronService read ops while job is running", () => {
         delivery: { mode: "none" },
       });
 
-      vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
-      await vi.advanceTimersByTimeAsync(1_000);
+      tick = Promise.resolve(clock.advanceBy(1_000));
 
       await isolatedRun.runStarted;
       expect(isolatedRun.runIsolatedAgentJob).toHaveBeenCalledTimes(1);
@@ -353,28 +339,14 @@ describe("CronService read ops while job is running", () => {
 
       isolatedRun.completeRun({ status: "ok", summary: "done" });
 
-      // Wait until the scheduler writes the result back to the store.
-      await finished;
-      // Ensure any trailing store writes have finished before cleanup.
+      await tick;
       await cron.status();
 
       const completed = await cron.list({ includeDisabled: true });
       expect(completed[0]?.state.lastStatus).toBe("ok");
-
-      // Ensure the scheduler loop has fully settled before deleting the store directory.
-      const internal = cron as unknown as { state?: { running?: boolean } };
-      for (let i = 0; i < 100; i += 1) {
-        if (!internal.state?.running) {
-          break;
-        }
-        await Promise.resolve();
-      }
-      expect(internal.state?.running).toBe(false);
     } finally {
       cron.stop();
-      await isolatedRun.settle();
-      vi.clearAllTimers();
-      vi.useRealTimers();
+      await isolatedRun.settle(tick);
       await store.cleanup();
     }
   });
@@ -387,6 +359,7 @@ describe("CronService read ops while job is running", () => {
       const originalAt = Date.parse("2030-01-01T00:05:00.000Z");
       const intermediateAt = Date.parse("2030-01-01T00:10:00.000Z");
       const cron = new CronService({
+        scheduler: createTestGatewayScheduler(),
         storePath: store.storePath,
         cronEnabled: true,
         log: noopLogger,
@@ -433,6 +406,7 @@ describe("CronService read ops while job is running", () => {
 
         cron.stop();
         restartedCron = new CronService({
+          scheduler: createTestGatewayScheduler(),
           storePath: store.storePath,
           cronEnabled: true,
           log: noopLogger,
@@ -461,6 +435,7 @@ describe("CronService read ops while job is running", () => {
     const isolatedRun = createDeferredIsolatedRun();
 
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
@@ -544,6 +519,7 @@ describe("CronService read ops while job is running", () => {
     const isolatedRun = createDeferredIsolatedRun();
 
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,

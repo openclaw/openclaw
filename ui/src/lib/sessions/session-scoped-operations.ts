@@ -5,18 +5,11 @@ import {
   resetGatewaySessionMessageSubscriptionCoordinator,
 } from "@openclaw/gateway-client/browser";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type {
-  SessionBranch,
-  SessionsBranchesSwitchResult,
-  SessionsForkResult,
-  SessionsRewindResult,
-} from "../../api/types.ts";
 import { requestSessionRecovery } from "./recover.ts";
 import type {
   SessionCompactResult,
   SessionCapability,
   SessionConnectionOwner,
-  SessionConnectionScope,
   SessionMessageSubscription,
   SessionRefreshOutcome,
 } from "./session-capability.ts";
@@ -145,70 +138,47 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
     return subscription;
   };
 
-  const reconcileCommittedMutation = async (
-    scope: SessionConnectionScope,
+  const requestCommittedMutation = async <T>(
+    disconnectedError: string,
+    request: (client: GatewayBrowserClient) => Promise<T>,
     agentId?: string | null,
-  ) => {
+  ): Promise<T> => {
+    const scope = host.connection.capture();
+    if (!scope) {
+      throw new Error(disconnectedError);
+    }
+    const result = await request(scope.client);
     // The gateway response commits destructive work; refresh is connection-scoped
     // best effort and must never turn that commit into uncertainty or a retry.
     if (host.connection.isCurrent(scope)) {
       await host.reconcileMutation(agentId).catch(() => {});
     }
-  };
-
-  const rewind = async (
-    key: string,
-    entryId: string,
-    options: { agentId?: string | null } = {},
-  ): Promise<SessionsRewindResult> => {
-    const scope = host.connection.capture();
-    if (!scope) {
-      throw new Error("Session rewind requires an active Gateway connection");
-    }
-    const result = await requestSessionRewind(scope.client, key, entryId, options);
-    await reconcileCommittedMutation(scope, options.agentId);
     return result;
   };
 
-  const forkAtMessage = async (
-    key: string,
-    entryId: string,
-    options: { agentId?: string | null } = {},
-  ): Promise<SessionsForkResult> => {
-    const scope = host.connection.capture();
-    if (!scope) {
-      throw new Error("Session fork requires an active Gateway connection");
-    }
-    const result = await requestSessionFork(scope.client, key, entryId, options);
-    await reconcileCommittedMutation(scope, options.agentId);
-    return result;
-  };
+  const rewind: SessionCapability["rewind"] = (key, entryId, options = {}) =>
+    requestCommittedMutation(
+      "Session rewind requires an active Gateway connection",
+      (client) => requestSessionRewind(client, key, entryId, options),
+      options.agentId,
+    );
 
-  const listBranches = async (
-    key: string,
-    options: { agentId?: string | null } = {},
-  ): Promise<SessionBranch[]> => {
-    const scope = host.connection.capture();
-    if (!scope) {
-      return [];
-    }
-    const branches = await requestSessionBranches(scope.client, key, options);
-    return host.connection.isCurrent(scope) ? branches : [];
-  };
+  const forkAtMessage: SessionCapability["forkAtMessage"] = (key, entryId, options = {}) =>
+    requestCommittedMutation(
+      "Session fork requires an active Gateway connection",
+      (client) => requestSessionFork(client, key, entryId, options),
+      options.agentId,
+    );
 
-  const switchBranch = async (
-    key: string,
-    leafEntryId: string,
-    options: { agentId?: string | null } = {},
-  ): Promise<SessionsBranchesSwitchResult> => {
-    const scope = host.connection.capture();
-    if (!scope) {
-      throw new Error("Session branch switch requires an active Gateway connection");
-    }
-    const result = await requestSessionBranchSwitch(scope.client, key, leafEntryId, options);
-    await reconcileCommittedMutation(scope, options.agentId);
-    return result;
-  };
+  const listBranches: SessionCapability["listBranches"] = async (key, options = {}) =>
+    (await requestCurrent((client) => requestSessionBranches(client, key, options))) ?? [];
+
+  const switchBranch: SessionCapability["switchBranch"] = (key, leafEntryId, options = {}) =>
+    requestCommittedMutation(
+      "Session branch switch requires an active Gateway connection",
+      (client) => requestSessionBranchSwitch(client, key, leafEntryId, options),
+      options.agentId,
+    );
 
   return {
     compact,

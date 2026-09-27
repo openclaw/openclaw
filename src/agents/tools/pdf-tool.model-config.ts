@@ -1,8 +1,3 @@
-/**
- * PDF tool model configuration resolver.
- *
- * Selects explicit PDF, image-model, native PDF, vision, or text-extraction fallback models.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   providerSupportsNativePdfDocument,

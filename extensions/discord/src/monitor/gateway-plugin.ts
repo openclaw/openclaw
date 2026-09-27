@@ -3,8 +3,8 @@ import type { Agent as HttpAgent } from "node:http";
 import { Agent as HttpsAgent } from "node:https";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
+import * as proxyCaptureSdk from "openclaw/plugin-sdk/proxy-capture";
 import {
-  captureWsEvent,
   resolveEffectiveDebugProxyUrl,
   resolveDebugProxySettings,
 } from "openclaw/plugin-sdk/proxy-capture";
@@ -28,6 +28,9 @@ import {
   type DiscordGatewayFetch,
   type DiscordGatewayFetchInit,
 } from "./gateway-metadata.js";
+
+// The shipped 2026.9.6 host omits async capture; retire this check when the minimum advances.
+const captureSdk: Partial<Pick<typeof proxyCaptureSdk, "captureWsEventAsync">> = proxyCaptureSdk;
 
 const DISCORD_GATEWAY_POLICY_VIOLATION_CLOSE_CODE = 1008;
 const DISCORD_GATEWAY_WS_RECEIVER_LIMIT_CODE = "WS_ERR_TOO_MANY_BUFFERED_PARTS";
@@ -268,35 +271,42 @@ function createGatewayPlugin(params: {
         }
         this.emitter.emit(DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT, { at: Date.now() });
       };
-      captureWsEvent({
-        url,
-        direction: "local",
-        kind: "ws-open",
-        flowId: wsFlowId,
-        meta: { subsystem: "discord-gateway" },
-      });
+      // Finalization retains capture failures; observe Promises returned by the SDK view.
+      void captureSdk
+        .captureWsEventAsync?.({
+          url,
+          direction: "local",
+          kind: "ws-open",
+          flowId: wsFlowId,
+          meta: { subsystem: "discord-gateway" },
+        })
+        .catch(() => {});
       socket.on?.("message", (data: unknown) => {
         emitTransportActivity();
-        captureWsEvent({
-          url,
-          direction: "inbound",
-          kind: "ws-frame",
-          flowId: wsFlowId,
-          payload: Buffer.isBuffer(data) ? data : Buffer.from(String(data)),
-          meta: { subsystem: "discord-gateway" },
-        });
+        void captureSdk
+          .captureWsEventAsync?.({
+            url,
+            direction: "inbound",
+            kind: "ws-frame",
+            flowId: wsFlowId,
+            payload: Buffer.isBuffer(data) ? data : Buffer.from(String(data)),
+            meta: { subsystem: "discord-gateway" },
+          })
+          .catch(() => {});
       });
       socket.on?.("close", (code: number, reason: Buffer) => {
         const closeReason = Buffer.isBuffer(reason) ? reason : Buffer.from(String(reason ?? ""));
-        captureWsEvent({
-          url,
-          direction: "local",
-          kind: "ws-close",
-          flowId: wsFlowId,
-          closeCode: code,
-          payload: closeReason,
-          meta: { subsystem: "discord-gateway" },
-        });
+        void captureSdk
+          .captureWsEventAsync?.({
+            url,
+            direction: "local",
+            kind: "ws-close",
+            flowId: wsFlowId,
+            closeCode: code,
+            payload: closeReason,
+            meta: { subsystem: "discord-gateway" },
+          })
+          .catch(() => {});
         if (
           shouldLogDiscordGatewayTransportClose({
             code,
@@ -318,14 +328,16 @@ function createGatewayPlugin(params: {
       });
       socket.on?.("error", (error: Error) => {
         lastTransportError = describeDiscordGatewayTransportError(error);
-        captureWsEvent({
-          url,
-          direction: "local",
-          kind: "error",
-          flowId: wsFlowId,
-          errorText: error.message,
-          meta: { subsystem: "discord-gateway" },
-        });
+        void captureSdk
+          .captureWsEventAsync?.({
+            url,
+            direction: "local",
+            kind: "error",
+            flowId: wsFlowId,
+            errorText: error.message,
+            meta: { subsystem: "discord-gateway" },
+          })
+          .catch(() => {});
         params.runtime?.log?.(
           warn(
             formatDiscordGatewayTransportErrorLog({ flowId: wsFlowId, error: lastTransportError }),

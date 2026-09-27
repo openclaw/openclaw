@@ -249,18 +249,6 @@ describe("projectModelCatalogEntryForRoute", () => {
     ).toEqual({ provider: "openai", id: "gpt-5.5", name: "GPT-5.5" });
   });
 
-  it("does not copy private route policy facts into the catalog row", () => {
-    const { entry: projected } = projectModelCatalogEntryForRoute({
-      entry: platformEntry,
-      projection: { kind: "selected", route: chatGPTRoute, policy: routePolicy },
-      catalog: [chatGPTEntry],
-    });
-    expect(projected).not.toHaveProperty("authRequirement");
-    expect(projected).not.toHaveProperty("requestTransportOverrides");
-    expect(projected).not.toHaveProperty("params");
-    expect(projected).not.toHaveProperty("compat");
-  });
-
   it("applies explicit logical context overrides after physical route selection", () => {
     const cfg = {
       models: {

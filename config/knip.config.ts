@@ -28,8 +28,6 @@ const repositoryScriptEntries = [
   ".github/actions/git-owner/test-prerequisites.mjs!",
   // The compiler below exposes this workflow's inline and generated-config imports.
   ".github/workflows/plugin-prerelease.yml!",
-  // mobile-release-authority invokes this helper from composite-action YAML.
-  ".github/actions/mobile-release-authority/authority.mjs!",
   // setup-node-env invokes this helper from composite-action YAML.
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
   ".github/actions/setup-node-env/seed-bun-from-image.mjs!",
@@ -47,6 +45,8 @@ const repositoryScriptEntries = [
   "scripts/check-live-cache.ts!",
   "scripts/check-package-dist-imports.mjs!",
   "scripts/check-plugin-sdk-exports.mts!",
+  // Declaration preparation and boundary checks launch this compiler worker by path.
+  "scripts/compile-extension-boundary.mts!",
   // openclaw-performance.yml invokes the paired benchmark CLI by path.
   "scripts/vitest-pair-benchmark.mts!",
   // Cloudflare deployment template: wrangler bundles the Worker from this entry.
@@ -77,6 +77,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/codex-on-demand/doctor-checks.mjs!",
   "scripts/e2e/lib/config-reload/assert-log.mjs!",
   "scripts/e2e/lib/config-reload/mutate-metadata.mjs!",
+  "scripts/e2e/lib/container-image-upgrade/assert-launch.mjs!",
+  "scripts/e2e/lib/container-image-upgrade/fixture.mjs!",
   "scripts/e2e/lib/docker-artifact-proof/write-identities.ts!",
   "scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs!",
   "scripts/e2e/lib/doctor-install-switch/assert-exec-start.mjs!",
@@ -156,6 +158,8 @@ const repositoryScriptEntries = [
   "scripts/ios-screenshot-evidence.mjs!",
   "scripts/ios-release-cut.ts!",
   "scripts/ios-release-plan.ts!",
+  // Android Fastlane invokes this planner and its pre-upload validation by path.
+  "scripts/android-release-plan.ts!",
   "scripts/ios-release-signing.mts!",
   "scripts/lib/docker-plugin-selection.mjs!",
   // The frozen compatibility shell invokes the source CLI and imports trusted tooling.
@@ -339,7 +343,7 @@ const rootEntries = [
   "security/opengrep/rules/ghsa-82g8-464f-2mv7/skill-env.ts!",
   "security/opengrep/rules/ghsa-fv94-qvg8-xqpw/ssh-sandbox-upload.js!",
   "security/opengrep/rules/ghsa-fv94-qvg8-xqpw/ssh-sandbox-upload.ts!",
-  "openclaw.mjs!",
+  "{openclaw,docker-entrypoint}.mjs!",
   // update-command-node-runtime-resolution loads this package-root module by absolute URL.
   "node-runtime-recovery.mjs!",
   "src/index.ts!",
@@ -348,6 +352,7 @@ const rootEntries = [
   "src/docker-healthcheck.ts!",
   // Deployed in the worker archive and launched by path, without a static host import.
   "src/worker/worker-deploy-entry.ts!",
+  "src/worker/worker-deploy-file-tool-planning.ts!",
   "src/worker/worker-deploy-image-processor.ts!",
   "src/worker/worker-deploy-sqlite-store.ts!",
   "src/worker/workspace-rsync-receiver.ts!",
@@ -655,6 +660,9 @@ const config = {
     // Registry facades retain direct registration/reset compatibility seams used by focused
     // tests; the full-tree scan still audits every named export against those consumers.
     "src/agents/harness/registry.ts": ["exports"],
+    // Focused outbox tests seed and recover rows through these kernels; production
+    // reaches them only through the agent database worker's command dispatcher.
+    "src/agents/harness/context-engine-turn-outbox.ts": ["exports"],
     // Runtime reason values are exported now so protocol schemas can derive from one tuple later.
     "src/agents/failover/signal.ts": ["exports"],
     "src/context-engine/registry.ts": ["exports", "types"],

@@ -94,6 +94,14 @@ const createSystemAgentVerifiedInferenceBinding: typeof createSystemAgentVerifie
   (...args) =>
     pluginMetadataSnapshot!.run(() => createSystemAgentVerifiedInferenceBindingImpl(...args));
 
+function turnParams(
+  session: SystemAgentSession,
+  overview: Parameters<typeof runSystemAgentTurnWithDeps>[0]["overview"],
+  input = "hello",
+): Parameters<typeof runSystemAgentTurnWithDeps>[0] {
+  return { input, overview, surface: "gateway", approvalArmed: false, session };
+}
+
 function useTempStateDir(): string {
   const stateDir = tempDirs.make("openclaw-turn-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -204,13 +212,7 @@ describe("runSystemAgentTurn", () => {
     }));
     const turn = async () =>
       await runSystemAgentTurnWithDeps(
-        {
-          input: "continue setup",
-          overview: { defaultModel: "openai/gpt-5.5" } as never,
-          surface: "gateway",
-          approvalArmed: false,
-          session,
-        },
+        turnParams(session, { defaultModel: "openai/gpt-5.5" } as never, "continue setup"),
         {
           ...authDeps,
           runEmbeddedAgent: runEmbeddedAgent as never,
@@ -377,13 +379,7 @@ describe("runSystemAgentTurn", () => {
     const { session, deps } = await createVerifiedSession(config);
 
     await runSystemAgentTurnWithDeps(
-      {
-        input: "hello",
-        overview: { defaultModel: "claude-cli/claude-opus-4-8" } as never,
-        surface: "gateway",
-        approvalArmed: false,
-        session,
-      },
+      turnParams(session, { defaultModel: "claude-cli/claude-opus-4-8" } as never),
       {
         ...deps,
         runCliAgent: runCliAgent as never,
@@ -449,13 +445,11 @@ describe("runSystemAgentTurn", () => {
 
     try {
       await runSystemAgentTurnWithDeps(
-        {
-          input: "set up my workspace",
-          overview: { defaultModel: "google-gemini-cli/gemini-3.1-pro-preview" } as never,
-          surface: "gateway",
-          approvalArmed: false,
+        turnParams(
           session,
-        },
+          { defaultModel: "google-gemini-cli/gemini-3.1-pro-preview" } as never,
+          "set up my workspace",
+        ),
         {
           ...deps,
           runCliAgent: runCliAgent as never,
@@ -502,13 +496,7 @@ describe("runSystemAgentTurn", () => {
       const { session, deps } = await createVerifiedSession(config);
       const turn = async (input: string) =>
         await runSystemAgentTurnWithDeps(
-          {
-            input,
-            overview: { defaultModel: "claude-cli/claude-opus-4-8" } as never,
-            surface: "gateway",
-            approvalArmed: false,
-            session,
-          },
+          turnParams(session, { defaultModel: "claude-cli/claude-opus-4-8" } as never, input),
           {
             ...deps,
             runCliAgent: runCliAgent as never,
@@ -585,13 +573,7 @@ describe("runSystemAgentTurn", () => {
     const { session, deps } = await createVerifiedSession(config);
 
     await runSystemAgentTurnWithDeps(
-      {
-        input: "hello",
-        overview: { defaultModel: "anthropic/claude-opus-4-8" } as never,
-        surface: "gateway",
-        approvalArmed: false,
-        session,
-      },
+      turnParams(session, { defaultModel: "anthropic/claude-opus-4-8" } as never),
       {
         ...deps,
         runCliAgent: runCliAgent as never,
@@ -644,13 +626,11 @@ describe("runSystemAgentTurn", () => {
     const readConfigFileSnapshot = vi.fn(async () => configSnapshot(config)) as never;
 
     await runSystemAgentTurnWithDeps(
-      {
-        input: "set the default model",
-        overview: { defaultModel: "claude-cli/claude-opus-4-8" } as never,
-        surface: "gateway",
-        approvalArmed: false,
+      turnParams(
         session,
-      },
+        { defaultModel: "claude-cli/claude-opus-4-8" } as never,
+        "set the default model",
+      ),
       { ...deps, runCliAgent: runCliAgent as never, readConfigFileSnapshot },
     );
     // Mirrors the denied tool result that arms the exact-operation hash.
@@ -704,13 +684,7 @@ describe("runSystemAgentTurn", () => {
     const { session, deps } = await createVerifiedSession(configForProfile("claude-cli:ops"));
     const turn = async () =>
       await runSystemAgentTurnWithDeps(
-        {
-          input: "hello",
-          overview: { defaultModel: "claude-cli/claude-opus-4-8" } as never,
-          surface: "gateway",
-          approvalArmed: false,
-          session,
-        },
+        turnParams(session, { defaultModel: "claude-cli/claude-opus-4-8" } as never),
         {
           ...deps,
           runCliAgent: runCliAgent as never,
@@ -762,13 +736,7 @@ describe("runSystemAgentTurn", () => {
     const { session, deps } = await createVerifiedSession(configForGlobalPolicy("full"));
     const turn = async () =>
       await runSystemAgentTurnWithDeps(
-        {
-          input: "hello",
-          overview: { defaultModel: "claude-cli/claude-opus-4-8" } as never,
-          surface: "gateway",
-          approvalArmed: false,
-          session,
-        },
+        turnParams(session, { defaultModel: "claude-cli/claude-opus-4-8" } as never),
         {
           ...deps,
           runCliAgent: runCliAgent as never,
@@ -828,13 +796,7 @@ describe("runSystemAgentTurn", () => {
     const { session, deps } = await createVerifiedSession(cliConfig);
     const turn = async (input: string) =>
       await runSystemAgentTurnWithDeps(
-        {
-          input,
-          overview: { defaultModel: "configured" } as never,
-          surface: "gateway",
-          approvalArmed: false,
-          session,
-        },
+        turnParams(session, { defaultModel: "configured" } as never, input),
         {
           ...deps,
           runCliAgent: runCliAgent as never,
@@ -893,13 +855,7 @@ describe("runSystemAgentTurn", () => {
     const { session, deps } = await createVerifiedSession(config);
 
     await runSystemAgentTurnWithDeps(
-      {
-        input: "hello",
-        overview: { defaultModel: "openai/gpt-5.4" } as never,
-        surface: "gateway",
-        approvalArmed: false,
-        session,
-      },
+      turnParams(session, { defaultModel: "openai/gpt-5.4" } as never),
       {
         ...deps,
         runCliAgent: runCliAgent as never,
@@ -1011,13 +967,7 @@ describe("runSystemAgentTurn", () => {
 
     await expect(
       runSystemAgentTurnWithDeps(
-        {
-          input: "hello",
-          overview: { defaultModel: "openai/stale-overview-model" } as never,
-          surface: "gateway",
-          approvalArmed: false,
-          session: unverifiedSession,
-        },
+        turnParams(unverifiedSession, { defaultModel: "openai/stale-overview-model" } as never),
         {
           runCliAgent: runCliAgent as never,
           runEmbeddedAgent: runEmbeddedAgent as never,
@@ -1043,21 +993,12 @@ describe("runSystemAgentTurn", () => {
     };
 
     await expect(
-      runSystemAgentTurnWithDeps(
-        {
-          input: "hello",
-          overview: { defaultModel: "openai/gpt-5.5" } as never,
-          surface: "gateway",
-          approvalArmed: false,
-          session,
-        },
-        {
-          ...deps,
-          readConfigFileSnapshot: vi.fn(async () => {
-            throw new Error("config read failed");
-          }) as never,
-        },
-      ),
+      runSystemAgentTurnWithDeps(turnParams(session, { defaultModel: "openai/gpt-5.5" } as never), {
+        ...deps,
+        readConfigFileSnapshot: vi.fn(async () => {
+          throw new Error("config read failed");
+        }) as never,
+      }),
     ).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
     expect(session.proposalRef.current).toBeUndefined();
     expect(session.cliSession).toBeUndefined();

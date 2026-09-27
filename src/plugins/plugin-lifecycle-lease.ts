@@ -14,14 +14,17 @@ import {
   waitForPluginCacheRetirement,
   withPluginCache,
 } from "./plugin-cache.js";
+import { PLUGIN_LIFECYCLE_LEASE_IDENTITY } from "./plugin-lifecycle-lease-identity.js";
 
-const PLUGIN_LIFECYCLE_LEASE_SCOPE = "core:plugin-lifecycle";
-const PLUGIN_LIFECYCLE_LEASE_KEY = "global";
 const DEFAULT_PLUGIN_LIFECYCLE_LEASE_MS = 5 * 60_000;
 const DEFAULT_PLUGIN_LIFECYCLE_WAIT_MS = 10 * 60_000;
 
 export type PluginLifecycleLeaseContext = OpenClawStateLeaseContext & {
   databasePath: string;
+  /** Original state owner; wrapper identity cannot authorize worker writes. */
+  stateLease: OpenClawStateLeaseContext;
+  /** Live requester checks without synchronous lease SQL inside worker admission. */
+  assertCurrent(): void;
 };
 
 type PluginLifecycleRefusal = { current?: { error: unknown } };
@@ -94,6 +97,11 @@ export async function withPluginLifecycleLease<T>(
         ? lease
         : {
             ...lease,
+            assertCurrent: () =>
+              assertAuthority(() => {
+                assertCurrent?.();
+                lease.assertCurrent();
+              }),
             assertOwned: () =>
               assertAuthority(() => {
                 assertCurrent?.();
@@ -144,8 +152,7 @@ export async function withPluginLifecycleLease<T>(
 
   return await withOpenClawStateLease(
     {
-      scope: PLUGIN_LIFECYCLE_LEASE_SCOPE,
-      key: PLUGIN_LIFECYCLE_LEASE_KEY,
+      ...PLUGIN_LIFECYCLE_LEASE_IDENTITY,
       database: {
         scope: "shared",
         schemaPolicy: options.schemaPolicy,
@@ -164,6 +171,8 @@ export async function withPluginLifecycleLease<T>(
     async (lease) => {
       const pluginLease: PluginLifecycleLeaseContext = {
         databasePath,
+        stateLease: lease,
+        assertCurrent: () => assertAuthority(() => lease.signal.throwIfAborted()),
         signal: lease.signal,
         assertOwned: () => lease.assertOwned(),
         assertOwnedInTransaction: (database) => lease.assertOwnedInTransaction(database),

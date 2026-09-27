@@ -1,13 +1,6 @@
 import { t } from "../i18n/index.ts";
-import type {
-  ChatAttachment,
-  ChatComposerMemoryFallback,
-  ChatGoalDraftMode,
-  HumanMention,
-} from "../lib/chat/chat-types.ts";
 import { showToast } from "../lib/toast.ts";
 import { releaseChatAttachmentPayloads } from "../pages/chat/attachment-payload-lifecycle.ts";
-import type { NewSessionDraftHandoff } from "../pages/new-session/draft-persistence.ts";
 import type { ApplicationChatAttachmentHandoff } from "./context.ts";
 import { registerControlUiReloadGuard } from "./document-reload-guard.ts";
 import { createGatewayControlUiReloadOptions } from "./gateway-control-ui-reload.ts";
@@ -19,17 +12,13 @@ const MAX_PENDING_CHAT_ATTACHMENT_ENTRIES = 32;
 // Hidden split panes can remain unmounted indefinitely, so wall-clock expiry
 // would lose valid drafts. Bounded oldest-first eviction owns abandoned cleanup.
 
-type PendingChatAttachmentHandoff = {
+type PendingChatAttachmentHandoff = NonNullable<
+  ReturnType<ApplicationChatAttachmentHandoff["consume"]>
+> & {
   owner: NonNullable<Parameters<ApplicationChatAttachmentHandoff["prepare"]>[0]["owner"]>;
   paneId: string;
   scopeKey: string;
-  attachments: ChatAttachment[];
-  fallbacks: Record<string, ChatComposerMemoryFallback>;
   message: string;
-  draftRevision?: number;
-  goalMode?: ChatGoalDraftMode | null;
-  mentions?: readonly HumanMention[];
-  newSessionDraft?: NewSessionDraftHandoff;
   preparedAt: number;
   incognito?: boolean;
   isConnectionCurrent: () => boolean;
@@ -39,8 +28,18 @@ type PendingChatAttachmentHandoff = {
 };
 
 const hasInput = (
-  draft: Pick<PendingChatAttachmentHandoff, "message" | "attachments" | "goalMode" | "mentions">,
-) => Boolean(draft.message || draft.attachments.length || draft.goalMode || draft.mentions?.length);
+  draft: Pick<
+    PendingChatAttachmentHandoff,
+    "message" | "attachments" | "goalMode" | "mentions" | "replyTarget"
+  >,
+) =>
+  Boolean(
+    draft.message ||
+    draft.attachments.length ||
+    draft.goalMode ||
+    draft.replyTarget ||
+    draft.mentions?.length,
+  );
 
 export function createChatAttachmentHandoff(
   gateway: ApplicationGateway,
@@ -152,12 +151,14 @@ export function createChatAttachmentHandoff(
         entry.message = "";
         entry.attachments = [];
         entry.goalMode = null;
+        entry.replyTarget = null;
         entry.mentions = [];
       }
       if (
         !entry.message &&
         !entry.attachments.length &&
         !entry.goalMode &&
+        !entry.replyTarget &&
         !Object.keys(entry.fallbacks).length
       ) {
         take(key);
@@ -195,6 +196,7 @@ export function createChatAttachmentHandoff(
       message = "",
       draftRevision,
       goalMode,
+      replyTarget,
       mentions,
       newSessionDraft,
       incognito,
@@ -203,7 +205,13 @@ export function createChatAttachmentHandoff(
       const key = entryKey(paneId, scopeKey);
       const previous = take(key);
       const fallbackEntries = Object.entries(fallbacks);
-      if (!message && !goalMode && attachments.length === 0 && fallbackEntries.length === 0) {
+      if (
+        !message &&
+        !goalMode &&
+        !replyTarget &&
+        attachments.length === 0 &&
+        fallbackEntries.length === 0
+      ) {
         releaseHandoff(previous);
         return;
       }
@@ -237,6 +245,7 @@ export function createChatAttachmentHandoff(
         message,
         ...(draftRevision !== undefined ? { draftRevision } : {}),
         ...(goalMode ? { goalMode } : {}),
+        ...(replyTarget ? { replyTarget: { ...replyTarget } } : {}),
         ...(mentions?.length ? { mentions: mentions.map((mention) => ({ ...mention })) } : {}),
         fallbacks: Object.fromEntries(
           fallbackEntries.map(([fallbackKey, fallback]) => [
@@ -266,6 +275,7 @@ export function createChatAttachmentHandoff(
           ...(match.message ? { message: match.message } : {}),
           ...(match.draftRevision !== undefined ? { draftRevision: match.draftRevision } : {}),
           ...(match.goalMode ? { goalMode: match.goalMode } : {}),
+          ...(match.replyTarget ? { replyTarget: match.replyTarget } : {}),
           ...(match.mentions ? { mentions: match.mentions } : {}),
         };
       }

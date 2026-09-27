@@ -47,6 +47,15 @@ session reset and `withSessionDeletion(params, run)` for removal of a session
 key, including expiry and maintenance. A physical session ID changing at the
 same key is a transfer, not deletion; preserve any compaction adoption path.
 
+Core logs reset-hook failures once per harness ID per process, including across
+plugin reloads. Later resets still invoke the hook so it can recover.
+
+ACPX automatically migrates sessions from its former `<workspace>/state` default
+to `<OPENCLAW_STATE_DIR>/acpx` when the new default is empty. Set
+`plugins.entries.acpx.config.stateDir` only to keep a different location; explicit
+values are never relocated. Failed adoption warns and retains the old location
+for the process so an update does not silently hide existing sessions.
+
 `withSessionDeletion` acquires the native owner's lease before calling
 `run({ commit, rollback })`. Core invokes the synchronous `commit()` at the
 session row deletion boundary and `rollback()` if the transaction fails.
@@ -73,10 +82,14 @@ invoke this hook and continues to preserve native thread continuity.
 
 Official harnesses use the JavaScript-only private
 `openclaw/plugin-sdk/agent-harness-session-runtime`; it is not a third-party
-Plugin SDK contract and uses the existing synchronous plugin-state store.
+Plugin SDK contract. Binding mutations use action-bound plugin-state observations
+and conditional writes in the shared-state worker. Synchronous reads still serve
+native lease assertions, and synchronous deletion/rollback remains part of the
+host's existing transaction contract.
 `createNativeSessionBindingLifecycle` owns exact-token lease acquisition,
 renewal, mutation fences, and transactional deletion/rollback. The backend
-supplies its record codec, acquisition/retention policy, errors, and timing.
+supplies matching synchronous and asynchronous views of the same plugin-state
+namespace, its record codec, acquisition/retention policy, errors, and timing.
 Pass host authority through `assertCurrent` and validate the expected generation
 in `assertRecordCurrent`. Leases coordinate storage; they grant no execution
 authority. Keep native cleanup after the host transaction commits.

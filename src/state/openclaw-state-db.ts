@@ -139,7 +139,7 @@ export function repairOpenClawStateDatabaseIndexesForDoctor(
   return repairDoctorStateDatabase(options, "indexes", "Doctor state index repair");
 }
 
-/** Make exact legacy catalog damage readable before Doctor loads config-dependent state. */
+/** Repair known catalog damage and preserve orphan rows before Doctor backs up or loads state. */
 export function repairOpenClawStateDatabaseReadabilityForDoctor(
   options: OpenClawStateDatabaseOptions = {},
 ): { changes: string[]; warnings: string[] } {
@@ -355,7 +355,7 @@ function openOpenClawStateDatabaseWithBusyTimeout(
   if (existingSchema) {
     recordExistingOpenClawStateSchemaDatabase(unpublished.db, pathname);
   }
-  const database = stateDbCache.publishOpenClawStateDatabase(unpublished);
+  const database = stateDbCache.publishOpenClawStateDatabase(unpublished, env);
   try {
     if (!existingSchema && readSqliteUserVersion(database.db) < OPENCLAW_STATE_SCHEMA_VERSION) {
       deferredStateDatabases.add(database.db);

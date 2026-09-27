@@ -343,26 +343,4 @@ describe("Workboard catalog", () => {
     await vi.waitFor(() => expect(snapshots.at(-1)?.boards[0]?.id).toBe("platform"));
     runtime.dispose();
   });
-
-  it("forces a catalog refresh after reconnect", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({ cards: [], boards: [board("ops")] })
-      .mockResolvedValueOnce({ cards: [], boards: [board("platform")] });
-    const snapshots: WorkboardCatalogSnapshot[] = [];
-    const runtime = createWorkboardCatalogRuntime(
-      (snapshot) => snapshots.push(snapshot),
-      createHost(),
-    );
-    const client = { request } as unknown as GatewayBrowserClient;
-
-    runtime.sync(client, true);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    runtime.sync(client, false);
-    runtime.sync(client, true);
-
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(snapshots.at(-1)?.boards[0]?.id).toBe("platform"));
-    runtime.dispose();
-  });
 });

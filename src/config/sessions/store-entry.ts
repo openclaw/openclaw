@@ -1,4 +1,3 @@
-// Store entry lookup resolves canonical keys and safe legacy aliases.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeConversationPeerId } from "../../routing/conversation-ref.js";
 import {
@@ -43,13 +42,8 @@ function normalizeEntryTarget(value: unknown): string {
     return "";
   }
   const trimmed = value.trim();
-  const sigilIndexes = ["!", "#"]
-    .map((sigil) => trimmed.indexOf(sigil))
-    .filter((index) => index >= 0);
-  if (sigilIndexes.length === 0) {
-    return trimmed;
-  }
-  return trimmed.slice(Math.min(...sigilIndexes));
+  const sigilIndex = trimmed.search(/[!#]/);
+  return sigilIndex < 0 ? trimmed : trimmed.slice(sigilIndex);
 }
 
 function entryDeliveryTargets(entry: SessionCanonicalDeliveryEvidence | undefined): string[] {
@@ -60,9 +54,6 @@ function entryDeliveryTargets(entry: SessionCanonicalDeliveryEvidence | undefine
 }
 
 function normalizeEntryThreadId(value: unknown): string {
-  if (value == null) {
-    return "";
-  }
   if (typeof value !== "string" && typeof value !== "number") {
     return "";
   }

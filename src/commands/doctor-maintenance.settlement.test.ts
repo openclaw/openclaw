@@ -1,16 +1,87 @@
 import "./doctor-maintenance.settlement.test-support.js";
+import fs from "node:fs";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { GatewayServiceStopUnsafeError } from "../daemon/service-inspection-error.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
 import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator.js";
 import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
+import * as updateState from "../infra/update-candidate-state.js";
+import { readUpdateDatabaseGenerations } from "../infra/update-database-generations.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
+import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 
 const settlement = await import("./doctor-maintenance.settlement.test-support.js");
 const { begin, boundary, cleanupBarrier, root } = settlement;
+
+it.each([false, true])(
+  "captures settled Doctor writes without attributing earlier writes (changed=%s)",
+  async (changed) => {
+    vi.spyOn(updateState, "readUpdateDatabaseGenerationsIsolated").mockImplementation(
+      async (paths) => readUpdateDatabaseGenerations(paths),
+    );
+    const pathname = path.join(settlement.tempDirs.make("doctor-write-receipt-"), "agent.sqlite");
+    const missing = `${pathname}.missing`;
+    const seed = new DatabaseSync(pathname);
+    seed.exec("CREATE TABLE evidence(value INTEGER); INSERT INTO evidence VALUES (1)");
+    seed.close();
+    const databaseGenerations = readUpdateDatabaseGenerations([pathname, missing]);
+    if (changed) {
+      const foreign = new DatabaseSync(pathname);
+      foreign.exec("INSERT INTO evidence VALUES (99)");
+      foreign.close();
+    }
+    const maintenance = await beginDoctorMaintenance({
+      root: null,
+      options: { repair: true, nonInteractive: true },
+      runtime: { log: boundary.log, error: vi.fn(), exit: vi.fn() },
+      databaseGenerations,
+    });
+    expect(maintenance?.databaseWrites).toBeUndefined();
+    const owned = new DatabaseSync(pathname);
+    owned.exec("PRAGMA journal_mode=WAL; INSERT INTO evidence VALUES (2)");
+    boundary.close.mockImplementationOnce(async () => owned.close());
+    await maintenance!.releaseState();
+    const receipt = maintenance!.databaseWrites;
+    expect(receipt).toEqual({
+      unchanged: !changed,
+      generations: readUpdateDatabaseGenerations([pathname, missing]),
+    });
+    expect(receipt?.generations[pathname]).not.toBe(databaseGenerations[pathname]);
+    const later = new DatabaseSync(pathname);
+    later.exec("INSERT INTO evidence VALUES (100)");
+    later.close();
+    await maintenance!.release();
+    expect(maintenance!.databaseWrites).toEqual(receipt);
+    expect(readUpdateDatabaseGenerations([pathname])[pathname]).not.toBe(
+      receipt?.generations[pathname],
+    );
+  },
+);
+
+it("keeps fingerprint failures advisory and publishes no database write proof", async () => {
+  vi.spyOn(updateState, "readUpdateDatabaseGenerationsIsolated").mockImplementation(async (paths) =>
+    readUpdateDatabaseGenerations(paths),
+  );
+  const pathname = path.join(settlement.tempDirs.make("doctor-write-proof-unavailable-"), "db");
+  fs.mkdirSync(pathname);
+  const maintenance = await beginDoctorMaintenance({
+    root: null,
+    options: { repair: true, nonInteractive: true },
+    runtime: { log: boundary.log, error: vi.fn(), exit: vi.fn() },
+    databaseGenerations: { [pathname]: null },
+  });
+  await expect(maintenance!.finish({})).resolves.toBeUndefined();
+  expect(maintenance!.databaseWrites).toBeUndefined();
+  expect(maintenance!.warnings).toContainEqual(
+    expect.stringContaining("Database write verification is unavailable"),
+  );
+  await maintenance!.release();
+});
 
 it.each([false, true])(
   "settles failed repair before restoration (data at risk=%s)",

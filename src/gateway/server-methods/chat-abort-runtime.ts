@@ -28,7 +28,6 @@ import {
   type ChatAbortOps,
 } from "../chat-abort.js";
 import { abortQueuedChatTurnById } from "../chat-queued-turns.js";
-// Cancellation orchestration across active, queued, pending, and worker runs.
 import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
@@ -94,7 +93,7 @@ export async function abortControlledSubagents(params: {
 }
 
 export function descendantAbortError(
-  result: Awaited<ReturnType<typeof abortControlledSubagents>> | undefined,
+  result: Awaited<ReturnType<typeof abortControlledSubagents>>,
   subject: "Parent run" | "Session",
 ) {
   return result && result.status !== "ok"

@@ -6,7 +6,8 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveSubagentLabel } from "../../../auto-reply/reply/subagents-utils.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
-import { listSessionEntriesReadOnly } from "../../../config/sessions/session-accessor.js";
+import { readSessionEntriesFromStoreInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../../config/sessions/session-sqlite-target-paths.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
@@ -109,10 +110,10 @@ export function captureSubagentListReadContext(
   };
 }
 
-export function readSubagentListSessionEntries(
+export async function readSubagentListSessionEntries(
   cfg: OpenClawConfig,
   context: SubagentListReadContext,
-): Map<string, SessionEntry> {
+): Promise<Map<string, SessionEntry>> {
   const runs = [...context.view.active, ...context.view.recent];
   const keysByStore = new Map<string, string[]>();
   for (const run of runs) {
@@ -128,13 +129,18 @@ export function readSubagentListSessionEntries(
   }
   const entries = new Map<string, SessionEntry>();
   for (const [storePath, sessionKeys] of keysByStore) {
-    // The listing accessor validates the whole snapshot before selecting these rows.
-    for (const { sessionKey, entry } of listSessionEntriesReadOnly({
+    const target = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath);
+    const agentId = target.agentId ?? parseAgentSessionKey(sessionKeys[0]!)?.agentId;
+    if (!agentId) {
+      throw new Error("Cannot resolve subagent session metadata without an agent id");
+    }
+    const selected = await readSessionEntriesFromStoreInWorker({
+      agentId,
       storePath,
       sessionKeys,
-      clone: false,
       projection: "list",
-    })) {
+    });
+    for (const { sessionKey, entry } of selected.entries) {
       entries.set(sessionKey, entry);
     }
   }

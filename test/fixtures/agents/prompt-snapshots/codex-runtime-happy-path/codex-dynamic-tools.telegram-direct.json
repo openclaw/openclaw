@@ -586,40 +586,48 @@
                   "type": "boolean"
                 },
                 "failureAlert": {
-                  "additionalProperties": true,
-                  "description": "Failure alert policy/route override. Route-backed jobs default to after=2 for execution failures and cooldownMs=3600000 for all failure alerts; false disables execution/delivery alerts but not the auto-disable safety notice.",
-                  "properties": {
-                    "accountId": {
-                      "type": "string"
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "accountId": {
+                          "type": "string"
+                        },
+                        "after": {
+                          "description": "Consecutive execution failures before alert; delivery failures bypass this threshold",
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "channel": {
+                          "description": "Alert channel",
+                          "type": "string"
+                        },
+                        "cooldownMs": {
+                          "description": "Alert cooldown ms",
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "includeSkipped": {
+                          "description": "Count skipped runs.",
+                          "type": "boolean"
+                        },
+                        "mode": {
+                          "enum": ["announce", "webhook"],
+                          "type": "string"
+                        },
+                        "to": {
+                          "description": "Alert target",
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
                     },
-                    "after": {
-                      "description": "Consecutive execution failures before alert; delivery failures bypass this threshold",
-                      "minimum": 1,
-                      "type": "integer"
-                    },
-                    "channel": {
-                      "description": "Alert channel",
-                      "type": "string"
-                    },
-                    "cooldownMs": {
-                      "description": "Alert cooldown ms",
-                      "minimum": 0,
-                      "type": "integer"
-                    },
-                    "includeSkipped": {
-                      "description": "Count skipped runs.",
+                    {
+                      "const": false,
                       "type": "boolean"
-                    },
-                    "mode": {
-                      "enum": ["announce", "webhook"],
-                      "type": "string"
-                    },
-                    "to": {
-                      "description": "Alert target",
-                      "type": "string"
                     }
-                  },
-                  "type": "object"
+                  ],
+                  "description": "Failure alert policy/route override. Route-backed jobs default to after=2 for execution failures and cooldownMs=3600000 for all failure alerts; false disables execution/delivery alerts but not the auto-disable safety notice."
                 },
                 "name": {
                   "description": "Job name",

@@ -1,5 +1,8 @@
 import type { AsyncLocalStorage } from "node:async_hooks";
+import { readCommittedIncognitoSessionSharing } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { getOpenIncognitoAgentDatabase } from "../state/openclaw-agent-db-lifecycle.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import type { createSessionRowPlacementProjection } from "./session-row-placement-projection.js";
 import type {
   SessionRowReadView,
@@ -7,10 +10,19 @@ import type {
   withPreparedSessionRows,
 } from "./session-row-prepared-read.js";
 import * as records from "./session-row-projection-record.js";
-import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
+import {
+  resolveStoredSessionKeyForAgentStore,
+  selectStoredSessionLineage,
+} from "./session-store-key.js";
+import { projectGatewaySessionRunState } from "./session-utils-display.js";
 
 /** Materialization reads current physical relations from the projection's existing indexes. */
 export function createSessionRowRelationReads(owner: {
+  env: NodeJS.ProcessEnv;
+  inOwnerContext: ReturnType<typeof AsyncLocalStorage.snapshot>;
+  isReady: () => boolean;
+  preparedContext: () => SessionRowReadView["state"]["rowContext"] | undefined;
+  lookup: (query: records.Lookup) => records.Row | undefined;
   config: () => records.Inputs["cfg"];
   rows: ReadonlyMap<string, records.Row>;
   byParent: ReadonlyMap<string, Set<string>>;
@@ -20,6 +32,45 @@ export function createSessionRowRelationReads(owner: {
   acquireEntry: (row: records.Row, entry: records.Row["storedEntry"]) => records.Row | undefined;
 }) {
   return {
+    readPreparedSpawnedBy(this: void, query: records.Lookup): string | undefined {
+      if (!owner.isReady()) {
+        return undefined;
+      }
+      return owner.inOwnerContext(() => {
+        const { key, value: entry } = selectStoredSessionLineage({
+          cfg: owner.config(),
+          agentId: query.agentId,
+          sessionKey: query.key,
+          read: (agentId, storedKey) => {
+            if (!isIncognitoSessionKey(storedKey)) {
+              const row = owner.lookup({ ...query, agentId, key: storedKey });
+              return row?.key === storedKey ? row.sharingEntry : undefined;
+            }
+            const database = getOpenIncognitoAgentDatabase(
+              agentId,
+              resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: owner.env }),
+            );
+            try {
+              return (
+                database && readCommittedIncognitoSessionSharing(database.db, storedKey)?.entry
+              );
+            } catch {
+              // A pending private write cannot supply optional display enrichment yet.
+              return undefined;
+            }
+          },
+        });
+        if (!entry) {
+          return undefined;
+        }
+        const rowContext = owner.preparedContext();
+        return (
+          (rowContext
+            ? projectGatewaySessionRunState({ key, now: Date.now(), rowContext }).subagentOwner
+            : undefined) || entry.spawnedBy
+        );
+      });
+    },
     readSourceEntry(this: void, row: records.Row, key: string, residentOnly = false) {
       const source = owner.referenced(
         records.parentReference(

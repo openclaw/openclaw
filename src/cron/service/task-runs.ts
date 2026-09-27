@@ -9,6 +9,7 @@ import {
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { CRON_TASK_KIND } from "../../tasks/cron-task-contract.js";
+import { cronTaskRecordToRunLogEntry } from "../../tasks/cron-task-record.js";
 import {
   createRunningTaskRunCore,
   finalizeTaskRunById,
@@ -24,21 +25,20 @@ import {
   CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
   resolveCronJobEffectiveAgentId,
 } from "../agent-id.js";
+import {
+  cronRunLogEntryToDetail,
+  cronRunStorageStatus,
+  cronQuietTriggerDetail,
+  cronRunRecordStoreKey,
+  cronRunRecordToScriptRunResult,
+  cronRunRecordToTriggerEval,
+  resolveCronRunRecordTimestamp,
+} from "../run-history-detail.js";
 import { createCronExecutionId } from "../run-id.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
 import { cronStoreKey } from "../store/key.js";
 import { bindCronRunReceiptExecution } from "../store/run-receipt-execution-binding.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
-import {
-  cronRunLogEntryToTaskDetail,
-  cronRunStatusToTaskStatus,
-  cronQuietTriggerTaskDetail,
-  cronTaskRecordStoreKey,
-  cronTaskRecordToRunLogEntry,
-  cronTaskRecordToScriptRunResult,
-  cronTaskRecordToTriggerEval,
-  resolveCronTaskRecordTimestamp,
-} from "../task-run-detail.js";
 import { cronRunLogEntryFromEvent } from "../task-run-event-codec.js";
 import type {
   CronCompletionStatus,
@@ -211,7 +211,7 @@ function findLatestCronTaskRunForRecoveryFromRecords(
       if (task.runtime !== "cron" || task.sourceId !== jobId) {
         return false;
       }
-      const taskStoreKey = cronTaskRecordStoreKey(task);
+      const taskStoreKey = cronRunRecordStoreKey(task);
       if (receiptRunId) {
         // Receipt recovery accepts only its owner-native identity; legacy rows
         // without that receipt prefix are ambiguous when runs share a millisecond.
@@ -233,7 +233,7 @@ function findLatestCronTaskRunForRecoveryFromRecords(
     .toSorted(
       (left, right) =>
         Number(left.endedAt !== undefined) - Number(right.endedAt !== undefined) ||
-        resolveCronTaskRecordTimestamp(right) - resolveCronTaskRecordTimestamp(left) ||
+        resolveCronRunRecordTimestamp(right) - resolveCronRunRecordTimestamp(left) ||
         right.createdAt - left.createdAt ||
         right.taskId.localeCompare(left.taskId),
     )[0];
@@ -252,7 +252,7 @@ function finalizedCronTaskRun(
   if (task?.runtime !== "cron" || task.sourceId !== jobId || task.endedAt === undefined) {
     return undefined;
   }
-  const triggerEval = cronTaskRecordToTriggerEval(task);
+  const triggerEval = cronRunRecordToTriggerEval(task);
   const storedEntry = cronTaskRecordToRunLogEntry(task);
   const entry =
     storedEntry ??
@@ -273,7 +273,7 @@ function finalizedCronTaskRun(
   if (!entry?.status) {
     return undefined;
   }
-  const scriptResult = cronTaskRecordToScriptRunResult(task);
+  const scriptResult = cronRunRecordToScriptRunResult(task);
   return {
     entry: { ...entry, status: entry.status },
     ...(scriptResult ? { scriptResult } : {}),
@@ -395,7 +395,7 @@ export function tryFinishCronTaskRunWithoutHistory(
     finalizeTaskRunByRunIdCore({
       runId: result.taskRunId,
       runtime: "cron",
-      status: cronRunStatusToTaskStatus({
+      status: cronRunStorageStatus({
         status: result.status,
         completionStatus: quietTriggerEval ? "succeeded" : result.completionStatus,
         error,
@@ -407,10 +407,7 @@ export function tryFinishCronTaskRunWithoutHistory(
       childSessionKey: result.childSessionKey ?? result.sessionKey ?? null,
       ...(quietTriggerEval
         ? {
-            detail: cronQuietTriggerTaskDetail(
-              cronStoreKey(state.deps.storePath),
-              quietTriggerEval,
-            ),
+            detail: cronQuietTriggerDetail(cronStoreKey(state.deps.storePath), quietTriggerEval),
           }
         : {}),
     });
@@ -464,7 +461,7 @@ export function tryFinishCronTaskRun(
     }
     const storeKey = cronStoreKey(state.deps.storePath);
     const legacyRecoveryRunId = createCronExecutionId(entry.jobId, startedAt);
-    const detail = cronRunLogEntryToTaskDetail(entry, {
+    const detail = cronRunLogEntryToDetail(entry, {
       storeKey,
       ...(result.scriptResult ? { scriptResult: result.scriptResult } : {}),
       ...(result.triggerEval ? { triggerEval: result.triggerEval } : {}),
@@ -474,7 +471,7 @@ export function tryFinishCronTaskRun(
       status: Extract<
         TaskStatus,
         "succeeded" | "failed" | "timed_out" | "cancelled"
-      > = cronRunStatusToTaskStatus(entry),
+      > = cronRunStorageStatus(entry),
     ) =>
       finalizeTaskRunByRunIdCore({
         runId,
@@ -502,7 +499,7 @@ export function tryFinishCronTaskRun(
       } else if (
         existing?.runtime === "cron" &&
         (existing.status === "lost" ||
-          (cronTaskRecordStoreKey(existing) === storeKey &&
+          (cronRunRecordStoreKey(existing) === storeKey &&
             cronTaskRecordToRunLogEntry(existing) === null) ||
           (existing.detail === undefined && existing.runId === legacyRecoveryRunId))
       ) {
@@ -510,7 +507,7 @@ export function tryFinishCronTaskRun(
         // Startup recovery replaces them with the durable interrupted outcome.
         const recovered = finalizeTaskRunById({
           taskId: existing.taskId,
-          status: cronRunStatusToTaskStatus(entry),
+          status: cronRunStorageStatus(entry),
           childSessionKey: entry.sessionKey ?? null,
           endedAt: entry.ts,
           lastEventAt: entry.ts,

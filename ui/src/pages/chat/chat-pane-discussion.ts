@@ -75,28 +75,24 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
       cached.config.openUrl = this.sessionDiscussionOpenUrls.get(sessionKey) ?? null;
       return cached.config;
     }
+    const request = async (
+      method: "session.discussion.info" | "session.discussion.open",
+      key: string,
+    ) => {
+      if (!state.connected || !state.client) {
+        throw new Error(t("chat.sessionDiscussion.disconnected"));
+      }
+      return state.client.request<SessionDiscussionInfo>(method, {
+        sessionKey: key,
+        agentId: resolveChatAgentId(state),
+      });
+    };
     const config: SessionDiscussionPanelConfig = {
       sessionKey,
       canOpen,
       openUrl: this.sessionDiscussionOpenUrls.get(sessionKey) ?? null,
-      loadInfo: async (key) => {
-        if (!state.connected || !state.client) {
-          throw new Error(t("chat.sessionDiscussion.disconnected"));
-        }
-        return await state.client.request<SessionDiscussionInfo>("session.discussion.info", {
-          sessionKey: key,
-          agentId: resolveChatAgentId(state),
-        });
-      },
-      openDiscussion: async (key) => {
-        if (!state.connected || !state.client) {
-          throw new Error(t("chat.sessionDiscussion.disconnected"));
-        }
-        return await state.client.request<SessionDiscussionInfo>("session.discussion.open", {
-          sessionKey: key,
-          agentId: resolveChatAgentId(state),
-        });
-      },
+      loadInfo: (key) => request("session.discussion.info", key),
+      openDiscussion: (key) => request("session.discussion.open", key),
       onStateChange: (key, discussionState, openUrl) => {
         // Panels created under a previous connection may report late; their
         // state belongs to the old provider and must not touch the new cache.

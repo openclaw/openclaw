@@ -3,7 +3,6 @@ import {
   dispatchChannelInboundTurn,
   resolveInboundReplyDispatchCounts,
   readAgentRunTerminalOutcome,
-  type InboundReplyRecordOptions,
   hasVisibleInboundReplyDispatch,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -445,7 +444,7 @@ async function dispatchSlackMessageWithSetup(
           replyPipeline.typingCallbacks?.onIdle?.();
         },
       },
-      record: prepared.turn.record as InboundReplyRecordOptions,
+      record: prepared.turn.record,
       botLoopProtection: resolveSlackBotLoopProtection(prepared),
       replyOptions: {
         groupThreadReplyFormatter: formatSlackGroupThreadReply,

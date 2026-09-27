@@ -45,7 +45,7 @@ export type StagedPackageSwapParams = {
   beforeActivate?: () => Promise<void>;
   assertCurrent?: () => void;
   onLiveMutation?: () => void;
-  onTransaction?: (transaction: PackageUpdateTransaction) => void;
+  onTransaction?: (transaction: PackageUpdateTransaction) => void | Promise<void>;
   timeoutMs?: number;
   localOverrides?: { reapply: boolean; env?: NodeJS.ProcessEnv };
   onLocalOverrides?: (result: LocalPackageOverridesResult) => void;

@@ -1,5 +1,4 @@
 import type { Result } from "@openclaw/normalization-core/result";
-// RPC adapter for chat.abort; cancellation policy lives in the sibling modules.
 import {
   ErrorCodes,
   errorShape,
@@ -72,17 +71,8 @@ export async function handleChatAbortRequestWithLifecycle(
   if (!assertValidParams(params, validateChatAbortParams, "chat.abort", respond)) {
     return;
   }
-  const {
-    sessionKey: rawSessionKey,
-    runId,
-    preserveSideRuns,
-  } = params as {
-    sessionKey: string;
-    agentId?: string;
-    runId?: string;
-    preserveSideRuns?: boolean;
-  };
-  const agentIdOverride = normalizeOptionalText((params as { agentId?: string }).agentId);
+  const { sessionKey: rawSessionKey, runId, preserveSideRuns } = params;
+  const agentIdOverride = normalizeOptionalText(params.agentId);
   const abortCfg = context.getRuntimeConfig();
   const parsedAbortSessionKey = parseAgentSessionKey(rawSessionKey);
   const compatibilityDefaultAgentId = tryResolveSessionCompatibilityOwnerAgentId(
@@ -155,10 +145,12 @@ export async function handleChatAbortRequestWithLifecycle(
   const ops = createChatAbortOps(context);
   const requester = resolveChatAbortRequester(client);
 
-  const sessionLoadOptions = { agentId: abortAgentId };
   const abortSession: Result<ReturnType<typeof loadSessionEntry>, unknown> = (() => {
     try {
-      return { ok: true, value: loadSessionEntry(canonicalAbortSessionKey, sessionLoadOptions) };
+      return {
+        ok: true,
+        value: loadSessionEntry(canonicalAbortSessionKey, { agentId: abortAgentId }),
+      };
     } catch (error) {
       return { ok: false, error };
     }

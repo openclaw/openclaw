@@ -29,6 +29,21 @@
   min-height: 0;
 }
 
+.chat-split-view__unbound {
+  grid-area: 1 / 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.chat-split-view__unbound strong {
+  color: var(--text);
+}
+
 .chat-pane-cache__pane {
   opacity: 0;
   grid-area: 1 / 1;

@@ -168,10 +168,11 @@ runtime through its normal policy checks.
 After changing Computer Use config, use `/new` or `/reset` in the affected
 chat before testing if an existing Codex thread has already started.
 
-On macOS, managed startup for Computer Use prefers the desktop app binary at
-`/Applications/ChatGPT.app/Contents/Resources/codex`, then falls
-back to `/Applications/Codex.app/Contents/Resources/codex` for legacy
-standalone installs. This also applies to one-off Computer Use status and
+On macOS, managed startup for Computer Use prefers `ChatGPT.app`, then
+`Codex.app` for standalone installs. Within each app's `Contents/Resources`,
+it checks `codex-cli/CodexCLI.app/Contents/MacOS/codex` before the older `codex`
+layout. Computer Use dependencies stay rooted in that app's `Contents/Resources`
+for either executable layout. This also applies to one-off Computer Use status and
 install commands that start their own client. It keeps desktop control under
 the app bundle that owns the local macOS permissions. If the desktop app is not
 installed, OpenClaw falls back to the managed Codex binary installed beside the

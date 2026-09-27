@@ -29,8 +29,10 @@ import { createSessionConversationTestRegistry } from "../../test-utils/session-
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
 import "../test-helpers/fast-openclaw-tools-sessions.js";
+import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import * as inProcessGateway from "./in-process-gateway.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
+import * as sessionsSendFollowup from "./sessions-send-followup.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 import { createSessionsSendTool } from "./sessions-send-tool.js";
 
@@ -76,7 +78,18 @@ describe("sessions_send dispatch admission", () => {
     await state.cleanup();
   });
 
-  it("keeps the accepted reply source until the detached flow actually settles", async () => {
+  const callerKeys = [requesterSessionKey, "agent:main:telegram:direct:peer-1"];
+  it.each(callerKeys)("retains accepted reply source (%s)", async (sourceKey) => {
+    if (sourceKey !== requesterSessionKey) {
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: sourceKey },
+        { sessionId: "key-only-requester", updatedAt: 1 },
+      );
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: targetSessionKey },
+        { sessionId: "target-session", updatedAt: 1, spawnedBy: sourceKey },
+      );
+    }
     const context = createContext();
     const owner = createOperatorClient({ profileName: "send-owner", scopes: ["operator.write"] });
     const source = captureGatewayDeviceRevocation(
@@ -116,21 +129,36 @@ describe("sessions_send dispatch admission", () => {
               scopes: owner.connect.scopes ?? [],
             },
             () =>
-              createSessionsSendTool({
-                agentSessionKey: requesterSessionKey,
-                config,
-                callGateway,
-                idempotencyKey: runId,
-              }).execute("send-followup", {
-                sessionKey: targetSessionKey,
-                message: "Continue the task",
-                mode: "followup",
-                timeoutSeconds: 0,
-              }),
+              withGatewayToolCallerIdentity(
+                {
+                  agentId: "main",
+                  sessionKey: sourceKey,
+                  gatewayContextResolver: () => context,
+                  receiptAuthority: () => true,
+                },
+                () =>
+                  createSessionsSendTool({
+                    agentSessionKey: sourceKey,
+                    config,
+                    callGateway,
+                    idempotencyKey: runId,
+                  }).execute("send-followup", {
+                    sessionKey: targetSessionKey,
+                    message: "Continue the task",
+                    mode: "followup",
+                    timeoutSeconds: 0,
+                  }),
+              ),
           ),
       );
-      expect(result.details).toMatchObject({ status: "accepted", delivery: { status: "pending" } });
+      expect(result.details).toMatchObject({
+        status: "accepted",
+        delivery: { status: "pending" },
+      });
       expect(runSessionsSendA2AFlow).toHaveBeenCalledOnce();
+      expect(runSessionsSendA2AFlow).toHaveBeenCalledWith(
+        expect.objectContaining({ requesterSessionKey, targetSessionKey }),
+      );
       source.release();
       expect(readGatewayDeviceSourceAuthority(source.isCurrent)?.()).toBe(true);
     } finally {
@@ -224,6 +252,12 @@ describe("sessions_send dispatch admission", () => {
       const gateway = vi
         .spyOn(inProcessGateway, "callAgentToolGatewayRequest")
         .mockImplementation(callGateway);
+      // This routing fixture supplies a run-scoped Gateway, not a native task
+      // receipt. Keep its real A2A/route assertions at that explicit boundary;
+      // retained core authority and custody have separate owner/integration proof.
+      const prepareFollowup = vi
+        .spyOn(sessionsSendFollowup, "prepareSessionsSendFollowup")
+        .mockResolvedValue(undefined);
       try {
         const tool = createOpenClawTools({
           agentSessionKey: sourceKey,
@@ -270,6 +304,7 @@ describe("sessions_send dispatch admission", () => {
           sourceReplyDeliveryMode: "message_tool_only",
         });
       } finally {
+        prepareFollowup.mockRestore();
         gateway.mockRestore();
       }
     },

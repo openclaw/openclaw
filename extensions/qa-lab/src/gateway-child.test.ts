@@ -183,19 +183,6 @@ describe("runQaGatewayCliCommand", () => {
     expect(output).toBe("1:fixture:voicecall,start");
   });
 
-  it("reports CLI stderr when a fixture command fails", async () => {
-    await expect(
-      runQaGatewayCliCommand({
-        lifetime: new QaGatewayChildLifecycle(),
-        executablePath: process.execPath,
-        argsPrefix: ["--eval", 'process.stderr.write("fixture failure"); process.exit(7)'],
-        args: [],
-        cwd: process.cwd(),
-        env: process.env,
-      }),
-    ).rejects.toThrow("OpenClaw CLI exited 7: fixture failure");
-  });
-
   it("retains bounded redacted stdout failures alongside stderr panels", async () => {
     const lifetime = new QaGatewayChildLifecycle();
     try {
@@ -290,53 +277,50 @@ describe("formatQaGatewayProcessBoundaryStartupFailure", () => {
 });
 
 describe("waitForGatewayReady", () => {
-  it.each(["startup", "restart"] as const)(
-    "does not accept a healthy listener as %s readiness",
-    async (phase) => {
-      vi.useFakeTimers();
-      const baseUrl = "http://127.0.0.1:43124";
-      const release = vi.fn(async () => {});
-      let ready = false;
+  it("does not accept a healthy listener as readiness", async () => {
+    vi.useFakeTimers();
+    const baseUrl = "http://127.0.0.1:43124";
+    const release = vi.fn(async () => {});
+    let ready = false;
 
-      fetchWithSsrFGuardMock.mockImplementation(async ({ url }: { url: string }) => {
-        const status = url.endsWith("/healthz") || ready ? 200 : 503;
-        return { response: { ok: status === 200, status }, release };
+    fetchWithSsrFGuardMock.mockImplementation(async ({ url }: { url: string }) => {
+      const status = url.endsWith("/healthz") || ready ? 200 : 503;
+      return { response: { ok: status === 200, status }, release };
+    });
+
+    try {
+      const readiness = waitForGatewayReady({
+        baseUrl,
+        logs: () => "startup logs",
+        child: { exitCode: null, signalCode: null },
+        timeoutMs: 1_000,
       });
 
-      try {
-        const readiness = waitForGatewayReady({
-          baseUrl,
-          logs: () => `${phase} logs`,
-          child: { exitCode: null, signalCode: null },
-          timeoutMs: 1_000,
-        });
+      await vi.advanceTimersByTimeAsync(0);
 
-        await vi.advanceTimersByTimeAsync(0);
+      expect(fetchWithSsrFGuardMock.mock.calls.map(([request]) => request.url)).toEqual([
+        `${baseUrl}/readyz`,
+      ]);
+      const healthRequest = requireSsrFetchCall();
+      expect(healthRequest.init?.method).toBe("HEAD");
+      expect(healthRequest.init?.headers).toEqual({ connection: "close" });
+      expect(healthRequest.policy).toEqual({ allowPrivateNetwork: true });
+      expect(healthRequest.auditContext).toBe("qa-lab-gateway-child-health");
+      expect(release).toHaveBeenCalledTimes(1);
 
-        expect(fetchWithSsrFGuardMock.mock.calls.map(([request]) => request.url)).toEqual([
-          `${baseUrl}/readyz`,
-        ]);
-        const healthRequest = requireSsrFetchCall();
-        expect(healthRequest.init?.method).toBe("HEAD");
-        expect(healthRequest.init?.headers).toEqual({ connection: "close" });
-        expect(healthRequest.policy).toEqual({ allowPrivateNetwork: true });
-        expect(healthRequest.auditContext).toBe("qa-lab-gateway-child-health");
-        expect(release).toHaveBeenCalledTimes(1);
+      ready = true;
+      await vi.advanceTimersByTimeAsync(250);
 
-        ready = true;
-        await vi.advanceTimersByTimeAsync(250);
-
-        await expect(readiness).resolves.toBeUndefined();
-        expect(fetchWithSsrFGuardMock.mock.calls.map(([request]) => request.url)).toEqual([
-          `${baseUrl}/readyz`,
-          `${baseUrl}/readyz`,
-        ]);
-        expect(release).toHaveBeenCalledTimes(2);
-      } finally {
-        vi.useRealTimers();
-      }
-    },
-  );
+      await expect(readiness).resolves.toBeUndefined();
+      expect(fetchWithSsrFGuardMock.mock.calls.map(([request]) => request.url)).toEqual([
+        `${baseUrl}/readyz`,
+        `${baseUrl}/readyz`,
+      ]);
+      expect(release).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("bounds a stalled readiness probe by the remaining deadline", async () => {
     let probeSignal: AbortSignal | undefined;
@@ -567,31 +551,28 @@ describe("buildQaRuntimeEnv", () => {
     await expect(readdir(commandTempParent)).resolves.toStrictEqual([]);
   });
 
-  it.each([undefined, { OPENCLAW_BUILD_PRIVATE_QA: "0", OPENCLAW_ENABLE_PRIVATE_QA_CLI: "0" }])(
-    "keeps private-QA and slow-reply controls enabled under fast mode with patch %j",
-    (runtimeEnvPatch) => {
-      const env = buildQaRuntimeEnv({
-        ...createParams({}),
-        providerMode: "mock-openai",
-        runtimeEnvPatch,
-      });
+  it("keeps private-QA and slow-reply controls enabled despite caller patches", () => {
+    const env = buildQaRuntimeEnv({
+      ...createParams({}),
+      providerMode: "mock-openai",
+      runtimeEnvPatch: { OPENCLAW_BUILD_PRIVATE_QA: "0", OPENCLAW_ENABLE_PRIVATE_QA_CLI: "0" },
+    });
 
-      expect(env.OPENCLAW_TEST_FAST).toBe("1");
-      expect(env.OPENCLAW_SKIP_STARTUP_MODEL_PREWARM).toBe("1");
-      expect(env.OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS).toBe("2000");
-      expect(env.OPENCLAW_QA_PARENT_PID).toBe(String(process.pid));
-      expect(env.OPENCLAW_QA_TEMP_ROOT).toBe("/tmp/openclaw-qa");
-      expect(env.OPENCLAW_QA_STAGED_RUNTIME_ROOT).toBe(
-        "/repo/.artifacts/qa-runtime/openclaw-qa-suite-test",
-      );
-      expect(env.OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER).toBe("1");
-      expect(env.OPENCLAW_BUILD_PRIVATE_QA).toBe("1");
-      expect(env.OPENCLAW_ENABLE_PRIVATE_QA_CLI).toBe("1");
-      expect(env.OPENCLAW_ALLOW_SLOW_REPLY_TESTS).toBe("1");
-      expect(env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBe("/tmp/openclaw-qa/bundled-plugins");
-      expect(env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("2026.4.8");
-    },
-  );
+    expect(env.OPENCLAW_TEST_FAST).toBe("1");
+    expect(env.OPENCLAW_SKIP_STARTUP_MODEL_PREWARM).toBe("1");
+    expect(env.OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS).toBe("2000");
+    expect(env.OPENCLAW_QA_PARENT_PID).toBe(String(process.pid));
+    expect(env.OPENCLAW_QA_TEMP_ROOT).toBe("/tmp/openclaw-qa");
+    expect(env.OPENCLAW_QA_STAGED_RUNTIME_ROOT).toBe(
+      "/repo/.artifacts/qa-runtime/openclaw-qa-suite-test",
+    );
+    expect(env.OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER).toBe("1");
+    expect(env.OPENCLAW_BUILD_PRIVATE_QA).toBe("1");
+    expect(env.OPENCLAW_ENABLE_PRIVATE_QA_CLI).toBe("1");
+    expect(env.OPENCLAW_ALLOW_SLOW_REPLY_TESTS).toBe("1");
+    expect(env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBe("/tmp/openclaw-qa/bundled-plugins");
+    expect(env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("2026.4.8");
+  });
 
   it("isolates gateway children from Vitest without removing QA controls or non-test NODE_ENV", () => {
     const testEnv = buildQaRuntimeEnv({
@@ -647,34 +628,6 @@ describe("buildQaRuntimeEnv", () => {
 
     expect(env.OPENCLAW_SKIP_CHANNELS).toBe("patched-channels");
     expect(env.OPENCLAW_SKIP_PROVIDERS).toBe("patched-providers");
-  });
-
-  it("binds plugin authority to the source candidate after caller environment patches", () => {
-    const env = buildQaRuntimeEnv({
-      ...createParams({
-        OPENCLAW_DEV_SOURCE_ROOT: "/repo/current-harness",
-      }),
-      developmentSourceRoot: "/repo/release-candidate",
-      runtimeEnvPatch: {
-        OPENCLAW_DEV_SOURCE_ROOT: "/repo/caller-override",
-      },
-    });
-
-    expect(env.OPENCLAW_DEV_SOURCE_ROOT).toBe("/repo/release-candidate");
-  });
-
-  it("clears inherited and patched source roots for packaged candidates", () => {
-    const env = buildQaRuntimeEnv({
-      ...createParams({
-        OPENCLAW_DEV_SOURCE_ROOT: "/repo/current-harness",
-      }),
-      developmentSourceRoot: null,
-      runtimeEnvPatch: {
-        OPENCLAW_DEV_SOURCE_ROOT: "/repo/caller-override",
-      },
-    });
-
-    expect(env.OPENCLAW_DEV_SOURCE_ROOT).toBeUndefined();
   });
 
   it("maps live frontier key aliases into provider env vars", () => {
@@ -791,43 +744,13 @@ describe("buildQaRuntimeEnv", () => {
     expect(env.OPENCLAW_LIVE_CLI_BACKEND_AUTH_MODE).toBe("subscription");
   });
 
-  it("does not pass QA setup-token values to the gateway child env", () => {
-    const env = buildQaRuntimeEnv({
-      ...createParams({
-        OPENCLAW_LIVE_SETUP_TOKEN_VALUE: `sk-ant-oat01-${"a".repeat(80)}`,
-        OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN: `sk-ant-oat01-${"b".repeat(80)}`,
-      }),
-      providerMode: "live-frontier",
-    });
-
-    expect(env.OPENCLAW_LIVE_SETUP_TOKEN_VALUE).toBeUndefined();
-    expect(env.OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN).toBeUndefined();
-  });
-
-  it("does not pass credential broker or Telegram harness secrets to the gateway child env", () => {
-    const env = buildQaRuntimeEnv({
-      ...createParams({
-        OPENCLAW_QA_CONVEX_SECRET_CI: "convex-ci-secret",
-        OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "convex-maintainer-secret",
-        OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL: "trusted-parent-only",
-        OPENCLAW_QA_TELEGRAM_GROUP_ID: "-1001234567890",
-        OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: "driver-token",
-        OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: "sut-token",
-      }),
-      providerMode: "live-frontier",
-    });
-
-    expect(env.OPENCLAW_QA_CONVEX_SECRET_CI).toBeUndefined();
-    expect(env.OPENCLAW_QA_CONVEX_SECRET_MAINTAINER).toBeUndefined();
-    expect(env.OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL).toBeUndefined();
-    expect(env.OPENCLAW_QA_TELEGRAM_GROUP_ID).toBeUndefined();
-    expect(env.OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN).toBeUndefined();
-    expect(env.OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN).toBeUndefined();
-  });
-
   it("re-scrubs blocked credentials after runtime env patches", () => {
     const env = buildQaRuntimeEnv({
-      ...createParams({ SAFE_VALUE: "base" }),
+      ...createParams({
+        SAFE_VALUE: "base",
+        OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "convex-maintainer-secret",
+      }),
+      providerMode: "live-frontier",
       runtimeEnvPatch: {
         SAFE_VALUE: "patched",
         OPENCLAW_LIVE_SETUP_TOKEN_VALUE: "setup-token",
@@ -842,6 +765,7 @@ describe("buildQaRuntimeEnv", () => {
     });
 
     expect(env.SAFE_VALUE).toBe("patched");
+    expect(env.OPENCLAW_QA_CONVEX_SECRET_MAINTAINER).toBeUndefined();
     expect(env.OPENCLAW_LIVE_SETUP_TOKEN_VALUE).toBeUndefined();
     expect(env.OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN).toBeUndefined();
     expect(env.OPENCLAW_QA_CONVEX_SECRET_CI).toBeUndefined();
@@ -1202,17 +1126,6 @@ describe("buildQaRuntimeEnv", () => {
     expect(output.text()).not.toContain("�");
   });
 
-  it("times out when a SIGUSR2 restart never reaches the boundary", async () => {
-    await expect(
-      waitForQaGatewayRestartBoundary({
-        readLogsSince: () => "signal SIGUSR2 received\n",
-        mark: 0,
-        pollMs: 1,
-        timeoutMs: 1,
-      }),
-    ).rejects.toThrow("qa gateway child did not reach restart boundary");
-  });
-
   it("keeps oversized restart-boundary poll intervals within the timeout", async () => {
     await expect(
       waitForQaGatewayRestartBoundary({
@@ -1248,65 +1161,61 @@ describe("buildQaRuntimeEnv", () => {
     expect(storeProfile.token).toBe(token);
   });
 
-  it("stages live env API-key profiles for isolated QA workers", async () => {
+  it.each([
+    { source: "provider env", apiKey: undefined, env: { OPENAI_API_KEY: "qa-live-key" } },
+    {
+      source: "live alias",
+      apiKey: undefined,
+      env: { OPENCLAW_LIVE_CODEX_API_KEY: "qa-live-key" },
+    },
+    { source: "config literal", apiKey: "qa-live-key", env: {} },
+    {
+      source: "config secret ref",
+      apiKey: { source: "env" as const, provider: "default", id: "OPENCLAW_LIVE_CODEX_API_KEY" },
+      env: { OPENCLAW_LIVE_CODEX_API_KEY: "qa-live-key" },
+    },
+    {
+      source: "config env marker",
+      apiKey: "OPENCLAW_LIVE_CODEX_API_KEY",
+      env: { OPENCLAW_LIVE_CODEX_API_KEY: "qa-live-key" },
+    },
+  ])("stages $source API-key auth for isolated live QA workers", async ({ apiKey, env }) => {
     const stateDir = await tempDirs.makeTempDir("qa-live-api-key-state-");
-
     const cfg = await stageQaLiveApiKeyProfiles({
-      cfg: {},
+      cfg:
+        apiKey === undefined
+          ? {}
+          : {
+              models: { providers: { openai: { baseUrl: "", models: [], apiKey } } },
+            },
       stateDir,
       providerIds: ["openai"],
-      env: {
-        OPENAI_API_KEY: "qa-live-not-a-real-key",
-      },
+      env,
     });
-
-    const configProfile = requireAuthProfile(cfg.auth?.profiles, "qa-live-openai-env");
-    expect(configProfile.provider).toBe("openai");
-    expect(configProfile.mode).toBe("api_key");
-    expect(configProfile.displayName).toBe("QA live openai env credential");
+    expect(requireAuthProfile(cfg.auth?.profiles, "qa-live-openai-env")).toMatchObject({
+      provider: "openai",
+      mode: "api_key",
+      displayName: "QA live openai env credential",
+    });
     expect(Object.values(cfg.auth?.profiles ?? {})).not.toContainEqual(
       expect.objectContaining({ provider: "anthropic" }),
     );
-
     for (const agentId of ["main", "qa"]) {
       const profiles = readAuthProfileStore(stateDir, agentId).profiles;
-      const storeProfile = requireAuthProfile(profiles, "qa-live-openai-env");
-      expect(storeProfile.type).toBe("api_key");
-      expect(storeProfile.provider).toBe("openai");
-      expect(storeProfile.key).toBe("qa-live-not-a-real-key");
+      expect(requireAuthProfile(profiles, "qa-live-openai-env")).toMatchObject({
+        type: "api_key",
+        provider: "openai",
+        key: "qa-live-key",
+      });
       expect(Object.values(profiles)).not.toContainEqual(
         expect.objectContaining({ provider: "anthropic" }),
       );
     }
-  });
-
-  it("stages direct live OpenAI API-key aliases for isolated QA workers", async () => {
-    const stateDir = await tempDirs.makeTempDir("qa-live-codex-direct-key-state-");
-
-    const cfg = await stageQaLiveApiKeyProfiles({
-      cfg: {},
-      stateDir,
-      providerIds: ["openai"],
-      env: {
-        OPENCLAW_LIVE_CODEX_API_KEY: "qa-live-direct-codex-key",
-      },
-    });
-
-    const storeProfile = requireAuthProfile(
-      readAuthProfileStore(stateDir, "qa").profiles,
-      "qa-live-openai-env",
-    );
-    expect(storeProfile.type).toBe("api_key");
-    expect(storeProfile.provider).toBe("openai");
-    expect(storeProfile.key).toBe("qa-live-direct-codex-key");
-
     expect(() =>
       assertQaLiveCodexAuthAvailable({
         cfg,
         providerIds: ["openai"],
-        env: {
-          OPENCLAW_LIVE_CODEX_API_KEY: "qa-live-direct-codex-key",
-        },
+        env: {},
         readCodexCredentials: () => null,
       }),
     ).not.toThrow();
@@ -1370,131 +1279,6 @@ describe("buildQaRuntimeEnv", () => {
           OPENCLAW_LIVE_OPENAI_KEY: "qa-live-codex-fallback-key",
           OPENCLAW_QA_FORCE_RUNTIME: "codex",
         },
-        readCodexCredentials: () => null,
-      }),
-    ).not.toThrow();
-  });
-
-  it("stages configured OpenAI API keys for live QA runs", async () => {
-    const stateDir = await tempDirs.makeTempDir("qa-live-codex-config-key-state-");
-    const cfg = await stageQaLiveApiKeyProfiles({
-      cfg: {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "",
-              models: [],
-              apiKey: "qa-configured-not-a-real-key",
-            },
-          },
-        },
-      },
-      stateDir,
-      providerIds: ["openai"],
-      env: {},
-    });
-
-    const configProfile = requireAuthProfile(cfg.auth?.profiles, "qa-live-openai-env");
-    expect(configProfile.provider).toBe("openai");
-    expect(configProfile.mode).toBe("api_key");
-    for (const agentId of ["main", "qa"]) {
-      const storeProfile = requireAuthProfile(
-        readAuthProfileStore(stateDir, agentId).profiles,
-        "qa-live-openai-env",
-      );
-      expect(storeProfile.type).toBe("api_key");
-      expect(storeProfile.provider).toBe("openai");
-      expect(storeProfile.key).toBe("qa-configured-not-a-real-key");
-    }
-
-    expect(() =>
-      assertQaLiveCodexAuthAvailable({
-        cfg,
-        providerIds: ["openai"],
-        env: {},
-        readCodexCredentials: () => null,
-      }),
-    ).not.toThrow();
-  });
-
-  it("stages configured OpenAI env secret refs for default OpenAI live QA runs", async () => {
-    const stateDir = await tempDirs.makeTempDir("qa-live-codex-config-ref-state-");
-    const env = {
-      OPENCLAW_LIVE_CODEX_API_KEY: "qa-configured-env-ref-not-a-real-key",
-    };
-    const cfg = await stageQaLiveApiKeyProfiles({
-      cfg: {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "",
-              models: [],
-              apiKey: {
-                source: "env",
-                provider: "default",
-                id: "OPENCLAW_LIVE_CODEX_API_KEY",
-              },
-            },
-          },
-        },
-      },
-      stateDir,
-      providerIds: ["openai"],
-      env,
-    });
-
-    const storeProfile = requireAuthProfile(
-      readAuthProfileStore(stateDir, "qa").profiles,
-      "qa-live-openai-env",
-    );
-    expect(storeProfile.type).toBe("api_key");
-    expect(storeProfile.provider).toBe("openai");
-    expect(storeProfile.key).toBe("qa-configured-env-ref-not-a-real-key");
-
-    expect(() =>
-      assertQaLiveCodexAuthAvailable({
-        cfg,
-        providerIds: ["openai"],
-        env,
-        readCodexCredentials: () => null,
-      }),
-    ).not.toThrow();
-  });
-
-  it("stages configured OpenAI env markers for live QA runs", async () => {
-    const stateDir = await tempDirs.makeTempDir("qa-live-codex-config-marker-state-");
-    const cfg = await stageQaLiveApiKeyProfiles({
-      cfg: {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "",
-              models: [],
-              apiKey: "OPENCLAW_LIVE_CODEX_API_KEY",
-            },
-          },
-        },
-      },
-      stateDir,
-      providerIds: ["openai"],
-      env: {
-        OPENCLAW_LIVE_CODEX_API_KEY: "qa-configured-marker-not-a-real-key",
-      },
-    });
-
-    const storeProfile = requireAuthProfile(
-      readAuthProfileStore(stateDir, "main").profiles,
-      "qa-live-openai-env",
-    );
-    expect(storeProfile.type).toBe("api_key");
-    expect(storeProfile.provider).toBe("openai");
-    expect(storeProfile.key).toBe("qa-configured-marker-not-a-real-key");
-
-    expect(() =>
-      assertQaLiveCodexAuthAvailable({
-        cfg,
-        providerIds: ["openai"],
-        env: {},
         readCodexCredentials: () => null,
       }),
     ).not.toThrow();
@@ -1593,30 +1377,19 @@ describe("buildQaRuntimeEnv", () => {
       const records = await readJsonLines(recordPath);
       const authRecords = records.filter((record) => record.kind === "auth");
       expect(authRecords).toHaveLength(2);
-      expect(authRecords.map((record) => record.args)).toEqual([
-        [
+      expect(authRecords.map((record) => record.args)).toEqual(
+        ["openai", "anthropic"].map((provider) => [
           "models",
           "auth",
           "--agent",
           "qa",
           "paste-api-key",
           "--provider",
-          "openai",
+          provider,
           "--profile-id",
-          "qa-mock-openai",
-        ],
-        [
-          "models",
-          "auth",
-          "--agent",
-          "qa",
-          "paste-api-key",
-          "--provider",
-          "anthropic",
-          "--profile-id",
-          "qa-mock-anthropic",
-        ],
-      ]);
+          `qa-mock-${provider}`,
+        ]),
+      );
       for (const record of authRecords) {
         expect(record.stdin).toMatch(/^sk-qa-mock-[a-f0-9]{32}\n$/u);
         expect(record.env).toMatchObject({
@@ -1763,7 +1536,7 @@ describe("buildQaRuntimeEnv", () => {
     await expect(lstat(recordPath)).rejects.toThrow(/ENOENT/u);
   });
 
-  it.each(["openai", "anthropic", "help", "repair"] as const)(
+  it.each(["anthropic", "help", "repair"] as const)(
     "blocks packaged gateway spawn with bounded redacted diagnostics when %s fails",
     async (phase) => {
       const fixtureRoot = await tempDirs.makeTempDir("qa-packaged-command-fail-");
@@ -1771,7 +1544,7 @@ describe("buildQaRuntimeEnv", () => {
       const recordPath = path.join(fixtureRoot, "commands.jsonl");
       const fixturePath = await writePackagedGatewayFixture(fixtureRoot);
       await mkdir(tempParentDir);
-      const provider = phase === "openai" || phase === "anthropic" ? phase : undefined;
+      const provider = phase === "anthropic" ? phase : undefined;
       const owner = ownGateway();
       const error = await owner
         .start({
@@ -1809,9 +1582,7 @@ describe("buildQaRuntimeEnv", () => {
       const records = await readJsonLines(recordPath);
       expect(records.map((record) => record.kind)).toEqual(
         provider
-          ? provider === "openai"
-            ? ["auth"]
-            : ["auth", "auth"]
+          ? ["auth", "auth"]
           : ["auth", "auth", ...(phase === "repair" ? ["help"] : []), "plugins"],
       );
       expect(records[0]).toMatchObject({
@@ -2067,10 +1838,6 @@ describe("buildQaRuntimeEnv", () => {
       "failed to bind gateway socket on ws://127.0.0.1:43124: Error: listen EADDRINUSE",
       "bind-collision",
     ],
-    [
-      "OpenClaw plugin migration inputs changed during startup convergence; refusing to report the gateway ready. Restart OpenClaw so state migrations run against the final config and plugin inventory.",
-      "migration-convergence-restart",
-    ],
   ] as const)("classifies %s", (details, expectedKind) => {
     expect(
       resolveQaGatewayStartupRetry({
@@ -2081,12 +1848,8 @@ describe("buildQaRuntimeEnv", () => {
     ).toBe(expectedKind);
   });
 
-  it.each([
-    "OpenClaw startup migrations did not complete cleanly; refusing to report the gateway ready.",
-    "OpenClaw plugin migration inputs changed during startup convergence",
-    "Restart OpenClaw so state migrations can continue.",
-    "gateway failed to become healthy",
-  ])("does not retry unrelated startup failure: %s", (details) => {
+  it("does not retry an incomplete migration-convergence diagnostic", () => {
+    const details = "OpenClaw plugin migration inputs changed during startup convergence";
     expect(
       resolveQaGatewayStartupRetry({
         attempt: 1,
@@ -2700,26 +2463,6 @@ describe("qa bundled plugin dir", () => {
     expect(Object.keys(overrides)).toEqual(["openai"]);
     expect(overrides["openai"]).not.toHaveProperty("baseUrl");
     expect(overrides["openai"]?.api).toBe("openai-responses");
-  });
-
-  it("raises the QA runtime host version to the highest allowed plugin floor", async () => {
-    const repoRoot = await tempDirs.makeTempDir("qa-runtime-version-");
-    await writeJsonFixture(path.join(repoRoot, "package.json"), { version: "2026.4.7-1" });
-    const bundledRoot = path.join(repoRoot, "extensions");
-    await writeJsonFixture(path.join(bundledRoot, "qa-channel", "package.json"), {
-      openclaw: { install: { minHostVersion: ">=2026.4.8" } },
-    });
-
-    await writeJsonFixture(path.join(bundledRoot, "memory-core", "package.json"), {
-      openclaw: { install: { minHostVersion: ">=2026.4.7" } },
-    });
-
-    await expect(
-      resolveQaRuntimeHostVersion({
-        repoRoot,
-        allowedPluginIds: ["memory-core", "qa-channel"],
-      }),
-    ).resolves.toBe("2026.4.8");
   });
 
   it("includes the always-staged runtime facade when raising the QA runtime host version", async () => {

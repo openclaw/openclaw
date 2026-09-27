@@ -503,30 +503,15 @@ export function renderChatAbortAction(
 
 export function renderChatPrimaryActions(props: ChatRunControlsProps) {
   const hasComposedContent = Boolean(props.draft.trim() || props.hasAttachments);
-  const steersActiveRun = props.followUpMode === "steer";
-  const interruptsActiveRun = props.followUpMode === "interrupt";
-  const activeRunActionLabel =
-    props.submissionLabel ??
-    (props.suggestionComposer
-      ? t("chat.sessionSuggestions.suggest")
-      : !props.canAbort || props.followUpMode === undefined
-        ? t("chat.runControls.send")
-        : steersActiveRun
-          ? t("chat.queue.steer")
-          : interruptsActiveRun
-            ? t("chat.runControls.send")
-            : t("chat.runControls.queue"));
-  const activeRunActionDescription =
-    props.submissionLabel ??
-    (props.suggestionComposer
-      ? t("chat.sessionSuggestions.suggestMessage")
-      : !props.canAbort || props.followUpMode === undefined
-        ? t("chat.runControls.sendMessage")
-        : steersActiveRun
-          ? t("chat.followUpModeSteer")
-          : interruptsActiveRun
-            ? t("chat.runControls.sendMessage")
-            : t("chat.runControls.queueMessage"));
+  const [actionLabel, actionDescription] = props.suggestionComposer
+    ? (["chat.sessionSuggestions.suggest", "chat.sessionSuggestions.suggestMessage"] as const)
+    : !props.canAbort || props.followUpMode === undefined || props.followUpMode === "interrupt"
+      ? (["chat.runControls.send", "chat.runControls.sendMessage"] as const)
+      : props.followUpMode === "steer"
+        ? (["chat.queue.steer", "chat.followUpModeSteer"] as const)
+        : (["chat.runControls.queue", "chat.runControls.queueMessage"] as const);
+  const activeRunActionLabel = props.submissionLabel ?? t(actionLabel);
+  const activeRunActionDescription = props.submissionLabel ?? t(actionDescription);
   const alternateActionLabel = t(
     props.alternateFollowUpMode === "queue" ? "chat.runControls.queue" : "chat.queue.steer",
   );
@@ -544,6 +529,9 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
   // only its stop affordance instead of a fake listening meter plus a
   // duplicate announcement.
   const voiceErrored = props.voiceStatus === "error";
+  const cameraLabel = t(
+    props.voiceVideoEnabled ? "chat.composer.turnCameraOff" : "chat.composer.turnCameraOn",
+  );
   const voiceButton = renderComposerVoiceButton(props);
   // Dictation and Talk are one affordance to the operator — a microphone — so
   // the control shows whenever either route exists, and it always sits ahead of
@@ -694,13 +682,7 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
             ${
               props.voiceVideoCapable && props.onToggleCamera
                 ? html`
-                    <openclaw-tooltip
-                      .content=${
-                        props.voiceVideoEnabled
-                          ? t("chat.composer.turnCameraOff")
-                          : t("chat.composer.turnCameraOn")
-                      }
-                    >
+                    <openclaw-tooltip .content=${cameraLabel}>
                       <button
                         class="chat-send-btn chat-send-btn--voice"
                         @click=${props.onToggleCamera}
@@ -709,21 +691,11 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
                           props.voiceStatus === "connecting" ||
                           props.voiceStatus === "error"
                         }
-                        aria-label=${
-                          props.voiceVideoEnabled
-                            ? t("chat.composer.turnCameraOff")
-                            : t("chat.composer.turnCameraOn")
-                        }
+                        aria-label=${cameraLabel}
                         aria-pressed=${props.voiceVideoEnabled ? "true" : "false"}
                       >
                         ${props.voiceVideoEnabled ? icons.cameraOff : icons.camera}
-                        <span class="agent-chat__control-label"
-                          >${
-                            props.voiceVideoEnabled
-                              ? t("chat.composer.turnCameraOff")
-                              : t("chat.composer.turnCameraOn")
-                          }</span
-                        >
+                        <span class="agent-chat__control-label">${cameraLabel}</span>
                       </button>
                     </openclaw-tooltip>
                   `

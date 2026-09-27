@@ -1,9 +1,11 @@
 import type { ReactionTypeEmoji } from "grammy/types";
+import { firstDefined } from "openclaw/plugin-sdk/allow-from";
 import {
   resolveAckReaction,
   shouldAckReaction as shouldAckReactionGate,
 } from "openclaw/plugin-sdk/channel-feedback";
 import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveBotThreadMentionPolicy } from "openclaw/plugin-sdk/channel-mention-gating";
 import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
@@ -22,11 +24,7 @@ import {
 import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import { resolveDefaultTelegramAccountId } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
-import {
-  firstDefined,
-  normalizeAllowFrom,
-  resolveTelegramEffectiveDmPolicy,
-} from "./bot-access.js";
+import { normalizeAllowFrom, resolveTelegramEffectiveDmPolicy } from "./bot-access.js";
 import { resolveTelegramInboundBody } from "./bot-message-context.body.js";
 import {
   buildTelegramInboundContextPayload,
@@ -49,6 +47,7 @@ import {
   resolveTelegramConversationRoute,
 } from "./conversation-route.js";
 import { enforceTelegramDmAccess } from "./dm-access.js";
+import { resolveTelegramForumTopicMetadata } from "./forum-topic-metadata.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
 import { resolveTelegramNativeCommandAdmission } from "./ingress.js";
 import {
@@ -59,7 +58,6 @@ import {
   resolveTelegramReactionVariant,
   resolveTelegramStatusReactionEmojis,
 } from "./status-reaction-variants.js";
-import { getTopicName, resolveTopicNameCacheScope, updateTopicName } from "./topic-name-cache.js";
 
 export type {
   BuildTelegramMessageContextParams,
@@ -178,59 +176,22 @@ export const buildTelegramMessageContext = async ({
   const replyThreadId = threadSpec.id;
   const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
   let topicName: string | undefined;
+  let isBotOwnedThread = false;
   if (isForum && resolvedThreadId != null) {
-    const topicNameCacheScope = resolveTopicNameCacheScope(
-      await resolveTelegramMessageContextStorePath({
-        cfg,
-        agentId:
-          ownerAgentId?.trim() ||
-          resolveTelegramAccountOwnerAgentId({ cfg, accountId: account.accountId }),
-        sessionRuntime,
-      }),
-    );
-    const ftCreated = msg.forum_topic_created;
-    const ftEdited = msg.forum_topic_edited;
-    const ftClosed = msg.forum_topic_closed;
-    const ftReopened = msg.forum_topic_reopened;
-    const topicPatch = ftCreated?.name
-      ? {
-          name: ftCreated.name,
-          iconColor: ftCreated.icon_color,
-          iconCustomEmojiId: ftCreated.icon_custom_emoji_id,
-          closed: false,
-        }
-      : ftEdited?.name
-        ? {
-            name: ftEdited.name,
-            iconCustomEmojiId: ftEdited.icon_custom_emoji_id,
-          }
-        : ftClosed
-          ? { closed: true }
-          : ftReopened
-            ? { closed: false }
-            : undefined;
-
-    if (topicPatch) {
-      await updateTopicName(chatId, resolvedThreadId, topicPatch, topicNameCacheScope);
-    }
-
-    topicName = await getTopicName(chatId, resolvedThreadId, topicNameCacheScope);
-    if (!topicName) {
-      const replyFtCreated = msg.reply_to_message?.forum_topic_created;
-      if (replyFtCreated?.name) {
-        await updateTopicName(
-          chatId,
-          resolvedThreadId,
-          {
-            name: replyFtCreated.name,
-            iconColor: replyFtCreated.icon_color,
-            iconCustomEmojiId: replyFtCreated.icon_custom_emoji_id,
-          },
-          topicNameCacheScope,
-        );
-        topicName = replyFtCreated.name;
-      }
-    }
+    const topicNameCacheScope = await resolveTelegramMessageContextStorePath({
+      cfg,
+      agentId:
+        ownerAgentId?.trim() ||
+        resolveTelegramAccountOwnerAgentId({ cfg, accountId: account.accountId }),
+      sessionRuntime,
+    });
+    const topic = await resolveTelegramForumTopicMetadata({
+      msg,
+      threadId: resolvedThreadId,
+      scope: topicNameCacheScope,
+    });
+    topicName = topic.topicName;
+    isBotOwnedThread = primaryCtx.me?.id !== undefined && topic.creatorUserId === primaryCtx.me.id;
   }
 
   const threadIdForConfig = resolvedThreadId ?? dmThreadId;
@@ -452,12 +413,21 @@ export const buildTelegramMessageContext = async ({
   const baseRequireMention = resolveGroupRequireMention(chatId, cfg);
   // Persisted session activation intentionally interleaves topic and group config.
   // ScopeTree resolves config only, so this precedence remains session-owned here.
-  const groupRequireMention = firstDefined(
+  const configuredGroupRequireMention = firstDefined(
     topicConfig?.requireMention,
     activationOverride,
     telegramGroupConfig?.requireMention,
     baseRequireMention,
   );
+  const requireMentionInBotThreads = firstDefined(
+    topicConfig?.requireMentionInBotThreads,
+    telegramGroupConfig?.requireMentionInBotThreads,
+  );
+  const { requireMention: groupRequireMention } = resolveBotThreadMentionPolicy({
+    isBotOwnedThread,
+    requireMentionInBotThreads,
+    requireMention: Boolean(configuredGroupRequireMention),
+  });
   const requireMention =
     isGroup && bindingMode.kind === "plugin-owned-runtime" ? false : groupRequireMention;
 
@@ -494,7 +464,9 @@ export const buildTelegramMessageContext = async ({
     groupConfig,
     topicConfig,
     providerMentionPatterns: cfg.channels?.telegram?.accounts?.[account.accountId]?.mentionPatterns,
-    requireMention: Boolean(requireMention),
+    requireMention,
+    isBotOwnedThread,
+    requireMentionInBotThreads,
     options,
     logger,
   });
@@ -541,7 +513,7 @@ export const buildTelegramMessageContext = async ({
     topicConfig,
     effectiveWasMentioned: bodyResult.effectiveWasMentioned,
     inboundEventKind: bodyResult.inboundEventKind,
-    groupRequireMention: Boolean(groupRequireMention),
+    groupRequireMention,
     mentionFacts: bodyResult.mentionFacts,
     groupThread: bodyResult.groupThread,
     commandSource: bodyResult.commandSource,

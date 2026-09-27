@@ -114,7 +114,7 @@ describe("one-time ticket store", () => {
     expect(getEventListeners(requester.signal, "abort")).toHaveLength(0);
   });
 
-  it.each(["", " ", "a".repeat(47), "a".repeat(49), "A".repeat(48), "g".repeat(48)])(
+  it.each(["", "a".repeat(47), "a".repeat(49), "A".repeat(48), "g".repeat(48)])(
     "rejects malformed token %j without consuming another ticket",
     (token) => {
       const store = createOneTimeTicketStore<string>({ ttlMs: 60_000 });

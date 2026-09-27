@@ -1,12 +1,9 @@
-// Qa Lab plugin module implements Slack live transport adapter behavior.
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
-import {
-  createDebugProxyCaptureReader,
-  type DebugProxyCaptureReader,
-} from "openclaw/plugin-sdk/proxy-capture";
+import * as proxyCapture from "openclaw/plugin-sdk/proxy-capture";
+import type { AsyncDebugProxyCaptureReader } from "openclaw/plugin-sdk/proxy-capture";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import {
   acquireQaCredentialLease,
@@ -124,6 +121,10 @@ async function recordSlackObservedMessage(params: {
 export async function createSlackQaTransportAdapter(
   context: FactoryContext,
 ): Promise<AdapterDefinition> {
+  const { createDebugProxyCaptureReaderAsync } = proxyCapture;
+  if (typeof createDebugProxyCaptureReaderAsync !== "function") {
+    throw new Error("Slack QA requires async proxy capture support. Upgrade the OpenClaw host.");
+  }
   const { createSlackWebClient, createSlackWriteClient, resolveSlackWebClientOptions } =
     loadSlackQaRuntime();
   const options = context.adapterOptions ?? {};
@@ -139,8 +140,8 @@ export async function createSlackQaTransportAdapter(
   const runtimeEnv = lease.payload;
   let driverIdentity: Awaited<ReturnType<typeof getSlackIdentity>>;
   let sutIdentity: Awaited<ReturnType<typeof getSlackIdentity>>;
-  let captureReader: DebugProxyCaptureReader | undefined;
-  const captureFinalWrites: Array<() => void> = [];
+  let captureReader: AsyncDebugProxyCaptureReader | undefined;
+  const captureFinalWrites: Array<() => Promise<void>> = [];
   const captureSessionId = `qa-slack-${randomUUID()}`;
   try {
     heartbeat.throwIfFailed();
@@ -288,9 +289,9 @@ export async function createSlackQaTransportAdapter(
     channelId: runtimeEnv.channelId,
     driverBotUserId: driverIdentity.userId,
     driverClient,
-    getMessageWriteCursor: () =>
+    getMessageWriteCursor: async () =>
       captureReader
-        ? getSlackQaMessageWriteCursor({
+        ? await getSlackQaMessageWriteCursor({
             sessionId: captureSessionId,
             store: captureReader,
           })
@@ -370,13 +371,13 @@ export async function createSlackQaTransportAdapter(
       OPENCLAW_DEBUG_PROXY_SESSION_ID: captureSessionId,
     }),
     prepareFlow: async (input) => {
-      captureReader ??= createDebugProxyCaptureReader({
+      captureReader ??= createDebugProxyCaptureReaderAsync({
         env: (input.gateway as { runtimeEnv: NodeJS.ProcessEnv }).runtimeEnv,
       });
       if (options.agentE2e) {
         flowSignal = input.signal;
         assertNativeActive();
-        nativeWriteCursor = getSlackQaNativeWriteCursor({
+        nativeWriteCursor = await getSlackQaNativeWriteCursor({
           sessionId: captureSessionId,
           store: captureReader,
         });
@@ -388,8 +389,8 @@ export async function createSlackQaTransportAdapter(
             store: captureReader!,
           });
         let finalWrites: SlackNativeWrite[] | undefined;
-        captureFinalWrites.push(() => {
-          finalWrites = readWrites();
+        captureFinalWrites.push(async () => {
+          finalWrites = await readWrites();
           if (finalWrites.some((write) => write.evidence === "uncertain")) {
             throw new Error(
               "Slack Gateway mutation outcome is uncertain; preserve runtime capture",
@@ -453,7 +454,7 @@ export async function createSlackQaTransportAdapter(
       const failures: unknown[] = [];
       for (const capture of captureFinalWrites) {
         try {
-          capture();
+          await capture();
         } catch (error) {
           failures.push(error);
         }

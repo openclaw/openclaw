@@ -13,7 +13,10 @@ import {
   createSessionSqliteMigrationRun,
   writeSessionSqliteMigrationManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
 import {
   claimSessionSqliteMigrationGithubIssue,
   createSessionSqliteMigrationFailureIssue,
@@ -344,7 +347,7 @@ describe("runDoctorSessionSqlite", () => {
       lastActivityAt: currentMetadata.lastActivityAt,
     });
     const currentHistory = structuredClone(loadTranscriptEventsSync(transcriptScope));
-    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawAgentDatabasesAsync();
 
     if (restoreState === "interrupted linked restore") {
       // Persist the two-name inode left by a crash before the restore receipt and unlink.

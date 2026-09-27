@@ -30,15 +30,10 @@ type SessionNavigationContext<TRouteId extends string> = Pick<
   "agents" | "agentSelection" | "basePath" | "gateway" | "sessions"
 >;
 
-type ContextSessionNavigationTargetParams<TRouteId extends string> = {
-  context: SessionNavigationContext<TRouteId>;
+type SessionNavigationTargetOptions = {
   face: BoardFace;
   sessionKey: string;
-  agentId?: string;
-  fallbackAgentId?: never;
   basePath?: string;
-  row?: never;
-  mainKey?: never;
   shortIdLength?: number;
   exactKey?: boolean;
   preferenceDerivedFace?: boolean;
@@ -47,21 +42,21 @@ type ContextSessionNavigationTargetParams<TRouteId extends string> = {
   navigationKey?: string;
 };
 
-type ExplicitSessionNavigationTargetParams = {
+type ContextSessionNavigationTargetParams<TRouteId extends string> =
+  SessionNavigationTargetOptions & {
+    context: SessionNavigationContext<TRouteId>;
+    agentId?: string;
+    fallbackAgentId?: never;
+    row?: never;
+    mainKey?: never;
+  };
+
+type ExplicitSessionNavigationTargetParams = SessionNavigationTargetOptions & {
   context?: never;
-  face: BoardFace;
-  sessionKey: string;
   fallbackAgentId: string;
-  basePath?: string;
   row?: Pick<GatewaySessionRow, "displayName" | "key">;
   mainKey?: string | null;
-  shortIdLength?: number;
-  exactKey?: boolean;
   agentId?: never;
-  preferenceDerivedFace?: boolean;
-  focusComposer?: boolean;
-  dashboardExpanded?: boolean;
-  navigationKey?: string;
 };
 
 type SessionNavigationTarget = {

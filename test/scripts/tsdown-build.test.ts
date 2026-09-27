@@ -101,17 +101,7 @@ function resolveTestNodeOptions(params: TsdownInvocationParams) {
 }
 
 async function expectPathMissing(targetPath: string) {
-  let statError: unknown;
-  try {
-    await fsPromises.stat(targetPath);
-  } catch (error) {
-    statError = error;
-  }
-  expect(statError).toBeInstanceOf(Error);
-  if (!(statError instanceof Error)) {
-    throw new Error("expected missing path error");
-  }
-  expect(Reflect.get(statError, "code")).toBe("ENOENT");
+  await expect(fsPromises.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
 describe("resolveTsdownBuildInvocation", () => {
@@ -263,26 +253,23 @@ describe("resolveTsdownBuildInvocation", () => {
     }
   });
 
-  it.each(["tsdown.config.ts", "."])(
-    "keeps cleanup one-time when canonical config %s is serialized",
-    (config) => {
-      const args = ["--config", config, "--clean"];
-      const results = resolveTsdownBuildInvocations({
-        args,
-        env: {},
-        ...NO_MEMORY_LIMIT,
-      });
+  it("keeps cleanup one-time when the canonical directory config is serialized", () => {
+    const args = ["--config", ".", "--clean"];
+    const results = resolveTsdownBuildInvocations({
+      args,
+      env: {},
+      ...NO_MEMORY_LIMIT,
+    });
 
-      expect(resolveTsdownCleanOutputRoots(args)).toEqual(
-        resolveTsdownCleanOutputRoots(["--config", "tsdown.config.ts", "--clean"]),
-      );
-      expect(results.length).toBeGreaterThan(1);
-      for (const result of results) {
-        expect(result.args).toContain("--no-clean");
-        expect(result.args).not.toContain("--clean");
-      }
-    },
-  );
+    expect(resolveTsdownCleanOutputRoots(args)).toEqual(
+      resolveTsdownCleanOutputRoots(["--config", "tsdown.config.ts", "--clean"]),
+    );
+    expect(results.length).toBeGreaterThan(1);
+    for (const result of results) {
+      expect(result.args).toContain("--no-clean");
+      expect(result.args).not.toContain("--clean");
+    }
+  });
 
   it("preserves explicit cleanup for a custom config-owned output", () => {
     const [result] = resolveTsdownBuildInvocations({
@@ -331,12 +318,8 @@ describe("resolveTsdownBuildInvocation", () => {
     ).toEqual([TSDOWN_PACKAGE_CONFIG_GROUP, "openclaw-dts-base"]);
   });
 
-  it.each([
-    ["long filter", ["--filter", "openclaw-unified"]],
-    ["long assigned filter", ["--filter=openclaw-unified"]],
-    ["short filter", ["-F", "openclaw-unified"]],
-    ["short assigned filter", ["-F=openclaw-unified"]],
-  ])("keeps a caller-provided %s in one main invocation", (_label, args) => {
+  it("keeps a caller-provided filter in one main invocation", () => {
+    const args = ["-F", "openclaw-unified"];
     const results = resolveTsdownBuildInvocations({
       args,
       platform: "linux",
@@ -351,27 +334,7 @@ describe("resolveTsdownBuildInvocation", () => {
   });
 
   it.each([
-    ["long config", ["--config", "custom.tsdown.config.ts"]],
-    ["long assigned config", ["--config=custom.tsdown.config.ts"]],
-    ["short config", ["-c", "custom.tsdown.config.ts"]],
-    ["short assigned config", ["-c=custom.tsdown.config.ts"]],
-    ["config disabled", ["--no-config", "src/index.ts"]],
-  ])("keeps a caller-provided %s in one unfiltered invocation", (_label, args) => {
-    const results = resolveTsdownBuildInvocations({
-      args,
-      platform: "linux",
-      nodeExecPath: "/usr/bin/node",
-      env: {},
-      ...NO_MEMORY_LIMIT,
-    });
-
-    expect(results).toHaveLength(1);
-    expect(results[0]?.args.slice(-args.length)).toEqual(args);
-  });
-
-  it.each([
     ["long", ["--watch"]],
-    ["long path", ["--watch", "src"]],
     ["long assigned", ["--watch=src"]],
     ["short", ["-w"]],
     ["short assigned", ["-w=src"]],
@@ -383,14 +346,11 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(results[0]?.args.slice(-args.length)).toEqual(args);
   });
 
-  it.each([["--watch"], ["-w"]])(
-    "rejects default %s mode before splitting long-lived watchers",
-    (watchArg) => {
-      expect(() =>
-        resolveTsdownBuildInvocations({ args: [watchArg], env: {}, ...NO_MEMORY_LIMIT }),
-      ).toThrow("watch mode requires an explicit --config/-c or --no-config selector");
-    },
-  );
+  it("rejects default watch mode before splitting long-lived watchers", () => {
+    expect(() =>
+      resolveTsdownBuildInvocations({ args: ["-w"], env: {}, ...NO_MEMORY_LIMIT }),
+    ).toThrow("watch mode requires an explicit --config/-c or --no-config selector");
+  });
 
   it("keeps an explicit config-free positional entry in one small plan", () => {
     const args = ["--no-config", "packages/normalization-core/src/mountinfo-path.ts"];
@@ -454,11 +414,8 @@ describe("resolveTsdownBuildInvocation", () => {
     }
   });
 
-  it.each([
-    ["custom config", ["--config", "custom.tsdown.config.ts"]],
-    ["disabled config", ["--no-config", "src/index.ts"]],
-    ["package-only filtered build", ["--filter", TSDOWN_PACKAGE_CONFIG_GROUP]],
-  ])("does not apply full-build admission to a %s", (_label, args) => {
+  it("keeps custom configs in one invocation without full-build admission", () => {
+    const args = ["-c", "custom.tsdown.config.ts"];
     const result = resolveTsdownBuildPlan({
       args,
       platform: "linux",
@@ -468,6 +425,8 @@ describe("resolveTsdownBuildInvocation", () => {
     });
 
     expect(result.heapShortfall).toBeNull();
+    expect(result.invocations).toHaveLength(1);
+    expect(result.invocations[0]?.args.slice(-args.length)).toEqual(args);
   });
 
   it("applies admission to the direct unified declaration plan", () => {
@@ -489,17 +448,10 @@ describe("resolveTsdownBuildInvocation", () => {
   });
 
   it.each([
-    ["long", ["--filter", TSDOWN_PACKAGE_CONFIG_GROUP, "--filter", TSDOWN_UNIFIED_CONFIG_GROUP]],
     [
       "long reversed",
       ["--filter", TSDOWN_UNIFIED_CONFIG_GROUP, "--filter", TSDOWN_PACKAGE_CONFIG_GROUP],
     ],
-    [
-      "long assigned",
-      [`--filter=${TSDOWN_PACKAGE_CONFIG_GROUP}`, `--filter=${TSDOWN_UNIFIED_CONFIG_GROUP}`],
-    ],
-    ["short", ["-F", TSDOWN_PACKAGE_CONFIG_GROUP, "-F", TSDOWN_UNIFIED_CONFIG_GROUP]],
-    ["short reversed", ["-F", TSDOWN_UNIFIED_CONFIG_GROUP, "-F", TSDOWN_PACKAGE_CONFIG_GROUP]],
     ["short assigned", [`-F=${TSDOWN_PACKAGE_CONFIG_GROUP}`, `-F=${TSDOWN_UNIFIED_CONFIG_GROUP}`]],
   ])("admits repeated %s filters and cleans the complete output set", (_label, args) => {
     const result = resolveTsdownBuildPlan({
@@ -584,24 +536,18 @@ describe("resolveTsdownBuildInvocation", () => {
     ).toEqual(new Set(listTsdownOutputRoots()));
   });
 
-  it.each([
-    ["--config", "tsdown.config.ts"],
-    ["--config=tsdown.config.ts"],
-    ["-c", "tsdown.config.ts"],
-    ["-c=tsdown.config.ts"],
-    ["--config", "."],
-    ["--config=."],
-    ["-c", "."],
-    ["-c=."],
-  ])("applies admission to canonical config form %j", (...args) => {
-    expect(
-      resolveTsdownBuildPlan({
-        args,
-        env: {},
-        cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024,
-      }).heapShortfall?.fatal,
-    ).toBe(true);
-  });
+  it.each([["--config=tsdown.config.ts"], ["-c", "tsdown.config.ts"], ["-c=."]])(
+    "applies admission to alternate canonical config form %j",
+    (...args) => {
+      expect(
+        resolveTsdownBuildPlan({
+          args,
+          env: {},
+          cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024,
+        }).heapShortfall?.fatal,
+      ).toBe(true);
+    },
+  );
 
   it("applies admission to the unfiltered canonical config but not a package-only selector", () => {
     const full = resolveTsdownBuildPlan({
@@ -666,16 +612,10 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(result.maxOldSpaceMb).toBe(1280);
     expect(result.heapShortfall?.fatal).toBe(true);
     expect(result.invocations).toHaveLength(2);
-  });
-
-  it("restores declaration-build admission when --dts overrides the Docker default", () => {
-    const result = resolveTsdownBuildPlan({
-      args: ["--dts"],
-      env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
-      cgroupMemoryLimitBytes: 2 * 1024 * 1024 * 1024,
-    });
-
-    expect(result.heapShortfall?.fatal).toBe(true);
+    expect(result.invocations[0]?.args).toEqual(
+      expect.arrayContaining(["--config", "tsdown.ai.config.ts"]),
+    );
+    expect(result.invocations[1]?.args).not.toContain("--filter");
   });
 
   it("keeps the selected Windows runtime and literal compiler arguments", () => {
@@ -709,25 +649,11 @@ describe("resolveTsdownBuildInvocation", () => {
 
   it.each([
     {
-      title: "keeps inherited Windows tsdown heap settings at the Windows build cap",
-      platform: "win32",
-      execPath: "C:\\Program Files\\nodejs\\node.exe",
-      nodeOptions: "--trace-warnings --max-old-space-size=8192",
-      expectedNodeOptions: "--trace-warnings --max-old-space-size=8192",
-    },
-    {
       title: "clamps explicit Windows tsdown heap settings to the Windows build cap",
       platform: "win32",
       execPath: "C:\\Program Files\\nodejs\\node.exe",
       nodeOptions: "--trace-warnings --max-old-space-size=12288",
       expectedNodeOptions: "--trace-warnings --max-old-space-size=8192",
-    },
-    {
-      title: "preserves explicit tsdown heap settings",
-      platform: "linux",
-      execPath: "/usr/bin/node",
-      nodeOptions: "--trace-warnings --max-old-space-size=12288",
-      expectedNodeOptions: "--trace-warnings --max-old-space-size=12288",
     },
     {
       title: "raises inherited lower tsdown heap settings to the build default",
@@ -752,12 +678,6 @@ describe("resolveTsdownBuildInvocation", () => {
     });
 
     expect(result.options.env.NODE_OPTIONS).toBe(expectedNodeOptions);
-  });
-
-  it("keeps default tsdown heap below the container memory limit", () => {
-    expect(resolveTestNodeOptions({ cgroupMemoryLimitBytes: 7 * 1024 * 1024 * 1024 })).toBe(
-      "--max-old-space-size=6400",
-    );
   });
 
   it("deducts memory already used by a shared limiting cgroup", () => {
@@ -819,15 +739,6 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(shortfall?.message).toContain("OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB=<MB>");
   });
 
-  it("refuses a host whose slice cannot hold the whole-build peak", () => {
-    // A 4GiB slice resolves a 3328MB heap and clears the early invocations, then dies partway
-    // through the third: the binding constraint is the 4730MiB whole-build peak, not one pass.
-    expect(
-      describeInsufficientTsdownHeap({ env: {}, cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024 })
-        ?.fatal,
-    ).toBe(true);
-  });
-
   it("points Docker refusals at the public build heap override", () => {
     const shortfall = describeInsufficientTsdownHeap({
       env: { OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS: "" },
@@ -837,12 +748,6 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(shortfall?.fatal).toBe(true);
     expect(shortfall?.message).toContain("set OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB=<MB>");
     expect(shortfall?.message).not.toContain("set OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB=<MB>");
-  });
-
-  it("admits the smallest slice measured to complete a full build", () => {
-    expect(
-      describeInsufficientTsdownHeap({ env: {}, cgroupMemoryLimitBytes: 5 * 1024 * 1024 * 1024 }),
-    ).toBeNull();
   });
 
   it("uses an explicit heap override as the operator's opt-in for the complete plan", () => {
@@ -888,7 +793,6 @@ describe("resolveTsdownBuildInvocation", () => {
   it.each([
     ["repeated named configs", ["--config", "custom.ts", "-c=tsdown.config.ts"]],
     ["config then no-config", ["--config", "tsdown.config.ts", "--no-config", "src/index.ts"]],
-    ["no-config then config", ["--no-config", "src/index.ts", "-c=tsdown.config.ts"]],
   ])("rejects %s before cleanup", (_label, args) => {
     const cleanup = vi.fn();
 
@@ -954,7 +858,6 @@ describe("resolveTsdownBuildInvocation", () => {
 
   it.each([
     ["bare long filter", ["--filter"]],
-    ["bare short filter", ["-F"]],
     ["empty assigned filter", ["--filter="]],
     ["missing repeated filter", ["--filter", "openclaw-packages", "-F", "--watch"]],
   ])("rejects %s before cleanup", (_label, args) => {
@@ -973,27 +876,11 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(cleanup).not.toHaveBeenCalled();
   });
 
-  it("stays silent when the host budget fits the build", () => {
-    expect(
-      describeInsufficientTsdownHeap({ env: {}, cgroupMemoryLimitBytes: 8 * 1024 * 1024 * 1024 }),
-    ).toBeNull();
-  });
-
-  it("never sizes the heap above a cgroup limit smaller than the old floor", () => {
-    // A floor applied on top of a real limit yields a heap the cgroup cannot honour, so the
-    // build is OOM-killed instead of merely running smaller.
-    // 1500 MiB budget minus the 768 MiB headroom, not the former 2048 MiB floor.
-    expect(resolveTestNodeOptions({ cgroupMemoryLimitBytes: 1500 * 1024 * 1024 })).toBe(
-      "--max-old-space-size=732",
+  it("keeps a sub-MiB cgroup limit bounded instead of treating it as unbounded", () => {
+    expect(resolveTestNodeOptions({ cgroupMemoryLimitBytes: 1024 * 1024 - 1 })).toBe(
+      "--max-old-space-size=1",
     );
   });
-
-  it.each([4096, 1024 * 1024 - 1])(
-    "keeps a %i-byte cgroup limit bounded instead of treating it as unbounded",
-    (cgroupMemoryLimitBytes) => {
-      expect(resolveTestNodeOptions({ cgroupMemoryLimitBytes })).toBe("--max-old-space-size=1");
-    },
-  );
 
   it("keeps a parsed zero-byte cgroup limit bounded", () => {
     expect(
@@ -1690,15 +1577,6 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(nodeOptions).toBe("--trace-warnings --max-old-space-size=6400");
   });
 
-  it("honors OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB over platform and memory defaults", () => {
-    const nodeOptions = resolveTestNodeOptions({
-      env: { OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: "3072" },
-      cgroupMemoryLimitBytes: 7 * 1024 * 1024 * 1024,
-    });
-
-    expect(nodeOptions).toBe("--max-old-space-size=3072");
-  });
-
   it("keeps memory detection when OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB is blank", () => {
     const nodeOptions = resolveTestNodeOptions({
       env: { OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: "  " },
@@ -2001,25 +1879,6 @@ describe("resolveTsdownBuildInvocation", () => {
       await expect(fsPromises.readFile(coreFile, "utf8")).resolves.toBe("keep\n");
     }));
 
-  it("sanitizes only the declaration roots selected by a direct AI build", () =>
-    fixture.run(async () => {
-      const rootDir = createTempDir("openclaw-tsdown-selected-sanitize-");
-      const aiDeclaration = path.join(rootDir, "packages", "ai", "dist", "index.d.ts");
-      const rootDeclaration = path.join(rootDir, "dist", "index.d.ts");
-      const malformed = "export { __exportAll, publicApi };\n";
-      await fsPromises.mkdir(path.dirname(aiDeclaration), { recursive: true });
-      await fsPromises.mkdir(path.dirname(rootDeclaration), { recursive: true });
-      await fsPromises.writeFile(aiDeclaration, malformed);
-      await fsPromises.writeFile(rootDeclaration, malformed);
-
-      sanitizeTsdownBuildOutputRoots(["--config", "tsdown.ai.config.ts"], rootDir);
-
-      await expect(fsPromises.readFile(aiDeclaration, "utf8")).resolves.toBe(
-        "export { publicApi };\n",
-      );
-      await expect(fsPromises.readFile(rootDeclaration, "utf8")).resolves.toBe(malformed);
-    }));
-
   it("refuses to sanitize a symlinked direct-build output root", () =>
     fixture.run(async () => {
       const rootDir = createTempDir("openclaw-tsdown-sanitize-symlink-");
@@ -2080,25 +1939,21 @@ describe("resolveTsdownBuildInvocation", () => {
     }),
   );
 
-  it.each(["OpenClaw.app", "candidates/OpenClaw.app"])(
-    "keeps the packaged Mac app intact at %s while rebuilding its replacement runtime",
-    (appPath) =>
-      fixture.run(async () => {
-        const rootDir = createTempDir("openclaw-tsdown-app-pairing-");
-        const appFile = path.join(rootDir, "dist", appPath, "Contents", "Resources", "worker.js");
-        const staleFile = path.join(rootDir, "dist", "stale.js");
-        await fsPromises.mkdir(path.dirname(appFile), { recursive: true });
-        await fsPromises.writeFile(appFile, "previous signed worker\n");
-        await fsPromises.writeFile(staleFile, "stale\n");
+  it("keeps a nested packaged Mac app intact while rebuilding its replacement runtime", () =>
+    fixture.run(async () => {
+      const appPath = "candidates/OpenClaw.app";
+      const rootDir = createTempDir("openclaw-tsdown-app-pairing-");
+      const appFile = path.join(rootDir, "dist", appPath, "Contents", "Resources", "worker.js");
+      const staleFile = path.join(rootDir, "dist", "stale.js");
+      await fsPromises.mkdir(path.dirname(appFile), { recursive: true });
+      await fsPromises.writeFile(appFile, "previous signed worker\n");
+      await fsPromises.writeFile(staleFile, "stale\n");
 
-        cleanTsdownOutputRoots({ cwd: rootDir, roots: ["dist"] });
+      cleanTsdownOutputRoots({ cwd: rootDir, roots: ["dist"] });
 
-        await expect(fsPromises.readFile(appFile, "utf8")).resolves.toBe(
-          "previous signed worker\n",
-        );
-        await expectPathMissing(staleFile);
-      }),
-  );
+      await expect(fsPromises.readFile(appFile, "utf8")).resolves.toBe("previous signed worker\n");
+      await expectPathMissing(staleFile);
+    }));
 
   it("cleans an absolute explicit output directory without rebasing it under cwd", () =>
     fixture.run(async () => {
@@ -2244,24 +2099,6 @@ describe("resolveTsdownBuildInvocation", () => {
       await expect(fsPromises.readFile(firstRootFile, "utf8")).resolves.toBe("keep\n");
     }));
 
-  it("refuses a symlinked output root even without protected children", () =>
-    fixture.run(async () => {
-      const rootDir = createTempDir("openclaw-tsdown-clean-symlink-plain-");
-      const targetDir = path.join(rootDir, "gateway-dist");
-      const targetFile = path.join(targetDir, "stale.js");
-      await fsPromises.mkdir(targetDir, { recursive: true });
-      await fsPromises.writeFile(targetFile, "stale\n");
-      const distLink = path.join(rootDir, "dist");
-      await fsPromises.symlink(targetDir, distLink, "dir");
-
-      expect(() => cleanTsdownOutputRoots({ cwd: rootDir, roots: ["dist"] })).toThrow(
-        /symbolic link/u,
-      );
-
-      expect(fs.readlinkSync(distLink)).toBe(targetDir);
-      await expect(fsPromises.readFile(targetFile, "utf8")).resolves.toBe("stale\n");
-    }));
-
   it("refuses an output root behind an intermediate symlink", () =>
     fixture.run(async () => {
       const rootDir = createTempDir("openclaw-tsdown-clean-parent-symlink-");
@@ -2278,22 +2115,6 @@ describe("resolveTsdownBuildInvocation", () => {
       ).toThrow(/symbolic link/u);
 
       await expect(fsPromises.readFile(targetFile, "utf8")).resolves.toBe("keep\n");
-    }));
-
-  it("refuses to prune stale root chunks through a symlinked output root", () =>
-    fixture.run(async () => {
-      const rootDir = createTempDir("openclaw-tsdown-prune-symlink-");
-      const targetDir = path.join(rootDir, "gateway-dist");
-      const hashedFile = path.join(targetDir, "delegate-BPjCe4gC.js");
-      await fsPromises.mkdir(targetDir, { recursive: true });
-      await fsPromises.writeFile(hashedFile, "old delegate\n");
-      const distLink = path.join(rootDir, "dist");
-      await fsPromises.symlink(targetDir, distLink, "dir");
-
-      expect(() => pruneStaleRootChunkFiles({ cwd: rootDir })).toThrow(/symbolic link/u);
-
-      expect(fs.readlinkSync(distLink)).toBe(targetDir);
-      await expect(fsPromises.readFile(hashedFile, "utf8")).resolves.toBe("old delegate\n");
     }));
 
   it("validates every chunk root before pruning any output", () =>

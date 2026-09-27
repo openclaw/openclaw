@@ -20,6 +20,7 @@ import type {
   UserModelAccountSelection,
 } from "./model-account-authority.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
+import type { SessionCreatePhase } from "./session-create-diagnostics.js";
 
 type TrustedCatalogSessionTarget = {
   model: string;
@@ -93,6 +94,7 @@ export type CreateGatewaySessionResult =
   | Extract<GatewaySessionCommitResult, { ok: false }>;
 
 export type CreateGatewaySessionParams = {
+  onPhase?: (phase: SessionCreatePhase) => void;
   cfg: OpenClawConfig;
   operatorAuthority?: Promise<
     | {

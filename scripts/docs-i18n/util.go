@@ -30,14 +30,11 @@ func cacheNamespace() string {
 
 func cacheKey(namespace, srcLang, tgtLang, segmentID, textHash string) string {
 	raw := fmt.Sprintf("%s|%s|%s|%s|%s", namespace, srcLang, tgtLang, segmentID, textHash)
-	hash := sha256.Sum256([]byte(raw))
-	return hex.EncodeToString(hash[:])
+	return hashBytes([]byte(raw))
 }
 
 func hashText(text string) string {
-	normalized := normalizeText(text)
-	hash := sha256.Sum256([]byte(normalized))
-	return hex.EncodeToString(hash[:])
+	return hashBytes([]byte(normalizeText(text)))
 }
 
 func hashBytes(data []byte) string {

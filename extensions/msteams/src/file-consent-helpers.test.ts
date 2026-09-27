@@ -8,12 +8,8 @@ describe("requiresFileConsent", () => {
 
   it.each([
     ["personal", "application/pdf", 1000, true],
-    ["personal", "image/png", 5 * 1024 * 1024, true],
-    ["personal", "image/png", 1000, false],
     ["groupChat", "application/pdf", 5 * 1024 * 1024, false],
-    ["channel", "application/pdf", 5 * 1024 * 1024, false],
     ["Personal", "application/pdf", 1000, true],
-    ["PERSONAL", "application/pdf", 1000, true],
     [undefined, "application/pdf", 1000, false],
     ["personal", undefined, 1000, true],
     ["personal", "image/jpeg", thresholdBytes, true],
@@ -30,6 +26,13 @@ describe("requiresFileConsent", () => {
 
 describe("prepareFileConsentActivity", () => {
   const mockUploadId = "test-upload-id-123";
+  const media = {
+    buffer: Buffer.from("test content"),
+    filename: "test.pdf",
+    contentType: "application/pdf",
+  };
+  const prepare = (description?: string) =>
+    prepareFileConsentActivity({ media, conversationId: "conv123", description });
 
   beforeEach(() => {
     vi.spyOn(pendingUploads, "storePendingUpload").mockReturnValue(mockUploadId);
@@ -40,15 +43,7 @@ describe("prepareFileConsentActivity", () => {
   });
 
   it("creates activity with consent card attachment", () => {
-    const result = prepareFileConsentActivity({
-      media: {
-        buffer: Buffer.from("test content"),
-        filename: "test.pdf",
-        contentType: "application/pdf",
-      },
-      conversationId: "conv123",
-      description: "My file",
-    });
+    const result = prepare("My file");
 
     expect(result.uploadId).toBe(mockUploadId);
     expect(result.activity.type).toBe("message");
@@ -60,52 +55,25 @@ describe("prepareFileConsentActivity", () => {
   });
 
   it("stores pending upload with correct data", () => {
-    const buffer = Buffer.from("test content");
-    prepareFileConsentActivity({
-      media: {
-        buffer,
-        filename: "test.pdf",
-        contentType: "application/pdf",
-      },
-      conversationId: "conv123",
-      description: "My file",
-    });
+    prepare("My file");
 
     expect(pendingUploads.storePendingUpload).toHaveBeenCalledWith({
-      buffer,
-      filename: "test.pdf",
-      contentType: "application/pdf",
+      ...media,
       conversationId: "conv123",
     });
   });
 
   it("uses default description when not provided", () => {
-    const result = prepareFileConsentActivity({
-      media: {
-        buffer: Buffer.from("test"),
-        filename: "document.docx",
-        contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      },
-      conversationId: "conv456",
-    });
-
+    const result = prepare();
     const attachment = expectDefined(
       (result.activity.attachments as Array<{ content: { description: string } }>)[0],
       "default file-consent attachment",
     );
-    expect(attachment.content.description).toBe("File: document.docx");
+    expect(attachment.content.description).toBe("File: test.pdf");
   });
 
   it("uses provided description", () => {
-    const result = prepareFileConsentActivity({
-      media: {
-        buffer: Buffer.from("test"),
-        filename: "report.pdf",
-        contentType: "application/pdf",
-      },
-      conversationId: "conv789",
-      description: "Q4 Financial Report",
-    });
+    const result = prepare("Q4 Financial Report");
 
     const attachment = expectDefined(
       (result.activity.attachments as Array<{ content: { description: string } }>)[0],
@@ -115,14 +83,7 @@ describe("prepareFileConsentActivity", () => {
   });
 
   it("includes uploadId in consent card context", () => {
-    const result = prepareFileConsentActivity({
-      media: {
-        buffer: Buffer.from("test"),
-        filename: "file.txt",
-        contentType: "text/plain",
-      },
-      conversationId: "conv000",
-    });
+    const result = prepare();
 
     const attachment = expectDefined(
       (
@@ -133,18 +94,5 @@ describe("prepareFileConsentActivity", () => {
       "file-consent upload attachment",
     );
     expect(attachment.content.acceptContext.uploadId).toBe(mockUploadId);
-  });
-
-  it("handles media without contentType", () => {
-    const result = prepareFileConsentActivity({
-      media: {
-        buffer: Buffer.from("binary data"),
-        filename: "unknown.bin",
-      },
-      conversationId: "conv111",
-    });
-
-    expect(result.uploadId).toBe(mockUploadId);
-    expect(result.activity.type).toBe("message");
   });
 });

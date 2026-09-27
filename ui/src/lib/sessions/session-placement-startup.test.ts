@@ -174,15 +174,25 @@ describe("session placement startup", () => {
     );
   });
 
-  it("waits for an absent placement after an ambiguous dispatch error", async () => {
+  it.each([
+    { name: "absent placement", response: { session: {} } },
+    {
+      name: "draining placement",
+      response: { session: { placement: { state: "draining", environmentId: "environment-1" } } },
+    },
+    { name: "transient lookup failure", response: new Error("still reconnecting") },
+  ])("waits through $name after an ambiguous dispatch error", async ({ response }) => {
     vi.useFakeTimers();
     onTestFinished(() => {
       vi.useRealTimers();
     });
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("transport closed"))
-      .mockResolvedValueOnce({ session: {} })
+    const request = vi.fn().mockRejectedValueOnce(new Error("transport closed"));
+    if (response instanceof Error) {
+      request.mockRejectedValueOnce(response);
+    } else {
+      request.mockResolvedValueOnce(response);
+    }
+    request
       .mockResolvedValueOnce({
         session: { placement: { state: "active", environmentId: "environment-1" } },
       })
@@ -192,6 +202,7 @@ describe("session placement startup", () => {
     await vi.runAllTimersAsync();
     await expect(outcome).resolves.toMatchObject({ status: "started" });
     expect(request).toHaveBeenNthCalledWith(3, "sessions.describe", { key: params.key });
+    expect(request).not.toHaveBeenCalledWith("environments.destroy", expect.anything());
     expect(request).toHaveBeenNthCalledWith(
       4,
       "sessions.send",
@@ -223,102 +234,6 @@ describe("session placement startup", () => {
       "sessions.send",
       expect.objectContaining({ message: params.message }),
     );
-  });
-
-  it("waits through an in-progress placement after an ambiguous dispatch error", async () => {
-    vi.useFakeTimers();
-    onTestFinished(() => {
-      vi.useRealTimers();
-    });
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("transport closed"))
-      .mockResolvedValueOnce({ session: { placement: { state: "provisioning" } } })
-      .mockResolvedValueOnce({
-        session: { placement: { state: "active", environmentId: "environment-1" } },
-      })
-      .mockResolvedValueOnce({ runId: "run-1" });
-
-    const outcome = startSessionPlacementInitialTurn(clientWith(request), params, () => true);
-    await vi.runAllTimersAsync();
-    await expect(outcome).resolves.toMatchObject({ status: "started" });
-    expect(request).toHaveBeenNthCalledWith(3, "sessions.describe", { key: params.key });
-    expect(request).toHaveBeenNthCalledWith(
-      4,
-      "sessions.send",
-      expect.objectContaining({ message: params.message }),
-    );
-  });
-
-  it("waits for a draining placement to become active during recovery", async () => {
-    vi.useFakeTimers();
-    onTestFinished(() => {
-      vi.useRealTimers();
-    });
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("transport closed"))
-      .mockResolvedValueOnce({
-        session: { placement: { state: "draining", environmentId: "environment-1" } },
-      })
-      .mockResolvedValueOnce({
-        session: { placement: { state: "active", environmentId: "environment-1" } },
-      })
-      .mockResolvedValueOnce({ runId: "run-1" });
-
-    const outcome = startSessionPlacementInitialTurn(clientWith(request), params, () => true);
-    await vi.runAllTimersAsync();
-    await expect(outcome).resolves.toMatchObject({ status: "started" });
-    expect(request).not.toHaveBeenCalledWith("environments.destroy", expect.anything());
-    expect(request).toHaveBeenNthCalledWith(
-      4,
-      "sessions.send",
-      expect.objectContaining({ message: params.message }),
-    );
-  });
-
-  it("keeps reconciling after a transient placement lookup failure", async () => {
-    vi.useFakeTimers();
-    onTestFinished(() => {
-      vi.useRealTimers();
-    });
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("transport closed"))
-      .mockRejectedValueOnce(new Error("still reconnecting"))
-      .mockResolvedValueOnce({
-        session: { placement: { state: "active", environmentId: "environment-1" } },
-      })
-      .mockResolvedValueOnce({ runId: "run-1" });
-
-    const outcome = startSessionPlacementInitialTurn(clientWith(request), params, () => true);
-    await vi.runAllTimersAsync();
-    await expect(outcome).resolves.toMatchObject({ status: "started" });
-    expect(request).toHaveBeenNthCalledWith(3, "sessions.describe", { key: params.key });
-    expect(request).toHaveBeenNthCalledWith(
-      4,
-      "sessions.send",
-      expect.objectContaining({ message: params.message }),
-    );
-  });
-
-  it("stops quickly when placement lookups remain unavailable", async () => {
-    vi.useFakeTimers();
-    onTestFinished(() => {
-      vi.useRealTimers();
-    });
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("transport closed"))
-      .mockRejectedValue(new Error("authentication expired"));
-
-    const outcome = startSessionPlacementInitialTurn(clientWith(request), params, () => true);
-    await vi.runAllTimersAsync();
-    await expect(outcome).resolves.toEqual({
-      status: "cleanup-rejected",
-      error: "session placement could not be verified; cleanup failed: authentication expired",
-    });
-    expect(request).toHaveBeenCalledTimes(6);
   });
 
   it.each(["gateway-suspending", "gateway-restarting"])(

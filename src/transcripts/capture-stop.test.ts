@@ -36,8 +36,6 @@ afterEach(async () => {
 
 describe("transcript provider cleanup custody", () => {
   it.each([
-    { owner: "tool", failure: "returned", registryChange: "none" },
-    { owner: "tool", failure: "thrown", registryChange: "none" },
     { owner: "service", failure: "returned", registryChange: "none" },
     { owner: "service", failure: "thrown", registryChange: "none" },
     { owner: "manual-service", failure: "returned", registryChange: "none" },

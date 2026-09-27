@@ -6,10 +6,7 @@ import {
   assertAgentHarnessTaskRuntimeScope,
   type AgentHarnessTaskRuntimeScope,
 } from "./agent-harness-task-runtime-scope.js";
-import {
-  backgroundCommandTaskContent,
-  backgroundCommandTaskSummary,
-} from "./background-command-task-content.js";
+import { backgroundCommandTaskContent } from "./background-command-task-content.js";
 import {
   DetachedTaskAssignmentUnsupportedError,
   type DetachedTaskTerminalState,
@@ -17,6 +14,7 @@ import {
 import { captureDetachedTaskRuntimeOwner } from "./detached-task-runtime-state.js";
 import { prepareRunningTaskRun } from "./detached-task-runtime.js";
 import { captureTaskCancellationControl } from "./task-cancellation-context.js";
+import { backgroundCommandTaskSummary } from "./task-content.js";
 import { getTaskById } from "./task-registry-query.js";
 import {
   captureTaskPersistenceReceipt,

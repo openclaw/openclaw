@@ -24,6 +24,11 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { createAgentHarnessTaskRuntimeScope } from "../tasks/agent-harness-task-runtime-scope.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../tasks/detached-task-runtime-contract.js";
 import {
+  finalizeTaskRunByRunIdAsync,
+  setDetachedTaskDeliveryStatusByRunIdAsync,
+  transitionTaskAssignmentAsync,
+} from "../tasks/detached-task-runtime.async.js";
+import {
   createRunningTaskRun,
   finalizeTaskRunByRunId,
   recordTaskRunProgressByRunId,
@@ -33,6 +38,7 @@ import {
 } from "../tasks/detached-task-runtime.js";
 import { listTaskRecords } from "../tasks/runtime-internal.js";
 import { captureTaskExecutionOwner } from "../tasks/task-execution-owner.js";
+import type { TaskRecord } from "../tasks/task-registry.types.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
   setDetachedTaskLifecycleRuntime,
@@ -81,6 +87,24 @@ vi.mock("../tasks/detached-task-runtime.js", () => ({
 
 vi.mock("../tasks/runtime-internal.js", () => ({
   listTaskRecords: vi.fn(() => []),
+}));
+
+vi.mock("../tasks/detached-task-runtime.async.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../tasks/detached-task-runtime.async.js")>()),
+  finalizeTaskRunByRunIdAsync: vi.fn(async () => []),
+  setDetachedTaskDeliveryStatusByRunIdAsync: vi.fn(async () => []),
+  transitionTaskAssignmentAsync: vi.fn(async (params) => {
+    params.assertCurrent();
+    return [];
+  }),
+}));
+
+vi.mock("../tasks/task-registry-read.js", () => ({
+  captureTaskRegistryRunSelection: async (runId: string, matches: (task: TaskRecord) => boolean) =>
+    structuredClone(listTaskRecords().filter((task) => task.runId === runId && matches(task))),
+  prepareTaskRegistryRead: async () => ({
+    getTasksByRunId: (runId: string) => listTaskRecords().filter((task) => task.runId === runId),
+  }),
 }));
 
 vi.mock("../tasks/task-execution-owner.js", () => ({
@@ -229,7 +253,7 @@ describe("agent-harness-task-runtime", () => {
 
   it.each([false, true])(
     "projects private task content before every writer (private: %s)",
-    (privateSession) => {
+    async (privateSession) => {
       const requesterSessionKey = privateSession
         ? "agent:main:dashboard:incognito-native"
         : "agent:main:main";
@@ -274,19 +298,38 @@ describe("agent-harness-task-runtime", () => {
           deliveryStatus: "pending",
           error: content,
         });
+        await runtime.finalizeTaskRunByRunIdAsync!({
+          ...identity,
+          status: "failed",
+          endedAt: 2,
+          error: content,
+          progressSummary: content,
+          terminalSummary: content,
+          detail,
+        });
+        await runtime.setDetachedTaskDeliveryStatusByRunIdAsync!({
+          ...identity,
+          deliveryStatus: "pending",
+          error: content,
+        });
       }
       for (const writer of [
         recordTaskRunProgressByRunId,
         finalizeTaskRunByRunId,
         setDetachedTaskDeliveryStatusByRunId,
+        finalizeTaskRunByRunIdAsync,
+        setDetachedTaskDeliveryStatusByRunIdAsync,
       ]) {
         expect(JSON.stringify(vi.mocked(writer).mock.calls).includes(content)).toBe(
           !privateSession,
         );
         expect(writer).toHaveBeenCalledOnce();
       }
-      const transitions = vi.mocked(transitionTaskAssignment).mock.calls.map(([input]) => input);
-      expect(transitions).toHaveLength(3);
+      const transitions = [
+        ...vi.mocked(transitionTaskAssignment).mock.calls,
+        ...vi.mocked(transitionTaskAssignmentAsync).mock.calls,
+      ].map(([input]) => input);
+      expect(transitions).toHaveLength(5);
       expect(JSON.stringify(transitions).includes(content)).toBe(!privateSession);
       for (const transition of transitions) {
         expect(transition.expectedTask).toEqual(expectedTask);
@@ -296,6 +339,11 @@ describe("agent-harness-task-runtime", () => {
         });
       }
       expect(transitions[1]?.transition.params).toMatchObject({
+        status: "failed",
+        endedAt: 2,
+        detail,
+      });
+      expect(transitions[3]?.transition.params).toMatchObject({
         status: "failed",
         endedAt: 2,
         detail,
@@ -526,50 +574,6 @@ describe("agent-harness-task-runtime", () => {
         result: "child final answer",
       }),
     ).rejects.toThrow(/host-issued scope/);
-  });
-
-  it("lists only task records owned by the scoped requester session", () => {
-    const records = [
-      {
-        taskId: "task-1",
-        runtime: "subagent",
-        taskKind: "example-harness",
-        requesterSessionKey: "agent:main:channel:C123",
-        ownerKey: "agent:main:channel:C123",
-        scopeKind: "session",
-        runId: "example:child-1",
-        task: "owned",
-        status: "running",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
-        createdAt: 1,
-      },
-      {
-        taskId: "task-2",
-        runtime: "subagent",
-        taskKind: "example-harness",
-        requesterSessionKey: "agent:other:channel:C999",
-        ownerKey: "agent:other:channel:C999",
-        scopeKind: "session",
-        runId: "example:child-2",
-        task: "other",
-        status: "running",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
-        createdAt: 1,
-      },
-    ] satisfies ReturnType<typeof listTaskRecords>;
-    vi.mocked(listTaskRecords).mockImplementation((filter) =>
-      filter ? records.filter(filter) : records,
-    );
-    const runtime = createAgentHarnessTaskRuntime({
-      runtime: "subagent",
-      taskKind: "example-harness",
-      scope: createScope(),
-      runIdPrefix: "example:",
-    });
-
-    expect(runtime.listTaskRecords().map((task) => task.taskId)).toEqual(["task-1"]);
   });
 
   it.each(["unguarded", "retired-during-origin"] as const)(

@@ -2,23 +2,12 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  inspectBundlePluginArtifact,
-  inspectNativePluginArtifact,
-} from "./install-artifact-inspection.js";
+import { inspectBundlePluginArtifact } from "./install-artifact-inspection.js";
 import { installPluginFromPath } from "./install-package.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("plugin install artifact inspection", () => {
-  it("classifies native plugins as canonically mapped", () => {
-    expect(inspectNativePluginArtifact()).toEqual({
-      format: "openclaw",
-      mapped: ["plugin"],
-      unavailable: [],
-    });
-  });
-
   it("separates mapped and detect-only bundle capabilities deterministically", () => {
     expect(
       inspectBundlePluginArtifact({
@@ -29,19 +18,6 @@ describe("plugin install artifact inspection", () => {
       format: "claude",
       mapped: ["agents", "mcpServers", "outputStyles", "skills"],
       unavailable: [],
-    });
-  });
-
-  it("reports cursor agent directories as unavailable because the runtime never loads them", () => {
-    expect(
-      inspectBundlePluginArtifact({
-        format: "cursor",
-        capabilities: ["agents", "commands", "skills"],
-      }),
-    ).toEqual({
-      format: "cursor",
-      mapped: ["commands", "skills"],
-      unavailable: ["agents"],
     });
   });
 

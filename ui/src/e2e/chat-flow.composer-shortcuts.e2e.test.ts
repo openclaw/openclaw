@@ -9,10 +9,104 @@ import {
   waitForRequests,
 } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("restores a quoted draft after reload and keeps cancellation cleared", async () => {
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
+    try {
+      const page = await context.newPage();
+      const sessionKey = "agent:main:main";
+      const quote = "Review all 60 checklist items before sending the summary.";
+      const draft = "Please explain the quoted checklist.";
+      const gateway = await installMockGateway(page, {
+        sessionKey,
+        historyMessages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: quote }],
+            timestamp: 1_800_000_000_000,
+            __openclaw: { id: "quoted-checklist", seq: 1 },
+          },
+        ],
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const pane = page.locator(".chat-pane-cache__pane--active");
+      const composer = pane.getByRole("textbox", { name: "Chat composer" });
+      const group = pane.locator(".chat-group.assistant").filter({ hasText: quote });
+      await group.hover();
+      await group.getByRole("button", { name: "Reply to message", exact: true }).click();
+      const preview = pane.locator(".chat-reply-preview.composer-context-strip");
+      await preview.waitFor({ state: "visible" });
+      await composer.fill(draft);
+      const scopeKey = `chat:v3:${sessionKey}\u0000agent:main`;
+      await waitForCommittedComposerDraft(page, scopeKey, draft, 0);
+      await page.reload();
+      await expect.poll(() => composer.inputValue()).toBe(draft);
+      await group.waitFor({ state: "visible" });
+      await captureUiProof(suite, page, "quoted-draft-reload", "after-reload.png");
+      await expect
+        .poll(() => preview.locator(".chat-reply-preview__text").textContent())
+        .toBe(quote);
+      await pane.getByRole("button", { name: "Send message", exact: true }).click();
+      const request = await gateway.waitForRequest("chat.send");
+      await waitForCommittedComposerDraft(page, scopeKey, null, 0, undefined, null);
+      expect(requireRecord(request.params)).toMatchObject({
+        sessionKey,
+        message: draft,
+        replyToId: "quoted-checklist",
+      });
+      await gateway.emitChatFinal({
+        runId: requireString(requireRecord(request.params).idempotencyKey, "quoted run"),
+        text: "The checklist is ready.",
+      });
+      await pane
+        .locator(".chat-group.assistant")
+        .getByText("The checklist is ready.", { exact: true })
+        .waitFor();
+      await pane
+        .getByRole("button", { name: "Stop generating", exact: true })
+        .waitFor({ state: "detached" });
+      await composer.fill("Keep the text without a quote.");
+      await waitForCommittedComposerDraft(
+        page,
+        scopeKey,
+        "Keep the text without a quote.",
+        0,
+        undefined,
+        null,
+      );
+      await group.hover();
+      await group.getByRole("button", { name: "Reply to message", exact: true }).click();
+      await preview.waitFor({ state: "visible" });
+      await waitForCommittedComposerDraft(
+        page,
+        scopeKey,
+        "Keep the text without a quote.",
+        0,
+        undefined,
+        "quoted-checklist",
+      );
+      await preview.getByRole("button", { name: "Cancel reply", exact: true }).click();
+      await preview.waitFor({ state: "hidden" });
+      await waitForCommittedComposerDraft(
+        page,
+        scopeKey,
+        "Keep the text without a quote.",
+        0,
+        undefined,
+        null,
+      );
+      await page.reload();
+      await expect.poll(() => composer.inputValue()).toBe("Keep the text without a quote.");
+      expect(await preview.count()).toBe(0);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("preserves IME reply before deliberate Escape abort", async () => {
     const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     try {

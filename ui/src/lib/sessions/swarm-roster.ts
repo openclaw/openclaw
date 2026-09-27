@@ -1,6 +1,7 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { childSessionListQuery } from "./child-session-data.ts";
 import type { SessionCapability, SessionListSnapshot, SessionRowObservation } from "./index.ts";
 import { fetchPagedSessionRows } from "./paged-session-rows.ts";
 import {
@@ -10,16 +11,6 @@ import {
 } from "./session-key.ts";
 
 const SWARM_SESSION_PAGE_SIZE = 10_000;
-
-function childQuery(parentKey: string) {
-  return {
-    spawnedBy: parentKey,
-    limit: SWARM_SESSION_PAGE_SIZE,
-    includeGlobal: false,
-    includeUnknown: false,
-    configuredAgentsOnly: true,
-  };
-}
 
 function readSwarmEnabled(value: unknown): boolean | undefined {
   if (typeof value === "boolean") {
@@ -45,12 +36,6 @@ export function isSwarmEnabledInConfig(config: unknown, agentId?: string): boole
   return agentEnabled ?? globalEnabled ?? true;
 }
 
-function isNewerSessionRow(candidate: GatewaySessionRow, current: GatewaySessionRow): boolean {
-  // Equal persisted timestamps intentionally prefer the later row source,
-  // while Map replacement preserves each key's first insertion position.
-  return (candidate.updatedAt ?? 0) >= (current.updatedAt ?? 0);
-}
-
 export function mergeSwarmSessionRows(
   ...rowSources: readonly (readonly GatewaySessionRow[])[]
 ): GatewaySessionRow[] {
@@ -58,7 +43,8 @@ export function mergeSwarmSessionRows(
   for (const rows of rowSources) {
     for (const row of rows) {
       const current = merged.get(row.key);
-      if (!current || isNewerSessionRow(row, current)) {
+      // Ties prefer the later source without changing the first insertion position.
+      if (!current || (row.updatedAt ?? 0) >= (current.updatedAt ?? 0)) {
         merged.set(row.key, row);
       }
     }
@@ -72,8 +58,12 @@ export async function hydrateSwarmSessionRows(params: {
   isCurrent: () => boolean;
   initialResult?: SessionsListResult;
 }): Promise<GatewaySessionRow[] | null> {
-  const childRows = await fetchPagedSessionRows({
-    list: (offset) => params.sessions.list({ ...childQuery(params.parentKey), offset }),
+  return fetchPagedSessionRows({
+    list: (offset) =>
+      params.sessions.list({
+        ...childSessionListQuery(params.parentKey, SWARM_SESSION_PAGE_SIZE),
+        offset,
+      }),
     initialResult: params.initialResult,
     isCurrent: params.isCurrent,
     missingResultError: "child session list returned no result",
@@ -82,7 +72,6 @@ export async function hydrateSwarmSessionRows(params: {
       return rows.map((row) => params.sessions.inheritRow({ ...row, runtimeSampledAt }, row));
     },
   });
-  return childRows;
 }
 
 type SwarmHydrationParams = {
@@ -176,11 +165,14 @@ export class SwarmRosterHydrator {
         },
       },
     );
-    this.children = params.sessions.observeList(childQuery(params.parentKey), (snapshot) => {
-      if (isCurrent()) {
-        this.applyChildren(snapshot);
-      }
-    });
+    this.children = params.sessions.observeList(
+      childSessionListQuery(params.parentKey, SWARM_SESSION_PAGE_SIZE),
+      (snapshot) => {
+        if (isCurrent()) {
+          this.applyChildren(snapshot);
+        }
+      },
+    );
     // Parent counts remain independent of the optional child-name page.
     void this.readParent();
     void this.children.refresh().catch(() => {

@@ -11,7 +11,6 @@ import {
  */
 import type {
   ChannelIngressAdapter,
-  ChannelIngressAdapterEntry,
   ChannelIngressIdentityDescriptor,
   ChannelIngressIdentityField,
   ChannelIngressIdentitySubjectInput,
@@ -122,10 +121,6 @@ function identityFields(identity: ChannelIngressIdentityDescriptor): ResolvedIde
   return fields;
 }
 
-function identityMatchKey(entry: Pick<ChannelIngressAdapterEntry, "kind" | "value">): string {
-  return `${entry.kind}:${entry.value}`;
-}
-
 function adapterEntry(params: {
   identity: ChannelIngressIdentityDescriptor;
   field: ResolvedIdentityField;
@@ -214,7 +209,7 @@ export function createIdentityAdapter(
               ({ identifier, value }) =>
                 identifier.opaqueId === entry.identityFieldKey &&
                 identifier.kind === entry.kind &&
-                identityMatchKey({ kind: identifier.kind, value }) === identityMatchKey(entry),
+                value === entry.value,
             );
         if (candidates.length === 0) {
           // A legacy positive whole-subject matcher has no exact subject provenance. Preserve

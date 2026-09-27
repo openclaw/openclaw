@@ -38,7 +38,7 @@ async function seedActiveNode(
     to: "attached",
     patch: support.attachedPatch(environmentId, sessionId),
   });
-  let placement = placements.startDispatch({
+  let placement = await placements.startDispatch({
     sessionId,
     sessionKey: `agent:main:${sessionId}`,
     agentId: "main",
@@ -122,7 +122,7 @@ describe("worker placement startup concurrency", () => {
         expect(adopt).not.toHaveBeenCalled();
 
         if (conflictingOwner) {
-          const duplicate = placements.startDispatch({
+          const duplicate = await placements.startDispatch({
             sessionId: "session-duplicate",
             sessionKey: "agent:main:session-duplicate",
             agentId: "main",

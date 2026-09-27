@@ -361,6 +361,17 @@ export function tryCreateStateLifecycleDelegate(
   if (heldCoordinators.size === 0) {
     return undefined;
   }
+  let hasLifecycleOwner = false;
+  for (const pathname of heldCoordinators.keys()) {
+    // Explicit coordinator paths can cross families; the derived delegate path cannot.
+    if (path.basename(pathname).startsWith("state-lifecycle.")) {
+      hasLifecycleOwner = true;
+      break;
+    }
+  }
+  if (!hasLifecycleOwner) {
+    return undefined;
+  }
   const coordinatorPath = buildLifecycleCoordinatorPath(
     "state-lifecycle",
     resolveCoordinatorBase({ databasePath: params.databasePath }),
@@ -617,8 +628,8 @@ function resolveSourceScopePath(databasePath: string): string {
 
 /** Only a live process-local exclusion owner may copy its already-drained source. */
 export function hasStateDatabaseSourceExclusion(databasePath: string): boolean {
-  const pathname = resolveSourceScopePath(databasePath);
-  const scope = sourceReadScopes.getStore()?.get(pathname);
+  const scopes = sourceReadScopes.getStore();
+  const scope = scopes?.get(resolveSourceScopePath(databasePath));
   if (!scope?.active) {
     return false;
   }
@@ -630,8 +641,12 @@ export function hasStateDatabaseSourceExclusion(databasePath: string): boolean {
 export function prepareStateDatabaseSourceExclusion(
   databasePath: string,
 ): (() => void) | undefined {
+  const scopes = sourceReadScopes.getStore();
+  if (!scopes) {
+    return undefined;
+  }
   const pathname = resolveSourceScopePath(databasePath);
-  const scope = sourceReadScopes.getStore()?.get(pathname);
+  const scope = scopes.get(pathname);
   if (!scope) {
     return undefined;
   }

@@ -234,7 +234,10 @@ export type UserTurnTranscriptRecorder = {
   confirmSteerTargetRunIdForPersistence?: (targetRunId: string) => Promise<void>;
   getPersistedMessage?: () => PersistedUserTurnMessage | undefined;
   getAdmissionReceipt: () => UserTurnTranscriptAdmissionReceipt | undefined;
-  setAdmissionHandler?: (handler: (admission: UserTurnTranscriptAdmissionReceipt) => void) => void;
+  /** Persistence and `waitForRuntimePersistence` settle the handler's write and reject on its failure. */
+  setAdmissionHandler?: (
+    handler: (admission: UserTurnTranscriptAdmissionReceipt) => void | Promise<void>,
+  ) => void;
   markSentToProvider?: () => void;
   markRuntimePersistencePending: (pending: Promise<void>) => void;
   markRuntimePersisted: (

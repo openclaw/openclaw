@@ -1,10 +1,7 @@
-/**
- * Bridges Codex app-server approval requests into OpenClaw policy hooks and
- * plugin approval UX.
- */
 import {
   type AgentApprovalEventData,
   type BeforeToolCallFailureDisposition,
+  type ExecApprovalDecision,
   formatApprovalDisplayPath,
   hasNativeHookRelayInvocation,
   invokeNativeHookRelay,
@@ -36,7 +33,6 @@ import {
   truncateCodexApprovalDisplayText as truncate,
   type AppServerApprovalOutcome,
   type CodexApprovalKind,
-  type ExecApprovalDecision,
   waitForPluginApprovalDecision,
 } from "./plugin-approval-roundtrip.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
@@ -65,10 +61,6 @@ type SanitizedApprovalPreview = {
   omitted: boolean;
 };
 
-/**
- * Handles one app-server approval request for the active thread/turn, returning
- * the app-server response payload when the request belongs to this run.
- */
 export async function handleCodexAppServerApprovalRequest(params: {
   method: string;
   requestParams: JsonValue | undefined;
@@ -362,7 +354,6 @@ function recordNativeToolFailureDisposition(
   }
 }
 
-/** Converts an OpenClaw approval outcome into the app-server method response. */
 function buildApprovalResponse(
   method: string,
   requestParams: JsonObject | undefined,
@@ -419,7 +410,7 @@ function buildApprovalContext(params: {
       ? describeCommandApprovalDetails(params.requestParams)
       : [];
   const commandPreview = sanitizeApprovalPreview(
-    readDisplayCommandPreview(params.requestParams),
+    readCommandActionsPreview(params.requestParams) ?? readCommandPreview(params.requestParams),
     commandDetailLines.length > 0 ? COMMAND_PREVIEW_WITH_DETAILS_MAX_LENGTH : 180,
   );
   const reasonPreview = sanitizeApprovalPreview(
@@ -443,7 +434,7 @@ function buildApprovalContext(params: {
     approvalKind === "command" ? "exec" : approvalKind === "other" ? "unknown" : "plugin";
   const permissionLines =
     params.method === "item/permissions/requestApproval"
-      ? describeRequestedPermissions(params.requestParams)
+      ? describePermissionProfile(requestedPermissions(params.requestParams), "Permissions")
       : [];
   const title = networkApproval
     ? "Codex app-server network approval"
@@ -456,7 +447,7 @@ function buildApprovalContext(params: {
           : "Codex app-server approval";
   const subject =
     (networkApproval
-      ? `Network: ${sanitizePermissionScalar(networkApproval.protocol)}://${sanitizePermissionHostValue(networkApproval.host)}`
+      ? `Network: ${sanitizeCodexApprovalVisibleText(networkApproval.protocol)}://${sanitizePermissionHostValue(networkApproval.host)}`
       : undefined) ??
     permissionLines[0] ??
     (command
@@ -891,11 +882,6 @@ function requestedPermissions(requestParams: JsonObject | undefined): JsonObject
   return granted;
 }
 
-function describeRequestedPermissions(requestParams: JsonObject | undefined): string[] {
-  const permissions = requestedPermissions(requestParams);
-  return describePermissionProfile(permissions, "Permissions");
-}
-
 function describeCommandApprovalDetails(requestParams: JsonObject | undefined): string[] {
   const lines: string[] = [];
   const additionalPermissions = isJsonObject(requestParams?.additionalPermissions)
@@ -907,7 +893,7 @@ function describeCommandApprovalDetails(requestParams: JsonObject | undefined): 
   const execpolicySummary = summarizeStringArray(
     requestParams?.proposedExecpolicyAmendment,
     "Proposed exec policy",
-    sanitizePermissionScalar,
+    sanitizeCodexApprovalVisibleText,
   );
   if (execpolicySummary) {
     lines.push(execpolicySummary);
@@ -1009,15 +995,12 @@ function summarizeFileSystemEntries(
       }
     }
     if (samples.length < PERMISSION_SAMPLE_LIMIT) {
-      samples.push(`${sanitizePermissionScalar(access)} ${sanitizePermissionPathValue(path)}`);
+      samples.push(
+        `${sanitizeCodexApprovalVisibleText(access)} ${sanitizePermissionPathValue(path)}`,
+      );
     }
   }
-  if (count === 0) {
-    return undefined;
-  }
-  const remaining = count - samples.length;
-  const remainderSuffix = remaining > 0 ? ` (+${remaining} more)` : "";
-  return `entries: ${samples.join(", ")}${remainderSuffix}`;
+  return formatPermissionSamples("entries", samples, count);
 }
 
 function summarizePermissionArray(
@@ -1042,12 +1025,7 @@ function summarizePermissionArray(
     .slice(0, PERMISSION_SAMPLE_LIMIT)
     .map(format.sanitize)
     .filter(Boolean);
-  if (sampleValues.length === 0) {
-    return `${label}: ${values.length}`;
-  }
-  const remaining = values.length - sampleValues.length;
-  const remainderSuffix = remaining > 0 ? ` (+${remaining} more)` : "";
-  return `${label}: ${sampleValues.join(", ")}${remainderSuffix}`;
+  return formatPermissionSamples(label, sampleValues, values.length);
 }
 
 function summarizeStringArray(
@@ -1062,13 +1040,7 @@ function summarizeStringArray(
     .filter((entry): entry is string => typeof entry === "string")
     .map((entry) => sanitize(entry))
     .filter(Boolean);
-  if (values.length === 0) {
-    return undefined;
-  }
-  const samples = values.slice(0, PERMISSION_SAMPLE_LIMIT);
-  const remaining = values.length - samples.length;
-  const remainderSuffix = remaining > 0 ? ` (+${remaining} more)` : "";
-  return `${label}: ${samples.join(", ")}${remainderSuffix}`;
+  return formatPermissionSamples(label, values.slice(0, PERMISSION_SAMPLE_LIMIT), values.length);
 }
 
 function summarizeNetworkPolicyAmendments(value: JsonValue | undefined): string | undefined {
@@ -1086,19 +1058,32 @@ function summarizeNetworkPolicyAmendments(value: JsonValue | undefined): string 
     }
     count += 1;
     if (samples.length < PERMISSION_SAMPLE_LIMIT) {
-      samples.push(`${sanitizePermissionScalar(action)} ${sanitizePermissionHostValue(host)}`);
+      samples.push(
+        `${sanitizeCodexApprovalVisibleText(action)} ${sanitizePermissionHostValue(host)}`,
+      );
     }
   }
+  return formatPermissionSamples("Proposed network policy", samples, count);
+}
+
+function formatPermissionSamples(
+  label: string,
+  samples: string[],
+  count: number,
+): string | undefined {
   if (count === 0) {
     return undefined;
   }
+  if (samples.length === 0) {
+    return `${label}: ${count}`;
+  }
   const remaining = count - samples.length;
   const remainderSuffix = remaining > 0 ? ` (+${remaining} more)` : "";
-  return `Proposed network policy: ${samples.join(", ")}${remainderSuffix}`;
+  return `${label}: ${samples.join(", ")}${remainderSuffix}`;
 }
 
 function sanitizePermissionHostValue(value: string): string {
-  const compact = sanitizePermissionScalar(value).toLowerCase();
+  const compact = sanitizeCodexApprovalVisibleText(value).toLowerCase();
   const withoutScheme = compact.replace(/^[a-z][a-z0-9+.-]*:\/\//, "");
   const authority = withoutScheme.split(/[/?#]/, 1)[0] ?? withoutScheme;
   const withoutUserInfo = authority.includes("@")
@@ -1109,13 +1094,9 @@ function sanitizePermissionHostValue(value: string): string {
 
 function sanitizePermissionPathValue(value: string): string {
   return truncate(
-    formatApprovalDisplayPath(sanitizePermissionScalar(value)),
+    formatApprovalDisplayPath(sanitizeCodexApprovalVisibleText(value)),
     PERMISSION_VALUE_MAX_LENGTH,
   );
-}
-
-function sanitizePermissionScalar(value: string): string {
-  return sanitizeCodexApprovalVisibleText(value);
 }
 
 function permissionHostRisks(value: string): string[] {
@@ -1131,7 +1112,7 @@ function permissionHostRisks(value: string): string[] {
 }
 
 function permissionPathRisks(value: string): string[] {
-  const normalized = sanitizePermissionScalar(value);
+  const normalized = sanitizeCodexApprovalVisibleText(value);
   const risks: string[] = [];
   if (normalized === "/" || normalized === "\\" || /^[A-Za-z]:[\\/]*$/.test(normalized)) {
     risks.push("filesystem root");
@@ -1144,18 +1125,9 @@ function isPrivateNetworkHostPattern(value: string): boolean {
   const wildcardStripped = normalized.replace(/^\*\./, "");
   if (
     wildcardStripped === "localhost" ||
-    wildcardStripped === "local" ||
-    wildcardStripped === "internal" ||
-    wildcardStripped === "lan" ||
-    wildcardStripped === "home" ||
-    wildcardStripped === "corp" ||
-    wildcardStripped === "private" ||
-    wildcardStripped.endsWith(".local") ||
-    wildcardStripped.endsWith(".internal") ||
-    wildcardStripped.endsWith(".lan") ||
-    wildcardStripped.endsWith(".home") ||
-    wildcardStripped.endsWith(".corp") ||
-    wildcardStripped.endsWith(".private")
+    ["local", "internal", "lan", "home", "corp", "private"].some(
+      (suffix) => wildcardStripped === suffix || wildcardStripped.endsWith(`.${suffix}`),
+    )
   ) {
     return true;
   }
@@ -1194,16 +1166,6 @@ function emitApprovalEvent(params: EmbeddedRunAttemptParams, data: AgentApproval
     stream: "approval",
     data: { ...data },
   });
-}
-
-function readDisplayCommandPreview(
-  record: JsonObject | undefined,
-): ApprovalPreviewSource | undefined {
-  const actionCommand = readCommandActionsPreview(record);
-  if (actionCommand) {
-    return actionCommand;
-  }
-  return readCommandPreview(record);
 }
 
 function readPolicyCommand(record: JsonObject | undefined): string | undefined {

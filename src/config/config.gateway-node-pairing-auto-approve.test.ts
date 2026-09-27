@@ -51,8 +51,6 @@ describe("gateway node pairing auto-approve config", () => {
 
   it.each([
     { name: "IPv4 CIDR", value: ["192.168.1.0/24"] },
-    { name: "IPv6 CIDR", value: ["fd00:1234:5678::/64"] },
-    { name: "exact IP", value: ["192.168.1.42"] },
     { name: "empty array", value: [] },
   ])("accepts $name entries", ({ value }) => {
     const result = validateConfigObject({

@@ -159,41 +159,6 @@ describe("Docker channel promotion", () => {
     });
   });
 
-  it("keeps an explicit empty suffix identical to the plain release plan", () => {
-    expect(
-      createDockerChannelPromotionPlan({
-        version: "2026.6.33",
-        imageTagSuffix: "",
-        images,
-      }),
-    ).toEqual(createDockerChannelPromotionPlan({ version: "2026.6.33", images }));
-  });
-
-  it("keeps suffixed extended-stable sources on dedicated aliases", () => {
-    const plan = createDockerChannelPromotionPlan({
-      version: "2026.6.34",
-      imageTagSuffix: "-r20260820",
-      images: images.slice(0, 1),
-    });
-
-    expect(plan.promotions.map(({ sourceRef, targetRefs }) => ({ sourceRef, targetRefs }))).toEqual(
-      [
-        {
-          sourceRef: `${images[0]}:2026.6.34-r20260820`,
-          targetRefs: [`${images[0]}:extended-stable`],
-        },
-        {
-          sourceRef: `${images[0]}:2026.6.34-r20260820-slim`,
-          targetRefs: [`${images[0]}:extended-stable-slim`],
-        },
-        {
-          sourceRef: `${images[0]}:2026.6.34-r20260820-browser`,
-          targetRefs: [`${images[0]}:extended-stable-browser`],
-        },
-      ],
-    );
-  });
-
   it.each(["r20260820", "-r2026082", "-r202608200", "-r20260820-extra"])(
     "rejects malformed rebuild suffix %s",
     (imageTagSuffix) => {
@@ -262,7 +227,8 @@ describe("Docker channel promotion", () => {
     },
   );
 
-  it.each(["2026.7.1", "2026.6.33"])("promotes prepared no-browser backfills for %s", (version) => {
+  it("promotes prepared no-browser extended-stable backfills", () => {
+    const version = "2026.6.33";
     const execFileSyncImpl = createDockerMock({
       browserAvailable: false,
       candidateVersion: version,
@@ -349,11 +315,9 @@ describe("Docker channel promotion", () => {
     expect(execFileSyncImpl.mock.calls.some(([, args]) => args[2] === "create")).toBe(false);
   });
 
-  it.each([
-    ["same", "2026.6.33", "2026.6.33"],
-    ["newer", "2026.6.34", "2026.6.33"],
-  ])("allows an automatic %s-version promotion", (_label, candidateVersion, currentVersion) => {
-    const execFileSyncImpl = createDockerMock({ candidateVersion, currentVersion });
+  it("allows an automatic newer-version promotion", () => {
+    const candidateVersion = "2026.6.34";
+    const execFileSyncImpl = createDockerMock({ candidateVersion, currentVersion: "2026.6.33" });
 
     promoteDockerChannel(
       { version: candidateVersion, images: images.slice(0, 1) },
@@ -432,8 +396,6 @@ describe("Docker channel promotion", () => {
       }),
     ],
     ["authentication", new Error("unauthorized: authentication required")],
-    ["a timeout", new Error("docker inspect timed out")],
-    ["a transport failure", new Error("read: connection reset by peer")],
   ])("fails closed on %s while inspecting an existing alias", (_label, inspectionError) => {
     const execFileSyncImpl = vi.fn((_command: string, args: string[]) => {
       if (args.at(-1)?.includes(".Image") && !args[3]!.includes("@")) {

@@ -372,7 +372,7 @@ describePosix("native correction preparation", () => {
       [
         "resolve_pr_gates_remote_mode() { echo github; }",
         "mark_pr_operation_side_effects_if_available() { :; }",
-        "derive_prepare_gate_change_plan() { PREPARE_GATE_CHANGED_FILES=docs/fix.md; PREPARE_GATE_DOCS_ONLY=false; PREPARE_GATE_CHANGELOG_ONLY=false; PREPARE_GATE_CHANGELOG_REQUIRED=false; PREPARE_GATE_CHANGELOG_UPDATE=false; }",
+        `derive_prepare_gate_change_plan() { PREPARE_GATE_BASE_SHA=${f.incoming}; PREPARE_GATE_CHANGED_FILES=docs/fix.md; PREPARE_GATE_DOCS_ONLY=false; PREPARE_GATE_CHANGELOG_ONLY=false; PREPARE_GATE_CHANGELOG_REQUIRED=false; PREPARE_GATE_CHANGELOG_UPDATE=false; }`,
         "push_prep_head_to_pr_branch() { touch .local/execution-reached; return 73; }",
         "prepare_gates 42",
         "prepare_push 42",
@@ -474,7 +474,7 @@ describePosix("native correction preparation", () => {
             if [ '${authorization}' = revoked ] && [ "$phase" = publication ]; then return 1; fi
             echo fixture-admin
           }`,
-          "derive_prepare_gate_change_plan() { PREPARE_GATE_CHANGED_FILES=docs/fix.md; PREPARE_GATE_DOCS_ONLY=false; PREPARE_GATE_CHANGELOG_ONLY=false; PREPARE_GATE_CHANGELOG_REQUIRED=false; PREPARE_GATE_CHANGELOG_UPDATE=false; }",
+          `derive_prepare_gate_change_plan() { PREPARE_GATE_BASE_SHA=${f.incoming}; PREPARE_GATE_CHANGED_FILES=docs/fix.md; PREPARE_GATE_DOCS_ONLY=false; PREPARE_GATE_CHANGELOG_ONLY=false; PREPARE_GATE_CHANGELOG_REQUIRED=false; PREPARE_GATE_CHANGELOG_UPDATE=false; }`,
           `gh() { printf '%s\\n' '${target}'; }`,
           "push_prep_head_to_pr_branch() { touch .local/execution-reached; return 73; }",
           "prepare_gates 42",

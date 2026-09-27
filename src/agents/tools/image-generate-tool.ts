@@ -18,6 +18,7 @@ import {
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
   readToolStringParam,
+  type AnyAgentTool,
 } from "./common.js";
 import {
   createImageGenerateDuplicateGuardResult,
@@ -48,7 +49,6 @@ import {
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
 import type { ToolModelConfig } from "./model-config.helpers.js";
-import type { AnyAgentTool } from "./tool-runtime.helpers.js";
 
 const DEFAULT_COUNT = 1;
 const MAX_COUNT = 4;

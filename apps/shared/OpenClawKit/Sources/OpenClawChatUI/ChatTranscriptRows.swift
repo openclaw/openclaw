@@ -175,3 +175,61 @@ enum ChatTranscriptRow: Hashable, Identifiable {
         return text.hasPrefix(prefix) ? String(text.dropFirst(prefix.count)) : text
     }
 }
+
+extension ChatTranscriptRow {
+    static func mergeToolResults(in messages: [OpenClawChatMessage]) -> [OpenClawChatMessage] {
+        var result: [OpenClawChatMessage] = []
+        result.reserveCapacity(messages.count)
+        var callIndexes: [String: Int] = [:]
+
+        for message in messages {
+            // Narration can separate calls from results, but an input or history
+            // boundary ends their lookup scope even when a run ID is reused.
+            if Self(message)?.startsTurn == true || message.historyMarker != nil {
+                callIndexes.removeAll(keepingCapacity: true)
+            }
+            guard ["toolresult", "tool_result"].contains(message.role.lowercased()),
+                  let toolCallId = message.toolCallId,
+                  let index = callIndexes[toolCallId],
+                  (message.workRunID != nil && message.workRunID == result[index].workRunID) ||
+                  (index == result.count - 1 &&
+                      (message.workRunID == nil || result[index].workRunID == nil))
+            else {
+                if !message.isForwardedTurnBoundary {
+                    for block in message.content where block.isToolCall {
+                        if let id = block.id { callIndexes[id] = result.count }
+                    }
+                    if let id = message.toolCallId { callIndexes[id] = result.count }
+                }
+                result.append(message)
+                continue
+            }
+
+            var merged = result[index]
+            let toolText = ChatMessageVisibleText.displayText(in: message, includeThinking: false)
+            // Preserve empty results too: receiving a result owns the outcome,
+            // independently of whether it contains display text.
+            merged.content.append(
+                OpenClawChatMessageContent(
+                    type: "tool_result",
+                    text: toolText,
+                    thinking: nil,
+                    thinkingSignature: nil,
+                    mimeType: nil,
+                    fileName: nil,
+                    content: nil,
+                    id: toolCallId,
+                    name: message.toolName,
+                    arguments: nil,
+                    details: message.details,
+                    isError: message.isError))
+
+            if let terminal = message.activity {
+                merged.activity = (merged.activity ?? []).filter { $0.toolCallId != toolCallId } + terminal
+            }
+            result[index] = merged
+        }
+
+        return result
+    }
+}

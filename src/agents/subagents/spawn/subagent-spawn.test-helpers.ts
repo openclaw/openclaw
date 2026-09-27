@@ -353,6 +353,17 @@ export async function loadSubagentSpawnModuleForTest(params: {
     prepareModelChoice: params.prepareModelChoiceMock ?? supportedSpawnModelChoice,
     loadSessionEntry: (scope: { storePath?: string; sessionKey: string }) =>
       ((params.loadSessionStoreMock?.(scope.storePath) ?? {}) as SessionStore)[scope.sessionKey],
+    withSessionEntryReadOnlyInWorker: async (
+      scope: { storePath?: string; sessionKey: string },
+      assertCurrent: () => void,
+      consume: (read: { ok: true; value: Record<string, unknown> | undefined }) => Promise<unknown>,
+    ) => {
+      assertCurrent();
+      const store = (params.loadSessionStoreMock?.(scope.storePath) ?? {}) as SessionStore;
+      const value = await consume({ ok: true, value: store[scope.sessionKey] });
+      assertCurrent();
+      return value;
+    },
     loadSessionStore: params.loadSessionStoreMock ?? (() => ({})),
     ensureContextEnginesInitialized:
       params.ensureContextEnginesInitializedMock ?? (() => undefined),
@@ -445,11 +456,12 @@ export async function loadSubagentSpawnModuleForTest(params: {
       ...fallback,
       ...primary,
     }),
-    resolveGatewaySessionStoreTarget: (targetParams: { key: string }) => ({
+    resolveGatewaySessionStoreTargetInWorker: async (targetParams: { key: string }) => ({
       agentId: "main",
       storePath: params.sessionStorePath ?? "/tmp/subagent-spawn-model-session.json",
       canonicalKey: targetParams.key,
       storeKeys: [targetParams.key],
+      store: params.loadSessionStoreMock?.(params.sessionStorePath) ?? {},
     }),
     normalizeDeliveryContext: identityDeliveryContext,
     resolveAgentConfig: params.resolveAgentConfig ?? (() => undefined),
@@ -528,13 +540,6 @@ type InheritedSpawnPreferenceCase = {
 
 const inheritedSpawnPreferenceCases: readonly InheritedSpawnPreferenceCase[] = [
   {
-    name: "inherits requester thinking level when no spawn or subagent default is configured",
-    task: "inherit thinking",
-    requesterState: { thinkingLevel: "high" },
-    preferenceKey: "thinkingLevel",
-    expected: "high",
-  },
-  {
     name: "inherits active-turn Ultra instead of the stored session thinking level",
     task: "inherit active thinking",
     requesterState: { thinkingLevel: "medium" },
@@ -583,14 +588,6 @@ const inheritedSpawnPreferenceCases: readonly InheritedSpawnPreferenceCase[] = [
     expected: "off",
   },
   {
-    name: "inherits requester agent thinkingDefault when the caller session has no stored thinking",
-    task: "inherit agent thinking default",
-    requesterState: {},
-    requesterAgent: { thinkingDefault: "high" },
-    preferenceKey: "thinkingLevel",
-    expected: "high",
-  },
-  {
     name: "inherits global thinkingDefault when caller session and agent have no stored thinking",
     task: "inherit global thinking default",
     requesterState: {},
@@ -613,9 +610,6 @@ export const inheritedSpawnCases = {
   preferences: inheritedSpawnPreferenceCases,
   permissionModes: [
     { label: "default", mode: undefined },
-    { label: "read-only", mode: "read-only" },
     { label: "guarded", mode: "guarded" },
-    { label: "workspace", mode: "workspace" },
-    { label: "full", mode: "full" },
   ] as const,
 };

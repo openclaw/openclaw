@@ -107,16 +107,12 @@ async function handleSessionSend(
     return;
   }
   const p = options.params;
-  const key = requireSessionKey((p as { key?: unknown }).key, options.respond);
+  const key = requireSessionKey(p.key, options.respond);
   if (!key) {
     return;
   }
   const cfg = options.context.getRuntimeConfig();
-  const requestedAgent = resolveRequestedGlobalAgentId(
-    cfg,
-    key,
-    (p as { agentId?: string }).agentId,
-  );
+  const requestedAgent = resolveRequestedGlobalAgentId(cfg, key, p.agentId);
   if (!requestedAgent.ok) {
     options.respond(false, undefined, requestedAgent.error);
     return;
@@ -140,11 +136,7 @@ async function handleSessionSend(
     );
     return;
   }
-  const rawIdempotencyKey = (p as { idempotencyKey?: string }).idempotencyKey;
-  const explicitIdempotencyKey =
-    typeof rawIdempotencyKey === "string" && rawIdempotencyKey.trim()
-      ? rawIdempotencyKey.trim()
-      : undefined;
+  const explicitIdempotencyKey = normalizeOptionalString(p.idempotencyKey);
   const idempotencyKey = explicitIdempotencyKey ?? randomUUID();
   const respond = options.respond;
   const dispatchChatSend = async (dispatchRespond: RespondFn) => {
@@ -155,11 +147,11 @@ async function handleSessionSend(
         params: {
           sessionKey: canonicalKey,
           ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
-          message: (p as { message: string }).message,
+          message: p.message,
           ...(p.mentions ? { mentions: p.mentions } : {}),
-          thinking: (p as { thinking?: string }).thinking,
-          attachments: (p as { attachments?: unknown[] }).attachments,
-          timeoutMs: (p as { timeoutMs?: number }).timeoutMs,
+          thinking: p.thinking,
+          attachments: p.attachments,
+          timeoutMs: p.timeoutMs,
           idempotencyKey,
           ...(queueMode ? { queueMode } : {}),
         },
@@ -225,7 +217,7 @@ async function handleSessionSend(
         await reactivateCompletedSubagentSession({
           sessionKey: canonicalKey,
           runId: startedRunId,
-          task: (p as { message: string }).message,
+          task: p.message,
           gatewayContextResolver: options.context.resolveGatewayContext,
         });
       } catch (error) {
@@ -248,10 +240,6 @@ async function handleSessionSend(
 }
 
 export const sessionMessagingHandlers: GatewayRequestHandlers = {
-  "sessions.send": async (options) => {
-    await handleSessionSend("sessions.send", options);
-  },
-  "sessions.steer": async (options) => {
-    await handleSessionSend("sessions.steer", options);
-  },
+  "sessions.send": (options) => handleSessionSend("sessions.send", options),
+  "sessions.steer": (options) => handleSessionSend("sessions.steer", options),
 };

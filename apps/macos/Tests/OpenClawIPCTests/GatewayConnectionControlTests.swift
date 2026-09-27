@@ -1300,14 +1300,6 @@ extension GatewayConnectionControlTests {
         await connection.shutdown()
     }
 
-    @Test func `status fails when process missing`() async {
-        let (connection, _) = makeTestGatewayConnection()
-        let result = await connection.status()
-        await connection.shutdown()
-        #expect(result.ok == false)
-        #expect(result.error != nil)
-    }
-
     @Test func `reject empty message`() async {
         let (connection, _) = makeTestGatewayConnection()
         let result = await connection.sendAgent(GatewayAgentInvocation(

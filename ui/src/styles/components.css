@@ -414,7 +414,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   }
 }
 
-/* Shared by the login gate and the Sessions, Tasks, and Cron routes. */
+/* Shared by the login gate and the Sessions and Cron routes. */
 .session-link {
   color: var(--accent);
   font-weight: 500;

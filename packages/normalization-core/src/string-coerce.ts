@@ -74,9 +74,6 @@ export function normalizeFastMode(raw?: unknown): FastMode | undefined {
   if (typeof raw === "boolean") {
     return raw;
   }
-  if (!raw) {
-    return undefined;
-  }
   const key = normalizeLowercaseStringOrEmpty(raw);
   if (["off", "false", "no", "0", "disable", "disabled", "normal"].includes(key)) {
     return false;

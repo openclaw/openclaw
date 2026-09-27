@@ -36,9 +36,11 @@ const mocks = vi.hoisted(() => ({
     | { request: (method: string, params?: unknown) => Promise<unknown> }
     | undefined,
   closeMcpManager: vi.fn(async () => undefined),
-  runStartupMigrations: vi.fn(async () => undefined),
   loadNodeHostConfig: vi.fn<() => Promise<NodeHostConfig | null>>(async () => null),
   loadDeviceAuthTokenReadOnly: vi.fn<typeof loadDeviceAuthTokenReadOnly>(async () => null),
+  loadDeviceIdentityIfPresent: vi.fn(
+    () => null as { deviceId: string; publicKeyPem: string; privateKeyPem: string } | null,
+  ),
   configureNodeHost: vi.fn(async (params: Parameters<typeof configureNodeHost>[0]) => {
     mocks.capturedConfiguredGatewayConfigs.push(params.gateway);
     return {
@@ -112,6 +114,7 @@ vi.mock("../infra/device-auth-store.js", async (importOriginal) => ({
 
 vi.mock("../infra/device-identity.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/device-identity.js")>()),
+  loadDeviceIdentityIfPresent: mocks.loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity: vi.fn(() => ({
     deviceId: "device-test",
     publicKeyPem: "public-key-test",
@@ -190,8 +193,8 @@ vi.mock("./skills.js", () => ({
   scanNodeHostedSkills: vi.fn(() => mocks.nodeSkillDescriptors),
 }));
 
-vi.mock("./startup-state-migrations.js", () => ({
-  runStartupMigrations: mocks.runStartupMigrations,
+vi.mock("./startup-state-readiness.js", () => ({
+  ensureNodeHostStateReady: () => {},
 }));
 
 vi.mock("./runtime.js", async (importOriginal) => {
@@ -264,6 +267,7 @@ export function resetRunnerTestState() {
   vi.clearAllMocks();
   mocks.loadNodeHostConfig.mockReset().mockResolvedValue(null);
   mocks.loadDeviceAuthTokenReadOnly.mockReset().mockResolvedValue(null);
+  mocks.loadDeviceIdentityIfPresent.mockReset().mockReturnValue(null);
   mocks.getRuntimeConfig.mockReturnValue({
     gateway: { handshakeTimeoutMs: 1_000 },
   });

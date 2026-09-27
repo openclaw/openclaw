@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements shared live-transport RTT behavior.
 import type { QaEvidenceTiming } from "../../evidence-summary.js";
 
 export type LiveTransportRttSample = {

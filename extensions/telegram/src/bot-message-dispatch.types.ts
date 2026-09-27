@@ -73,7 +73,7 @@ export type FreshTelegramSessionEntryLoader = ((
   clear: () => void;
 };
 
-export type TelegramAnswerBlockDelivery = {
+type TelegramAnswerBlockDelivery = {
   payload: ReplyPayload;
   text: string;
   buttons: import("./button-types.js").TelegramInlineButtons | undefined;
@@ -119,7 +119,7 @@ export type TelegramQueuedAnswerBlockRotation = {
   text?: string;
   shouldRotateBeforeDelivery: boolean;
 };
-export type TelegramBufferedFinalSettlement = {
+type TelegramBufferedFinalSettlement = {
   visibleReplySent: boolean;
   onPlatformSendDispatch?: () => Promise<void>;
   assertPlatformSendAuthorized?: () => void;

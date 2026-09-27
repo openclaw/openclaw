@@ -18,29 +18,30 @@ import {
 type BranchTree = SessionTranscriptTree<SessionBranchTranscriptEntry | undefined>;
 type HeadlineCandidate = { seq: number; previous: HeadlineCandidate | undefined };
 type BranchPathSummary = { messageCount: number; candidate: HeadlineCandidate | undefined };
+type SessionBranchSummaries = { branches: SessionBranchSummary[]; appendSafe: boolean };
 
 /** Retain navigation, then read only the headline candidates needed by the final graph. */
 export function readSessionBranchSummaries(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
-): SessionBranchSummary[] {
+  previous?: { branches: SessionBranchSummary[]; appendSafe?: boolean; maxSeq: number | null },
+): SessionBranchSummaries {
   return readHotSessionTranscriptSnapshot(database, sessionId, "events", () => {
     const db = getSessionKysely(database.db);
-    const rows = iterateSqliteQuerySync(
-      database.db,
-      db
-        .selectFrom("transcript_events")
-        .select(["seq", transcriptEventNavigationSql().as("event_json")])
-        .where("session_id", "=", sessionId)
-        .orderBy("seq", "asc"),
-    );
-    function* navigationEntries() {
-      for (const row of rows) {
-        yield projectSessionBranchEntry(JSON.parse(row.event_json), row.seq);
-      }
-    }
-    // Finish parsing every row before accepting any headline, including malformed unused tails.
-    const tree = scanSessionTranscriptTree(navigationEntries());
+    const navigationQuery = db
+      .selectFrom("transcript_events")
+      .select(["seq", transcriptEventNavigationSql().as("event_json")])
+      .select((eb) =>
+        eb
+          .selectFrom("transcript_event_identities")
+          .select("event_id")
+          .where("session_id", "=", sessionId)
+          .whereRef("seq", "=", "transcript_events.seq")
+          .limit(1)
+          .as("identity_id"),
+      )
+      .where("session_id", "=", sessionId)
+      .orderBy("seq", "asc");
     const readCandidate = prepareSqliteQuerySync<number, { event_json: string }>(
       database.db,
       (parameter) =>
@@ -62,6 +63,64 @@ export function readSessionBranchSummaries(
       }
       return extractSessionBranchHeadline(JSON.parse(row.event_json));
     };
+    const active = previous?.branches.find((branch) => branch.active);
+    if (previous?.appendSafe && previous.maxSeq !== null && active) {
+      let tail = { ...active };
+      let appendSafe = true;
+      for (const row of iterateSqliteQuerySync(
+        database.db,
+        navigationQuery.where("seq", ">", previous.maxSeq),
+      )) {
+        const entry = projectSessionBranchEntry(JSON.parse(row.event_json), row.seq);
+        // Identity ownership rules out duplicate IDs in the certified prefix or suffix.
+        if (
+          !entry ||
+          entry.type !== "message" ||
+          entry.appendMode === "side" ||
+          entry.id !== row.identity_id ||
+          typeof entry.id !== "string" ||
+          entry.id.trim() !== entry.id ||
+          entry.parentId !== tail.leafEntryId
+        ) {
+          appendSafe = false;
+          break;
+        }
+        tail = {
+          leafEntryId: entry.id,
+          headline: (entry.headlineCandidate ? readHeadline(row.seq) : undefined) ?? tail.headline,
+          messageCount: tail.messageCount + 1,
+          ...(typeof entry.timestamp === "string" ? { updatedAt: entry.timestamp } : {}),
+          active: true,
+        };
+      }
+      if (appendSafe) {
+        return {
+          branches: [tail, ...previous.branches.filter((branch) => !branch.active)],
+          appendSafe,
+        };
+      }
+    }
+    let appendSafe = true;
+    function* navigationEntries() {
+      for (const row of iterateSqliteQuerySync(database.db, navigationQuery)) {
+        const entry = projectSessionBranchEntry(JSON.parse(row.event_json), row.seq);
+        appendSafe &&=
+          typeof entry?.id === "string" &&
+          entry.id === row.identity_id &&
+          entry.id.trim() === entry.id;
+        yield entry;
+      }
+    }
+    // Finish parsing every row before accepting any headline, including malformed unused tails.
+    const tree = scanSessionTranscriptTree(navigationEntries());
+    // Missing/forward parents can change old paths when a later append supplies their ID.
+    appendSafe &&=
+      !tree.hasInvalidLeafControl &&
+      tree.nodes.length === tree.byId.size &&
+      tree.nodes.every(
+        (node) =>
+          node.parentId === null || (tree.byId.get(node.parentId)?.index ?? Infinity) < node.index,
+      );
     const paths = new Map<string, BranchPathSummary>();
     const headlines = new Map<HeadlineCandidate, string | undefined>();
     const branches: SessionBranchSummary[] = [];
@@ -82,7 +141,7 @@ export function readSessionBranchSummaries(
         active: tree.leafId === leaf.id,
       });
     }
-    return branches;
+    return { branches, appendSafe };
   });
 }
 

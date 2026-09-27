@@ -7,7 +7,7 @@ import { ensureConfigReady, testApi } from "./config-guard.js";
 
 const mocks = vi.hoisted(() => ({
   readConfig: vi.fn(),
-  prepareDoctor: vi.fn(),
+  prepareStartup: vi.fn(),
   setRuntimeConfig: vi.fn(),
   offerRecovery: vi.fn(),
 }));
@@ -16,8 +16,8 @@ vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: mocks.readConfig,
   setRuntimeConfigSnapshot: mocks.setRuntimeConfig,
 }));
-vi.mock("../../commands/doctor-config-preflight.js", () => ({
-  runDoctorConfigPreflight: mocks.prepareDoctor,
+vi.mock("../../commands/startup-config-preflight.js", () => ({
+  runStartupConfigPreflight: mocks.prepareStartup,
 }));
 vi.mock("../invalid-config-recovery.js", () => ({
   offerInvalidConfigRecovery: mocks.offerRecovery,
@@ -64,7 +64,7 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_CONFIG_READONLY", undefined);
   statePath = path.join(stateDir, "state", "openclaw.sqlite");
   mocks.readConfig.mockImplementation(async () => snapshot());
-  mocks.prepareDoctor.mockImplementation(async () => ({
+  mocks.prepareStartup.mockImplementation(async () => ({
     snapshot: snapshot(),
     baseConfig: config,
   }));
@@ -81,7 +81,7 @@ describe("managed node startup config", () => {
         await ensureConfigReady({ runtime: host, commandPath });
       });
 
-      expect(mocks.prepareDoctor).not.toHaveBeenCalled();
+      expect(mocks.prepareStartup).not.toHaveBeenCalled();
       expect(mocks.readConfig).toHaveBeenCalledWith({ observe: false });
       expect(mocks.setRuntimeConfig).toHaveBeenCalledWith(config, config);
       expect(host.exit).not.toHaveBeenCalled();
@@ -89,14 +89,11 @@ describe("managed node startup config", () => {
   );
 
   it.each([["node", "run"], ["connect"]])(
-    "retains ordinary %j migration ownership outside the managed scope",
+    "checks ordinary %j readiness outside the managed scope",
     async (...commandPath) => {
       await ensureConfigReady({ runtime: runtime(), commandPath });
-      expect(mocks.prepareDoctor).toHaveBeenCalledWith({
-        migrateState: true,
-        migrateLegacyConfig: false,
-        invalidConfigNote: false,
-        requireStateMigrationCheckpoint: true,
+      expect(mocks.prepareStartup).toHaveBeenCalledWith({
+        gateway: false,
       });
     },
   );
@@ -111,7 +108,7 @@ describe("managed node startup config", () => {
     ).rejects.toMatchObject({ name: "ExitError", code: 1 });
 
     expect(mocks.readConfig).toHaveBeenCalledWith({ observe: false });
-    expect(mocks.prepareDoctor).not.toHaveBeenCalled();
+    expect(mocks.prepareStartup).not.toHaveBeenCalled();
     expect(mocks.offerRecovery).not.toHaveBeenCalled();
     expect(mocks.setRuntimeConfig).not.toHaveBeenCalled();
     expect(host.error.mock.calls.join("\n")).toContain("invalid plugin value");
@@ -127,6 +124,6 @@ describe("managed node startup config", () => {
     ).rejects.toThrow(/state.*(?:bound|changed)/i);
 
     expect(mocks.readConfig).not.toHaveBeenCalled();
-    expect(mocks.prepareDoctor).not.toHaveBeenCalled();
+    expect(mocks.prepareStartup).not.toHaveBeenCalled();
   });
 });

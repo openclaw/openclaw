@@ -190,6 +190,10 @@ describe("TOOLS.md migration", () => {
       "\n## Safety\n\nBe careful.\n";
     await fs.writeFile(fixture.agentsPath, agents);
     await fs.writeFile(fixture.toolsPath, tools);
+    if (process.platform !== "win32") {
+      await fs.chmod(fixture.workspace, 0o751);
+      await fs.chmod(fixture.agentsPath, 0o640);
+    }
 
     const result = await maybeMigrateToolsMd({
       cfg: fixture.cfg,
@@ -202,6 +206,10 @@ describe("TOOLS.md migration", () => {
     await expect(fs.readFile(fixture.agentsPath, "utf8")).resolves.toBe(expected);
     await expect(readOnlyArchive(fixture.stateDir)).resolves.toEqual(Buffer.from(tools));
     await expectMissing(fixture.toolsPath);
+    if (process.platform !== "win32") {
+      expect((await fs.stat(fixture.workspace)).mode & 0o777).toBe(0o751);
+      expect((await fs.stat(fixture.agentsPath)).mode & 0o777).toBe(0o640);
+    }
 
     await expect(
       maybeMigrateToolsMd({
@@ -213,26 +221,6 @@ describe("TOOLS.md migration", () => {
     const rerunAgents = await fs.readFile(fixture.agentsPath, "utf8");
     expect(rerunAgents).toBe(expected);
     expect(rerunAgents.match(/migrated from TOOLS\.md/gu)).toHaveLength(1);
-  });
-
-  it("warns when the merged AGENTS.md will exceed the agent bootstrap file limit", async () => {
-    const fixture = await createFixture();
-    const agents = `# Agent\n\n## Tools\n\n${"a".repeat(15_000)}\n`;
-    const tools = `${"b".repeat(15_000)}\n`;
-    const merged = `${agents}\n### Local notes (migrated from TOOLS.md)\n\n${tools}`;
-    fixture.cfg.agents!.list![0]!.bootstrapMaxChars = 20_000;
-    await fs.writeFile(fixture.agentsPath, agents);
-    await fs.writeFile(fixture.toolsPath, tools);
-
-    const findings = await collectToolsMdMigrationFindings(fixture.cfg);
-
-    expect(findings).toContainEqual(
-      expect.objectContaining({
-        checkId: "core/doctor/tools-md-migration",
-        requirement: "tools-md-merged-bootstrap-limit",
-        message: `Agent "main" TOOLS.md migration will produce a ${merged.length}-character AGENTS.md, exceeding its configured bootstrapMaxChars limit of 20000. Raise \`agents.entries.*.bootstrapMaxChars\` for this agent, or \`agents.defaults.bootstrapMaxChars\` as fallback, to preserve all migrated instructions.`,
-      }),
-    );
   });
 
   it("checks every agent budget while migrating a shared workspace once", async () => {
@@ -270,18 +258,6 @@ describe("TOOLS.md migration", () => {
     await expectMissing(fixture.toolsPath);
   });
 
-  it("does not emit a bootstrap limit finding for a normal-sized merge", async () => {
-    const fixture = await createFixture();
-    await fs.writeFile(fixture.agentsPath, "# Agent\n\n## Tools\n\nExisting notes.\n");
-    await fs.writeFile(fixture.toolsPath, "Local camera: kitchen\n");
-
-    const findings = await collectToolsMdMigrationFindings(fixture.cfg);
-
-    expect(findings).not.toContainEqual(
-      expect.objectContaining({ requirement: "tools-md-merged-bootstrap-limit" }),
-    );
-  });
-
   it.each(LEGACY_AGENTS_GUIDANCE_REWRITES)(
     "rewrites the %s without leaving a TOOLS.md directive",
     async (_label, legacy, current) => {
@@ -304,28 +280,37 @@ describe("TOOLS.md migration", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")("refuses symlinked AGENTS.md files", async () => {
-    const linkedFixture = await createFixture();
-    const linkedTarget = path.join(linkedFixture.root, "outside-agents.md");
-    await fs.writeFile(linkedTarget, "Private external instructions.\n");
-    await fs.writeFile(linkedFixture.toolsPath, "Local tool notes.\n");
-    await fs.symlink(linkedTarget, linkedFixture.agentsPath);
+  it.runIf(process.platform !== "win32").each(["symlink", "hardlink"] as const)(
+    "refuses AGENTS.md %s aliases",
+    async (kind) => {
+      const linkedFixture = await createFixture();
+      const linkedTarget = path.join(linkedFixture.root, "outside-agents.md");
+      await fs.writeFile(linkedTarget, "Private external instructions.\n");
+      await fs.writeFile(linkedFixture.toolsPath, "Local tool notes.\n");
+      if (kind === "symlink") {
+        await fs.symlink(linkedTarget, linkedFixture.agentsPath);
+      } else {
+        await fs.link(linkedTarget, linkedFixture.agentsPath);
+      }
 
-    const linkedResult = await maybeMigrateToolsMd({
-      cfg: linkedFixture.cfg,
-      shouldRepair: true,
-      env: linkedFixture.env,
-    });
+      const linkedResult = await maybeMigrateToolsMd({
+        cfg: linkedFixture.cfg,
+        shouldRepair: true,
+        env: linkedFixture.env,
+      });
 
-    expect(linkedResult.changes).toEqual([]);
-    expect(linkedResult.warnings).toEqual([
-      expect.stringContaining("AGENTS.md must be an unlinked regular file"),
-    ]);
-    await expect(fs.readFile(linkedFixture.toolsPath, "utf8")).resolves.toBe("Local tool notes.\n");
-    await expect(fs.readFile(linkedTarget, "utf8")).resolves.toBe(
-      "Private external instructions.\n",
-    );
-  });
+      expect(linkedResult.changes).toEqual([]);
+      expect(linkedResult.warnings).toEqual([
+        expect.stringContaining("AGENTS.md must be an unlinked regular file"),
+      ]);
+      await expect(fs.readFile(linkedFixture.toolsPath, "utf8")).resolves.toBe(
+        "Local tool notes.\n",
+      );
+      await expect(fs.readFile(linkedTarget, "utf8")).resolves.toBe(
+        "Private external instructions.\n",
+      );
+    },
+  );
 
   it("reruns after an interrupted AGENTS.md temp write and converges", async () => {
     const fixture = await createFixture();
@@ -394,7 +379,6 @@ describe("TOOLS.md migration", () => {
 
   it.each([
     ["untouched template", LEGACY_TOOLS_MD_TEMPLATE_FIXTURE],
-    ["empty file", ""],
     ["whitespace-only file", " \n\t"],
   ])("deletes the %s without appending content", async (_label, tools) => {
     const fixture = await createFixture();

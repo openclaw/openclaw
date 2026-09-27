@@ -11,12 +11,15 @@ import {
   normalizeUniqueTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
+import type {
+  NodeListNode,
+  NodeWorkerBundleStatus,
+} from "../../../../src/shared/node-list-types.js";
 import type { PresenceEntry } from "../../api/types.ts";
 import type { PairedDevice } from "./index.ts";
 
-type NodeApprovalState = "approved" | "pending-approval" | "pending-reapproval" | "unapproved";
-type NodeWorkerSlots = { total: number; available: number };
-type NodeWorkerBundleStatus = { status: "installed"; version: string } | { status: "missing" };
+type NodeApprovalState = NonNullable<NodeListNode["approvalState"]>;
+type NodeWorkerSlots = NonNullable<NodeListNode["workerSlots"]>;
 
 const hostStatsSchema = z
   .object({
@@ -38,33 +41,12 @@ const hostStatsSchema = z
         stats.diskAvailableBytes <= stats.diskTotalBytes),
   );
 
-type NodeHostStats = z.infer<typeof hostStatsSchema>;
-
 /** Typed projection of one raw `node.list` row. */
-type NodeListEntry = {
-  nodeId: string;
-  displayName?: string;
-  platform?: string;
-  deviceFamily?: string;
-  version?: string;
-  coreVersion?: string;
-  uiVersion?: string;
-  modelIdentifier?: string;
-  clientId?: string;
-  clientMode?: string;
-  remoteIp?: string;
+type NodeListEntry = NodeListNode & {
   caps: string[];
   commands: string[];
-  approvalState?: NodeApprovalState;
-  pendingRequestId?: string;
-  workerSlots?: NodeWorkerSlots;
-  workerBundle?: NodeWorkerBundleStatus;
-  hostStats?: NodeHostStats;
   connected: boolean;
   paired: boolean;
-  connectedAtMs?: number;
-  lastSeenAtMs?: number;
-  approvedAtMs?: number;
 };
 
 export type DeviceInventoryEntry = {
@@ -130,12 +112,11 @@ function parseWorkerBundleStatus(value: unknown): NodeWorkerBundleStatus | undef
   if (!isRecord(value)) {
     return undefined;
   }
-  const raw = value;
-  if (raw.status === "missing" && Object.keys(raw).length === 1) {
+  if (value.status === "missing" && Object.keys(value).length === 1) {
     return { status: "missing" };
   }
-  const version = normalizeOptionalString(raw.version);
-  return raw.status === "installed" && version && Object.keys(raw).length === 2
+  const version = normalizeOptionalString(value.version);
+  return value.status === "installed" && version && Object.keys(value).length === 2
     ? { status: "installed", version }
     : undefined;
 }

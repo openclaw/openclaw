@@ -21,6 +21,9 @@ import {
 } from "./device-auth-store.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 
+const deviceTarget = { deviceId: "device-1", role: "operator" };
+const originTarget = { ...deviceTarget, gatewayScope: "wss://one.example" };
+
 function createEnv(stateDir: string): NodeJS.ProcessEnv {
   return {
     OPENCLAW_STATE_DIR: stateDir,
@@ -39,17 +42,8 @@ describe("infra/device-auth-store", () => {
       const env = createEnv(stateDir);
       const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
 
-      expect(
-        await loadDeviceAuthTokenReadOnly({ deviceId: "device-1", role: "operator", env }),
-      ).toBeNull();
-      expect(
-        await loadOriginDeviceTokenReadOnly({
-          gatewayScope: "wss://one.example",
-          deviceId: "device-1",
-          role: "operator",
-          env,
-        }),
-      ).toBeNull();
+      expect(await loadDeviceAuthTokenReadOnly({ ...deviceTarget, env })).toBeNull();
+      expect(await loadOriginDeviceTokenReadOnly({ ...originTarget, env })).toBeNull();
       expect(fs.existsSync(databasePath)).toBe(false);
     });
   });
@@ -96,8 +90,7 @@ describe("infra/device-auth-store", () => {
       const env = createEnv(stateDir);
       await storeOriginDeviceToken({
         gatewayScope: "wss://one.example/rpc",
-        deviceId: "device-1",
-        role: "operator",
+        ...deviceTarget,
         token: "origin-one-token",
         env,
       });
@@ -105,15 +98,13 @@ describe("infra/device-auth-store", () => {
       expect(
         await loadOriginDeviceToken({
           gatewayScope: "wss://two.example/rpc",
-          deviceId: "device-1",
-          role: "operator",
+          ...deviceTarget,
           env,
         }),
       ).toBeNull();
       await clearOriginDeviceToken({
         gatewayScope: "wss://two.example/rpc",
-        deviceId: "device-1",
-        role: "operator",
+        ...deviceTarget,
         env,
       });
       expect(
@@ -150,8 +141,7 @@ describe("infra/device-auth-store", () => {
       });
       await storeOriginDeviceToken({
         gatewayScope: "wss://two.example",
-        deviceId: "device-1",
-        role: "operator",
+        ...deviceTarget,
         token: "other-origin-token",
         env,
       });

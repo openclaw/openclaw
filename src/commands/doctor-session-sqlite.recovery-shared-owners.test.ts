@@ -6,7 +6,10 @@ import { updateSessionEntry } from "../config/sessions/session-accessor.entry-mu
 import { loadSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { writeSessionSqliteMigrationManifest } from "../infra/session-sqlite-migration-manifest.js";
 import * as sqliteReaders from "../infra/session-sqlite-migration-readers.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
@@ -135,7 +138,7 @@ describe("runDoctorSessionSqlite", () => {
         expect(entry.label).toBe(`Current ${owner} metadata`);
         current.push({ scope, entry: structuredClone(entry) });
       }
-      closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawAgentDatabasesAsync();
       const restored = await runDoctorSessionSqlite({ cfg, env, allAgents: true, mode: "restore" });
       expect(restored.targets.flatMap((target) => target.issues)).toEqual([]);
       for (const original of originals) {

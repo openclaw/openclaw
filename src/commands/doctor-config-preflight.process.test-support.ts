@@ -17,7 +17,7 @@ const isolatedRuntimeNodeExecPath = resolveTestNodeExecPath();
 // The fixture owns its package assets; resolving linked source back to the checkout
 // makes Doctor repair that checkout instead, including building its Control UI.
 // Dependency realpaths still own their transitive packages under isolated installs.
-const ISOLATED_RUNTIME_NODE_ARGS = [
+export const ISOLATED_RUNTIME_NODE_ARGS = [
   "--preserve-symlinks",
   "--preserve-symlinks-main",
   "--import",
@@ -163,6 +163,57 @@ export function createBuiltRuntime(
     throw new Error("built Doctor fixture requires dist/entry.js; prepare the runtime first");
   }
   return runtimeRoot;
+}
+
+export function seedPluginStateSidecar(stateDir: string, canonicalCreatedAt: number): void {
+  const sharedPath = path.join(stateDir, "state", "openclaw.sqlite");
+  const sidecarPath = path.join(stateDir, "plugin-state", "state.sqlite");
+  fs.mkdirSync(path.dirname(sharedPath), { recursive: true });
+  fs.mkdirSync(path.dirname(sidecarPath), { recursive: true });
+
+  openOpenClawStateDatabase({
+    path: sharedPath,
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+  });
+  closeOpenClawStateDatabaseForTest();
+
+  const shared = new DatabaseSync(sharedPath);
+  try {
+    shared
+      .prepare(`
+        INSERT INTO plugin_state_entries (
+          plugin_id, namespace, entry_key, value_json, created_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `)
+      .run("discord", "components", "interaction:1", '{"ok":false}', canonicalCreatedAt, null);
+  } finally {
+    shared.close();
+  }
+
+  const sidecar = new DatabaseSync(sidecarPath);
+  try {
+    sidecar.exec(`
+      CREATE TABLE plugin_state_entries (
+        plugin_id TEXT NOT NULL,
+        namespace TEXT NOT NULL,
+        entry_key TEXT NOT NULL,
+        value_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER,
+        PRIMARY KEY (plugin_id, namespace, entry_key)
+      );
+    `);
+    sidecar
+      .prepare(`
+        INSERT INTO plugin_state_entries (
+          plugin_id, namespace, entry_key, value_json, created_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `)
+      // Keep retired sidecar data distinct from the canonical row.
+      .run("discord", "components", "interaction:1", '{"ok":true}', 3_000, null);
+  } finally {
+    sidecar.close();
+  }
 }
 
 export function seedV17AdditiveRepairDatabase(

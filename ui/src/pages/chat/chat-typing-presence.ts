@@ -4,6 +4,18 @@ import { readTranscriptSenderIdentity } from "../../../../src/chat/sender-identi
 import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 
+export type ChatTypingActorState = {
+  label: string;
+  expiresAt: number;
+  preview?: string;
+  exitDurationMs?: number;
+};
+
+export type ChatTypingActorView = Omit<ChatTypingActorState, "expiresAt"> & {
+  id: string;
+  paused?: boolean;
+};
+
 export function clearTypingActorForSessionMessage(
   payload: unknown,
   actors: Map<string, unknown>,

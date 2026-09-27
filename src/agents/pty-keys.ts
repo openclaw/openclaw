@@ -224,7 +224,7 @@ function encodeKeyToken(
     return applyCharModifiers(base, parsed.mods);
   }
 
-  if (parsed.hasModifiers) {
+  if (hasAnyModifier(parsed.mods)) {
     warnings.push(`Unknown key "${base}" for modifiers; sending literal.`);
   }
   return base;
@@ -233,7 +233,6 @@ function encodeKeyToken(
 function parseModifiers(token: string) {
   const mods: Modifiers = { ctrl: false, alt: false, shift: false };
   let rest = token;
-  let sawModifiers = false;
 
   while (rest.length > 2 && rest[1] === "-") {
     const mod = normalizeLowercaseStringOrEmpty(rest[0]);
@@ -246,11 +245,10 @@ function parseModifiers(token: string) {
     } else {
       break;
     }
-    sawModifiers = true;
     rest = rest.slice(2);
   }
 
-  return { mods, base: rest, hasModifiers: sawModifiers };
+  return { mods, base: rest };
 }
 
 function applyCharModifiers(char: string, mods: Modifiers): string {
@@ -271,9 +269,6 @@ function applyCharModifiers(char: string, mods: Modifiers): string {
 }
 
 function toCtrlChar(char: string): string | null {
-  if (char.length !== 1) {
-    return null;
-  }
   if (char === "?") {
     return "\x7f";
   }
@@ -308,9 +303,5 @@ function parseHexByte(raw: string): number | null {
   if (!/^[0-9a-f]{1,2}$/.test(normalized)) {
     return null;
   }
-  const value = Number.parseInt(normalized, 16);
-  if (Number.isNaN(value) || value < 0 || value > 0xff) {
-    return null;
-  }
-  return value;
+  return Number.parseInt(normalized, 16);
 }

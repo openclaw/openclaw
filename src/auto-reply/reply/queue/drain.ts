@@ -893,6 +893,7 @@ async function runSyntheticOverflowSummary(params: {
   let admitted = false;
   await params.runFollowup({
     prompt: params.prompt,
+    sourceTurnId: runtimeMetadata.sourceTurnId,
     queueAbortSignal: params.source.queueAbortSignal,
     transcriptPrompt: params.prompt,
     messageId: params.source.messageId,
@@ -1110,12 +1111,6 @@ export function scheduleFollowupDrain(
           break;
         }
         if (await drainProtectedPriorityFollowup(queue, effectiveRunFollowup)) {
-          continue;
-        }
-        if (queue.droppedCount > 0 && queue.items.some((item) => item.steerAnchor)) {
-          if (!(await drainNextQueueItem(queue.items, effectiveRunFollowup, reserveOptions))) {
-            break;
-          }
           continue;
         }
         if (

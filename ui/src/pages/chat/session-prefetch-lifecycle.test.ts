@@ -54,59 +54,56 @@ describe("session prefetch pane and navigation ownership", () => {
     },
   );
 
-  it.each(["pointerover", "focusin"])(
-    "keeps dashboard warming intent-only for %s and resumes with its conversation",
-    async (eventType) => {
-      const dashboard = "agent:main:dashboard";
-      const intended = "agent:main:intended";
-      const recent = "agent:main:recent";
-      const request = vi.fn(async (_method: string, params: unknown) =>
-        historyResult((params as { sessionKey: string }).sessionKey),
-      );
-      updatePrefetch({
-        client: createTestGatewayClient(request),
-        listRevision: 1,
-        openSessionKeys: [dashboard],
-        hiddenConversationSessionKeys: [dashboard],
-        rows: [row(dashboard, NOW), row(recent, NOW - 1), row(intended, 1)],
-      });
-      const pane = fixture.host.firstElementChild as HTMLElement & {
-        conversationPresented: boolean;
-      };
-      // A visible sibling Home conversation cannot opt the dashboard page into warming.
-      const home = Object.assign(document.createElement("openclaw-chat-pane"), {
-        sessionKey: "agent:main:home",
-        conversationPresented: true,
-        transcriptLoading: false,
-      });
-      shell.append(home);
-      await vi.advanceTimersByTimeAsync(1_000);
-      await settlePromises();
-      expect(request).not.toHaveBeenCalled();
+  it("keeps dashboard warming intent-only and resumes with its conversation", async () => {
+    const dashboard = "agent:main:dashboard";
+    const intended = "agent:main:intended";
+    const recent = "agent:main:recent";
+    const request = vi.fn(async (_method: string, params: unknown) =>
+      historyResult((params as { sessionKey: string }).sessionKey),
+    );
+    updatePrefetch({
+      client: createTestGatewayClient(request),
+      listRevision: 1,
+      openSessionKeys: [dashboard],
+      hiddenConversationSessionKeys: [dashboard],
+      rows: [row(dashboard, NOW), row(recent, NOW - 1), row(intended, 1)],
+    });
+    const pane = fixture.host.firstElementChild as HTMLElement & {
+      conversationPresented: boolean;
+    };
+    // A visible sibling Home conversation cannot opt the dashboard page into warming.
+    const home = Object.assign(document.createElement("openclaw-chat-pane"), {
+      sessionKey: "agent:main:home",
+      conversationPresented: true,
+      transcriptLoading: false,
+    });
+    shell.append(home);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await settlePromises();
+    expect(request).not.toHaveBeenCalled();
 
-      const target = document.createElement("a");
-      target.dataset.sessionKey = intended;
-      shell.append(target);
-      home.transcriptLoading = true;
-      home.dispatchEvent(new Event("openclaw-chat-transcript-loading-changed", { bubbles: true }));
-      target.dispatchEvent(new Event(eventType, { bubbles: true }));
-      await vi.advanceTimersByTimeAsync(300);
-      await settlePromises();
-      expect(request).not.toHaveBeenCalled();
+    const target = document.createElement("a");
+    target.dataset.sessionKey = intended;
+    shell.append(target);
+    home.transcriptLoading = true;
+    home.dispatchEvent(new Event("openclaw-chat-transcript-loading-changed", { bubbles: true }));
+    target.dispatchEvent(new Event("pointerover", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(300);
+    await settlePromises();
+    expect(request).not.toHaveBeenCalled();
 
-      home.transcriptLoading = false;
-      home.dispatchEvent(new Event("openclaw-chat-transcript-loading-changed", { bubbles: true }));
-      await vi.advanceTimersByTimeAsync(300);
-      await settlePromises();
-      expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([intended]);
+    home.transcriptLoading = false;
+    home.dispatchEvent(new Event("openclaw-chat-transcript-loading-changed", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(300);
+    await settlePromises();
+    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([intended]);
 
-      pane.conversationPresented = true;
-      pane.dispatchEvent(new Event("openclaw-chat-pane-lifecycle-changed", { bubbles: true }));
-      await vi.advanceTimersByTimeAsync(300);
-      await settlePromises();
-      expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([intended, recent]);
-    },
-  );
+    pane.conversationPresented = true;
+    pane.dispatchEvent(new Event("openclaw-chat-pane-lifecycle-changed", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(300);
+    await settlePromises();
+    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([intended, recent]);
+  });
 
   it.each(["stored read", "cursor reset"])(
     "rechecks dashboard intent after %s before another history request",

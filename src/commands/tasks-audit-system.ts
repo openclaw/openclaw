@@ -70,15 +70,11 @@ export function buildTaskSystemAuditFindings(params: {
     })),
   ];
   const filteredFindings = allFindings
-    .filter((finding) => {
-      if (params.severityFilter && finding.severity !== params.severityFilter) {
-        return false;
-      }
-      if (params.codeFilter && finding.code !== params.codeFilter) {
-        return false;
-      }
-      return true;
-    })
+    .filter(
+      (finding) =>
+        (!params.severityFilter || finding.severity === params.severityFilter) &&
+        (!params.codeFilter || finding.code === params.codeFilter),
+    )
     .toSorted(compareSystemAuditFindings);
   // Filters only affect displayed findings; summary counts cover the full set.
   return {

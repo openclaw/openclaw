@@ -23,7 +23,11 @@ import {
   type MarkdownRenderEnv,
   type MarkdownRenderOptions,
 } from "./markdown-render-options.ts";
-import { repairStreamingMarkdownTail, splitStableStreamingMarkdown } from "./markdown-streaming.ts";
+import {
+  repairStreamingMarkdownTail,
+  splitStableStreamingMarkdown,
+  streamingMarkdownState,
+} from "./markdown-streaming.ts";
 import { isMarkdownBlockArtText, normalizeMarkdownLineBreaks } from "./markdown-text.ts";
 
 const allowedTags = [
@@ -330,10 +334,6 @@ const APP_RESOURCE_PATH_PREFIXES = [
   ["plugins", "diffs-language-pack"],
 ];
 const markdownCache = new Map<string, string>();
-const STREAMING_INPUT_CACHE_LIMIT = 8;
-const STREAMING_INPUT_CACHE_MAX_CHARS = MARKDOWN_CHAR_LIMIT;
-type StreamingInputCacheEntry = { source: string; normalized: string };
-const streamingInputCache = new Map<string, StreamingInputCacheEntry>();
 
 function getCachedMarkdown(key: string): string | null {
   const cached = markdownCache.get(key);
@@ -358,36 +358,21 @@ function setCachedMarkdown(key: string, value: string) {
 
 function normalizeStreamingMarkdownInput(markdownLocal: string, streamKey?: string): string {
   const source = stripUnsupportedCitationControlMarkers(markdownLocal);
-  if (!streamKey) {
-    return normalizeMarkdownLineBreaks(source);
-  }
-
-  const cached = streamingInputCache.get(streamKey);
+  const state = streamingMarkdownState(streamKey);
+  const cached = state?.input;
+  let normalized: string;
   if (cached && source.startsWith(cached.source)) {
     const appended = source.slice(cached.source.length);
     const normalizedAppend = normalizeMarkdownLineBreaks(appended);
-    const normalized =
+    normalized =
       cached.source.endsWith("\r") && appended.startsWith("\n")
         ? `${cached.normalized.slice(0, -1)}${normalizedAppend}`
         : `${cached.normalized}${normalizedAppend}`;
-    streamingInputCache.delete(streamKey);
-    if (source.length <= STREAMING_INPUT_CACHE_MAX_CHARS) {
-      streamingInputCache.set(streamKey, { source, normalized });
-    }
-    return normalized;
+  } else {
+    normalized = normalizeMarkdownLineBreaks(source);
   }
-
-  const normalized = normalizeMarkdownLineBreaks(source);
-  streamingInputCache.delete(streamKey);
-  if (source.length <= STREAMING_INPUT_CACHE_MAX_CHARS) {
-    streamingInputCache.set(streamKey, { source, normalized });
-  }
-  while (streamingInputCache.size > STREAMING_INPUT_CACHE_LIMIT) {
-    const oldest = streamingInputCache.keys().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    streamingInputCache.delete(oldest);
+  if (state) {
+    state.input = source.length <= MARKDOWN_CHAR_LIMIT ? { source, normalized } : undefined;
   }
   return normalized;
 }
@@ -587,7 +572,11 @@ const markdownParser = createMarkdownParser();
 // Uncached render core shared by the static and streaming paths. The streaming
 // tail changes on every delta, so routing it through here (instead of the cached
 // wrapper) keeps per-message churn out of the LRU cache.
-function renderSanitizedMarkdown(renderInput: string, renderOptions: MarkdownRenderEnv): string {
+function renderSanitizedMarkdown(
+  renderInput: string,
+  renderOptions: MarkdownRenderEnv,
+  blockArt?: boolean,
+): string {
   installHooks();
   const activeSanitizeOptions = renderOptions.progressBars
     ? progressSanitizeOptions
@@ -599,7 +588,7 @@ function renderSanitizedMarkdown(renderInput: string, renderOptions: MarkdownRen
   const input = renderOptions.progressBars
     ? stripProgressCardRawContentBlocks(appendMarkdownTruncationNotice(truncated))
     : appendMarkdownTruncationNotice(truncated);
-  if (isMarkdownBlockArtText(truncated.text)) {
+  if (blockArt ?? isMarkdownBlockArtText(truncated.text)) {
     return DOMPurify.sanitize(
       renderMarkdownCodeBlock(input, "", renderOptions, { blockArt: true }),
       activeSanitizeOptions,
@@ -659,7 +648,7 @@ export function toSanitizedMarkdownHtml(
   if (renderInput.length > MARKDOWN_CACHE_MAX_CHARS) {
     return renderSanitizedMarkdown(renderInput, renderOptions);
   }
-  const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.codeBlockInteraction}\0${renderOptions.fileLinks}\0${JSON.stringify(renderOptions.githubRepo ? [renderOptions.githubRepo.owner, renderOptions.githubRepo.repo] : null)}\0${markdownGitHubAliasSignature(renderOptions.githubRepositories, renderOptions.githubRepo)}\0${renderOptions.interactiveImages}\0${renderOptions.linkFavicons}\0${renderOptions.progressBars}\0${renderOptions.mode}\0${renderOptions.remoteImages}\0${renderOptions.sessionLinks}\0${renderOptions.tableInteractions}\0${JSON.stringify(renderOptions.humanMentionTokens)}\0${renderInput}`;
+  const cacheKey = `${markdownRenderKey(renderOptions)}\0${renderInput}`;
   const cached = getCachedMarkdown(cacheKey);
   if (cached !== null) {
     return cached;
@@ -667,6 +656,10 @@ export function toSanitizedMarkdownHtml(
   const sanitized = renderSanitizedMarkdown(renderInput, renderOptions);
   setCachedMarkdown(cacheKey, sanitized);
   return sanitized;
+}
+
+function markdownRenderKey(options: MarkdownRenderEnv): string {
+  return `${i18n.getLocale()}\0${options.assistantTranscriptRoleHeaders}\0${options.codeBlockChrome}\0${options.codeBlockInteraction}\0${options.fileLinks}\0${JSON.stringify(options.githubRepo ? [options.githubRepo.owner, options.githubRepo.repo] : null)}\0${markdownGitHubAliasSignature(options.githubRepositories, options.githubRepo)}\0${options.interactiveImages}\0${options.linkFavicons}\0${options.progressBars}\0${options.mode}\0${options.remoteImages}\0${options.sessionLinks}\0${options.tableInteractions}\0${JSON.stringify(options.humanMentionTokens ?? [])}`;
 }
 
 function toPlainTextElement(value: string, options: MarkdownRenderEnv): HTMLDivElement {
@@ -705,16 +698,53 @@ export function toStreamingMarkdownParts(
   );
   const stableMarkdown = input.slice(0, boundary);
   const streamingTail = input.slice(boundary);
-  const stableHtml = boundary > 0 ? toSanitizedMarkdownHtml(stableMarkdown, options) : "";
+  const state = streamingMarkdownState(streamKey);
+  const previous = state?.rendered;
+  const renderKey = markdownRenderKey(renderOptions);
+  // Containers and block-art classification can outlive a completed boundary.
+  // The message parse guard also keeps applying to the complete prefix.
+  const incremental =
+    previous?.options === renderKey &&
+    stableMarkdown.startsWith(previous.markdown) &&
+    (previous.markdown === stableMarkdown ||
+      (previous.markdown.endsWith("\n") &&
+        !/^(?: {4}| {0,3}[\t>])/mu.test(stableMarkdown) &&
+        !/^ {0,3}(?:[-+*]|\d{1,9}[.)])$/mu.test(stableMarkdown) &&
+        !stableMarkdown.includes("<") &&
+        !isMarkdownBlockArtText(stableMarkdown) &&
+        !previous.html.includes('class="markdown-block-art"') &&
+        (renderOptions.mode === "document" || boundary <= MARKDOWN_PARSE_LIMIT)));
+  let stableHtml = incremental ? previous.html : "";
+  const stableAppend = stableMarkdown.slice(incremental ? previous.markdown.length : 0);
+  if (stableAppend) {
+    const appendedHtml = renderSanitizedMarkdown(stableAppend, { ...renderOptions });
+    // File-label collisions and standalone block art depend on the whole prefix.
+    stableHtml =
+      (stableHtml.length > 0 && isMarkdownBlockArtText(stableAppend)) ||
+      (renderOptions.fileLinks &&
+        stableHtml.includes('class="markdown-file-link"') &&
+        appendedHtml.includes('class="markdown-file-link"'))
+        ? renderSanitizedMarkdown(stableMarkdown, { ...renderOptions })
+        : stableHtml + appendedHtml;
+  }
+  if (state) {
+    state.rendered = { options: renderKey, markdown: stableMarkdown, html: stableHtml };
+  }
   if (!streamingTail.trim()) {
     return [stableHtml, ""];
   }
+  // The whole input was classified above; an isolated tail is not block art.
   const tailHtml =
     tailRepairStart === null
-      ? renderSanitizedMarkdown(streamingTail, { ...renderOptions, streamingOpenFence: true })
+      ? renderSanitizedMarkdown(
+          streamingTail,
+          { ...renderOptions, streamingOpenFence: true },
+          false,
+        )
       : renderSanitizedMarkdown(
           repairStreamingMarkdownTail(streamingTail, tailRepairStart - boundary),
           renderOptions,
+          false,
         );
   return [stableHtml, tailHtml];
 }

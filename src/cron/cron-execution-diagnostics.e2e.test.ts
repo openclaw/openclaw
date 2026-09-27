@@ -9,6 +9,7 @@ import {
 import type { OpenClawConfig } from "../config/config.js";
 import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   loadRunCronIsolatedAgentTurn,
@@ -20,10 +21,10 @@ import {
   runEmbeddedAgentMock,
   runWithModelFallbackMock,
 } from "./isolated-agent/run.test-harness.js";
+import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import { CronService, type CronEvent } from "./service.js";
 import { createNoopLogger } from "./service.test-harness.js";
 import { cronStoreKey } from "./store/key.js";
-import { readCronTaskRunHistoryPage } from "./task-run-history.js";
 
 vi.doUnmock("./isolated-agent/model-preflight.runtime.js");
 
@@ -93,6 +94,8 @@ async function runPersistedDiagnosticCase(params: {
       const events: CronEvent[] = [];
       const storePath = state.path("cron", "jobs.json");
       const cron = new CronService({
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => Date.now(),
         storePath,
         cronEnabled: true,
         cronConfig: { triggers: { enabled: true } },
@@ -128,7 +131,7 @@ async function runPersistedDiagnosticCase(params: {
         const finished = events.find(
           (event) => event.action === "finished" && event.jobId === job.id,
         );
-        const history = readCronTaskRunHistoryPage({
+        const history = readCronRunHistoryPageForTests({
           storeKey: cronStoreKey(storePath),
           jobId: job.id,
           limit: 1,

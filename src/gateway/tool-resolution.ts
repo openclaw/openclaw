@@ -263,7 +263,7 @@ export function resolveGatewayScopedTools(
   const workspaceDir =
     params.rootedExecution?.workspaceDir ??
     (params.workspaceDir?.trim() || resolveAgentWorkspaceDir(params.cfg, sessionAgentId));
-  const explicitDenylist = collectExplicitDenylist([
+  const basePolicies = [
     profilePolicy,
     providerProfilePolicy,
     globalPolicy,
@@ -275,6 +275,13 @@ export function resolveGatewayScopedTools(
     sandboxPolicy,
     subagentPolicy,
     inheritedToolPolicy,
+  ];
+  const requestedPolicies = [
+    ...basePolicies,
+    gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
+  ];
+  const explicitDenylist = collectExplicitDenylist([
+    ...basePolicies,
     defaultGatewayDeny.length > 0 ? { deny: defaultGatewayDeny } : undefined,
     ownerOnlyGatewayDeny.length > 0 ? { deny: ownerOnlyGatewayDeny } : undefined,
     Array.isArray(gatewayToolsCfg?.deny) ? { deny: gatewayToolsCfg.deny } : undefined,
@@ -286,20 +293,7 @@ export function resolveGatewayScopedTools(
   const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
   const cronCreatorToolAllowlistCaptureRef: CronToolsAllowCaptureRef | undefined =
     surface === "loopback" ? {} : undefined;
-  const shouldInheritEffectiveToolAllowlist = [
-    profilePolicy,
-    providerProfilePolicy,
-    globalPolicy,
-    globalProviderPolicy,
-    agentPolicy,
-    agentProviderPolicy,
-    groupPolicy,
-    senderPolicy,
-    sandboxPolicy,
-    subagentPolicy,
-    inheritedToolPolicy,
-    gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
-  ].some(hasRestrictiveAllowPolicy);
+  const shouldInheritEffectiveToolAllowlist = requestedPolicies.some(hasRestrictiveAllowPolicy);
 
   // CLI backends reach OpenClaw tools through this resolver instead of the
   // embedded runner, and the loopback grant carries no collector fields, so the
@@ -424,20 +418,7 @@ export function resolveGatewayScopedTools(
             : true,
         }
       : {}),
-    pluginToolAllowlist: collectExplicitAllowlist([
-      profilePolicy,
-      providerProfilePolicy,
-      globalPolicy,
-      globalProviderPolicy,
-      agentPolicy,
-      agentProviderPolicy,
-      groupPolicy,
-      senderPolicy,
-      sandboxPolicy,
-      subagentPolicy,
-      inheritedToolPolicy,
-      gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
-    ]),
+    pluginToolAllowlist: collectExplicitAllowlist(requestedPolicies),
     pluginToolDenylist: explicitDenylist,
     cronCreatorToolAllowlist,
     cronCreatorToolAllowlistCaptureRef,

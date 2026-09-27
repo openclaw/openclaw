@@ -28,6 +28,7 @@ import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.j
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { HostReadMediaTypeError, LocalMediaAccessError } from "../../media/local-media-access.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
+import { resolveInboundMediaReference } from "../../media/media-reference.js";
 import { resolveOutboundAttachmentFromUrl } from "../../media/outbound-attachment.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import {
@@ -298,7 +299,11 @@ export function createReplyMediaSourcePreparer(params: {
   };
 
   const normalizeMediaSource = async (raw: string): Promise<PreparedReplyMediaSource> => {
-    const source = raw.trim();
+    const trimmed = raw.trim();
+    // Canonical references from history must pass the same policy as their stored file.
+    const source = /^media:\/\//i.test(trimmed)
+      ? ((await resolveInboundMediaReference(trimmed))?.physicalPath ?? trimmed)
+      : trimmed;
     const mapping = params.workspaceMediaRoot
       ? resolveSandboxPathMapping(
           [{ hostRoot: params.workspaceDir, containerRoot: params.workspaceMediaRoot }],

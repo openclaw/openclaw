@@ -373,7 +373,7 @@ it.each(cases)(
       entered.resolve();
       await release.promise;
       if (mode === "cold-commit") {
-        if (owner === "replacement") {
+        if (owner !== "whole-store") {
           await closeWorkerForIntegrityAdmission(f);
         } else {
           closeForIntegrityAdmission(f);
@@ -424,7 +424,7 @@ it.each(cases)(
               ],
             }),
     );
-    expect(callbacks).toBe(owner === "replacement" || mode === "cold-preparation" ? 0 : 1);
+    expect(callbacks).toBe(owner === "whole-store" && mode !== "cold-preparation" ? 1 : 0);
     const later = own(
       runExclusiveSqliteSessionWrite(
         f.scope,
@@ -809,7 +809,7 @@ it.each(
     ([false, true] as const).map((cold) => ({ owner, cold })),
   ),
 )(
-  "keeps $owner maintenance finalization in the writer FIFO (cold: $cold)",
+  "keeps $owner maintenance commits after validation without blocking writers (cold: $cold)",
   async ({ owner, cold }) => {
     const f = maintenanceFixture();
     const probe = observeWorkerAdmission(f.databasePath, cold);
@@ -823,7 +823,7 @@ it.each(
         "session.transcript.batch",
       );
       if (cold) {
-        if (owner === "replacement") {
+        if (owner !== "whole-store") {
           await closeWorkerForIntegrityAdmission(f);
         } else {
           closeForIntegrityAdmission(f);
@@ -864,29 +864,33 @@ it.each(
     );
     if (cold) {
       await probe.expectPending(work);
-      let laterRan = false;
+      expect(loadSessionEntryReadOnly(f.input)?.label).toBe("kept");
       const later = own(
-        runExclusiveSqliteSessionWrite(
-          f.scope,
-          async () => {
-            laterRan = true;
-            expect(loadSessionEntryReadOnly(f.stale)).toBeUndefined();
-          },
-          "session.transcript.batch",
-        ),
+        applySessionEntryReplacements({
+          storePath: f.databasePath,
+          sessionKeys: [f.input.sessionKey],
+          skipMaintenance: true,
+          update: (entries) => ({
+            result: undefined,
+            replacements: entries.map(({ entry, sessionKey }) => ({
+              sessionKey,
+              entry: { ...entry, label: "foreground" },
+            })),
+          }),
+        }),
       );
-      await yieldToEventLoop();
+      // Validation has no writer permit; the finalizer acquires it for its native commit.
+      await later;
       expect(preparationWriterRan).toBe(true);
-      expect(laterRan).toBe(false);
+      expect(loadSessionEntryReadOnly(f.input)?.label).toBe("foreground");
       expect(loadSessionEntryReadOnly(f.stale)?.sessionId).toBe("old");
       probe.release.resolve();
       await work;
-      await later;
     } else {
       await work;
     }
     expect(preparationWriterRan).toBe(true);
-    expect(loadSessionEntryReadOnly(f.input)?.label).toBe("kept");
+    expect(loadSessionEntryReadOnly(f.input)?.label).toBe(cold ? "foreground" : "kept");
     expectMaintenanceArchived(f);
     await probe.expectHealthy(cold ? 1 : 0);
   },

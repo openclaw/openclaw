@@ -172,7 +172,7 @@ export function createAlwaysConfiguredPluginConfig(
   };
 }
 
-export function createActionHubPluginFixture() {
+function createActionHubPluginFixture() {
   const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
     jsonResult({ ok: true, params }),
   );

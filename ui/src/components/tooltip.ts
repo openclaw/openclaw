@@ -97,7 +97,12 @@ class Tooltip extends OpenClawLitElement {
   static readonly #activeByDocument = new WeakMap<Document, Tooltip>();
 
   static readonly consumeEscape = (event: KeyboardEvent, ownerDocument: Document): boolean => {
-    if (event.key !== "Escape" || event.defaultPrevented) {
+    if (
+      event.key !== "Escape" ||
+      event.defaultPrevented ||
+      event.isComposing ||
+      event.keyCode === 229
+    ) {
       return false;
     }
     const active = Tooltip.#activeByDocument.get(ownerDocument);

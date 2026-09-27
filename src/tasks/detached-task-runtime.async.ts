@@ -1,14 +1,37 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import type {
+  DetachedRunningTaskCreateParams,
+  DetachedTaskAssignmentTransition,
   DetachedTaskCompleteParams,
   DetachedTaskFailParams,
   DetachedTaskFinalizeParams,
   DetachedTaskLifecycleRuntime,
 } from "./detached-task-runtime-contract.js";
+import { DetachedTaskAssignmentUnsupportedError } from "./detached-task-runtime-contract.js";
 import { DetachedTaskLegacyRuntimeError } from "./detached-task-runtime-errors.js";
 import { captureDetachedTaskRuntimeOwner } from "./detached-task-runtime-state.js";
+import { isIncognitoTask, projectTaskContentForPersistence } from "./task-content.js";
+import { createRunningTaskRunCoreAsync } from "./task-executor-create.async.js";
 import { transitionTaskRecordsByRunAsync } from "./task-registry-transition.async.js";
 import type { TaskRecord, TaskRunTransition } from "./task-registry.types.js";
+
+export async function createRunningTaskRunAsync(
+  params: DetachedRunningTaskCreateParams,
+  assertCurrent?: () => void,
+): Promise<TaskRecord | null> {
+  const owner = captureDetachedTaskRuntimeOwner();
+  const assertOwner = () => {
+    owner.assertCurrent();
+    assertCurrent?.();
+  };
+  assertOwner();
+  // The shipped V1 adapter owns its synchronous creation contract, including refusal.
+  return owner.runtime
+    ? owner.runtime.createRunningTaskRun(
+        projectTaskContentForPersistence(isIncognitoTask(params), params),
+      )
+    : await createRunningTaskRunCoreAsync(params, assertOwner);
+}
 
 async function mutateDetachedTask(
   transition: TaskRunTransition,
@@ -95,4 +118,31 @@ export function setDetachedTaskDeliveryStatusByRunIdAsync(
     (runtime) => runtime.setDetachedTaskDeliveryStatusByRunId(params),
     assertCurrent,
   );
+}
+
+/** Exact settlement retains the original assignment while worker admission yields. */
+export async function transitionTaskAssignmentAsync(
+  params: DetachedTaskAssignmentTransition,
+): Promise<TaskRecord[]> {
+  const owner = captureDetachedTaskRuntimeOwner({ settlement: true });
+  const assertCurrent = () => {
+    owner.assertCurrent();
+    params.assertCurrent();
+  };
+  assertCurrent();
+  if (owner.runtime) {
+    if (!owner.runtime.transitionTaskAssignment) {
+      throw new DetachedTaskAssignmentUnsupportedError();
+    }
+    const result = owner.runtime.transitionTaskAssignment({ ...params, assertCurrent });
+    assertCurrent();
+    return result;
+  }
+  const result = await transitionTaskRecordsByRunAsync(
+    params.transition,
+    assertCurrent,
+    params.expectedTask,
+  );
+  assertCurrent();
+  return result;
 }

@@ -81,7 +81,7 @@ vi.mock("openclaw/plugin-sdk/proxy-capture", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/proxy-capture")>()),
   resolveDebugProxySettings: vi.fn(),
   createDebugProxyWebSocketAgent: vi.fn(),
-  captureWsEvent: vi.fn(),
+  captureWsEventAsync: vi.fn().mockResolvedValue(undefined),
 }));
 
 type Socket = InstanceType<typeof providerMocks.FakeWebSocket>;

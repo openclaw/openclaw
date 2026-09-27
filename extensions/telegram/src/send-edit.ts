@@ -1,4 +1,5 @@
 import type { Message } from "grammy/types";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveTelegramMessageThreadSpec } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
@@ -23,7 +24,6 @@ import { withTelegramPlainFallback } from "./rich-plain-fallback.js";
 import { sendLogger, withTelegramApiContext, type TelegramApiContext } from "./send-context.js";
 import type { TelegramApiCallOpts, TelegramSendOpts } from "./send-message-types.js";
 import { prepareTelegramOutbound } from "./send-outbound.js";
-import { resolveMarkdownTableMode } from "./send.runtime.js";
 import {
   deliverTelegramTextPage,
   planTelegramTextDeliveryPages,

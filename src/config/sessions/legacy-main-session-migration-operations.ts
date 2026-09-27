@@ -532,17 +532,18 @@ export async function processIdenticalClaims(params: {
   const crossStore = params.aliases.some(
     (claim) => !samePhysicalStore(claim.store, params.destination),
   );
+  const completedOutcome = (): LegacyMainSessionMigrationOutcome => ({
+    kind: params.canonical
+      ? "canonical-exists-identical"
+      : crossStore
+        ? "migrated-cross-store"
+        : "migrated-in-place",
+    canonicalKey: params.canonicalKey,
+    paths: [...new Set(params.aliases.map((claim) => claim.store.path))],
+    sourceKeys: params.aliases.map((claim) => claim.key),
+  });
   if (params.mode !== "doctor-fix") {
-    return {
-      kind: params.canonical
-        ? "canonical-exists-identical"
-        : crossStore
-          ? "migrated-cross-store"
-          : "migrated-in-place",
-      canonicalKey: params.canonicalKey,
-      paths: [...new Set(params.aliases.map((claim) => claim.store.path))],
-      sourceKeys: params.aliases.map((claim) => claim.key),
-    };
+    return completedOutcome();
   }
 
   let canonical = params.canonical;
@@ -620,16 +621,7 @@ export async function processIdenticalClaims(params: {
       detail: `source changed before expected-entry cleanup: ${changedSource.store.path}#${changedSource.key}`,
     };
   }
-  return {
-    kind: params.canonical
-      ? "canonical-exists-identical"
-      : crossStore
-        ? "migrated-cross-store"
-        : "migrated-in-place",
-    canonicalKey: params.canonicalKey,
-    paths: [...new Set(params.aliases.map((claim) => claim.store.path))],
-    sourceKeys: params.aliases.map((claim) => claim.key),
-  };
+  return completedOutcome();
 }
 
 export async function repairDivergentClaims(params: {

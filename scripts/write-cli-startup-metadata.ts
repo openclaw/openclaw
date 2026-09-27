@@ -1,4 +1,3 @@
-// Write Cli Startup Metadata script supports OpenClaw repository automation.
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs, { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
@@ -11,20 +10,11 @@ import pMap from "p-map";
 import type { RootHelpRenderOptions } from "../src/cli/program/root-help.js";
 import type { OpenClawConfig } from "../src/config/config.js";
 import { resolveCliStartupRootHelpBundleIdentity } from "./lib/cli-startup-root-help-bundle.js";
-import { terminateManagedChild } from "./lib/managed-child-process.mts";
-
-function dedupe(values: string[]): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const value of values) {
-    if (!value || seen.has(value)) {
-      continue;
-    }
-    seen.add(value);
-    out.push(value);
-  }
-  return out;
-}
+import {
+  inspectManagedProcessGroup,
+  terminateManagedChild,
+  waitForManagedProcessGroupExit,
+} from "./lib/managed-child-process.mts";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const scriptDir = path.dirname(scriptPath);
@@ -516,25 +506,23 @@ async function spawnText(
       if (!useProcessGroup || typeof child.pid !== "number") {
         return false;
       }
-      try {
-        process.kill(-child.pid, 0);
-        return true;
-      } catch (error) {
-        return (error as NodeJS.ErrnoException).code === "EPERM";
-      }
+      // Snapshot work belongs to the bounded drain, not this initial presence check.
+      return (
+        inspectManagedProcessGroup(child, {
+          deadlineAt: Date.now(),
+          errorPolicy: "alive-on-eperm",
+          useProcessGroup,
+        }) !== "dead"
+      );
     };
-    const waitForProcessGroupExit = async (timeoutMs: number) => {
-      const deadline = Date.now() + timeoutMs;
-      while (Date.now() < deadline) {
-        if (!processGroupIsAlive()) {
-          return true;
-        }
-        await new Promise((resolvePoll) => {
-          setTimeout(resolvePoll, 25);
-        });
-      }
-      return !processGroupIsAlive();
-    };
+    const waitForProcessGroupExit = (deadlineAt: number) =>
+      waitForManagedProcessGroupExit(child, Math.max(0, deadlineAt - Date.now()), {
+        deadlineAt,
+        errorPolicy: "alive-on-eperm",
+        useProcessGroup,
+        clampPollToDeadline: true,
+        pollIntervalMs: 25,
+      });
     const recordTerminalFailure = (error: Error) => {
       if (terminalFailure) {
         return terminalFailure;
@@ -601,39 +589,43 @@ async function spawnText(
       if (waitingForKillGrace) {
         return;
       }
+      const graceDeadlineAt = Date.now() + killGraceMs;
       waitingForKillGrace = true;
-      killTimer = setTimeout(() => {
-        waitingForKillGrace = false;
-        killTimer = undefined;
-        forceKillInFlight = true;
-        signalChild("SIGKILL");
-        const forceDrain = useProcessGroup
-          ? waitForProcessGroupExit(killGraceMs)
-          : Promise.resolve(true);
-        void forceDrain.then((drained) => {
-          forceKillInFlight = false;
-          if (!drained) {
-            processTreeCleanupFailure = Object.assign(
-              createFailure(
-                "process-tree-cleanup",
-                `process group did not exit within ${killGraceMs}ms after SIGKILL`,
-              ),
-              { preserveRenderState: true },
-            );
-            options.onTerminalFailure?.(processTreeCleanupFailure);
-          }
-          if (childClosedResult) {
-            finishClose(childClosedResult);
-          } else if (!drained) {
-            child.stdout.destroy();
-            child.stderr.destroy();
-            child.unref?.();
-            finishClose({ code: null, signal: "SIGKILL" });
-          }
-        });
-      }, killGraceMs);
+      killTimer = setTimeout(
+        () => {
+          waitingForKillGrace = false;
+          killTimer = undefined;
+          forceKillInFlight = true;
+          signalChild("SIGKILL");
+          const forceDrain = useProcessGroup
+            ? waitForProcessGroupExit(Date.now() + killGraceMs)
+            : Promise.resolve(true);
+          void forceDrain.then((drained) => {
+            forceKillInFlight = false;
+            if (!drained) {
+              processTreeCleanupFailure = Object.assign(
+                createFailure(
+                  "process-tree-cleanup",
+                  `process group did not exit within ${killGraceMs}ms after SIGKILL`,
+                ),
+                { preserveRenderState: true },
+              );
+              options.onTerminalFailure?.(processTreeCleanupFailure);
+            }
+            if (childClosedResult) {
+              finishClose(childClosedResult);
+            } else if (!drained) {
+              child.stdout.destroy();
+              child.stderr.destroy();
+              child.unref?.();
+              finishClose({ code: null, signal: "SIGKILL" });
+            }
+          });
+        },
+        Math.max(0, graceDeadlineAt - Date.now()),
+      );
       if (useProcessGroup) {
-        void waitForProcessGroupExit(killGraceMs).then((drained) => {
+        void waitForProcessGroupExit(graceDeadlineAt).then((drained) => {
           if (!drained || !waitingForKillGrace) {
             return;
           }
@@ -806,17 +798,6 @@ async function renderSourceRootHelpText(
   });
 }
 
-async function renderSourceBrowserHelpText(
-  renderContext: RootHelpRenderContext,
-  taskContext?: RenderTaskContext,
-): Promise<string> {
-  // The launcher CLI boot renders byte-identical browser help to a direct
-  // tsx source render (registerBrowserCli + configureProgramHelp) while
-  // avoiding a tsx evaluation of the whole browser CLI import graph, which
-  // dominated this script's wall time.
-  return await renderSourceCommandHelpText("browser", renderContext, taskContext);
-}
-
 async function renderSourceCommandHelpText(
   command: SourceCommandHelpCommand,
   renderContext: RootHelpRenderContext,
@@ -833,20 +814,6 @@ async function renderSourceCommandHelpText(
     signal: taskContext?.signal,
     timeoutMs: COMMAND_HELP_RENDER_TIMEOUT_MS,
   });
-}
-
-async function renderSourceSecretsHelpText(
-  renderContext: RootHelpRenderContext,
-  taskContext?: RenderTaskContext,
-): Promise<string> {
-  return await renderSourceCommandHelpText("secrets", renderContext, taskContext);
-}
-
-async function renderSourceNodesHelpText(
-  renderContext: RootHelpRenderContext,
-  taskContext?: RenderTaskContext,
-): Promise<string> {
-  return await renderSourceCommandHelpText("nodes", renderContext, taskContext);
 }
 
 async function renderSourceCommandHelpTextRecord(
@@ -920,7 +887,7 @@ async function writeCliStartupMetadata(options?: {
   const nodesHelpSourceSignature = resolveNodesHelpSourceSignature(resolvedSourceRootDir);
   const subcommandHelpSourceSignature = resolveSubcommandHelpSourceSignature(resolvedSourceRootDir);
   const bundledPluginsDir = path.join(resolvedDistDir, "extensions");
-  const channelOptions = dedupe([...CORE_CHANNEL_ORDER, ...channelCatalog.ids]);
+  const channelOptions = [...new Set([...CORE_CHANNEL_ORDER, ...channelCatalog.ids])];
 
   let existing: ExistingCliStartupMetadata | undefined;
   try {
@@ -931,21 +898,19 @@ async function writeCliStartupMetadata(options?: {
 
   const reusableExisting =
     existing?.generatorSignature === generatorSignature &&
-    existing.channelCatalogSignature === channelCatalog.signature
+    existing.channelCatalogSignature === channelCatalog.signature &&
+    bundleIdentity &&
+    existing.rootHelpBundleSignature === bundleIdentity.signature
       ? existing
       : undefined;
   const reusableRootHelpText =
     reusableExisting &&
-    bundleIdentity &&
-    reusableExisting.rootHelpBundleSignature === bundleIdentity.signature &&
     typeof reusableExisting.rootHelpText === "string" &&
     reusableExisting.rootHelpText.length > 0
       ? reusableExisting.rootHelpText
       : undefined;
   const reusableBrowserHelpText =
     reusableExisting &&
-    bundleIdentity &&
-    reusableExisting.rootHelpBundleSignature === bundleIdentity.signature &&
     reusableExisting.browserHelpSourceSignature === browserHelpSourceSignature &&
     typeof reusableExisting.browserHelpText === "string" &&
     reusableExisting.browserHelpText.length > 0
@@ -953,8 +918,6 @@ async function writeCliStartupMetadata(options?: {
       : undefined;
   const reusableSecretsHelpText =
     reusableExisting &&
-    bundleIdentity &&
-    reusableExisting.rootHelpBundleSignature === bundleIdentity.signature &&
     reusableExisting.secretsHelpSourceSignature === secretsHelpSourceSignature &&
     typeof reusableExisting.secretsHelpText === "string" &&
     reusableExisting.secretsHelpText.length > 0
@@ -962,8 +925,6 @@ async function writeCliStartupMetadata(options?: {
       : undefined;
   const reusableNodesHelpText =
     reusableExisting &&
-    bundleIdentity &&
-    reusableExisting.rootHelpBundleSignature === bundleIdentity.signature &&
     reusableExisting.nodesHelpSourceSignature === nodesHelpSourceSignature &&
     typeof reusableExisting.nodesHelpText === "string" &&
     reusableExisting.nodesHelpText.length > 0
@@ -971,8 +932,6 @@ async function writeCliStartupMetadata(options?: {
       : undefined;
   const reusableSubcommandHelpText =
     reusableExisting &&
-    bundleIdentity &&
-    reusableExisting.rootHelpBundleSignature === bundleIdentity.signature &&
     reusableExisting.subcommandHelpSourceSignature === subcommandHelpSourceSignature &&
     hasAllPrecomputedSubcommandHelpText(reusableExisting.subcommandHelpText)
       ? (reusableExisting.subcommandHelpText as PrecomputedSubcommandHelpText)
@@ -1038,21 +997,35 @@ async function writeCliStartupMetadata(options?: {
       : afterRootHelp(() =>
           renderSourceCommandHelpTextRecord(sourceCommandsToRender, renderContext, supervisor),
         );
-  const browserHelpTextPromise = reusableBrowserHelpText
-    ? Promise.resolve(reusableBrowserHelpText)
-    : commandHelpTextPromise
-      ? commandHelpTextPromise.then((commandHelpText) => commandHelpText.browser)
-      : runSourceRenderer(options?.renderSourceBrowserHelpText ?? renderSourceBrowserHelpText);
-  const secretsHelpTextPromise = reusableSecretsHelpText
-    ? Promise.resolve(reusableSecretsHelpText)
-    : commandHelpTextPromise
-      ? commandHelpTextPromise.then((commandHelpText) => commandHelpText.secrets)
-      : runSourceRenderer(options?.renderSourceSecretsHelpText ?? renderSourceSecretsHelpText);
-  const nodesHelpTextPromise = reusableNodesHelpText
-    ? Promise.resolve(reusableNodesHelpText)
-    : commandHelpTextPromise
-      ? commandHelpTextPromise.then((commandHelpText) => commandHelpText.nodes)
-      : runSourceRenderer(options?.renderSourceNodesHelpText ?? renderSourceNodesHelpText);
+  const commandHelp = (
+    command: "browser" | "secrets" | "nodes",
+    reusable: string | undefined,
+    render?: SourceHelpRenderer,
+  ) =>
+    reusable !== undefined
+      ? Promise.resolve(reusable)
+      : commandHelpTextPromise
+        ? commandHelpTextPromise.then((help) => help[command])
+        : runSourceRenderer(
+            render ??
+              ((context, taskContext) =>
+                renderSourceCommandHelpText(command, context, taskContext)),
+          );
+  const browserHelpTextPromise = commandHelp(
+    "browser",
+    reusableBrowserHelpText,
+    options?.renderSourceBrowserHelpText,
+  );
+  const secretsHelpTextPromise = commandHelp(
+    "secrets",
+    reusableSecretsHelpText,
+    options?.renderSourceSecretsHelpText,
+  );
+  const nodesHelpTextPromise = commandHelp(
+    "nodes",
+    reusableNodesHelpText,
+    options?.renderSourceNodesHelpText,
+  );
   const subcommandHelpTextPromise = reusableSubcommandHelpText
     ? Promise.resolve(reusableSubcommandHelpText)
     : commandHelpTextPromise

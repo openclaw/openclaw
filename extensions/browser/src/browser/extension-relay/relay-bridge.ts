@@ -611,8 +611,9 @@ export class ExtensionRelayBridge {
       return { status: "unavailable", reason: "extension-disconnected" };
     }
     // Tabs can arrive while Chrome attaches the previous batch. Visit each tab
-    // generation once; a failed acquisition still rejects the complete inventory.
+    // generation once; only Chrome's permanent page refusal permits an omission.
     const identities = new Map<TabState, string | undefined>();
+    const skipped = new Map<TabState, { url: string; reason: string }>();
     while (this.extensionConnected) {
       const pending = [...this.tabs].filter(([, tab]) => !identities.has(tab));
       if (pending.length === 0) {
@@ -622,16 +623,30 @@ export class ExtensionRelayBridge {
         identities.set(tab, undefined);
       }
       await Promise.allSettled(
-        pending.map(([tabId, tab]) =>
-          this.withAttachedTab(client, tabId, (attached) => {
-            this.announceAttachedTab(
-              tabId,
-              attached,
-              this.autoAttachRecipients(tabId, attached.sessionId),
-            );
-            identities.set(tab, attached.targetId);
-          }),
-        ),
+        pending.map(async ([tabId, tab]) => {
+          const url = tab.info.url;
+          try {
+            await this.withAttachedTab(client, tabId, (attached) => {
+              this.announceAttachedTab(
+                tabId,
+                attached,
+                this.autoAttachRecipients(tabId, attached.sessionId),
+              );
+              identities.set(tab, attached.targetId);
+            });
+          } catch (error) {
+            // Exact Chromium page restrictions, not attachment conflicts,
+            // permission failures, timeouts, or retired tab generations.
+            if (
+              error instanceof Error &&
+              (error.message === "The extensions gallery cannot be scripted." ||
+                error.message === "Cannot access a chrome:// URL" ||
+                error.message === "Cannot access a chrome-extension:// URL of different extension")
+            ) {
+              skipped.set(tab, { url, reason: error.message });
+            }
+          }
+        }),
       );
     }
     if (!this.extensionConnected) {
@@ -639,6 +654,11 @@ export class ExtensionRelayBridge {
     }
     const targetInfos: Record<string, unknown>[] = [];
     for (const [tabId, tab] of this.tabs) {
+      const refusal = skipped.get(tab);
+      if (refusal && refusal.url === tab.info.url) {
+        log.warn(`Skipping tab ${tabId} during target enumeration: ${refusal.reason}`);
+        continue;
+      }
       const targetId = identities.get(tab);
       if (!targetId || (!tab.target?.sessionId && this.autoAttachRecipients(tabId).length > 0)) {
         return { status: "unavailable", reason: "target-identity-unresolved" };

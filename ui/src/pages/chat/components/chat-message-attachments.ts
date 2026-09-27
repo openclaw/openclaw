@@ -385,6 +385,15 @@ function resolveAttachmentSource(
   };
 }
 
+export function hasUserFileAttachments(attachments: readonly AssistantAttachmentItem[]): boolean {
+  return attachments.some(
+    (item) =>
+      item.attachment.kind === "document" &&
+      !isSentCommentAttachment(item) &&
+      !isSentPastedTextAttachment(item),
+  );
+}
+
 export function renderAssistantAttachments(
   attachments: AssistantAttachmentItem[],
   options: ImageRenderOptions,

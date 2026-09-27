@@ -1,6 +1,8 @@
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VitestBatchRunParams } from "../../scripts/lib/vitest-batch-runner.mts";
 import {
@@ -57,7 +59,7 @@ beforeEach(() => {
   commands.prepare.mockReset();
   commands.prepareE2e.mockReset().mockResolvedValue({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
   commands.reader.mockReset().mockImplementation(() => ({
-    completion: Promise.resolve({ code: 0, signal: null }),
+    completion: Promise.resolve({ code: 0, signal: null, groupJoined: true }),
     getForwardedSignal: () => undefined,
   }));
   originalArgv = process.argv;
@@ -90,10 +92,6 @@ describe("CLI runtime admission", () => {
   posixIt.for<[name: string, args: string[]]>([
     ["ordinary target", [ordinaryQa]],
     ["ordinary CLI config", ["--config", "test/vitest/vitest.cli.config.ts"]],
-    [
-      "ordinary CLI selection",
-      ["--config", "test/vitest/vitest.cli.config.ts", "command-path-policy.test.ts"],
-    ],
     [
       "CLI process runtime exclusions",
       [
@@ -139,11 +137,7 @@ describe("CLI runtime admission", () => {
     ["custom config", ["--config", "custom.config.ts"]],
     ["list command", ["list"]],
     ["help", ["--help"]],
-    ["equals help", ["--help=true"]],
-    ["short help group", ["-uh"]],
     ["version only", ["--version=true"]],
-    ["list tags", ["--listTags"]],
-    ["clear cache", ["--clearCache"]],
     ["native invalid scalar", ["--passWithNoTests", "--passWithNoTests"]],
     ["native unknown option", ["--unknownOption"]],
   ])(
@@ -209,11 +203,6 @@ syncFixtureBuiltinExports();\n`,
       "scripts/run-vitest.mts",
       ["run", "--config=", "test/vitest/vitest.extension-qa.config.ts"],
     ],
-    [
-      "config empty short",
-      "scripts/run-vitest.mts",
-      ["run", "-c=", "test/vitest/vitest.extension-qa.config.ts"],
-    ],
     ["root config", "scripts/run-vitest.mts", ["run", "--config", "vitest.config.ts"]],
     [
       "CLI process",
@@ -245,24 +234,6 @@ syncFixtureBuiltinExports();\n`,
       "private-qa",
     ],
     [
-      "Gateway core",
-      "scripts/run-vitest.mts",
-      ["run", "--config", "test/vitest/vitest.gateway-core.config.ts"],
-      "runtime",
-    ],
-    [
-      "Gateway selective exclusion",
-      "scripts/run-vitest.mts",
-      [
-        "run",
-        "--config",
-        "test/vitest/vitest.gateway-core.config.ts",
-        "--exclude",
-        "gateway-concurrent-streams.test.ts",
-      ],
-      "runtime",
-    ],
-    [
       "Gateway server selective exclusion",
       "scripts/run-vitest.mts",
       [
@@ -271,35 +242,6 @@ syncFixtureBuiltinExports();\n`,
         "test/vitest/vitest.gateway-server.config.ts",
         "--exclude",
         "server-sidecar-retention.test.ts",
-      ],
-      "runtime",
-    ],
-    [
-      "Gateway umbrella",
-      "scripts/run-vitest.mts",
-      ["run", "--config", "test/vitest/vitest.gateway.config.ts"],
-      "runtime",
-    ],
-    [
-      "Gateway umbrella with core consumers excluded",
-      "scripts/run-vitest.mts",
-      ["run", "--config", "test/vitest/vitest.gateway.config.ts", "--exclude", "gateway-*.test.ts"],
-      "runtime",
-    ],
-    [
-      "agentic aggregate",
-      "scripts/run-vitest.mts",
-      ["run", "--config", "test/vitest/vitest.full-agentic.config.ts"],
-      "runtime",
-    ],
-    [
-      "Gateway active memory",
-      "scripts/run-vitest.mts",
-      [
-        "run",
-        "--config",
-        "test/vitest/vitest.gateway-core.config.ts",
-        "gateway-active-memory.test.ts",
       ],
       "runtime",
     ],
@@ -582,6 +524,263 @@ describe("full-suite timing metadata", () => {
       expect(new Set(samples.map((sample) => sample?.config)).size).toBe(2);
       for (const sample of samples) {
         expect(sample).toMatchObject({ baseConfig: config, includePatternCount: 1 });
+      }
+    },
+  );
+});
+
+describe("automatic exact-target admission", () => {
+  const outputArgs = ["--reporter=dot", "--coverage.enabled=false"];
+  const files = [
+    modelTarget,
+    "test/scripts/run-node-lifecycle.test.ts",
+    "extensions/memory-lancedb/config.test.ts",
+  ];
+  beforeEach(async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.stubEnv("CI", "1");
+    vi.stubEnv("GITHUB_ACTIONS", "");
+    vi.stubEnv("OPENCLAW_TEST_PROJECTS_SERIAL", "");
+    vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT", "");
+    vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_PATH", "");
+    vi.stubEnv("OPENCLAW_VITEST_MAX_WORKERS", "2");
+    vi.spyOn(os, "availableParallelism").mockReturnValue(8);
+    vi.spyOn(os, "totalmem").mockReturnValue(24 * 1024 ** 3);
+    commands.prepare.mockResolvedValue(0);
+    const planner = await import("../../scripts/test-projects.test-support.mts");
+    expect(planner.findUnmatchedExplicitTestTargets(files, process.cwd())).toEqual([]);
+  });
+
+  it.each([
+    { name: "CI=1", expected: 2 },
+    { name: "CI=true", ci: "true", expected: 2 },
+    { name: "unresolved config outputs", args: [], expected: 1 },
+    { name: "console reporter without coverage override", args: ["--reporter=dot"], expected: 1 },
+    { name: "coverage override without reporter", args: ["--coverage.enabled=false"], expected: 1 },
+    {
+      name: "JSON without owner",
+      args: ["--reporter=json", "--coverage.enabled=false"],
+      expected: 1,
+    },
+    {
+      name: "GitHub summary",
+      args: ["--reporter=github-actions", "--coverage.enabled=false"],
+      expected: 1,
+    },
+    { name: "coverage destination", args: ["--coverage"], expected: 1 },
+    { name: "file destination", args: ["--outputFile=report.json"], expected: 1 },
+    { name: "file reporter", args: ["--reporter=html"], expected: 1 },
+    { name: "plural file reporter", args: ["--reporters=html"], expected: 1 },
+    { name: "custom reporter", args: ["--reporter=./custom-reporter.mjs"], expected: 1 },
+    { name: "local", ci: "", expected: 1 },
+    { name: "constrained CPU", cpus: 4, expected: 1 },
+    { name: "unknown memory", gib: Number.NaN, expected: 1 },
+    { name: "explicit parallel", parallel: "3", expected: 3 },
+    { name: "explicit serial", serial: "1", expected: 1 },
+    { name: "portable", portable: true, expected: 1 },
+    { name: "caller cache leaf", callerLeaf: true, expected: 1 },
+  ])(
+    "preserves resolved specs and policy for $name",
+    async ({ ci, cpus, gib, parallel, serial, portable, callerLeaf, args, expected }) => {
+      vi.stubEnv("CI", ci ?? "1");
+      vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", parallel ?? "");
+      vi.stubEnv("OPENCLAW_TEST_PROJECTS_SERIAL", serial ?? "");
+      if (portable) {
+        vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      }
+      if (callerLeaf) {
+        const root = tempDirs.make("caller-cache-");
+        vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT", root);
+        vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_PATH", path.join(root, "leaf"));
+      }
+      vi.mocked(os.availableParallelism).mockReturnValue(cpus ?? 8);
+      vi.mocked(os.totalmem).mockReturnValue((gib ?? 24) * 1024 ** 3);
+      const planner = await import("../../scripts/test-projects.test-support.mts");
+      const produced = vi.spyOn(planner, "createVitestRunSpecs");
+      const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
+      const selections: Array<{ config: string; include: string[] | null; workers: string }> = [];
+      let active = 0;
+      let peak = 0;
+      commands.reader.mockImplementation(({ env, pnpmArgs }) => {
+        selections.push({
+          config: pnpmArgs[pnpmArgs.indexOf("--config") + 1],
+          include: env.OPENCLAW_VITEST_INCLUDE_FILE
+            ? JSON.parse(fs.readFileSync(env.OPENCLAW_VITEST_INCLUDE_FILE, "utf8"))
+            : null,
+          workers: env.OPENCLAW_VITEST_MAX_WORKERS,
+        });
+        active += 1;
+        peak = Math.max(peak, active);
+        return {
+          completion: nextTurn().then(() => {
+            active -= 1;
+            return { code: 0, signal: null, groupJoined: !portable };
+          }),
+          getForwardedSignal: () => undefined,
+        };
+      });
+      await runTestProjects(async () => {}, [...files, ...(args ?? outputArgs)]);
+      const specs = produced.mock.results[0]!.value as ReturnType<
+        typeof planner.createVitestRunSpecs
+      >;
+      expect(specs.length).toBeGreaterThanOrEqual(3);
+      expect(peak).toBe(expected);
+      const actual = selections.map(({ config, include }) => ({ config, include }));
+      const planned = specs.map((spec) => ({ config: spec.config, include: spec.includePatterns }));
+      // Explicit parallelism retains its timing order; automatic admission keeps native plan order.
+      expect(
+        parallel ? actual.toSorted((a, b) => a.config.localeCompare(b.config)) : actual,
+      ).toEqual(parallel ? planned.toSorted((a, b) => a.config.localeCompare(b.config)) : planned);
+      expect(selections.every(({ workers }) => workers === "2")).toBe(true);
+      expect(process.exitCode).toBe(0);
+    },
+  );
+
+  it.each(["success", "failure", "SIGTERM"])(
+    "joins the real Gateway plan barrier before later admission and disposal (%s)",
+    async (outcome) => {
+      const workerOwner = await import("../../scripts/lib/vitest-worker-run.mts");
+      const original = workerOwner.createVitestWorkerRun;
+      const events: string[] = [];
+      vi.spyOn(workerOwner, "createVitestWorkerRun").mockImplementation((...args) => {
+        const worker = original(...args);
+        const dispose = worker.dispose.bind(worker);
+        vi.spyOn(worker, "dispose").mockImplementation(async () => {
+          events.push("dispose");
+          await dispose();
+          events.push("disposed");
+        });
+        return worker;
+      });
+      const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
+      const barrierFiles = ["src/utils.test.ts", "src/gateway/call.test.ts", modelTarget];
+      const configs = [
+        "test/vitest/vitest.unit-fast-fake-timers.config.ts",
+        "test/vitest/vitest.gateway.config.ts",
+        "test/vitest/vitest.agents-embedded-agent.config.ts",
+      ];
+      const planner = await import("../../scripts/test-projects.test-support.mts");
+      expect(planner.findUnmatchedExplicitTestTargets(barrierFiles, process.cwd())).toEqual([]);
+      expect(
+        planner.buildVitestRunPlans([...barrierFiles, ...outputArgs]).map(({ config }) => config),
+      ).toEqual(configs);
+      const releases = configs.map(() => createDeferred());
+      const admissions = configs.map(() => createDeferred());
+      const selected: string[] = [];
+      commands.reader.mockImplementation(({ pnpmArgs }) => {
+        const config = pnpmArgs[pnpmArgs.indexOf("--config") + 1];
+        const index = configs.indexOf(config);
+        expect(index).toBeGreaterThanOrEqual(0);
+        selected.push(config);
+        events.push(`start:${index}`);
+        admissions[index]!.resolve();
+        return {
+          completion: releases[index]!.promise.then(() => {
+            events.push(`joined:${index}`);
+            return {
+              code: index === 1 && outcome === "failure" ? 1 : 0,
+              signal: index === 1 && outcome === "SIGTERM" ? "SIGTERM" : null,
+              groupJoined: true,
+            };
+          }),
+          getForwardedSignal: () => undefined,
+        };
+      });
+      const exit = vi.fn(async () => {});
+      const running = runTestProjects(exit, [...barrierFiles, ...outputArgs]);
+      try {
+        for (let index = 0; index < 2; index++) {
+          await withTestTimeout(
+            Promise.race([admissions[index]!.promise, running]),
+            5_000,
+            "barrier admission",
+          );
+          expect(selected).toEqual(configs.slice(0, index + 1));
+          expect(events).not.toContain("dispose");
+          releases[index]!.resolve();
+        }
+        if (outcome === "success") {
+          await withTestTimeout(
+            Promise.race([admissions[2]!.promise, running]),
+            5_000,
+            "post-barrier admission",
+          );
+          expect(events).toEqual(["start:0", "joined:0", "start:1", "joined:1", "start:2"]);
+        }
+      } finally {
+        releases.forEach((release) => release.resolve());
+        await running;
+      }
+      expect(selected).toEqual(outcome === "success" ? configs : configs.slice(0, 2));
+      expect(events.slice(-3)).toEqual([
+        `joined:${outcome === "success" ? 2 : 1}`,
+        "dispose",
+        "disposed",
+      ]);
+      expect(exit.mock.calls).toEqual(outcome === "SIGTERM" ? [["SIGTERM"]] : []);
+      expect(process.exitCode).toBe(outcome === "SIGTERM" ? 143 : outcome === "failure" ? 1 : 0);
+    },
+  );
+
+  it.each(["failure", "unjoined", "rejection", "signal"])(
+    "drains peers and stops later exact-target specs after %s",
+    async (outcome) => {
+      const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
+      const first = createDeferred<{
+        code: number;
+        signal: NodeJS.Signals | null;
+        groupJoined: boolean;
+      }>();
+      const peer = createDeferred<{ code: number; signal: null; groupJoined: boolean }>();
+      const admitted = createDeferred();
+      let settled = false;
+      commands.reader.mockImplementation(() => {
+        if (commands.reader.mock.calls.length === 2) {
+          admitted.resolve();
+        }
+        return {
+          completion: commands.reader.mock.calls.length === 1 ? first.promise : peer.promise,
+          getForwardedSignal: () => undefined,
+        };
+      });
+      const running = runTestProjects(async () => {}, [...files, ...outputArgs]).finally(() => {
+        settled = true;
+      });
+      const checked =
+        outcome === "unjoined" || outcome === "rejection"
+          ? expect(running).rejects.toThrow()
+          : running;
+      try {
+        await withTestTimeout(
+          Promise.race([admitted.promise, running]),
+          5_000,
+          "automatic admission",
+        );
+        expect(commands.reader).toHaveBeenCalledTimes(2);
+        if (outcome === "rejection") {
+          first.reject(new Error("child join rejected"));
+        } else {
+          first.resolve({
+            code: outcome === "unjoined" ? 0 : 1,
+            signal: outcome === "signal" ? "SIGTERM" : null,
+            groupJoined: outcome !== "unjoined",
+          });
+        }
+        await nextTurn();
+        expect(commands.reader).toHaveBeenCalledTimes(2);
+        expect(settled).toBe(false);
+      } finally {
+        first.resolve({ code: 0, signal: null, groupJoined: true });
+        peer.resolve({ code: 0, signal: null, groupJoined: true });
+        await checked;
+      }
+      expect(commands.reader).toHaveBeenCalledTimes(2);
+      if (outcome === "failure") {
+        expect(process.exitCode).toBe(1);
+        expect(console.error).toHaveBeenCalledWith(expect.stringMatching(/^\[test\] failed 2 /u));
+      }
+      if (outcome === "signal") {
+        expect(process.exitCode).toBe(143);
       }
     },
   );

@@ -2,6 +2,7 @@ import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import type { BlockReplyContext } from "openclaw/plugin-sdk/reply-runtime";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import type { TelegramBotDeps } from "./bot-deps.js";
 import type {
   TelegramDispatchTurn as Turn,
   TelegramDispatchTurnConfig as TurnConfig,
@@ -9,7 +10,6 @@ import type {
   TelegramDraftStateSlice,
   TelegramQueuedAnswerBlockRotation,
   TelegramSplitLaneSegmentsResult,
-  TelegramAnswerBlockDelivery,
 } from "./bot-message-dispatch.types.js";
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 import type { TelegramDraftPreview } from "./draft-stream-message.js";
@@ -24,6 +24,12 @@ import { recordSentMessage } from "./sent-message-cache.js";
 
 const draftLogger = createSubsystemLogger("telegram/draft-stream");
 const DRAFT_MIN_INITIAL_CHARS = 30;
+
+type Cancel = NonNullable<
+  Parameters<
+    TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]
+  >[0]["dispatcherOptions"]["onBeforeDeliverCancelled"]
+>;
 
 function resolveDraftPartialText(
   previous: string,
@@ -197,11 +203,11 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
       params.resolvedReasoningLevel === "on" || Boolean(lanes.reasoning.stream),
     lastAnswerPartialText: "",
     activeAnswerDraftIsToolProgressOnly: false,
-    activeAnswerBlockAssistantMessageIndex: undefined as number | undefined,
-    activeAnswerBlockDelivery: undefined as TelegramAnswerBlockDelivery | undefined,
-    queuedAnswerBlockRotations: [] as TelegramQueuedAnswerBlockRotation[],
-    queuedAnswerBlockAssistantMessageIndex: undefined as number | undefined,
-    pendingAnswerBlockAssistantMessageIndex: undefined as number | undefined,
+    activeAnswerBlockAssistantMessageIndex: undefined,
+    activeAnswerBlockDelivery: undefined,
+    queuedAnswerBlockRotations: [],
+    queuedAnswerBlockAssistantMessageIndex: undefined,
+    pendingAnswerBlockAssistantMessageIndex: undefined,
     rotateAnswerLaneWhenQueuedBlocksSettle: false,
     draftEventQueue: Promise.resolve(),
   };
@@ -556,6 +562,18 @@ export function dropQueuedAnswerBlockRotation(
     turn.pendingAnswerBlockAssistantMessageIndex = matched.assistantMessageIndex;
   }
   recomputeTelegramQueuedAnswerBlockRotations(turn);
+}
+
+export function handleBeforeDeliverCancelled(
+  turn: Turn,
+  payload: Parameters<Cancel>[0],
+  info: Parameters<Cancel>[1],
+): ReturnType<Cancel> {
+  return info.kind === "block"
+    ? enqueueDraftEvent(turn, async () => {
+        dropQueuedAnswerBlockRotation(turn, payload, info.assistantMessageIndex);
+      })
+    : undefined;
 }
 
 export function isQueuedAnswerBlock(

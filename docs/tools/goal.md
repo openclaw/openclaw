@@ -194,7 +194,8 @@ the objective as a normal chat draft. Complete pasted commands such as
 
 Starting a Goal saves the Goal, its user turn, and the run admission together
 before acknowledging Send. A failed admission leaves the draft intact and
-does not create a Goal. Start and Resume require the built-in OpenClaw runtime
+does not create a Goal. A failed older chat send stays separate from a newly opened
+Goal draft instead of filling its empty objective. Start and Resume require the built-in OpenClaw runtime
 and an idle local session with recoverable history. They are unavailable for
 native Codex and other external runtimes, and are not queued or steered into
 another run. The UI reports unsupported or busy sessions rather than creating

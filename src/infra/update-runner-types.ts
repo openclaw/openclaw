@@ -1,5 +1,8 @@
 import type { z } from "zod";
-import type { PluginUpdateOutcome } from "../plugins/update.js";
+import type {
+  PluginUpdateIntegrityDriftParams,
+  PluginUpdateSummary,
+} from "../plugins/update-source.js";
 import type { CommandOptions } from "../process/exec.js";
 import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
 import type { LocalPackageOverridesResult } from "./package-local-overrides.js";
@@ -23,6 +26,8 @@ export type UpdateRunResult = {
   /** The executing owner's terminal failure; steps also retain superseded attempts. */
   failedStep?: UpdateStepResult;
   gitRuntime?: GitRuntimeArtifactIdentity;
+  /** The preparation owner verified that completion needs no runtime regeneration. */
+  sourceRuntimePrepared?: boolean;
   before?: { sha?: string | null; version?: string | null; buildId?: string | null };
   after?: {
     sha?: string | null;
@@ -60,19 +65,10 @@ export type UpdateRunResult = {
         warnings: string[];
         errors: string[];
       };
-      npm: {
-        changed: boolean;
-        outcomes: PluginUpdateOutcome[];
-      };
-      integrityDrifts: Array<{
-        pluginId: string;
-        spec: string;
-        expectedIntegrity: string;
-        actualIntegrity: string;
-        resolvedSpec?: string;
-        resolvedVersion?: string;
-        action: "aborted";
-      }>;
+      npm: Pick<PluginUpdateSummary, "changed" | "outcomes">;
+      integrityDrifts: Array<
+        Omit<PluginUpdateIntegrityDriftParams, "dryRun"> & { action: "aborted" }
+      >;
     };
   };
 };
@@ -114,6 +110,7 @@ type GitUpdateTarget = {
 };
 
 export type UpdateRunnerOptions = {
+  sourceRuntimePrepared?: boolean;
   channel?: UpdateChannel;
   devTarget?: DevUpdateTarget;
   /** Expose a new checkout only after target admission; subsequent work uses the published path. */

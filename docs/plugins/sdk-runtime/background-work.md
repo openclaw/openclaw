@@ -307,6 +307,24 @@ If a successful exact transition normalizes the creation timestamp, advance the
 receipt only from that transition's returned record. Carry the successor through
 later mutations, events, and delivery; never adopt it from a fresh task lookup.
 
+On hosts that provide them, await the scoped runtime's optional
+`createRunningTaskRunAsync(...)`, `finalizeTaskRunByRunIdAsync(...)`, and
+`setDetachedTaskDeliveryStatusByRunIdAsync(...)` methods for task creation and
+background completion. Core persistence waits run through its existing
+worker and retain the same `expectedTask` and `completionCustody` fences. Custom
+runtimes keep their registered exact-assignment adapter; asynchronous callers never
+fall through to core when an adapter is present.
+
+For admission checks, await `prepareTaskRunRead(runId)` before delivery. Its returned
+accessor reads current resident records without synchronous database I/O. It rejects
+if the runtime, store, or relevant task identity is no longer prepared. Prepare again
+on a later attempt; do not treat a rejected read as proof that the task is absent.
+Custom runtimes keep their synchronous V1 creation and lookup contracts. Prepared
+harness reads use the existing core task projection; an empty custom-runtime
+projection raises an error rather than claiming that its task is absent.
+The accessor follows settled updates, but it never grants ownership of a replacement
+assignment. Continue checking the original `expectedTask` on every effect.
+
 Before admitting exact-assignment work, call the scoped task runtime's
 `assertTaskAssignmentSupported()` on each registration, including reused runtimes.
 This checks the original runtime owner without rebinding it to a replacement.

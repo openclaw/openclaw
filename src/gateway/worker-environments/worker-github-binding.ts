@@ -14,8 +14,6 @@ import {
 } from "../github-publication-availability.js";
 import { parseGitHubRemoteUrl } from "../github-remote.js";
 
-export type WorkerGitHubBinding = WorkerGitHubLaunchBinding;
-
 const log = createSubsystemLogger("gateway/worker-github");
 
 export async function prepareWorkerGitHubBinding(params: {
@@ -23,7 +21,7 @@ export async function prepareWorkerGitHubBinding(params: {
   sessionKey: string;
   agentId: string;
   assertCurrent?: () => boolean;
-}): Promise<WorkerGitHubBinding | undefined> {
+}): Promise<WorkerGitHubLaunchBinding | undefined> {
   try {
     if (params.assertCurrent?.() === false) {
       return undefined;

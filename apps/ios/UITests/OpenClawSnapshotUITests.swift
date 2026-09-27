@@ -1025,20 +1025,24 @@ final class OpenClawSnapshotUITests: XCTestCase {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone chat proof only")
         let app = try launchPairedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")
 
-        // Build scrollable history through the paired app before checking reader behavior.
+        // Seed real history with the keyboard open before checking transcript-tap dismissal and reader behavior.
         for index in 0..<3 {
             let seedMarker = "OPENCLAW_E2E_SEED_\(index)_\(Int(Date().timeIntervalSince1970 * 1000))"
             let seedContext = String(repeating: "Reader context \(index). ", count: 6)
-            self.sendLiveGatewayMessage(
+            try self.sendLiveGatewayMessage(
                 "\(seedContext)Reply exactly with \(seedMarker) and no other text.",
                 expecting: seedMarker,
+                stage: "seed-\(index)",
+                dismissKeyboard: false,
                 in: app)
         }
 
         let replyMarker = "OPENCLAW_E2E_OK_\(Int(Date().timeIntervalSince1970 * 1000))"
-        self.sendLiveGatewayMessage(
+        try self.sendLiveGatewayMessage(
             "Reply exactly with \(replyMarker) and no other text.",
             expecting: replyMarker,
+            stage: "final",
+            dismissKeyboard: true,
             in: app)
         let jumpToLatest = app.buttons["Jump to latest reply"]
         XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 3))
@@ -1050,7 +1054,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         Thread.sleep(forTimeInterval: 0.5)
         self.attachScreenshot(named: "live-gateway-chat-jumped-to-latest")
 
-        let transcript = app.scrollViews.firstMatch
+        let transcript = try self.chatTranscript(in: app)
         XCTAssertTrue(transcript.exists)
         transcript.swipeDown()
         XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 3))
@@ -1859,10 +1863,19 @@ extension OpenClawSnapshotUITests {
         return app
     }
 
+    private func chatTranscript(in app: XCUIApplication) throws -> XCUIElement {
+        let candidates = app.scrollViews.matching(identifier: "chat-transcript").allElementsBoundByIndex
+        return try XCTUnwrap(
+            candidates.count == 1 ? candidates.first : nil,
+            "Expected one chat transcript")
+    }
+
     private func sendLiveGatewayMessage(
         _ text: String,
         expecting replyMarker: String,
-        in app: XCUIApplication)
+        stage: String,
+        dismissKeyboard: Bool,
+        in app: XCUIApplication) throws
     {
         let input = self.chatMessageInput(in: app)
         XCTAssertTrue(input.waitForExistence(timeout: 8))
@@ -1872,11 +1885,42 @@ extension OpenClawSnapshotUITests {
         let send = app.buttons["chat-send-message"]
         XCTAssertTrue(send.waitForExistence(timeout: 3))
         XCTAssertTrue(send.isEnabled)
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
-        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
-        send.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        if dismissKeyboard {
+            // Typing can move historical replies off-screen; tap visible text without activating an action.
+            let transcript = try self.chatTranscript(in: app)
+            let actionQueries = [transcript.buttons, transcript.links]
+            let dismissalText = try XCTUnwrap(
+                transcript.staticTexts.allElementsBoundByIndex.first { candidate in
+                    guard candidate.isHittable,
+                          candidate.buttons.count == 0,
+                          candidate.links.count == 0
+                    else {
+                        return false
+                    }
+                    let label = NSPredicate(format: "label == %@", candidate.label)
+                    return actionQueries.allSatisfy {
+                        !$0.matching(label).firstMatch.exists && !$0.containing(label).firstMatch.exists
+                    }
+                },
+                "Expected visible noninteractive transcript text")
+            dismissalText.tap()
+            XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
+        }
+        XCTAssertEqual(input.value as? String, text)
+        send.tap()
 
-        XCTAssertTrue(app.staticTexts[replyMarker].waitForExistence(timeout: 60))
+        let failureContext = { (checkpoint: String) in
+            "IOS_RELEASE_CHAT_FAILURE \(stage) \(checkpoint) draft=\(input.value as? String == text) " +
+                "keyboard=\(app.keyboards.firstMatch.exists) reply=\(app.staticTexts[replyMarker].exists) " +
+                "writing=\(app.staticTexts["Writing"].exists) jump=\(app.buttons["Jump to latest reply"].exists) " +
+                "foreground=\(app.state == .runningForeground) input=\(input.exists) " +
+                "transcript=\(app.scrollViews["chat-transcript"].exists) send=\(send.exists)"
+        }
+        let submittedText = app.staticTexts.matching(NSPredicate(format: "label == %@", text)).firstMatch
+        XCTAssertTrue(submittedText.waitForExistence(timeout: 5), failureContext("submission"))
+        XCTAssertTrue(
+            app.staticTexts[replyMarker].waitForExistence(timeout: 60),
+            failureContext("reply"))
         XCTAssertTrue(app.staticTexts["Writing"].waitForNonExistence(timeout: 5))
     }
 

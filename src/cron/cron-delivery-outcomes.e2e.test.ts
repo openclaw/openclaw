@@ -8,15 +8,16 @@ import {
 } from "../gateway/server-cron-notifications.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runCronCommandJob } from "./command-runner.js";
 import { resolveCronDeliveryPreviews } from "./delivery-preview.js";
+import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import { CronService } from "./service.js";
 import { createNoopLogger } from "./service.test-harness.js";
 import type { CronServiceDeps } from "./service/state.js";
 import { loadCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
-import { readCronTaskRunHistoryPage } from "./task-run-history.js";
 
 type WebhookRequest = {
   body: Record<string, unknown>;
@@ -75,7 +76,7 @@ function commandRunner(): NonNullable<CronServiceDeps["runCommandJob"]> {
 }
 
 function historyEntry(storePath: string, jobId: string) {
-  const history = readCronTaskRunHistoryPage({
+  const history = readCronRunHistoryPageForTests({
     storeKey: cronStoreKey(storePath),
     jobId,
     limit: 1,
@@ -98,6 +99,8 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
           resetTaskRegistryForTests({ persist: false });
           const storePath = state.path("cron", "jobs.json");
           const cron = new CronService({
+            scheduler: createTestGatewayScheduler(),
+            nowMs: () => Date.now(),
             storePath,
             cronEnabled: true,
             log: createNoopLogger(),
@@ -194,6 +197,8 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
           resetTaskRegistryForTests({ persist: false });
           const storePath = state.path("cron", "jobs.json");
           const cron = new CronService({
+            scheduler: createTestGatewayScheduler(),
+            nowMs: () => Date.now(),
             storePath,
             cronEnabled: true,
             log: createNoopLogger(),
@@ -284,7 +289,7 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
                 lastFailureNotificationDeliveryStatus: "not-requested",
               },
             });
-            const history = readCronTaskRunHistoryPage({
+            const history = readCronRunHistoryPageForTests({
               storeKey: cronStoreKey(storePath),
               jobId: job.id,
               limit: 25,
@@ -328,6 +333,7 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
             deliveryError: "primary route rejected",
           }));
           const cron = new CronService({
+            scheduler: createTestGatewayScheduler(),
             storePath,
             cronEnabled: true,
             nowMs: () => now,
@@ -389,7 +395,7 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
             await cron.run(job.id, "force");
             await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
             expect(receiver.requests).toHaveLength(1);
-            const history = readCronTaskRunHistoryPage({
+            const history = readCronRunHistoryPageForTests({
               storeKey: cronStoreKey(storePath),
               jobId: job.id,
               limit: 10,
@@ -455,6 +461,8 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
         const requestHeartbeat = vi.fn();
         const storePath = state.path("cron", "jobs.json");
         const cron = new CronService({
+          scheduler: createTestGatewayScheduler(),
+          nowMs: () => Date.now(),
           storePath,
           cronEnabled: true,
           log: createNoopLogger(),
@@ -534,6 +542,8 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
           resetTaskRegistryForTests({ persist: false });
           const storePath = state.path("cron", "jobs.json");
           const cron = new CronService({
+            scheduler: createTestGatewayScheduler(),
+            nowMs: () => Date.now(),
             storePath,
             cronEnabled: true,
             cronConfig: {
@@ -616,6 +626,8 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
       async (state) => {
         resetTaskRegistryForTests({ persist: false });
         const cron = new CronService({
+          scheduler: createTestGatewayScheduler(),
+          nowMs: () => Date.now(),
           storePath: state.path("cron", "jobs.json"),
           cronEnabled: true,
           log: createNoopLogger(),

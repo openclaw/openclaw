@@ -146,6 +146,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       const { buildGatewayCronService } = await import("./server-cron.js");
       assertCronReloadCurrent();
       nextState.cronState = buildGatewayCronService({
+        scheduler: params.scheduler,
         cfg: nextConfig,
         deps: params.deps,
         broadcast: params.broadcast,
@@ -618,6 +619,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
               cfg: nextConfig,
               log: params.logHooks,
               signal: restartAbortController.signal,
+              scheduler: params.scheduler,
               onSkipped: () =>
                 params.logHooks.info(
                   "skipping gmail watcher restart (OPENCLAW_SKIP_GMAIL_WATCHER=1)",

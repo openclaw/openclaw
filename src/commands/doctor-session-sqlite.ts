@@ -9,7 +9,6 @@ import {
   isLegacySessionRecordOwnedByTarget,
   shouldFilterLegacySessionRecordsByTarget,
 } from "../config/sessions/legacy-store-inspection.js";
-import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import type { SessionStoreTarget as ResolvedSessionStoreTarget } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -47,11 +46,9 @@ import {
   type SessionSqliteMigrationMove,
 } from "../infra/session-sqlite-migration-manifest.js";
 import {
-  countTranscriptEventsForPath,
   readOnlySqliteValidationSnapshot,
   readSqliteEntryCount,
   resolveTargetSqlitePath,
-  type ReadOnlySqliteValidationSnapshot,
 } from "../infra/session-sqlite-migration-readers.js";
 import { prepareActiveSqliteTranscriptSettlement } from "./doctor-session-sqlite-active.js";
 import {
@@ -74,7 +71,6 @@ import {
   readLegacySessionRecords,
   readArchivedSessionOwnership,
   type HistoricalArchiveSources,
-  type LegacySessionRecord,
 } from "./doctor-session-sqlite-discovery.js";
 import { writeSessionSqliteMigrationFailureReports } from "./doctor-session-sqlite-failure.js";
 import { importLegacySessionRecords } from "./doctor-session-sqlite-import.js";
@@ -107,6 +103,7 @@ import {
   type DoctorSessionSqliteTargetReport,
   type LegacyArchiveTarget,
 } from "./doctor-session-sqlite-types.js";
+import { validateLegacySessionRecords } from "./doctor-session-sqlite-verification.js";
 import {
   assertDoctorSqliteMaintenancePathsNotAliased,
   isDestructiveDoctorSessionSqliteMode,
@@ -180,6 +177,7 @@ export async function runDoctorSessionSqlite(
       env,
       options,
       targets,
+      recoveryInventory: historicalSources?.inventory,
       historicalArchiveStores: new Set([
         ...historicalArchives.keys(),
         ...settlements.map(({ target }) => target.storePath),
@@ -843,7 +841,7 @@ async function inspectOrMigrateTarget(params: {
       countLegacyTranscript(record, report);
     }
   } else {
-    validateLegacySessionRecords(params.target, records, report, "validate");
+    validateLegacySessionRecords(params.target, records, report, "validate", params.env);
   }
   let validationPassed = retainedImport !== undefined;
   if (params.mode === "import" && retainedImport) {
@@ -867,6 +865,7 @@ async function inspectOrMigrateTarget(params: {
       records,
       report,
       "before-archive",
+      params.env,
     );
     updateMigrationManifestTarget(
       params.activeRun,
@@ -1011,101 +1010,6 @@ async function inspectOrMigrateTarget(params: {
     report.issues,
   );
   return report;
-}
-
-function validateLegacySessionRecords(
-  target: SessionStoreTarget,
-  records: readonly LegacySessionRecord[],
-  report: DoctorSessionSqliteTargetReport,
-  purpose: "validate" | "before-archive",
-): boolean {
-  if (purpose === "before-archive" && records.length === 0) {
-    return true;
-  }
-  const issueCountBeforeValidation = report.issues.length;
-  const validation = readOnlySqliteValidationSnapshot(target);
-  if (!validation.ok) {
-    report.issues.push({
-      code: "sqlite_read_failed",
-      message: `SQLite validation read failed: ${String(validation.error)}`,
-    });
-    return false;
-  }
-  for (const record of records) {
-    validateLegacySessionRecord(record, report, validation.snapshot, purpose);
-  }
-  return report.issues.length === issueCountBeforeValidation;
-}
-
-function validateLegacySessionRecord(
-  record: LegacySessionRecord,
-  report: DoctorSessionSqliteTargetReport,
-  snapshot: ReadOnlySqliteValidationSnapshot,
-  purpose: "validate" | "before-archive",
-): void {
-  const beforeArchive = purpose === "before-archive";
-  // Import preserves aliases until canonical repair; standalone validation compares canonical keys.
-  const normalizedKey = beforeArchive
-    ? record.sessionKey
-    : normalizeStoreSessionKey(record.sessionKey);
-  const sqliteSessionId = record.historical
-    ? snapshot.sessionKeysBySessionId.get(record.entry.sessionId) === normalizedKey
-      ? record.entry.sessionId
-      : undefined
-    : snapshot.sessionIdsBySessionKey.get(normalizedKey);
-  if (!sqliteSessionId) {
-    report.issues.push({
-      code: "sqlite_entry_missing",
-      message: `SQLite entry is missing for ${normalizedKey}.`,
-      sessionKey: record.sessionKey,
-    });
-    return;
-  }
-  if (sqliteSessionId !== record.entry.sessionId) {
-    report.issues.push({
-      code: "sqlite_entry_mismatch",
-      message: `SQLite sessionId ${sqliteSessionId} does not match ${record.entry.sessionId}.`,
-      sessionKey: record.sessionKey,
-    });
-    return;
-  }
-  if (!beforeArchive) {
-    report.validatedEntries += 1;
-  }
-  const result = countTranscriptEventsForPath(record.transcriptPath);
-  if (result.status === "missing") {
-    if (!beforeArchive) {
-      report.validatedTranscriptEvents +=
-        snapshot.transcriptEventCountsBySessionId.get(record.entry.sessionId) ?? 0;
-    }
-    return;
-  }
-  if (result.status !== "ok") {
-    if (!hasSessionIssue(report, "transcript_malformed", record.sessionKey)) {
-      report.issues.push({
-        code: "transcript_malformed",
-        message: result.message,
-        sessionKey: record.sessionKey,
-      });
-    }
-    return;
-  }
-  const sqliteEvents = snapshot.transcriptEventCountsBySessionId.get(record.entry.sessionId) ?? 0;
-  // Verified import may retain later history and repair source rows; validation compares the raw count.
-  const expectedEvents = beforeArchive ? (record.recovery?.events ?? result.events) : result.events;
-  if (beforeArchive ? sqliteEvents < expectedEvents : sqliteEvents !== expectedEvents) {
-    report.issues.push({
-      code: "sqlite_transcript_count_mismatch",
-      message: beforeArchive
-        ? `SQLite transcript has ${sqliteEvents} events; verified import expects ${expectedEvents}.`
-        : `SQLite transcript has ${sqliteEvents} events; source has ${result.events}.`,
-      sessionKey: record.sessionKey,
-    });
-    return;
-  }
-  if (!beforeArchive) {
-    report.validatedTranscriptEvents += sqliteEvents;
-  }
 }
 
 async function archiveLegacyArtifacts(
@@ -1283,6 +1187,13 @@ async function archiveLegacyArtifacts(
               : complete && move.kind === "transcript"
                 ? "verified-import-original"
                 : "unimported-or-unknown-history",
+          ...(complete &&
+          move.kind === "transcript" &&
+          first.record.recovery?.sqliteEvents !== undefined
+            ? {
+                verification: `superseded by SQLite (${first.record.recovery.events} of ${first.record.recovery.sqliteEvents} events present)`,
+              }
+            : {}),
           dependencies: [],
           disposal: { state: "retained" },
         };

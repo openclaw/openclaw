@@ -375,30 +375,6 @@ describe("plugin npm runtime build planning", () => {
     }
   });
 
-  it("plans msteams startup runtime surfaces as native CommonJS entrypoints", () => {
-    const plan = expectPluginNpmRuntimeBuildPlan(
-      resolvePluginNpmRuntimeBuildPlan({
-        repoRoot,
-        packageDir: path.join(repoRoot, "extensions", "msteams"),
-      }),
-    );
-
-    expect(plan.runtimeFormat).toBe("cjs");
-    expect(plan.runtimeExtensions).toEqual(["./dist/index.cjs"]);
-    expect(plan.runtimeSetupEntry).toBe("./dist/setup-entry.cjs");
-    expect(plan.runtimeBuildOutputs).toEqual(
-      expect.arrayContaining([
-        "./dist/channel-plugin-api.cjs",
-        "./dist/doctor-contract-api.cjs",
-        "./dist/index.cjs",
-        "./dist/runtime-api.cjs",
-        "./dist/secret-contract-api.cjs",
-        "./dist/setup-entry.cjs",
-        "./dist/setup-plugin-api.cjs",
-      ]),
-    );
-  });
-
   it("builds msteams startup runtime surfaces as CommonJS files", async () => {
     const result = await buildPluginNpmRuntime({
       repoRoot,

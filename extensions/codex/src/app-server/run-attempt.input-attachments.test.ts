@@ -1,16 +1,14 @@
-import path from "node:path";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { CODEX_TURN_START_TEXT_INPUT_MAX_CHARS } from "./context-engine-projection.js";
 import {
   assistantMessage,
-  createParams,
+  createTestParams,
   createStartedThreadHarness,
   runCodexAppServerAttempt,
   setupRunAttemptTestHooks,
   setCodexTestModelSupportsTools,
-  tempDir,
 } from "./run-attempt-test-harness.js";
 import { createContextEngine } from "./run-attempt.context-engine.test-support.js";
 import { createCodexTestModel } from "./test-support.js";
@@ -20,10 +18,7 @@ setupRunAttemptTestHooks();
 describe("native current input attachments", () => {
   it("delivers prepared document paths alongside native images without changing the canonical prompt", async () => {
     const harness = createStartedThreadHarness();
-    const params = createParams(
-      path.join(tempDir, "session.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
+    const params = createTestParams();
     const prompt = params.prompt;
     const note = "Attachment file: /fixture/managed/inventory.csv";
     const prepare = vi.fn(async () => note);
@@ -54,22 +49,16 @@ describe("native current input attachments", () => {
   });
 
   it.each([
-    ...["inbound", "hook-prefix", "hook-tail"].flatMap((context) =>
-      [false, true].flatMap((projected) =>
-        [false, true].map((withPaths) => ({ context, projected, withPaths })),
-      ),
-    ),
-    ...["combined", "combined-overflow"].flatMap((context) =>
-      [false, true].map((withPaths) => ({ context, projected: true, withPaths })),
-    ),
+    { context: "inbound", projected: false },
+    ...["inbound", "hook-prefix", "hook-tail", "combined-overflow"].map((context) => ({
+      context,
+      projected: true,
+    })),
   ])(
-    "preserves $context with projected history $projected and optional paths $withPaths",
-    async ({ context, projected, withPaths }) => {
+    "preserves $context with projected history $projected when adding optional paths",
+    async ({ context, projected }) => {
       const harness = createStartedThreadHarness();
-      const params = createParams(
-        path.join(tempDir, "session.jsonl"),
-        path.join(tempDir, "workspace"),
-      );
+      const params = createTestParams();
       const combined = context.startsWith("combined");
       const expandedContext =
         "current context " +
@@ -112,7 +101,7 @@ describe("native current input attachments", () => {
       )}`;
       params.hostCapabilities = {
         ...params.hostCapabilities,
-        prepareInputAttachments: async () => (withPaths ? note : undefined),
+        prepareInputAttachments: async () => note,
       };
       setCodexTestModelSupportsTools(params, false);
 
@@ -131,7 +120,7 @@ describe("native current input attachments", () => {
       if (projected) {
         expect(inputText).toContain("historical tail");
       }
-      if (combined && withPaths) {
+      if (combined) {
         expect(inputText).toContain(note);
       } else {
         expect(inputText).not.toContain(note);

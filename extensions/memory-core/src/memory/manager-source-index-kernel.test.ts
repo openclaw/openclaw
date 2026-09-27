@@ -65,7 +65,10 @@ function replacement(
 
 function write(database: MemoryIndexDatabase, value: MemorySourceIndexReplacement) {
   return runSqliteImmediateTransactionSync(database.db, () =>
-    new MemorySourceIndexKernel(database.db, database).replace(value),
+    new MemorySourceIndexKernel(database.db, database).replaceRows(
+      value,
+      value.chunks.map((chunk, index) => ({ chunk, embedding: value.embeddings[index] ?? [] })),
+    ),
   );
 }
 

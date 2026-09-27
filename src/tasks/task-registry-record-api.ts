@@ -16,16 +16,6 @@ import {
   type TaskTerminalOutcome,
 } from "./task-registry.types.js";
 
-export function setTaskCleanupAfterById(params: {
-  taskId: string;
-  cleanupAfter: number;
-}): TaskRecord | null {
-  ensureTaskRegistryReady();
-  return updateTask(params.taskId, {
-    cleanupAfter: params.cleanupAfter,
-  });
-}
-
 export function markTaskTerminalById(params: {
   taskId: string;
   status: Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled">;

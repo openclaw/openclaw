@@ -1,5 +1,4 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-// Discord plugin module implements message handler.routing preflight behavior.
 import { resolveDiscordRuntimeBindingConversationId } from "../conversation-identity.js";
 import type { User } from "../internal/discord.js";
 import { resolveDiscordConversationBindingRoute } from "./conversation-binding-route.js";

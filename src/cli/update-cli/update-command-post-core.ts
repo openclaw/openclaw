@@ -55,6 +55,7 @@ import { VERSION } from "../../version.js";
 import { readPackageVersion, resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
 import { writePostCoreSourceConfigFile } from "./update-command-config.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
+import { releaseLegacySourceLock } from "./update-command-runtime.js";
 import { isPackageManagerUpdateMode } from "./update-command-service-command.js";
 import {
   disableUpdatedPackageCompileCacheEnv,
@@ -91,17 +92,21 @@ export async function resolvePostCoreUpdateOperatorOptions(params: {
   opts: UpdateCommandOptions;
   resultPath: string | undefined;
 }): Promise<UpdateCommandOptions> {
-  if (!params.resultPath || params.opts.timeout === undefined) {
+  if (!params.resultPath) {
     return params.opts;
   }
-  const handoff = await readJsonIfExists<unknown>(
+  const handoff = await readJsonIfExists<{ sourceRuntimePrepared?: boolean }>(
     path.join(path.dirname(params.resultPath), "handoff.json"),
   );
-  if (!isOmittedUpdateTimeout(params.opts.timeout, handoff)) {
+  const opts =
+    typeof handoff?.sourceRuntimePrepared === "boolean"
+      ? { ...params.opts, sourceRuntimePrepared: handoff.sourceRuntimePrepared }
+      : params.opts;
+  if (opts.timeout === undefined || !isOmittedUpdateTimeout(opts.timeout, handoff)) {
     // Shipped parents have no provenance. Their received deadline remains explicit-looking.
-    return params.opts;
+    return opts;
   }
-  return { ...params.opts, timeout: undefined };
+  return { ...opts, timeout: undefined };
 }
 
 export async function writePostCoreUpdateFailureFile(
@@ -328,6 +333,7 @@ export function preparePostCorePluginInstallRecordsForFreshProcess(params: {
 
 export async function continuePostCoreUpdateInFreshProcess(params: {
   root: string;
+  sourceRuntimePrepared?: boolean;
   channel: UpdateChannel;
   requestedChannel: UpdateChannel | null;
   opts: UpdateCommandOptions;
@@ -377,7 +383,10 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
   }
   // Older targets need the existing allowance. New targets recover operator intent
   // from the private handoff instead of treating this compatibility value as explicit.
-  const handoff = createUpdateTimeoutHandoff(params.opts.timeout, params.timeoutMs);
+  const handoff = {
+    ...createUpdateTimeoutHandoff(params.opts.timeout, params.timeoutMs),
+    sourceRuntimePrepared: params.sourceRuntimePrepared,
+  };
   const serializedTimeout = handoff.timeout.serialized;
   argv.push("--timeout", serializedTimeout);
   const resultDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-post-core-"));
@@ -441,6 +450,7 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
       await fs.writeFile(sentinelPath, JSON.stringify(sentinel), { mode: 0o600 });
       handoffEnv[CONTROL_PLANE_UPDATE_SENTINEL_META_ENV] = sentinelPath;
     }
+    await releaseLegacySourceLock(params.root, params.opts.run?.sourceArtifactLock);
     const child = spawn(nodeRunner, argv, {
       cwd: params.root,
       stdio: childStdio,

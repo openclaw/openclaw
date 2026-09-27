@@ -184,13 +184,16 @@ it
       });
       const intent = () => db.prepare("SELECT pid, reason FROM gateway_restart_intent").get();
       let atBootout: ReturnType<typeof intent>;
-      vi.spyOn(ancestry, "getSelfAndAncestorPidsSync").mockReturnValue(
-        new Set(
-          scenario === "ordinary external Stop"
-            ? [process.pid, process.ppid, 1]
-            : [process.pid, process.ppid, gatewayPid],
-        ),
+      const callerPids = new Set(
+        scenario === "ordinary external Stop"
+          ? [process.pid, process.ppid, 1]
+          : [process.pid, process.ppid, gatewayPid],
       );
+      vi.spyOn(ancestry, "getSelfAndAncestorPidsSync").mockReturnValue(callerPids);
+      vi.spyOn(ancestry, "inspectSelfAndAncestorPidsSync").mockReturnValue({
+        pids: callerPids,
+        complete: true,
+      });
       // The native manager and port are the external boundaries; stopLaunchAgent stays real.
       const cleanup = vi.spyOn(ancestry, "cleanStaleGatewayProcessesSync").mockReturnValue([]);
       vi.spyOn(ports, "inspectPortUsage").mockResolvedValue({

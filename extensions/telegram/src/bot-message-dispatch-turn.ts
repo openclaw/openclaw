@@ -16,6 +16,7 @@ import {
   beginDraftQueuedFollowup,
   cleanupDrafts,
   enqueueDraftEvent,
+  handleBeforeDeliverCancelled,
   ingestDraftLaneSegments,
   prepareQueuedAnswerBlock,
   repositionLaneForNewMessage,
@@ -39,7 +40,6 @@ import {
 import {
   deliverReply,
   deliverPreparedReply,
-  handleBeforeDeliverCancelled,
   handleReplyError,
   handleReplySkip,
   resetReasoningStepState,

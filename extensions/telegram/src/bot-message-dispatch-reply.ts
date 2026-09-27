@@ -44,7 +44,6 @@ import {
 import { pushToolProgress } from "./bot-message-dispatch-progress.js";
 import { deduplicateBlockSentMedia, trackBlockMedia } from "./bot-message-dispatch.media-dedup.js";
 import type {
-  TelegramBufferedFinalSettlement,
   TelegramDispatchTurn as Turn,
   TelegramReplyStateSlice,
 } from "./bot-message-dispatch.types.js";
@@ -72,7 +71,6 @@ type DispatcherOptions = BufferedDispatchParams["dispatcherOptions"];
 type Deliver = DispatcherOptions["deliver"];
 type Skip = NonNullable<DispatcherOptions["onSkip"]>;
 type ErrorCallback = NonNullable<DispatcherOptions["onError"]>;
-type Cancel = NonNullable<DispatcherOptions["onBeforeDeliverCancelled"]>;
 
 function toTelegramReplyDeliveryResult(
   turn: Turn,
@@ -148,7 +146,7 @@ function hasExecApprovalPayload(payload: ReplyPayload): boolean {
 export function createReplyState(): TelegramReplyStateSlice {
   return {
     reasoningStepState: createTelegramReasoningStepState(),
-    bufferedFinalSettlement: undefined as TelegramBufferedFinalSettlement | undefined,
+    bufferedFinalSettlement: undefined,
     sentBlockMediaUrls: new Set<string>(),
     splitReasoningOnNextStream: false,
   };
@@ -709,16 +707,4 @@ export function handleReplyError(
   }
   turn.deliveryState.markNonSilentFailure();
   turn.runtime.error?.(danger(`telegram ${info.kind} reply failed: ${String(err)}`));
-}
-
-export function handleBeforeDeliverCancelled(
-  turn: Turn,
-  payload: Parameters<Cancel>[0],
-  info: Parameters<Cancel>[1],
-): ReturnType<Cancel> {
-  return info.kind === "block"
-    ? enqueueDraftEvent(turn, async () => {
-        dropQueuedAnswerBlockRotation(turn, payload, info.assistantMessageIndex);
-      })
-    : undefined;
 }

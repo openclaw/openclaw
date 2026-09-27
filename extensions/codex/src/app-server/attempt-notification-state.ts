@@ -40,7 +40,6 @@ export function reportCodexExecutionNotification(params: {
   });
 }
 
-/** Returns true when a notification ends the current app-server turn. */
 export function isTerminalCodexTurnNotificationForTurn(params: {
   notification: CodexServerNotification;
   threadId: string;

@@ -305,7 +305,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
           (!enrollmentOwner?.nodeSetupId ||
             current.nodeSetupId !== enrollmentOwner.nodeSetupId ||
             current.nodeDeviceId !== lease.node.deviceId)) ||
-        options.store.get(record.environmentId)?.destroyRequestedAtMs !== null
+        current.destroyRequestedAtMs !== null
       ) {
         throw new Error("Prepared worker provisioning owner is no longer current");
       }

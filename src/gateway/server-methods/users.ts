@@ -1,4 +1,4 @@
-// Gateway methods for durable user profile administration.
+import { isValidBase64 } from "@openclaw/media-core/base64";
 import {
   ErrorCodes,
   GatewayErrorDetailCodes,
@@ -61,18 +61,6 @@ function refreshConnectedProfile(
     updatedAt: profile.updatedAt,
   });
   return display;
-}
-
-function decodeBase64(value: string): Uint8Array | undefined {
-  const trimmed = value.trim();
-  if (
-    !trimmed ||
-    trimmed.length % 4 !== 0 ||
-    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(trimmed)
-  ) {
-    return undefined;
-  }
-  return Buffer.from(trimmed, "base64");
 }
 
 function profileError(error: unknown) {
@@ -291,8 +279,8 @@ export const usersHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateUsersSetAvatarParams, "users.setAvatar", respond)) {
       return;
     }
-    const bytes = decodeBase64(params.avatarBase64);
-    if (!bytes) {
+    const avatarBase64 = params.avatarBase64.trim();
+    if (!isValidBase64(avatarBase64)) {
       respond(
         false,
         undefined,
@@ -300,6 +288,7 @@ export const usersHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const bytes = Buffer.from(avatarBase64, "base64");
     try {
       if (!requireProfileMutationAccess(client, params.profileId, respond)) {
         return;

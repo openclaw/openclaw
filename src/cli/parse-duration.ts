@@ -40,7 +40,7 @@ export function parseDurationMs(raw: string, opts?: DurationMsParseOptions): num
   const single = /^(\d+(?:\.\d+)?)(ms|s|m|h|d)?$/.exec(trimmed);
   if (single) {
     const value = single[1] ?? "";
-    const unit = (single[2] ?? opts?.defaultUnit ?? "ms") as "ms" | "s" | "m" | "h" | "d";
+    const unit = single[2] ?? opts?.defaultUnit ?? "ms";
     return roundSafeDurationMs(raw, parseDurationToken(raw, value, unit));
   }
 

@@ -165,26 +165,17 @@ export function registerBrowserAgentActHookRoutes(
                 window.prompt = originals.prompt;
                 delete window.__openclawDialogHook;
               };
-              window.alert = (...args) => {
-                try {
-                  return undefined;
-                } finally {
-                  restore();
-                }
+              window.alert = () => {
+                restore();
+                return undefined;
               };
-              window.confirm = (...args) => {
-                try {
-                  return ${accept ? "true" : "false"};
-                } finally {
-                  restore();
-                }
+              window.confirm = () => {
+                restore();
+                return ${accept ? "true" : "false"};
               };
-              window.prompt = (...args) => {
-                try {
-                  return ${accept ? JSON.stringify(promptText ?? "") : "null"};
-                } finally {
-                  restore();
-                }
+              window.prompt = () => {
+                restore();
+                return ${accept ? JSON.stringify(promptText ?? "") : "null"};
               };
               return true;
             }`,

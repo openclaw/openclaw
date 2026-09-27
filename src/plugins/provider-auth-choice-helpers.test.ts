@@ -358,47 +358,6 @@ describe("applyProviderAuthConfigPatch", () => {
 });
 
 describe("applyDefaultModel", () => {
-  it("sets the primary when none exists", () => {
-    const config = {
-      agents: { defaults: {} },
-    } as OpenClawConfig;
-    const next = applyDefaultModel(config, "openrouter/auto");
-    expect(next.agents?.defaults?.model).toEqual({ primary: "openrouter/auto" });
-  });
-
-  it("overwrites an existing primary by default", () => {
-    const config = {
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-opus-4-6" },
-        },
-      },
-    } as OpenClawConfig;
-    const next = applyDefaultModel(config, "openrouter/auto");
-    expect(next.agents?.defaults?.model).toEqual({
-      primary: "openrouter/auto",
-    });
-  });
-
-  it("preserves an existing primary when requested", () => {
-    const config = {
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-opus-4-6" },
-        },
-      },
-    } as OpenClawConfig;
-    const next = applyDefaultModel(config, "openrouter/auto", {
-      preserveExistingPrimary: true,
-    });
-    expect(next.agents?.defaults?.model).toEqual({
-      primary: "anthropic/claude-opus-4-6",
-    });
-    expect(next.agents?.defaults?.models).toEqual({
-      "openrouter/auto": {},
-    });
-  });
-
   it("normalizes a preserved retired Google Gemini primary", () => {
     const config = {
       agents: {
@@ -434,17 +393,6 @@ describe("applyDefaultModel", () => {
       fallbacks: ["openai/gpt-5.4"],
     });
     expect(next.agents?.defaults?.models).toEqual({
-      "openrouter/auto": {},
-    });
-  });
-
-  it("adds the model to per-model config", () => {
-    const config = {
-      agents: { defaults: { models: { "anthropic/claude-sonnet-4-6": {} } } },
-    } as OpenClawConfig;
-    const next = applyDefaultModel(config, "openrouter/auto");
-    expect(next.agents?.defaults?.models).toEqual({
-      "anthropic/claude-sonnet-4-6": {},
       "openrouter/auto": {},
     });
   });

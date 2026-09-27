@@ -1,8 +1,21 @@
 // Control UI CSS hygiene: plain stylesheets plus css`` templates in Lit
 // components (postcss-lit). Error-class rules only — oxfmt owns formatting.
+const selectorFunction = String.raw`\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)`;
+const selectorTail = String.raw`(?:[^([]|${selectorFunction}|\[[^\]]*\])*`;
+
 export default {
   extends: "stylelint-config-recommended",
   rules: {
+    // Measured :has() hazards: universal targets (~9 ms) and ::placeholder (~8 ms)
+    // restyle the whole subtree per insertion with 534 messages; ::part did not.
+    // Skip functional arguments/attributes; split lists to keep safe branches independent.
+    "selector-disallowed-list": [
+      [
+        new RegExp(`:has${selectorFunction}${selectorTail}[\\s>+~]\\*`, "i"),
+        new RegExp(`:has${selectorFunction}${selectorTail}::placeholder(?![\\w-])`, "i"),
+      ],
+      { splitList: true },
+    ],
     // Cascade-order advice, not an error class; 400+ intentional hits in the
     // existing token/override cascade make it pure noise here.
     "no-descending-specificity": null,

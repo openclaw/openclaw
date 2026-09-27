@@ -1,10 +1,8 @@
-// Read-side chat handlers own history projection, startup metadata, and message lookup.
 import {
   ErrorCodes,
   errorShape,
   validateChatHistoryParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { CHAT_HISTORY_MAX_ENTRIES } from "../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import { findModelCatalogEntry } from "../../agents/model-catalog.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
@@ -84,6 +82,7 @@ export async function handleChatHistoryRequest({
     sessionId: string;
     run?: { id: string; maxBytes: number };
     requireCurrentSession?: boolean;
+    verifyRetainedState?: () => Promise<boolean>;
   };
 }) {
   if (!assertValidParams(params, validateChatHistoryParams, method, respond)) {
@@ -119,7 +118,7 @@ export async function handleChatHistoryRequest({
     await prepareOptionalSubagentSessionListReadCache();
   }
   signal?.throwIfAborted();
-  const agentIdOverride = normalizeOptionalText((params as { agentId?: string }).agentId);
+  const agentIdOverride = normalizeOptionalText(params.agentId);
   const selection = await prepareChatHistorySessionRead({
     context,
     sessionMutationAuthorization,
@@ -213,8 +212,7 @@ export async function handleChatHistoryRequest({
     const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId, {
       allowPluginNormalization: false,
     });
-    const requested = typeof limit === "number" ? limit : 200;
-    const max = Math.min(CHAT_HISTORY_MAX_ENTRIES, requested);
+    const max = limit ?? 200;
     const maxHistoryBytes = Math.min(maxBytes ?? Infinity, getMaxChatHistoryMessagesBytes());
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(maxChars);
     const pendingInputs =
@@ -424,12 +422,12 @@ export async function handleChatHistoryRequest({
       });
       if (sessionInfo) {
         sessionInfo.hasActiveRun = activeRunState.active;
-      }
-      if (sessionInfo && activeRunState.runIds !== undefined) {
-        sessionInfo.activeRunIds = activeRunState.runIds;
-      }
-      if (sessionInfo && activeRunState.active) {
-        sessionInfo.status = activeRunState.status ?? "running";
+        if (activeRunState.runIds !== undefined) {
+          sessionInfo.activeRunIds = activeRunState.runIds;
+        }
+        if (activeRunState.active) {
+          sessionInfo.status = activeRunState.status ?? "running";
+        }
       }
       // An active embedded run can be owned by the embedded registry while absent
       // from the visible chat-abort controllers. The activeRunIds field stays
@@ -623,6 +621,7 @@ export async function handleChatHistoryRequest({
         pendingInputs,
         ...(inputReceipts ? { inputReceipts, inputConsumptions } : {}),
         ...(historyPage.deltaCursor ? { deltaCursor: historyPage.deltaCursor } : {}),
+        ...(historyPage.windowReset ? { windowReset: true } : {}),
         ...(historyPage.responseOffset !== undefined ? { offset: historyPage.responseOffset } : {}),
         ...(hasMore ? { nextOffset: candidateNextOffset } : {}),
         ...(hasMore !== undefined ? { hasMore } : {}),
@@ -642,7 +641,9 @@ export async function handleChatHistoryRequest({
       if (retainedTranscript) {
         return () =>
           selection.publishRetainedTranscript({
-            verify: readTranscriptOwner,
+            verify: async () =>
+              (await readTranscriptOwner()) &&
+              ((await retainedTranscript.verifyRetainedState?.()) ?? true),
             requireCurrentSession: retainedTranscript.requireCurrentSession === true,
             sharing: currentSharing,
             publish: () => respond(true, projectOperatorModelRead(modelReadScope, payload)),

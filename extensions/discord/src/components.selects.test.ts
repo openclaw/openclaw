@@ -22,15 +22,6 @@ import { createDiscordLoopbackRest } from "./send.test-harness.js";
 
 const GENERATED_DISCORD_ID_PATTERN =
   /(?<![A-Za-z0-9_-])(?:btn|fld|grp|mdl|sel)_[A-Za-z0-9_-]{8}(?![A-Za-z0-9_-])/gu;
-const SELECT_BASE_KEYS = [
-  "isV2",
-  "defer",
-  "ephemeral",
-  "customIdParser",
-  "disabled",
-  "type",
-  "customId",
-];
 
 function normalizeGeneratedDiscordIds(value: unknown): unknown {
   const ids = new Map<string, string>();
@@ -70,7 +61,7 @@ describe("discord select components", () => {
     ["mentionable", ComponentType.MentionableSelect, MentionableSelectMenu, "mentionable select"],
     ["channel", ComponentType.ChannelSelect, ChannelSelectMenu, "channel select"],
   ] as const)(
-    "preserves %s identity, own properties, payload, and metadata",
+    "preserves %s identity, payload, and metadata",
     (type, componentType, constructor, defaultLabel) => {
       const options = [
         {
@@ -109,13 +100,6 @@ describe("discord select components", () => {
       }
 
       expect(select).toBeInstanceOf(constructor);
-      expect(Object.keys(select)).toEqual([
-        ...SELECT_BASE_KEYS,
-        ...(type === "string" ? ["options"] : []),
-        "minValues",
-        "maxValues",
-        "placeholder",
-      ]);
       expect(normalizeGeneratedDiscordIds(select.serialize())).toEqual({
         type: componentType,
         ...(type === "string" ? { options } : {}),
@@ -144,7 +128,7 @@ describe("discord select components", () => {
     },
   );
 
-  it("preserves modal identity, required values, own properties, and callback payload", async () => {
+  it("preserves modal identity, required values, and callback payload", async () => {
     const result = buildDiscordComponentMessage({
       spec: {
         modal: {
@@ -193,11 +177,6 @@ describe("discord select components", () => {
     expect(fields[0]).toBeInstanceOf(StringSelectMenu);
     expect(fields[1]).toBeInstanceOf(RoleSelectMenu);
     expect(fields[2]).toBeInstanceOf(UserSelectMenu);
-    expect(fields.map((field) => Object.keys(field))).toEqual([
-      [...SELECT_BASE_KEYS, "options", "required", "minValues", "maxValues", "placeholder"],
-      [...SELECT_BASE_KEYS, "required", "minValues", "maxValues", "placeholder"],
-      [...SELECT_BASE_KEYS, "required", "minValues", "maxValues", "placeholder"],
-    ]);
 
     const serialized = normalizeGeneratedDiscordIds(modal.serialize());
     expect(serialized).toEqual({

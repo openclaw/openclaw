@@ -4,6 +4,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../infra/device-identity-async.js";
 import { getPairedDevice } from "../infra/device-pairing.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
@@ -18,6 +19,7 @@ import type { NodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
 import type { DesktopSessionRegistry } from "./desktop/session-registry.js";
 import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
 import type { GatewayContextResolver, GatewayRequestContext } from "./server-methods/types.js";
+import type { ArtifactTransferHttpCallback } from "./worker-environments/artifact-transfer-http.js";
 import type { WorkerBundleProducer, WorkerNpmArtifact } from "./worker-environments/bundle.js";
 import {
   bindDeviceWorkerAvailability,
@@ -28,7 +30,6 @@ import {
 import type { WorkerLiveEventReceiver } from "./worker-environments/live-events.js";
 import type { createNodeBootstrapArtifactProvider } from "./worker-environments/node-bootstrap-artifact.js";
 import { createWorkerNodeEnrollmentManager } from "./worker-environments/node-enrollment.js";
-import type { NodeWorkerBundleTransferHttpCallback } from "./worker-environments/node-worker-bundle-transfer-http.js";
 import { nodeWorkerGatewayNamespace as resolveNodeWorkerGatewayNamespace } from "./worker-environments/node-worker-gateway-namespace.js";
 import type { NodeWorkerWorkspaceBindingResolver } from "./worker-environments/node-worker-tunnel.js";
 import type { NodeWorkerBundleRetention } from "./worker-environments/node-workspace-retain-coordinator.js";
@@ -37,7 +38,6 @@ import type { WorkerSessionPlacementStore } from "./worker-environments/placemen
 import type { WorkerPlacementDispatchContract } from "./worker-environments/service-contract.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
 import type { WorkerTunnelManager } from "./worker-environments/tunnel.js";
-import type { WorkerBootstrapArtifactTransferHttpCallback } from "./worker-environments/worker-bootstrap-artifact-transfer-http.js";
 import { listRetainedWorkerBundleHashes } from "./worker-environments/worker-bundle-retention.js";
 import type { WorkerSessionToolExecutor } from "./worker-environments/worker-session-tool-result.js";
 
@@ -65,8 +65,8 @@ export type GatewayWorkerEnvironmentRuntime = {
   bindDeviceNodeControl?: (transport: NodeWorkerSupervisorTransport) => void;
   bindWorkerNodeDesktopControl?: (transport: NodeWorkerSupervisorTransport) => void;
   bindNodeWorkspaceBindingResolver?: (resolver: NodeWorkerWorkspaceBindingResolver) => void;
-  handleNodeWorkerBundleTransferRequest?: NodeWorkerBundleTransferHttpCallback;
-  handleWorkerBootstrapArtifactTransferRequest?: WorkerBootstrapArtifactTransferHttpCallback;
+  handleNodeWorkerBundleTransferRequest?: ArtifactTransferHttpCallback;
+  handleWorkerBootstrapArtifactTransferRequest?: ArtifactTransferHttpCallback;
   handleNodeWorkspaceTransferRequest?: NodeWorkspaceTransferHttpCallback;
 };
 
@@ -114,6 +114,7 @@ export async function loadGatewayWorkerEnvironmentStartupState(): Promise<Gatewa
 }
 
 export async function createGatewayWorkerEnvironmentRuntime(params: {
+  scheduler: GatewayScheduler;
   getPluginRegistry: () => PluginRegistry;
   getPortalRuntime: () => Pick<GatewayRequestContext, "portalService" | "broadcast"> | undefined;
   resolveGatewayContext: GatewayContextResolver;
@@ -133,7 +134,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     { createNodeWorkerPreparedWorkspaceTransport },
     { createGatewayNodeWorkerBundleInstaller },
     { createNodeWorkerBundleTransferService },
-    { createNodeWorkerBundleTransferHttpCallback },
+    { createArtifactTransferHttpCallback },
     { createNodeWorkspaceTransferService },
     { createNodeWorkspaceTransferHttpCallback },
     { createWorkerNodeDesktopCarrier },
@@ -142,7 +143,6 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     { resolveWorkerProvider },
     { maintainConfiguredWorkerProviders },
     { createWorkerBootstrapArtifactTransferService },
-    { createWorkerBootstrapArtifactTransferHttpCallback },
   ] = await Promise.all([
     import("./worker-environments/service.js"),
     import("./worker-environments/live-events.js"),
@@ -153,7 +153,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     import("./worker-environments/node-worker-prepared-workspace-transport.js"),
     import("./worker-environments/node-worker-bundle-installer.js"),
     import("./worker-environments/node-worker-bundle-transfer-service.js"),
-    import("./worker-environments/node-worker-bundle-transfer-http.js"),
+    import("./worker-environments/artifact-transfer-http.js"),
     import("./worker-environments/node-workspace-transfer-service.js"),
     import("./worker-environments/node-workspace-transfer-http.js"),
     import("./worker-environments/node-desktop-carrier.js"),
@@ -162,7 +162,6 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     import("../plugins/worker-provider-registry.js"),
     import("../plugins/worker-provider-maintenance.js"),
     import("./worker-environments/worker-bootstrap-artifact-transfer-service.js"),
-    import("./worker-environments/worker-bootstrap-artifact-transfer-http.js"),
   ]);
   // The Gateway state-directory lock proves that executors from the previous
   // process are gone. Resolve their ambiguous effects before placement
@@ -382,6 +381,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     gatewayNamespace: nodeWorkerGatewayNamespace,
   });
   const workerEnvironmentServiceBase = createWorkerEnvironmentService({
+    scheduler: params.scheduler,
     projectNamespace: nodeWorkerGatewayNamespace,
     prepareComputer: computers.prepare,
     prepareAttachedComputer: computers.prepareAttached,
@@ -477,20 +477,25 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     placementStore: placementGate,
     executeSessionTool: (request) => executeSessionTool(request),
     liveEvents: workerLiveEvents,
-    resolveSshIdentity: async ({ provider, leaseId, profile, keyRef }) => {
+    resolveSshIdentity: async ({ provider, leaseId, profile, keyRef, assertAuthorized }) => {
+      assertAuthorized();
       const workerRuntime = await loadWorkerEnvironmentRuntimeModule();
+      assertAuthorized();
       return await workerRuntime.resolveWorkerSshIdentity({
         provider,
         leaseId,
         profile,
         keyRef,
-        resolveGeneric: async (genericKeyRef) => ({
-          kind: "material",
-          contents: await workerRuntime.resolveSecretRefString(genericKeyRef, {
+        assertAuthorized,
+        resolveGeneric: async (genericKeyRef, assertCurrent) => {
+          assertCurrent();
+          const contents = await workerRuntime.resolveSecretRefString(genericKeyRef, {
             config: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? getRuntimeConfig(),
             env: getActiveSecretsRuntimeEnvState(),
-          }),
-        }),
+          });
+          assertCurrent();
+          return { kind: "material", contents };
+        },
       });
     },
     bootstrapWorker: async ({
@@ -610,9 +615,9 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     bindNodeWorkspaceBindingResolver: (resolver) =>
       nodeWorkerTunnelManager.bindWorkspaceBindingResolver(resolver),
     handleNodeWorkerBundleTransferRequest:
-      createNodeWorkerBundleTransferHttpCallback(nodeWorkerBundleTransfer),
+      createArtifactTransferHttpCallback(nodeWorkerBundleTransfer),
     handleWorkerBootstrapArtifactTransferRequest:
-      createWorkerBootstrapArtifactTransferHttpCallback(nodeBootstrapTransfer),
+      createArtifactTransferHttpCallback(nodeBootstrapTransfer),
     handleNodeWorkspaceTransferRequest:
       createNodeWorkspaceTransferHttpCallback(nodeWorkspaceTransfer),
   };

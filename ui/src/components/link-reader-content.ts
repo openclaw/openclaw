@@ -11,7 +11,6 @@ import type { LinkReaderTarget } from "./link-reader-target.ts";
 import { createMarkdownParser } from "./markdown-parser.ts";
 import { normalizeMarkdownRenderOptions } from "./markdown-render-options.ts";
 import { escapeMarkdownHtml } from "./markdown-text.ts";
-export { linkReaderContentStyles } from "./link-reader-content.styles.ts";
 
 type ControlUiLinkReaderComment = NonNullable<ControlUiLinkReaderDocument["comments"]>[number];
 type ControlUiLinkReaderFile = NonNullable<ControlUiLinkReaderDocument["files"]>[number];

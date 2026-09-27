@@ -1,5 +1,4 @@
 import type { Bot } from "grammy";
-import type { Message } from "grammy/types";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createOutboundPayloadPlan,
@@ -114,7 +113,7 @@ function filterEmptyTelegramTextChunks(chunks: readonly TelegramTextDeliveryPage
   );
 }
 
-async function deliverTextReply(params: {
+type TextReplyParams = {
   sender: TelegramPreparedSender;
   chatId: string;
   runtime: RuntimeEnv;
@@ -134,7 +133,9 @@ async function deliverTextReply(params: {
   progress: DeliveryProgress;
   recordMessageId: (messageId: number) => Promise<void>;
   quoteOnlyOnFirstChunk?: boolean;
-}): Promise<number | undefined> {
+};
+
+async function deliverTextReply(params: TextReplyParams): Promise<number | undefined> {
   const chunks = filterEmptyTelegramTextChunks(params.chunkText(params.text));
   const suppressReply = chunks.length > 1 && isSingleUseReplyToMode(params.replyToMode);
   const delivered = await params.sender.sendText({
@@ -219,34 +220,19 @@ function resolveVoiceFallbackText(reply: ReplyPayload): string | undefined {
   return undefined;
 }
 
-async function deliverMediaReply(params: {
-  sender: TelegramPreparedSender;
-  reply: ReplyPayload;
-  mediaList: string[];
-  bot: Bot;
-  chatId: string;
-  runtime: RuntimeEnv;
-  thread?: TelegramThreadSpec | null;
-  tableMode?: MarkdownTableMode;
-  richMessages?: boolean;
-  mediaLocalRoots?: readonly string[];
-  mediaMaxBytes?: number;
-  chunkText: ChunkTextFn;
-  mediaLoader: typeof loadWebMedia;
-  onVoiceRecording?: () => Promise<void> | void;
-  linkPreview?: boolean;
-  silent?: boolean;
-  replyQuoteMessageId?: number;
-  replyQuoteText?: string;
-  replyQuotePosition?: number;
-  replyQuoteEntities?: unknown[];
-  replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
-  replyToId?: number;
-  replyToMode: ReplyToMode;
-  progress: DeliveryProgress;
-  recordMessageId: (messageId: number) => Promise<void>;
-  textMode?: "html";
-}): Promise<{
+async function deliverMediaReply(
+  params: Omit<TextReplyParams, "text" | "quoteOnlyOnFirstChunk"> & {
+    reply: ReplyPayload;
+    mediaList: string[];
+    bot: Bot;
+    tableMode?: MarkdownTableMode;
+    mediaLocalRoots?: readonly string[];
+    mediaMaxBytes?: number;
+    mediaLoader: typeof loadWebMedia;
+    onVoiceRecording?: () => Promise<void> | void;
+    textMode?: "html";
+  },
+): Promise<{
   firstDeliveredMessageId?: number;
   visibleFallbackText?: string;
   mediaUrls: string[];
@@ -282,8 +268,8 @@ async function deliverMediaReply(params: {
     markDelivered(params.progress);
   };
   const deliverAcceptedMedia = async (options: {
-    sender: TelegramOutboundMediaSender<Message>;
-    documentSender?: TelegramOutboundMediaSender<Message>;
+    sender: TelegramOutboundMediaSender;
+    documentSender?: TelegramOutboundMediaSender;
     mediaUrl: string;
     requestParams: Record<string, unknown>;
     plainCaption?: string;
@@ -315,7 +301,7 @@ async function deliverMediaReply(params: {
       tableMode: params.tableMode,
       preparedHtml: true,
     });
-    const { sender: mediaSender, documentSender } = resolveTelegramOutboundMediaSenders<Message>({
+    const { sender: mediaSender, documentSender } = resolveTelegramOutboundMediaSenders({
       api: params.bot.api,
       chatId: params.chatId,
       media,

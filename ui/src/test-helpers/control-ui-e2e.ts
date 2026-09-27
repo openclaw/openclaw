@@ -44,6 +44,7 @@ import { resolveAvailableLoopbackPort } from "./control-ui-e2e-port.ts";
 import { controlUiE2eWaitTimeoutMs } from "./control-ui-e2e-readiness.ts";
 import { getSharedControlUiE2ePreview } from "./control-ui-e2e-shared-preview.ts";
 import { createControlUiMockResponses } from "./control-ui-mock-responses.ts";
+import { createControlUiMockSessionSubscriptions } from "./control-ui-mock-session-subscriptions.ts";
 import type { NativeControlUiPluginFixture } from "./control-ui-plugin-fixture.ts";
 import {
   createControlUiSessionFixtures,
@@ -360,36 +361,6 @@ export async function waitForControlUiRoute(page: Page, target: ControlUiRouteTa
       { cause: error },
     );
   }
-}
-
-/**
- * Click a control inside a board widget document once pointer events reach it.
- *
- * Board widget frames stay `inert` and transparent until the sandbox reports
- * the document rendered, and Linux Chromium keeps routing pointer events to the
- * outer iframe element instead of into the revealed cross-origin document until
- * that reveal reaches its compositor. Playwright's actionability checks read the
- * DOM, and its hit-target interceptor reports a click that reached no frame as
- * delivered, so a click issued in that window is a silent no-op. Hover until the
- * widget document itself observes the pointer, then click; a control that never
- * observes it fails loudly instead.
- */
-export async function clickBoardWidgetControl(page: Page, control: Locator): Promise<void> {
-  const deadline = Date.now() + controlUiE2eWaitTimeoutMs;
-  for (;;) {
-    // Leave and re-enter: a stationary pointer keeps the browser's stale
-    // routing decision, while a fresh move re-runs hit testing.
-    await page.mouse.move(0, 0);
-    await control.hover();
-    if (await control.evaluate((element) => element.matches(":hover"))) {
-      break;
-    }
-    if (Date.now() >= deadline) {
-      throw new Error("Board widget control never received pointer events.");
-    }
-    await page.waitForTimeout(100);
-  }
-  await control.click();
 }
 
 export async function waitForControlUiSettingsTakeover(
@@ -1067,7 +1038,7 @@ export function createControlUiMockGatewayInitScript(
     protocolVersion: PROTOCOL_VERSION,
     scenario: normalizeScenario(scenario),
   };
-  return `${json5BrowserSource}\n;(() => { const __name = (target) => target; (${installControlUiMockGateway.toString()})(${JSON.stringify(input)}, globalThis.JSON5.parse, ${createControlUiSessionFixtures.toString()}, ${createControlUiAttachmentFacts.toString()}, ${createControlUiMockResponses.toString()}); })();`;
+  return `${json5BrowserSource}\n;(() => { const __name = (target) => target; (${installControlUiMockGateway.toString()})(${JSON.stringify(input)}, globalThis.JSON5.parse, ${createControlUiSessionFixtures.toString()}, ${createControlUiAttachmentFacts.toString()}, ${createControlUiMockResponses.toString()}, ${createControlUiMockSessionSubscriptions.toString()}); })();`;
 }
 
 function installControlUiMockGateway(
@@ -1079,6 +1050,7 @@ function installControlUiMockGateway(
   createSessions: typeof createControlUiSessionFixtures,
   createAttachmentFacts: typeof createControlUiAttachmentFacts,
   createResponses: typeof createControlUiMockResponses,
+  createSubscriptions: typeof createControlUiMockSessionSubscriptions,
 ) {
   const NativeWebSocket = window.WebSocket;
   type BrowserFrame = {
@@ -1091,7 +1063,7 @@ function installControlUiMockGateway(
     id: string;
     method: string;
     params?: unknown;
-    socket: { deliver: (frame: unknown) => void };
+    socket: MockWebSocket;
   };
   type DeferredMethod = {
     method: string;
@@ -1179,9 +1151,9 @@ function installControlUiMockGateway(
     // preserves the same exact owner rows used by CAS, describe, and startup.
     sessions.replaceCanonicalList(canonicalSessionRows);
   }
+  const subscriptionRouting = createSubscriptions(scenario, isRecord);
   const terminalSessions = new Map<string, MockTerminalSession>();
   let terminalSessionSequence = 0;
-  const sessionMessageSubscriptions = new Set<string>();
   const sockets: Array<{
     readonly readyState: number;
     readonly url: string;
@@ -1707,11 +1679,7 @@ function installControlUiMockGateway(
     return response;
   }
 
-  function emitGatewayEvent(
-    socket: { deliver: (frame: unknown) => void } | null,
-    event: string,
-    payload: unknown,
-  ): void {
+  function emitGatewayEvent(socket: MockWebSocket | null, event: string, payload: unknown): void {
     if (
       event === "chat" &&
       isRecord(payload) &&
@@ -1748,6 +1716,9 @@ function installControlUiMockGateway(
       }
       pendingApprovals.set(method, queue);
     }
+    if (socket && !socket.sessionMessageSubscriptions.allows(event, payload)) {
+      return;
+    }
     socket?.deliver({ event, payload, seq: ++seq, type: "event" });
   }
 
@@ -1783,23 +1754,15 @@ function installControlUiMockGateway(
 
   function emitRepeatingSessionEvent(): void {
     const events = scenario.repeatingSessionEvents.events;
-    if (events.length === 0) {
-      return;
-    }
     const event = events[sessionMessageEventIndex % events.length];
     sessionMessageEventIndex += 1;
-    if (!event || !isRecord(event.payload) || typeof event.payload.sessionKey !== "string") {
+    if (
+      !event ||
+      !MockWebSocket.latest?.sessionMessageSubscriptions.hasSubscription(event.payload)
+    ) {
       return;
     }
-    if (!sessionMessageSubscriptions.has(event.payload.sessionKey)) {
-      return;
-    }
-    MockWebSocket.latest?.deliver({
-      event: event.event,
-      payload: event.payload,
-      seq: ++seq,
-      type: "event",
-    });
+    emitGatewayEvent(MockWebSocket.latest, event.event, event.payload);
   }
 
   function startRepeatingSessionEvents(): void {
@@ -1811,21 +1774,22 @@ function installControlUiMockGateway(
     sessionMessageEventTimer = window.setInterval(emitRepeatingSessionEvent, intervalMs);
   }
 
-  function updateSessionMessageSubscription(method: string, params: unknown): void {
-    const sessionKey = isRecord(params) && typeof params.key === "string" ? params.key : "";
-    if (!sessionKey) {
+  function updateSessionMessageSubscription(
+    socket: MockWebSocket,
+    method: string,
+    params: unknown,
+  ): void {
+    if (socket.readyState !== MockWebSocket.OPEN) {
       return;
     }
+    socket.sessionMessageSubscriptions.recordRequest(method, params);
     if (method === "sessions.messages.subscribe") {
-      sessionMessageSubscriptions.add(sessionKey);
       startRepeatingSessionEvents();
-      return;
-    }
-    if (method === "sessions.messages.unsubscribe") {
-      sessionMessageSubscriptions.delete(sessionKey);
-      if (sessionMessageSubscriptions.size === 0) {
-        stopRepeatingSessionEvents();
-      }
+    } else if (
+      method === "sessions.messages.unsubscribe" &&
+      socket.sessionMessageSubscriptions.size === 0
+    ) {
+      stopRepeatingSessionEvents();
     }
   }
 
@@ -2362,7 +2326,9 @@ function installControlUiMockGateway(
         return { subscribed: true };
       case "sessions.messages.subscribe":
         return {
-          key: isRecord(params) && typeof params.key === "string" ? params.key : "",
+          key: subscriptionRouting.canonicalKey(
+            isRecord(params) && typeof params.key === "string" ? params.key : "",
+          ),
         };
       case "sessions.messages.unsubscribe":
         return { ok: true };
@@ -2525,6 +2491,7 @@ function installControlUiMockGateway(
     readyState = MockWebSocket.CONNECTING;
     readonly url: string;
     private tickTimer: number | null = null;
+    readonly sessionMessageSubscriptions = subscriptionRouting.createClient();
 
     constructor(url: string | URL) {
       super();
@@ -2576,7 +2543,7 @@ function installControlUiMockGateway(
         window.clearInterval(this.tickTimer);
         this.tickTimer = null;
       }
-      sessionMessageSubscriptions.clear();
+      this.sessionMessageSubscriptions.clear();
       stopRepeatingSessionEvents();
       this.dispatchEvent(new CloseEvent("close", { code, reason }));
     }
@@ -2600,6 +2567,9 @@ function installControlUiMockGateway(
         const payload = commitFixtureResponse(method, frame.params, response);
         const mockError =
           isRecord(payload) && isRecord(payload["__mockError"]) ? payload["__mockError"] : null;
+        if (!mockError) {
+          updateSessionMessageSubscription(this, method, frame.params);
+        }
         this.deliver(
           mockError
             ? { id, ok: false, error: mockError, type: "res" }
@@ -2612,9 +2582,6 @@ function installControlUiMockGateway(
           this.tickTimer = window.setInterval(() => {
             this.deliver({ event: "tick", payload: {}, seq: ++seq, type: "event" });
           }, 30_000);
-        }
-        if (!mockError) {
-          updateSessionMessageSubscription(method, frame.params);
         }
         if (
           !mockError &&
@@ -2717,6 +2684,9 @@ function installControlUiMockGateway(
           ),
         );
         const mockError = isRecord(resolvedPayload) ? resolvedPayload["__mockError"] : undefined;
+        if (!mockError) {
+          updateSessionMessageSubscription(response.socket, response.method, response.params);
+        }
         response.socket.deliver({
           id: response.id,
           ok: !mockError,
@@ -2873,7 +2843,7 @@ function installControlUiMockGateway(
   });
   window.WebSocket = RoutedWebSocket as unknown as typeof WebSocket;
   window.addEventListener("pagehide", () => {
-    sessionMessageSubscriptions.clear();
+    MockWebSocket.latest?.sessionMessageSubscriptions.clear();
     stopRepeatingSessionEvents();
   });
 }

@@ -9,7 +9,6 @@ import {
   buildHostedMediaEvidence,
   classifyHostedMediaFailureStatus,
   findSkippedExplicitProviderSelections,
-  formatHelp,
   parseArgs,
   parseHostedMediaOptions,
   runCli,
@@ -100,13 +99,6 @@ describe("hosted media provider live QA producer", () => {
 });
 
 describe("hosted media provider live CLI", () => {
-  it("prints help for the live media command", () => {
-    const help = formatHelp();
-
-    expect(help).toContain("Media live harness");
-    expect(help).toContain("pnpm test:live:media");
-  });
-
   it("rejects unknown global providers for the selected suites", () => {
     expect(() =>
       parseArgs(["image", "--providers", "definitely-not-a-provider", "--all-providers"]),
@@ -147,13 +139,6 @@ describe("hosted media provider live CLI", () => {
       suites: ["image"],
       requireAuth: false,
       passthroughArgs: ["--project", "tooling", "-t", "media-smoke"],
-    });
-  });
-
-  it("parses the explicit empty-run escape hatch", () => {
-    expect(parseArgs(["--allow-empty"])).toMatchObject({
-      allowEmpty: true,
-      requireAuth: true,
     });
   });
 

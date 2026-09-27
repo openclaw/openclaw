@@ -1,5 +1,4 @@
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
-// Matrix plugin module implements setup core behavior.
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,

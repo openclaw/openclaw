@@ -1,5 +1,4 @@
 #if os(macOS)
-import AppKit
 import SwiftUI
 
 extension ChatSessionSidebarModel.Node {
@@ -578,8 +577,7 @@ struct ChatSessionSidebar: View {
         }
         Divider()
         Button {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(session.key, forType: .string)
+            ChatPasteboard.copy(session.key)
         } label: {
             self.actionLabel(String(localized: "Copy Session Key"), systemImage: "doc.on.doc")
         }

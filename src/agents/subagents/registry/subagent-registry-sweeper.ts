@@ -96,6 +96,7 @@ export function createSubagentRegistrySweeper(params: {
   }
 
   function stop() {
+    recovery.reset();
     intervalStarted = false;
     clearTimeout(scheduled?.timer);
     scheduled = undefined;

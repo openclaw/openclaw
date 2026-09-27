@@ -176,8 +176,6 @@ Options:
   --plugin-sdk-api-acknowledgement <digest>
                                       8-character digest from the Plugin SDK API diff report.
   --windows-node-tag <tag>            Optional exact Windows Node tag for postpublish asset promotion.
-  --stable-soak-waiver <reason>       Operator-approved reason to publish stable from beta-profile validation without soak.
-  --lane-waiver <reason>              Operator acknowledgement for evidence sealed under a Full Release Validation lane waiver.
   --skip-dispatch                    Require Full Release Validation run; separate npm run only for historical recovery.
   --skip-local-generated-check        Do not run local generated release baseline checks before dispatch.
   --run-parallels                    Force candidate Parallels smoke; beta defaults to postpublish release:beta-smoke.
@@ -234,8 +232,6 @@ export function parseArgs(argv: string[]) {
     pluginSdkApiAcknowledgement: "",
     windowsNodeTag: "",
     windowsNodeInstallerDigests: "",
-    stableSoakWaiver: "",
-    laneWaiver: "",
     outputDir: "",
   };
   const helpIndex = cliArgs.findIndex((arg) => arg === "-h" || arg === "--help");
@@ -256,8 +252,6 @@ export function parseArgs(argv: string[]) {
           ["--npm-preflight-run", "npmPreflightRunId"],
           ["--plugin-sdk-api-acknowledgement", "pluginSdkApiAcknowledgement"],
           ["--windows-node-tag", "windowsNodeTag"],
-          ["--stable-soak-waiver", "stableSoakWaiver"],
-          ["--lane-waiver", "laneWaiver"],
           ["--telegram-provider-mode", "telegramProviderMode"],
           ["--provider", "provider"],
           ["--mode", "mode"],
@@ -357,16 +351,13 @@ export function parseArgs(argv: string[]) {
   if (!["beta", "stable", "full"].includes(options.releaseProfile)) {
     throw new Error("--release-profile must be beta, stable, or full");
   }
-  // Strict default for stable tags; the operator fast path needs an explicit waiver.
+  // Stable tags require the stable or full validation profile.
   if (
     !options.tag.includes("-alpha.") &&
     !options.tag.includes("-beta.") &&
-    options.releaseProfile === "beta" &&
-    !options.stableSoakWaiver.trim()
+    options.releaseProfile === "beta"
   ) {
-    throw new Error(
-      "stable release candidates require --release-profile stable or full, or an explicit --stable-soak-waiver",
-    );
+    throw new Error("stable release candidates require --release-profile stable or full");
   }
   if (options.runParallels && options.skipParallels) {
     throw new Error("--run-parallels and --skip-parallels cannot be combined");
@@ -1693,12 +1684,6 @@ export function buildPublishCommand(
   if (options.plugins.trim()) {
     fields.push(["plugins", options.plugins]);
   }
-  if (options.stableSoakWaiver.trim()) {
-    fields.push(["stable_soak_waiver", options.stableSoakWaiver]);
-  }
-  if (options.laneWaiver.trim()) {
-    fields.push(["lane_waiver", options.laneWaiver]);
-  }
   if (
     mode === "prepare" &&
     (!PUBLISH_TOOLING_TAG_PATTERN.test(workflowRef) ||
@@ -2032,7 +2017,7 @@ function checkCandidateAndroidVersion(targetSha: string, tag: string) {
     targetVersion,
     message: matches
       ? `PASS: Android version ${androidVersion} matches release train ${targetVersion}.`
-      : `WARNING: Android version ${androidVersion} does not match release train ${targetVersion}; run node --import tsx scripts/mobile-release-version.ts --prepare --version ${targetVersion} --write before tagging, or accept that Android will not ship for this release.`,
+      : `WARNING: Android version ${androidVersion} does not match release train ${targetVersion}; run node --import tsx scripts/android-pin-version.ts --version ${targetVersion} before tagging, or accept that Android will not ship for this release.`,
   };
 }
 
@@ -2138,12 +2123,12 @@ async function main() {
     const train = version && classifyReleaseTrain(version);
     if (train === "unsupported-extended-stable-correction") {
       throw new Error(
-        `Extended-stable correction suffixes are invalid (${options.tag}); use a new monthly maintenance patch. See the monthly Gateway extended-stable procedure in docs/reference/RELEASING.md.`,
+        `Extended-stable correction suffixes are invalid (${options.tag}); use a new monthly maintenance patch. See the monthly Gateway extended-stable procedure in .agents/skills/release-openclaw-maintainer/references/extended-stable-publish.md.`,
       );
     }
     if (options.npmDistTag === "extended-stable" || train === "extended-stable") {
       throw new Error(
-        "Fresh extended-stable checklist launches are not supported. Use the monthly Gateway extended-stable procedure in docs/reference/RELEASING.md: Full Release Validation, then the separate plugin npm and core npm publication owners.",
+        "Fresh extended-stable checklist launches are not supported. Use the monthly Gateway extended-stable procedure in .agents/skills/release-openclaw-maintainer/references/extended-stable-publish.md: Full Release Validation, then the separate plugin npm and core npm publication owners.",
       );
     }
   }
@@ -2451,8 +2436,6 @@ async function main() {
       npmDistTag: options.npmDistTag,
       pluginPublishScope: publicationSelection.pluginPublishScope,
       plugins: options.plugins,
-      stableSoakWaiver: options.stableSoakWaiver,
-      laneWaiver: options.laneWaiver,
       workflowRef:
         options.publishWorkflowRef || npmPreflightSource?.workflowRef || options.workflowRef,
       releaseProfile: "from-validation",

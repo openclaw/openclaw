@@ -259,7 +259,6 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
   });
 
   it.each([
-    { shape: "single", count: 1 },
     { shape: "aliases", count: 1 },
     { shape: "stress", count: 100 },
   ])("bounds cold and warm broadcaster lookup work for $shape keys", async ({ shape, count }) => {

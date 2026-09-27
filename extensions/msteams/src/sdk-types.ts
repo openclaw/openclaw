@@ -44,6 +44,8 @@ type MSTeamsActivity = {
   name?: string;
   membersAdded?: Array<{ id?: string; name?: string }>;
   membersRemoved?: Array<{ id?: string; name?: string }>;
+  reactionsAdded?: Array<{ type?: string }>;
+  reactionsRemoved?: Array<{ type?: string }>;
   replyToId?: string;
   [key: string]: unknown;
 };

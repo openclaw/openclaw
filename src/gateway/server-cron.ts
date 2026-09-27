@@ -71,6 +71,7 @@ import type {
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing.js";
+import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import {
   resolveHeartbeatForWake,
   resolveHeartbeatTimeoutOverrideSeconds,
@@ -394,6 +395,7 @@ const CRON_ACTIVE_RUN_SHUTDOWN_DRAIN_MS = 10_000;
 
 /** Build the cron service state used by Gateway startup and lazy cron loading. */
 export function buildGatewayCronService(params: {
+  scheduler: GatewayScheduler;
   cfg: OpenClawConfig;
   deps: CliDeps;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
@@ -756,6 +758,7 @@ export function buildGatewayCronService(params: {
   };
 
   const cron = new CronService({
+    scheduler: params.scheduler,
     storePath,
     cronEnabled,
     cronConfig: params.cfg.cron,
@@ -1482,11 +1485,11 @@ export function buildGatewayCronService(params: {
   // Serialize accepted-config convergence; newer requests and stop supersede this tail.
   let systemJobReconcileEpoch = 0;
   let systemJobReconcileTail = Promise.resolve<GatewaySystemJobReconciliationResult>("converged");
-  let systemJobRetryTimer: NodeJS.Timeout | undefined;
+  let systemJobRetryTimer: GatewayScheduledJob | undefined;
   const stopSystemJobReconcileRetry = () => {
     // Also invalidate any in-flight pass so a post-stop retry cannot fire.
     systemJobReconcileEpoch += 1;
-    clearTimeout(systemJobRetryTimer);
+    systemJobRetryTimer?.cancel();
     systemJobRetryTimer = undefined;
   };
   const reconcileSystemJobs = (): Promise<GatewaySystemJobReconciliationResult> => {
@@ -1516,11 +1519,11 @@ export function buildGatewayCronService(params: {
           converged &&= ok;
         }
         if (!converged) {
-          systemJobRetryTimer = setTimeout(() => {
-            systemJobRetryTimer = undefined;
-            void reconcileSystemJobs();
-          }, 30_000);
-          systemJobRetryTimer.unref?.();
+          systemJobRetryTimer = params.scheduler.schedule({
+            id: `cron:${storePath}:system-jobs`,
+            delayMs: 30_000,
+            run: reconcileSystemJobs,
+          });
         }
         return converged ? "converged" : "retry-scheduled";
       } catch (error) {

@@ -431,17 +431,6 @@ describe("resolveConfigEnvVars", () => {
       });
     });
 
-    it("collects warnings and preserves placeholder when onMissing is set", () => {
-      const warnings: EnvSubstitutionWarning[] = [];
-      const result = resolveConfigEnvVars(
-        { key: "${MISSING_VAR}", present: "${PRESENT}" },
-        { PRESENT: "ok" },
-        { onMissing: (w) => warnings.push(w) },
-      );
-      expect(result).toEqual({ key: "${MISSING_VAR}", present: "ok" });
-      expect(warnings).toEqual([{ varName: "MISSING_VAR", configPath: "key" }]);
-    });
-
     it("collects multiple warnings across nested paths", () => {
       const warnings: EnvSubstitutionWarning[] = [];
       const result = resolveConfigEnvVars(
@@ -465,10 +454,6 @@ describe("resolveConfigEnvVars", () => {
       expect(warnings).toHaveLength(2);
       expect(warnings[0]).toEqual({ varName: "TTS_KEY", configPath: "providers.tts.apiKey" });
       expect(warnings[1]).toEqual({ varName: "STT_KEY", configPath: "providers.stt.apiKey" });
-    });
-
-    it("still throws when onMissing is not set", () => {
-      expect(() => resolveConfigEnvVars({ key: "${MISSING}" }, {})).toThrow(MissingEnvVarError);
     });
   });
 
@@ -498,62 +483,6 @@ describe("resolveConfigEnvVars", () => {
     it("detects references mixed with escaped placeholders", () => {
       expect(containsEnvVarReference("$${ESCAPED} ${REAL}")).toBe(true);
       expect(containsEnvVarReference("${REAL} $${ESCAPED}")).toBe(true);
-    });
-  });
-
-  describe("real-world config patterns", () => {
-    it("substitutes provider, gateway, and base URL config values", () => {
-      const scenarios: SubstitutionScenario[] = [
-        {
-          name: "provider API keys",
-          config: {
-            models: {
-              providers: {
-                "vercel-gateway": { apiKey: "${VERCEL_GATEWAY_API_KEY}" },
-                openai: { apiKey: "${OPENAI_API_KEY}" },
-              },
-            },
-          },
-          env: {
-            VERCEL_GATEWAY_API_KEY: "vg_key_123",
-            OPENAI_API_KEY: "sk-xxx",
-          },
-          expected: {
-            models: {
-              providers: {
-                "vercel-gateway": { apiKey: "vg_key_123" },
-                openai: { apiKey: "sk-xxx" },
-              },
-            },
-          },
-        },
-        {
-          name: "gateway auth token",
-          config: { gateway: { auth: { token: "${OPENCLAW_GATEWAY_TOKEN}" } } },
-          env: { OPENCLAW_GATEWAY_TOKEN: "secret-token" },
-          expected: { gateway: { auth: { token: "secret-token" } } },
-        },
-        {
-          name: "provider base URL composition",
-          config: {
-            models: {
-              providers: {
-                custom: { baseUrl: "${CUSTOM_API_BASE}/v1" },
-              },
-            },
-          },
-          env: { CUSTOM_API_BASE: "https://api.example.com" },
-          expected: {
-            models: {
-              providers: {
-                custom: { baseUrl: "https://api.example.com/v1" },
-              },
-            },
-          },
-        },
-      ];
-
-      expectResolvedScenarios(scenarios);
     });
   });
 

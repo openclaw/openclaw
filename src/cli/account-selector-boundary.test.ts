@@ -94,9 +94,7 @@ const channelCases = [
   },
 ];
 const representativeCases = [
-  ...messageCases.filter(({ name }) =>
-    ["message send", "message thread create", "message broadcast"].includes(name),
-  ),
+  ...messageCases.filter(({ name }) => name === "message send"),
   ...channelCases,
 ];
 
@@ -127,27 +125,26 @@ describe("account selector option boundaries", () => {
     expect(leaves(program, "").toSorted()).toEqual(messageCases.map(({ name }) => name).toSorted());
   });
 
-  describe.each([...messageCases, ...channelCases])("$name", ({ args }) => {
-    it("preserves valid omitted input before action", async () => {
-      const { program, startup } = await createProgram(args);
-      await expect(program.parseAsync(args, { from: "user" })).rejects.toThrow(
-        "command startup reached",
-      );
-      expect(startup.mock.calls.map(([, action]) => action.opts<AccountOptions>().account)).toEqual(
-        [undefined],
-      );
-    });
-
-    it.each(["", " \t\n "])("rejects blank %j before command startup", async (account) => {
+  it.each([...messageCases, ...channelCases])(
+    "rejects blank input before $name startup",
+    async ({ args }) => {
       const { program, startup } = await createProgram(args);
       await expect(
-        program.parseAsync([...args, "--account", account], { from: "user" }),
+        program.parseAsync([...args, "--account", ""], { from: "user" }),
+      ).rejects.toThrow("--account must not be blank");
+      expect(startup).not.toHaveBeenCalled();
+    },
+  );
+
+  describe.each(representativeCases)("$name selector forms", ({ args }) => {
+    it("rejects whitespace before command startup", async () => {
+      const { program, startup } = await createProgram(args);
+      await expect(
+        program.parseAsync([...args, "--account", " \t\n "], { from: "user" }),
       ).rejects.toThrow("--account must not be blank");
       expect(startup).not.toHaveBeenCalled();
     });
-  });
 
-  describe.each(representativeCases)("$name selector forms", ({ args }) => {
     it.each([undefined, "work", " work "])(
       "preserves nonblank or omitted value %j",
       async (account) => {

@@ -1,9 +1,6 @@
 import { listAgentIds, resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
-/**
- * Anthropic config defaulting helpers. They seed default Anthropic/Claude CLI
- * model refs and cache-retention params based on configured auth mode.
- */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
+import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
@@ -17,7 +14,7 @@ import {
 } from "./claude-model-refs.js";
 import {
   CLAUDE_CLI_BACKEND_ID,
-  CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS,
+  CLAUDE_CLI_CANONICAL_ALLOWLIST_REFS,
   CLAUDE_CLI_PROFILE_ID,
 } from "./cli-constants.js";
 
@@ -95,21 +92,6 @@ function usesRetiredClaudeCliProviderEntry(config: OpenClawConfig): boolean {
   );
 }
 
-function resolveModelPrimaryValue(
-  value: string | { primary?: string; fallbacks?: string[] } | undefined,
-): string | undefined {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed || undefined;
-  }
-  const primary = value?.primary;
-  if (typeof primary !== "string") {
-    return undefined;
-  }
-  const trimmed = primary.trim();
-  return trimmed || undefined;
-}
-
 function isAnthropicCacheRetentionTarget(
   parsed: { provider: string; model: string } | null | undefined,
 ): parsed is { provider: string; model: string } {
@@ -122,12 +104,7 @@ function isAnthropicCacheRetentionTarget(
 }
 
 function usesClaudeCliModelSelection(config: OpenClawConfig): boolean {
-  const primary = resolveModelPrimaryValue(
-    config.agents?.defaults?.model as
-      | string
-      | { primary?: string; fallbacks?: string[] }
-      | undefined,
-  );
+  const primary = resolveAgentModelPrimaryValue(config.agents?.defaults?.model);
   const parsedPrimary = primary ? parseAnthropicModelRef(primary) : null;
   if (parsedPrimary?.provider === CLAUDE_CLI_BACKEND_ID) {
     return true;
@@ -179,12 +156,6 @@ function usesSelectedClaudeCliAuthProfile(config: OpenClawConfig): boolean {
   return hasClaudeCliProfile && !hasAnthropicProfile;
 }
 
-function toCanonicalAnthropicModelRef(ref: string): string {
-  return ref.startsWith(`${CLAUDE_CLI_BACKEND_ID}/`)
-    ? `anthropic/${ref.slice(CLAUDE_CLI_BACKEND_ID.length + 1)}`
-    : ref;
-}
-
 function collectClaudeCliRuntimeRefsFromConfig(config: OpenClawConfig): string[] {
   type ClaudeCliModelSelection = string | { primary?: string; fallbacks?: string[] } | undefined;
   const selections: Array<{
@@ -219,7 +190,6 @@ function collectClaudeCliRuntimeRefsFromConfig(config: OpenClawConfig): string[]
   return [...refs];
 }
 
-/** Normalize Anthropic provider config defaults for one provider entry. */
 export function normalizeAnthropicProviderConfigForProvider<
   T extends { api?: string; models?: unknown[] },
 >(params: { provider: string; providerConfig: T }): T {
@@ -236,7 +206,6 @@ export function normalizeAnthropicProviderConfigForProvider<
   return { ...providerConfig, api: ANTHROPIC_PROVIDER_API };
 }
 
-/** Apply Anthropic and Claude CLI defaults to an OpenClaw config object. */
 export function applyAnthropicConfigDefaults(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -277,7 +246,7 @@ export function applyAnthropicConfigDefaults(params: {
     const nextModels = defaults.models ? { ...defaults.models } : {};
     let modelsMutated = false;
 
-    const primary = resolveKnownAnthropicModelRef(resolveModelPrimaryValue(defaults.model));
+    const primary = resolveKnownAnthropicModelRef(resolveAgentModelPrimaryValue(defaults.model));
     const parsedPrimary = primary ? parseAnthropicModelRef(primary) : null;
     const refs = [
       ...Object.keys(nextModels),
@@ -326,10 +295,10 @@ export function applyAnthropicConfigDefaults(params: {
   ) {
     const nextModels = defaults.models ? { ...defaults.models } : {};
     let modelsMutated = false;
-    const runtimeRefs = new Set<string>(collectClaudeCliRuntimeRefsFromConfig(params.config));
-    for (const rawRef of CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS) {
-      runtimeRefs.add(toCanonicalAnthropicModelRef(rawRef));
-    }
+    const runtimeRefs = new Set([
+      ...collectClaudeCliRuntimeRefsFromConfig(params.config),
+      ...CLAUDE_CLI_CANONICAL_ALLOWLIST_REFS,
+    ]);
     for (const ref of runtimeRefs) {
       const current = nextModels[ref];
       const updated = modelEntryWithClaudeCliRuntime(current);

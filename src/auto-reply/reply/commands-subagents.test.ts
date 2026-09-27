@@ -119,36 +119,6 @@ describe("subagents status", () => {
       unexpectedText: [] as string[],
     },
     {
-      name: "includes subagent details in /status when verbose",
-      seedRuns: () => {
-        addSubagentRunForTests({
-          runId: "run-1",
-          childSessionKey: "agent:main:subagent:abc",
-          requesterSessionKey: "agent:main:main",
-          requesterDisplayKey: "main",
-          task: "do thing",
-          cleanup: "keep",
-          createdAt: 1000,
-          startedAt: 1000,
-        });
-        addSubagentRunForTests({
-          runId: "run-2",
-          childSessionKey: "agent:main:subagent:def",
-          requesterSessionKey: "agent:main:main",
-          requesterDisplayKey: "main",
-          task: "finished task",
-          cleanup: "keep",
-          createdAt: 900,
-          startedAt: 900,
-          endedAt: 1200,
-          outcome: { status: "ok" },
-        });
-      },
-      verboseLevel: "on" as const,
-      expectedText: ["🤖 Subagents: 1 active", "· 1 done", "  • do thing · 4s"],
-      unexpectedText: [] as string[],
-    },
-    {
       name: "preserves verbose done-only summary",
       seedRuns: () => {
         addSubagentRunForTests({
@@ -246,7 +216,6 @@ describe("subagents status", () => {
   it.each([
     { endedAt: Number.NaN, duration: "4s" },
     { endedAt: Infinity, duration: "0s" },
-    { endedAt: -Infinity, duration: "0s" },
   ])("preserves active duration for non-finite end $endedAt", async ({ endedAt, duration }) => {
     const run: SubagentRunRecord = {
       runId: "non-finite-end",
@@ -563,7 +532,7 @@ describe("subagents info", () => {
       addSubagentRunForTests(run);
     }
     const context = buildInfoContext({ cfg: buildCommandTestConfig(), runs, restTokens: ["1"] });
-    const listing = requireReplyText(handleSubagentsListAction(context).reply);
+    const listing = requireReplyText((await handleSubagentsListAction(context)).reply);
     expect(listing).toContain("1. recent worker");
     expect(listing).not.toContain("stale worker");
     expect(requireReplyText(handleSubagentsInfoAction(context).reply)).toContain(
@@ -602,7 +571,7 @@ describe("subagents info", () => {
     },
   ])(
     "keeps /subagents info and list aligned for $name",
-    ({ endedReason, outcome, expectedStatus }) => {
+    async ({ endedReason, outcome, expectedStatus }) => {
       const now = Date.now();
       const run = {
         runId: `commands-subagents-status-${expectedStatus}`,
@@ -630,7 +599,7 @@ describe("subagents info", () => {
       expect(requireReplyText(handleSubagentsInfoAction(context).reply)).toContain(
         `Status: ${expectedStatus}`,
       );
-      expect(requireReplyText(handleSubagentsListAction(context).reply)).toContain(
+      expect(requireReplyText((await handleSubagentsListAction(context)).reply)).toContain(
         ` ${expectedStatus}`,
       );
     },

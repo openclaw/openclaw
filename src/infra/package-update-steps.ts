@@ -225,7 +225,7 @@ export async function runGlobalPackageUpdateSteps(params: {
   validateCandidate?: (packageRoot: string) => Promise<UpdateStepResult[]>;
   beforeActivate?: () => Promise<void>;
   assertCurrent?: () => void;
-  onTransaction?: (transaction: PackageUpdateTransaction) => void;
+  onTransaction?: (transaction: PackageUpdateTransaction) => void | Promise<void>;
   expectedGitCheckout?: GitRuntimeIdentity;
   activateGitRoot?: string;
   localOverrides?: { reapply: boolean; env?: NodeJS.ProcessEnv };

@@ -836,7 +836,11 @@
     },
     {
       "source": "/showcase",
-      "destination": "/start/showcase"
+      "destination": "https://openclaw.ai/showcase"
+    },
+    {
+      "source": "/start/showcase",
+      "destination": "https://openclaw.ai/showcase"
     },
     {
       "source": "/signal",
@@ -1295,7 +1299,6 @@
                 "group": "Overview",
                 "pages": [
                   "index",
-                  "start/showcase",
                   "start/why-openclaw",
                   "start/why-openclaw/the-trust-boundary",
                   "start/why-openclaw/policy-as-code",
@@ -1812,7 +1815,6 @@
                       "plugins/logbook",
                       "plugins/oc-path",
                       "plugins/session-share",
-                      "plugins/webhooks",
                       "plugins/workboard",
                       "plugins/zalouser"
                     ]

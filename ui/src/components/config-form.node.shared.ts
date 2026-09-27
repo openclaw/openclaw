@@ -1,4 +1,3 @@
-// Control UI helpers shared by config form node renderers.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
@@ -11,7 +10,7 @@ import { REDACTED_SENTINEL } from "../lib/config-form-utils.ts";
 import { formatUnknownText } from "../lib/format.ts";
 import { configValuesEqual, isSupportedConfigValueValid } from "./config-form.constraints.ts";
 import { formatConfigFormNumber } from "./config-form.numeric.ts";
-import type { ConfigSearchCriteria } from "./config-form.search.ts";
+import { resolveConfigFieldMeta, type ConfigSearchCriteria } from "./config-form.search.ts";
 import {
   configFieldId,
   hasSensitiveConfigData,
@@ -68,6 +67,19 @@ export type ConfigNodeRenderParams = {
 export type ConfigNodeRenderer = (
   params: ConfigNodeRenderParams,
 ) => TemplateResult | typeof nothing;
+
+export function resolveConfigFieldPresentation(params: ConfigNodeRenderParams) {
+  const { label, help } = resolveConfigFieldMeta(params.path, params.schema, params.hints);
+  const showLabel = params.showLabel ?? true;
+  return {
+    label,
+    help,
+    showLabel,
+    helpId:
+      params.descriptionId ??
+      (showLabel && help ? configFieldId(params.path, "description") : undefined),
+  };
+}
 
 type SensitiveRenderState = {
   isSensitive: boolean;

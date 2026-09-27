@@ -17,6 +17,7 @@ import ai.openclaw.app.R
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.currentAppLanguage
 import ai.openclaw.app.firstGraphemeOrNull
+import ai.openclaw.app.gatewayConnectionStatusForDisplay
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.joinedNativeText
 import ai.openclaw.app.i18n.nativeString
@@ -126,7 +127,6 @@ private val overviewListRowMinHeight = 54.dp
 private const val overviewRecentSessionLimit = 50
 private const val overviewRecentSessionVisibleLimit = 3
 
-/** Main post-onboarding shell that owns top-level Android navigation state. */
 @Composable
 fun ShellScreen(
   viewModel: MainViewModel,
@@ -470,7 +470,7 @@ private fun OverviewScreen(
   val headerRoute = overviewHeaderRoute(attentionRows)
   val activeAgentName = overviewAgentName(agents = agents, defaultAgentId = defaultAgentId)
   val activeAgentBadge = overviewAgentBadgeText(agents = agents, defaultAgentId = defaultAgentId)
-  val activeAgentAvatar = overviewAgentAvatar(agents = agents, defaultAgentId = defaultAgentId)
+  val activeAgentAvatar = overviewAgent(agents = agents, defaultAgentId = defaultAgentId)?.let(::agentAvatarSource)
   val overviewSessions = overviewRecentSessions(sessions)
   val overviewSessionCount = overviewSessions.size
   val candidateRecentRows =
@@ -867,24 +867,11 @@ internal fun overviewHeaderState(
 
 internal fun overviewHeaderRoute(attentionRows: List<HomeAttentionRow>): SettingsRoute = attentionRows.firstNotNullOfOrNull { it.settingsRoute } ?: SettingsRoute.Gateway
 
-internal fun overviewRecentSessionCount(sessions: List<ChatSessionEntry>): Int = overviewRecentSessions(sessions).size
-
 internal fun overviewRecentSessions(sessions: List<ChatSessionEntry>): List<ChatSessionEntry> =
   sessions
-    .withIndex()
-    .groupBy { entry -> entry.value.key }
-    .values
-    .map { entries ->
-      entries
-        .sortedWith(
-          compareByDescending<IndexedValue<ChatSessionEntry>> { entry -> entry.value.overviewRecentSessionRecencyMs() }
-            .thenBy { entry -> entry.index },
-        ).first()
-    }.sortedWith(
-      compareByDescending<IndexedValue<ChatSessionEntry>> { entry -> entry.value.overviewRecentSessionRecencyMs() }
-        .thenBy { entry -> entry.value.key },
-    ).take(overviewRecentSessionLimit)
-    .map { entry -> entry.value }
+    .sortedWith(compareByDescending<ChatSessionEntry> { it.overviewRecentSessionRecencyMs() }.thenBy { it.key })
+    .distinctBy(ChatSessionEntry::key)
+    .take(overviewRecentSessionLimit)
 
 private fun ChatSessionEntry.overviewRecentSessionRecencyMs(): Long = lastActivityAt ?: updatedAtMs ?: Long.MIN_VALUE
 
@@ -999,11 +986,6 @@ internal fun overviewAgentBadgeText(
   return agentInitials(source)
 }
 
-internal fun overviewAgentAvatar(
-  agents: List<GatewayAgentSummary>,
-  defaultAgentId: String?,
-): AgentAvatarSource? = overviewAgent(agents = agents, defaultAgentId = defaultAgentId)?.let(::agentAvatarSource)
-
 private fun overviewAgent(
   agents: List<GatewayAgentSummary>,
   defaultAgentId: String?,
@@ -1102,39 +1084,31 @@ internal fun homeAttentionRows(
   readyProviderCount: Int,
   unknownProviderCount: Int = 0,
 ): List<HomeAttentionRow> =
-  listOfNotNull(
+  buildList {
     if (!isConnected) {
-      HomeAttentionRow(
-        nativeString("Gateway"),
-        nativeString("Connect before chat, voice, and live status."),
-        Icons.Default.Cloud,
-        Tab.Settings,
-        SettingsRoute.Gateway,
+      add(
+        HomeAttentionRow(
+          nativeString("Gateway"),
+          nativeString("Connect before chat, voice, and live status."),
+          Icons.Default.Cloud,
+          Tab.Settings,
+          SettingsRoute.Gateway,
+        ),
       )
-    } else {
-      null
-    },
+    }
     if (pendingApprovals > 0) {
-      HomeAttentionRow(nativeString("Approvals"), approvalsSummary(pendingApprovals), Icons.Default.Lock, Tab.Settings, SettingsRoute.Approvals)
-    } else {
-      null
-    },
+      add(HomeAttentionRow(nativeString("Approvals"), approvalsSummary(pendingApprovals), Icons.Default.Lock, Tab.Settings, SettingsRoute.Approvals))
+    }
     if (channelsSummary?.channels?.any { it.error != null } == true) {
-      HomeAttentionRow(nativeString("Channels"), channelsSummaryText(channelsSummary), Icons.Default.Notifications, Tab.Settings, SettingsRoute.Channels)
-    } else {
-      null
-    },
+      add(HomeAttentionRow(nativeString("Channels"), channelsSummaryText(channelsSummary), Icons.Default.Notifications, Tab.Settings, SettingsRoute.Channels))
+    }
     if (nodesDevicesSummary.pendingDevices.isNotEmpty() || nodesDevicesSummary.hasNodeCapabilityApprovalPending()) {
-      HomeAttentionRow(nativeString("Nodes & Devices"), nodesDevicesSummaryText(nodesDevicesSummary), Icons.Default.Cloud, Tab.Settings, SettingsRoute.NodesDevices)
-    } else {
-      null
-    },
+      add(HomeAttentionRow(nativeString("Nodes & Devices"), nodesDevicesSummaryText(nodesDevicesSummary), Icons.Default.Cloud, Tab.Settings, SettingsRoute.NodesDevices))
+    }
     if (isConnected && readyProviderCount == 0 && unknownProviderCount == 0) {
-      HomeAttentionRow(nativeString("Providers"), nativeString("No ready providers"), Icons.Outlined.Inventory2, Tab.Settings, SettingsRoute.ProvidersModels)
-    } else {
-      null
-    },
-  )
+      add(HomeAttentionRow(nativeString("Providers"), nativeString("No ready providers"), Icons.Outlined.Inventory2, Tab.Settings, SettingsRoute.ProvidersModels))
+    }
+  }
 
 @Composable
 private fun HomeAttentionPanel(
@@ -1253,18 +1227,18 @@ internal fun stableOverviewRecentRows(
   val previousRowsByKey = previousRows.associateBy { row -> row.key }
   return candidateRows.map { candidateRow ->
     val previousRow = previousRowsByKey[candidateRow.key]
-    if (previousRow == null) candidateRow else candidateRow.withStableFieldsFrom(previousRow)
+    if (previousRow == null) {
+      candidateRow
+    } else {
+      candidateRow.copy(
+        title = candidateRow.title.ifBlank { previousRow.title },
+        source = candidateRow.source.ifBlank { previousRow.source },
+        metadata = candidateRow.metadata.ifBlank { previousRow.metadata },
+      )
+    }
   }
 }
 
-private fun RecentSessionListItem.withStableFieldsFrom(previousRow: RecentSessionListItem): RecentSessionListItem =
-  copy(
-    title = title.ifBlank { previousRow.title },
-    source = source.ifBlank { previousRow.source },
-    metadata = metadata.ifBlank { previousRow.metadata },
-  )
-
-/** Recent sessions panel that preserves the session key behind display labels. */
 @Composable
 private fun RecentSessionList(
   rows: List<RecentSessionListItem>,
@@ -1551,7 +1525,6 @@ private fun approvalsSummary(count: Int): String =
 
 private fun approvalsStatus(count: Int): Boolean? = if (count > 0) true else null
 
-/** Summarizes scheduled gateway jobs for overview and settings rows. */
 private fun cronJobsSummary(count: Int): String =
   when (count) {
     0 -> nativeString("No scheduled jobs")
@@ -1570,7 +1543,6 @@ private fun usageSummaryText(count: Int): String =
     else -> nativeString("\$count providers", count)
   }
 
-/** Reports how many gateway skills are enabled, eligible, and dependency-complete. */
 private fun skillsSummaryText(skills: List<GatewaySkillSummary>): String {
   val ready =
     skills.count {
@@ -1583,7 +1555,6 @@ private fun skillsSummaryText(skills: List<GatewaySkillSummary>): String {
   }
 }
 
-/** Converts gateway skill health into a tri-state settings status dot. */
 private fun skillsStatus(skills: List<GatewaySkillSummary>): Boolean? =
   when {
     skills.isEmpty() -> null
@@ -1597,7 +1568,6 @@ private fun skillsStatus(skills: List<GatewaySkillSummary>): Boolean? =
     else -> true
   }
 
-/** Mirrors the Skill Workshop review queue in one compact Settings row. */
 internal fun skillWorkshopSummaryText(summary: GatewaySkillWorkshopSummary): String {
   val pending = summary.proposals.count { it.status == "pending" }
   if (pending > 0) return if (pending == 1) nativeString("1 pending") else nativeString("\$pending pending", pending)
@@ -1619,7 +1589,6 @@ internal fun skillWorkshopStatus(summary: GatewaySkillWorkshopSummary): Boolean?
     else -> null
   }
 
-/** Prioritizes pending pairings over online counts for compact node/device summaries. */
 private fun nodesDevicesSummaryText(summary: GatewayNodesDevicesSummary): String {
   val online = summary.nodes.count { it.connected }
   val devices = summary.pairedDevices.size
@@ -1632,7 +1601,6 @@ private fun nodesDevicesSummaryText(summary: GatewayNodesDevicesSummary): String
   }
 }
 
-/** Maps node/device state to a settings status dot, treating pending pairings as attention-needed. */
 private fun nodesDevicesStatus(summary: GatewayNodesDevicesSummary): Boolean? =
   when {
     summary.pendingDevices.isNotEmpty() -> false
@@ -1649,7 +1617,6 @@ private fun GatewayNodesDevicesSummary.hasNodeCapabilityApprovalPending(): Boole
       node.approvalState == GatewayNodeCapabilityApproval.Unapproved
   }
 
-/** Summarizes channel connection state, surfacing errors before connected counts. */
 internal fun channelsSummaryText(summary: GatewayChannelsSummary): String {
   val connected = summary.channels.count { it.connected }
   val issueCount = summary.channels.count { it.error != null }
@@ -1661,7 +1628,6 @@ internal fun channelsSummaryText(summary: GatewayChannelsSummary): String {
   }
 }
 
-/** Maps channel health to the settings status dot shown in the shell. */
 private fun channelsStatus(summary: GatewayChannelsSummary): Boolean? =
   when {
     summary.channels.any { it.error != null } -> false
@@ -1670,7 +1636,6 @@ private fun channelsStatus(summary: GatewayChannelsSummary): Boolean? =
     else -> null
   }
 
-/** Summarizes dreaming memory health before enabled/off state. */
 private fun dreamingSummaryText(summary: GatewayDreamingSummary): String =
   when {
     !summary.storeHealthy || !summary.phaseSignalHealthy -> nativeString("Needs attention")
@@ -1678,7 +1643,6 @@ private fun dreamingSummaryText(summary: GatewayDreamingSummary): String =
     else -> nativeString("Off")
   }
 
-/** Maps dreaming store/phase health and enabled state to a settings status dot. */
 private fun dreamingStatus(summary: GatewayDreamingSummary): Boolean? =
   when {
     !summary.storeHealthy || !summary.phaseSignalHealthy -> false
@@ -1819,7 +1783,7 @@ internal fun gatewaySummary(
   isConnected: Boolean,
   gatewayConnectionProblem: GatewayConnectionProblem? = null,
 ): String {
-  if (isConnected) return if (statusText == "Connected (node offline)") gatewayStatusForDisplay(statusText) else nativeString("Online and ready")
+  if (isConnected) return if (statusText == "Connected (node offline)") gatewayConnectionStatusForDisplay(statusText) else nativeString("Online and ready")
   val status = statusText.trim().lowercase()
   return when {
     status.contains("connecting") || status.contains("reconnecting") -> nativeString("Connecting...")

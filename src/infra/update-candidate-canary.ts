@@ -227,6 +227,7 @@ export async function validateUpdateCandidateCanary(params: {
       nodeRunner: params.nodeRunner,
       timeoutMs: params.timeoutMs,
       signal: params.signal,
+      onProgress: params.onProgress,
     });
     // Copying private state has its own size/progress budget; preserve the
     // runtime validation budget after large snapshots finish.
@@ -237,6 +238,7 @@ export async function validateUpdateCandidateCanary(params: {
       durationMs: snapshotDuration,
       exitCode: 0,
       snapshotCapacity: rehearsal.snapshotCapacity,
+      diagnostics: rehearsal.snapshotDiagnostics,
     };
     steps.push(snapshotStep);
     params.onStep?.(snapshotStep);

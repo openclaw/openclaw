@@ -5,9 +5,15 @@ import {
   createTextPartCodeRegionResolver,
   indexTextParts,
   findCodeRegions,
+  findCodeOwnership,
   isInsideCode,
 } from "../shared/text/code-regions.js";
-import { trimTextPreservingCode } from "../shared/text/text-projection.js";
+import {
+  createConditionalTextProjector,
+  trimTextPreservingCode,
+  type TextFilter,
+} from "../shared/text/text-projection.js";
+import { createInlineReplyTagReader } from "./inline-reply-tags.js";
 
 export type InlineDirectiveParseResult = {
   text: string;
@@ -33,9 +39,7 @@ type InlineDirectiveParseOptions = {
 // messages.visibleReplies default flips to "message_tool" (structured fields own
 // delivery intent; persisted transcripts already carry openclawDelivery facts).
 const AUDIO_TAG_RE = /\[\[\s*audio_as_voice\s*\]\]/gi;
-const REPLY_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*([^\]\n]+))\s*\]\]/gi;
-const INLINE_DIRECTIVE_TAG_WITH_PADDING_RE =
-  /(?:\s*(?:\[\[\s*audio_as_voice\s*\]\]|\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\])\s*|^[\t ]*\[\[\s*(?:reply_to_current(?:[\t ]*\](?!\])|(?=[\t ]+\S)|[\t ]*$)|reply_to\s*:\s*(?:[^\]\r\n]*\](?!\])|[\t ]*$))[\t ]*)/iuy;
+const DELIVERY_AUDIO_TAG_RE = /\[\[\s*audio_as_voice\s*\]\]/iuy;
 const MAX_REPLY_DIRECTIVE_ID_LENGTH = 256;
 const UNSAFE_REPLY_DIRECTIVE_CHARS_RE = /[\p{Cc}[\]]/gu;
 const NO_INLINE_DIRECTIVES = {
@@ -78,6 +82,32 @@ export function replaceOutsideCodeRegions(
 }
 
 type NativeTextEdit = { start: number; end: number; text: string };
+
+type TextReplacement = Parameters<typeof replaceOutsideCodeRegions>[2];
+type TextReplacer = (text: string, replacement: TextReplacement) => string;
+
+function replaceReplyTagsOutsideCodeRegions(text: string, replacement: TextReplacement): string {
+  const readReply = createInlineReplyTagReader(text);
+  let codeRegions: ReturnType<typeof findCodeRegions> | undefined;
+  let cursor = 0;
+  let searchFrom = 0;
+  let result = "";
+  while (searchFrom < text.length) {
+    const marker = text.indexOf("[[", searchFrom);
+    if (marker < 0) {
+      break;
+    }
+    const tag = readReply(marker);
+    searchFrom = tag ? tag.end : marker + 1;
+    if (!tag || isInsideCode(marker, (codeRegions ??= findCodeRegions(text)))) {
+      continue;
+    }
+    result += text.slice(cursor, marker);
+    result += replacement(text.slice(marker, tag.end), [tag.id], marker, text);
+    cursor = tag.end;
+  }
+  return result + text.slice(cursor);
+}
 
 function applyNativeTextEdits(parts: readonly string[], edits: NativeTextEdit[]): string[] {
   const source = indexTextParts(parts);
@@ -146,10 +176,22 @@ export function replaceOutsideCodeRegionParts(
     partIndex: number,
   ) => string,
 ): string[] {
+  return replaceTextParts(
+    parts,
+    (text, replace) => replaceOutsideCodeRegions(text, regex, replace),
+    replacement,
+  );
+}
+
+function replaceTextParts(
+  parts: readonly string[],
+  replace: TextReplacer,
+  replacement: Parameters<typeof replaceOutsideCodeRegionParts>[2],
+): string[] {
   const source = indexTextParts(parts);
   const edits: NativeTextEdit[] = [];
   let part = 0;
-  replaceOutsideCodeRegions(source.text, regex, (match, captures, offset, text) => {
+  replace(source.text, (match, captures, offset, text) => {
     while (
       source.spans[part + 1] &&
       expectDefined(source.spans[part + 1], "next text part").start <= offset
@@ -221,12 +263,117 @@ export function stripInlineDirectiveTagsForDisplay(text: string): StripInlineDir
     return { text, changed: false };
   }
   const withoutAudio = replaceOutsideCodeRegions(text, AUDIO_TAG_RE, () => "");
-  const stripped = replaceOutsideCodeRegions(withoutAudio, REPLY_TAG_RE, () => "");
+  const stripped = replaceReplyTagsOutsideCodeRegions(withoutAudio, () => "");
   return {
     text: stripped,
     changed: stripped !== text,
   };
 }
+
+/** Raw offsets for literal directives whose Markdown code ownership is settled. */
+export type StreamDirectiveCodePrefix = {
+  end: number;
+  checkedRawLength: number;
+};
+
+function hasDirectiveCodePrefixOpportunity(source: string, delta: string): boolean {
+  if (!delta) {
+    return false;
+  }
+  const deltaStart = source.length - delta.length;
+  const start = Math.max(0, deltaStart - 4);
+  let separator = -1;
+  // A following line can close block code without a blank separator; ownership proves stability.
+  for (const match of source.slice(start).matchAll(/(?:\r\n|\n|\r)[^\S\r\n]*\S/g)) {
+    if (start + match.index + match[0].length > deltaStart) {
+      separator = start + match.index;
+    }
+  }
+  if (separator === -1) {
+    return false;
+  }
+  const lastMarker = source.lastIndexOf("[[");
+  return lastMarker !== -1 && separator > lastMarker;
+}
+
+export function findDirectiveCodePrefix(
+  source: string,
+  delta: string,
+): StreamDirectiveCodePrefix | undefined {
+  if (!hasDirectiveCodePrefixOpportunity(source, delta)) {
+    return undefined;
+  }
+  const { regions, retainStart, completedParagraphs } = findCodeOwnership(source);
+  let regionIndex = 0;
+  let paragraphIndex = 0;
+  let end = 0;
+  for (
+    let marker = source.indexOf("[[");
+    marker !== -1;
+    marker = source.indexOf("[[", marker + 1)
+  ) {
+    let region = regions[regionIndex];
+    while (region && region.end <= marker) {
+      region = regions[++regionIndex];
+    }
+    let paragraph = completedParagraphs[paragraphIndex];
+    while (paragraph && paragraph.end <= marker) {
+      paragraph = completedParagraphs[++paragraphIndex];
+    }
+    if (!region || region.start > marker || region.end < marker + 2) {
+      return undefined;
+    }
+    if (region.block) {
+      if (region.end > retainStart) {
+        return undefined;
+      }
+      end = region.end;
+      continue;
+    }
+    if (
+      !paragraph ||
+      paragraph.hasReferenceCandidate ||
+      paragraph.start > region.start ||
+      paragraph.end < region.end
+    ) {
+      return undefined;
+    }
+    end = paragraph.end;
+  }
+  return end ? { end, checkedRawLength: source.length } : undefined;
+}
+
+/** Retain only literal directives whose Markdown ownership cannot change on append. */
+export const inlineDirectiveDisplayTextFilter: TextFilter = {
+  transform: (text) => stripInlineDirectiveTagsForDisplay(text).text,
+  create: () => {
+    let prefix: StreamDirectiveCodePrefix | undefined;
+    let hasMarker = false;
+    let previousChar = "";
+    let delta = "";
+    return createConditionalTextProjector(
+      (text) => {
+        const projected = stripInlineDirectiveTagsForDisplay(text).text;
+        prefix = projected === text ? findDirectiveCodePrefix(text, delta) : undefined;
+        return projected;
+      },
+      (input) => {
+        delta = input.delta ?? input.text;
+        if ((previousChar + delta).includes("[[")) {
+          hasMarker = true;
+          prefix = undefined;
+        }
+        if (delta) {
+          previousChar = delta.slice(-1);
+        }
+        if (prefix) {
+          prefix.checkedRawLength = input.text.length;
+        }
+        return hasMarker && !prefix;
+      },
+    );
+  },
+};
 
 export function sanitizeReplyDirectiveId(rawReplyToId?: string): string | undefined {
   const trimmed = rawReplyToId?.trim();
@@ -247,8 +394,8 @@ function collectDeliveryDirectiveEdits(text: string): NativeTextEdit[] {
   if (!text.includes("[[")) {
     return [];
   }
-  // Only malformed prefixes at the absolute message start are control text; keep
-  // the regex non-multiline while code-region scanning preserves literal examples.
+  // Only malformed prefixes at the absolute message start are control text.
+  const readReply = createInlineReplyTagReader(text);
   let codeRegions: ReturnType<typeof findCodeRegions> | undefined;
   const edits: NativeTextEdit[] = [];
   let cursor = 0;
@@ -265,11 +412,19 @@ function collectDeliveryDirectiveEdits(text: string): NativeTextEdit[] {
     while (start > previousMatchEnd && /\s/u.test(text.charAt(start - 1))) {
       start -= 1;
     }
-    INLINE_DIRECTIVE_TAG_WITH_PADDING_RE.lastIndex = start;
-    const match = INLINE_DIRECTIVE_TAG_WITH_PADDING_RE.exec(text);
-    searchFrom = match ? INLINE_DIRECTIVE_TAG_WITH_PADDING_RE.lastIndex : marker + 1;
-    if (!match) {
+    DELIVERY_AUDIO_TAG_RE.lastIndex = marker;
+    const audio = DELIVERY_AUDIO_TAG_RE.exec(text);
+    const reply = audio ? null : readReply(marker, true);
+    if (!audio && !reply) {
+      searchFrom = marker + 1;
       continue;
+    }
+    const complete = Boolean(audio) || reply?.complete;
+    searchFrom = audio ? DELIVERY_AUDIO_TAG_RE.lastIndex : expectDefined(reply, "reply tag").end;
+    if (complete) {
+      while (searchFrom < text.length && /\s/u.test(text.charAt(searchFrom))) {
+        searchFrom += 1;
+      }
     }
     previousMatchEnd = searchFrom;
     if (isInsideCode(marker, (codeRegions ??= findCodeRegions(text)))) {
@@ -279,11 +434,13 @@ function collectDeliveryDirectiveEdits(text: string): NativeTextEdit[] {
     const preserveCodePadding = codeRegions.some(
       (region) => region.block && region.start > marker && region.start <= searchFrom,
     );
-    cursor = preserveCodePadding ? start + match[0].trimEnd().length : searchFrom;
+    cursor = preserveCodePadding
+      ? start + text.slice(start, searchFrom).trimEnd().length
+      : searchFrom;
     edits.push({
       start,
       end: cursor,
-      text: !preserveCodePadding && match[0].includes("]]") ? " " : "",
+      text: !preserveCodePadding && complete ? " " : "",
     });
   }
   if (cursor === 0) {
@@ -395,9 +552,9 @@ export function parseInlineDirectiveParts(
       return stripAudioTag ? stripDirective(match, offset, source, partIndex) : match;
     },
   );
-  const replyText = replaceOutsideCodeRegionParts(
+  const replyText = replaceTextParts(
     audioText,
-    REPLY_TAG_RE,
+    replaceReplyTagsOutsideCodeRegions,
     (match, captures, offset, source, partIndex) => {
       const state = expectDefined(states[partIndex], "reply directive part");
       const idRaw = typeof captures[0] === "string" ? captures[0] : undefined;

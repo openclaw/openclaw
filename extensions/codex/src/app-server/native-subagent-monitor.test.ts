@@ -5,6 +5,7 @@ import {
   createAgentHarnessTaskRuntime,
   type AgentHarnessTaskRecord,
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
@@ -17,6 +18,7 @@ import {
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
+import { CodexNativeSubagentCompletionDelivery } from "./native-subagent-completion-delivery.js";
 import { defaultNativeSubagentMonitorRuntime } from "./native-subagent-monitor-runtime.js";
 import type { NativeSubagentMonitorRuntime } from "./native-subagent-monitor-types.js";
 import {
@@ -42,6 +44,42 @@ import {
 } from "./native-subagent-monitor.test-support.js";
 import type { JsonObject } from "./protocol.js";
 
+function observeCompletionAttempts() {
+  const attempts = new Map<Promise<void>, string>();
+  // oxlint-disable-next-line typescript/unbound-method -- Invoked below with .call(this, ...) to preserve the observed instance.
+  const original = CodexNativeSubagentCompletionDelivery.prototype.deliverPending;
+  const observer = vi
+    .spyOn(CodexNativeSubagentCompletionDelivery.prototype, "deliverPending")
+    .mockImplementation(function (
+      this: CodexNativeSubagentCompletionDelivery,
+      state,
+      child,
+      trigger,
+    ) {
+      const attempt = original.call(this, state, child, trigger);
+      attempts.set(attempt, child.runId);
+      return attempt;
+    });
+  onTestFinished(() => observer.mockRestore());
+  return {
+    async settle(runId?: string) {
+      // Observe the real attempt through worker persistence and receipt settlement.
+      // Advancing a timer or yielding one event-loop turn cannot establish either.
+      while (true) {
+        const batch = [...attempts].filter(([, id]) => runId === undefined || id === runId);
+        if (batch.length === 0) {
+          return;
+        }
+        for (const [attempt] of batch) {
+          attempts.delete(attempt);
+        }
+        await Promise.all(batch.map(([attempt]) => attempt));
+      }
+    },
+    restore: () => observer.mockRestore(),
+  };
+}
+
 describe("Native completion delivery settlement", () => {
   async function withDeliveryFixture(
     label: string,
@@ -51,6 +89,7 @@ describe("Native completion delivery settlement", () => {
       parent: Awaited<ReturnType<typeof registerCodexNativeSubagentMonitor>>;
       register: (turnId: string) => ReturnType<typeof registerCodexNativeSubagentMonitor>;
       readTask: (runId?: string) => Record<string, unknown> | undefined;
+      settle: (runId?: string) => Promise<void>;
     }) => Promise<void>,
   ) {
     await withStateDirEnv("codex-delivery-settlement-", async ({ stateDir }) => {
@@ -90,9 +129,10 @@ describe("Native completion delivery settlement", () => {
         registrations.push(parent);
         return parent;
       };
-      const parent = await register("parent-turn");
+      const attempts = observeCompletionAttempts();
       let database: DatabaseSync | undefined;
       try {
+        const parent = await register("parent-turn");
         await notifyChildStarted(client);
         await client.notify({
           method: "turn/started",
@@ -108,6 +148,7 @@ describe("Native completion delivery settlement", () => {
           client,
           parent,
           register,
+          settle: (runId) => attempts.settle(runId),
           readTask: (runId = "codex-thread:child-thread") =>
             database!
               .prepare(
@@ -120,9 +161,14 @@ describe("Native completion delivery settlement", () => {
           await registration.unregister();
         }
         client.close();
-        database?.close();
-        host.closeHost();
-        host.closeAdmission();
+        try {
+          await attempts.settle();
+        } finally {
+          attempts.restore();
+          database?.close();
+          host.closeHost();
+          host.closeAdmission();
+        }
       }
     });
   }
@@ -145,24 +191,34 @@ describe("Native completion delivery settlement", () => {
       });
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       try {
-        await withDeliveryFixture(failureMode, deliver, async ({ client, parent, readTask }) => {
-          await client.notify(completedTurn("accepted retry result"));
-          expect(readTask()).toMatchObject({ status: "succeeded", delivery_status: "pending" });
-          await parent.unregister();
-          await vi.advanceTimersByTimeAsync(1_000_000);
-          const afterExhaustion = readTask();
-          const attempts = deliver.mock.calls.length;
-          await vi.advanceTimersByTimeAsync(1_000_000);
-          expect(deliver.mock.calls.length).toBe(attempts);
-          expect(attempts).toBeGreaterThan(1);
-          expect(readTask()).toEqual(afterExhaustion);
-          expect(readTask()).toMatchObject({
-            status: "succeeded",
-            delivery_status: "failed",
-            terminal_summary: "accepted retry result",
-            error: "synthetic delivery failure",
-          });
-        });
+        await withDeliveryFixture(
+          failureMode,
+          deliver,
+          async ({ client, parent, readTask, settle }) => {
+            await client.notify(completedTurn("accepted retry result"));
+            await settle();
+            expect(readTask()).toMatchObject({ status: "succeeded", delivery_status: "pending" });
+            await parent.unregister();
+            await settle();
+            while (readTask()?.delivery_status !== "failed") {
+              expect(vi.getTimerCount()).toBeGreaterThan(0);
+              await vi.advanceTimersToNextTimerAsync();
+              await settle();
+            }
+            const afterExhaustion = readTask();
+            const attempts = deliver.mock.calls.length;
+            await vi.advanceTimersByTimeAsync(1_000_000);
+            expect(deliver.mock.calls.length).toBe(attempts);
+            expect(attempts).toBeGreaterThan(1);
+            expect(readTask()).toEqual(afterExhaustion);
+            expect(readTask()).toMatchObject({
+              status: "succeeded",
+              delivery_status: "failed",
+              terminal_summary: "accepted retry result",
+              error: "synthetic delivery failure",
+            });
+          },
+        );
       } finally {
         vi.useRealTimers();
       }
@@ -170,13 +226,13 @@ describe("Native completion delivery settlement", () => {
   );
 
   it("settles an in-flight predecessor without acknowledging its pending follow-up", async () => {
-    let finishFirst!: (result: { delivered: true; path: "direct" }) => void;
+    const firstStarted = createDeferred<void>();
+    const firstDelivery = createDeferred<{ delivered: true; path: "direct" }>();
     const deliver = vi.fn<NativeSubagentMonitorRuntime["deliverAgentHarnessTaskCompletion"]>(
       async () => {
         if (deliver.mock.calls.length === 1) {
-          return await new Promise<{ delivered: true; path: "direct" }>((resolve) => {
-            finishFirst = resolve;
-          });
+          firstStarted.resolve();
+          return await firstDelivery.promise;
         }
         return { delivered: true, path: "direct" };
       },
@@ -184,64 +240,66 @@ describe("Native completion delivery settlement", () => {
     await withDeliveryFixture(
       "inflight",
       deliver,
-      async ({ client, parent, register, readTask }) => {
-        await client.notify(completedTurn("predecessor result"));
-        await parent.unregister();
-        expect(deliver).toHaveBeenCalledOnce();
-        const nextParent = await register("parent-followup-turn");
-        await client.notify(completedTurn("duplicate predecessor result"));
-        await client.notify({
-          method: "turn/started",
-          params: {
-            threadId: "child-thread",
-            turn: { id: "followup-turn", status: "inProgress", items: [], error: null },
-          },
-        });
-        await client.notify({
-          method: "item/completed",
-          params: {
-            threadId: "parent-thread",
-            turnId: "parent-followup-turn",
-            item: {
-              id: "followup-input",
-              type: "collabAgentToolCall",
-              tool: "sendInput",
-              status: "completed",
-              senderThreadId: "parent-thread",
-              receiverThreadIds: ["child-thread"],
+      async ({ client, parent, register, readTask, settle }) => {
+        try {
+          await client.notify(completedTurn("predecessor result"));
+          await parent.unregister();
+          await firstStarted.promise;
+          expect(deliver).toHaveBeenCalledOnce();
+          const nextParent = await register("parent-followup-turn");
+          await client.notify(completedTurn("duplicate predecessor result"));
+          await client.notify({
+            method: "turn/started",
+            params: {
+              threadId: "child-thread",
+              turn: { id: "followup-turn", status: "inProgress", items: [], error: null },
             },
-          },
-        });
-        await client.notify(
-          successfulSendInputOutput({
-            turnId: "parent-followup-turn",
-            callId: "followup-input",
-            submissionId: "followup-turn",
-          }),
-        );
-        await client.notify(completedTurn("follow-up result", "followup-turn"));
-        const followupId = "codex-thread:child-thread:turn:followup-turn";
-        expect(readTask(followupId)).toMatchObject({ delivery_status: "pending" });
-        finishFirst({ delivered: true, path: "direct" });
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        const afterFirstReceipt = { predecessor: readTask(), followup: readTask(followupId) };
-        expect(afterFirstReceipt).toMatchObject({
-          predecessor: { delivery_status: "delivered", terminal_summary: "predecessor result" },
-          followup: { delivery_status: "pending", terminal_summary: "follow-up result" },
-        });
-        await nextParent.unregister();
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        expect(
-          deliver.mock.calls.map(([request]) => [request.childSessionKey, request.result]),
-        ).toEqual([
-          ["codex-thread:child-thread", "predecessor result"],
-          [followupId, "follow-up result"],
-        ]);
-        expect(readTask(followupId)).toMatchObject({ delivery_status: "delivered" });
+          });
+          await client.notify({
+            method: "item/completed",
+            params: {
+              threadId: "parent-thread",
+              turnId: "parent-followup-turn",
+              item: {
+                id: "followup-input",
+                type: "collabAgentToolCall",
+                tool: "sendInput",
+                status: "completed",
+                senderThreadId: "parent-thread",
+                receiverThreadIds: ["child-thread"],
+              },
+            },
+          });
+          await client.notify(
+            successfulSendInputOutput({
+              turnId: "parent-followup-turn",
+              callId: "followup-input",
+              submissionId: "followup-turn",
+            }),
+          );
+          await client.notify(completedTurn("follow-up result", "followup-turn"));
+          const followupId = "codex-thread:child-thread:turn:followup-turn";
+          await settle(followupId);
+          expect(readTask(followupId)).toMatchObject({ delivery_status: "pending" });
+          firstDelivery.resolve({ delivered: true, path: "direct" });
+          await settle();
+          const afterFirstReceipt = { predecessor: readTask(), followup: readTask(followupId) };
+          expect(afterFirstReceipt).toMatchObject({
+            predecessor: { delivery_status: "delivered", terminal_summary: "predecessor result" },
+            followup: { delivery_status: "pending", terminal_summary: "follow-up result" },
+          });
+          await nextParent.unregister();
+          await settle();
+          expect(
+            deliver.mock.calls.map(([request]) => [request.childSessionKey, request.result]),
+          ).toEqual([
+            ["codex-thread:child-thread", "predecessor result"],
+            [followupId, "follow-up result"],
+          ]);
+          expect(readTask(followupId)).toMatchObject({ delivery_status: "delivered" });
+        } finally {
+          firstDelivery.resolve({ delivered: true, path: "direct" });
+        }
       },
     );
   });
@@ -2437,6 +2495,7 @@ describe("CodexNativeSubagentMonitor", () => {
       client.setThreadRead("child-thread", history);
       ensureCodexAppServerClientRuntime(client as never, { agentDir: stateDir });
       const deliver = createRuntime().deliverAgentHarnessTaskCompletion;
+      const attempts = observeCompletionAttempts();
       vi.useFakeTimers();
       const parent = await registerCodexNativeSubagentMonitor({
         client: client as never,
@@ -2460,6 +2519,7 @@ describe("CodexNativeSubagentMonitor", () => {
         );
         await parent.unregister();
         await vi.advanceTimersByTimeAsync(0);
+        await attempts.settle();
         if (successor && !recorded) {
           expect({
             initial: readTask(initialRunId),
@@ -2487,10 +2547,15 @@ describe("CodexNativeSubagentMonitor", () => {
       } finally {
         await parent.unregister();
         client.close();
-        vi.useRealTimers();
-        database.close();
-        host.closeHost();
-        host.closeAdmission();
+        try {
+          await attempts.settle();
+        } finally {
+          attempts.restore();
+          vi.useRealTimers();
+          database.close();
+          host.closeHost();
+          host.closeAdmission();
+        }
       }
     });
   });
@@ -2562,6 +2627,7 @@ describe("CodexNativeSubagentMonitor", () => {
         threadRead({ status: "inProgress", previousResult: "original successful result" }),
       );
       ensureCodexAppServerClientRuntime(client as never, { agentDir: stateDir });
+      const attempts = observeCompletionAttempts();
       const parent = await registerCodexNativeSubagentMonitor({
         client: client as never,
         parentThreadId: "parent-thread",
@@ -2609,6 +2675,7 @@ describe("CodexNativeSubagentMonitor", () => {
             error: "follow-up failed",
           }),
         );
+        await attempts.settle();
         expect(readInitial()).toEqual(original);
         expect(
           runtime.listTaskRecords().find((task) => task.runId === followupRunId),
@@ -2619,9 +2686,14 @@ describe("CodexNativeSubagentMonitor", () => {
       } finally {
         await parent.unregister();
         client.close();
-        database.close();
-        host.closeHost();
-        host.closeAdmission();
+        try {
+          await attempts.settle();
+        } finally {
+          attempts.restore();
+          database.close();
+          host.closeHost();
+          host.closeAdmission();
+        }
       }
     });
   });
@@ -2703,7 +2775,6 @@ describe("CodexNativeSubagentMonitor", () => {
     });
     await vi.waitFor(() => expect(client.request).toHaveBeenCalledTimes(1));
 
-    expect(client.request).toHaveBeenCalledTimes(1);
     expect(client.request).toHaveBeenCalledWith(
       "thread/read",
       expect.objectContaining({ threadId: "child-a" }),
@@ -2857,7 +2928,6 @@ describe("CodexNativeSubagentMonitor", () => {
       expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(1),
     );
 
-    expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(1);
     client.close();
   });
 
@@ -3049,7 +3119,6 @@ describe("CodexNativeSubagentMonitor", () => {
     await registerParent(monitor, undefined, undefined, historyOwner);
     await vi.waitFor(() => expect(client.request).toHaveBeenCalledTimes(1));
 
-    expect(client.request).toHaveBeenCalledTimes(1);
     expect(client.request).toHaveBeenCalledWith(
       "thread/read",
       expect.objectContaining({ threadId: "recent-child" }),

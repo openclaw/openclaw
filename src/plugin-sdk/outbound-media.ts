@@ -35,21 +35,7 @@ export async function loadOutboundMediaFromUrl(
   mediaUrl: string,
   options: OutboundMediaLoadOptions = {},
 ) {
-  return await loadWebMedia(
-    mediaUrl,
-    buildOutboundMediaLoadOptions({
-      maxBytes: options.maxBytes,
-      mediaAccess: options.mediaAccess,
-      mediaLocalRoots: options.mediaLocalRoots,
-      mediaReadFile: options.mediaReadFile,
-      workspaceDir: options.workspaceDir,
-      proxyUrl: options.proxyUrl,
-      fetchImpl: options.fetchImpl,
-      requestInit: options.requestInit,
-      optimizeImages: options.optimizeImages,
-      trustExplicitProxyDns: options.trustExplicitProxyDns,
-    }),
-  );
+  return await loadWebMedia(mediaUrl, buildOutboundMediaLoadOptions(options));
 }
 
 export type HostedOutboundMediaMetadata = {
@@ -306,10 +292,6 @@ export function createHostedOutboundMediaStore(
     }
   }
 
-  async function deleteEntryRows(id: string, chunkCount: number): Promise<void> {
-    await deleteHostedOutboundMediaRows(id, options.metadataStore, options.chunkStore, chunkCount);
-  }
-
   async function readMetadataRecord(
     id: string,
     nowMs: number,
@@ -531,7 +513,12 @@ export function createHostedOutboundMediaStore(
             { ttlMs: metadataPhysicalTtlMs },
           );
         } catch (error) {
-          await deleteEntryRows(id, chunkCount);
+          await deleteHostedOutboundMediaRows(
+            id,
+            options.metadataStore,
+            options.chunkStore,
+            chunkCount,
+          );
           throw error;
         }
         return `${params.publicBaseUrl}${params.routePath}${id}?token=${token}`;

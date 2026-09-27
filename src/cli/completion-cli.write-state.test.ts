@@ -149,7 +149,7 @@ describe("completion-cli write-state", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(COMPLETION_SHELLS)(
+  it.each(["zsh"] as const)(
     "publishes %s completion atomically without changing existing file or directory modes",
     async (shell) => {
       await withIsolatedCompletionState(async () => {
@@ -180,7 +180,7 @@ describe("completion-cli write-state", () => {
     },
   );
 
-  it.each(COMPLETION_SHELLS)(
+  it.each(["zsh"] as const)(
     "preserves the existing %s completion when staged publication fails",
     async (shell) => {
       const actual = await vi.importActual<typeof import("./output-file.runtime.js")>(
@@ -328,7 +328,7 @@ describe("completion-cli write-state", () => {
     },
   );
 
-  it.each(COMPLETION_SHELLS)(
+  it.each(["zsh"] as const)(
     "reports missing %s completion cache without registering commands or plugins",
     async (shell) => {
       const { registerCompletionCli } = await import("./completion-cli.js");

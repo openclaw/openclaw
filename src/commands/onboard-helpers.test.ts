@@ -4,7 +4,6 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { SpawnResult } from "../process/exec-result.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -15,8 +14,6 @@ import {
   handleReset,
   normalizeGatewayTokenInput,
   openUrl,
-  printWizardHeader,
-  resolveBrowserOpenCommand,
   resolveAdvertisedControlUiLinks,
   resolveControlUiLinks,
   resolveLocalControlUiProbeLinks,
@@ -26,41 +23,6 @@ import {
 } from "./onboard-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-describe("printWizardHeader", () => {
-  const withColumns = async (columns: number | undefined, run: () => Promise<void>) => {
-    const previous = Object.getOwnPropertyDescriptor(process.stdout, "columns");
-    Object.defineProperty(process.stdout, "columns", { value: columns, configurable: true });
-    try {
-      await run();
-    } finally {
-      if (previous) {
-        Object.defineProperty(process.stdout, "columns", previous);
-      } else {
-        delete (process.stdout as { columns?: number }).columns;
-      }
-    }
-  };
-
-  it("prints the mascot beside the wordmark with claws above the text line", async () => {
-    const log = vi.fn();
-    await withColumns(120, () => printWizardHeader({ log } as unknown as RuntimeEnv));
-    const output = stripAnsi(String(log.mock.calls[0]?.[0]));
-    const rows = output.split("\n");
-    // Claw rows stand above the wordmark; its first row shares the mascot body line.
-    expect(rows[0]).toBe(" •●●:.        .:●●•");
-    expect(rows[3]).toContain("█▀▀▀█ █▀▀▀█ █▀▀▀▀ █▄  █ █▀▀▀▀ █     █▀▀▀█ █   █");
-    expect(rows[3]).toContain(" .●●●: •●●●●• :●●●.");
-  });
-
-  it("falls back to the plain title on narrow terminals", async () => {
-    const log = vi.fn();
-    await withColumns(50, () => printWizardHeader({ log } as unknown as RuntimeEnv));
-    const output = String(log.mock.calls[0]?.[0]);
-    expect(output).toContain("OPENCLAW");
-    expect(output).not.toContain("█");
-  });
-});
 
 const mocks = vi.hoisted(() => ({
   movePathToTrash: vi.fn(async (targetPath: string) => `${targetPath}.trashed`),
@@ -413,28 +375,6 @@ describe("handleReset", () => {
     expect(mocks.deleteWorkspaceState).toHaveBeenCalledWith({ workspaceDir });
   });
 
-  it("reports a workspace state deletion failure after trash succeeds", async () => {
-    const homeDir = tempDirs.make("openclaw-reset-state-delete-");
-    const stateDir = path.join(homeDir, ".openclaw");
-    const workspaceDir = path.join(stateDir, "workspace");
-    fs.mkdirSync(workspaceDir, { recursive: true });
-    mocks.deleteWorkspaceState.mockRejectedValueOnce(new Error("state database unavailable"));
-
-    await withEnvAsync(
-      {
-        HOME: homeDir,
-        OPENCLAW_HOME: homeDir,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-      },
-      async () => {
-        await expect(
-          handleReset("full", workspaceDir, { log: vi.fn() } as unknown as RuntimeEnv),
-        ).rejects.toThrow(`${workspaceDir} (workspace state)`);
-      },
-    );
-  });
-
   it("retains workspace state when workspace removal fails", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reset-profile-"));
     const profileStateDir = path.join(homeDir, ".openclaw-work");
@@ -511,19 +451,6 @@ describe("openUrl", () => {
 
       expect(ok).toBe(false);
       expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
-    });
-  });
-});
-
-describe("resolveBrowserOpenCommand", () => {
-  it("uses trusted rundll32 on win32", async () => {
-    vi.stubEnv("SystemRoot", "C:\\Windows");
-    const rundll32 = path.win32.join("C:\\Windows", "System32", "rundll32.exe");
-
-    await withMockedPlatform("win32", async () => {
-      const resolved = await resolveBrowserOpenCommand();
-      expect(resolved.argv).toEqual([rundll32, "url.dll,FileProtocolHandler"]);
-      expect(resolved.command).toBe(rundll32);
     });
   });
 });
@@ -624,18 +551,6 @@ describe("summarizeExistingConfig", () => {
         },
       }),
     ).toBe("Model: openai/gpt-5.4\nGateway: remote via LAN at ws://192.168.0.202:18789");
-  });
-
-  it("uses the port when no remote gateway URL is configured", () => {
-    expect(
-      summarizeExistingConfig({
-        gateway: {
-          mode: "local",
-          port: 18789,
-          bind: "loopback",
-        },
-      }),
-    ).toBe("Gateway: local via loopback on :18789");
   });
 
   it("does not show a stale remote URL as active for local gateway mode", () => {
@@ -776,10 +691,6 @@ describe("normalizeGatewayTokenInput", () => {
 
   it("trims string input", () => {
     expect(normalizeGatewayTokenInput("  token  ")).toBe("token");
-  });
-
-  it("returns empty string for non-string input", () => {
-    expect(normalizeGatewayTokenInput(123)).toBe("");
   });
 
   it('rejects literal string coercion artifacts ("undefined"/"null")', () => {
