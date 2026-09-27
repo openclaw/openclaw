@@ -773,7 +773,7 @@ it.each(
       });
       const load = getChatHistoryLoadState(follower.state);
       if (load.phase === "in-flight") {
-        await load.promise;
+        await (load.refresh?.promise ?? load.promise);
       }
     };
     const mutate = async () => {
