@@ -667,10 +667,7 @@ export function createResumeHarness(
           ...(resumeParams.modelProvider ? { modelProvider: resumeParams.modelProvider } : {}),
         };
       }
-      if (method === "turn/start") {
-        return turnStartResult();
-      }
-      return {};
+      return method === "turn/start" ? turnStartResult() : {};
     },
     { persistedThreads: [threadId] },
   );
