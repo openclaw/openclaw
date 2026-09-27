@@ -2,6 +2,9 @@
 // for PDF understanding tools.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { finalizePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
 
 const PINNED_ANTHROPIC_PDF_MODEL = "anthropic/claude-opus-5";
@@ -112,6 +115,145 @@ describe("resolvePdfModelConfigForTool", () => {
     expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toBeNull();
   });
 
+  it("uses the admitted image-capable model for PDF extraction fallback", () => {
+    const cfg = {
+      ...withDefaultModel("anthropic/claude-sonnet-4-5"),
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: "https://openrouter.ai/api/v1",
+            apiKey: "openrouter-test", // pragma: allowlist secret
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolvePdfModelConfigForTool({
+        cfg,
+        agentDir: TEST_AGENT_DIR,
+        activeModel: {
+          provider: "openrouter",
+          model: "deepseek/deepseek-v4.1-flash",
+          supportsImages: true,
+        },
+      }),
+    ).toEqual({ primary: "openrouter/deepseek/deepseek-v4.1-flash" });
+  });
+
+  it("does not select an active provider that disables PDF image extraction", () => {
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          restricted: {
+            baseUrl: "https://example.com/v1",
+            apiKey: "test-only-key", // pragma: allowlist secret
+            models: [],
+          },
+        },
+      },
+    };
+    const snapshot = finalizePluginMetadataSnapshot(
+      createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "restricted",
+            contracts: { mediaUnderstandingProviders: ["restricted"] },
+            mediaUnderstandingProviderMetadata: {
+              restricted: {
+                capabilities: ["image"],
+                documentModels: { pdf: { image: false } },
+              },
+            },
+          },
+        ],
+      }),
+    );
+    withPluginMetadataSnapshotScope(
+      snapshot,
+      () => {
+        expect(
+          resolvePdfModelConfigForTool({
+            cfg,
+            agentDir: TEST_AGENT_DIR,
+            activeModel: { provider: "restricted", model: "vision", supportsImages: true },
+          }),
+        ).toBeNull();
+      },
+      { config: cfg, trustConfigIdentity: true },
+    );
+  });
+
+  it("keeps an existing native PDF candidate ahead of the admitted active model", () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
+    const cfg = {
+      ...withDefaultModel("openai/gpt-5.4"),
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: "https://openrouter.ai/api/v1",
+            apiKey: "openrouter-test", // pragma: allowlist secret
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolvePdfModelConfigForTool({
+        cfg,
+        agentDir: TEST_AGENT_DIR,
+        activeModel: {
+          provider: "openrouter",
+          model: "deepseek/deepseek-v4.1-flash",
+          supportsImages: true,
+        },
+      })?.primary,
+    ).toBe("anthropic/claude-opus-5-5");
+  });
+
+  it("does not use an admitted text-only model for PDF extraction fallback", () => {
+    const cfg = {
+      ...withDefaultModel("anthropic/claude-sonnet-4-5"),
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: "https://openrouter.ai/api/v1",
+            apiKey: "openrouter-test", // pragma: allowlist secret
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolvePdfModelConfigForTool({
+        cfg,
+        agentDir: TEST_AGENT_DIR,
+        activeModel: {
+          provider: "openrouter",
+          model: "deepseek/deepseek-v4.1-flash",
+          supportsImages: false,
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("does not use an admitted image-capable model without provider auth", () => {
+    expect(
+      resolvePdfModelConfigForTool({
+        cfg: withDefaultModel("anthropic/claude-sonnet-4-5"),
+        agentDir: TEST_AGENT_DIR,
+        activeModel: {
+          provider: "openrouter",
+          model: "deepseek/deepseek-v4.1-flash",
+          supportsImages: true,
+        },
+      }),
+    ).toBeNull();
+  });
+
   it("prefers explicit pdfModel config", () => {
     const cfg = {
       agents: {
@@ -121,7 +263,17 @@ describe("resolvePdfModelConfigForTool", () => {
         },
       },
     } as OpenClawConfig;
-    expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toEqual({
+    expect(
+      resolvePdfModelConfigForTool({
+        cfg,
+        agentDir: TEST_AGENT_DIR,
+        activeModel: {
+          provider: "openrouter",
+          model: "deepseek/deepseek-v4.1-flash",
+          supportsImages: true,
+        },
+      }),
+    ).toEqual({
       primary: PINNED_ANTHROPIC_PDF_MODEL,
     });
   });

@@ -27,7 +27,7 @@ This directory owns local tooling, script wrappers, and generated-artifact helpe
 
 ## PR Prepare Gates
 
-- The default agent handoff uses `OPENCLAW_PR_GATES_REMOTE=github` and `merge-run --auto-merge`. Preparation records `github_pending` bound to the published head without successful-proof stamps. Merge requires completed review, the exact prepared head, and the enforced `openclaw/ci-gate`; it rejects known failed required checks, accepts pending checks, and skips separate hosted workflow verification and its synchronous CI watcher. GitHub enforces required CI/security checks and reviews; the agent retains responsibility for follow-through. This mode replaces separate scheduled Testbox evidence with the PR's enforced gate; existing completed-evidence modes remain available. Accepted requests return pending, not completion. Follow the maintainer skill's polling cadence, investigate failures and conflicts, and reconcile through native recovery until merge and cleanup are verified. Preserve accepted or uncertain outcome records; never blindly re-arm a request. No admin or REST fallback applies to pending-gate admission.
+- The default agent handoff uses `OPENCLAW_PR_GATES_REMOTE=github` and `merge-run --auto-merge`. Preparation records `github_pending` bound to the published head without successful-proof stamps. Merge requires completed review, the exact prepared head, and the enforced `openclaw/ci-gate`; it rejects known failed required checks, accepts pending checks, and skips separate hosted workflow verification and its synchronous CI watcher. GitHub enforces required CI/security checks and reviews; the agent retains responsibility for follow-through. This mode replaces separate scheduled Testbox evidence with the PR's enforced gate; existing completed-evidence modes remain available. Accepted requests return pending, not completion. Follow the maintainer skill's polling cadence, investigate failures and conflicts, and reconcile through native recovery until merge and cleanup are verified. Preserve accepted or uncertain outcome records; never blindly re-arm a request. No implicit admin or REST fallback applies to pending-gate admission; explicitly authorized prior-CI admin admission is a separate mode below.
 - Gate-mode validation for `prepare-run`, `prepare-gates`, and `prepare-push` happens before PR reads, lock acquisition, or preparation evidence retirement. Select one mode: the GitHub-pending invocation clears `OPENCLAW_TESTBOX`; completed hosted proof clears `OPENCLAW_PR_GATES_REMOTE`. Unknown or contradictory selectors must fail without replacing saved evidence. This validation does not block merge-outcome reconciliation, whose retained intent owns recovery.
 - Normal `prepare-init` requires incoming-head READY. To resolve a validated incoming NEEDS WORK review with BLOCKER/IMPORTANT findings, explicitly use `scripts/pr prepare-correction-init <PR>`. This initializes correction preparation only, preserving the incoming review and contributor ancestry. Commit the fixes, then use `prepare-correction-review-init` to create a separate exact-candidate JSON review template. JSON alone is authoritative; validation renders its summary. Independently review the full corrected candidate and explain resolution of every required incoming finding. Gates, push, sync and merge require that candidate's READY review; changing the candidate or incoming review invalidates it. Discussion/rejection verdicts cannot use this route. This does not change canonical-wrapper trust or permit use of an unlanded wrapper on another PR. Correction publication does not accept `github_pending`; use a completed exact-candidate gate mode or the separately authorized protected Crabbox pending route.
 - PR source acquisition fetches the full head SHA authenticated by live PR metadata from the canonical origin, verifies the fetched commit, and checks that head SHA, branch, and repository identity stayed unchanged across the fetch. GitHub's asynchronous `refs/pull/<PR>/head` projection is not source authority. All review, prepare, publication, and merge fetches use this owner without changing the private main checkpoint or shared tracking refs.
@@ -138,11 +138,25 @@ intact. Octopool 0.6.10 and `641ce3c` do not support that auto shape.
 Prepare's reviewer assignment uses the exact issue-assignee POST with raw
 `assignees[]` fields. Fork commit publication declares its GraphQL JSON with
 `--input`, so the guard can inspect it; Octopool's aggregate input bound still
-applies. Native admin, non-squash, queue, and auto-cancellation variants are not
+applies. Native CLI admin, non-squash, queue, and auto-cancellation variants are not
 covered by the accepted shapes above. Do not replace them with an immediate REST
 merge, which changes admission semantics. A blocked dispatch still follows the
 retained-outcome recovery rules below; the generic guard error is not authority
 to clear or retry an intent.
+
+The explicit `merge-run --admin-evidence <file> --confirmed-operator-admin` mode
+is a separate immediate-squash admission, not a fallback from auto/queue or a
+failed request. It verifies a prior successful CI attempt and its PR/head
+provenance, binds the reviewed prior-to-prepared delta and scoped-check
+attestations, and revalidates active organization/repository-admin authority and
+effective review rules. Only pending/skipped `openclaw/ci-gate` may be waived;
+failed checks, other required checks, and required reviews remain blocking.
+Exact-head `github_pending` preparation remains pending. GraphQL owns
+observations and reconciliation; the protected REST PUT above owns the SHA-pinned
+dispatch. The existing retained outcome owns `priorCiAdmin` evidence and retains
+its prior head object. Admin snapshot stability and the landing-parent audit
+still apply. See the [landing workflow](../.agents/skills/openclaw-pr-maintainer/references/landing.md#explicit-prior-ci-admin-landing)
+for the evidence fields and supported policy limits.
 
 ## Generated Outputs
 
