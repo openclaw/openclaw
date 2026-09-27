@@ -1,3 +1,4 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -239,18 +240,6 @@ function isClaudeToolResultError(content: unknown): boolean {
   return isRecord(content) && typeof content.type === "string" && content.type.endsWith("_error");
 }
 
-function parseToolInputJson(parts: string[]): Record<string, unknown> {
-  if (parts.length === 0) {
-    return {};
-  }
-  try {
-    const parsed: unknown = JSON.parse(parts.join(""));
-    return isRecord(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
 function emitClaudeToolResultBlock(
   tracker: ToolUseTracker,
   block: Record<string, unknown>,
@@ -326,7 +315,7 @@ export function dispatchClaudeCliStreamingToolEvent(params: {
         // start snapshot overwrite it.
         const args =
           pending.inputJsonParts.length > 0
-            ? parseToolInputJson(pending.inputJsonParts)
+            ? (safeParseJsonRecord(pending.inputJsonParts.join("")) ?? {})
             : (pending.blockInput ?? {});
         emitToolStartOnce(
           tracker,

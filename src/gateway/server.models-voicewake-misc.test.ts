@@ -7,6 +7,7 @@ import { WebSocket } from "ws";
 import { resetPreparedModelCatalogStateForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import type { GatewayAgentRuntime } from "../shared/session-types.js";
+import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
@@ -33,6 +34,8 @@ let port: number;
 afterAll(async () => {
   ws.close();
   await server.close();
+  // Minimal test gateways skip the skills close hook; skills.status watchers stay open otherwise.
+  await closeSkillsWatchers(true);
 });
 
 beforeAll(async () => {

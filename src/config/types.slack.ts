@@ -31,6 +31,8 @@ export type SlackChannelConfig = {
   enabled?: boolean;
   /** Require mentioning the bot to trigger replies. */
   requireMention?: boolean;
+  /** Override mention gating in threads started by this bot; omitted preserves implicit mention policy. */
+  requireMentionInBotThreads?: boolean;
   /**
    * Ignore room messages that mention another user or user group but not this bot.
    * Requires a resolved bot user ID. Default: false.
@@ -160,6 +162,8 @@ export type SlackAccountConfig = Omit<
     userTokenReadOnly?: boolean;
     /** Default mention requirement for channel messages (default: true). */
     requireMention?: boolean;
+    /** Override mention gating in threads started by this bot; omitted preserves implicit mention policy. */
+    requireMentionInBotThreads?: boolean;
     /** Implicit mention policy for replies, quotes, and participated threads. */
     implicitMentions?: ChannelImplicitMentionsConfig;
     /** Pass through Slack chat.postMessage link unfurl control. Default: false. */

@@ -1,5 +1,3 @@
-// Gateway node subscription manager.
-// Maintains bidirectional node/session fanout indexes.
 import { serializeEventPayload, type SerializedEventPayload } from "./node-registry.js";
 
 // Node subscription manager keeps bidirectional node/session indexes so gateway
@@ -11,32 +9,8 @@ type NodeSendEventFn = (opts: {
   payloadJSON?: SerializedEventPayload | null;
 }) => void | Promise<unknown>;
 
-type NodeSubscriptionManager = {
-  subscribe: (nodeId: string, pairingGeneration: string, sessionKey: string) => void;
-  unsubscribe: (nodeId: string, pairingGeneration: string, sessionKey: string) => void;
-  unsubscribeAll: (nodeId: string, pairingGeneration?: string) => void;
-  hasSubscribers: (sessionKey: string) => boolean;
-  updatePairingGeneration: (params: {
-    nodeId: string;
-    previousPairingGeneration: string;
-    nextPairingGeneration: string;
-    preserveSubscriptions: boolean;
-  }) => void;
-  sendToSession: (
-    sessionKey: string,
-    event: string,
-    payload: unknown,
-    sendEvent?: NodeSendEventFn | null,
-  ) => Promise<void>;
-  sendToAllSubscribed: (
-    event: string,
-    payload: unknown,
-    sendEvent?: NodeSendEventFn | null,
-  ) => Promise<void>;
-};
-
 /** Manages node subscriptions to gateway session events. */
-export function createNodeSubscriptionManager(): NodeSubscriptionManager {
+export function createNodeSubscriptionManager() {
   const nodeSubscriptions = new Map<
     string,
     { pairingGeneration: string; sessionKeys: Set<string> }
@@ -229,7 +203,7 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
     subscribe,
     unsubscribe,
     unsubscribeAll,
-    hasSubscribers: (sessionKey) => sessionSubscribers.has(sessionKey.trim()),
+    hasSubscribers: (sessionKey: string) => sessionSubscribers.has(sessionKey.trim()),
     updatePairingGeneration,
     sendToSession,
     sendToAllSubscribed,

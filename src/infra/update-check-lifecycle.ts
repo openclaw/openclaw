@@ -5,8 +5,9 @@ import type { UpdateCampaignController } from "./update-campaign.js";
 import type { resolveStartupInstallStatus } from "./update-install-status.js";
 
 export type UpdateCheckLifecycle = {
+  scheduler: GatewayScheduler;
   signal: AbortSignal;
-  campaign?: Pick<UpdateCampaignController, "clear">;
+  campaign?: UpdateCampaignController;
   isCurrent: () => boolean;
   refreshes: WeakMap<OpenClawConfig, Promise<void>>;
   run: <T>(work: (signal: AbortSignal) => Promise<T>) => Promise<T>;
@@ -67,6 +68,7 @@ export function createGatewayUpdateLifecycle(scheduler: GatewayScheduler): Updat
     arm(0);
   };
   const lifecycle: UpdateCheckLifecycle = {
+    scheduler,
     signal,
     isCurrent: () => updateCheckLifecycle === lifecycle,
     refreshes: new WeakMap(),
@@ -79,9 +81,7 @@ export function createGatewayUpdateLifecycle(scheduler: GatewayScheduler): Updat
         job.cancel();
       }
       jobs.clear();
-      if (updateCheckLifecycle === lifecycle) {
-        lifecycle.campaign?.clear();
-      }
+      lifecycle.campaign?.clear();
       // Replacement owns the predecessor's drain too. Aborting alone does not
       // join a Git transport or maintenance process that is still shutting down.
       return (stopping ??= Promise.allSettled([predecessor, scope.drain()]).then(() => undefined));

@@ -1,10 +1,6 @@
-/**
- * Lifecycle callback state helpers for a single agent attempt.
- */
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "../runtime/index.js";
 
-/** Mutable lifecycle flags observed while a single agent attempt runs. */
 export type AgentAttemptLifecycleState = {
   currentTurnUserMessagePersisted: boolean;
   lifecycleError?: string;
@@ -13,7 +9,6 @@ export type AgentAttemptLifecycleState = {
   lifecycleEnded: boolean;
 };
 
-/** Event shape emitted by runtimes during an agent attempt. */
 type AgentAttemptLifecycleEvent = {
   stream: string;
   data?: Record<string, unknown>;
@@ -31,7 +26,6 @@ export function emitAgentAttemptRuntimeStart(
   }
 }
 
-/** Creates callbacks that update lifecycle flags for persistence decisions. */
 export function createAgentAttemptLifecycleCallbacks(
   state: AgentAttemptLifecycleState,
   onRuntimeTurnStarted?: () => void | Promise<void>,

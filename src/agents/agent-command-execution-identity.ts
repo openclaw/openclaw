@@ -240,6 +240,7 @@ export function sanitizePublicAgentCommandIngressOpts(
     operationalRunInstance: undefined,
     assertSourceCurrent: undefined,
     operatorAuthority: undefined,
+    skillLibraryAuthoring: undefined,
     cronCreatorAuthorityCapability: undefined,
     onAdmittedRunContext: undefined,
     onPostAdmittedRunContext: undefined,

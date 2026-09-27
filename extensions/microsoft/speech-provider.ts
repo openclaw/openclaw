@@ -116,8 +116,10 @@ async function listMicrosoftVoices(
 ): Promise<SpeechVoiceOption[]> {
   const { assertOkOrThrowProviderError, readProviderJsonResponse } =
     await import("openclaw/plugin-sdk/provider-http");
-  const { captureHttpExchangeAsync, isDebugProxyGlobalFetchPatchInstalled } =
-    await import("openclaw/plugin-sdk/proxy-capture");
+  const proxyCaptureSdk = await import("openclaw/plugin-sdk/proxy-capture");
+  // The shipped 2026.9.6 host lacks async diagnostics; remove optionality when the minimum advances.
+  const captureHost: Partial<Pick<typeof proxyCaptureSdk, "captureHttpExchangeAsync">> =
+    proxyCaptureSdk;
   const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
     await import("openclaw/plugin-sdk/ssrf-runtime");
   const url =
@@ -134,19 +136,21 @@ async function listMicrosoftVoices(
     timeoutMs,
   });
   try {
-    if (!isDebugProxyGlobalFetchPatchInstalled()) {
+    if (!proxyCaptureSdk.isDebugProxyGlobalFetchPatchInstalled()) {
       // Finalization retains capture failures; observe the Promise returned by the SDK view.
-      void captureHttpExchangeAsync({
-        url,
-        method: "GET",
-        requestHeaders: headers,
-        response,
-        transport: "http",
-        meta: {
-          provider: "microsoft",
-          capability: "speech-voices",
-        },
-      }).catch(() => {});
+      void captureHost
+        .captureHttpExchangeAsync?.({
+          url,
+          method: "GET",
+          requestHeaders: headers,
+          response,
+          transport: "http",
+          meta: {
+            provider: "microsoft",
+            capability: "speech-voices",
+          },
+        })
+        .catch(() => {});
     }
     await assertOkOrThrowProviderError(response, "Microsoft voices API error");
     const voices = await readProviderJsonResponse<unknown>(response, "microsoft.speech-voices");

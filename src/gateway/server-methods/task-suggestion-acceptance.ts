@@ -108,15 +108,7 @@ export async function failSuggestedTaskSession(params: {
     options: params.options,
   });
   if (rolledBack) {
-    const restored = cancelTaskSuggestionAcceptance(params.taskId);
-    if (restored) {
-      params.options.context.broadcast(
-        "task.suggestion",
-        { action: "created", suggestion: restored },
-        { dropIfSlow: true },
-      );
-    }
-    return { ok: false, error: params.error };
+    return restoreSuggestedTaskClaim(params);
   }
   abandonSuggestedTaskAcceptance(params.taskId, params.options);
   return {

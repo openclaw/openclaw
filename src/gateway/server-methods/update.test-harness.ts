@@ -337,13 +337,21 @@ vi.mock("../../infra/update-status-schedule.js", () => ({
   refreshGatewayUpdateStatus: refreshGatewayUpdateStatusMock,
 }));
 
-vi.mock("../../infra/update-campaign.js", () => ({
-  gatewayUpdateCampaign: {
-    adopt: adoptUpdateCampaignMock,
-    getRunId: () => undefined,
-    reconcileRun: () => {},
-  },
-}));
+vi.mock("../../infra/update-check-lifecycle.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/update-check-lifecycle.js")>();
+  return {
+    ...actual,
+    currentUpdateCheckLifecycle: () => ({
+      ...actual.currentUpdateCheckLifecycle(),
+      campaign: {
+        adopt: adoptUpdateCampaignMock,
+        bindRun: vi.fn(),
+        getRunId: () => undefined,
+        reconcileRun: () => {},
+      },
+    }),
+  };
+});
 
 vi.mock("../../infra/update-runner-install-surface.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/update-runner-install-surface.js")>()),

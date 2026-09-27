@@ -253,7 +253,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
         this.resetRealtimeSessionState();
         // Finalization retains capture failures; observe Promises returned by the host view.
         void this.runtime
-          .captureWsEventAsync({
+          .captureWsEventAsync?.({
             url,
             direction: "local",
             kind: "ws-open",
@@ -287,7 +287,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
           }
         }
         void this.runtime
-          .captureWsEventAsync({
+          .captureWsEventAsync?.({
             url,
             direction: "inbound",
             kind: "ws-frame",
@@ -346,7 +346,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
           return;
         }
         void this.runtime
-          .captureWsEventAsync({
+          .captureWsEventAsync?.({
             url,
             direction: "local",
             kind: "error",
@@ -672,7 +672,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
           : "unknown";
       const payload = JSON.stringify(event);
       void this.runtime
-        .captureWsEventAsync({
+        .captureWsEventAsync?.({
           url: this.connectionUrl,
           direction: "outbound",
           kind: "ws-frame",

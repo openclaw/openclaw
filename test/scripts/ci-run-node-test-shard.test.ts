@@ -53,6 +53,9 @@ const worktreeRecoveryTarget = "src/agents/worktrees/service.removal-recovery.te
 const gatewayCoreConfig = "test/vitest/vitest.gateway-core.config.ts";
 const gatewayClientConfig = "test/vitest/vitest.gateway-client.config.ts";
 const gatewayClientTarget = "src/gateway/talk/handlers/client-native-control.test.ts";
+const memoryConfig = "test/vitest/vitest.extension-memory.config.ts";
+const memoryTarget = "extensions/memory-lancedb/config.test.ts";
+const memoryIncludes = ["extensions/memory-lancedb", "extensions/memory-wiki"];
 
 function makeScratchDir(): string {
   const dir = mkdtempSync(path.join(tmpdir(), "openclaw-shard-test-"));
@@ -250,10 +253,29 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
   );
 
   it.each([
-    { policy: undefined, expected: ["eligible", "mixed", "unknown", "gateway-client", bunTarget] },
+    {
+      policy: undefined,
+      expected: [
+        "eligible",
+        "mixed",
+        "unknown",
+        "gateway-client",
+        "memory",
+        bunTarget,
+        memoryTarget,
+      ],
+    },
     {
       policy: "bun-compatible",
-      expected: ["bun:eligible", "mixed", "unknown", "bun:gateway-client", `bun:${bunTarget}`],
+      expected: [
+        "bun:eligible",
+        "mixed",
+        "unknown",
+        "bun:gateway-client",
+        "bun:memory",
+        `bun:${bunTarget}`,
+        `bun:${memoryTarget}`,
+      ],
     },
     {
       policy: "dual",
@@ -264,8 +286,12 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         "unknown",
         "gateway-client",
         "bun:gateway-client",
+        "memory",
+        "bun:memory",
         bunTarget,
         `bun:${bunTarget}`,
+        memoryTarget,
+        `bun:${memoryTarget}`,
       ],
     },
   ])("preserves complete process envelopes under $policy", async ({ policy, expected }) => {
@@ -288,10 +314,20 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
           shard_name: "gateway-client",
           includePatterns: [gatewayClientTarget],
         },
+        {
+          configs: [memoryConfig],
+          shard_name: "memory",
+          includePatterns: memoryIncludes,
+          env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+        },
       ]),
     });
     const exitCode = await runShardPlans(
-      [...groups, { kind: "target", name: bunTarget, target: bunTarget }],
+      [
+        ...groups,
+        { kind: "target", name: bunTarget, target: bunTarget },
+        { kind: "target", name: memoryTarget, target: memoryTarget },
+      ],
       {
         concurrency: 1,
         env: {
@@ -319,6 +355,12 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
               gatewayClientTarget,
             ]);
           }
+          if (label.endsWith("memory")) {
+            expect(JSON.parse(readFileSync(env.OPENCLAW_VITEST_INCLUDE_FILE!, "utf8"))).toEqual(
+              memoryIncludes,
+            );
+            expect(env.OPENCLAW_VITEST_MAX_WORKERS).toBe("2");
+          }
           await Promise.resolve();
           active -= 1;
           return 0;
@@ -340,7 +382,11 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
             ? ["unknown.config.ts"]
             : label.endsWith("gateway-client")
               ? [gatewayClientConfig]
-              : [bunTarget];
+              : label.endsWith("memory")
+                ? [memoryConfig]
+                : label.endsWith(memoryTarget)
+                  ? [memoryTarget]
+                  : [bunTarget];
       expect(args).toEqual([...targets, "--", "--maxWorkers=1"]);
     }
   });
@@ -646,11 +692,13 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         ).toEqual([{ runtime: "node" }]);
       }
       const captureFile = "src/proxy-capture/proxy-server.test.ts";
-      for (const selection of [
+      for (const captureSelection of [
         { targets: [captureFile] },
         { configs: ["test/vitest/vitest.infra.config.ts"], includePatterns: [captureFile] },
       ]) {
-        expect(resolveCiTestRuntimeSelections(selection, policy)).toEqual([{ runtime: "node" }]);
+        expect(resolveCiTestRuntimeSelections(captureSelection, policy)).toEqual([
+          { runtime: "node" },
+        ]);
       }
       expect(resolveCiTestRuntimeSelections({ targets: ["src/version.test.ts"] }, policy)).toEqual(
         policy === "dual" ? [{ runtime: "node" }, { runtime: "bun" }] : [{ runtime: "bun" }],
@@ -943,6 +991,8 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
 
   it.each([
     { shard: { configs: [bunConfig] }, expected: true },
+    { shard: { configs: [memoryConfig] }, expected: true },
+    { shard: { targets: [memoryTarget] }, expected: true },
     { shard: { configs: [] }, expected: false },
     { shard: { configs: [bunConfig, "unknown.config.ts"] }, expected: false },
     {
