@@ -152,6 +152,44 @@ function writePluginWithCliRegistryDependency(args) {
   writePluginWithCli(args, "7.0.0");
 }
 
+function writeBravePlugin() {
+  const root = process.env.FIXTURE_PACKAGE_DIR;
+  const version = process.env.FIXTURE_PACKAGE_VERSION;
+  if (!version) {
+    throw new Error("missing fixture package version");
+  }
+  writeJson(path.join(root, "package.json"), {
+    name: "@openclaw/brave-plugin",
+    version,
+    openclaw: { extensions: ["./index.js"] },
+  });
+  writeJson(path.join(root, "openclaw.plugin.json"), {
+    id: "brave",
+    activation: { onStartup: false },
+    setup: { providers: [{ id: "brave", envVars: ["BRAVE_API_KEY"] }] },
+    contracts: { webSearchProviders: ["brave"] },
+    configSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        webSearch: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            apiKey: { type: ["string", "object"] },
+            mode: { type: "string", enum: ["web", "llm-context"] },
+            baseUrl: { type: ["string", "object"] },
+          },
+        },
+      },
+    },
+  });
+  write(
+    path.join(root, "index.js"),
+    `module.exports = { id: "brave", name: "Brave Fixture", register() {} };\n`,
+  );
+}
+
 function writeClaudeBundle(args) {
   const root = requireArg(args[0], "root");
   writeJson(path.join(root, ".claude-plugin", "plugin.json"), { name: "claude-bundle-e2e" });
@@ -190,6 +228,7 @@ function writePluginMarketplace(args) {
 }
 
 export const pluginCommands = {
+  "brave-plugin": writeBravePlugin,
   "plugin-demo": writePluginDemo,
   plugin: writePlugin,
   "plugin-pack": writePluginPack,

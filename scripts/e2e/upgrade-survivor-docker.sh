@@ -687,7 +687,7 @@ configure_clawhub_fixture() {
    if [ "${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}" = "configured-plugin-installs" ]; then
     mkdir -p "$package_dir"
     FIXTURE_PACKAGE_DIR="$package_dir" FIXTURE_PACKAGE_VERSION="2026.5.2" \
-      node /tmp/openclaw-release-harness/scripts/e2e/lib/upgrade-survivor/brave-plugin-fixture.mjs
+      node /tmp/openclaw-release-harness/scripts/e2e/lib/fixture.mjs brave-plugin
     tar -czf "$tarball" -C "$fixture_root" package
     registry_args+=("@openclaw/brave-plugin" "2026.5.2" "$tarball")
   fi

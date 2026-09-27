@@ -580,14 +580,20 @@ try {
           .includes("plugin lifecycle resource ceiling exceeded:"),
         "updater exceeded the existing resource ceiling",
       );
-      const originals = assertRecoveryOriginals(fixture, readRecoveryMoves(stateDir));
+      const moves = readRecoveryMoves(stateDir);
+      const originals = assertRecoveryOriginals(fixture, moves);
       const files = Object.keys(recoveryTreeSnapshot([stateDir]));
       const known = new Set(fixture.preDoctorPaths);
       assert(
         !files.some((file) => file.includes(".pre-doctor-") && !known.has(file)),
         "public migration created an extra raw pre-Doctor copy",
       );
-      const destinations = [...new Set(readRecoveryMoves(stateDir).map((move) => move.sqlitePath))];
+      // Shared-index receipts also name unused agents that have no transcript database.
+      const destinations = [
+        ...new Set(
+          moves.filter((move) => move.kind === "transcript").map((move) => move.sqlitePath),
+        ),
+      ];
       saveEvidence({
         originals,
         spec: fixture.spec,

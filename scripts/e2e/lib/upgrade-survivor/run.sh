@@ -789,7 +789,7 @@ NODE
   if configured_plugin_installs_enabled; then
     mkdir -p "$package_dir"
     FIXTURE_PACKAGE_DIR="$package_dir" FIXTURE_PACKAGE_VERSION="$candidate_version" \
-      node scripts/e2e/lib/upgrade-survivor/brave-plugin-fixture.mjs
+      node scripts/e2e/lib/fixture.mjs brave-plugin
     tar -czf "$tarball" -C "$fixture_root" package
     registry_args+=("@openclaw/brave-plugin" "$candidate_version" "$tarball")
   fi

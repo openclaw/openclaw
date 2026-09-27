@@ -2977,7 +2977,7 @@ docker_e2e_docker_run_cmd run demo
     );
     expect(publishedRunner).toContain('FIXTURE_PACKAGE_VERSION="$candidate_version"');
     const braveFixtureRoot = tempDirs.make("survivor-brave-fixture-");
-    execFileSync(testNodeExecPath, ["scripts/e2e/lib/upgrade-survivor/brave-plugin-fixture.mjs"], {
+    execFileSync(testNodeExecPath, ["scripts/e2e/lib/fixture.mjs", "brave-plugin"], {
       env: {
         ...process.env,
         FIXTURE_PACKAGE_DIR: braveFixtureRoot,
