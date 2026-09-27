@@ -23,7 +23,7 @@ import {
   resolveNodeHostCloudflareAccess,
   type NodeHostCloudflareAccessConfig,
 } from "../node-host/gateway-cloudflare-access.js";
-import { runNodeHost } from "../node-host/runner.js";
+import { loadResumableNodeHostGateway, runNodeHost } from "../node-host/runner.js";
 import { isDevicePairingJoinCode } from "../pairing/join-code.js";
 import { decodePairingSetupCode, encodePairingSetupCode } from "../pairing/setup-code.js";
 import { defaultRuntime } from "../runtime.js";
@@ -144,7 +144,7 @@ function selectCloudflareAccessConfig(params: {
   );
 }
 
-/** Connect only redeems one-shot targets; a saved connection resumes through `openclaw node`. */
+/** Connect only redeems one-shot targets; a saved pairing resumes through `openclaw node`. */
 function formatMissingTargetError(
   opts: ConnectCommandOptions,
   savedGateway: NodeHostGatewayConfig | undefined,
@@ -154,7 +154,9 @@ function formatMissingTargetError(
   if (opts.ephemeral) {
     return missing;
   }
-  const command = (...parts: string[]) => formatCliCommand(parts.join(" "));
+  // Only the fixed prefix is formatted: quoted user values may contain --profile text.
+  const command = (fixed: string, ...args: string[]) =>
+    [formatCliCommand(fixed), ...args].join(" ");
   const sessionHostFlags = opts.sessionHost ? ["--session-host"] : [];
   const hostFlags = [
     ...(opts.displayName !== undefined ? ["--display-name", quoteCliArg(opts.displayName)] : []),
@@ -175,8 +177,8 @@ function formatMissingTargetError(
       ].join(", then ")
     : command("openclaw node run", ...sessionHostFlags, ...hostFlags);
   return [
-    `${missing} This machine has a saved Gateway connection (${formatGatewayCandidateUrl(savedGateway)}); join URLs and setup codes are single-use.`,
-    `To reconnect with it, run: ${reconnect}`,
+    `${missing} This machine is already paired with ${formatGatewayCandidateUrl(savedGateway)}; join URLs and setup codes are single-use.`,
+    `To reconnect with the saved pairing, run: ${reconnect}`,
     `To pair again, ${pair}`,
   ].join("\n");
 }
@@ -232,7 +234,7 @@ async function runConnectCommand(
   }
   const resolvedTarget = await resolveConnectTarget(target, opts.targetFile);
   if (!resolvedTarget) {
-    throw new Error(formatMissingTargetError(opts, (await loadNodeHostConfig())?.gateway));
+    throw new Error(formatMissingTargetError(opts, await loadResumableNodeHostGateway()));
   }
   const joinTarget = parseJoinTarget(resolvedTarget);
   const saved = await loadNodeHostConfig();

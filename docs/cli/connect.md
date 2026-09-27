@@ -90,13 +90,15 @@ and Gateway endpoint in node-host state. Reconnect with
 openclaw node run --session-host
 ```
 
-Running `openclaw connect` without a target on a machine with a saved Gateway
-connection does not connect. It exits with an error that prints the matching
-`openclaw node run` command for the flags you passed, and the `openclaw connect`
-command to use with a new join URL. With `--service`, it prints
+Running `openclaw connect` without a target does not connect. On an
+already-paired machine (a saved Gateway endpoint with its paired device
+token), it exits with an error that prints the matching `openclaw node run`
+command for the flags you passed, and the `openclaw connect` command to use
+with a new join URL. With `--service`, it prints
 `openclaw node install --force` instead, preceded by
 `openclaw config set nodeHost.workerRuns.enabled true` when you also passed
-`--session-host`. To enroll the machine again, mint a new join URL with
+`--session-host`. If the first enrollment never completed, it only points to
+a new join URL. To enroll the machine again, mint a new join URL with
 `openclaw devices join-code`.
 
 ## Environment-managed cloud nodes
