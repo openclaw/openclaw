@@ -70,3 +70,11 @@ export function isGoogleVoiceStoreInternal(error: unknown): boolean {
   const text = error instanceof Error ? error.message : String(error ?? "");
   return /\b500\b|INTERNAL error|Internal error encountered/i.test(text);
 }
+
+export function shouldAcceptMicStart(input: {
+  session: number;
+  currentSession: number;
+  dialogOpen: boolean;
+}): boolean {
+  return input.dialogOpen && input.session === input.currentSession;
+}

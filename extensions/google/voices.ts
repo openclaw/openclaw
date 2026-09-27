@@ -202,6 +202,11 @@ async function googleVoicesFetch(params: {
   method: "GET" | "POST";
   body?: Record<string, unknown>;
 }): Promise<Record<string, unknown>> {
+  if (params.method !== "GET") {
+    // CreateVoice with store:true is not idempotent. A 503 after the voice is
+    // stored would mint a duplicate on retry.
+    return await googleVoicesFetchOnce(params);
+  }
   let lastError: unknown;
   for (let attempt = 0; attempt < VOICE_HTTP_RETRY_LIMIT; attempt += 1) {
     try {

@@ -17,6 +17,17 @@ import { publishOutputFileAtomically } from "../media-output.js";
 import type { CapabilityTransport } from "./metadata.js";
 import { resolveLocalCapabilityRuntimeConfig } from "./shared.js";
 
+export function storedVoicePreviewOutputs(input: {
+  target: string;
+  audio: Buffer;
+  mimeType?: string;
+}): Array<{ path: string; format: string }> {
+  if (!input.target || input.audio.length === 0) {
+    return [];
+  }
+  return [{ path: input.target, format: input.mimeType ?? "audio/wav" }];
+}
+
 async function writePreviewAudio(target: string, audio: Buffer): Promise<void> {
   await publishOutputFileAtomically({
     filePath: target,
@@ -130,10 +141,10 @@ export async function runTtsReplicateVoice(params: {
   source: string;
   consent: string;
   model?: string;
-  output: string;
+  output?: string;
   transport: CapabilityTransport;
 }) {
-  const target = path.resolve(params.output);
+  const target = params.output ? path.resolve(params.output) : "";
   const sourcePath = path.resolve(params.source);
   const consentPath = path.resolve(params.consent);
   const sourceAudio = await fs.readFile(sourcePath);
@@ -144,7 +155,7 @@ export async function runTtsReplicateVoice(params: {
     const gatewayConnection = buildGatewayConnectionDetailsWithResolvers({
       config: getRuntimeConfig(),
     });
-    if (!isLoopbackHost(new URL(gatewayConnection.url).hostname)) {
+    if (params.output && !isLoopbackHost(new URL(gatewayConnection.url).hostname)) {
       throw new Error(
         `--output is not supported for remote gateway voice replication yet (gateway target: ${gatewayConnection.url}).`,
       );
@@ -168,11 +179,18 @@ export async function runTtsReplicateVoice(params: {
       },
       timeoutMs: 120_000,
     });
-    const audio = Buffer.from(result.audioBase64 ?? "", "base64");
-    if (!result.id || audio.length === 0) {
-      throw new Error("Gateway voice replication did not return a voice id and preview");
+    if (!result.id) {
+      throw new Error("Gateway voice replication did not return a voice id");
     }
-    await writePreviewAudio(target, audio);
+    const audio = Buffer.from(result.audioBase64 ?? "", "base64");
+    const outputs = storedVoicePreviewOutputs({
+      target,
+      audio,
+      mimeType: result.mimeType,
+    });
+    if (outputs[0]) {
+      await writePreviewAudio(outputs[0].path, audio);
+    }
     return {
       ok: true,
       capability: "tts.replicateVoice",
@@ -180,7 +198,7 @@ export async function runTtsReplicateVoice(params: {
       provider: result.provider,
       id: result.id,
       name: result.name,
-      outputs: [{ path: target, format: result.mimeType ?? "audio/wav" }],
+      outputs,
     };
   }
   const cfg = await resolveLocalCapabilityRuntimeConfig({
@@ -200,7 +218,14 @@ export async function runTtsReplicateVoice(params: {
     consentMimeType,
     model: params.model,
   });
-  await writePreviewAudio(target, replicated.previewAudio);
+  const outputs = storedVoicePreviewOutputs({
+    target,
+    audio: replicated.previewAudio,
+    mimeType: replicated.mimeType,
+  });
+  if (outputs[0]) {
+    await writePreviewAudio(outputs[0].path, replicated.previewAudio);
+  }
   return {
     ok: true,
     capability: "tts.replicateVoice",
@@ -208,6 +233,6 @@ export async function runTtsReplicateVoice(params: {
     provider,
     id: replicated.id,
     name: replicated.name,
-    outputs: [{ path: target, format: replicated.mimeType }],
+    outputs,
   };
 }

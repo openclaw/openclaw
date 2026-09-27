@@ -177,7 +177,7 @@ export function registerTtsCapabilityCommands(capability: Command): void {
       .requiredOption("--name <name>", "Display name")
       .requiredOption("--source <path>", "10-30s reference recording of the speaker")
       .requiredOption("--consent <path>", "Same speaker reciting Google's consent statement")
-      .requiredOption("--output <path>", "Preview audio path")
+      .option("--output <path>", "Preview audio path when the provider returns one")
       .option("--provider <id>", "Speech provider id")
       .option("--model <id>", "Voice-replication model id"),
     "local",
@@ -189,7 +189,7 @@ export function registerTtsCapabilityCommands(capability: Command): void {
         source: String(opts.source),
         consent: String(opts.consent),
         model: typeof opts.model === "string" ? opts.model : undefined,
-        output: String(opts.output),
+        output: typeof opts.output === "string" ? opts.output : undefined,
         transport,
       });
     },

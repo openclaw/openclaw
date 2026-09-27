@@ -62,7 +62,7 @@ agent agent.identity.get agent.wait chat.history chat.startup chat.metadata chat
 chat.abort chat.send terminal.open terminal.input terminal.resize terminal.close
 channels.pairing.list channels.pairing.approve channels.pairing.dismiss attach.grant
 attach.revoke push.web.preferences.get push.web.preferences.set terminal.attach terminal.list
-controlUi.githubPreview system.info agents.workspace.list agents.workspace.get tts.speak
+controlUi.githubPreview system.info agents.workspace.list agents.workspace.get tts.speak tts.voices tts.designVoice tts.replicateVoice
 plugins.list plugins.search plugins.install plugins.setEnabled plugins.uninstall plugins.refresh
 controlUi.sessionPullRequests.subscribe controlUi.sessionPreview gateway.suspend.prepare
 gateway.suspend.status gateway.suspend.resume chat.toolTitles sessions.diff

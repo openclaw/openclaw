@@ -3,7 +3,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
+  validateTtsDesignVoiceParams,
+  validateTtsReplicateVoiceParams,
   validateTtsSpeakParams,
+  validateTtsVoicesParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import {
@@ -325,6 +328,9 @@ export const ttsHandlers: GatewayRequestHandlers = {
     });
   },
   "tts.voices": async ({ params, respond, context }) => {
+    if (!assertValidParams(params, validateTtsVoicesParams, "tts.voices", respond)) {
+      return;
+    }
     await respondUnavailableOnThrow(respond, async () => {
       const cfg = context.getRuntimeConfig();
       const provider = normalizeOptionalString(params.provider);
@@ -341,6 +347,9 @@ export const ttsHandlers: GatewayRequestHandlers = {
     });
   },
   "tts.designVoice": async ({ params, respond, context }) => {
+    if (!assertValidParams(params, validateTtsDesignVoiceParams, "tts.designVoice", respond)) {
+      return;
+    }
     const displayName = normalizeOptionalString(params.displayName);
     const prompt = normalizeOptionalString(params.prompt);
     const provider = normalizeOptionalString(params.provider);
@@ -376,6 +385,11 @@ export const ttsHandlers: GatewayRequestHandlers = {
     });
   },
   "tts.replicateVoice": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(params, validateTtsReplicateVoiceParams, "tts.replicateVoice", respond)
+    ) {
+      return;
+    }
     const displayName = normalizeOptionalString(params.displayName);
     const provider = normalizeOptionalString(params.provider);
     const sourceAudioBase64 = normalizeOptionalString(params.sourceAudioBase64);
@@ -408,7 +422,9 @@ export const ttsHandlers: GatewayRequestHandlers = {
         id: replicated.id,
         name: replicated.name,
         mimeType: replicated.mimeType,
-        audioBase64: replicated.previewAudio.toString("base64"),
+        ...(replicated.previewAudio.length > 0
+          ? { audioBase64: replicated.previewAudio.toString("base64") }
+          : {}),
       });
     });
   },

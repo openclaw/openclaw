@@ -27,6 +27,7 @@ import {
   isGoogleVoiceStoreBusy,
   isGoogleVoiceStoreInternal,
   isStoredSpeechVoice,
+  shouldAcceptMicStart,
   voiceLabSubmitBlock,
   type StoredSpeechVoice,
 } from "./tts-voice-lab-state.ts";
@@ -77,6 +78,7 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
   private elapsedTimer: ReturnType<typeof setInterval> | undefined;
   private consentUrl: string | null = null;
   private sourceUrl: string | null = null;
+  private recordSession = 0;
 
   disconnectedCallback(): void {
     super.disconnectedCallback();
@@ -124,6 +126,7 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
   };
 
   private closeDialog = () => {
+    this.recordSession += 1;
     void this.stopRecording();
     this.pending = null;
     this.dialogOpen = false;
@@ -154,6 +157,7 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
   }
 
   private async startRecordingAsync(slot: ClipSlot) {
+    const session = this.recordSession;
     try {
       await this.recorder.start({
         deviceId: this.context.theme.settings.realtimeTalkInputDeviceId,
@@ -161,6 +165,17 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
           this.level = level;
         },
       });
+      if (
+        !shouldAcceptMicStart({
+          session,
+          currentSession: this.recordSession,
+          dialogOpen: this.dialogOpen,
+        })
+      ) {
+        this.recorder.dispose();
+        this.pending = null;
+        return;
+      }
       this.recording = slot;
       this.pending = null;
       this.elapsedMs = 0;
@@ -173,7 +188,15 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
       }, 200);
     } catch (error) {
       this.pending = null;
-      this.createError = formatUiError(error);
+      if (
+        shouldAcceptMicStart({
+          session,
+          currentSession: this.recordSession,
+          dialogOpen: this.dialogOpen,
+        })
+      ) {
+        this.createError = formatUiError(error);
+      }
     }
   }
 

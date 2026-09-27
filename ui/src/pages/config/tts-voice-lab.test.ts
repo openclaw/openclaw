@@ -3,6 +3,7 @@ import {
   isGoogleVoiceStoreBusy,
   isGoogleVoiceStoreInternal,
   isStoredSpeechVoice,
+  shouldAcceptMicStart,
   voiceLabCanSubmit,
   voiceLabSubmitBlock,
 } from "./tts-voice-lab-state.ts";
@@ -37,6 +38,12 @@ describe("TTS voice lab", () => {
         connected: false,
       }),
     ).toBe("disconnected");
+  });
+
+  it("drops a pending microphone start after the dialog closes", () => {
+    expect(shouldAcceptMicStart({ session: 1, currentSession: 1, dialogOpen: true })).toBe(true);
+    expect(shouldAcceptMicStart({ session: 1, currentSession: 2, dialogOpen: false })).toBe(false);
+    expect(shouldAcceptMicStart({ session: 1, currentSession: 1, dialogOpen: false })).toBe(false);
   });
 
   it("treats Google 503 UNAVAILABLE as a busy voice store", () => {

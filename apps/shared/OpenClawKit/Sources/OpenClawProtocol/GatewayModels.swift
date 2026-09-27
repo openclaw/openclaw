@@ -23887,6 +23887,138 @@ public struct TranscriptsSummarizeParams: Codable, Sendable {
     }
 }
 
+public struct TtsDesignVoiceParams: Codable, Sendable {
+    public let provider: String
+    public let displayname: String
+    public let prompt: String
+    public let languagecode: String?
+    public let gender: String?
+    public let modelid: String?
+
+    public init(
+        provider: String,
+        displayname: String,
+        prompt: String,
+        languagecode: String? = nil,
+        gender: String? = nil,
+        modelid: String? = nil)
+    {
+        self.provider = provider
+        self.displayname = displayname
+        self.prompt = prompt
+        self.languagecode = languagecode
+        self.gender = gender
+        self.modelid = modelid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case provider
+        case displayname = "displayName"
+        case prompt
+        case languagecode = "languageCode"
+        case gender
+        case modelid = "modelId"
+    }
+}
+
+public struct TtsDesignVoiceResult: Codable, Sendable {
+    public let provider: String
+    public let id: String
+    public let name: String?
+    public let mimetype: String?
+    public let audiobase64: String
+
+    public init(
+        provider: String,
+        id: String,
+        name: String? = nil,
+        mimetype: String? = nil,
+        audiobase64: String)
+    {
+        self.provider = provider
+        self.id = id
+        self.name = name
+        self.mimetype = mimetype
+        self.audiobase64 = audiobase64
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case provider
+        case id
+        case name
+        case mimetype = "mimeType"
+        case audiobase64 = "audioBase64"
+    }
+}
+
+public struct TtsReplicateVoiceParams: Codable, Sendable {
+    public let provider: String
+    public let displayname: String
+    public let sourceaudiobase64: String
+    public let consentaudiobase64: String
+    public let sourcemimetype: String?
+    public let consentmimetype: String?
+    public let modelid: String?
+
+    public init(
+        provider: String,
+        displayname: String,
+        sourceaudiobase64: String,
+        consentaudiobase64: String,
+        sourcemimetype: String? = nil,
+        consentmimetype: String? = nil,
+        modelid: String? = nil)
+    {
+        self.provider = provider
+        self.displayname = displayname
+        self.sourceaudiobase64 = sourceaudiobase64
+        self.consentaudiobase64 = consentaudiobase64
+        self.sourcemimetype = sourcemimetype
+        self.consentmimetype = consentmimetype
+        self.modelid = modelid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case provider
+        case displayname = "displayName"
+        case sourceaudiobase64 = "sourceAudioBase64"
+        case consentaudiobase64 = "consentAudioBase64"
+        case sourcemimetype = "sourceMimeType"
+        case consentmimetype = "consentMimeType"
+        case modelid = "modelId"
+    }
+}
+
+public struct TtsReplicateVoiceResult: Codable, Sendable {
+    public let provider: String
+    public let id: String
+    public let name: String?
+    public let mimetype: String?
+    public let audiobase64: String?
+
+    public init(
+        provider: String,
+        id: String,
+        name: String? = nil,
+        mimetype: String? = nil,
+        audiobase64: String? = nil)
+    {
+        self.provider = provider
+        self.id = id
+        self.name = name
+        self.mimetype = mimetype
+        self.audiobase64 = audiobase64
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case provider
+        case id
+        case name
+        case mimetype = "mimeType"
+        case audiobase64 = "audioBase64"
+    }
+}
+
 public struct TtsSpeakParams: Codable, Sendable {
     public let text: String
 
@@ -23924,6 +24056,54 @@ public struct TtsSpeakResult: Codable, Sendable {
         case outputformat = "outputFormat"
         case mimetype = "mimeType"
         case fileextension = "fileExtension"
+    }
+}
+
+public struct TtsVoiceOption: Codable, Sendable {
+    public let id: String
+    public let name: String?
+    public let category: String?
+    public let description: String?
+    public let locale: String?
+    public let gender: String?
+
+    public init(
+        id: String,
+        name: String? = nil,
+        category: String? = nil,
+        description: String? = nil,
+        locale: String? = nil,
+        gender: String? = nil)
+    {
+        self.id = id
+        self.name = name
+        self.category = category
+        self.description = description
+        self.locale = locale
+        self.gender = gender
+    }
+}
+
+public struct TtsVoicesParams: Codable, Sendable {
+    public let provider: String
+
+    public init(
+        provider: String)
+    {
+        self.provider = provider
+    }
+}
+
+public struct TtsVoicesResult: Codable, Sendable {
+    public let provider: String
+    public let voices: [TtsVoiceOption]
+
+    public init(
+        provider: String,
+        voices: [TtsVoiceOption])
+    {
+        self.provider = provider
+        self.voices = voices
     }
 }
 
