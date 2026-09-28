@@ -224,6 +224,21 @@ describe("memory host SDK package internals", () => {
     ]);
   });
 
+  it("skips dependency trees inside memory roots", async () => {
+    const workspaceDir = getTmpDir();
+    const memoryDir = path.join(workspaceDir, "memory");
+    const dependencyDir = path.join(memoryDir, "deliverable", "node_modules", "dependency");
+    await fs.mkdir(dependencyDir, { recursive: true });
+    await fs.writeFile(path.join(memoryDir, "note.md"), "# Note", "utf8");
+    await fs.writeFile(path.join(dependencyDir, "README.md"), "# Dependency", "utf8");
+
+    const files = await listMemoryFiles(workspaceDir);
+
+    expect(files.map((file) => path.relative(workspaceDir, file))).toEqual([
+      path.join("memory", "note.md"),
+    ]);
+  });
+
   it.each([
     {
       label: "primary memory file",
