@@ -70,8 +70,8 @@ const AMBIENT_SESSION_CONTEXT_FIELDS = [
 ] as const satisfies readonly (keyof SessionEntry)[];
 
 function copySessionFields<K extends keyof SessionEntry>(
-  target: Partial<SessionEntry>,
-  entry: SessionEntry,
+  target: Partial<Pick<SessionEntry, K>>,
+  entry: Pick<SessionEntry, K>,
   fields: readonly K[],
 ): void {
   for (const field of fields) {
