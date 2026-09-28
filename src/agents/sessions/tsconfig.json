@@ -1,37 +1,3 @@
 {
-  "extends": "../../tsconfig.json",
-  "compilerOptions": {
-    // Explicit source augmentations span the repository; native TSGo otherwise
-    // infers this leaf directory and rejects those roots before linting.
-    "rootDir": "../../..",
-    // The parent graph imports these shared ambient libraries transitively.
-    // Preserve collection iterators and Intl without rooting unrelated UI tests.
-    "lib": ["DOM", "DOM.Iterable", "ES2023", "ES2025.Iterator", "ESNext.Intl"]
-  },
-  // Retain source-wide module augmentations when narrowing this editor/lint graph.
-  "files": [
-    "../../config/sessions/session-entry.test-compat.d.ts",
-    "../../cli/program/openclaw-command.ts",
-    "../bash-tools.exec.resolve-env-hook.test.ts",
-    "../../plugin-sdk/channel-inbound.test.ts"
-  ],
-  "include": [
-    "**/*.ts",
-    "**/*.tsx",
-    "**/*.mts",
-    "**/*.cts",
-    "**/*.test-support.cjs",
-    "../../**/*.d.ts",
-    "../../**/*.d.mts",
-    "../../**/*.d.cts",
-    "../../../packages/**/*.d.ts",
-    "../../../packages/**/*.d.mts",
-    "../../../packages/**/*.d.cts",
-    "../../../ui/**/*.d.ts",
-    "../../../ui/**/*.d.mts",
-    "../../../ui/**/*.d.cts",
-    "../../../extensions/**/*.d.ts",
-    "../../../extensions/**/*.d.mts",
-    "../../../extensions/**/*.d.cts"
-  ]
+  "extends": "../../../config/tsconfig/oxlint.source.json"
 }

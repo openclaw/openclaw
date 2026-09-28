@@ -1024,26 +1024,21 @@ describe("oxlint config", () => {
     for (const file of [".oxlintrc.json", "tsconfig.json", "src/tsconfig.json"]) {
       write(file, fs.readFileSync(file, "utf8"));
     }
-    writeSessionCompatibilityFixture(root);
+    writeSourceProjectFixture(root);
     fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
     const owner = "src/agents/sessions";
-    // Reproduce the broad graph's transitive standard-library references.
+    // The canonical source contract supplies these libraries even in a leaf.
     write(
       "src/unrelated-library-owner.ts",
       '/// <reference lib="es2025.iterator" />\n/// <reference lib="esnext.intl" />\nexport {};',
     );
     write(
       owner + "/library-contract.ts",
-      'export const iterator = Iterator.from([1]).map(value => value + 1);\nexport const date = new Intl.DateTimeFormat().format(Temporal.PlainDate.from("2026-01-01"));',
+      'export const attempt = Promise.try(() => 1);\nexport const iterator = Iterator.from([1]).map(value => value + 1);\nexport const date = new Intl.DateTimeFormat().format(Temporal.PlainDate.from("2026-01-01"));',
     );
     const contract = owner + "/contract.ts";
     write(contract, "export interface Contract {} export declare const contract: Contract;");
-    const augmenters = [
-      "src/agents/sessions/keybindings.ts",
-      "src/cli/program/openclaw-command.ts",
-      "src/agents/bash-tools.exec.resolve-env-hook.test.ts",
-      "src/plugin-sdk/channel-inbound.test.ts",
-    ];
+    const augmenters = sourceAugmentations;
     for (const [index, file] of augmenters.entries()) {
       let module = path
         .relative(path.dirname(file), contract)
@@ -1116,17 +1111,30 @@ describe("oxlint config", () => {
           },
         },
       );
+    const libraries = (project: string) => {
+      const result = spawnSync(
+        resolveRepoToolBinPath("tsgo"),
+        ["--listFilesOnly", "--project", project],
+        { cwd: root, encoding: "utf8", timeout: 10_000 },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      const names = result.stdout
+        .trim()
+        .split(/\r?\n/u)
+        .map((file) => path.basename(file))
+        .filter((file) => /^lib\..*\.d\.ts$/u.test(file))
+        .toSorted();
+      return names;
+    };
     const baseline = lint();
+    const inheritedLibraries = libraries("src/agents/tsconfig.json");
     write(owner + "/tsconfig.json", fs.readFileSync(owner + "/tsconfig.json", "utf8"));
     const narrowed = lint();
+    expect(libraries(owner + "/tsconfig.json")).toEqual(inheritedLibraries);
     const expanded = spawnSync(
-      process.execPath,
-      [
-        path.resolve("node_modules/typescript/bin/tsc"),
-        "--showConfig",
-        "-p",
-        owner + "/tsconfig.json",
-      ],
+      resolveRepoToolBinPath("tsgo"),
+      ["--showConfig", "-p", owner + "/tsconfig.json"],
       { cwd: root, encoding: "utf8", timeout: 10_000 },
     );
     expect(expanded.error).toBeUndefined();
@@ -1138,18 +1146,12 @@ describe("oxlint config", () => {
       path.resolve(root, "src/config/sessions/session-entry.test-compat.d.ts"),
     );
     expect(roots).not.toContain(path.resolve(root, owner, "unrelated.test-compat.d.ts"));
+    expect(roots).not.toContain(path.resolve(root, "src/sibling.ts"));
+    for (const file of [...selected.slice(0, 3), ...augmenters, ...declarations])
+      expect(roots, file).toContain(path.resolve(root, file));
     const libraryCheck = spawnSync(
-      process.execPath,
-      [
-        path.resolve("node_modules/typescript/bin/tsc"),
-        "-p",
-        owner + "/tsconfig.json",
-        "--noEmit",
-        "--incremental",
-        "false",
-        "--pretty",
-        "false",
-      ],
+      resolveRepoToolBinPath("tsgo"),
+      ["-p", owner + "/tsconfig.json", "--noEmit", "--pretty", "false"],
       { cwd: root, encoding: "utf8", timeout: 10_000 },
     );
     expect(libraryCheck.error).toBeUndefined();
@@ -1174,7 +1176,14 @@ describe("oxlint config", () => {
           .map((item) => item.code),
       ).toEqual(
         Array.from(
-          { length: index < 2 ? 16 : index === 2 ? 12 : 1 },
+          {
+            length:
+              index < 2
+                ? augmenters.length + declarations.length
+                : index === 2
+                  ? declarations.length
+                  : 1,
+          },
           () => "typescript(no-floating-promises)",
         ),
       );
