@@ -2,30 +2,25 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { registerModelsAccountsCli } from "./models-accounts-cli.js";
 import { isModelsStatusJsonOutput } from "./models-output-mode.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 
 type ModelsCliRuntime = typeof import("./models-cli.runtime.js");
 
-function createModuleLoader<T>(load: () => Promise<T>): () => Promise<T> {
-  // Model subcommands are heavy; load each implementation once on first use.
-  let promise: Promise<T> | undefined;
-  return () => (promise ??= load());
-}
-
-const loadModelsRuntime = createModuleLoader<ModelsCliRuntime>(
-  () => import("./models-cli.runtime.js"),
-);
-const loadModelsStatusCommands = createModuleLoader(
+const loadModelsRuntime = createLazyRuntimeModule(() => import("./models-cli.runtime.js"));
+const loadModelsStatusCommands = createLazyRuntimeModule(
   () => import("../commands/models/list.status-command.js"),
 );
-const loadModelsAliasesCommands = createModuleLoader(() => import("../commands/models/aliases.js"));
-const loadModelsFallbacksCommands = createModuleLoader(
+const loadModelsAliasesCommands = createLazyRuntimeModule(
+  () => import("../commands/models/aliases.js"),
+);
+const loadModelsFallbacksCommands = createLazyRuntimeModule(
   () => import("../commands/models/fallbacks-shared.js"),
 );
-const loadModelsAuthCommands = createModuleLoader(() => import("../commands/models/auth.js"));
-const loadModelsAuthOrderCommands = createModuleLoader(
+const loadModelsAuthCommands = createLazyRuntimeModule(() => import("../commands/models/auth.js"));
+const loadModelsAuthOrderCommands = createLazyRuntimeModule(
   () => import("../commands/models/auth-order.js"),
 );
 

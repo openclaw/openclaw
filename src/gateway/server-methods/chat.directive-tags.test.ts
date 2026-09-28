@@ -1298,52 +1298,17 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it.each([
-    ["stale", "previous-leaf"],
-    ["empty", null],
-  ])("rejects a %s expected active leaf before starting or writing", async (name, expectedLeaf) => {
+    ["rejects an off-path leaf without a session id", "previous-leaf", undefined, false],
+    ["rejects a stale empty leaf without a session id", null, undefined, false],
+    ["accepts an empty starting leaf after a same-session append", null, "current", true],
+    ["accepts a same-session active ancestor", "rendered-leaf", "current", true],
+    ["rejects an ancestor from a replaced session", "rendered-leaf", "replaced", false],
+  ] as const)("%s", async (_name, expectedLeafEntryId, sessionId, accepted) => {
     const { context, respond, send } = await createSqliteChatRequest(
-      `openclaw-chat-send-${name}-leaf-`,
+      "openclaw-chat-send-active-ancestor-",
     );
-    await appendTestTranscriptMessage({
-      eventId: "current-leaf",
-      role: "user",
-      content: "existing",
-      now: 1,
-      parentId: null,
-    });
-    const before = loadTranscriptEventsSync(transcriptScope());
-
-    await send({
-      idempotencyKey: `idem-${name}-leaf`,
-      requestParams: { expectedLeafEntryId: expectedLeaf },
-      waitFor: "none",
-    });
-
-    expect(lastRespondCall(respond)).toEqual([
-      false,
-      undefined,
-      expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
-    ]);
-    expect(context.addChatRun).not.toHaveBeenCalled();
-    expect(mockState.lastDispatchCtx).toBeUndefined();
-    expect(loadTranscriptEventsSync(transcriptScope())).toEqual(before);
-  });
-
-  it.each([
-    {
-      name: "allows a same-session expected ancestor that remains on the active path",
-      sessionId: "current",
-      accepted: true,
-    },
-    {
-      name: "rejects an active-path ancestor from a different requested session generation",
-      sessionId: "different-session-generation",
-      accepted: false,
-    },
-  ])("$name", async ({ sessionId, accepted }) => {
-    const { context, respond, send } = await createSqliteChatRequest(
-      `openclaw-chat-send-active-ancestor-${sessionId}-`,
-    );
+    // Capture the physical session before another participant appends the first turn.
+    const requestedSessionId = sessionId === "current" ? mockState.sessionId : sessionId;
     await appendTestTranscriptMessage({
       eventId: "rendered-leaf",
       role: "assistant",
@@ -1381,8 +1346,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await send({
       idempotencyKey: `idem-active-ancestor-${sessionId}`,
       requestParams: {
-        expectedLeafEntryId: "rendered-leaf",
-        sessionId: sessionId === "current" ? mockState.sessionId : sessionId,
+        expectedLeafEntryId,
+        sessionId: requestedSessionId,
       },
       waitFor: "none",
     });
@@ -1396,78 +1361,84 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     if (accepted) {
       expect(response[1]).toEqual(expect.objectContaining({ status: "started" }));
     } else {
-      expect(response[2]).toEqual(
+      expect(response).toEqual([
+        false,
+        undefined,
         expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
-      );
+      ]);
+      expect(mockState.lastDispatchCtx).toBeUndefined();
       expect(loadTranscriptEventsSync(transcriptScope())).toEqual(before);
     }
   });
 
-  it("rejects a copied exact leaf from the session before a branch switch", async () => {
-    const { context, respond, send } = await createSqliteChatRequest(
-      "openclaw-chat-send-rotated-exact-leaf-",
-    );
-    await appendTestTranscriptMessage({
-      eventId: "branch-root",
-      role: "user",
-      content: "root",
-      now: 1,
-      parentId: null,
-    });
-    await appendTestTranscriptMessage({
-      eventId: "copied-leaf",
-      role: "assistant",
-      content: "selected branch",
-      now: 2,
-      parentId: "branch-root",
-    });
-    await appendTestTranscriptMessage({
-      eventId: "active-sibling",
-      role: "assistant",
-      content: "active branch",
-      now: 3,
-      parentId: "branch-root",
-    });
-    await waitForSessionTranscriptIndexReconcile({
-      agentId: "main",
-      env: suiteFixtureEnv,
-      path: suiteDatabasePath,
-    });
-    const staleSessionId = mockState.sessionId;
-    const switched = await switchSessionBranch({
-      agentId: "main",
-      env: suiteFixtureEnv,
-      leafEntryId: "copied-leaf",
-      sessionKey: "agent:main:main",
-      storePath: suiteDatabasePath,
-    });
-    expect(switched.status).toBe("created");
-    if (switched.status !== "created") {
-      throw new Error("expected branch switch test invariant");
-    }
-    expect(switched.entry.sessionId).not.toBe(staleSessionId);
-    mockState.sessionId = switched.entry.sessionId;
-    const before = loadTranscriptEventsSync(transcriptScope());
-    expect(resolveSessionTranscriptActiveLeafEntryId(before)).toBe("copied-leaf");
+  it.each(["copied-leaf", null])(
+    "rejects leaf %s from before a branch switch",
+    async (expectedLeafEntryId) => {
+      const { context, respond, send } = await createSqliteChatRequest(
+        "openclaw-chat-send-rotated-exact-leaf-",
+      );
+      await appendTestTranscriptMessage({
+        eventId: "branch-root",
+        role: "user",
+        content: "root",
+        now: 1,
+        parentId: null,
+      });
+      await appendTestTranscriptMessage({
+        eventId: "copied-leaf",
+        role: "assistant",
+        content: "selected branch",
+        now: 2,
+        parentId: "branch-root",
+      });
+      await appendTestTranscriptMessage({
+        eventId: "active-sibling",
+        role: "assistant",
+        content: "active branch",
+        now: 3,
+        parentId: "branch-root",
+      });
+      await waitForSessionTranscriptIndexReconcile({
+        agentId: "main",
+        env: suiteFixtureEnv,
+        path: suiteDatabasePath,
+      });
+      const staleSessionId = mockState.sessionId;
+      const switched = await switchSessionBranch({
+        agentId: "main",
+        env: suiteFixtureEnv,
+        leafEntryId: "copied-leaf",
+        sessionKey: "agent:main:main",
+        storePath: suiteDatabasePath,
+      });
+      expect(switched.status).toBe("created");
+      if (switched.status !== "created") {
+        throw new Error("expected branch switch test invariant");
+      }
+      expect(switched.entry.sessionId).not.toBe(staleSessionId);
+      mockState.sessionId = switched.entry.sessionId;
+      const before = loadTranscriptEventsSync(transcriptScope());
+      expect(resolveSessionTranscriptActiveLeafEntryId(before)).toBe("copied-leaf");
 
-    await send({
-      idempotencyKey: "idem-rotated-exact-leaf",
-      requestParams: {
-        expectedLeafEntryId: "copied-leaf",
-        sessionId: staleSessionId,
-      },
-      waitFor: "none",
-    });
+      await send({
+        idempotencyKey: "idem-rotated-exact-leaf",
+        requestParams: {
+          expectedLeafEntryId,
+          sessionId: staleSessionId,
+        },
+        waitFor: "none",
+      });
 
-    expect(lastRespondCall(respond)).toEqual([
-      false,
-      undefined,
-      expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
-    ]);
-    expect(context.addChatRun).not.toHaveBeenCalled();
-    expect(mockState.lastDispatchCtx).toBeUndefined();
-    expect(loadTranscriptEventsSync(transcriptScope())).toEqual(before);
-  });
+      expect(lastRespondCall(respond)).toEqual([
+        false,
+        undefined,
+        expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
+      ]);
+      expect(context.addChatRun).not.toHaveBeenCalled();
+      expect(mockState.lastDispatchCtx).toBeUndefined();
+      expect(loadTranscriptEventsSync(transcriptScope())).toEqual(before);
+    },
+  );
 
   it("rejects an expected sibling that is off the active path", async () => {
     const { context, respond, send } = await createSqliteChatRequest(

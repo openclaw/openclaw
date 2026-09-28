@@ -1,4 +1,3 @@
-// MCP CLI for configured servers, OAuth auth, diagnostics, and channel MCP serving.
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -197,21 +196,13 @@ function applyMcpTimeoutOptions(
   server: Record<string, unknown>,
   opts: McpServerControlOptions,
 ): void {
-  const requestTimeoutSeconds = parsePositiveNumberOption(opts.timeout, "--timeout");
-  setOptionalField(
-    server,
-    "requestTimeoutMs",
-    requestTimeoutSeconds === undefined ? undefined : requestTimeoutSeconds * 1_000,
-  );
-  const connectionTimeoutSeconds = parsePositiveNumberOption(
-    opts.connectTimeout,
-    "--connect-timeout",
-  );
-  setOptionalField(
-    server,
-    "connectionTimeoutMs",
-    connectionTimeoutSeconds === undefined ? undefined : connectionTimeoutSeconds * 1_000,
-  );
+  for (const [option, field, label] of [
+    ["timeout", "requestTimeoutMs", "--timeout"],
+    ["connectTimeout", "connectionTimeoutMs", "--connect-timeout"],
+  ] as const) {
+    const seconds = parsePositiveNumberOption(opts[option], label);
+    setOptionalField(server, field, seconds === undefined ? undefined : seconds * 1_000);
+  }
 }
 
 function applyMcpOAuthOptions(
@@ -321,19 +312,9 @@ function resolveConfiguredPath(filePath: string, cwd: unknown): string {
   return path.resolve(base, filePath);
 }
 
-async function fileExists(filePath: string): Promise<boolean> {
+async function pathHasType(filePath: string, type: "isFile" | "isDirectory"): Promise<boolean> {
   try {
-    const stat = await fs.stat(filePath);
-    return stat.isFile();
-  } catch {
-    return false;
-  }
-}
-
-async function directoryExists(filePath: string): Promise<boolean> {
-  try {
-    const stat = await fs.stat(filePath);
-    return stat.isDirectory();
+    return (await fs.stat(filePath))[type]();
   } catch {
     return false;
   }
@@ -396,7 +377,6 @@ async function collectMcpDoctorIssues(params: {
   server: Record<string, unknown>;
   probe: boolean;
   config: OpenClawConfig;
-  path: string;
 }): Promise<McpDoctorIssue[]> {
   const issues: McpDoctorIssue[] = [];
   const { name, server } = params;
@@ -415,7 +395,7 @@ async function collectMcpDoctorIssues(params: {
           issue("error", `stdio command not found or not executable: ${resolved.command}`),
         );
       }
-      if (resolved.cwd && !(await directoryExists(resolved.cwd))) {
+      if (resolved.cwd && !(await pathHasType(resolved.cwd, "isDirectory"))) {
         issues.push(issue("error", `stdio cwd does not exist: ${resolved.cwd}`));
       }
     }
@@ -453,7 +433,7 @@ async function collectMcpDoctorIssues(params: {
       }
       if (
         resolved.clientCert &&
-        !(await fileExists(resolveConfiguredPath(resolved.clientCert, "")))
+        !(await pathHasType(resolveConfiguredPath(resolved.clientCert, ""), "isFile"))
       ) {
         issues.push(
           issue("error", `client certificate file does not exist: ${resolved.clientCert}`),
@@ -461,7 +441,7 @@ async function collectMcpDoctorIssues(params: {
       }
       if (
         resolved.clientKey &&
-        !(await fileExists(resolveConfiguredPath(resolved.clientKey, "")))
+        !(await pathHasType(resolveConfiguredPath(resolved.clientKey, ""), "isFile"))
       ) {
         issues.push(issue("error", `client key file does not exist: ${resolved.clientKey}`));
       }
@@ -819,14 +799,12 @@ export function registerMcpCli(program: Command) {
     .action(async (name: string | undefined, opts: { json?: boolean }) => {
       const loaded = await loadMcpConfig(opts);
       const value = name ? requireMcpServer(loaded, name, opts) : loaded.mcpServers;
-      if (opts.json) {
-        defaultRuntime.writeJson(value ?? {});
-        return;
-      }
-      if (name) {
-        defaultRuntime.log(`OpenClaw-managed MCP server "${name}" (${loaded.path}):`);
-      } else {
-        defaultRuntime.log(`OpenClaw-managed MCP servers (${loaded.path}):`);
+      if (!opts.json) {
+        defaultRuntime.log(
+          name
+            ? `OpenClaw-managed MCP server "${name}" (${loaded.path}):`
+            : `OpenClaw-managed MCP servers (${loaded.path}):`,
+        );
       }
       defaultRuntime.writeJson(value ?? {});
     });
@@ -959,7 +937,6 @@ export function registerMcpCli(program: Command) {
             name: serverName,
             server,
             config: loaded.config,
-            path: loaded.path,
             probe: Boolean(opts.probe),
           });
           return {
