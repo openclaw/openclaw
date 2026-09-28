@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import JSON5 from "json5";
 import type { DummyRuleMap, OxlintConfig } from "oxlint";
@@ -87,7 +88,7 @@ type OxlintRunResult = {
   };
 };
 
-const MAX_EVIDENCE_OUTPUT = 1024 * 1024;
+const MAX_REPORT_BYTES = 1024 * 1024;
 
 function oxlintOption(args: string[], name: string, short: string) {
   const end = args.indexOf("--");
@@ -205,12 +206,27 @@ async function runWithAdvisoryLimits(
       { flag: "wx" },
     );
   }
+  const outputListeners = new Set<() => void>();
+  const forward = (source: Readable, target: NodeJS.WriteStream, chunk: string) => {
+    if (!chunk || target.write(chunk)) {
+      return;
+    }
+    source.pause();
+    const remove = () => target.off("drain", resume);
+    const resume = () => {
+      outputListeners.delete(remove);
+      source.resume();
+    };
+    outputListeners.add(remove);
+    target.once("drain", resume);
+  };
   try {
     const configuredArgs = advisoryConfig ? configOption.replace(advisoryConfig) : args;
     const format = oxlintOption(configuredArgs, "--format", "-f");
     let output = "";
     let stderr = "";
     let overflow = false;
+    let capturedBytes = 0;
     const status = await runManagedCommand({
       ...command,
       args: format.replace("json"),
@@ -219,20 +235,23 @@ async function runWithAdvisoryLimits(
         if (!child.stdout) {
           throw new Error("Oxlint JSON report pipe is unavailable");
         }
-        child.stdout.setEncoding("utf8");
-        child.stdout.on("data", (chunk: string) => {
-          if (
-            evidenceEnabled &&
-            output.length + stderr.length + chunk.length > MAX_EVIDENCE_OUTPUT
-          ) {
-            if (!overflow) {
-              process.stdout.write(output);
-              output = "";
-              overflow = true;
-            }
+        const stdout = child.stdout;
+        const capture = (chunk: string) => {
+          capturedBytes += Buffer.byteLength(chunk);
+          if (!overflow && capturedBytes > MAX_REPORT_BYTES) {
+            overflow = true;
+            forward(stdout, process.stdout, output);
+            output = "";
+            stderr = "";
           }
+        };
+        stdout.setEncoding("utf8");
+        stdout.on("data", (chunk: string) => {
+          capture(chunk);
           if (overflow) {
-            process.stdout.write(chunk);
+            // The supervisor lives outside the compiler's memory scope. Bound
+            // both its report capture and its queue to a slow output consumer.
+            forward(stdout, process.stdout, chunk);
           } else {
             output += chunk;
           }
@@ -241,16 +260,12 @@ async function runWithAdvisoryLimits(
           if (!child.stderr) {
             throw new Error("Oxlint diagnostic error pipe is unavailable");
           }
-          child.stderr.setEncoding("utf8");
-          child.stderr.on("data", (chunk: string) => {
-            process.stderr.write(chunk);
-            if (output.length + stderr.length + chunk.length > MAX_EVIDENCE_OUTPUT) {
-              if (!overflow) {
-                process.stdout.write(output);
-                output = "";
-                overflow = true;
-              }
-            } else if (!overflow) {
+          const errors = child.stderr;
+          errors.setEncoding("utf8");
+          errors.on("data", (chunk: string) => {
+            forward(errors, process.stderr, chunk);
+            capture(chunk);
+            if (!overflow) {
               stderr += chunk;
             }
           });
@@ -334,6 +349,9 @@ async function runWithAdvisoryLimits(
         : {}),
     };
   } finally {
+    for (const remove of outputListeners) {
+      remove();
+    }
     if (advisoryConfig) {
       fs.unlinkSync(advisoryConfig);
     }
@@ -534,7 +552,7 @@ async function prepareExtensionPackageBoundaryArtifacts(env: NodeJS.ProcessEnv) 
 /**
  * Applies wrapper policy and runs oxlint with the final argument list.
  */
-async function runOxlint(
+export async function runOxlint(
   argv: string[] = process.argv.slice(2),
   runtimeEnv: NodeJS.ProcessEnv = process.env,
 ): Promise<OxlintRunResult> {
