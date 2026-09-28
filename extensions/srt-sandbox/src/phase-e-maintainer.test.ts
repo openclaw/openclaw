@@ -108,4 +108,13 @@ describe("Phase E maintainer policy", () => {
       /node:child_process|spawn(?:Sync)?\s*\(|powershell|cmd\.exe|netsh|schtasks/i,
     );
   });
+  it("persists a canonical, generation-checked lease-store contract in the native boundary", async () => {
+    const source = await import("node:fs/promises").then((fs) =>
+      fs.readFile(new URL("../native/phase-e-maintainer.cc", import.meta.url), "utf8"),
+    );
+    expect(source).toContain('\\"generation\\":1');
+    expect(source).toContain('\\"crc32\\"');
+    expect(source).toContain('\\"state\\":\\"free\\"');
+    expect(source).toContain("LeaseCrc(1,sidFacts)");
+  });
 });
