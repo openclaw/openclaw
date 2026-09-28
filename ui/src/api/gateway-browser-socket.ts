@@ -3,7 +3,41 @@ import {
   type GatewayProtocolSocket,
   type GatewayProtocolSocketHandlers,
 } from "@openclaw/gateway-client/browser";
-import { gatewayWebSocketTransportUrl } from "../dev-gateway.ts";
+import { gatewayWebSocketTransportUrl, uiDevGatewayResourceUrl } from "../dev-gateway.ts";
+
+export async function probeGatewayReachability(url: string, signal: AbortSignal): Promise<boolean> {
+  try {
+    const gateway = new URL(url, window.location.href);
+    gateway.protocol = gateway.protocol.replace(/^ws/u, "http");
+    const probe = new URL(
+      uiDevGatewayResourceUrl(new URL("/healthz", gateway).href),
+      window.location.href,
+    );
+    if (probe.origin !== new URL(window.location.href).origin) {
+      return false;
+    }
+    const response = await fetch(probe, {
+      cache: "no-store",
+      credentials: "same-origin",
+      redirect: "error",
+      signal,
+    });
+    if (!response.ok) {
+      return false;
+    }
+    const body: unknown = await response.json();
+    return (
+      body !== null &&
+      typeof body === "object" &&
+      "ok" in body &&
+      body.ok === true &&
+      "status" in body &&
+      body.status === "live"
+    );
+  } catch {
+    return false;
+  }
+}
 
 export function createBrowserGatewaySocket(
   url: string,

@@ -50,7 +50,7 @@ import {
   loadOrCreateDeviceIdentity,
 } from "../lib/nodes/index.ts";
 import { generateUUID } from "../lib/uuid.ts";
-import { createBrowserGatewaySocket } from "./gateway-browser-socket.ts";
+import { createBrowserGatewaySocket, probeGatewayReachability } from "./gateway-browser-socket.ts";
 import { GatewayChatEvents } from "./gateway-chat-events.ts";
 import { buildGatewayConnectDevice } from "./gateway-connect-device.ts";
 import {
@@ -149,7 +149,9 @@ export type GatewayBrowserClientOptions = {
     reason: string;
     error?: ErrorShape;
     willRetry: boolean;
+    busy?: boolean;
   }) => void;
+  onReconnectScheduled?: (delayMs: number) => void;
   onGap?: (info: { expected: number; received: number }) => void;
   onRequestTiming?: (timing: GatewayProtocolRequestTiming) => void;
   onConnectTiming?: (timing: GatewayConnectTiming) => void;
@@ -256,10 +258,13 @@ export class GatewayBrowserClient {
   // Close/stop advances this generation before another socket can make stale hello work look active.
   private recovery = { value: "", resolved: false, generation: 0 };
   private scopeUpgradeBinding: ScopeUpgradeBinding | null = null;
+  private reachabilityProbe: AbortController | null = null;
 
   constructor(private opts: GatewayBrowserClientOptions) {
     this.client = new GatewayProtocolClient<ConnectPlan>({
       createSocket: (handlers) => {
+        this.reachabilityProbe?.abort();
+        this.reachabilityProbe = null;
         this.chatEvents.clear();
         this.maxPayloadBytes = undefined;
         return createBrowserGatewaySocket(this.opts.url, handlers, () => this.maxPayloadBytes);
@@ -295,14 +300,40 @@ export class GatewayBrowserClient {
           errorCode: error instanceof GatewayRequestError ? error.code : "SOCKET_CLOSED",
         });
         if (decision.notify) {
-          this.opts.onClose?.({
+          const info = {
             code: context.code,
             reason: context.reason,
             error: error instanceof GatewayRequestError ? toGatewayErrorInfo(error) : undefined,
             willRetry: decision.retry,
-          });
+          };
+          if (
+            decision.retry &&
+            !context.socketOpened &&
+            context.code === BROWSER_WEBSOCKET_CLOSE_CODE &&
+            !info.error
+          ) {
+            const probe = new AbortController();
+            this.reachabilityProbe = probe;
+            const timeout = setTimeout(() => probe.abort(), 1_000);
+            void probeGatewayReachability(this.opts.url, probe.signal)
+              .then((reachable) => {
+                clearTimeout(timeout);
+                // A new socket or explicit stop retires this failed upgrade's evidence.
+                if (this.reachabilityProbe === probe) {
+                  this.reachabilityProbe = null;
+                  this.opts.onClose?.({
+                    ...info,
+                    ...(reachable && !probe.signal.aborted ? { busy: true } : {}),
+                  });
+                }
+              })
+              .catch((error: unknown) => console.error("[gateway] close handler error:", error));
+          } else {
+            this.opts.onClose?.(info);
+          }
         }
       },
+      onReconnectScheduled: (delayMs) => this.opts.onReconnectScheduled?.(delayMs),
       onSocketFactoryError: (error) => this.handleSocketFactoryError(error),
       onEvent: (event) => this.chatEvents.dispatch(event, this.opts.onEvent),
       onGap: (info) => this.opts.onGap?.(info),
@@ -341,6 +372,8 @@ export class GatewayBrowserClient {
   }
 
   stop() {
+    this.reachabilityProbe?.abort();
+    this.reachabilityProbe = null;
     this.chatEvents.clear();
     this.stopTickWatch();
     this.recovery = { ...this.recovery, generation: this.recovery.generation + 1, resolved: false };

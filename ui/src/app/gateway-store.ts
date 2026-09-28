@@ -149,6 +149,9 @@ export function createApplicationGateway(
   const setSnapshot = (patch: Partial<ApplicationGatewaySnapshot>) => {
     const previous = snapshot;
     snapshot = { ...previous, ...patch };
+    if (snapshot.phase !== "connecting" && snapshot.phase !== "reconnecting") {
+      snapshot.reconnectAt = undefined;
+    }
     if (
       previous.client !== snapshot.client ||
       previous.hello !== snapshot.hello ||
@@ -505,7 +508,12 @@ export function createApplicationGateway(
         retireStoredGoalOperations(nextConnection.gatewayUrl, nextClient.recoveryScope);
         setSnapshot({});
       },
-      onClose: ({ code, reason, error, willRetry }) => {
+      onReconnectScheduled: (delayMs) => {
+        if (client === nextClient) {
+          setSnapshot({ reconnectAt: Date.now() + delayMs });
+        }
+      },
+      onClose: ({ code, reason, error, willRetry, busy }) => {
         if (client !== nextClient) {
           return;
         }
@@ -572,7 +580,7 @@ export function createApplicationGateway(
                 : t(willRetry ? "connection.interruptedRetrying" : "connection.interrupted", {
                     code: String(code),
                   }),
-          lastErrorCode: startupPending ? null : lastErrorCode,
+          lastErrorCode: startupPending ? null : busy ? "GATEWAY_BUSY" : lastErrorCode,
           lastErrorAuthReason: startupPending ? null : readConnectionAuthReason(error?.details),
         });
       },
@@ -603,6 +611,7 @@ export function createApplicationGateway(
       // Keep the shell mounted while a fresh client attempts event-gap
       // recovery or a manual retry when a session already existed.
       phase: everConnected ? "reconnecting" : "connecting",
+      reconnectAt: undefined,
       hello: null,
       canvasPluginSurfaceUrl: null,
       assistantAgentId: null,
