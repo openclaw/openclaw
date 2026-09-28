@@ -3,6 +3,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import chokidar from "chokidar";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi, type TestContext } from "vitest";
+import { resolveDefaultAgentDir } from "../../../src/agents/agent-scope.js";
 import { prepareHostConfigSnapshot } from "../../../src/config/io.snapshot-preparation.js";
 import { GatewayClient, GatewayClientRequestError } from "../../../src/gateway/client.js";
 import { invalidateConfigGetResponseCache } from "../../../src/gateway/config-get-response.js";
@@ -14,6 +15,7 @@ import { readConfiguredParsedLogTail } from "../../../src/logging/log-tail.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../../../src/logging/logger.js";
 import { clearPluginMetadataLifecycleCaches } from "../../../src/plugins/plugin-metadata-lifecycle.js";
 import { createDeferredCore } from "../../../src/shared/deferred.js";
+import { deleteTestEnvValue } from "../../../src/test-utils/env.js";
 import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.js";
 import { getFreePort } from "../../../src/test-utils/ports.js";
 import { withTestTimeout } from "../promise.js";
@@ -288,6 +290,30 @@ export async function restoreConfigFileForTest(
   original: Awaited<ReturnType<typeof getCurrentConfigObject>>,
 ) {
   await writeJsonFile(original.path, original.config);
+}
+
+export async function writeUnresolvedAuthProfileTokenRef(missingEnvVar: string) {
+  deleteTestEnvValue(missingEnvVar);
+  const authStorePath = path.join(resolveDefaultAgentDir({}), "auth-profiles.json");
+  await fs.mkdir(path.dirname(authStorePath), { recursive: true });
+  await fs.writeFile(
+    authStorePath,
+    `${JSON.stringify(
+      {
+        version: 1,
+        profiles: {
+          "custom:token": {
+            type: "token",
+            provider: "custom",
+            tokenRef: { source: "env", provider: "default", id: missingEnvVar },
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf-8",
+  );
 }
 
 export function installConfigWriteGatewayHooks(options: ConfigRpcGatewayOptions = {}) {

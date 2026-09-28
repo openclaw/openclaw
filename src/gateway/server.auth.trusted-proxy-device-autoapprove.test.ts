@@ -453,6 +453,24 @@ describe("trusted-proxy operator device auto-approval", () => {
     expect((await getPairedDevice(identity.deviceId))?.approvedScopes).toEqual(["operator.read"]);
   });
 
+  test("caps requested scopes to the configured and declared proxy scopes", async () => {
+    const { identityPath, identity } = await prepareAutoApproval(
+      "trusted-proxy-requested-scopes-cap",
+      ["operator.read", "operator.write", "operator.approvals"],
+    );
+    await withSharedProxyGateway(async ({ port }) => {
+      const res = await connectOperatorUi({
+        client: CONTROL_UI_CLIENT,
+        port,
+        identityPath,
+        scopes: ["operator.read", "operator.write", "operator.admin"],
+        declaredProxyScopes: "operator.read",
+      });
+      expect(res.ok).toBe(true);
+    });
+    expect((await getPairedDevice(identity.deviceId))?.approvedScopes).toEqual(["operator.read"]);
+  });
+
   test("keeps configured and requested scope behavior when the proxy header is absent", async () => {
     await writeGatewayAuthConfig({
       mode: "trusted-proxy",

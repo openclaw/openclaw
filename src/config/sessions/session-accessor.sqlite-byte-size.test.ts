@@ -24,6 +24,7 @@ import {
   readTranscriptDisplayDelta,
 } from "./session-accessor.sqlite-history-events.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
+import type { SessionTranscriptRuntimeScope } from "./session-accessor.types.js";
 import {
   shouldRebuildSessionTranscriptIndexSynchronously,
   SYNC_REBUILD_MAX_BYTES,
@@ -92,7 +93,7 @@ const readers: Array<
 ];
 
 async function withByteSizeScope(
-  run: (scope: SessionTranscriptReadScope & { agentId: string }) => Promise<void>,
+  run: (scope: SessionTranscriptRuntimeScope & { agentId: string }) => Promise<void>,
 ) {
   await withOpenClawTestState({ label: "transcript-byte-size" }, async (state) => {
     await run({

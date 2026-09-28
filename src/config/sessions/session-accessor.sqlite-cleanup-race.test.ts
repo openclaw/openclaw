@@ -374,7 +374,7 @@ describe("SQLite lifecycle cleanup races", () => {
   it("continues a maintenance batch after one entry changes", async () => {
     const entryCount = 66;
     const historyId = "maintenance-batch-historical-session";
-    const sessions = [];
+    const sessions: Awaited<ReturnType<typeof seed>>[] = [];
     for (let index = 0; index < entryCount; index += 1) {
       const suffix = String(index).padStart(2, "0");
       sessions.push(

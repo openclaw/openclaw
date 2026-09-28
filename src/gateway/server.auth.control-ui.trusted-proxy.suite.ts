@@ -17,6 +17,28 @@ import {
 } from "./server.auth.test-helpers.js";
 
 export function registerControlUiTrustedProxySuite(): void {
+  test("requires device identity when loopback trusted-proxy authentication is rejected", async () => {
+    await configureTrustedProxyControlUiAuth();
+    await withControlUiGatewayServer(async ({ port }) => {
+      const ws = await openWs(port, TRUSTED_PROXY_CONTROL_UI_HEADERS);
+      try {
+        const res = await connectReq(ws, {
+          skipDefaultAuth: true,
+          role: "operator",
+          scopes: ["operator.admin"],
+          device: null,
+          client: CONTROL_UI_CLIENT,
+        });
+        expect(res.ok).toBe(false);
+        expect(res.error?.details).toMatchObject({
+          code: ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
+        });
+      } finally {
+        ws.close();
+      }
+    });
+  });
+
   test("rejects loopback trusted-proxy control ui node role before pairing", async () => {
     await configureTrustedProxyControlUiAuth();
     await withControlUiGatewayServer(async ({ port }) => {

@@ -1227,7 +1227,7 @@ describe("gateway server chat", () => {
         { createdVia: "agent", creatorAgentId: "main" },
         { nowMs: 42 },
       );
-      await connectOk(ws);
+      await connectOk(ws, { prePairDevice: true });
       await createSessionDir();
       const updatedAt = Date.now();
       await writeStoredMainSession({
@@ -2319,7 +2319,7 @@ describe("gateway server chat", () => {
           },
         },
       });
-      await connectOk(ws);
+      await connectOk(ws, { prePairDevice: true });
 
       const metadata = await rpcReq<{
         commands?: Array<{ name?: string; textAliases?: string[] }>;

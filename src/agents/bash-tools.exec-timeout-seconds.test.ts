@@ -1,8 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../../packages/gateway-client/src/timeouts.js";
 import { createExecTool } from "./bash-tools.js";
+import { execSchema, nodeExecSchema } from "./bash-tools.schemas.js";
 import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
 import { createLazyExecTool } from "./lazy-exec-tool.js";
+
+it("exposes unit-bearing timeout fields on both exec surfaces", () => {
+  expect(nodeExecSchema.properties.timeoutSeconds).toBeDefined();
+  expect(execSchema.properties).not.toHaveProperty("timeout");
+  expect(nodeExecSchema.properties).not.toHaveProperty("timeout");
+});
 
 describe("removed exec timeout field", () => {
   it("rejects a stale timeout argument before command execution", async () => {

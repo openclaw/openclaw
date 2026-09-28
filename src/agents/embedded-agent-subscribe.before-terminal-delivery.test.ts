@@ -287,6 +287,21 @@ describe("delivery failures", () => {
     },
   );
 
+  it("preserves accepted delivery evidence after a later callback rejects", async () => {
+    const callback = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("second block rejected"));
+    const h = setup({ onBlockReply: callback });
+    h.message(answer("First delivered answer."), false);
+    await h.drain();
+    h.message(answer("Second rejected answer."), false);
+    h.end();
+    await h.drain();
+    expect(callback).toHaveBeenCalledTimes(2);
+    expect(h.subscription.getVisibleBlockReplyCount()).toBe(1);
+  });
+
   it("delivers queued media after a rejected reasoning reply", async () => {
     const callback = vi
       .fn()
