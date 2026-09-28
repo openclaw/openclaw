@@ -658,6 +658,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/run/run-attempt-dispatch.owner.test.ts",
   "src/agents/tools-effective-inventory.cold-provider.test.ts",
   "src/tts/tts-summary.static-catalog.test.ts",
+  "src/agents/prepared-model-runtime.hot-reload-dispatch.test.ts",
   "src/agents/prepared-model-runtime.run-resources.test.ts",
   "src/agents/sessions/sdk.auth-migration.test.ts",
   "src/agents/sandbox/registry-read.test.ts",
