@@ -1,4 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { extractToolPayload as extractQaToolPayload } from "openclaw/plugin-sdk/tool-payload";
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { buildAssistantText } from "./providers/mock-openai/mock-openai-assistant-text.js";
@@ -94,6 +95,11 @@ function rawCompletionInput(result: string, status = "completed; ready for paren
 type EvidenceCase =
   | "inherited"
   | "code-mode"
+  | "settled-batch"
+  | "settled-wrong-run"
+  | "settled-wrong-requester"
+  | "settled-wrong-result"
+  | "settled-wrong-parent"
   | "plain-parent"
   | "wrong-plain-parent"
   | "projected-tool"
@@ -108,10 +114,17 @@ type EvidenceCase =
   | "missing-completion"
   | "wrong-parent";
 
-async function runForkEvidence(evidence: EvidenceCase) {
+async function runForkEvidence(
+  evidence: EvidenceCase,
+  receiptWire: "direct" | "catalog" | "other-catalog-tool" | "unmatched-catalog-call" = "direct",
+) {
   const state = createQaBusState();
+  const settledBatch = evidence.startsWith("settled-");
   const usesPlainReply =
-    evidence === "plain-parent" || evidence === "projected" || evidence === "wrong-plain-parent";
+    settledBatch ||
+    evidence === "plain-parent" ||
+    evidence === "projected" ||
+    evidence === "wrong-plain-parent";
   let parentPrompt = prompt;
   let parentKey = "agent:qa:forked-context";
   const start = async (_env: unknown, params: { message: string; sessionKey: string }) => {
@@ -128,9 +141,28 @@ async function runForkEvidence(evidence: EvidenceCase) {
         mock: { baseUrl: "http://mock.test" },
       },
       normalizeLowercaseStringOrEmpty,
+      extractQaToolPayload,
       runAgentPrompt: start,
       startAgentRun: start,
+      readNativeQaSubagentRuns: async (_env: unknown, requesterSessionKey: string) => {
+        expect(requesterSessionKey).toBe(parentKey);
+        return [
+          {
+            runId: evidence === "settled-wrong-run" ? "another-run" : "child-run",
+            childSessionKey: childKey,
+            requesterSessionKey:
+              evidence === "settled-wrong-requester" ? "another-parent" : parentKey,
+            execution: { status: "terminal", outcome: { status: "ok" } },
+            delivery: { status: "delivered" },
+          },
+        ];
+      },
       readSessionTranscriptSummary: async (_env: unknown, sessionKey: string) => {
+        if (sessionKey === childKey) {
+          return {
+            finalText: evidence === "settled-wrong-result" ? "another result" : childResult,
+          };
+        }
         expect(sessionKey).toBe(parentKey);
         return {
           finalText: usesPlainReply && evidence !== "wrong-plain-parent" ? childResult : "NO_REPLY",
@@ -154,23 +186,43 @@ async function runForkEvidence(evidence: EvidenceCase) {
         }
         const parent = {
           cursor: 11,
+          sessionId: "parent-session",
           prompt: `[Mon 2026-08-31 12:00 UTC] ${parentPrompt}`,
           allInputText: parentPrompt,
           toolOutput: "",
           plannedToolName: "sessions_spawn",
+          ...(receiptWire !== "direct" ? { plannedWireToolName: "tool_call" } : {}),
           plannedToolCallId: "spawn-call",
           plannedToolArgs: { context: "fork", mode: "run", task },
           body: { input: [userInput(parentPrompt)] },
         };
+        const accepted = {
+          status: "accepted",
+          context: "fork",
+          childSessionKey: childKey,
+          runId: "child-run",
+        };
         const receipt = {
           cursor: 12,
           prompt: parentPrompt,
-          toolOutputCallId: "spawn-call",
-          toolOutput: JSON.stringify({
-            status: "accepted",
-            context: "fork",
-            childSessionKey: childKey,
-          }),
+          toolOutputCallId: receiptWire === "unmatched-catalog-call" ? "other-call" : "spawn-call",
+          // Captured tool_call wire contract: target identity plus unchanged
+          // AgentToolResult content/details, rather than a flat spawn receipt.
+          toolOutput: JSON.stringify(
+            receiptWire === "direct"
+              ? accepted
+              : {
+                  tool: {
+                    id: "openclaw:core:sessions_spawn",
+                    name: receiptWire === "other-catalog-tool" ? "sessions_send" : "sessions_spawn",
+                    source: "openclaw",
+                  },
+                  result: {
+                    content: [{ type: "text", text: JSON.stringify(accepted) }],
+                    details: accepted,
+                  },
+                },
+          ),
         };
         const currentTask =
           evidence === "task-leak" ? childTask.replace(task, `${task} ${code}`) : childTask;
@@ -202,7 +254,19 @@ async function runForkEvidence(evidence: EvidenceCase) {
         };
         const completion = {
           cursor: 14,
-          prompt: settledInput(childResult).content[0].text,
+          sessionId:
+            evidence === "settled-wrong-parent" ? "another-parent-session" : "parent-session",
+          // Current OpenClaw settled batches omit the model-facing source header.
+          prompt: settledBatch
+            ? settledInput(childResult)
+                .content[0].text.split("\n")
+                .slice(1)
+                .join("\n")
+                .replace(
+                  "Every subagent spawned from this session has now settled.",
+                  "Every subagent in this batch has now settled, including its descendants.",
+                )
+            : settledInput(childResult).content[0].text,
           allInputText: parentPrompt,
           ...(!usesPlainReply
             ? {
@@ -482,6 +546,44 @@ describe("subagent forked-context evidence", () => {
       await expect(runForkEvidence(evidence)).resolves.toMatchObject({ status: "pass" });
     },
   );
+
+  it("accepts the catalog-dispatched fork receipt and exact direct parent final", async () => {
+    await expect(runForkEvidence("plain-parent", "catalog")).resolves.toMatchObject({
+      status: "pass",
+    });
+  });
+
+  it("binds a header-free settled batch to the accepted native run and child result", async () => {
+    await expect(runForkEvidence("settled-batch", "catalog")).resolves.toMatchObject({
+      status: "pass",
+    });
+  });
+
+  it.each([
+    "settled-wrong-run",
+    "settled-wrong-requester",
+    "settled-wrong-result",
+    "settled-wrong-parent",
+  ] as const)("rejects %s despite matching completion text", async (evidence) => {
+    await expect(runForkEvidence(evidence, "catalog")).rejects.toThrow(
+      /parent completion request/i,
+    );
+  });
+
+  it.each(["other-catalog-tool", "unmatched-catalog-call"] as const)(
+    "rejects %s despite otherwise valid child evidence",
+    async (receiptWire) => {
+      await expect(runForkEvidence("plain-parent", receiptWire)).rejects.toThrow(
+        /successful fork receipt/i,
+      );
+    },
+  );
+
+  it("rejects another child's history after accepting a catalog receipt", async () => {
+    await expect(runForkEvidence("wrong-child", "catalog")).rejects.toThrow(
+      /child provider request/i,
+    );
+  });
 
   it.each([
     "missing-child",
