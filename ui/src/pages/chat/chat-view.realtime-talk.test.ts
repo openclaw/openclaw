@@ -27,5 +27,4 @@ describe("realtime Talk tail block gating", () => {
     expect(container.querySelector(".agent-chat__voice-turns")).toBeNull();
     expect(container.querySelector(".agent-chat__voice-turn")).toBeNull();
   });
-
 });
