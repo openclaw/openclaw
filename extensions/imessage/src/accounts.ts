@@ -42,12 +42,16 @@ export const resolveDefaultIMessageAccountId = resolveDefaultAccountId;
 
 type IMessageStreamingConfig = NonNullable<IMessageAccountConfig["streaming"]>;
 
+function asStreamingConfigObject(value: unknown): IMessageStreamingConfig | undefined {
+  return asOptionalRecord(value) as IMessageStreamingConfig | undefined;
+}
+
 function mergeIMessageStreamingConfig(
   base: unknown,
   account: unknown,
 ): IMessageStreamingConfig | undefined {
-  const baseConfig = asOptionalRecord(base) as IMessageStreamingConfig | undefined;
-  const accountConfig = asOptionalRecord(account) as IMessageStreamingConfig | undefined;
+  const baseConfig = asStreamingConfigObject(base);
+  const accountConfig = asStreamingConfigObject(account);
   if (!baseConfig || !accountConfig) {
     return accountConfig ?? baseConfig;
   }
