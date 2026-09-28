@@ -848,6 +848,8 @@ describe("oxlint config", () => {
     fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
     // The original repository graph acquires ESNext through unrelated roots.
     write("src/library-owner.ts", '/// <reference lib="esnext" />\nexport {};');
+    write("ui/unrelated.ts", "export {};");
+    write("extensions/unrelated.ts", "export {};");
     const contract = "packages/example/contract.ts";
     write(contract, "export interface Contract {} export declare const contract: Contract;");
     for (const [index, file] of sourceAugmentations.entries()) {
@@ -979,6 +981,28 @@ describe("oxlint config", () => {
         expect(result.stderr.replaceAll("\\", "/")).toContain(
           `Unmatched file: ${path.join(root, file).replaceAll("\\", "/")}`,
         );
+    }
+    const expanded = spawnSync(
+      resolveRepoToolBinPath("tsgo"),
+      ["--showConfig", "--project", "packages/tsconfig.json"],
+      { cwd: root, encoding: "utf8", timeout: 10_000 },
+    );
+    expect(expanded.error).toBeUndefined();
+    expect(expanded.status, expanded.stdout + expanded.stderr).toBe(0);
+    const roots = (JSON.parse(expanded.stdout) as { files: string[] }).files.map((file) =>
+      path.resolve(root, "packages", file),
+    );
+    for (const file of [...fallback, ...configured, ...sourceAugmentations, ...declarations]) {
+      expect(roots, file).toContain(path.resolve(root, file));
+    }
+    for (const file of [
+      "src/library-owner.ts",
+      "ui/unrelated.ts",
+      "extensions/unrelated.ts",
+      "src/config/sessions/session-entry.test-compat.d.ts",
+      ...inferred,
+    ]) {
+      expect(roots, file).not.toContain(path.resolve(root, file));
     }
     const checked = spawnSync(
       resolveRepoToolBinPath("tsgo"),
