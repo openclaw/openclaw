@@ -115,17 +115,18 @@ describe("wrapToolWithAbortSignal", () => {
     expect(runAbort.signal.reason).toBe(handoffReason);
   });
 
-  it("still aborts a concurrent sibling when sessions_yield hands off the run", async () => {
+  it("lets a concurrent sibling finish when sessions_yield hands off the run", async () => {
     const runAbort = new AbortController();
     const handoffReason = { code: "sessions_yield", turnHandoff: true } as const;
+    const siblingResult = textResult("sibling completed");
     const sibling = wrapToolWithAbortSignal(
-      asAgentTool({ name: "wedged", execute: vi.fn(() => new Promise<never>(() => {})) }),
+      asAgentTool({
+        name: "sibling",
+        execute: vi.fn(async () => siblingResult),
+      }),
       runAbort.signal,
     );
-    const siblingAborted = expect(sibling.execute("call-sibling", {})).rejects.toMatchObject({
-      name: "AbortError",
-      message: "Aborted",
-    });
+    const siblingExecution = sibling.execute("call-sibling", {});
     const yieldTool = wrapToolWithAbortSignal(
       createSessionsYieldTool({
         sessionId: "requester",
@@ -140,7 +141,7 @@ describe("wrapToolWithAbortSignal", () => {
     await expect(yieldTool.execute("call-yield", {})).resolves.toMatchObject({
       details: { status: "yielded" },
     });
-    await siblingAborted;
+    await expect(siblingExecution).resolves.toEqual(siblingResult);
   });
 
   it("preserves the handoff when distinct run and per-call signals both yield", async () => {
