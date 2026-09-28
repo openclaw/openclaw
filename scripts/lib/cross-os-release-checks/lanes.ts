@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -954,7 +955,7 @@ function buildLaneEnv(
 ): NodeJS.ProcessEnv {
   ensureLocalNpmShim(lane);
   return {
-    ...process.env,
+    ...inheritLaneEnv(),
     HOME: lane.homeDir,
     USERPROFILE: lane.homeDir,
     APPDATA: lane.appDataDir,
@@ -970,6 +971,21 @@ function buildLaneEnv(
   };
 }
 
+function inheritLaneEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  if (process.platform === "win32") {
+    // Published updaters cannot be patched: use long paths for their handoff
+    // receipts while keeping the runner's existing physical temp directories.
+    for (const key of Object.keys(env)) {
+      const value = env[key];
+      if (["TEMP", "TMP", "TMPDIR"].includes(key.toUpperCase()) && value) {
+        env[key] = realpathSync.native(value);
+      }
+    }
+  }
+  return env;
+}
+
 function buildInstallerEnv(
   lane: LaneState,
   providerMeta: ProviderConfig,
@@ -978,7 +994,7 @@ function buildInstallerEnv(
   const localAppData = join(lane.homeDir, "AppData", "Local");
   mkdirSync(localAppData, { recursive: true });
   return {
-    ...process.env,
+    ...inheritLaneEnv(),
     HOME: lane.homeDir,
     USERPROFILE: lane.homeDir,
     APPDATA: lane.appDataDir,

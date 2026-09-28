@@ -1,6 +1,7 @@
 // Completed cron work must become durable before unrelated batch work drains.
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import { observeCronStoreCommits } from "../../../test/helpers/cron/runtime-mutation.js";
 import {
   createCronRegressionState,
   createDueIsolatedJob,
@@ -169,6 +170,17 @@ describe("cron batch outcome finalization", () => {
         onEvent: (event) => events.push(event),
       });
       const database = openOpenClawStateDatabase().db;
+      const stopObserving = observeCronStoreCommits(store.storePath, () => {
+        const queued = database
+          .prepare(
+            "SELECT 1 FROM cron_jobs WHERE store_key = ? AND job_id = ? AND json_extract(state_json, '$.queuedAtMs') = ?",
+          )
+          .get(cronStoreKey(store.storePath), job.id, reservedAt);
+        if (!reservationPersisted && queued) {
+          reservationPersisted = true;
+          now = startedAt;
+        }
+      });
       const functionName = `observe_advanced_clock_${trigger}`;
       const triggerName = `observe_advanced_clock_${trigger}`;
       database.function(functionName, (writtenJobId, stateJson) => {
@@ -176,10 +188,7 @@ describe("cron batch outcome finalization", () => {
           return 0;
         }
         const persistedState = JSON.parse(stateJson) as CronJob["state"];
-        if (!reservationPersisted && persistedState.queuedAtMs === reservedAt) {
-          reservationPersisted = true;
-          now = startedAt;
-        } else if (!terminalWriteRejected && persistedState.lastRunStatus === "ok") {
+        if (!terminalWriteRejected && persistedState.lastRunStatus === "ok") {
           terminalWriteRejected = true;
           throw new Error("cron terminal write failed");
         }
@@ -240,6 +249,7 @@ describe("cron batch outcome finalization", () => {
         });
         expect(events.filter((event) => event.action === "finished")).toHaveLength(0);
       } finally {
+        stopObserving();
         database.exec(`DROP TRIGGER IF EXISTS ${triggerName}`);
         stop(state);
         if (recoveryState) {

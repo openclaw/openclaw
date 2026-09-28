@@ -183,6 +183,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-row-projection.prepared-read.test.ts",
   "src/gateway/session-row-projection.search-facts.test.ts",
   "src/gateway/session-sharing-groups.test.ts",
+  "src/gateway/session-sharing-preparation.admission.test.ts",
   "src/gateway/session-sharing-preparation.creation-settlement.test.ts",
   "src/gateway/session-sharing-preparation.test.ts",
   "src/gateway/session-startup-migration.test.ts",

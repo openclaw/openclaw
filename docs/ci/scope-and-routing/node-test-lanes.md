@@ -70,6 +70,11 @@ keeps the selected files, configs, worker limits, and process owners intact; bro
 PRs may have longer rows instead of failing preflight solely because of splitting.
 Dist descriptors do not consume the Node row budget.
 
+Explicitly selected plugin tests retain their canonical config, native-loader
+isolation, worker policy, and group timing. The release-only switch controls the
+full plugin sweep, not the availability of its owner metadata; unrelated PRs
+still do not acquire that sweep.
+
 The fixed PR smoke inventory lives in `PR_SMOKE_TEST_FILES` in
 `scripts/lib/ci-changed-node-test-plan.mts`. It selects six complete existing files:
 

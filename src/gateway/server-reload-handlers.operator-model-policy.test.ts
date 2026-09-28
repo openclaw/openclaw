@@ -132,6 +132,7 @@ it("commits model-only role changes without retiring permitted models or origina
     const rebuild = vi.spyOn(preparedModelRuntime, "refreshPreparedModelRuntimeSnapshots");
     let state = createDefaultGatewayReloadState();
     const channelManager = createChannelManager({
+      scheduler: createTestGatewayScheduler(),
       getRuntimeConfig: () => initialConfig,
       getPluginRegistry: () => registry,
       channelLogs: {},

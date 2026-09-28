@@ -1451,7 +1451,7 @@ async function buildResponsesPayload(
     QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE.test(prompt) ||
     (hasCompletedToolOutput && QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE.test(allInputText));
   if (isTelegramCurrentSessionStatusTurn) {
-    if (!hasCompletedToolOutput && hasDeclaredTool(body, "session_status")) {
+    if (!hasCompletedToolOutput && canCallScenarioTool(toolDeclarationBody, "session_status")) {
       return buildToolCallEventsWithArgs("session_status", { sessionKey: "current" });
     }
     const sessionKey = extractSessionStatusSessionKey(toolJson, toolOutput);

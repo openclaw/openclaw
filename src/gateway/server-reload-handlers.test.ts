@@ -512,6 +512,7 @@ async function withReloadChannelManager(
   };
   setActivePluginRegistry(registry.current);
   const manager = createChannelManager({
+    scheduler: createTestGatewayScheduler(),
     getRuntimeConfig,
     getPluginRegistry: () => registry.current,
     channelLogs: {},
@@ -1162,6 +1163,7 @@ async function withManagedChannelSecretFixture(
   const initialSnapshot = await prepare(initialSource);
   activateSecretsRuntimeSnapshot(initialSnapshot);
   const manager = createChannelManager({
+    scheduler: createTestGatewayScheduler(),
     getRuntimeConfig: () => getActiveSecretsRuntimeSnapshot()?.config ?? initialSnapshot.config,
     getPluginRegistry: requireActivePluginChannelRegistry,
     channelLogs: {},
@@ -4196,7 +4198,6 @@ describe("gateway restart deferral preflight", () => {
     hoisted.activeAgentRunCount.value = 1;
     hoisted.activeEmbeddedRunSessionIds.push("session-issue-82433");
     hoisted.activeEmbeddedRunSessionKeys.push("agent:main:issue-82433");
-    hoisted.activeAgentRunCount.value = 1;
     const signalSpy = vi.fn();
     process.once("SIGUSR2", signalSpy);
     vi.useFakeTimers();
@@ -4245,7 +4246,6 @@ describe("gateway restart deferral preflight", () => {
   it("uses the default restart deferral timeout when config omits deferralTimeoutMs", async () => {
     restartTesting.resetRestartSignalState();
     const { requestGatewayRestart } = createReloadHandlersForTest();
-    hoisted.activeAgentRunCount.value = 1;
     hoisted.activeAgentRunCount.value = 1;
     const signalSpy = vi.fn();
     process.once("SIGUSR2", signalSpy);

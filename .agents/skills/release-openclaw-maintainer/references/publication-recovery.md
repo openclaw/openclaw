@@ -134,7 +134,8 @@ Explicit ClawHub recovery uses `recovered_clawhub_run_id` and
 `recovered_clawhub_run_attempt` to name the original child. Keep the original
 parent's tooling, inputs, run ID, and attempt. Do not reuse an approval from another
 child. Docker-only recovery does not recover canceled ClawHub publication;
-verify and recover that surface separately.
+verify and recover that surface separately. Recover a failed Plugin ClawHub New
+bootstrap child through its [direct route](first-package.md), not a rerun.
 
 ## Registry selectors
 
