@@ -255,6 +255,7 @@ it.each(["a changed snapshot", "missing current update history"] as const)(
   "refuses %s before moving either live database",
   async (failure) => {
     await withFixture(async (fixture) => {
+      const backupEntries = (await fs.readdir(fixture.backup.directory)).toSorted();
       if (failure === "missing current update history") {
         fixture.shared.db.exec("DROP TABLE update_runs");
       }
@@ -269,6 +270,7 @@ it.each(["a changed snapshot", "missing current update history"] as const)(
           : "missing table update_runs",
       );
       await assertUnchanged();
+      expect((await fs.readdir(fixture.backup.directory)).toSorted()).toEqual(backupEntries);
     });
   },
 );

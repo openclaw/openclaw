@@ -140,7 +140,7 @@ export async function restoreUpdateDatabaseBackup(params: {
   ].toSorted();
   const displaced: string[] = [];
   let preparedCopy: ReturnType<typeof adoptPreparedLocation> | undefined;
-  let completed = false;
+  let retainPreparedCopy = false;
   try {
     const result = await withDatabaseExclusion(
       params.env,
@@ -237,6 +237,7 @@ export async function restoreUpdateDatabaseBackup(params: {
         }
         for (const move of moves) {
           assertOwned();
+          retainPreparedCopy = true;
           await publishFileExclusive({
             sourcePath: move.source,
             targetPath: move.target,
@@ -249,6 +250,7 @@ export async function restoreUpdateDatabaseBackup(params: {
         for (const entry of sources) {
           assertOwned();
           const sourceIdentity = await fs.lstat(entry.snapshotPath);
+          retainPreparedCopy = true;
           await publishVerifiedSqliteFile({
             sourcePath: entry.snapshotPath,
             sourceIdentity,
@@ -263,16 +265,19 @@ export async function restoreUpdateDatabaseBackup(params: {
         return displaced;
       },
     );
-    completed = true;
+    retainPreparedCopy = false;
     return result;
+  } catch (error) {
+    retainPreparedCopy ||= hasCommandProcessCleanupError(error);
+    throw error;
   } finally {
     if (preparedCopy) {
-      if (completed) {
-        // The published databases are verified; ordinary scratch cleanup failures are advisory.
-        await preparedCopy.cleanupAsync();
-      } else {
+      if (retainPreparedCopy) {
         // Unfinished publication or child settlement retains its prepared bytes for recovery.
         releaseSnapshotTempDirectory(path.dirname(preparedCopy.location));
+      } else {
+        // Completed work and settled refusals before publication no longer need this private copy.
+        await preparedCopy.cleanupAsync();
       }
     }
   }
