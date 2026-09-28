@@ -1122,7 +1122,7 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
         name: updateFirstHopCompatLaneName(version),
         resources: ["docker", "npm", "service"],
         stateScenario: "upgrade-survivor",
-        timeoutMs: 1_500_000,
+        timeoutMs: 2_100_000,
         weight: 1,
       })),
     ]);

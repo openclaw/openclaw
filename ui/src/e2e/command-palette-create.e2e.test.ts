@@ -185,11 +185,10 @@ suite.define(() => {
           );
           await input.fill("appearance");
           await palette.getByRole("option", { name: /^Appearance audit/ }).waitFor();
-          await palette
-            .locator(".cmd-palette__search")
-            .getByRole("status")
-            .filter({ hasText: "Models unavailable" })
-            .waitFor();
+          await expect
+            .poll(() => palette.locator(".cmd-palette__results").getAttribute("aria-busy"))
+            .toBe("false");
+          expect(await palette.locator(".cmd-palette__source-error").count()).toBe(0);
           const search = palette.locator(".cmd-palette__search");
           const original = (await palette.locator(".cmd-palette").boundingBox())!;
           const inputTop = (await input.boundingBox())!.y;

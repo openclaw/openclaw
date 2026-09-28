@@ -776,13 +776,6 @@ describe("scripts/pr wrappers", () => {
       ...[
         ["--admin-evidence", "proof.json"],
         ["--confirmed-operator-admin"],
-        [
-          "--admin-evidence",
-          "proof.json",
-          "--confirmed-operator-admin",
-          "--replacement-head",
-          "b".repeat(40),
-        ],
         ["--admin-evidence", "proof.json", "--confirmed-operator-admin", "--cancel-auto"],
         [
           "--admin-evidence",

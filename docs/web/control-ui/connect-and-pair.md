@@ -29,6 +29,12 @@ After gateway auth succeeds, connecting from a new browser or device usually req
 
 Keep the page open while approval is pending. It retries automatically and connects on its own once the request is approved; **Check now** lets you retry immediately.
 
+If the login screen says **Pairing link is no longer valid**, the one-time dashboard
+link may have expired or already been used. Run `openclaw dashboard` on the Gateway
+host and open the fresh link it opens or copies. Without browser or clipboard access
+on that host, run `openclaw dashboard --json` and open its `browserUrl` within ten
+minutes. This error does not mean the shared Gateway token or password needs changing.
+
 If the browser retries pairing with changed auth details (role/scopes/public key), the previous pending request is superseded and a new `requestId` is created; re-run `openclaw devices list` before approving.
 
 Switching an already-paired browser from read access to write/admin access through ordinary stored or shared credentials is treated as an approval upgrade, not a silent reconnect: OpenClaw keeps the old approval active, blocks the broader reconnect, and asks you to approve the new scope set explicitly. The narrow exception is a fresh owner handoff issued on the Gateway host by `openclaw dashboard` or graphical onboarding; it can upgrade only the same signed browser that redeems that one-time handoff.

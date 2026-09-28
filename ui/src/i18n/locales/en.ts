@@ -23,6 +23,7 @@ export const en: TranslationMap & {
         | "showLess"
         | "showMore"
         | "tooLargeToDisplay"
+        | "unattributedSender"
         | "toolSender"
         | "errorSender",
         string
@@ -3727,6 +3728,7 @@ export const en: TranslationMap & {
       showLess: "Show less",
       showMore: "Show more",
       tooLargeToDisplay: "This message is too large to display here.",
+      unattributedSender: "Message",
       toolSender: "Tool",
       errorSender: "Error",
     },
@@ -4198,6 +4200,8 @@ export const en: TranslationMap & {
     workRun: {
       workedFor: "Worked for {duration}",
       worked: "Worked",
+      toolCallsOne: "1 tool call",
+      toolCallsMany: "{count} tool calls",
     },
     sessionDiff: {
       title: "Changes",

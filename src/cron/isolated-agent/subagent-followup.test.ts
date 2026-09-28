@@ -14,9 +14,12 @@ import {
   waitForDescendantSubagentSummary,
 } from "./subagent-followup.js";
 
-vi.mock("../../agents/subagents/registry/subagent-registry-read.js", () => ({
-  listDescendantRunsForRequester: vi.fn().mockReturnValue([]),
-  hasDescendantRunAwaitingSettle: vi.fn().mockReturnValue(false),
+vi.mock("./run-subagent-registry.runtime.js", () => ({
+  listDescendantRunsForRequester: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock("./delivery-subagent-registry.runtime.js", () => ({
+  hasUnsettledCronDescendants: vi.fn().mockResolvedValue(false),
 }));
 
 vi.mock("../../agents/run-wait.js", async () => {
@@ -33,8 +36,8 @@ import * as gatewayCallRuntime from "../../gateway/call.js";
 const callGateway = vi.spyOn(gatewayCallRuntime, "callGateway").mockResolvedValue({ status: "ok" });
 afterAll(() => callGateway.mockRestore());
 
-const { listDescendantRunsForRequester, hasDescendantRunAwaitingSettle } =
-  await import("../../agents/subagents/registry/subagent-registry-read.js");
+const { listDescendantRunsForRequester } = await import("./run-subagent-registry.runtime.js");
+const { hasUnsettledCronDescendants } = await import("./delivery-subagent-registry.runtime.js");
 const { readLatestAssistantReply } = await import("../../agents/run-wait.js");
 
 async function resolveAfterAdvancingTimers<T>(promise: Promise<T>, advanceMs = 100): Promise<T> {
@@ -120,7 +123,7 @@ describe("readDescendantSubagentFallbackReply", () => {
   const runStartedAt = 1000;
 
   it("returns undefined when no descendants exist", async () => {
-    vi.mocked(listDescendantRunsForRequester).mockReturnValue([]);
+    vi.mocked(listDescendantRunsForRequester).mockResolvedValue([]);
     const result = await readDescendantSubagentFallbackReply({
       sessionKey: "test-session",
       runStartedAt,
@@ -129,7 +132,7 @@ describe("readDescendantSubagentFallbackReply", () => {
   });
 
   it("falls back to frozenResultText when session transcript unavailable", async () => {
-    vi.mocked(listDescendantRunsForRequester).mockReturnValue([
+    vi.mocked(listDescendantRunsForRequester).mockResolvedValue([
       createDescendantRun({
         cleanup: "delete",
         resultText: "frozen child output",
@@ -144,7 +147,7 @@ describe("readDescendantSubagentFallbackReply", () => {
   });
 
   it("prefers session transcript over frozenResultText", async () => {
-    vi.mocked(listDescendantRunsForRequester).mockReturnValue([
+    vi.mocked(listDescendantRunsForRequester).mockResolvedValue([
       createDescendantRun({ resultText: "frozen text" }),
     ]);
     vi.mocked(readLatestAssistantReply).mockResolvedValue("live transcript text");
@@ -185,7 +188,7 @@ describe("readDescendantSubagentFallbackReply", () => {
         fallbackResultText: "older captured fallback",
         terminalReply,
       };
-      vi.mocked(listDescendantRunsForRequester).mockReturnValue([descendant]);
+      vi.mocked(listDescendantRunsForRequester).mockResolvedValue([descendant]);
       vi.mocked(readLatestAssistantReply).mockResolvedValue("stale child transcript");
 
       await expect(
@@ -208,7 +211,7 @@ describe("readDescendantSubagentFallbackReply", () => {
         resultText: "NO_REPLY",
         fallbackResultText: "captured child findings",
       };
-      vi.mocked(listDescendantRunsForRequester).mockReturnValue([descendant]);
+      vi.mocked(listDescendantRunsForRequester).mockResolvedValue([descendant]);
       vi.mocked(readLatestAssistantReply).mockResolvedValue(transcript);
 
       await expect(
@@ -218,7 +221,7 @@ describe("readDescendantSubagentFallbackReply", () => {
   );
 
   it("prefers captured completion for internally resumed descendants", async () => {
-    vi.mocked(listDescendantRunsForRequester).mockReturnValue([
+    vi.mocked(listDescendantRunsForRequester).mockResolvedValue([
       createDescendantRun({
         resultText: "fresh recovered output",
         hasInternalTranscript: true,
@@ -233,7 +236,7 @@ describe("readDescendantSubagentFallbackReply", () => {
   });
 
   it("does not fall back to visible transcript for internally resumed descendants without captured output", async () => {
-    vi.mocked(listDescendantRunsForRequester).mockReturnValue([
+    vi.mocked(listDescendantRunsForRequester).mockResolvedValue([
       createDescendantRun({
         resultText: null,
         hasInternalTranscript: true,
@@ -250,7 +253,7 @@ describe("readDescendantSubagentFallbackReply", () => {
   });
 
   it("joins replies from multiple descendants", async () => {
-    vi.mocked(listDescendantRunsForRequester).mockReturnValue([
+    vi.mocked(listDescendantRunsForRequester).mockResolvedValue([
       createDescendantRun({ resultText: "first child output" }),
       createDescendantRun({
         runId: "run-2",
@@ -269,7 +272,7 @@ describe("readDescendantSubagentFallbackReply", () => {
   });
 
   it("skips SILENT_REPLY_TOKEN descendants", async () => {
-    vi.mocked(listDescendantRunsForRequester).mockReturnValue([
+    vi.mocked(listDescendantRunsForRequester).mockResolvedValue([
       createDescendantRun(),
       createDescendantRun({
         runId: "run-2",
@@ -293,7 +296,7 @@ describe("readDescendantSubagentFallbackReply", () => {
   });
 
   it("returns undefined when completion result is null", async () => {
-    vi.mocked(listDescendantRunsForRequester).mockReturnValue([
+    vi.mocked(listDescendantRunsForRequester).mockResolvedValue([
       createDescendantRun({
         cleanup: "delete",
         resultText: null,
@@ -308,7 +311,7 @@ describe("readDescendantSubagentFallbackReply", () => {
   });
 
   it("ignores descendants that ended before run started", async () => {
-    vi.mocked(listDescendantRunsForRequester).mockReturnValue([
+    vi.mocked(listDescendantRunsForRequester).mockResolvedValue([
       createDescendantRun({ endedAt: 900, resultText: "stale output from previous run" }),
     ]);
     vi.mocked(readLatestAssistantReply).mockResolvedValue(undefined);
@@ -324,8 +327,8 @@ describe("waitForDescendantSubagentSummary", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useRealTimers();
-    vi.mocked(listDescendantRunsForRequester).mockReturnValue([]);
-    vi.mocked(hasDescendantRunAwaitingSettle).mockReturnValue(false);
+    vi.mocked(listDescendantRunsForRequester).mockResolvedValue([]);
+    vi.mocked(hasUnsettledCronDescendants).mockResolvedValue(false);
     vi.mocked(readLatestAssistantReply).mockResolvedValue(undefined);
     vi.mocked(callGateway).mockResolvedValue({ status: "ok" });
   });
@@ -335,7 +338,7 @@ describe("waitForDescendantSubagentSummary", () => {
   });
 
   it("returns initialReply immediately when no active descendants and observedActiveDescendants=false", async () => {
-    vi.mocked(listDescendantRunsForRequester).mockReturnValue([]);
+    vi.mocked(listDescendantRunsForRequester).mockResolvedValue([]);
     const result = await waitForDescendantSubagentSummary({
       sessionKey: "cron-session",
       initialReply: "on it",
@@ -349,7 +352,7 @@ describe("waitForDescendantSubagentSummary", () => {
   it("awaits active descendants via agent.wait and returns synthesis after grace period", async () => {
     // First call: active run; second call (after agent.wait resolves): no active runs
     vi.mocked(listDescendantRunsForRequester)
-      .mockReturnValueOnce([
+      .mockResolvedValueOnce([
         {
           runId: "run-abc",
           childSessionKey: "child-session",
@@ -362,7 +365,7 @@ describe("waitForDescendantSubagentSummary", () => {
           // no endedAt → active
         },
       ])
-      .mockReturnValue([]); // subsequent calls: all done
+      .mockResolvedValue([]); // subsequent calls: all done
 
     vi.mocked(callGateway).mockResolvedValue({ status: "ok" });
     vi.mocked(readLatestAssistantReply).mockResolvedValue("Morning briefing complete!");
@@ -389,7 +392,7 @@ describe("waitForDescendantSubagentSummary", () => {
   it("waits for a queued descendant's successor to produce the synthesis", async () => {
     let descendants = [createDescendantRun({ runId: "queued-run", active: true })];
     let parentReply = "on it";
-    vi.mocked(listDescendantRunsForRequester).mockImplementation(() => descendants);
+    vi.mocked(listDescendantRunsForRequester).mockImplementation(async () => descendants);
     vi.mocked(readLatestAssistantReply).mockImplementation(async () => parentReply);
     callGateway.mockImplementation(async (request) => {
       if ((request.params as { runId: string }).runId === "queued-run") {
@@ -424,7 +427,7 @@ describe("waitForDescendantSubagentSummary", () => {
     async (parentReply) => {
       vi.useFakeTimers();
       // No active runs at call time, but observedActiveDescendants=true (saw them before)
-      vi.mocked(listDescendantRunsForRequester).mockReturnValue([]);
+      vi.mocked(listDescendantRunsForRequester).mockResolvedValue([]);
       // readLatestAssistantReply keeps returning interim text
       vi.mocked(readLatestAssistantReply).mockResolvedValue(parentReply);
 
@@ -443,7 +446,7 @@ describe("waitForDescendantSubagentSummary", () => {
 
   it("returns synthesis even if initial reply was undefined", async () => {
     vi.mocked(listDescendantRunsForRequester)
-      .mockReturnValueOnce([
+      .mockResolvedValueOnce([
         {
           runId: "run-xyz",
           childSessionKey: "child-2",
@@ -455,7 +458,7 @@ describe("waitForDescendantSubagentSummary", () => {
           execution: { status: "running" },
         },
       ])
-      .mockReturnValue([]);
+      .mockResolvedValue([]);
 
     vi.mocked(callGateway).mockResolvedValue({ status: "ok" });
     vi.mocked(readLatestAssistantReply).mockResolvedValue("Report generated successfully.");
@@ -472,7 +475,7 @@ describe("waitForDescendantSubagentSummary", () => {
 
   it("uses agent.wait for each active run when multiple descendants exist", async () => {
     vi.mocked(listDescendantRunsForRequester)
-      .mockReturnValueOnce([
+      .mockResolvedValueOnce([
         {
           runId: "run-1",
           childSessionKey: "child-1",
@@ -494,7 +497,7 @@ describe("waitForDescendantSubagentSummary", () => {
           execution: { status: "running" },
         },
       ])
-      .mockReturnValue([]);
+      .mockResolvedValue([]);
 
     vi.mocked(callGateway).mockResolvedValue({ status: "ok" });
     vi.mocked(readLatestAssistantReply).mockResolvedValue("All tasks complete.");
@@ -542,8 +545,8 @@ describe("waitForDescendantSubagentSummary", () => {
       let descendants = [orchestrator, ...workers];
       let cronReply = "spawned a subagent";
       const finalSynthesis = "Daily report complete: both findings reconciled.";
-      vi.mocked(listDescendantRunsForRequester).mockImplementation(() => descendants);
-      vi.mocked(hasDescendantRunAwaitingSettle).mockImplementation(() =>
+      vi.mocked(listDescendantRunsForRequester).mockImplementation(async () => descendants);
+      vi.mocked(hasUnsettledCronDescendants).mockImplementation(async () =>
         hasDescendantRunAwaitingSettleFromRuns(
           new Map(descendants.map((entry) => [entry.runId, entry])),
           cronSessionKey,
@@ -608,8 +611,8 @@ describe("waitForDescendantSubagentSummary", () => {
     vi.useFakeTimers();
     const paused = createDescendantRun();
     paused.pauseReason = "sessions_yield";
-    vi.mocked(listDescendantRunsForRequester).mockReturnValue([paused]);
-    vi.mocked(hasDescendantRunAwaitingSettle).mockReturnValue(true);
+    vi.mocked(listDescendantRunsForRequester).mockResolvedValue([paused]);
+    vi.mocked(hasUnsettledCronDescendants).mockResolvedValue(true);
     vi.mocked(readLatestAssistantReply).mockResolvedValue("Partial results are available.");
 
     const resultPromise = waitForDescendantSubagentSummary({
@@ -630,8 +633,8 @@ describe("waitForDescendantSubagentSummary", () => {
     if (phase === "handoff") {
       descendant.pauseReason = "sessions_yield";
     }
-    vi.mocked(listDescendantRunsForRequester).mockReturnValue([descendant]);
-    vi.mocked(hasDescendantRunAwaitingSettle).mockReturnValue(true);
+    vi.mocked(listDescendantRunsForRequester).mockResolvedValue([descendant]);
+    vi.mocked(hasUnsettledCronDescendants).mockResolvedValue(true);
     vi.mocked(readLatestAssistantReply).mockResolvedValue("on it");
     vi.mocked(callGateway).mockImplementation(async ({ signal }) => {
       await new Promise<void>((_resolve, reject) => {
@@ -659,7 +662,7 @@ describe("waitForDescendantSubagentSummary", () => {
 
   it("handles agent.wait errors gracefully and still reads the synthesis", async () => {
     vi.mocked(listDescendantRunsForRequester)
-      .mockReturnValueOnce([
+      .mockResolvedValueOnce([
         {
           runId: "run-err",
           childSessionKey: "child-err",
@@ -671,7 +674,7 @@ describe("waitForDescendantSubagentSummary", () => {
           execution: { status: "running" },
         },
       ])
-      .mockReturnValue([]);
+      .mockResolvedValue([]);
 
     vi.mocked(callGateway).mockRejectedValue(new Error("gateway unavailable"));
     vi.mocked(readLatestAssistantReply).mockResolvedValue("Completed despite gateway error.");
@@ -698,7 +701,7 @@ describe("waitForDescendantSubagentSummary", () => {
     "skips the %s control-only parent reply instead of treating it as child output",
     async (parentReply) => {
       vi.useFakeTimers();
-      vi.mocked(listDescendantRunsForRequester).mockReturnValue([]);
+      vi.mocked(listDescendantRunsForRequester).mockResolvedValue([]);
       vi.mocked(readLatestAssistantReply).mockResolvedValue(parentReply);
 
       const resultPromise = waitForDescendantSubagentSummary({
@@ -723,7 +726,7 @@ describe("waitForDescendantSubagentSummary", () => {
   ])(
     "preserves substantive synthesis that also contains a heartbeat token: %s",
     async (synthesis) => {
-      vi.mocked(listDescendantRunsForRequester).mockReturnValue([]);
+      vi.mocked(listDescendantRunsForRequester).mockResolvedValue([]);
       vi.mocked(readLatestAssistantReply).mockResolvedValue(synthesis);
 
       const result = await waitForDescendantSubagentSummary({
