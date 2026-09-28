@@ -247,31 +247,29 @@ class SessionsScreenGroupingTest {
   }
 
   @Test
-  fun independentOperatorChatStaysOutsidePinnedHome() {
-    val home = session("agent:ops:custom-home", pinned = true).copy(isMain = true)
-    val chat =
-      session("agent:ops:dashboard:new", parentSessionKey = home.key).copy(
-        createdVia = "operator",
-        spawnDepth = 0,
-      )
-    val sections = buildSessionTreeSections(listOf(home, chat))
+  fun ordinaryNewChatsStayIndependentOfHomeAndPreviousChats() {
+    for (parent in listOf(
+      session("agent:ops:custom-home", pinned = true).copy(isMain = true),
+      session("agent:ops:node-android", pinned = true),
+      session("agent:ops:dashboard:previous", pinned = true),
+    )) {
+      val chat =
+        session("agent:ops:dashboard:new", parentSessionKey = parent.key).copy(
+          createdVia = "operator",
+          spawnDepth = 0,
+        )
+      val sections = buildSessionTreeSections(listOf(parent, chat), collapsedSessionKeys = setOf(parent.key))
 
-    assertEquals(listOf("Pinned", "Ungrouped"), sections.map { it.title })
-    assertEquals(listOf(home.key), sections[0].entries.map { it.session.key })
-    assertEquals(listOf(chat.key), sections[1].entries.map { it.session.key })
-    assertEquals(0, sections[1].entries.single().depth)
-    assertEquals(
-      home.key,
-      sections[1]
-        .entries
-        .single()
-        .session
-        .parentSessionKey,
-    )
+      assertEquals(parent.key, listOf("Pinned", "Ungrouped"), sections.map { it.title })
+      assertEquals(listOf(parent.key), sections[0].entries.map { it.session.key })
+      assertEquals(listOf(chat.key), sections[1].entries.map { it.session.key })
+      assertEquals(0, sections[1].entries.single().depth)
+      assertEquals(chat, sections[1].entries.single().session)
+    }
   }
 
   @Test
-  fun explicitAndAmbiguousHomeChildrenKeepTheirNesting() {
+  fun forksSubagentsWorktreesAndUnknownSessionsKeepTheirNesting() {
     val home = session("agent:ops:custom-home").copy(isMain = true)
     val chat =
       session("agent:ops:dashboard:new", parentSessionKey = home.key).copy(
@@ -280,7 +278,7 @@ class SessionsScreenGroupingTest {
       )
     val children =
       listOf(
-        "explicit parent" to chat.copy(parentSessionId = "home-generation"),
+        "worktree" to chat.copy(worktreeId = "worktree-1"),
         "delegation" to chat.copy(spawnDepth = 1),
         "spawn" to chat.copy(spawnedBy = home.key),
         "fork" to chat.copy(forkedFromParent = true),
@@ -293,11 +291,6 @@ class SessionsScreenGroupingTest {
       assertEquals(name, listOf(home.key, child.key), rows.map { it.session.key })
       assertEquals(name, listOf(0, 1), rows.map { it.depth })
     }
-    val ordinaryParent = home.copy(isMain = false)
-    assertEquals(
-      listOf(0, 1),
-      buildSessionTreeSections(listOf(ordinaryParent, chat)).single().entries.map { it.depth },
-    )
   }
 
   @Test

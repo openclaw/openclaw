@@ -1082,7 +1082,7 @@ class ChatControllerTranscriptCacheTest {
                 "key": "main",
                 "label": "Daily",
                 "category": "Work",
-                "parentSessionId": "parent-generation",
+                "worktree": {"id": "worktree-1"},
                 "spawnDepth": 1,
                 "forkedFromParent": true,
                 "pinned": true,
@@ -1103,7 +1103,7 @@ class ChatControllerTranscriptCacheTest {
       val session = controller.sessions.value.single()
       assertEquals("Daily", session.label)
       assertEquals("Work", session.category)
-      assertEquals("parent-generation", session.parentSessionId)
+      assertEquals("worktree-1", session.worktreeId)
       assertEquals(1, session.spawnDepth)
       assertEquals(true, session.forkedFromParent)
       assertEquals(true, session.pinned)
@@ -1119,7 +1119,7 @@ class ChatControllerTranscriptCacheTest {
     runTest {
       val controller =
         createScriptedChatController {
-          respond("sessions.list", """{"sessions":[{"key":"main","label":"Daily","category":"Work","color":"green","parentSessionId":"parent-generation","spawnDepth":1,"forkedFromParent":true,"pinned":true,"unread":true}]}""")
+          respond("sessions.list", """{"sessions":[{"key":"main","label":"Daily","category":"Work","color":"green","worktree":{"id":"worktree-1"},"spawnDepth":1,"forkedFromParent":true,"pinned":true,"unread":true}]}""")
         }
       controller.refreshSessions()
       advanceUntilIdle()
@@ -1135,10 +1135,21 @@ class ChatControllerTranscriptCacheTest {
       assertEquals(true, session.pinned)
       assertEquals(true, session.unread)
       assertEquals("green", session.color)
-      assertEquals("parent-generation", session.parentSessionId)
+      assertEquals("worktree-1", session.worktreeId)
       assertEquals(1, session.spawnDepth)
       assertEquals(true, session.forkedFromParent)
       assertEquals(30L, session.lastActivityAt)
+
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"session":{"key":"main","agentId":"main","worktree":null}}""",
+      )
+      assertEquals(
+        null,
+        controller.sessions.value
+          .single()
+          .worktreeId,
+      )
     }
 
   @Test

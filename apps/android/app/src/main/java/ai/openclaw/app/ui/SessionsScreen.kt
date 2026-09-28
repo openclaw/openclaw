@@ -1247,11 +1247,10 @@ internal fun buildSessionTreeSections(
         val parentKey =
           entry.parentSessionKey?.trim()?.takeIf(String::isNotEmpty)
             ?: entry.spawnedBy?.trim()?.takeIf(String::isNotEmpty)
-        // Match the web sidebar: an implicit Home link routes notices, not visual nesting.
+        // Ordinary New chats can retain a settings-inheritance parent without being child sessions.
         if (
-          entriesByKey[parentKey]?.isMain == true &&
           entry.createdVia == "operator" && entry.spawnDepth == 0 &&
-          entry.parentSessionId.isNullOrBlank() && entry.spawnedBy.isNullOrBlank() &&
+          entry.spawnedBy.isNullOrBlank() && entry.worktreeId == null &&
           entry.forkedFromParent != true && entry.classification != "subagent"
         ) {
           return@forEach
