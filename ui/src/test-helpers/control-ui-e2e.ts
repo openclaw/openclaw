@@ -2099,7 +2099,7 @@ function installControlUiMockGateway(
       case "sessions.resolve":
       case "sessions.describe":
       case "session.members.listEvidence":
-        return sessions.query(method, params, scenario);
+        return sessions.readResponse(method, params, scenario);
       case "chat.history":
       case "chat.startup": {
         const resolution =

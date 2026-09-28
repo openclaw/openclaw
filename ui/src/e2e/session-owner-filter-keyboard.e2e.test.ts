@@ -6,7 +6,6 @@ import {
   createSessionManagementE2eSuite,
   installMockGateway,
   sessionsListResponse,
-  waitForSessionRosterHydration,
 } from "./session-management.test-support.ts";
 import {
   chooseSidebarOwner,
@@ -30,6 +29,7 @@ suite.define(() => {
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       sessionKey: "agent:main:ada",
+      heldMethods: ["chat.startup"],
       presenceUsers: [{ self: true, id: "profile-patrick", name: "Patrick" }],
       historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
       methodResponses: {
@@ -50,7 +50,10 @@ suite.define(() => {
 
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
-      await waitForSessionRosterHydration(page);
+      await gateway.waitForRequest("chat.startup");
+      await gateway.resolveDeferred("chat.startup");
+      // The selected descriptor can render before the roster supplies owner filters.
+      await page.locator('.sidebar-recent-session[data-session-key="agent:main:bob"]').waitFor();
       const trigger = page.getByRole("button", { name: "Filter & sort" });
       await trigger.focus();
       await page.keyboard.press("Enter");

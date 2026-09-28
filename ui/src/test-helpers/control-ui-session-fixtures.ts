@@ -134,9 +134,6 @@ export function createControlUiSessionFixtures(
     ...row,
     snapshotAt: row.snapshotAt ?? now,
   });
-  // Unseeded wire-only fixtures have no canonical metadata to publish.
-  const sessionInfo = (key: string) =>
-    listed.has(canonicalKey(key)) ? sample(read(key), Date.now()) : undefined;
   const patch = (key: string, fields: Record<string, unknown>) => {
     const value = record(key);
     const next = { ...value.row };
@@ -495,21 +492,25 @@ export function createControlUiSessionFixtures(
       ? { ok: true, ...only }
       : { ok: false, ...(matches.length ? { candidates: matches.slice(0, 10) } : {}) };
   };
+  // History publishes a full row replacement. An unseeded wire-only fixture
+  // has no canonical metadata to publish until its caller declares the row.
+  const sessionInfo = (key: string) =>
+    listed.has(canonicalKey(key)) ? sample(read(key), Date.now()) : undefined;
   return {
     read,
     resolve,
     sessionInfo,
-    query(
+    readResponse(
       method: "sessions.resolve" | "sessions.describe" | "session.members.listEvidence",
       params: unknown,
-      defaults: { sessionKey: string; allowedSessionVisibilities: readonly string[] },
+      scenario: { sessionKey: string; allowedSessionVisibilities: readonly string[] },
     ) {
-      const fields = isRecord(params) ? params : {};
       if (method === "sessions.resolve") {
-        return resolve(fields);
+        return resolve(isRecord(params) ? params : {});
       }
-      const requestedKey = method === "sessions.describe" ? fields.key : fields.sessionKey;
-      const key = typeof requestedKey === "string" ? requestedKey : defaults.sessionKey;
+      const field = method === "sessions.describe" ? "key" : "sessionKey";
+      const requestedKey = isRecord(params) ? params[field] : undefined;
+      const key = typeof requestedKey === "string" ? requestedKey : scenario.sessionKey;
       if (method === "sessions.describe") {
         return { session: sessionInfo(key) ?? null };
       }
@@ -518,8 +519,8 @@ export function createControlUiSessionFixtures(
         sessionKey: row.key,
         members: [],
         identities: [],
-        role: row.sharingRole ?? "viewer",
-        allowedVisibilities: defaults.allowedSessionVisibilities,
+        role: row.sharingRole ?? "admin",
+        allowedVisibilities: scenario.allowedSessionVisibilities,
       };
     },
     patch,

@@ -262,11 +262,12 @@ syncBuiltinESMExports();
       const root = tempDirs.make("oc-vt-preparation-");
       const receiptsPath = path.join(root, "events.jsonl");
       const pidPath = path.join(root, "builder.pid");
-      const declarationsReadyPath = path.join(root, "ai-declarations-ready");
       const executable = path.join(root, "command.mjs");
       const preload = path.join(root, "preload.mjs");
+      const aiDeclarations = path.join(root, "ai-declarations");
       if (outcome === "prebuilt") {
-        fs.writeFileSync(declarationsReadyPath, "");
+        // A complete prebuilt generation includes the typed AI package.
+        fs.writeFileSync(aiDeclarations, "");
       }
       fs.writeFileSync(
         executable,
@@ -282,29 +283,30 @@ if (kind === "runtime" && ${JSON.stringify(outcome)} === "cancel") {
   fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
   setInterval(() => {}, 1000);
 } else {
-  if (kind === "ai" && ${JSON.stringify(outcome)} !== "ai-failure") {
-    fs.writeFileSync(${JSON.stringify(declarationsReadyPath)}, "");
+  const failed = ${JSON.stringify(outcome)} === kind + "-failure";
+  if (kind === "ai" && !failed) {
+    fs.writeFileSync(${JSON.stringify(aiDeclarations)}, "");
   }
   record("end");
-  process.exit(${JSON.stringify(outcome)} === kind + "-failure" ? 7 : 0);
+  process.exit(failed ? 7 : 0);
 }
 `,
       );
       // Preserve the real CLI and managed process owners; replace only the
       // expensive executables so build/read admission remains observable.
+      // The stub AI build publishes its declarations as a fixture receipt, so
+      // the declaration check sees the stub's output, not the checkout's dist.
       fs.writeFileSync(
         preload,
         `import cp from "node:child_process";
 import fs from "node:fs";
-import path from "node:path";
 import { syncBuiltinESMExports } from "node:module";
-const aiRoot = ${JSON.stringify(path.join(repoRoot, "packages/ai"))};
-const manifest = JSON.parse(fs.readFileSync(path.join(aiRoot, "package.json"), "utf8"));
-const declarations = new Set([manifest.types, ...Object.values(manifest.exports).map(entry => entry.types)]
-  .map(entry => path.resolve(aiRoot, entry)));
+const aiDist = ${JSON.stringify(path.join(repoRoot, "packages/ai/dist") + path.sep)};
 const existsSync = fs.existsSync;
-fs.existsSync = file => typeof file === "string" && declarations.has(path.resolve(file))
-  ? existsSync(${JSON.stringify(declarationsReadyPath)}) : existsSync(file);
+fs.existsSync = (entry) =>
+  typeof entry === "string" && entry.startsWith(aiDist) && entry.endsWith(".d.mts")
+    ? existsSync(${JSON.stringify(aiDeclarations)})
+    : existsSync(entry);
 const spawn = cp.spawn;
 cp.spawn = (bin, args, options) => {
   const kind = args.includes("scripts/run-node.mjs") ? "runtime"

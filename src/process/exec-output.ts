@@ -59,18 +59,11 @@ export function resolveOutputCapture(
   return (typeof value === "string" ? value : value?.[stream]) ?? "tail";
 }
 
-export function shouldTerminateOnOutputLimit(
+export function shouldTerminateOnOutput(
   value: CommandOutputLimitOption | undefined,
   limit: CommandOutputStream | "combined",
 ): boolean {
   return typeof value === "boolean" ? value : value?.[limit] === true;
-}
-
-export function shouldTerminateOnOutputError(
-  value: CommandOutputErrorOption | undefined,
-  stream: CommandOutputStream,
-): boolean {
-  return typeof value === "boolean" ? value : value?.[stream] === true;
 }
 
 export function appendCapturedOutput(

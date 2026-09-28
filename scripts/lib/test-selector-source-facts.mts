@@ -510,6 +510,7 @@ export function readTestSelectorSourceFacts(
   files: SourceFile[],
   terms: string[],
   maxBuffer: number,
+  options: { matchingOnly?: boolean } = {},
 ) {
   if (files.length === 0) {
     return [];
@@ -525,7 +526,7 @@ export function readTestSelectorSourceFacts(
   const result = spawnSync(executable, [fileURLToPath(import.meta.url)], {
     cwd,
     env,
-    input: JSON.stringify({ files, terms }),
+    input: JSON.stringify({ files, terms, matchingOnly: options.matchingOnly === true }),
     encoding: "utf8",
     maxBuffer,
     stdio: ["pipe", "pipe", "pipe"],
@@ -536,7 +537,7 @@ export function readTestSelectorSourceFacts(
       { cause: result.error },
     );
   }
-  // Position is the file identity, including skipped or unreadable files.
+  // Position is the file identity, including unreadable and filtered rows.
   const rows: unknown = JSON.parse(result.stdout);
   if (!Array.isArray(rows) || rows.length !== files.length) {
     throw new Error("Invalid test selector source scan row count");
@@ -575,8 +576,8 @@ async function readSourceFacts() {
     }
     return { file: value.file, parseImports: value.parseImports };
   });
-  const terms = parseStrings(request.terms);
-  const matchTerms = createSourceTermMatcher(terms);
+  const matchTerms = createSourceTermMatcher(parseStrings(request.terms));
+  const matchingOnly = "matchingOnly" in request && request.matchingOnly === true;
   const readFacts = async ({ file, parseImports }: SourceFile) => {
     let source: string;
     try {
@@ -586,9 +587,9 @@ async function readSourceFacts() {
       return null;
     }
     const { matches, references } = matchTerms(source);
-    // A narrow scan must not parse unrelated files or publish empty import facts
-    // that could satisfy a later full-graph read.
-    if (terms.length > 0 && matches.length === 0) {
+    // Targeted scans only need candidate edges. Omit nonmatches rather than
+    // publishing empty imports that could poison a later complete graph read.
+    if (matchingOnly && matches.length === 0) {
       return null;
     }
     const facts = parseImports ? importFacts(source) : { imports: [], typeOnlyImports: [] };

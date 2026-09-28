@@ -67,7 +67,7 @@ export function buildGatewaySnapshot(opts: {
     scope === "global" ? "global" : resolveAgentMainSessionKey({ cfg, agentId: defaultAgentId });
   const presence = createPresenceRecipientProjection({
     cfg,
-    presence: listSystemPresence(),
+    presence: listSystemPresence({ includeConnectionId: opts.client?.connId }),
     projection: opts.sessionRowProjection,
   })(opts.client);
   const uptimeMs = Math.round(process.uptime() * 1000);

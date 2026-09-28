@@ -232,6 +232,7 @@
       "@openclaw/normalization-core/utf16-slice": [
         "./packages/normalization-core/src/utf16-slice.ts"
       ],
+      "@openclaw/normalization-core/uuid": ["./packages/normalization-core/src/uuid.ts"],
       "@openclaw/normalization-core/home-dir": [
         "./packages/normalization-core/src/home-dir.ts"
       ],
