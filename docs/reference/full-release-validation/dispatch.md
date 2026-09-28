@@ -157,8 +157,9 @@ still record `targetRef` and `refs.target`, and the current helper rejects them
 as invalid. Reconcile such a file with the helper from the parent of the merge
 commit that removed the target ref, for example from
 `git worktree add --detach <path> <merge-commit>^`. Neither version creates or
-deletes refs during reconciliation. After the run is settled, delete any
-remaining `release-ci/*` or `validation/target-*` ref deliberately.
+deletes refs during reconciliation. Keep any remaining `release-ci/*` or
+`validation/target-*` ref while GitHub reruns or evidence diagnosis may still
+need it, then delete it deliberately.
 
 Missing or ambiguous runs, incomplete pagination, unavailable or mismatched input
 witnesses, and exhausted discovery remain `dispatch=unknown`. A complete HTTP
