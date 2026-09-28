@@ -256,7 +256,7 @@ class SessionsScreenGroupingTest {
       )
     val sections = buildSessionTreeSections(listOf(home, chat))
 
-    assertEquals(listOf("Pinned", null), sections.map { it.title })
+    assertEquals(listOf("Pinned", "Ungrouped"), sections.map { it.title })
     assertEquals(listOf(home.key), sections[0].entries.map { it.session.key })
     assertEquals(listOf(chat.key), sections[1].entries.map { it.session.key })
     assertEquals(0, sections[1].entries.single().depth)
