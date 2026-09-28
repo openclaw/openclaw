@@ -46,7 +46,7 @@ type CronWakeMode = "next-heartbeat" | "now";
 export type CronMessageChannel = ChannelId;
 
 /** Delivery mode for job completion output. */
-export type CronDeliveryMode = "none" | "announce" | "webhook";
+type CronDeliveryMode = "none" | "announce" | "webhook";
 
 /** Completion delivery configuration for cron job output. */
 export type CronDelivery = {
