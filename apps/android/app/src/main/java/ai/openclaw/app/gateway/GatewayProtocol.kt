@@ -978,6 +978,9 @@ enum class GatewayMethod(
   UsersMerge("users.merge"),
   GatewayStopRequest("gateway.stop.request"),
   DiagnosticsHeapSnapshot("diagnostics.heapSnapshot"),
+  TtsVoices("tts.voices"),
+  TtsDesignVoice("tts.designVoice"),
+  TtsReplicateVoice("tts.replicateVoice"),
 }
 
 enum class GatewayEvent(
