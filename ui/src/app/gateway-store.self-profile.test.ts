@@ -212,37 +212,42 @@ describe("Gateway self-profile ownership", () => {
     gateway.stop();
   });
 
-  it("preserves current-profile display events and upload revisions through a pending self read", async () => {
-    const { gateway, current } = createStore();
-    gateway.start();
-    current().request.mockResolvedValue({ profile });
-    current().opts.onHello?.(hello());
-    await gateway.loadSelfProfile();
-    const pending = createDeferred<{ profile: UserProfile }>();
-    current().request.mockReturnValueOnce(pending.promise);
-    const read = gateway.loadSelfProfile();
-    const user = {
-      id: profile.id,
-      name: "New Name",
-      avatarUrl: "/api/users/profile-1/avatar?v=content-hash",
-    };
-    current().opts.onEvent?.(
-      createGatewayEvent("presence", { presence: [{ instanceId: current().instanceId, user }] }),
-    );
-    pending.resolve({ profile });
-    await read;
-    expect(gateway.snapshot.selfUser).toMatchObject({
-      ...user,
-      email: profile.emails[0],
-      identity: { type: "profile", id: profile.id },
-    });
-    gateway.updateSelfUser?.({ avatarUrl: "/api/users/profile-1/avatar?v=uploaded-content-hash" });
-    await gateway.loadSelfProfile();
-    expect(gateway.snapshot.selfUser?.avatarUrl).toBe(
-      "/api/users/profile-1/avatar?v=uploaded-content-hash",
-    );
-    gateway.stop();
-  });
+  it.each(["operator.sessions.write", "operator.read"])(
+    "preserves current-profile display events and upload revisions through a pending self read with %s",
+    async (scope) => {
+      const { gateway, current } = createStore();
+      gateway.start();
+      current().request.mockResolvedValue({ profile });
+      current().opts.onHello?.(hello([scope]));
+      await gateway.loadSelfProfile();
+      const pending = createDeferred<{ profile: UserProfile }>();
+      current().request.mockReturnValueOnce(pending.promise);
+      const read = gateway.loadSelfProfile();
+      const user = {
+        id: profile.id,
+        name: "New Name",
+        avatarUrl: "/api/users/profile-1/avatar?v=content-hash",
+      };
+      current().opts.onEvent?.(
+        createGatewayEvent("presence", { presence: [{ instanceId: current().instanceId, user }] }),
+      );
+      pending.resolve({ profile });
+      await read;
+      expect(gateway.snapshot.selfUser).toMatchObject({
+        ...user,
+        email: profile.emails[0],
+        identity: { type: "profile", id: profile.id },
+      });
+      gateway.updateSelfUser?.({
+        avatarUrl: "/api/users/profile-1/avatar?v=uploaded-content-hash",
+      });
+      await gateway.loadSelfProfile();
+      expect(gateway.snapshot.selfUser?.avatarUrl).toBe(
+        "/api/users/profile-1/avatar?v=uploaded-content-hash",
+      );
+      gateway.stop();
+    },
+  );
 
   it("refreshes a generated avatar fallback when the self profile changes", async () => {
     const { gateway, current } = createStore();

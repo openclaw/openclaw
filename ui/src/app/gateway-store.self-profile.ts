@@ -113,7 +113,8 @@ export function createGatewaySelfProfile(options: {
       }
       if (
         hasOperatorReadAccess(snapshot.hello?.auth ?? null) &&
-        (presence.id !== current?.id || presence.identity?.id !== current.identity?.id)
+        (presence.id !== current?.id ||
+          (presence.identity && presence.identity.id !== current.identity?.id))
       ) {
         // Broad readers receive live identity attachment changes through their own presence row.
         selfProfileRequest = null;
