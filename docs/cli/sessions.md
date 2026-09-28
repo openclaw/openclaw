@@ -71,6 +71,11 @@ JSON session rows include `color` when a session color is set (for example,
 `"color": "blue"`). Uncolored sessions and sessions whose color was cleared omit
 the field.
 
+JSON session rows also include `category` when a stored session category is set
+(for example, `"category": "work"`). Sessions with no category, and sessions
+whose category was cleared, omit the field — same omit-when-unset contract as
+`color`.
+
 RPC clients can pass `configuredAgentsOnly: true` to keep the broad combined
 discovery source but return only rows for agents currently present in config.
 Control UI uses that mode by default so deleted or disk-only agent stores do
