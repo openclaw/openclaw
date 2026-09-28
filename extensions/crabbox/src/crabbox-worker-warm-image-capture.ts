@@ -79,6 +79,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
     prepareAndScrubSource?: (scrubScript: string) => Promise<void>,
   ): Promise<boolean> {
     assertCurrent(context);
+    const assertSourceCurrent = context.assertCurrent;
     const authority = captureCrabboxCheckpointAuthority(context);
     const captureId = randomUUID();
     const owner = await lookupLease(context.id);
@@ -97,7 +98,10 @@ export function createCrabboxWarmImageCapture(dependencies: {
           !key ||
           !owner.runtimeIdentity ||
           owner.demandAtMs === null ||
-          (owner.projectKey ? owner.phase !== "prepared" : owner.phase !== "enrolled")
+          // Teardown retains cleanup custody, not authority to start a project capture.
+          (owner.projectKey
+            ? owner.phase !== "prepared" || !assertSourceCurrent
+            : owner.phase !== "enrolled")
         ) {
           return undefined;
         }
