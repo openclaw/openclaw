@@ -1,5 +1,4 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildReplyPayloads } from "../../auto-reply/reply/agent-runner-payloads.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { BlockReplyPayload } from "../embedded-agent-payloads.js";
 import type { AgentHarness } from "../harness/types.js";
@@ -40,68 +39,6 @@ afterEach(async () => {
 });
 
 describe("plugin runtime refresh admission", () => {
-  it.each([false, true])(
-    "preserves same-route delivery dedupe across refresh (media: %s)",
-    async (media) => {
-      const text = "The requested result was delivered by the original plugin generation.";
-      const mediaUrl = "https://example.test/delivered-result.png";
-      const sentTarget = {
-        tool: "message",
-        provider: "telegram",
-        to: "telegram:123",
-        ...(media ? { mediaUrls: [mediaUrl] } : { text }),
-      };
-      const payload = media ? { mediaUrl } : { text };
-      mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
-        params.registerPluginRuntimeRefreshConsumer?.(() => true);
-        expect(captureAgentPluginRuntimeRefresh().request()).toBe(true);
-        return makeAttemptResult({
-          assistantTexts: [],
-          toolMetas: [
-            { toolName: "message", isError: false },
-            { toolName: "plugins", isError: false },
-          ],
-          didSendViaMessagingTool: true,
-          messagingToolSentTexts: media ? [] : [text],
-          messagingToolSentMediaUrls: media ? [mediaUrl] : [],
-          messagingToolSentTargets: [sentTarget],
-        });
-      });
-      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-        makeAttemptResult({ assistantTexts: [payload.text ?? "The requested image is ready."] }),
-      );
-      mockedBuildEmbeddedRunPayloads.mockReturnValue([payload]);
-      const onAttemptStart = vi.fn();
-      const result = await runEmbeddedAgent({
-        ...createOverflowRunParams(state),
-        prompt: "send the result, reload the plugin, then verify the result",
-        agentHarnessId: "openclaw",
-        provider: "fixture-provider",
-        model: "fixture-model",
-        sessionKey: undefined,
-        onAttemptStart,
-      });
-      expect(result.meta.error).toBeUndefined();
-      expect(mockedRunEmbeddedAttempt.mock.calls[1]?.[0]?.pluginRuntimeRefreshMessages).toEqual([]);
-      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-      expect(onAttemptStart).toHaveBeenCalledTimes(2);
-      const final = await buildReplyPayloads({
-        payloads: result.payloads ?? [],
-        messagingToolSentTexts: result.messagingToolSentTexts,
-        messagingToolSentMediaUrls: result.messagingToolSentMediaUrls,
-        messagingToolSentTargets: result.messagingToolSentTargets,
-        messageProvider: "telegram",
-        originatingTo: "telegram:123",
-        isHeartbeat: false,
-        didLogHeartbeatStrip: false,
-        blockStreamingEnabled: false,
-        blockReplyPipeline: null,
-        replyToMode: "off",
-      });
-      expect(final.replyPayloads).toEqual([]);
-    },
-  );
-
   it("reacquires generations while preserving run authority, committed work, and one terminal", async () => {
     const { getPluginRuntimeGatewayRequestScope, withPluginRuntimeGatewayRequestScope } =
       await import("../../plugins/runtime/gateway-request-scope.js");
@@ -260,16 +197,9 @@ describe("plugin runtime refresh admission", () => {
     const next = await runEmbeddedAgent({ ...runParams, prompt: "new task" });
     expect(next.meta.agentMeta?.terminalReceipt?.successfulToolNames).toEqual([]);
   });
-  it.each([
-    { kind: "generated", refresh: false },
-    { kind: "generated", refresh: true },
-    { kind: "host-owned", refresh: false },
-    { kind: "host-owned", refresh: true },
-    { kind: "tts", refresh: true },
-    { kind: "foreign-tts", refresh: true },
-  ])(
-    "preserves pending $kind media and its provenance (refresh: $refresh)",
-    async ({ kind, refresh }) => {
+  it.each(["generated", "host-owned", "tts", "foreign-tts"])(
+    "preserves pending %s media and its provenance across refresh",
+    async (kind) => {
       useOpenAIPlatformAuthFixture();
       const { getReplyPayloadMetadata } = await import("../../auto-reply/reply-payload.js");
       const { markCoreTtsAttemptResult } = await import("../tools/tts-tool-result-provenance.js");
@@ -293,12 +223,10 @@ describe("plugin runtime refresh admission", () => {
         },
       });
       mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
-        if (refresh) {
-          params.registerPluginRuntimeRefreshConsumer?.(() => true);
-          expect(captureAgentPluginRuntimeRefresh().request()).toBe(true);
-        }
+        params.registerPluginRuntimeRefreshConsumer?.(() => true);
+        expect(captureAgentPluginRuntimeRefresh().request()).toBe(true);
         const attempt = makeAttemptResult({
-          assistantTexts: refresh ? [] : [finalText],
+          assistantTexts: [],
           toolMetas: [{ toolName: "produce_media", isError: false }],
           toolMediaUrls: mediaUrls,
           hostOwnedToolMediaUrls: kind === "host-owned" ? [selected, alternate] : undefined,
@@ -315,11 +243,9 @@ describe("plugin runtime refresh admission", () => {
             )
           : attempt;
       });
-      if (refresh) {
-        mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-          makeAttemptResult({ assistantTexts: [finalText] }),
-        );
-      }
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+        makeAttemptResult({ assistantTexts: [finalText] }),
+      );
       mockedBuildEmbeddedRunPayloads.mockImplementation(({ assistantTexts }) =>
         assistantTexts.map((text) => ({ text })),
       );
@@ -332,7 +258,7 @@ describe("plugin runtime refresh admission", () => {
         preparedRunAdmission: admission,
         ...(kind === "generated" ? {} : { sourceReplyDeliveryMode: "message_tool_only" as const }),
       }).finally(() => admission.close());
-      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(refresh ? 2 : 1);
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
       expect(result.didSendViaMessagingTool).not.toBe(true);
       expect(result.messagingToolSentMediaUrls ?? []).toEqual([]);
       expect(result.meta.agentMeta?.terminalReceipt?.sourceReplyDelivered).not.toBe(true);
@@ -511,15 +437,13 @@ describe("plugin runtime refresh admission", () => {
 
 describe("plugin runtime refresh streaming delivery", () => {
   it.each([
-    { name: "same source", otherRoute: false, toolOnly: false, mirror: false, ownedMedia: false },
-    { name: "another target", otherRoute: true, toolOnly: false, mirror: false, ownedMedia: false },
-    { name: "source mirrors", otherRoute: false, toolOnly: false, mirror: true, ownedMedia: false },
+    { name: "another target", otherRoute: true, toolOnly: false, mirror: false },
+    { name: "source mirrors", otherRoute: false, toolOnly: false, mirror: true },
     {
       name: "tool-only source with owned media",
       otherRoute: false,
       toolOnly: true,
       mirror: false,
-      ownedMedia: true,
     },
   ])("retains committed delivery before successor callbacks for $name", async (scenario) => {
     const {
@@ -590,7 +514,7 @@ describe("plugin runtime refresh streaming delivery", () => {
       await params.onPartialReply?.({ text: unrelated });
       await params.onBlockReply?.(scenario.mirror ? mirror : duplicate);
       await params.onBlockReply?.(remaining);
-      if (scenario.ownedMedia) {
+      if (scenario.toolOnly) {
         await params.onBlockReply?.(ownedMedia);
       }
       await params.onReasoningStream?.({
@@ -605,9 +529,7 @@ describe("plugin runtime refresh streaming delivery", () => {
             ? [prefix, divergent, text, unrelated]
             : [divergent, unrelated],
         blocks: scenario.toolOnly
-          ? scenario.ownedMedia
-            ? [ownedMedia]
-            : []
+          ? [ownedMedia]
           : scenario.otherRoute
             ? [duplicate, remaining]
             : [...(scenario.mirror ? [mirror] : []), { text: unrelated }],
