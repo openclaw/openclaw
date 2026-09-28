@@ -1,9 +1,11 @@
 /** Summarizes installed service command paths and OpenClaw package layout. */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { pathExists } from "../infra/fs-safe.js";
+import { tryReadJson } from "../infra/json-files.js";
 import { readPackageName, readPackageVersion } from "../infra/package-json.js";
 import {
   hasGatewayServiceLauncherOverride,
@@ -23,6 +25,9 @@ export type GatewayServiceLayoutSummary = {
   packageRoot?: string;
   packageRootReal?: string;
   packageVersion?: string;
+  /** Build id recorded in the install's dist/build-info.json right now, not the one a
+   * running Gateway loaded. A rebuild replaces this while the process keeps the old one. */
+  packageBuildId?: string;
   entrypointSourceCheckout?: boolean;
 };
 
@@ -209,6 +214,18 @@ async function resolveOpenClawPackageRoot(entrypoint: string): Promise<string | 
   return undefined;
 }
 
+/** Reads the build id currently on disk. A build rewrites this under a running Gateway,
+ * so it is only comparable against the build id that Gateway reports having loaded. */
+async function readPackageBuildId(packageRoot: string): Promise<string | undefined> {
+  const info = asNullableRecord(
+    await tryReadJson(path.join(packageRoot, "dist", "build-info.json"), { maxBytes: 16 * 1024 }),
+  );
+  const buildId = normalizeOptionalString(info?.buildId);
+  // Matches the gateway-protocol bound on hello.server.buildId, so a corrupt or
+  // partially written build-info cannot widen what status reports.
+  return buildId && buildId.length <= 96 ? buildId : undefined;
+}
+
 export async function summarizeGatewayServiceLayout(
   command: Pick<
     GatewayServiceCommandConfig,
@@ -229,6 +246,7 @@ export async function summarizeGatewayServiceLayout(
   const packageVersion = packageRoot
     ? ((await readPackageVersion(packageRoot)) ?? undefined)
     : undefined;
+  const packageBuildId = packageRoot ? await readPackageBuildId(packageRoot) : undefined;
   const entrypointSourceCheckout = packageRootReal
     ? await isGatewayServiceSourceCheckoutRoot(packageRootReal)
     : undefined;
@@ -243,6 +261,7 @@ export async function summarizeGatewayServiceLayout(
     ...(packageRoot ? { packageRoot } : {}),
     ...(packageRootReal ? { packageRootReal } : {}),
     ...(packageVersion ? { packageVersion } : {}),
+    ...(packageBuildId ? { packageBuildId } : {}),
     ...(entrypointSourceCheckout !== undefined ? { entrypointSourceCheckout } : {}),
   };
 }

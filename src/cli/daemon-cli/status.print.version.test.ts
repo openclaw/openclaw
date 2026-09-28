@@ -26,6 +26,9 @@ type StatusFixture = {
   layout?: DaemonStatus["service"]["layout"];
   gatewayVersion?: string;
   rpcVersion?: string;
+  buildId?: string;
+  installedBuildId?: string;
+  restartRequired?: boolean;
 };
 
 function createStatus(params: StatusFixture): DaemonStatus {
@@ -50,6 +53,9 @@ function createStatus(params: StatusFixture): DaemonStatus {
       portSource: "env/config",
       probeUrl: "ws://127.0.0.1:18789",
       ...(params.gatewayVersion ? { version: params.gatewayVersion } : {}),
+      ...(params.buildId ? { buildId: params.buildId } : {}),
+      ...(params.installedBuildId ? { installedBuildId: params.installedBuildId } : {}),
+      ...(params.restartRequired ? { restartRequired: params.restartRequired } : {}),
     },
     ...(params.rpcVersion
       ? {
@@ -151,5 +157,43 @@ describe("daemon status version reporting", () => {
     const output = humanOutput();
     expect(output).toContain("Gateway service version: 2026.6.35");
     expect(output).not.toContain("installed Gateway service is version");
+  });
+
+  it("reports one build id and no restart guidance when the install has not moved", () => {
+    printDaemonStatus(
+      createStatus({
+        cliVersion: "2026.9.5",
+        rpcVersion: "2026.9.5",
+        buildId: "build-loaded",
+        installedBuildId: "build-loaded",
+      }),
+      { json: false },
+    );
+
+    const output = humanOutput();
+    expect(output).toContain("Gateway build: build-loaded");
+    expect(output).not.toContain("on disk");
+    expect(output).not.toContain("Restart required");
+  });
+
+  it("names both build ids and the restart when dist was rebuilt under the running Gateway", () => {
+    printDaemonStatus(
+      createStatus({
+        cliVersion: "2026.9.5",
+        rpcVersion: "2026.9.5",
+        buildId: "build-loaded",
+        installedBuildId: "build-on-disk",
+        restartRequired: true,
+      }),
+      { json: false },
+    );
+
+    const output = humanOutput();
+    expect(output).toContain("Gateway build: build-loaded, on disk build-on-disk");
+    expect(output).toContain(
+      "Restart required: the running Gateway loaded build build-loaded, but the installation on disk is build build-on-disk.",
+    );
+    expect(output).toContain("Imports it has not already loaded will fail until it restarts.");
+    expect(output).toContain("openclaw gateway restart");
   });
 });

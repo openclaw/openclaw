@@ -48,6 +48,7 @@ import { VERSION } from "../../version.js";
 import { resolveGatewayLocalPortOverride } from "../gateway-port-option.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import { normalizeListenerAddress } from "./shared.js";
+import { resolveGatewayIdentityReport } from "./status.gateway-identity.js";
 import {
   inspectDaemonPortStatuses,
   resolveGatewayStatusProbeConfig,
@@ -509,11 +510,14 @@ async function gatherDaemonStatusImpl(
           )
           .catch(() => undefined)
       : undefined;
-  const gatewayVersion = opts.probe
-    ? ((rpc && "server" in rpc ? rpc.server?.version : undefined) ??
-      (rpc && "version" in rpc ? rpc.version : undefined) ??
-      null)
+  // A remote or URL-override probe reaches a Gateway whose install this host cannot read,
+  // so only a local inspection can say which build a restart would actually load.
+  const gatewayIdentity = opts.probe
+    ? resolveGatewayIdentityReport(rpc, {
+        installedBuildId: shouldInspectLocalGateway ? serviceLayout?.packageBuildId : undefined,
+      })
     : undefined;
+  const gatewayVersion = gatewayIdentity?.version;
 
   let lastError: string | undefined;
   if (
@@ -658,11 +662,7 @@ async function gatherDaemonStatusImpl(
       ...(lastShutdown ? { lastShutdown } : {}),
       ...(duelingScopesWarning ? { duelingScopesWarning } : {}),
       ...(windowsFirewall?.applies ? { windowsFirewall } : {}),
-      ...(opts.probe
-        ? {
-            version: gatewayVersion,
-          }
-        : {}),
+      ...gatewayIdentity,
     },
     hostDesktop: hostDesktop.status,
     port: portStatus,

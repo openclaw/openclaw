@@ -41,6 +41,30 @@ describe("summarizeGatewayServiceLayout", () => {
       }),
     ).resolves.not.toHaveProperty("entrypoint");
   });
+
+  it.each([
+    { label: "readable", buildInfo: '{"version":"2026.9.5","buildId":"build-on-disk"}' },
+    { label: "unwritten", buildInfo: undefined },
+    { label: "truncated", buildInfo: '{"version":"2026.9.5","buil' },
+    { label: "over-long", buildInfo: `{"buildId":"${"b".repeat(97)}"}` },
+  ])("reports the build id currently on disk ($label)", async ({ label, buildInfo }) => {
+    const root = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-layout-build-id-")),
+    );
+    await fs.mkdir(path.join(root, "dist"), { recursive: true });
+    await fs.writeFile(path.join(root, "package.json"), '{"name":"openclaw","version":"2026.9.5"}');
+    await fs.writeFile(path.join(root, "dist", "index.js"), "gateway");
+    if (buildInfo !== undefined) {
+      await fs.writeFile(path.join(root, "dist", "build-info.json"), buildInfo);
+    }
+    const layout = await summarizeGatewayServiceLayout({
+      programArguments: [process.execPath, path.join(root, "dist", "index.js"), "gateway", "run"],
+    });
+    expect(layout?.packageRoot).toBe(root);
+    // Only a complete, bounded identity is reportable: a partial build-info must not
+    // become a build id that status then compares against the running Gateway.
+    expect(layout?.packageBuildId).toBe(label === "readable" ? "build-on-disk" : undefined);
+  });
 });
 
 describe("gatewayServiceCommandUsesRoot release ownership", () => {
