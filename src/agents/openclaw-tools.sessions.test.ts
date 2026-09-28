@@ -35,6 +35,7 @@ import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js"
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-tool-call.state.js";
+import * as embeddedRuns from "./embedded-agent-runner/runs.js";
 import {
   setActiveEmbeddedRun,
   type EmbeddedAgentQueueMessageOptions,
@@ -53,6 +54,7 @@ import { testing as agentStepTesting } from "./tools/agent-step.test-support.js"
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
+import * as sessionsSendFollowup from "./tools/sessions-send-followup.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 
 const { callGatewayMock } = await import("./openclaw-tools.sessions.mocks.test-support.js");
@@ -909,6 +911,95 @@ describe("sessions tools", () => {
       }
     },
   );
+
+  it.each([
+    { name: "steers into its running child", steered: true },
+    { name: "starts the same child after no_active_run", rejection: "no_active_run" as const },
+    { name: "starts the same child after stale_run", rejection: "stale_run" as const },
+    { name: "starts the same child after not_streaming", rejection: "not_streaming" as const },
+    { name: "rejects other steering failures", rejection: "runtime_rejected" as const },
+    { name: "starts an explicit followup", mode: "followup" as const },
+    { name: "starts a waited turn", timeoutSeconds: 1 },
+    { name: "starts an idle child", idle: true },
+  ])("sessions_send $name", async ({ steered, rejection, mode, timeoutSeconds = 0, idle }) => {
+    const requesterKey = "agent:main:main";
+    const targetKey = "agent:main:subagent:steering-child";
+    const sessionId = "own-child-active-session";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: targetKey },
+      { sessionId, updatedAt: 1, spawnedBy: requesterKey, spawnDepth: 1 },
+    );
+    const queueMessage = idle ? undefined : activeRun(targetKey, { sessionId });
+    const queue = vi.spyOn(embeddedRuns, "queueEmbeddedAgentMessageWithOutcomeAsync");
+    const prepare = vi.spyOn(sessionsSendFollowup, "prepareSessionsSendFollowup");
+    try {
+      if (rejection) {
+        queue.mockResolvedValueOnce({
+          queued: false,
+          sessionId,
+          reason: rejection,
+          gatewayHealth: "live",
+        });
+      }
+      mockGatewayResponses({
+        agent: { runId: "child-followup", status: "accepted" },
+        "agent.wait": { status: "ok", terminalReply: { disposition: "empty" } },
+      });
+      const result = await getSessionTool("sessions_send", {
+        agentSessionKey: requesterKey,
+      }).execute("child-send", {
+        sessionKey: targetKey,
+        message: "deps are ready",
+        timeoutSeconds,
+        mode,
+      });
+      const failed = rejection === "runtime_rejected";
+      expect(result.details).toMatchObject(
+        timeoutSeconds > 0
+          ? { status: "no_reply", sessionKey: targetKey }
+          : failed
+            ? { status: "error", sessionKey: targetKey, error: expect.stringContaining(rejection) }
+            : {
+                status: "accepted",
+                sessionKey: targetKey,
+                targetDisposition: steered ? "steered" : "queued",
+                delivery: { status: steered ? "skipped" : "pending", mode: "announce" },
+              },
+      );
+      const attempts = steered || rejection ? 1 : 0;
+      expect(queue).toHaveBeenCalledTimes(attempts);
+      if (attempts) {
+        expect(queue).toHaveBeenCalledWith(sessionId, expect.stringContaining("deps are ready"), {
+          steeringMode: "all",
+          debounceMs: 0,
+          deliveryTimeoutMs: 30_000,
+          waitForTranscriptCommit: true,
+          sourceReplyDeliveryMode: "message_tool_only",
+          userTurnTranscriptRecorder: expect.any(Object),
+        });
+      }
+      if (steered) {
+        expect(queueMessage).toHaveBeenCalledOnce();
+      }
+      const agentCalls = callGatewayMock.mock.calls.filter(
+        ([request]) => request.method === "agent",
+      );
+      expect(agentCalls).toHaveLength(steered || failed ? 0 : 1);
+      expect(prepare).toHaveBeenCalledTimes(steered || failed ? 0 : 1);
+      if (agentCalls.length) {
+        expect(agentCalls[0]?.[0].params).toMatchObject({ sessionKey: targetKey });
+        expect(prepare.mock.invocationCallOrder[0]).toBeLessThan(
+          callGatewayMock.mock.invocationCallOrder[
+            callGatewayMock.mock.calls.findIndex(([request]) => request.method === "agent")
+          ]!,
+        );
+      }
+    } finally {
+      await continuations.settle();
+      queue.mockRestore();
+      prepare.mockRestore();
+    }
+  });
 
   it("sessions_send keeps ordinary active session targets on the gateway agent path", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
