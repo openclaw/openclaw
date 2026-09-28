@@ -2,8 +2,8 @@ import { readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import {
+  GITHUB_PUBLICATION_CONFIG_GUARD,
   githubPublicationUnsafeConfigArgs,
-  githubPublicationWorktreeConfigArgs,
 } from "../../src/gateway/github-publication-base.js";
 import {
   workspaceResultCheckpointInitArgs,
@@ -37,7 +37,7 @@ export function admitQaRepositoryCheckpointCommand(
   ) {
     return false;
   }
-  const matches = (command: string[]) =>
+  const matches = (command: readonly string[]) =>
     command.length === argv.length && command.every((value, index) => value === argv[index]);
   const checkpoint =
     matches(workspaceResultGitCommand(checkpointRoot, workspaceResultCheckpointInitArgs())) ||
@@ -45,7 +45,7 @@ export function admitQaRepositoryCheckpointCommand(
   const probe =
     cwd === nodeRoot &&
     [
-      githubPublicationWorktreeConfigArgs(),
+      GITHUB_PUBLICATION_CONFIG_GUARD.worktreeConfigArgs,
       githubPublicationUnsafeConfigArgs("--local"),
       githubPublicationUnsafeConfigArgs("--worktree"),
     ].some(matches);
