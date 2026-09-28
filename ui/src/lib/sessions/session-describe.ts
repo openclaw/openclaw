@@ -9,7 +9,11 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "./session-key.ts";
-import { readSessionChangedEvent, sessionChangedSnapshots } from "./session-row-reconcile.ts";
+import {
+  parseSessionChangedEvent,
+  readSessionChangedEvent,
+  sessionChangedSnapshots,
+} from "./session-row-reconcile.ts";
 
 type Params = Parameters<SessionCapability["describe"]>[0];
 type Result = Awaited<ReturnType<SessionCapability["describe"]>>;
@@ -126,6 +130,15 @@ export function createSessionDescribeReads(host: {
     describe,
     clear: () => reads.clear(),
     invalidateEvent(payload: unknown) {
+      const completeAncestors = Array.isArray(
+        parseSessionChangedEvent(payload)?.[1].ancestorSessions,
+      );
+      // An unlisted ancestor can belong to another agent or sit outside every
+      // held roster. No descriptor from before an incomplete tree event is certified.
+      if (!completeAncestors) {
+        reads.clear();
+        return;
+      }
       const targets = sessionChangedSnapshots(payload).flatMap((snapshot) => {
         const target = readSessionChangedEvent(snapshot);
         return target ? [target] : [];
@@ -137,13 +150,15 @@ export function createSessionDescribeReads(host: {
       for (const [key, read] of reads) {
         const agentId = parseAgentSessionKey(read.params.key)?.agentId ?? read.params.agentId;
         if (
-          targets.some(
-            (target) =>
+          targets.some((target) => {
+            const targetAgentId = target.agentId ?? parseAgentSessionKey(target.key)?.agentId;
+            return (
               areUiSessionKeysEquivalent(target.key, read.params.key) &&
               (!agentId ||
-                !target.agentId ||
-                normalizeAgentId(target.agentId) === normalizeAgentId(agentId)),
-          )
+                !targetAgentId ||
+                normalizeAgentId(targetAgentId) === normalizeAgentId(agentId))
+            );
+          })
         ) {
           reads.delete(key);
         }

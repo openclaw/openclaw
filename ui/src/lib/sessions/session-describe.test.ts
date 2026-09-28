@@ -122,6 +122,52 @@ describe("session descriptor reads", () => {
     },
   );
 
+  it.each(
+    (["pending", "completed"] as const).flatMap((phase) =>
+      (["missing", "unrelated", "parent"] as const).flatMap((coverage) =>
+        [key, "agent:research:parent"].map((parentKey) => ({ phase, coverage, parentKey })),
+      ),
+    ),
+  )(
+    "checks ancestor coverage before reusing a $phase $parentKey descriptor ($coverage)",
+    async ({ phase, coverage, parentKey }) => {
+      const h = harness();
+      const parent = { ...initial, key: parentKey };
+      h.setRow(parent);
+      const pending = createDeferred<{ session: GatewaySessionRow }>();
+      h.read.mockReturnValueOnce(pending.promise);
+      const previous = h.sessions.describe({ key: parentKey });
+      if (phase === "completed") {
+        pending.resolve({ session: parent });
+        await previous;
+      }
+      const next = { ...parent, updatedAt: 2, label: "Current ancestor" };
+      h.setRow(next);
+      h.emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: {
+          key: "agent:main:child",
+          sessionId: "replacement-child",
+          reason: "create",
+          ...(coverage === "unrelated" ? {} : { parentSessionKey: parentKey }),
+          ...(coverage === "missing"
+            ? {}
+            : { ancestorSessions: coverage === "parent" ? [next] : [] }),
+        },
+      });
+      const current = h.sessions.describe({ key: parentKey });
+      expect(h.read).toHaveBeenCalledTimes(coverage === "unrelated" ? 1 : 2);
+      pending.resolve({ session: parent });
+      expect(await current).toEqual({ session: coverage === "unrelated" ? parent : next });
+      await previous;
+      expect(await h.sessions.describe({ key: parentKey })).toEqual({
+        session: coverage === "unrelated" ? parent : next,
+      });
+      expect(h.read).toHaveBeenCalledTimes(coverage === "unrelated" ? 1 : 2);
+    },
+  );
+
   it.each(["refresh", "first observed revision"])(
     "supersedes a pending read on %s",
     async (cause) => {
