@@ -325,9 +325,9 @@ describe("OpenClaw performance workflow", () => {
 
   it("pins the Kova evaluator with release validation contracts", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
-    const canonicalKovaRef = "17304ab9d7aa283b78b1771a2585518fa5961048";
-    const legacyKovaRef = "17304ab9d7aa283b78b1771a2585518fa5961048";
-    const trustedLiveKovaRef = "17304ab9d7aa283b78b1771a2585518fa5961048";
+    const canonicalKovaRef = "ec90fe4dd443859a248df82206ad2f1f363930ba";
+    const legacyKovaRef = "ec90fe4dd443859a248df82206ad2f1f363930ba";
+    const trustedLiveKovaRef = "ec90fe4dd443859a248df82206ad2f1f363930ba";
     const install = findStep("Install OCM and Kova");
     const installRun = install.run ?? "";
     const targetCheckout = findStep("Checkout target metadata", "resolve_target");
@@ -537,7 +537,7 @@ describe("OpenClaw performance workflow", () => {
       expect(outputs).toMatchObject({
         checkout_ref: sha,
         tested_sha: sha,
-        kova_ref: "17304ab9d7aa283b78b1771a2585518fa5961048",
+        kova_ref: "ec90fe4dd443859a248df82206ad2f1f363930ba",
         kova_config_contract: "canonical",
       });
     });
