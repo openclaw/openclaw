@@ -1,31 +1,28 @@
 type SourceTerm = { text: string; index: number; reference: boolean };
 
-function isReferenceCharacter(code: number): boolean {
-  return (
-    (code >= 65 && code <= 90) ||
-    (code >= 97 && code <= 122) ||
-    (code >= 48 && code <= 57) ||
-    code === 95 ||
-    code === 46 ||
-    code === 64 ||
-    code === 43 ||
-    code === 47 ||
-    code === 45
-  );
-}
+// Out-of-range reads are NaN, which String.fromCharCode maps to NUL.
+const isReferenceCharacter = (code: number) => /[\w.@+/-]/u.test(String.fromCharCode(code));
 
 /** Match literal terms and complete source tokens without rescanning once per term. */
 export function createSourceTermMatcher(terms: readonly string[]) {
   // String.includes and the source-token contract operate on UTF-16 code units.
-  // Rows index the code units terms use; every other unit returns to the root.
-  const symbols = new Uint32Array(65_536);
+  // Dense rows cover only the ASCII units terms use, so each node costs at most
+  // 129 columns however diverse the paths are. Other units take sparse edges.
+  const symbols = new Uint8Array(128);
   let width = 1;
+  let maxNodes = 1;
   for (const text of terms) {
+    maxNodes += text.length;
     for (let index = 0; index < text.length; index++) {
-      symbols[text.charCodeAt(index)] ||= width++;
+      const code = text.charCodeAt(index);
+      if (code < 128) {
+        symbols[code] ||= width++;
+      }
     }
   }
-  let transitions = new Int32Array(width * 64);
+  // Each code unit adds at most one node; rows past the last node stay untouched.
+  const transitions = new Int32Array(maxNodes * width);
+  const wide: (Map<number, number> | undefined)[] = [];
   const outputs: SourceTerm[][] = [[]];
   const unique = new Map<string, SourceTerm>();
   let referenceCount = 0;
@@ -43,16 +40,16 @@ export function createSourceTermMatcher(terms: readonly string[]) {
     referenceCount += Number(term.reference);
     let node = 0;
     for (let index = 0; index < text.length; index++) {
-      const slot = node * width + symbols[text.charCodeAt(index)]!;
-      if (transitions[slot] === 0) {
-        if ((outputs.length + 1) * width > transitions.length) {
-          const grown = new Int32Array(transitions.length * 2);
-          grown.set(transitions);
-          transitions = grown;
-        }
-        transitions[slot] = outputs.length;
-        outputs.push([]);
+      const code = text.charCodeAt(index);
+      if (code >= 128) {
+        const edges = (wide[node] ??= new Map());
+        const next = edges.get(code) ?? outputs.push([]) - 1;
+        edges.set(code, next);
+        node = next;
+        continue;
       }
+      const slot = node * width + symbols[code]!;
+      transitions[slot] ||= outputs.push([]) - 1;
       node = transitions[slot]!;
     }
     if (text.length > 0) {
@@ -60,9 +57,17 @@ export function createSourceTermMatcher(terms: readonly string[]) {
     }
     return term;
   });
-  // Breadth-first order completes each failure row before its children use it,
-  // so the scan below takes exactly one transition per code unit.
   const failures = new Int32Array(outputs.length);
+  const wideStep = (from: number, code: number): number => {
+    for (let node = from; ; node = failures[node]!) {
+      const next = wide[node]?.get(code);
+      if (next !== undefined || node === 0) {
+        return next ?? 0;
+      }
+    }
+  };
+  // Breadth-first order completes each failure row before its children use it,
+  // so the scan below takes one table load per ASCII code unit.
   const queue = [0];
   for (const node of queue) {
     for (let symbol = 1; symbol < width; symbol++) {
@@ -75,6 +80,11 @@ export function createSourceTermMatcher(terms: readonly string[]) {
       }
       failures[child] = fallback;
       outputs[child]!.push(...outputs[fallback]!);
+      queue.push(child);
+    }
+    for (const [code, child] of wide[node] ?? []) {
+      failures[child] = node === 0 ? 0 : wideStep(failures[node]!, code);
+      outputs[child]!.push(...outputs[failures[child]!]!);
       queue.push(child);
     }
   }
@@ -93,7 +103,8 @@ export function createSourceTermMatcher(terms: readonly string[]) {
       if (matched === unique.size && referenced === referenceCount) {
         break;
       }
-      node = transitions[node * width + symbols[source.charCodeAt(index)]!]!;
+      const code = source.charCodeAt(index);
+      node = code < 128 ? transitions[node * width + symbols[code]!]! : wideStep(node, code);
       for (const term of outputs[node]!) {
         if (!matches[term.index]) {
           matches[term.index] = 1;
