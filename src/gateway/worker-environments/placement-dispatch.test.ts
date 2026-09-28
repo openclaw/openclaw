@@ -674,12 +674,7 @@ describe("worker placement dispatch", () => {
 
     await harness.service.reconcile();
 
-    expect(harness.log).toEqual([
-      "environment:reconcile",
-      "tunnel:attached",
-      "placement:adopted",
-      "workspace",
-    ]);
+    expect(harness.log).toEqual(["environment:reconcile", "tunnel:attached", "placement:adopted"]);
     expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
     expect(harness.environments.destroy).not.toHaveBeenCalled();
   });
@@ -724,7 +719,6 @@ describe("worker placement dispatch", () => {
       "placement:draining",
       "placement:reconciling",
       "placement:failed",
-      "workspace",
     ]);
     expect(harness.environments.startTunnel).not.toHaveBeenCalled();
     expect(harness.environments.destroy).not.toHaveBeenCalled();
@@ -834,7 +828,6 @@ describe("worker placement dispatch", () => {
       "teardown:stop",
       "teardown:destroy",
       "placement:failed",
-      "workspace",
     ]);
   });
 
@@ -854,7 +847,6 @@ describe("worker placement dispatch", () => {
       "teardown:stop",
       "teardown:destroy",
       "placement:reclaimed",
-      "workspace",
     ]);
 
     const destroyCalls = vi.mocked(harness.environments.destroy).mock.calls.length;

@@ -123,20 +123,16 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
     } catch (operationError) {
       const compensationErrors = await this.rollbackCardMutations(journal);
       if (compensationErrors.length > 0) {
-        throw this.compensationError(operationError, compensationErrors);
+        const message =
+          operationError instanceof Error ? operationError.message : String(operationError);
+        throw new AggregateError([operationError, ...compensationErrors], message, {
+          cause: operationError,
+        });
       }
       throw operationError;
     } finally {
       this.compensationJournal = undefined;
     }
-  }
-
-  private compensationError(operationError: unknown, cleanupErrors: unknown[]): AggregateError {
-    const message =
-      operationError instanceof Error ? operationError.message : String(operationError);
-    return new AggregateError([operationError, ...cleanupErrors], message, {
-      cause: operationError,
-    });
   }
 
   private recordCardMutation(before: WorkboardCard | undefined, after: WorkboardCard): void {
