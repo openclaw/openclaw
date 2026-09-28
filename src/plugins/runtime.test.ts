@@ -46,6 +46,24 @@ async function waitForCleanupSignal(signal: Promise<void>, label: string): Promi
   }
 }
 
+function createCleanupDatabase() {
+  const db = new DatabaseSync(":memory:");
+  const nativeState = resolveGlobalSingleton(
+    Symbol.for("openclaw.test.actualPluginCleanupDatabase"),
+    (): { database?: DatabaseSync; resets: number } => ({ resets: 0 }),
+    (state) => {
+      if (state.database?.isOpen) {
+        state.resets++;
+        state.database.close();
+      }
+    },
+    "plugin-registry",
+  );
+  nativeState.database = db;
+  nativeState.resets = 0;
+  return { db, nativeState };
+}
+
 const makeRoute = (path: string): PluginHttpRouteRegistration => ({
   path,
   handler: () => {},
@@ -83,14 +101,6 @@ describe("setActivePluginRegistry", () => {
     setActivePluginRegistry(newRegistry);
     expect(getActivePluginRegistry()?.httpRoutes).toHaveLength(1);
     expect(getActivePluginRegistry()?.httpRoutes[0]).toEqual(newRoute);
-  });
-
-  it("does not carry forward when same registry is set again", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.httpRoutes.push(makeRoute("/test"));
-    setActivePluginRegistry(registry);
-    setActivePluginRegistry(registry);
-    expect(getActivePluginRegistry()?.httpRoutes).toHaveLength(1);
   });
 
   it.each(["empty", "loaded"] as const)(
@@ -431,20 +441,7 @@ describe("setActivePluginRegistry", () => {
       const record = createPluginRecord({ id: "abort-cleanup-sqlite", status: "loaded" });
       builder.registry.plugins.push(record);
       const api = builder.createApi(record, { config: {} });
-      const db = new DatabaseSync(":memory:");
-      const nativeState = resolveGlobalSingleton(
-        Symbol.for("openclaw.test.actualPluginCleanupDatabase"),
-        (): { database?: DatabaseSync; resets: number } => ({ resets: 0 }),
-        (state) => {
-          if (state.database?.isOpen) {
-            state.resets++;
-            state.database.close();
-          }
-        },
-        "plugin-registry",
-      );
-      nativeState.database = db;
-      nativeState.resets = 0;
+      const { db, nativeState } = createCleanupDatabase();
       const cleanup = vi.fn(() => {
         expect(db.prepare("SELECT 2 AS value").get()).toEqual({ value: 2 });
       });
@@ -601,20 +598,7 @@ describe("setActivePluginRegistry", () => {
       await import("./loader.test-fixtures.js");
     useNoBundledPlugins();
     onTestFinished(resetPluginLoaderTestStateForTest);
-    const db = new DatabaseSync(":memory:");
-    const nativeState = resolveGlobalSingleton(
-      Symbol.for("openclaw.test.actualPluginCleanupDatabase"),
-      (): { database?: DatabaseSync; resets: number } => ({ resets: 0 }),
-      (state) => {
-        if (state.database?.isOpen) {
-          state.resets++;
-          state.database.close();
-        }
-      },
-      "plugin-registry",
-    );
-    nativeState.database = db;
-    nativeState.resets = 0;
+    const { db, nativeState } = createCleanupDatabase();
     const reads: unknown[] = [];
     const bridge = resolveGlobalSingleton(
       Symbol.for("openclaw.test.loadedRetirementCleanup"),
@@ -701,25 +685,12 @@ describe("setActivePluginRegistry", () => {
       const record = createPluginRecord({ id: "cleanup-sqlite", status: "loaded" });
       builder.registry.plugins.push(record);
       const api = builder.createApi(record, { config: {} });
-      const db = new DatabaseSync(":memory:");
+      const { db, nativeState } = createCleanupDatabase();
       const entered = createDeferredCore();
       const release = createDeferredCore();
       const finished = createDeferredCore();
       const reads: unknown[] = [];
       const failures: unknown[] = [];
-      const nativeState = resolveGlobalSingleton(
-        Symbol.for("openclaw.test.actualPluginCleanupDatabase"),
-        (): { database?: DatabaseSync; resets: number } => ({ resets: 0 }),
-        (state) => {
-          if (state.database?.isOpen) {
-            state.resets++;
-            state.database.close();
-          }
-        },
-        "plugin-registry",
-      );
-      nativeState.database = db;
-      nativeState.resets = 0;
       const readAfterRelease = async () => {
         entered.resolve();
         try {

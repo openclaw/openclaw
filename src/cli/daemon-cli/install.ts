@@ -295,7 +295,9 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     }
     runtimePath = wrapperPath ? undefined : pinnedRuntimePath;
   } catch (error) {
-    fail(`Invalid runtime pin: ${String(error)}`);
+    fail(
+      `Invalid runtime pin: ${String(error)}; reinstall with an explicit --runtime or --runtime-path to replace the saved runtime pin.`,
+    );
     return;
   }
   const installBind = resolveGatewayInstallBindMode(cfg);

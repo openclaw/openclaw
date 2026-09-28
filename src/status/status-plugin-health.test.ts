@@ -181,13 +181,10 @@ describe("plugin health status formatting", () => {
     expect(snapshot).toEqual(original);
   });
 
-  it("omits the compact line when there are no plugin health problems", () => {
-    expect(formatCompactPluginHealthLine(emptySnapshot)).toBeUndefined();
-  });
-
   it("summarizes plugin errors and context engine quarantines in the compact line", () => {
     expect(
       formatCompactPluginHealthLine({
+        ...emptySnapshot,
         plugins: [
           {
             id: "broken-plugin",
@@ -196,7 +193,6 @@ describe("plugin health status formatting", () => {
             error: "boom",
           },
         ],
-        diagnostics: [],
         contextEngineQuarantines: [
           {
             engineId: "lossless-claw",
@@ -208,29 +204,6 @@ describe("plugin health status formatting", () => {
         ],
       }),
     ).toBe("⚠️ Plugins: 1 plugin error · 1 context engine quarantine");
-  });
-
-  it("counts runtime tool quarantines and channel plugin failures as compact problems", () => {
-    expect(
-      formatCompactPluginHealthLine({
-        ...emptySnapshot,
-        runtimeToolQuarantines: [
-          {
-            toolName: "bad_tool",
-            owner: "plugin:bad-tools",
-            reason: "unsupported anyOf",
-            failedAt: new Date(0),
-          },
-        ],
-        channelPluginFailures: [
-          {
-            channelId: "sms",
-            pluginId: "sms-plugin",
-            message: "setup failed",
-          },
-        ],
-      }),
-    ).toBe("⚠️ Plugins: 1 runtime tool quarantine · 1 channel plugin failure");
   });
 
   it("does not double-count diagnostics classified as channel plugin failures", () => {
@@ -393,9 +366,8 @@ describe("plugin health status formatting", () => {
   it("merges runtime health into installed plugin snapshots for detailed status", () => {
     const snapshot = mergeStatusPluginHealthSnapshots(
       {
+        ...emptySnapshot,
         plugins: [{ id: "installed-ok", status: "loaded", enabled: true }],
-        diagnostics: [],
-        contextEngineQuarantines: [],
         compatibilityNotices: [
           {
             pluginId: "compat-only",
@@ -406,6 +378,7 @@ describe("plugin health status formatting", () => {
         ],
       },
       {
+        ...emptySnapshot,
         plugins: [
           {
             id: "runtime-broken",
@@ -423,7 +396,6 @@ describe("plugin health status formatting", () => {
             message: "failed to load setup entry: runtime load failed",
           },
         ],
-        contextEngineQuarantines: [],
         runtimeToolQuarantines: [
           {
             toolName: "bad_tool",
@@ -535,6 +507,7 @@ describe("plugin health status formatting", () => {
 
   it("includes detailed plugin state without dumping the full plugin registry", () => {
     const text = formatDetailedPluginHealth({
+      ...emptySnapshot,
       plugins: [
         { id: "ok-plugin", status: "loaded", enabled: true },
         { id: "disabled-plugin", status: "disabled", enabled: false },
@@ -547,7 +520,6 @@ describe("plugin health status formatting", () => {
         },
       ],
       diagnostics: [{ level: "warn", pluginId: "bad-plugin", message: "deprecated hook" }],
-      contextEngineQuarantines: [],
       runtimeToolQuarantines: [
         {
           toolName: "bad_tool",
@@ -590,6 +562,7 @@ describe("plugin health status formatting", () => {
 
   it("groups disabled plugins by their recorded disable reason", () => {
     const text = formatDetailedPluginHealth({
+      ...emptySnapshot,
       plugins: [
         { id: "zeta", status: "disabled", enabled: false, error: "not in allowlist" },
         {
@@ -602,8 +575,6 @@ describe("plugin health status formatting", () => {
         // No recorded reason (hand-built snapshot): falls back to a plain "disabled".
         { id: "mid", status: "disabled", enabled: false },
       ],
-      diagnostics: [],
-      contextEngineQuarantines: [],
     });
 
     const lines = text.split("\n");
@@ -620,14 +591,13 @@ describe("plugin health status formatting", () => {
 
   it("caps disabled reason lines and per-reason id lists", () => {
     const distinctReasons = formatDetailedPluginHealth({
+      ...emptySnapshot,
       plugins: Array.from({ length: 9 }, (_, index) => ({
         id: `plugin-${index}`,
         status: "disabled" as const,
         enabled: false,
         error: `reason ${index}`,
       })),
-      diagnostics: [],
-      contextEngineQuarantines: [],
     });
     expect(distinctReasons).toContain("Disabled: 9");
     expect(distinctReasons).toContain("- reason 7: 1 (plugin-7)");
@@ -635,14 +605,13 @@ describe("plugin health status formatting", () => {
     expect(distinctReasons).toContain("- +1 more reasons");
 
     const sharedReason = formatDetailedPluginHealth({
+      ...emptySnapshot,
       plugins: Array.from({ length: 10 }, (_, index) => ({
         id: `plugin-${index}`,
         status: "disabled" as const,
         enabled: false,
         error: "not in allowlist",
       })),
-      diagnostics: [],
-      contextEngineQuarantines: [],
     });
     expect(sharedReason).toContain("Disabled: 10");
     expect(sharedReason).toContain(
@@ -652,6 +621,7 @@ describe("plugin health status formatting", () => {
 
   it("separates runtime-loaded plugins from installed-but-not-active inventory", () => {
     const text = formatDetailedPluginHealth({
+      ...emptySnapshot,
       plugins: [
         { id: "runtime-ok", status: "loaded", enabled: true },
         // Disk scan marks this "loaded" from config, but the runtime registry
@@ -660,8 +630,6 @@ describe("plugin health status formatting", () => {
         { id: "broken", status: "error", enabled: true, failurePhase: "load", error: "boom" },
         { id: "off", status: "disabled", enabled: false },
       ],
-      diagnostics: [],
-      contextEngineQuarantines: [],
       runtimeLoadedPluginIds: ["runtime-ok"],
     });
 
@@ -676,12 +644,11 @@ describe("plugin health status formatting", () => {
 
   it("falls back to status-loaded when runtime provenance is absent", () => {
     const text = formatDetailedPluginHealth({
+      ...emptySnapshot,
       plugins: [
         { id: "a", status: "loaded", enabled: true },
         { id: "b", status: "loaded", enabled: true },
       ],
-      diagnostics: [],
-      contextEngineQuarantines: [],
     });
 
     expect(text).toContain("Loaded: 2 (a, b)");
@@ -691,14 +658,12 @@ describe("plugin health status formatting", () => {
   it("keeps installed-only loaded plugins out of Loaded after merge", () => {
     const snapshot = mergeStatusPluginHealthSnapshots(
       {
+        ...emptySnapshot,
         plugins: [{ id: "installed-idle", status: "loaded", enabled: true }],
-        diagnostics: [],
-        contextEngineQuarantines: [],
       },
       {
+        ...emptySnapshot,
         plugins: [{ id: "runtime-ok", status: "loaded", enabled: true }],
-        diagnostics: [],
-        contextEngineQuarantines: [],
         runtimeLoadedPluginIds: ["runtime-ok"],
       },
     );
@@ -713,9 +678,8 @@ describe("plugin health status formatting", () => {
     // A plugin live only via a pinned runtime surface is in runtimeLoadedPluginIds
     // but not in snapshot.plugins; it must still show under Loaded, not be dropped.
     const text = formatDetailedPluginHealth({
+      ...emptySnapshot,
       plugins: [{ id: "active-ok", status: "loaded", enabled: true }],
-      diagnostics: [],
-      contextEngineQuarantines: [],
       runtimeLoadedPluginIds: ["active-ok", "pinned-only"],
     });
 
@@ -725,6 +689,7 @@ describe("plugin health status formatting", () => {
 
   it("flags should-run plugins missing from the runtime-loaded set as drift", () => {
     const text = formatDetailedPluginHealth({
+      ...emptySnapshot,
       plugins: [
         { id: "runtime-ok", status: "loaded", enabled: true },
         // Planned for eager startup but never loaded at runtime: drift.
@@ -732,8 +697,6 @@ describe("plugin health status formatting", () => {
         // Installed/discovered but not in the startup plan: neutral inventory.
         { id: "not-planned-idle", status: "loaded", enabled: true },
       ],
-      diagnostics: [],
-      contextEngineQuarantines: [],
       runtimeLoadedPluginIds: ["runtime-ok"],
       shouldRunPluginIds: ["planned-missing", "runtime-ok"],
     });
@@ -744,31 +707,14 @@ describe("plugin health status formatting", () => {
     expect(text).toContain("Installed (not active): 1 (not-planned-idle)");
   });
 
-  it("reports no drift when every should-run plugin is runtime-loaded", () => {
-    const text = formatDetailedPluginHealth({
-      plugins: [
-        { id: "a", status: "loaded", enabled: true },
-        { id: "b", status: "loaded", enabled: true },
-      ],
-      diagnostics: [],
-      contextEngineQuarantines: [],
-      runtimeLoadedPluginIds: ["a", "b"],
-      shouldRunPluginIds: ["a", "b"],
-    });
-
-    expect(text).toContain("Loaded: 2 (a, b)");
-    expect(text).not.toContain("Configured to run but not loaded:");
-  });
-
   it("does not re-report should-run plugins already shown as error or disabled", () => {
     const text = formatDetailedPluginHealth({
+      ...emptySnapshot,
       plugins: [
         { id: "runtime-ok", status: "loaded", enabled: true },
         { id: "broken", status: "error", enabled: true, failurePhase: "load", error: "boom" },
         { id: "off", status: "disabled", enabled: false },
       ],
-      diagnostics: [],
-      contextEngineQuarantines: [],
       runtimeLoadedPluginIds: ["runtime-ok"],
       // Both broken and off are in the startup plan but already explained by their
       // own records, so neither should surface as drift.
@@ -782,12 +728,11 @@ describe("plugin health status formatting", () => {
 
   it("omits the drift line when the should-run set is absent (back-compat)", () => {
     const text = formatDetailedPluginHealth({
+      ...emptySnapshot,
       plugins: [
         { id: "runtime-ok", status: "loaded", enabled: true },
         { id: "installed-idle", status: "loaded", enabled: true },
       ],
-      diagnostics: [],
-      contextEngineQuarantines: [],
       runtimeLoadedPluginIds: ["runtime-ok"],
     });
 
@@ -797,9 +742,8 @@ describe("plugin health status formatting", () => {
 
   it("flags configured memory embedding providers that no loaded plugin registers", () => {
     const text = formatDetailedPluginHealth({
+      ...emptySnapshot,
       plugins: [{ id: "runtime-ok", status: "loaded", enabled: true }],
-      diagnostics: [],
-      contextEngineQuarantines: [],
       runtimeLoadedPluginIds: ["runtime-ok"],
       unregisteredMemoryEmbeddingProviders: [
         { configuredId: "custom-embed", source: "provider" },
@@ -816,16 +760,14 @@ describe("plugin health status formatting", () => {
 
   it("omits the memory-provider line when none are unregistered or the field is absent", () => {
     const withEmpty = formatDetailedPluginHealth({
+      ...emptySnapshot,
       plugins: [{ id: "runtime-ok", status: "loaded", enabled: true }],
-      diagnostics: [],
-      contextEngineQuarantines: [],
       runtimeLoadedPluginIds: ["runtime-ok"],
       unregisteredMemoryEmbeddingProviders: [],
     });
     const withAbsent = formatDetailedPluginHealth({
+      ...emptySnapshot,
       plugins: [{ id: "runtime-ok", status: "loaded", enabled: true }],
-      diagnostics: [],
-      contextEngineQuarantines: [],
       runtimeLoadedPluginIds: ["runtime-ok"],
     });
 

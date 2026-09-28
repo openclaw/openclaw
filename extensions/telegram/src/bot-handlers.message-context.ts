@@ -74,6 +74,7 @@ export type TelegramPromptContextMessageSelection = ReadonlyMap<string, "include
 
 export type TelegramSessionState = {
   agentId: string;
+  bindingMode: Awaited<ReturnType<typeof resolveTelegramConversationRoute>>["bindingMode"];
   sessionEntry: SessionEntry | undefined;
   sessionKey: string;
   storePath: string;
@@ -97,9 +98,6 @@ export type ResolvePromptContextAmbientWatermarkParams = {
   storePath: string;
 };
 
-export const normalizePromptContextMinTimestampMs = (timestampMs?: number) =>
-  asFiniteNumber(timestampMs);
-
 export function promptContextBoundaryOptions(
   timestampMs?: number,
   ambientWatermark?: TelegramAmbientTranscriptWatermark,
@@ -107,7 +105,7 @@ export function promptContextBoundaryOptions(
   TelegramMessageContextOptions,
   "promptContextMinTimestampMs" | "promptContextAmbientWatermark"
 > {
-  const promptContextMinTimestampMs = normalizePromptContextMinTimestampMs(timestampMs);
+  const promptContextMinTimestampMs = asFiniteNumber(timestampMs);
   return {
     ...(promptContextMinTimestampMs === undefined ? {} : { promptContextMinTimestampMs }),
     ...(ambientWatermark === undefined ? {} : { promptContextAmbientWatermark: ambientWatermark }),
@@ -119,7 +117,7 @@ export function latestPromptContextMinTimestampMs(
 ): number | undefined {
   let latest: number | undefined;
   for (const timestampMs of timestamps) {
-    const normalized = normalizePromptContextMinTimestampMs(timestampMs);
+    const normalized = asFiniteNumber(timestampMs);
     if (normalized !== undefined) {
       latest = latest === undefined ? normalized : Math.max(latest, normalized);
     }
@@ -199,7 +197,7 @@ export function createTelegramMessageSessionRuntime({
       topicThreadId,
       params.runtimeCfg,
     );
-    const { route } = await resolveTelegramConversationRoute({
+    const { route, bindingMode } = await resolveTelegramConversationRoute({
       cfg: params.runtimeCfg,
       accountId,
       chatId: params.chatId,
@@ -231,35 +229,24 @@ export function createTelegramMessageSessionRuntime({
         agentId: route.agentId,
       }).provider,
     });
-    if (storedOverride) {
-      return {
-        agentId: route.agentId,
-        sessionEntry: entry,
-        sessionKey,
-        storePath,
-        model: storedOverride.provider
-          ? `${storedOverride.provider}/${storedOverride.model}`
-          : storedOverride.model,
-      };
-    }
     const provider = entry?.modelProvider?.trim();
     const model = entry?.model?.trim();
-    if (provider && model) {
-      return {
-        agentId: route.agentId,
-        sessionEntry: entry,
-        sessionKey,
-        storePath,
-        model: `${provider}/${model}`,
-      };
-    }
     const modelCfg = params.runtimeCfg.agents?.defaults?.model;
     return {
       agentId: route.agentId,
+      bindingMode,
       sessionEntry: entry,
       sessionKey,
       storePath,
-      model: typeof modelCfg === "string" ? modelCfg : modelCfg?.primary,
+      model: storedOverride
+        ? storedOverride.provider
+          ? `${storedOverride.provider}/${storedOverride.model}`
+          : storedOverride.model
+        : provider && model
+          ? `${provider}/${model}`
+          : typeof modelCfg === "string"
+            ? modelCfg
+            : modelCfg?.primary,
     };
   };
 

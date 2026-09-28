@@ -29,7 +29,11 @@ and enable the **Cloud Worker Desktop** lab. The agent launches the application 
 the Desktop panel. When its model supports vision and tool policy permits
 `computer`, it can observe and control the same desktop using the attachment's
 `environmentId`. Taking manual control pauses agent input; observations remain
-available. Release manual control before asking the agent to interact again.
+available. When asked to resume, the agent can use `computer` with
+`action: "take_control"` under its existing computer-control authority. Your
+viewer returns to view-only, and the agent receives a fresh screenshot. No
+separate viewer-issued handoff token is required. You can reclaim control at any
+time or release it yourself; ordinary agent input never takes over automatically.
 
 For a web app, the agent starts a server and opens a [portal](/gateway/portals)
 in the side panel. A browser on the attached desktop can test that server with
@@ -51,6 +55,17 @@ Ask to stop a particular app or stop the entire Crabbox when finished. The
 machine is disposable: save required outputs before stopping it. Attaching a
 machine does not automatically synchronize the primary workspace; the agent
 must copy the required files or prepare the project on the machine.
+
+If stopping a conversation environment fails, cleanup retries with exponential
+backoff from 30 seconds to five minutes, on the next reconciliation sweep.
+After ten attempts or one hour, whichever comes first, cleanup is parked for
+the rest of that Gateway process. Environment status reports an error with the
+lease ID, last failure, and recovery instructions; the lease stays owned and
+blocks replacement until cleanup is confirmed. For Crabbox, inspect it with
+`crabbox leases list` and run `crabbox stop <lease>` as needed, then retry Stop
+in the conversation. An explicit Stop or Gateway restart starts a fresh retry
+budget. A text-only 404 from Crabbox is an unknown cleanup outcome, not proof
+that the lease was released.
 
 Stop attached machines before downgrading to a build without conversation
 attachments. Older builds can read the database, but they treat these machines

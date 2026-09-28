@@ -7,17 +7,23 @@ const helper = "scripts/e2e/lib/onboard/first-agent-flow.sh";
 
 describe.skipIf(process.platform === "win32")("guided first-agent prompt handshake", () => {
   it.each([
-    ["legacy", "plain", 5],
-    ["legacy", "fragmented", 5],
-    ["team", "plain", 6],
-    ["team", "fragmented", 6],
-  ] as const)("drives the real guided sender through %s %s prompts", (layout, rendering, count) => {
-    const root = dirs.make("onboard-first-agent-flow-");
-    const result = spawnSync(
-      "bash",
-      [
-        "-c",
-        `
+    ["legacy", "plain", "provider", 5],
+    ["legacy", "fragmented", "provider", 5],
+    ["team", "plain", "provider", 6],
+    ["team", "fragmented", "provider", 6],
+    ["legacy", "plain", "configured", 4],
+    ["legacy", "fragmented", "configured", 4],
+    ["team", "plain", "configured", 5],
+    ["team", "fragmented", "configured", 5],
+  ] as const)(
+    "drives the real guided sender through %s %s %s prompts",
+    (layout, rendering, modelPrompt, count) => {
+      const root = dirs.make("onboard-first-agent-flow-");
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `
 set -euo pipefail
 export OPENCLAW_ONBOARD_SCENARIO_SOURCE_ONLY=1
 export OPENCLAW_ONBOARD_E2E_TMPDIR="$CASE_ROOT"
@@ -29,7 +35,12 @@ prompts=("Help make OpenClaw better?")
 if [[ "$LAYOUT" == team ]]; then
   prompts+=($'\\e[36mWhat would you like to create?\\e[39m\\n● One agent\\n○ A small team')
 fi
-prompts+=("What should we call your first agent?" "How should I set things up?" "Model/auth provider" "Use which detected AI?")
+prompts+=("What should we call your first agent?" "How should I set things up?")
+if [[ "$MODEL_PROMPT" == configured ]]; then
+  prompts+=("Use Current model?")
+else
+  prompts+=("Model/auth provider" "Use which detected AI?")
+fi
 index=0
 render() {
   "$NODE_BIN" -e 'const fs=require("node:fs"); const text=process.argv[2]; fs.writeFileSync(process.argv[1], process.env.RENDERING === "fragmented" ? text.split("").join("\\n") : text);' "$WIZARD_LOG_PATH" "$1"
@@ -52,22 +63,24 @@ send_guided_skip_ui_flow
 [[ "$index" == "\${#prompts[@]}" ]]
 printf 'responses=%s\\n' "$index"
 `,
-      ],
-      {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          CASE_ROOT: root,
-          LAYOUT: layout,
-          RENDERING: rendering,
-          NODE_BIN: process.execPath,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            CASE_ROOT: root,
+            LAYOUT: layout,
+            MODEL_PROMPT: modelPrompt,
+            RENDERING: rendering,
+            NODE_BIN: process.execPath,
+          },
+          timeout: 10_000,
         },
-        timeout: 10_000,
-      },
-    );
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe(`responses=${count}`);
-  });
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe(`responses=${count}`);
+    },
+  );
 
   it.each([
     ["incomplete", 0],

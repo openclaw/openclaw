@@ -78,9 +78,10 @@ const config = {
         "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
         // CLI subprocess fixtures consume the shared native-report collector.
         "src/cli/cli-process-child.test-helpers.test.ts!",
-        // Core bootstrap packaging consumes the scripts' dist-import scanner.
+        // Core bootstrap packaging and source updates consume shared script owners.
         "src/gateway/worker-environments/node-bootstrap-artifact.ts!",
         "src/plugin-sdk/api-baseline.ts!",
+        "src/cli/update-cli/update-command-{git-admission,runtime}.ts!",
       ],
       project: [
         ".github/actions/**/*.{js,mjs,cjs,ts,mts,cts}!",
@@ -93,6 +94,7 @@ const config = {
         "src/cli/cli-process-child.test-helpers{,.test}.ts!",
         "src/gateway/worker-environments/node-bootstrap-artifact.ts!",
         "src/plugin-sdk/api-baseline.ts!",
+        "src/cli/update-cli/update-command-{git-admission,runtime}.ts!",
       ],
     },
   },

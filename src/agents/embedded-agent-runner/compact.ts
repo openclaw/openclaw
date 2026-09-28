@@ -46,21 +46,12 @@ import type {
   CompactEmbeddedAgentSessionParams,
   CompactEmbeddedAgentSessionRuntimeParams,
 } from "./compact.types.js";
-import { containsRealConversationMessages } from "./compaction-diagnostics.js";
-import {
-  buildBeforeCompactionHookMetrics,
-  estimateTokensAfterCompaction,
-  runAfterCompactionHooks,
-  runBeforeCompactionHooks,
-  runPostCompactionSideEffects,
-} from "./compaction-hooks.js";
 import { resolveEmbeddedCompactionTarget } from "./compaction-runtime-context.js";
 import {
   projectCodexHostTranscriptBytePreflightConfig,
   resolveCompactionRuntimeSelection,
 } from "./compaction-runtime-preparation.js";
 import { resolveCompactionTimeoutMs } from "./compaction-safety-timeout.js";
-import { prepareCompactionSessionAgent } from "./compaction-session-agent.js";
 import type { PreparedCompactEmbeddedAgentSessionParams } from "./direct-compaction-preparation.js";
 import { compactEmbeddedAgentSessionDirectOnce } from "./direct-compaction.js";
 import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
@@ -597,14 +588,3 @@ export async function compactEmbeddedAgentSessionDirect(
   }).catch(callerResult.reject);
   return await callerResult.promise;
 }
-
-export const testing = {
-  compactNativeCliSession,
-  containsRealConversationMessages,
-  estimateTokensAfterCompaction,
-  buildBeforeCompactionHookMetrics,
-  prepareCompactionSessionAgent,
-  runBeforeCompactionHooks,
-  runAfterCompactionHooks,
-  runPostCompactionSideEffects,
-} as const;

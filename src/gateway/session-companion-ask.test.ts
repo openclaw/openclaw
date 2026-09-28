@@ -11,7 +11,9 @@ import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as attachmentProcessor from "../media/attachment-processor.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { sessionCompanionHandlers } from "./session-companion-rpc.js";
 import { createSessionCompanion } from "./session-companion.js";
 
@@ -89,6 +91,7 @@ vi.mock("../agents/model-auth-provider.js", () => ({ resolveApiKeyForProviderCor
 
 function createCompanion(cfg: OpenClawConfig = {}) {
   return createSessionCompanion({
+    scheduler: createTestGatewayScheduler(),
     getConfig: () => cfg,
     contextReader: {
       currentSessionId: () => "session-1",
@@ -164,6 +167,75 @@ describe("session companion embedded invocation", () => {
           }),
         );
       } finally {
+        companion.dispose();
+      }
+    },
+  );
+
+  it.each(["preparation", "dispatch", "accepted"] as const)(
+    "rechecks the original RPC image policy until model admission (%s)",
+    async (phase) => {
+      const cfg: OpenClawConfig = {};
+      let committed: OpenClawConfig = cfg;
+      const disable = () => {
+        committed = { gateway: { uploads: { enabled: false } } };
+      };
+      const companion = createCompanion(cfg);
+      const respond = vi.fn();
+      const prepare = attachmentProcessor.prepareMediaAttachment;
+      const preparation = vi.spyOn(attachmentProcessor, "prepareMediaAttachment");
+      if (phase === "preparation") {
+        preparation.mockImplementationOnce(async (...args) => {
+          const result = await prepare(...args);
+          disable();
+          return result;
+        });
+      } else if (phase === "dispatch") {
+        admitWrite.mockImplementationOnce(async (_manager, write) => {
+          write();
+          disable();
+        });
+      } else {
+        runEmbeddedAgent.mockImplementationOnce(async () => {
+          disable();
+          return { meta: { durationMs: 1, finalAssistantVisibleText: "Accepted image answer" } };
+        });
+      }
+      try {
+        await sessionCompanionHandlers["sessions.companion.ask"]!({
+          params: {
+            sessionKey: question.sessionKey,
+            question: "Describe the image",
+            attachments: [{ mimeType: "image/png", content: imageBase64 }],
+          },
+          client: { connId: "late-policy-image" },
+          context: {
+            sessionCompanion: companion,
+            getRuntimeConfig: () => cfg,
+            getCommittedRuntimeConfig: () => committed,
+          },
+          respond,
+        } as never);
+        if (phase === "accepted") {
+          expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+          expect(respond).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({ answer: "Accepted image answer" }),
+          );
+        } else {
+          expect(runEmbeddedAgent).not.toHaveBeenCalled();
+          expect(respond).toHaveBeenCalledWith(
+            false,
+            undefined,
+            expect.objectContaining({
+              code: "FORBIDDEN",
+              details: { code: "UPLOADS_DISABLED" },
+            }),
+          );
+          expect(companion.state(question).exchanges).toEqual([]);
+        }
+      } finally {
+        preparation.mockRestore();
         companion.dispose();
       }
     },

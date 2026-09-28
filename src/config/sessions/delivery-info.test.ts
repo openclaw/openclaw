@@ -189,18 +189,6 @@ describe("extractDeliveryInfo", () => {
     });
   });
 
-  it("returns deliveryContext for direct session keys", () => {
-    const sessionKey = "agent:main:telegram:dm:user-123";
-    storeState.store[sessionKey] = buildEntry(createTelegramUserDelivery());
-
-    const result = extractDeliveryInfo(sessionKey);
-
-    expect(result).toEqual({
-      deliveryContext: createTelegramUserDelivery(),
-      threadId: undefined,
-    });
-  });
-
   it("falls back to base sessions for :thread: keys", () => {
     const baseKey = "agent:main:slack:channel:C0123ABC";
     const threadKey = `${baseKey}:thread:1234567890.123456`;

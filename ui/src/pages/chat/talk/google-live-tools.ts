@@ -30,8 +30,6 @@ type GoogleLiveToolOwnerOptions = {
   failConnection: (detail: string) => void;
   isDescribeViewActive: () => boolean;
   sendResult: (callId: string, name: string, result: unknown) => void;
-  sendControlSpeechMessage: (message: string) => void;
-  stopOutputForSuppressedControl: (result: unknown) => void;
 };
 
 export class GoogleLiveToolOwner {
@@ -134,7 +132,8 @@ export class GoogleLiveToolOwner {
   }
 
   private async runAgentTool(name: string, callId: string, args: unknown): Promise<void> {
-    const abortController = this.startExecution(callId);
+    const abortController = new AbortController();
+    this.abortControllers.set(callId, abortController);
     try {
       const params = {
         ctx: this.createActiveContext(),
@@ -204,12 +203,6 @@ export class GoogleLiveToolOwner {
     }
     this.pendingCalls.delete(callId);
     return true;
-  }
-
-  private startExecution(callId: string): AbortController {
-    const abortController = new AbortController();
-    this.abortControllers.set(callId, abortController);
-    return abortController;
   }
 
   private finishExecution(callId: string, abortController: AbortController): void {

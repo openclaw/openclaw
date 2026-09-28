@@ -1,23 +1,8 @@
 import { findScenarioOutcome, statusDotClass } from "./ui-render-scenario.js";
 import { badgeHtml, esc, formatIso } from "./ui-render-utils.js";
-import type { RunnerModelOption, RunnerSelection, TabId, UiState } from "./ui-types.js";
+import type { RunnerSelection, TabId, UiState } from "./ui-types.js";
 
-const MOCK_MODELS: RunnerModelOption[] = [
-  {
-    key: "mock-openai/gpt-5.6-luna",
-    name: "GPT-5.6 Luna (mock)",
-    provider: "mock-openai",
-    input: "text",
-    preferred: true,
-  },
-  {
-    key: "mock-openai/gpt-5.6-luna-alt",
-    name: "GPT-5.6 Luna Alt (mock)",
-    provider: "mock-openai",
-    input: "text",
-    preferred: false,
-  },
-];
+const MOCK_MODELS = ["mock-openai/gpt-5.6-luna", "mock-openai/gpt-5.6-luna-alt"];
 
 function deriveSelection(state: UiState): RunnerSelection | null {
   return state.runnerDraft ?? state.bootstrap?.runner.selection ?? null;
@@ -56,28 +41,21 @@ function renderModelSelect(params: {
   id: string;
   label: string;
   value: string;
-  options: RunnerModelOption[];
+  options: string[];
   disabled: boolean;
 }): string {
-  const values = new Set(params.options.map((o) => o.key));
-  const options = [...params.options];
-  if (!values.has(params.value) && params.value.trim()) {
-    options.unshift({
-      key: params.value,
-      name: params.value,
-      provider: params.value.split("/")[0] ?? "custom",
-      input: "text",
-      preferred: false,
-    });
-  }
+  const options =
+    !params.options.includes(params.value) && params.value.trim()
+      ? [params.value, ...params.options]
+      : params.options;
   return `
     <div class="config-field">
       <label class="config-label" for="${esc(params.id)}">${esc(params.label)}</label>
       <select id="${esc(params.id)}"${params.disabled ? " disabled" : ""}>
         ${options
           .map(
-            (o) =>
-              `<option value="${esc(o.key)}"${o.key === params.value ? " selected" : ""}>${esc(o.key)}</option>`,
+            (key) =>
+              `<option value="${esc(key)}"${key === params.value ? " selected" : ""}>${esc(key)}</option>`,
           )
           .join("")}
       </select>
@@ -92,7 +70,9 @@ export function renderSidebar(state: UiState): string {
   const isRunning = runner?.status === "running";
   const realModels = state.bootstrap?.runnerCatalog.real ?? [];
   const modelOptions =
-    selection?.providerMode === "live-frontier" && realModels.length > 0 ? realModels : MOCK_MODELS;
+    selection?.providerMode === "live-frontier" && realModels.length > 0
+      ? realModels.map((model) => model.key)
+      : MOCK_MODELS;
   const plan = state.runnerPlanOverride ?? state.bootstrap?.runner.plan ?? null;
   const resolvedIds = plan?.selectedScenarios.map((scenario) => scenario.id) ?? [];
   const selectedIds = new Set(

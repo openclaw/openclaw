@@ -1,9 +1,12 @@
 import { onSessionIdentityMutation } from "../../config/sessions/session-accessor.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { withTimeout } from "../../infra/fs-safe.js";
+import type { GatewayScheduledJob } from "../../infra/gateway-scheduler.js";
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type { WorkerExecutionMode } from "../../plugins/types.js";
+import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { workerBootstrapOperationTimeoutMs } from "./bootstrap.js";
 import { createWorkerEnvironmentBuildPreparation } from "./build-preparation.js";
@@ -13,9 +16,14 @@ import {
   createWorkerEnvironmentAccess,
   createWorkerEnvironmentTransportLifecycle,
 } from "./environment-access.js";
-import { registerWorkerInferenceSessionControl } from "./inference-control-internal.js";
+import { createWorkerEnvironmentErrorRecorder } from "./environment-errors.js";
+import {
+  joinInferenceOperations,
+  registerWorkerInferenceSessionControl,
+} from "./inference-control-internal.js";
 import { createWorkerInferenceManager } from "./inference.js";
 import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projection.types.js";
+import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
 import { createPreparedWorkerPool } from "./prepared-pool.js";
 import { createWorkerProviderLifecycle } from "./provider-lifecycle.js";
@@ -34,10 +42,7 @@ import type {
   WorkerEnvironmentTransitionPatch as TransitionPatch,
 } from "./store.js";
 import { joinWorkerTunnelStops } from "./tunnel-contract.js";
-import { boundedWorkerError as boundedError } from "./worker-error.js";
 import { createWorkerTurnRpc } from "./worker-turn-rpc.js";
-
-export type { WorkerEnvironmentReconcileCore } from "./service.types.js";
 
 class WorkerEnvironmentServiceError extends Error {
   constructor(
@@ -52,7 +57,7 @@ const serviceError = (code: WorkerEnvironmentServiceErrorCode, message: string) 
   new WorkerEnvironmentServiceError(code, message);
 
 export function createWorkerEnvironmentService(options: WorkerEnvironmentServiceOptions) {
-  const { store } = options;
+  const { store, scheduler } = options;
   const warn = (message: string) => options.logger?.warn(message);
   const operations = new KeyedAsyncQueue();
   const providerOperations = new KeyedAsyncQueue();
@@ -74,7 +79,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     ...(options.inferenceStore ? { store: options.inferenceStore } : {}),
   });
   let reconcileInFlight: Promise<void> | undefined;
-  let interval: ReturnType<typeof setInterval> | undefined;
+  let reconciliationJob: GatewayScheduledJob | undefined;
   let unsubscribeSessionIdentityMutation: (() => void) | undefined;
   let unsubscribeTurnClaimClosed = options.placementStore?.registerTurnClaimClosedHandler(
     (claim) => {
@@ -121,10 +126,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     run: () => Promise<T>,
     timeoutMs?: number,
   ): Promise<T> => {
-    let signalStarted!: () => void;
-    const started = new Promise<void>((resolve) => {
-      signalStarted = resolve;
-    });
+    const { promise: started, resolve: signalStarted } = createDeferredCore();
     const operation = trackOperation(
       providerOperations.enqueue(environmentId, async () => {
         signalStarted();
@@ -186,24 +188,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     return next;
   };
 
-  const saveError = async (
-    record: WorkerEnvironmentRecord,
-    error: unknown,
-    assertCurrent?: () => void,
-  ) => {
-    assertCurrent?.();
-    // Once bootstrap failure owns the terminal outcome, preserve that causal error across
-    // transient provider/inspection failures so the final failed row stays actionable.
-    if (record.teardownTerminalState === "failed" && record.lastError) {
-      return record;
-    }
-    return store.recordError({
-      environmentId: record.environmentId,
-      state: record.state,
-      error: boundedError(error),
-      assertCurrent,
-    });
-  };
+  const saveError = createWorkerEnvironmentErrorRecorder(store);
 
   const credentialBroker = createWorkerCredentialBroker({
     ...options,
@@ -242,6 +227,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const environmentAccess = createWorkerEnvironmentAccess({
     ...options,
     store,
+    getCleanupError: (record) => sessionAttachments.getCleanupError(record),
     prepareCurrentBundle: async () => await prepareInstallation("bundle"),
     now,
     identityResolverFor: providerLifecycle.identityResolverFor,
@@ -304,6 +290,13 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       if (!current || inState(current, "destroyed", "failed", "orphaned")) {
         return;
       }
+      // Conversation cleanup has one retry owner, including its backoff and parked budget.
+      if (
+        current.destroyRequestedAtMs !== null &&
+        (await store.hasSessionAttachment(environmentId))
+      ) {
+        return;
+      }
       await providerLifecycle.reconcileRecord(current, signal, retainProviderSettlement);
     });
   };
@@ -314,16 +307,14 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     }
     const guard = reconcileEnvironmentGuard;
     if (!guard) {
-      await reconcileEnvironmentCore(environmentId);
-      return;
+      return await reconcileEnvironmentCore(environmentId);
     }
     if (reconcileEnvironmentGuardClosing) {
       return;
     }
     const active = guardedReconcileInFlight.get(environmentId);
     if (active) {
-      await active;
-      return;
+      return await active;
     }
     const operation = guard(environmentId, async (signal, retainProviderSettlement) => {
       await reconcileEnvironmentCore(environmentId, signal, retainProviderSettlement);
@@ -430,7 +421,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   };
 
   const start = () => {
-    if (interval || stopping) {
+    if (reconciliationJob || stopping) {
       return;
     }
     unsubscribeSessionIdentityMutation = onSessionIdentityMutation((mutation) => {
@@ -443,11 +434,18 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     for (const profileId of new Set(store.listForReconcile().map((record) => record.profileId))) {
       providerLifecycle.warmMachineShape(profileId);
     }
-    interval = setInterval(
-      () => void reconcileOnce().catch(() => warn("Worker environment reconcile sweep failed")),
-      options.reconcileIntervalMs ?? 60_000,
-    );
-    interval.unref?.();
+    const everyMs = options.reconcileIntervalMs ?? 60_000;
+    reconciliationJob = scheduler.schedule({
+      id: "worker-environments:reconcile",
+      atMs: scheduler.now() + everyMs,
+      everyMs,
+      run: () => {
+        // The service joins its work; slow inspection must not hold the other maintenance duties.
+        runOutsideAsyncWorkScope(() => {
+          void reconcileOnce().catch(() => warn("Worker environment reconcile sweep failed"));
+        });
+      },
+    });
     void reconcileOnce().catch(() => warn("Worker environment startup reconcile failed"));
   };
 
@@ -459,8 +457,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     providerLifecycle.clearMachineShapeListeners();
     maintenanceAbort.abort();
     options.stopNodeEnrollmentWaits?.();
-    clearInterval(interval);
-    interval = undefined;
+    reconciliationJob?.cancel();
     unsubscribeSessionIdentityMutation?.();
     unsubscribeSessionIdentityMutation = undefined;
     unsubscribeTurnClaimClosed?.();
@@ -656,8 +653,14 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         os: args[6],
         runSetupScript: args[7],
       }),
-    destroy: async (environmentId: string, abandonment?: WorkerEnvironmentAbandonment) =>
-      environmentAccess.project(await providerLifecycle.destroy(environmentId, { abandonment })),
+    destroy: async (
+      environmentId: string,
+      abandonment?: WorkerEnvironmentAbandonment,
+      forceAbandon?: () => Promise<void>,
+    ) =>
+      environmentAccess.project(
+        await providerLifecycle.destroy(environmentId, { abandonment, forceAbandon }),
+      ),
     requestDestroy: async (environmentId: string) =>
       environmentAccess.project(
         await providerLifecycle.destroy(environmentId, { retryRequested: false }),
@@ -672,6 +675,12 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     launchDesktopApp: environmentAccess.launchDesktopApp,
     reconcileDesktopPolicy: environmentAccess.reconcileDesktopPolicy,
     admitWorker: turnRpc.admitWorker,
+    fenceWorkerTurnForRecovery: (claim: WorkerSessionTurnClaim) => {
+      if (!options.placementStore) {
+        throw serviceError("invalid_state", "Worker recovery requires its placement gate");
+      }
+      options.placementStore.fenceWorkerTurnForRecovery(claim);
+    },
     validateWorkerConnection: turnRpc.validateWorkerConnection,
     commitTranscript: turnRpc.commitTranscript,
     pushLiveEvent: turnRpc.pushLiveEvent,
@@ -699,20 +708,12 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     installReconcileEnvironmentGuard,
     reconcileEnvironment,
     reconcileOnce,
-    ready: async () => {
-      const results = await Promise.allSettled([store.ready(), inference.ready()]);
-      const failures = [
-        ...new Set(
-          results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
-        ),
-      ];
-      if (failures.length === 1) {
-        throw failures[0];
-      }
-      if (failures.length > 1) {
-        throw new AggregateError(failures, "Worker environment readiness failed");
-      }
-    },
+    ready: async () =>
+      await joinInferenceOperations(
+        [store.ready(), inference.ready()],
+        [],
+        "Worker environment readiness failed",
+      ),
     start,
     stop,
   };

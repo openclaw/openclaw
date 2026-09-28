@@ -582,13 +582,31 @@
   font-weight: 500;
 }
 
+.filter-chip-remove {
+  display: inline-flex;
+  width: 24px;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  vertical-align: middle;
+}
+
+.filter-chip-remove svg,
+.usage-query-chip button svg {
+  width: 12px;
+  height: 12px;
+}
+
 .usage-query-chip button {
+  display: grid;
+  width: 14px;
+  height: 14px;
+  place-items: center;
   padding: 0;
   border: 0;
   background: transparent;
   color: inherit;
-  font-size: 14px;
-  line-height: 1;
 }
 
 .usage-query-suggestion {
@@ -1619,6 +1637,15 @@
 .session-bar-actions,
 .session-detail-header-left {
   min-width: 0;
+}
+
+.session-detail-close {
+  width: 30px;
+  padding: 0;
+}
+
+.session-detail-close svg {
+  stroke-width: 2;
 }
 
 .session-bar-selection {

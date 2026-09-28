@@ -1,4 +1,6 @@
-import { findTaskByRunId, listTaskRecords } from "../../tasks/runtime-internal.js";
+import { cronRunRecordStoreKey } from "../run-history-detail.js";
+import { readCronRunRecordsForTests } from "../run-history.test-support.js";
+import { cronStoreKey } from "../store/key.js";
 import type { CronJob } from "../types.js";
 
 export function createDueMainJob(params: { now: number; wakeMode: CronJob["wakeMode"] }): CronJob {
@@ -75,9 +77,13 @@ export function createDueScriptJob(params: {
   };
 }
 
-export function findCronTaskByBaseRunId(baseRunId: string) {
+export function findCronRunByBaseRunId(storePath: string, baseRunId: string) {
+  const storeKey = cronStoreKey(storePath);
+  const runs = readCronRunRecordsForTests().filter(
+    (row) => cronRunRecordStoreKey(row) === storeKey,
+  );
   return (
-    findTaskByRunId(baseRunId) ??
-    listTaskRecords().find((task) => task.runId?.startsWith(`${baseRunId}:`))
+    runs.find((row) => row.runId === baseRunId) ??
+    runs.find((row) => row.runId?.startsWith(`${baseRunId}:`))
   );
 }

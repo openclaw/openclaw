@@ -65,13 +65,20 @@ deadline controls, and one prepared `authorization`:
   snapshot restricted to the single profile selected for that call. Core owns
   automatic fallback order and invokes the harness separately for each candidate.
 
+Agents API is a documented exception to the literal empty tool surface: it
+creates a fresh session without an executor, supplied functions, web search,
+vaults, or subagents, but the service may retain built-in helpers. This restricted
+mode is enabled by default. Rejecting tool-bearing output does not prevent a
+helper from acting during inference. Callers requiring a literal zero-tool
+guarantee must select a runtime that provides it.
+
 Each new isolated completion uses the configuration and agent/workspace directories
 of its admitted runtime generation. Explicit model, auth-profile, and runtime
 selections remain fixed while that generation is prepared.
 
 Host-authorized calls must use the supplied model and credential without substitution.
-Bundled host-authorized harnesses share one host-prepared completion helper that
-preserves the exact route, deadline, sampling options, and empty tool surface.
+Harnesses using the shared host-prepared completion helper
+preserve the exact route, deadline, sampling options, and empty tool surface.
 Harness-authorized calls may resolve only the supplied prepared
 route and scoped profiles, or the harness's native account when the plan leaves
 auth to the harness. The harness must not switch routes, reuse a native thread,
@@ -95,7 +102,8 @@ CLI-backed title calls also allow clean empty output without a silent-reply toke
 ordinary CLI calls still reject empty responses.
 Older external harnesses may ignore the policy; a final title filter cannot
 restore provenance that a harness already discarded, so this is not a universal
-reasoning-privacy guarantee. If the harness cannot enforce isolation, omit the capability.
+reasoning-privacy guarantee. Except for the documented Agents API limitation,
+if the harness cannot enforce isolation, omit the capability.
 Callers that require isolated completion then fail closed before invoking that
 harness; OpenClaw does not replay the request through another runtime.
 Plugin callers request isolated execution through
@@ -111,7 +119,8 @@ a host credential when only the legacy capability is present.
 Native agent servers often have ambient built-in tools even when OpenClaw sends
 an empty tool list. Disable and attest those native capabilities for the fresh
 turn, use a separate transport that can serialize a true zero-tool request, or
-leave the capability unsupported.
+leave the capability unsupported. Agents API retains the documented exception
+above until its service can enforce that boundary.
 
 Audit evidence follows the same boundary. OpenClaw can record registered plugin
 ownership and run admission, but it cannot claim an external native side effect

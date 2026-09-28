@@ -1,15 +1,14 @@
 import { createConnection } from "node:net";
 import * as Lark from "@larksuiteoapi/node-sdk";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupFeishuMonitorStateForTests } from "./monitor.cleanup.test-helpers.js";
-import { httpServers } from "./monitor.state.js";
 import { monitorWebhook } from "./monitor.transport.js";
 import {
   createFeishuWebhookTestAccount,
-  getFreePort,
+  getGatewayPort,
+  getGatewayServer,
   signFeishuPayload,
-  waitUntilServerReady,
+  waitForWebhookRoute,
 } from "./monitor.webhook.test-helpers.js";
 
 afterEach(async () => {
@@ -20,7 +19,7 @@ describe("Feishu webhook activity", () => {
   it("does not publish healthy activity when the client aborts a held signed dispatch", async () => {
     const accountId = "aborted-signed-dispatch";
     const path = "/hook-e2e-aborted-signed-dispatch";
-    const port = await getFreePort();
+    const port = await getGatewayPort();
     let releaseDispatch: () => void = () => {};
     const dispatchGate = new Promise<void>((resolve) => {
       releaseDispatch = resolve;
@@ -39,7 +38,7 @@ describe("Feishu webhook activity", () => {
     const statusSink = vi.fn();
     const abortController = new AbortController();
     const monitorPromise = monitorWebhook({
-      account: createFeishuWebhookTestAccount(accountId, port, path),
+      account: createFeishuWebhookTestAccount(accountId, path),
       accountId,
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
       abortSignal: abortController.signal,
@@ -48,9 +47,9 @@ describe("Feishu webhook activity", () => {
     });
     const socket = createConnection({ host: "127.0.0.1", port });
     try {
-      await waitUntilServerReady(`http://127.0.0.1:${port}${path}`);
+      await waitForWebhookRoute(`http://127.0.0.1:${port}${path}`);
       statusSink.mockClear();
-      const server = expectDefined(httpServers.get(accountId), "webhook server");
+      const server = getGatewayServer();
       const responseClosed = new Promise<void>((resolve) => {
         server.once("request", (_req, res) => res.once("close", resolve));
       });

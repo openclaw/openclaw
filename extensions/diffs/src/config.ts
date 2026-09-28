@@ -1,4 +1,3 @@
-// Diffs helper module supports config behavior.
 import { mapPluginConfigIssues } from "openclaw/plugin-sdk/extension-shared";
 import { buildPluginConfigSchema } from "openclaw/plugin-sdk/plugin-entry";
 import { z } from "zod";
@@ -184,14 +183,6 @@ export const diffsPluginConfigSchema: OpenClawPluginConfigSchema = {
   },
 };
 
-function resolveConfiguredValue<T>(options: {
-  primary: T | undefined;
-  aliases: Array<T | undefined>;
-}): T | undefined {
-  const alias = options.aliases.find((value): value is T => value !== undefined);
-  return options.primary ?? alias;
-}
-
 function buildDiffsPluginConfigShape(config: DiffsPluginConfig): DiffsPluginConfig {
   const viewerBaseUrl = resolveDiffsPluginViewerBaseUrl(config);
   return {
@@ -211,25 +202,11 @@ export function resolveDiffsPluginDefaults(config: unknown): DiffToolDefaults {
     return { ...DEFAULT_DIFFS_TOOL_DEFAULTS };
   }
 
-  const fileQuality = normalizeFileQuality(
-    resolveConfiguredValue({
-      primary: defaults.fileQuality,
-      aliases: [defaults.imageQuality],
-    }),
-  );
+  const fileQuality = normalizeFileQuality(defaults.fileQuality ?? defaults.imageQuality);
   const profile = DEFAULT_IMAGE_QUALITY_PROFILES[fileQuality];
-  const fileFormat = resolveConfiguredValue({
-    primary: defaults.fileFormat,
-    aliases: [defaults.imageFormat, defaults.format],
-  });
-  const fileScale = resolveConfiguredValue({
-    primary: defaults.fileScale,
-    aliases: [defaults.imageScale],
-  });
-  const fileMaxWidth = resolveConfiguredValue({
-    primary: defaults.fileMaxWidth,
-    aliases: [defaults.imageMaxWidth],
-  });
+  const fileFormat =
+    defaults.fileFormat ??
+    (defaults.imageFormat !== undefined ? defaults.imageFormat : defaults.format);
 
   return {
     fontFamily: normalizeFontFamily(defaults.fontFamily),
@@ -243,8 +220,11 @@ export function resolveDiffsPluginDefaults(config: unknown): DiffToolDefaults {
     theme: normalizeTheme(defaults.theme),
     fileFormat: normalizeFileFormat(fileFormat),
     fileQuality,
-    fileScale: normalizeFileScale(fileScale, profile.scale),
-    fileMaxWidth: normalizeFileMaxWidth(fileMaxWidth, profile.maxWidth),
+    fileScale: normalizeFileScale(defaults.fileScale ?? defaults.imageScale, profile.scale),
+    fileMaxWidth: normalizeFileMaxWidth(
+      defaults.fileMaxWidth ?? defaults.imageMaxWidth,
+      profile.maxWidth,
+    ),
     mode: normalizeMode(defaults.mode),
     ttlSeconds: normalizeTtlSeconds(defaults.ttlSeconds),
   };

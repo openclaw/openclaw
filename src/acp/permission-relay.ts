@@ -24,6 +24,11 @@ export type GatewayExecApprovalDetails = {
 };
 
 const FALLBACK_EXEC_APPROVAL_DECISIONS = ["allow-once", "deny"] as const;
+const EXEC_APPROVAL_OPTIONS: readonly PermissionOption[] = [
+  { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
+  { optionId: "allow-always", name: "Allow always", kind: "allow_always" },
+  { optionId: "deny", name: "Deny", kind: "reject_once" },
+];
 
 function normalizeGatewayExecApprovalDecision(
   value: unknown,
@@ -34,44 +39,20 @@ function normalizeGatewayExecApprovalDecision(
   return undefined;
 }
 
-/** Normalizes allowed Gateway exec approval decisions with a conservative fallback set. */
-function normalizeGatewayExecApprovalDecisions(value: unknown): GatewayExecApprovalDecision[] {
+function buildAcpPermissionOptions(value: unknown): PermissionOption[] {
   const normalized = Array.isArray(value)
-    ? value
-        .map(normalizeGatewayExecApprovalDecision)
-        .filter((decision): decision is GatewayExecApprovalDecision => Boolean(decision))
+    ? value.map(normalizeGatewayExecApprovalDecision).filter((decision) => decision !== undefined)
     : [];
-  return normalized.length > 0 ? normalized : [...FALLBACK_EXEC_APPROVAL_DECISIONS];
-}
-
-/** Converts Gateway exec decisions into ACP permission options. */
-function buildAcpPermissionOptions(
-  decisions: readonly GatewayExecApprovalDecision[],
-): PermissionOption[] {
-  const unique = new Set<GatewayExecApprovalDecision>(decisions);
+  const decisions = new Set<string>(
+    normalized.length > 0 ? normalized : FALLBACK_EXEC_APPROVAL_DECISIONS,
+  );
   const options: PermissionOption[] = [];
-  if (unique.has("allow-once")) {
-    options.push({
-      optionId: "allow-once",
-      name: "Allow once",
-      kind: "allow_once",
-    });
+  for (const option of EXEC_APPROVAL_OPTIONS) {
+    if (decisions.has(option.optionId)) {
+      options.push({ ...option });
+    }
   }
-  if (unique.has("allow-always")) {
-    options.push({
-      optionId: "allow-always",
-      name: "Allow always",
-      kind: "allow_always",
-    });
-  }
-  if (unique.has("deny")) {
-    options.push({
-      optionId: "deny",
-      name: "Deny",
-      kind: "reject_once",
-    });
-  }
-  return options.length > 0 ? options : buildAcpPermissionOptions(FALLBACK_EXEC_APPROVAL_DECISIONS);
+  return options;
 }
 
 /** Parses legacy Gateway approval event data into ACP relay state. */
@@ -124,7 +105,6 @@ export function buildAcpPermissionRequest(params: {
     readNonEmptyString(params.details?.commandPreview) ??
     params.event.command;
   const host = readNonEmptyString(params.details?.host) ?? params.event.host;
-  const decisions = normalizeGatewayExecApprovalDecisions(params.details?.allowedDecisions);
   const rawInput: Record<string, string> = {
     name: "exec",
     approvalId: params.event.approvalId,
@@ -151,7 +131,7 @@ export function buildAcpPermissionRequest(params: {
         approvalId: params.event.approvalId,
       },
     },
-    options: buildAcpPermissionOptions(decisions),
+    options: buildAcpPermissionOptions(params.details?.allowedDecisions),
   };
 }
 

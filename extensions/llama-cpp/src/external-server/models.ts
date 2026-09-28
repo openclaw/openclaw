@@ -137,34 +137,22 @@ export function mapLlamaServerModel(
   };
 }
 
-/** Keeps explicit rows first and appends models discovered from the server. */
-function mergeLlamaServerModels(params: {
-  explicitModels?: ModelDefinitionConfig[];
+export function buildLlamaServerProviderConfig(params: {
+  configured?: ModelProviderConfig;
   discoveredModels: readonly LlamaServerDiscoveredModel[];
-}): ModelDefinitionConfig[] {
-  const explicit = Array.isArray(params.explicitModels) ? params.explicitModels : [];
-  const merged = [...explicit];
-  const seen = new Set(explicit.map((model) => model.id));
+}): ModelProviderConfig {
+  const models = Array.isArray(params.configured?.models) ? [...params.configured.models] : [];
+  const seen = new Set(models.map((model) => model.id));
   for (const discovered of params.discoveredModels) {
     if (seen.has(discovered.config.id)) {
       continue;
     }
     seen.add(discovered.config.id);
-    merged.push(discovered.config);
+    models.push(discovered.config);
   }
-  return merged;
-}
-
-export function buildLlamaServerProviderConfig(params: {
-  configured?: ModelProviderConfig;
-  discoveredModels: readonly LlamaServerDiscoveredModel[];
-}): ModelProviderConfig {
   return normalizeLlamaServerProviderConfig({
     ...params.configured,
     baseUrl: params.configured?.baseUrl ?? LLAMA_SERVER_DEFAULT_ORIGIN,
-    models: mergeLlamaServerModels({
-      explicitModels: params.configured?.models,
-      discoveredModels: params.discoveredModels,
-    }),
+    models,
   });
 }

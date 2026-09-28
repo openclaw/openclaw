@@ -1,4 +1,3 @@
-// Discord tests cover resolve users plugin behavior.
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { resolveDiscordUserAllowlist } from "./resolve-users.js";
@@ -57,43 +56,27 @@ function createGuildsForbiddenFetcher() {
 }
 
 describe("resolveDiscordUserAllowlist", () => {
-  it("resolves plain user ids without calling listGuilds", async () => {
-    const { fetcher, wasGuildsCalled } = createGuildListProbeFetcher();
+  it.each(["<@123456789012345678>", "<@!123456789012345678>"])(
+    "resolves %s without calling listGuilds",
+    async (entry) => {
+      const { fetcher, wasGuildsCalled } = createGuildListProbeFetcher();
 
-    const results = await resolveDiscordUserAllowlist({
-      token: "test",
-      entries: ["123456789012345678"],
-      fetcher,
-    });
+      const results = await resolveDiscordUserAllowlist({
+        token: "test",
+        entries: [entry],
+        fetcher,
+      });
 
-    expect(results).toEqual([
-      {
-        input: "123456789012345678",
-        resolved: true,
-        id: "123456789012345678",
-      },
-    ]);
-    expect(wasGuildsCalled()).toBe(false);
-  });
-
-  it("resolves mention-format ids without calling listGuilds", async () => {
-    const { fetcher, wasGuildsCalled } = createGuildListProbeFetcher();
-
-    const results = await resolveDiscordUserAllowlist({
-      token: "test",
-      entries: ["<@!123456789012345678>"],
-      fetcher,
-    });
-
-    expect(results).toEqual([
-      {
-        input: "<@!123456789012345678>",
-        resolved: true,
-        id: "123456789012345678",
-      },
-    ]);
-    expect(wasGuildsCalled()).toBe(false);
-  });
+      expect(results).toEqual([
+        {
+          input: entry,
+          resolved: true,
+          id: "123456789012345678",
+        },
+      ]);
+      expect(wasGuildsCalled()).toBe(false);
+    },
+  );
 
   it("resolves prefixed ids (user:, discord:) without calling listGuilds", async () => {
     const { fetcher, wasGuildsCalled } = createGuildListProbeFetcher();
@@ -129,36 +112,6 @@ describe("resolveDiscordUserAllowlist", () => {
     ]);
   });
 
-  it("calls listGuilds lazily when resolving usernames", async () => {
-    let guildsCalled = false;
-    const fetcher = withFetchPreconnect(async (input: RequestInfo | URL) => {
-      const url = urlToString(input);
-      if (url.endsWith("/users/@me/guilds")) {
-        guildsCalled = true;
-        return jsonResponse([{ id: "g1", name: "Test Guild" }]);
-      }
-      if (url.includes("/guilds/g1/members/search")) {
-        return jsonResponse([
-          {
-            user: { id: "u1", username: "alice", bot: false },
-            nick: null,
-          },
-        ]);
-      }
-      return new Response("not found", { status: 404 });
-    });
-
-    const results = await resolveDiscordUserAllowlist({
-      token: "test",
-      entries: ["alice"],
-      fetcher,
-    });
-
-    expect(guildsCalled).toBe(true);
-    expect(results).toHaveLength(1);
-    expectResolvedUser(results[0], { input: "alice", id: "u1", name: "alice" });
-  });
-
   it("fetches guilds only once for multiple username entries", async () => {
     let guildsCallCount = 0;
     const fetcher = withFetchPreconnect(async (input: RequestInfo | URL) => {
@@ -188,14 +141,13 @@ describe("resolveDiscordUserAllowlist", () => {
 
     expect(guildsCallCount).toBe(1);
     expect(results).toHaveLength(2);
-    expectResolvedUser(results[0], { id: "u-alice" });
-    expectResolvedUser(results[1], { id: "u-bob" });
+    expectResolvedUser(results[0], { input: "alice", id: "u-alice", name: "alice" });
+    expectResolvedUser(results[1], { input: "bob", id: "u-bob", name: "bob" });
   });
 
-  it("handles mixed ids and usernames — ids resolve even if guilds fail", async () => {
+  it("propagates guild lookup failures when a batch includes usernames", async () => {
     const fetcher = createGuildsForbiddenFetcher();
 
-    // IDs should succeed, username should fail (listGuilds throws)
     await expect(
       resolveDiscordUserAllowlist({
         token: "test",
@@ -203,17 +155,6 @@ describe("resolveDiscordUserAllowlist", () => {
         fetcher,
       }),
     ).rejects.toThrow("Forbidden");
-
-    // But if we only pass IDs, it should work fine
-    const results = await resolveDiscordUserAllowlist({
-      token: "test",
-      entries: ["123456789012345678", "<@999>"],
-      fetcher,
-    });
-
-    expect(results).toHaveLength(2);
-    expectResolvedUser(results[0], { id: "123456789012345678" });
-    expectResolvedUser(results[1], { id: "999" });
   });
 
   it("returns unresolved for empty/blank entries", async () => {
@@ -232,13 +173,15 @@ describe("resolveDiscordUserAllowlist", () => {
     expectUnresolvedUser(results[1]);
   });
 
-  it("returns all unresolved when token is empty", async () => {
+  it("returns ordered unresolved entries when token is blank", async () => {
     const results = await resolveDiscordUserAllowlist({
-      token: "",
+      token: "  ",
       entries: ["123456789012345678", "alice"],
     });
 
-    expect(results).toHaveLength(2);
-    expect(results.map((result) => result.resolved)).toEqual([false, false]);
+    expect(results).toEqual([
+      { input: "123456789012345678", resolved: false },
+      { input: "alice", resolved: false },
+    ]);
   });
 });

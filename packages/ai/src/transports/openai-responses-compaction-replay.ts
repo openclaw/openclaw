@@ -36,13 +36,6 @@ type OpenAIResponsesCompactionSuppressionState = ProviderReplayState & {
   baseUrlHash: string;
 };
 
-export function buildOpenAIResponsesReplayContext(
-  model: Model,
-  options?: Pick<BaseOpenAIStreamOptions, "authProfileId" | "sessionId">,
-): OpenAIResponsesReplayContext {
-  return buildProviderReplayContext(model, options);
-}
-
 export function isOpenAIResponsesReplayContext(
   value: unknown,
 ): value is OpenAIResponsesReplayContext {
@@ -155,7 +148,7 @@ export function suppressOpenAIResponsesCompaction(
   options?: Pick<BaseOpenAIStreamOptions, "authProfileId" | "onCompactionRejected" | "sessionId">,
   rejectedCheckpoint?: OpenAIResponsesCompactionRejection,
 ): void {
-  const context = buildOpenAIResponsesReplayContext(model, options);
+  const context = buildProviderReplayContext(model, options);
   if (!context.baseUrlHash) {
     return;
   }
@@ -239,7 +232,7 @@ export function resolveNewestOpenAIResponsesCompactionReplay(
     }
   | { owner: AssistantMessage; mode: "refresh-required" }
   | undefined {
-  const context = buildOpenAIResponsesReplayContext(model, options);
+  const context = buildProviderReplayContext(model, options);
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message?.role !== "assistant") {
@@ -363,6 +356,6 @@ export function buildOpenAIResponsesReasoningReplayMetadata(
   return {
     v: 1,
     source: "openai-responses",
-    ...buildOpenAIResponsesReplayContext(model, options),
+    ...buildProviderReplayContext(model, options),
   };
 }

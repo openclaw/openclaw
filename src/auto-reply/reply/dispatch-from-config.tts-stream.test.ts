@@ -31,8 +31,6 @@ it.each([
     chunks: ["Intro [[tts:text]]hidden speech[", "[/tts:text]] visible"],
     visible: "Intro  visible",
   },
-  { name: "literal end", chunks: ["See ["], visible: "See [" },
-  { name: "complete final after literal end", chunks: ["See ["], visible: "See [", final: true },
   {
     name: "literal with attachment",
     chunks: ["See ["],

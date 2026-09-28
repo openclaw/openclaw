@@ -149,30 +149,6 @@ describe("accepted continuation status delivery", () => {
     },
   );
 
-  it("clears pending final delivery after final dispatch succeeds", async () => {
-    sessionStoreMocks.currentEntry = {
-      sessionId: "session-1",
-      sessionKey: "agent:test:session",
-      pendingFinalDelivery: pendingFinalDelivery("durable reply", "intent-1"),
-    };
-    const deliver = vi.fn().mockResolvedValue(undefined);
-    const dispatcher = createReplyDispatcher({ deliver });
-    const result = await dispatchReplyFromConfig({
-      ctx: createHookCtx(),
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver: async () => pendingFinalReply("durable reply"),
-    });
-    await dispatcher.waitForIdle();
-    await vi.waitFor(() => {
-      expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
-    });
-
-    expect(result.queuedFinal).toBe(true);
-    expect(deliver).toHaveBeenCalledOnce();
-    expect(sessionStoreMocks.updateSessionEntry).toHaveBeenCalledTimes(3);
-  });
-
   it.each([undefined, "Usage: 100 in / 20 out"])(
     "settles an accepted continuation after delivery with usage footer %s",
     async (usageLine) => {

@@ -46,8 +46,6 @@ require_cmd() {
   fi
 }
 
-is_root() { [[ "$(id -u)" -eq 0 ]]; }
-
 run_podman_pull() {
   local image="$1"
   openclaw_host_timeout_cmd "$PODMAN_PULL_TIMEOUT" podman pull "$image"
@@ -181,7 +179,7 @@ if [[ "$INSTALL_QUADLET" == true ]]; then
 fi
 
 require_cmd podman
-if is_root; then
+if [[ "$(id -u)" -eq 0 ]]; then
   echo "Run scripts/podman/setup.sh as your normal user so Podman stays rootless." >&2
   exit 1
 fi

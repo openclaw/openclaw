@@ -127,8 +127,10 @@ sessions do not passively receive session content
   `operator.admin` by default; explicit entries such as
   `plugin.approval.requested` / `plugin.approval.resolved` use
   `operator.approvals` instead.
-- Status/transport events (`heartbeat`, `presence`, `tick`, connect/disconnect
-  lifecycle) stay unrestricted so transport health is observable to every
+- Presence events require operator read access (`operator.read`, also satisfied
+  by `operator.write` or `operator.admin`). Watched-session references are filtered
+  for each recipient, including in hello snapshots and `system-presence` replies.
+- Transport events such as `heartbeat` and `tick` remain available to every
   authenticated session.
 - Unknown broadcast event families are scope-gated by default (fail-closed)
   unless a registered handler explicitly relaxes them.

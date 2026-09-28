@@ -8,7 +8,7 @@ import {
   getCodexInferenceThreadQualification,
   ownCodexInferenceClient,
 } from "./inference-routing.js";
-import { isJsonObject } from "./protocol.js";
+import { isJsonObject, type JsonObject } from "./protocol.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
   createParams,
@@ -27,6 +27,17 @@ import {
   startOrResumeThread,
 } from "./thread-lifecycle.test-fixtures.js";
 setupRunAttemptTestHooks();
+
+function readNativeConfig(method: string, config: JsonObject = {}) {
+  if (method === "config/read") {
+    return { config, origins: {}, layers: [] };
+  }
+  if (method === "configRequirements/read") {
+    return { requirements: null };
+  }
+  throw new Error(`unexpected method: ${method}`);
+}
+
 describe("Codex native configuration lifecycle", () => {
   it.each([false, true])(
     "validates every operator parent provider in final native config (overridden: %s)",
@@ -36,27 +47,17 @@ describe("Codex native configuration lifecycle", () => {
       const fixture = await createLeasedCodexLifecycleHarness({
         agentDir: path.join(tempDir, "agent"),
         respond: async (method) => {
-          if (method === "config/read") {
-            return {
-              config: {
-                model_providers: {
-                  restored: { name: "Stored provider", base_url: "https://restored.example/v1" },
-                },
-              },
-              origins: {},
-              layers: [],
-            };
-          }
-          if (method === "configRequirements/read") {
-            return { requirements: null };
-          }
           if (method === "account/read") {
             return { account: { type: "apiKey" } };
           }
           if (method === "thread/start") {
             return threadStartResult("parent");
           }
-          throw new Error(`unexpected method: ${method}`);
+          return readNativeConfig(method, {
+            model_providers: {
+              restored: { name: "Stored provider", base_url: "https://restored.example/v1" },
+            },
+          });
         },
       });
       ownCodexInferenceClient(fixture.client);
@@ -114,12 +115,6 @@ describe("Codex native configuration lifecycle", () => {
         agentDir: path.join(tempDir, "agent"),
         persistedThreads: ["old-thread"],
         respond: async (method) => {
-          if (method === "config/read") {
-            return { config: {}, origins: {}, layers: [] };
-          }
-          if (method === "configRequirements/read") {
-            return { requirements: null };
-          }
           if (method === "account/read") {
             return { account: { type: "apiKey" } };
           }
@@ -135,7 +130,7 @@ describe("Codex native configuration lifecycle", () => {
           if (method === "thread/inject_items") {
             return {};
           }
-          throw new Error(`unexpected method: ${method}`);
+          return readNativeConfig(method);
         },
       });
       ownCodexInferenceClient(fixture.client);
@@ -191,16 +186,10 @@ describe("Codex native configuration lifecycle", () => {
       const fixture = await createLeasedCodexLifecycleHarness({
         agentDir: path.join(tempDir, "agent"),
         respond: async (method) => {
-          if (method === "config/read") {
-            return { config: {}, origins: {}, layers: [] };
-          }
-          if (method === "configRequirements/read") {
-            return { requirements: null };
-          }
           if (method === "thread/start") {
             return threadStartResult("unexpected-thread");
           }
-          throw new Error(`unexpected method: ${method}`);
+          return readNativeConfig(method);
         },
       });
       const params = createParams(sessionFile, workspaceDir);
@@ -280,16 +269,10 @@ describe("Codex native configuration lifecycle", () => {
       const fixture = await createLeasedCodexLifecycleHarness({
         agentDir: path.join(tempDir, "agent"),
         respond: async (method) => {
-          if (method === "config/read") {
-            return { config: { model_provider: nativeProvider }, origins: {}, layers: [] };
-          }
-          if (method === "configRequirements/read") {
-            return { requirements: null };
-          }
           if (method === "thread/start" || method === "thread/resume") {
             return native;
           }
-          throw new Error(`unexpected method: ${method}`);
+          return readNativeConfig(method, { model_provider: nativeProvider });
         },
       });
       const params = createParams(sessionFile, workspaceDir);
@@ -359,16 +342,10 @@ describe("Codex native configuration lifecycle", () => {
         dynamicToolsFingerprint: "[]",
       });
       const respond = vi.fn(async (method: string) => {
-        if (method === "config/read") {
-          return { config: {}, origins: {}, layers: [] };
-        }
-        if (method === "configRequirements/read") {
-          return { requirements: null };
-        }
         if (method === "thread/resume") {
           return threadStartResult("thread-reused");
         }
-        throw new Error(`unexpected method: ${method}`);
+        return readNativeConfig(method);
       });
       const fixture = await createLeasedCodexLifecycleHarness({
         agentDir: path.join(tempDir, "agent"),

@@ -324,7 +324,6 @@ class TdClient:
         self.lib.td_execute(json.dumps({"@type": "setLogVerbosityLevel", "new_verbosity_level": 0}).encode())
         self.client = self.lib.td_json_client_create()
         self.extra = 0
-        self.pending = {}
         self.users = {}
         self.updates = []
         atexit.register(self.destroy)
@@ -361,7 +360,6 @@ class TdClient:
         extra = str(self.extra)
         payload = dict(payload)
         payload["@extra"] = extra
-        self.pending[extra] = payload["@type"]
         self.lib.td_json_client_send(self.client, json.dumps(payload).encode())
         return extra
 
@@ -399,16 +397,12 @@ class TdClient:
                         tdlib_method=payload["@type"],
                     )
                 return item
-            self.handle_update(item)
+            self.updates.append(item)
         raise DriverError(
             f"Timed out waiting for {payload['@type']}",
             tdlib_method=payload["@type"],
             tdlib_timed_out=True,
         )
-
-    def handle_update(self, item):
-        self.updates.append(item)
-        return item
 
     def next_update(self, timeout=1.0):
         if self.updates:
@@ -915,10 +909,7 @@ def print_result(payload, as_json=False, output=""):
         output_path = Path(output).expanduser()
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-    if as_json:
-        print(json.dumps(payload, indent=2, sort_keys=True))
-    else:
-        print(json.dumps(payload, indent=2, sort_keys=True))
+    print(json.dumps(payload, indent=2, sort_keys=True))
 
 
 def command_configure(args):
@@ -1719,59 +1710,51 @@ def main():
     parser = argparse.ArgumentParser(description="Telegram real-user E2E driver backed by TDLib.")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    configure = sub.add_parser("configure")
+    def command_parser(name, func, common=True):
+        command = sub.add_parser(name)
+        if common:
+            add_common(command)
+        command.set_defaults(func=func)
+        return command
+
+    configure = command_parser("configure", command_configure, common=False)
     configure.add_argument("--api-id")
     configure.add_argument("--api-hash")
     configure.add_argument("--tdlib-path")
     configure.add_argument("--chat")
     configure.add_argument("--sut-username")
     configure.add_argument("--sut-id")
-    configure.set_defaults(func=command_configure)
 
-    doctor = sub.add_parser("doctor")
+    doctor = command_parser("doctor", command_doctor, common=False)
     doctor.add_argument("--json", action="store_true")
     doctor.add_argument("--output", default="")
-    doctor.set_defaults(func=command_doctor)
 
-    login = sub.add_parser("login")
-    add_common(login)
+    login = command_parser("login", command_login)
     login.add_argument("--qr", action="store_true", default=True)
     login.add_argument("--phone", default="")
     login.add_argument("--code", default="")
     login.add_argument("--password", default="")
     login.add_argument("--first-name", default="")
     login.add_argument("--last-name", default="")
-    login.set_defaults(func=command_login)
 
-    status = sub.add_parser("status")
-    add_common(status)
+    status = command_parser("status", command_status)
     status.add_argument("--check-chat", default="")
     status.add_argument("--require-chat", default="")
-    status.set_defaults(func=command_status)
 
-    resolve_chat = sub.add_parser("resolve-chat")
-    add_common(resolve_chat)
+    resolve_chat = command_parser("resolve-chat", command_resolve_chat)
     resolve_chat.add_argument("--chat", required=True)
-    resolve_chat.set_defaults(func=command_resolve_chat)
 
     for name in ("prepare-group", "cleanup-group"):
-        group = sub.add_parser(name)
-        add_common(group)
+        group = command_parser(name, command_test_group)
         group.add_argument("--chat", default="")
-        group.set_defaults(func=command_test_group)
 
     for name in ("prepare-private-forum", "cleanup-private-forum"):
-        private_forum = sub.add_parser(name)
-        add_common(private_forum)
-        private_forum.set_defaults(func=command_private_forum)
+        command_parser(name, command_private_forum)
 
-    confirm_qr = sub.add_parser("confirm-qr")
-    add_common(confirm_qr)
+    confirm_qr = command_parser("confirm-qr", command_confirm_qr)
     confirm_qr.add_argument("--link", required=True)
-    confirm_qr.set_defaults(func=command_confirm_qr)
 
-    send = sub.add_parser("send")
-    add_common(send)
+    send = command_parser("send", command_send)
     send.add_argument("--chat", default="")
     send.add_argument("--text")
     send.add_argument("--photo", action="append", default=[])
@@ -1779,20 +1762,16 @@ def main():
     send.add_argument("--reply-to")
     send.add_argument("--thread-id", type=int, default=0)
     send.add_argument("--forum-topic-id", type=int)
-    send.set_defaults(func=command_send)
 
-    wait = sub.add_parser("wait")
-    add_common(wait)
+    wait = command_parser("wait", command_wait)
     wait.add_argument("--chat", default="")
     wait.add_argument("--expect", action="append", default=[])
     wait.add_argument("--from-bot", default="")
     wait.add_argument("--reply-to")
     wait.add_argument("--thread-id", type=int, default=0)
     wait.add_argument("--after-message-id", type=int, default=0)
-    wait.set_defaults(func=command_wait)
 
-    probe = sub.add_parser("probe")
-    add_common(probe)
+    probe = command_parser("probe", command_probe)
     probe.add_argument("--chat", default="")
     probe.add_argument("--text", default="@{sut} Reply exactly: USER-E2E-{run}")
     probe.add_argument("--photo", action="append", default=[])
@@ -1803,24 +1782,18 @@ def main():
     probe.add_argument("--thread-id", type=int, default=0)
     probe.add_argument("--require-reply", action="store_true", default=True)
     probe.add_argument("--any-sut-reply", dest="require_reply", action="store_false")
-    probe.set_defaults(func=command_probe)
 
-    transcript = sub.add_parser("transcript")
-    add_common(transcript)
+    transcript = command_parser("transcript", command_transcript)
     transcript.add_argument("--chat", default="")
     transcript.add_argument("--limit", type=int, default=20)
-    transcript.set_defaults(func=command_transcript)
 
-    chats = sub.add_parser("chats")
-    add_common(chats)
+    chats = command_parser("chats", command_chats)
     chats.add_argument("--limit", type=int, default=50)
-    chats.set_defaults(func=command_chats)
 
-    serve = sub.add_parser("serve")
+    serve = command_parser("serve", command_serve, common=False)
     serve.add_argument("--chat", default="")
     serve.add_argument("--observe-chat", action="append", default=[])
     serve.add_argument("--timeout-ms", type=int, default=120000)
-    serve.set_defaults(func=command_serve)
 
     args = parser.parse_args()
     if args.command == "send" and not args.text and not args.photo:

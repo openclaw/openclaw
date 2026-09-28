@@ -10,6 +10,7 @@ import type {
   PluginRegistryDifference,
   PluginRegistryDifferenceFacet,
 } from "./plugin-registry-snapshot.types.js";
+import { groupPluginRecords } from "./record-groups.js";
 
 export function isContainedPluginPath(
   rootPath: string,
@@ -44,6 +45,7 @@ function resolvePluginRegistryRecordContent(
   const {
     doctorContractFile: _doctorContractFile,
     manifestFile: _manifestFile,
+    sourceAdmissions: _sourceAdmissions,
     packageBuild,
     packageJson,
     ...record
@@ -119,23 +121,8 @@ export function diffPluginRegistryRecords(
   // whole registry stale. Reporting a narrower comparison would hide the owning plugin.
   const persistedPlugins = new Map(persisted.plugins.map((plugin) => [plugin.pluginId, plugin]));
   const derivedPlugins = new Map(derived.plugins.map((plugin) => [plugin.pluginId, plugin]));
-  const groupDiagnostics = (index: InstalledPluginIndex) => {
-    const groups = new Map<
-      string | undefined,
-      Array<InstalledPluginIndex["diagnostics"][number]>
-    >();
-    index.diagnostics.forEach((diagnostic) => {
-      const group = groups.get(diagnostic.pluginId);
-      if (group) {
-        group.push(diagnostic);
-      } else {
-        groups.set(diagnostic.pluginId, [diagnostic]);
-      }
-    });
-    return groups;
-  };
-  const persistedDiagnostics = groupDiagnostics(persisted);
-  const derivedDiagnostics = groupDiagnostics(derived);
+  const persistedDiagnostics = groupPluginRecords(persisted.diagnostics, (entry) => entry.pluginId);
+  const derivedDiagnostics = groupPluginRecords(derived.diagnostics, (entry) => entry.pluginId);
   const pluginIds = new Set([
     ...persistedPlugins.keys(),
     ...derivedPlugins.keys(),

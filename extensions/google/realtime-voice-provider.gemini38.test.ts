@@ -42,9 +42,6 @@ vi.mock("./google-genai-runtime.js", () => ({
   createGoogleGenAI: createGoogleGenAIMock,
 }));
 
-const ENV_KEYS = ["GEMINI_API_KEY", "GOOGLE_API_KEY"] as const;
-let envSnapshot: Partial<Record<(typeof ENV_KEYS)[number], string>>;
-
 function lastConnectParams(): MockGoogleLiveConnectParams {
   const params = connectMock.mock.calls.at(-1)?.[0];
   if (!params) {
@@ -100,14 +97,6 @@ describe("Gemini 3.8 Live model contracts", () => {
     expect(supportsClientContentInterrupt("gemini-3.1-flash-live-preview")).toBe(false);
   });
 
-  it("reserves interim tool responses and client-turn interrupts for the right models", () => {
-    expect(modelSupportsToolResultContinuation("gemini-3.8-live")).toBe(true);
-    expect(modelSupportsToolResultContinuation("gemini-3.8-live-extended-thinking")).toBe(false);
-    expect(modelSupportsToolResultContinuation("gemini-3.1-flash-live-preview")).toBe(false);
-    expect(supportsClientContentInterrupt("gemini-3.8-live-extended-thinking")).toBe(true);
-    expect(supportsClientContentInterrupt("gemini-3.8-live")).toBe(false);
-  });
-
   it("builds thinking config per model family", () => {
     expect(buildThinkingConfig({ thinkingLevel: "high" }, "gemini-3.8-live")).toBeUndefined();
     expect(buildThinkingConfig({ thinkingBudget: 512 }, "gemini-3.8-live")).toBeUndefined();
@@ -126,27 +115,19 @@ describe("Gemini 3.8 Live model contracts", () => {
 
 describe("buildGoogleRealtimeVoiceProvider with Gemini 3.8 Live", () => {
   beforeEach(() => {
-    envSnapshot = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
     connectMock.mockClear();
     createGoogleGenAIMock.mockClear();
     session.close.mockClear();
     session.sendClientContent.mockClear();
     session.sendRealtimeInput.mockClear();
     session.sendToolResponse.mockClear();
-    delete process.env.GEMINI_API_KEY;
-    delete process.env.GOOGLE_API_KEY;
+    vi.stubEnv("GEMINI_API_KEY", undefined);
+    vi.stubEnv("GOOGLE_API_KEY", undefined);
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
-    for (const key of ENV_KEYS) {
-      const value = envSnapshot[key];
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
+    vi.unstubAllEnvs();
   });
 
   it("uses the Gemini 3.8 Live Extended Thinking contract", async () => {

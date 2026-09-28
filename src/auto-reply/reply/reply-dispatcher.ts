@@ -13,6 +13,7 @@ import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-comple
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { sleep } from "../../utils.js";
@@ -133,12 +134,10 @@ export function captureReplyDispatchDeliveryOutcome(payload: ReplyPayload): {
   // it so a later send of the same payload owns a separate settlement.
   let tracker = deliveryOutcomeTrackers.get(payload);
   if (!tracker) {
-    let resolveOutcome!: (outcome: ReplyDispatchDeliveryOutcome) => void;
+    const { promise, resolve } = createDeferredCore<ReplyDispatchDeliveryOutcome>();
     tracker = {
-      promise: new Promise((resolve) => {
-        resolveOutcome = resolve;
-      }),
-      resolve: (outcome) => resolveOutcome(outcome),
+      promise,
+      resolve,
       tracked: false,
       pending: false,
     };

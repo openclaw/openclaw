@@ -463,58 +463,19 @@ describe("stable read-only snapshot copies", () => {
     }
   });
 
-  it("backs off between bounded asynchronous raw-copy retries", async () => {
+  it("reports source replacement after one acquisition and removes its incomplete copy", async () => {
     const fixture = createFixture(Buffer.alloc(0));
-    const open = fs.openSync.bind(fs);
-    const close = fs.closeSync.bind(fs);
-    const fsync = fs.fsyncSync.bind(fs);
-    const setTimer = globalThis.setTimeout.bind(globalThis);
-    const targets = new Set<number>();
-    const delays: number[] = [];
     let replacements = 0;
-    vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
-      if (typeof delay === "number") {
-        delays.push(delay);
-      }
-      return setTimer(callback, delay, ...args);
-    });
-    vi.spyOn(fs, "openSync").mockImplementation((pathname, flags, mode) => {
-      const descriptor = open(pathname, flags, mode);
-      if (
-        path.resolve(String(pathname)).startsWith(`${fixture.stagingRoot}${path.sep}`) &&
-        flags !== "r"
-      ) {
-        targets.add(descriptor);
-      }
-      return descriptor;
-    });
-    vi.spyOn(fs, "closeSync").mockImplementation((descriptor) => {
-      close(descriptor);
-      targets.delete(descriptor);
-    });
-    vi.spyOn(fs, "fsyncSync").mockImplementation((descriptor) => {
-      fsync(descriptor);
-      if (targets.has(descriptor) && replacements < 2) {
-        const displaced = `${fixture.sourcePath}.displaced-${replacements}`;
-        fs.renameSync(fixture.sourcePath, displaced);
-        fs.writeFileSync(fixture.sourcePath, "");
-        replacements += 1;
-      }
+    afterPrivateCopy(fixture.stagingRoot, () => {
+      fs.renameSync(fixture.sourcePath, `${fixture.sourcePath}.displaced-${replacements++}`);
+      fs.writeFileSync(fixture.sourcePath, "");
     });
 
-    let prepared: Awaited<ReturnType<typeof prepareSqliteReadOnlyLocationInProcess>> | undefined;
-    try {
-      prepared = await prepareSqliteReadOnlyLocationInProcess(
-        fixture.sourcePath,
-        fixture.stagingRoot,
-      );
-      expect(replacements).toBe(2);
-      expect(delays).toEqual(expect.arrayContaining([10, 20]));
-    } finally {
-      if (prepared) {
-        expect(await prepared.cleanupAsync()).toBe(true);
-      }
-    }
+    await expect(
+      prepareSqliteReadOnlyLocationInProcess(fixture.sourcePath, fixture.stagingRoot),
+    ).rejects.toThrow("SQLite source changed while copying");
+    expect(replacements).toBe(1);
+    expect(fs.readdirSync(fixture.stagingRoot)).toEqual([]);
   });
 
   it.each(["overwrite", "append", "truncate"] as const)(

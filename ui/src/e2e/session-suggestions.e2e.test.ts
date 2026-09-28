@@ -271,13 +271,13 @@ suite.define(() => {
         }
       }
       await expect(typingRow.locator(".agent-chat__typing-preview-label")).toHaveText("Owner");
-      await expect(typingRow.locator(".agent-chat__typing-state")).toHaveText("Typing · not sent");
+      await expect(typingRow.locator(".agent-chat__typing-state")).toHaveText("is typing...");
       await expect(typingRow.locator(".agent-chat__typing-bubble")).toHaveCount(0);
       await screenshot(page, "typing-preview-live.png");
       const activeBox = await previewBubble.boundingBox();
-      await page.clock.runFor(3_000);
+      await page.clock.runFor(10_000);
       await expect(previewBubble).toHaveText(draft);
-      await expect(typingRow.locator(".agent-chat__typing-state")).toHaveText("Paused · not sent");
+      await expect(typingRow.locator(".agent-chat__typing-state")).toHaveText("Draft");
       await expect(typingRow.locator(".sr-only")).toBeEmpty();
       expect(await previewBubble.boundingBox()).toEqual(activeBox);
       expect(
@@ -426,8 +426,8 @@ suite.define(() => {
       }
       await ownerTyping("Another unsent draft");
       await expect(previewBubble).toHaveText("Another unsent draft");
-      await page.clock.runFor(3_000);
-      await expect(typingRow.locator(".agent-chat__typing-state")).toHaveText("Paused · not sent");
+      await page.clock.runFor(10_000);
+      await expect(typingRow.locator(".agent-chat__typing-state")).toHaveText("Draft");
       await gateway.emitGatewayEvent("presence", {
         presence: ["alice", "owner", "zoe"].map((id) => ({
           ts: Date.now(),

@@ -83,7 +83,11 @@ const shellOwners = {
   ],
   "upgrade-survivor": [
     "upgrade_survivor_capabilities",
-    ["OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE"],
+    [
+      "OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE",
+      "OPENCLAW_FROZEN_UPGRADE_SURVIVOR_TOOL_SEARCH_RECIPE",
+      "OPENCLAW_FROZEN_UPGRADE_SURVIVOR_MEMBERSHIP_MODE",
+    ],
   ],
 };
 
@@ -192,6 +196,7 @@ const selectedMetadata = {
   "upgrade-survivor": [
     "package.json",
     "src/infra/clawhub-install-trust.ts",
+    "src/cli/update-cli/update-command-terminal-publication.ts",
     "src/plugins/clawhub.ts",
     "scripts/e2e/lib/upgrade-survivor",
     "scripts/lib/npm-publish-plan.mjs",
@@ -627,6 +632,7 @@ async function planWorkflowAdmission(input) {
   }
   // The recorded inventory stays optional: targets predating it keep the postbuild check.
   if (possibleLanes.some(isUpdateFirstHopCompatLane)) {
+    sourcePaths.add("scripts/lib/update-compat-inventory.json");
     sourcePaths.add("scripts/runtime-postbuild.mts");
   }
   if (possibleLanes.includes("update-corrupt-plugin")) {
@@ -1178,6 +1184,7 @@ async function preflightFrozenTargetContracts(input, workflow = false, verifiedT
     if (consumer === "update-corrupt-plugin") {
       required(sources.tooling, "scripts/lib/update-compat-contract.mjs");
       required(sources.tooling, "scripts/lib/openclaw-e2e-instance.sh");
+      required(sources.tooling, "scripts/lib/docker-e2e-watchdog.mjs");
       required(sources.tooling, "scripts/lib/direct-run.mjs");
     }
     if (consumer === "upgrade-survivor" && allow) {

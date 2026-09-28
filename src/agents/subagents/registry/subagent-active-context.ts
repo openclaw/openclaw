@@ -14,11 +14,7 @@ import {
 } from "../../tools/sessions-helpers.js";
 import { resolveSubagentCompletionResultText } from "../completion/subagent-completion-result.js";
 import { isSubagentRunVisibleToSession } from "./subagent-control-scope.js";
-import {
-  buildSubagentList,
-  captureSubagentListReadContext,
-  readSubagentListSessionEntries,
-} from "./subagent-list.js";
+import { buildSubagentList, captureSubagentListReadContext } from "./subagent-list.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { buildSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
@@ -142,7 +138,8 @@ export async function buildActiveSubagentRuntimeContext(params: {
       const context = captureSubagentListReadContext(runs, index, snapshot, recentMinutes);
       const list = buildSubagentList({
         context,
-        sessionEntries: readSubagentListSessionEntries(params.cfg, context),
+        // Prompt fields are registry-owned; model and usage enrichment belongs to visible lists.
+        sessionEntries: new Map(),
         taskMaxChars: 96,
       });
       // buildSubagentList returns recent runs in registry order, so sort before

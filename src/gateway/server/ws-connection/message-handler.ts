@@ -244,9 +244,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         );
       }
     };
+    const client = getClient();
     try {
       const parsed = JSON.parse(text);
-      const client = getClient();
       if (
         !client &&
         parsed !== null &&
@@ -416,7 +416,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
       await releasePendingNodePairingCleanup();
       logGateway.error(`parse/handle error: ${String(err)}`);
       logWs("out", "parse-error", { connId, error: formatForLog(err) });
-      if (!getClient()) {
+      // Failed connect frames close even after registration.
+      if (!client) {
         close();
       }
     }

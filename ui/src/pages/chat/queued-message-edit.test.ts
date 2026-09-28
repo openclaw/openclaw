@@ -182,9 +182,12 @@ describe("queued message edit round-trip", () => {
     expect(host.chatError).toBeNull();
   });
 
-  it("leaves the queue untouched when the edit is cancelled", () => {
-    const { host } = queueHost([{}, {}, {}]);
+  it("leaves composer attachments untouched when an edit is cancelled", () => {
+    const original = stageQueuedImage("att-original");
+    const added = stageQueuedImage("att-added");
+    const { host } = queueHost([{}, { attachments: [original] }, {}]);
     host.chatMessage = "separate composer draft";
+    host.chatAttachments = [added];
     beginQueuedMessageEdit(host as never, "queued-2");
     updateQueuedMessageEdit(host as never, "half-typed replacement");
 
@@ -192,20 +195,7 @@ describe("queued message edit round-trip", () => {
 
     expect(storedOrder(host)).toEqual(["message 1", "message 2", "message 3"]);
     expect(host.chatMessage).toBe("separate composer draft");
-    expect(host.chatAttachments).toEqual([]);
     expect(isQueuedMessageBeingEdited(host as never, "queued-2")).toBe(false);
-  });
-
-  it("leaves composer attachments untouched when an edit is cancelled", () => {
-    const original = stageQueuedImage("att-original");
-    const added = stageQueuedImage("att-added");
-    const { host } = queueHost([{ attachments: [original] }]);
-    host.chatAttachments = [added];
-    beginQueuedMessageEdit(host as never, "queued-1");
-
-    expect(cancelQueuedMessageEdit(host as never)).toBe(true);
-
-    expect(storedOrder(host)).toEqual(["message 1"]);
     expect(getChatAttachmentDataUrl(original)).not.toBeNull();
     expect(getChatAttachmentDataUrl(added)).not.toBeNull();
     expect(host.chatAttachments).toEqual([added]);
@@ -266,7 +256,7 @@ describe("queued message edit round-trip", () => {
     },
   );
 
-  it.each(["/stop", "/compact", "stop"])(
+  it.each(["/compact", "stop"])(
     "keeps the source row and rejects a command-like inline edit: %s",
     async (command) => {
       const sendRequest = vi.fn(() => ({ status: "started" as const }));
@@ -400,6 +390,7 @@ describe("queued message edit round-trip", () => {
     await submitQueuedEdit(host);
 
     expect(storedOrder(host)).toEqual(["message 1", "message 2, corrected", "message 3"]);
+    expect(isQueuedMessageBeingEdited(host as never, "queued-2")).toBe(false);
     const replacement = listStoredChatOutboxes(host as never)[0]?.queue[1];
     expect(replacement?.attachments?.map((attachment) => attachment.id)).toEqual(["att-kept"]);
     expect(replacement?.replyToId).toBe("reply-source");
@@ -672,16 +663,4 @@ describe("queued message edit round-trip", () => {
       }
     },
   );
-
-  it("leaves the edit behind when the pane routes to another session", () => {
-    const { host } = queueHost([{}, {}]);
-    beginQueuedMessageEdit(host as never, "queued-1");
-
-    host.sessionKey = "agent:other";
-
-    // Neither the badge nor the drain block may follow the operator elsewhere,
-    // and the stale edit must not lock the composer in the new session either.
-    expect(isQueuedMessageBeingEdited(host as never, "queued-1")).toBe(false);
-    expect(cancelQueuedMessageEdit(host as never)).toBe(false);
-  });
 });

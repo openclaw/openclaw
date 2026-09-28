@@ -1,4 +1,3 @@
-// Skills CLI for workspace status, install/update, ClawHub verification, and workshop proposals.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import {
@@ -88,9 +87,11 @@ type ResolvedClawHubSkillVerificationTarget = Extract<
   { ok: true }
 >;
 
-function formatSkillWarning(message: string): string {
-  return message.includes("╭─") ? message : theme.warn(message);
-}
+const skillInstallLogger = {
+  info: (message: string) => defaultRuntime.log(message),
+  warn: (message: string) =>
+    defaultRuntime.log(message.includes("╭─") ? message : theme.warn(message)),
+};
 
 function isClawHubSkillBlockedCliFailure(result: { code?: string; warning?: string }): boolean {
   return (
@@ -365,7 +366,7 @@ async function withOfflineGatewayLock<T>(
   const lock = await acquireGatewayLock({
     allowInTests: true,
     port: resolveGatewayPort(config, process.env),
-    role: "skill-workshop-apply",
+    role: "sqlite-maintenance",
     timeoutMs: GATEWAY_SKILLS_OFFLINE_LOCK_TIMEOUT_MS,
   }).catch(() => undefined);
   if (!lock) {
@@ -373,7 +374,7 @@ async function withOfflineGatewayLock<T>(
   }
   // Missing credentials cannot prove a Gateway is absent; only its ownership lock can.
   try {
-    return await action();
+    return await lock.run(action);
   } finally {
     await lock.release();
   }
@@ -513,9 +514,6 @@ async function readSkillProposalInput(options: {
   return { content: await readSkillProposalDraftFile(proposal!) };
 }
 
-/**
- * Register the skills CLI commands
- */
 export function registerSkillsCli(program: Command) {
   const skills = program
     .command("skills")
@@ -606,10 +604,7 @@ export function registerSkillsCli(program: Command) {
               ...resolveInstallPolicyWarningAcknowledgementCliOptions({
                 acknowledgeInstallPolicyWarning: opts.acknowledgeInstallPolicyWarning,
               }),
-              logger: {
-                info: (message) => defaultRuntime.log(message),
-                warn: (message) => defaultRuntime.log(formatSkillWarning(message)),
-              },
+              logger: skillInstallLogger,
             });
             if (!result.ok) {
               defaultRuntime.error(result.error);
@@ -644,10 +639,7 @@ export function registerSkillsCli(program: Command) {
             }),
             ...(opts.forceInstall ? { forceInstall: true } : {}),
             confirmInstall: resolveClawHubInstallConfirmation(),
-            logger: {
-              info: (message) => defaultRuntime.log(message),
-              warn: (message) => defaultRuntime.log(formatSkillWarning(message)),
-            },
+            logger: skillInstallLogger,
           });
           if (!result.ok) {
             if (!isClawHubSkillBlockedCliFailure(result)) {
@@ -723,10 +715,7 @@ export function registerSkillsCli(program: Command) {
             ...resolveInstallPolicyWarningAcknowledgementCliOptions({
               acknowledgeInstallPolicyWarning: opts.acknowledgeInstallPolicyWarning,
             }),
-            logger: {
-              info: (message) => defaultRuntime.log(message),
-              warn: (message) => defaultRuntime.log(formatSkillWarning(message)),
-            },
+            logger: skillInstallLogger,
             config: target.config,
           });
           let failed = false;
@@ -1216,7 +1205,6 @@ export function registerSkillsCli(program: Command) {
       );
     });
 
-  // Default action (no subcommand) - show list
   skills.action(async (opts: { agent?: string; json?: boolean }, command: Command) => {
     await runSkillsAction((report) => formatSkillsList(report, { json: hasJsonOutput(opts) }), {
       agentId: resolveAgentOption(command, opts),

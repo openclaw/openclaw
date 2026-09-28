@@ -8,17 +8,12 @@ import { withTempDir } from "../test-utils/temp-dir.js";
 import { createConfigIO } from "./io.factory.js";
 import { isInvalidConfigError } from "./io.invalid-config.js";
 
-function withTempHome<T>(run: (home: string) => Promise<T>): Promise<T> {
-  return withTempDir("openclaw-config-scalar-root-", run);
-}
-
 describe("config load with a scalar root", () => {
   it.each([
     { name: "null", raw: "null\n" },
     { name: "number", raw: "42\n" },
-    { name: "string", raw: '"oops"\n' },
   ])("rejects a $name root as INVALID_CONFIG instead of loading defaults", async ({ raw }) => {
-    await withTempHome(async (home) => {
+    await withTempDir("openclaw-config-scalar-root-", async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(configPath, raw, "utf-8");

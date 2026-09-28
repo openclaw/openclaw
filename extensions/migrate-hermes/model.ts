@@ -1,10 +1,14 @@
-// Migrate Hermes plugin module implements model behavior.
 import {
   resolveAgentEffectiveModelPrimary,
   resolveDefaultAgentId,
   setAgentEffectiveModelPrimary,
 } from "openclaw/plugin-sdk/agent-runtime";
-import { resolveMigrationConfigRuntime } from "openclaw/plugin-sdk/migration";
+import {
+  markMigrationItemConflict,
+  markMigrationItemError,
+  markMigrationItemSkipped,
+  resolveMigrationConfigRuntime,
+} from "openclaw/plugin-sdk/migration";
 import type { MigrationItem, MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   asOptionalRecord,
@@ -14,9 +18,6 @@ import {
   HERMES_REASON_ALREADY_CONFIGURED,
   HERMES_REASON_CONFIG_RUNTIME_UNAVAILABLE,
   HERMES_REASON_DEFAULT_MODEL_CONFIGURED,
-  hermesItemConflict,
-  hermesItemError,
-  hermesItemSkipped,
   readHermesModelDetails,
 } from "./items.js";
 
@@ -363,7 +364,7 @@ export async function applyModelItem(
   try {
     const configApi = resolveMigrationConfigRuntime(ctx);
     if (!configApi?.current || !configApi.mutateConfigFile) {
-      return hermesItemError(item, HERMES_REASON_CONFIG_RUNTIME_UNAVAILABLE);
+      return markMigrationItemError(item, HERMES_REASON_CONFIG_RUNTIME_UNAVAILABLE);
     }
     const agentId = ctx.targetAgentId ?? resolveDefaultAgentId(ctx.config);
     const currentModel = resolveAgentEffectiveModelPrimary(
@@ -371,10 +372,10 @@ export async function applyModelItem(
       agentId,
     );
     if (currentModel === details.model) {
-      return hermesItemSkipped(item, HERMES_REASON_ALREADY_CONFIGURED);
+      return markMigrationItemSkipped(item, HERMES_REASON_ALREADY_CONFIGURED);
     }
     if (currentModel && !ctx.overwrite) {
-      return hermesItemConflict(item, HERMES_REASON_DEFAULT_MODEL_CONFIGURED);
+      return markMigrationItemConflict(item, HERMES_REASON_DEFAULT_MODEL_CONFIGURED);
     }
     await configApi.mutateConfigFile({
       base: "runtime",
@@ -397,9 +398,9 @@ export async function applyModelItem(
   } catch (err) {
     if (err instanceof ModelApplyAbortError) {
       return err.status === "conflict"
-        ? hermesItemConflict(item, err.reason)
-        : hermesItemSkipped(item, err.reason);
+        ? markMigrationItemConflict(item, err.reason)
+        : markMigrationItemSkipped(item, err.reason);
     }
-    return hermesItemError(item, err instanceof Error ? err.message : String(err));
+    return markMigrationItemError(item, err instanceof Error ? err.message : String(err));
   }
 }

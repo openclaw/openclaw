@@ -2,6 +2,8 @@ import type {
   BrowserAnnotationDraft,
   BrowserAnnotationEvent,
 } from "../../components/browser/browser-annotation.ts";
+import { showToast } from "../../lib/toast.ts";
+import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { canAdmitBrowserAnnotation } from "./browser-annotation-admission.ts";
 import { CHAT_COMPOSER_TEXTAREA_SELECTOR } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -24,6 +26,10 @@ export function receiveBrowserAnnotation(
   event: Event,
 ): boolean {
   if (!state || !active || event.defaultPrevented || !(event instanceof CustomEvent)) {
+    return false;
+  }
+  if (!uploadsEnabled(state.uploadConfig)) {
+    showToast({ message: uploadsDisabledMessage() });
     return false;
   }
   const detail = event.detail as BrowserAnnotationDraft | null;

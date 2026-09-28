@@ -3,9 +3,9 @@ import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import {
   hasCommittedSourceReplyDeliveryEvidence,
   hasCompletedSourceReplyDeliveryEvidence,
+  hasVisibleCommittedMessagingToolDeliveryEvidence,
   resolveExplicitFinalSourceReplyDeliveryEvidence,
   resolveSourceReplyDelivery,
-  hasVisibleCommittedMessagingToolDeliveryEvidence,
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import {
   isSyntheticSourceReplyTurn,
@@ -20,7 +20,6 @@ import {
   getReplyPayloadMetadata,
   isReplyPayloadTerminalContent,
   markReplyPayloadForSourceSuppressionDelivery,
-  setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -351,27 +350,6 @@ export async function resolveFollowupDeliveryDecision(params: {
     );
     if (payloads.length === 0) {
       return { kind: "suppress", reason: "message-tool-only" };
-    }
-  }
-  if (result.meta?.yielded === true && result.acceptedSessionSpawns?.length) {
-    const statusPayload = payloads.find(
-      (payload) => getReplyPayloadMetadata(payload)?.continuationStatus === true,
-    );
-    const requesterSessionKey =
-      turn.session.kind === "session" ? turn.session.key : turn.queued.run.sessionKey;
-    if (statusPayload && requesterSessionKey) {
-      // Only accepted waiting replies need the task presentation runtime.
-      const { createTaskProgressContinuation } =
-        await import("../../tasks/task-progress-requester.js");
-      const progressContinuation = await createTaskProgressContinuation({
-        requesterSessionKey,
-        requesterAgentId: turn.queued.run.agentId,
-        requesterTurnRunId: execution.runId,
-        acceptedSessionSpawns: result.acceptedSessionSpawns,
-      });
-      if (progressContinuation) {
-        setReplyPayloadMetadata(statusPayload, { progressContinuation });
-      }
     }
   }
   return payloads.length > 0

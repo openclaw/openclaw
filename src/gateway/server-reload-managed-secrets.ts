@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { refreshContextWindowCache } from "../agents/context.js";
+import { resetContextWindowCache } from "../agents/context.js";
 import {
   getRuntimeConfigSnapshotMetadata,
   getRuntimeConfigSourceSnapshot,
@@ -352,7 +352,8 @@ export function createManagedReloadSecretHandlers(options: {
         );
         if (snapshotRestored) {
           if (previousSnapshot && shouldRefreshContextWindowCache(plan)) {
-            await refreshContextWindowCache(previousSnapshot.config);
+            // Plugin rollback must settle model replacement before a catalog read can finish.
+            resetContextWindowCache(previousSnapshot.config);
           }
           runtimeSecretsPublished = false;
         }

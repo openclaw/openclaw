@@ -31,12 +31,12 @@ Feature-local layout enums may define row heights and grid dimensions, but shoul
 
 - `OpenClawProBackground`: grouped page background
 - `ProCard`: quiet content grouping; never Liquid Glass
-- `ProIconBadge`, `ProValuePill`: compact semantic indicators
+- `ProIconBadge`: compact semantic indicator
 - `OpenClawNoticeBanner`: shared connection and runtime notices
 - `OpenClawAdaptiveHeaderRow`: responsive destination heading
 - `OpenClawGlassControlGroup`: performance and morphing boundary for nearby glass controls
 - `OpenClawSidebarPalette`: fixed black-sidebar colors that remain dark in every app appearance
-- `OpenClawSidebarRevealButton`, `OpenClawSidebarHeaderLeadingSlot`: shared leading toolbar affordance
+- `OpenClawSidebarControlButton`, `OpenClawSidebarToolbarItem`: shared leading toolbar affordance
 - `openClawGlassButton(prominent:tint:)`: iOS 26 glass button with an iOS 18 bordered fallback
 
 ## Liquid Glass rules

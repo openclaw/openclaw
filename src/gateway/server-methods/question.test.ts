@@ -511,15 +511,6 @@ describe("question gateway methods", () => {
         },
       ],
     },
-    {
-      behavior: "allowed hosts proposed for environment entries",
-      questions: [
-        {
-          ...secretRequestParams.questions[0],
-          secretStore: { ...secretRequestQuestion.secretStore, kind: "env" },
-        },
-      ],
-    },
   ])("rejects $behavior before opening a pending secret question", async ({ questions }) => {
     const response = await call(
       "question.request",
@@ -835,26 +826,6 @@ describe("question gateway methods", () => {
     });
   });
 
-  it("cold-refreshes configured SecretRefs after a store-bound question is answered", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      mockReferencedStoreSnapshot();
-      const id = await requestSecretQuestion();
-
-      expect(
-        (
-          await call("question.resolve", {
-            id,
-            answers: { answers: { secret_value: ["test-secret-value-cold-refresh-123"] } },
-          })
-        )[0],
-      ).toBe(true);
-      expect(reloadSecrets).toHaveBeenCalledWith({
-        forceColdRefKeys: new Set(["store:default:SERVICE_API_KEY"]),
-        joinInFlight: false,
-      });
-    });
-  });
-
   it.each(["second answer", "cancel", "expiry"] as const)(
     "settles the SQLite commit before deferred refresh can race with %s",
     async (racer) => {
@@ -897,6 +868,10 @@ describe("question gateway methods", () => {
           ).toEqual({ ok: true, value: firstValue });
           expect(manager.get(id)?.status).toBe("answered");
           expect(reloadSecrets).toHaveBeenCalledTimes(1);
+          expect(reloadSecrets).toHaveBeenCalledWith({
+            forceColdRefKeys: new Set(["store:default:SERVICE_API_KEY"]),
+            joinInFlight: false,
+          });
         } finally {
           reload.resolve({ warningCount: 0 });
           await Promise.all([pending, ...competitors]);

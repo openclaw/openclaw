@@ -22,6 +22,7 @@ import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-meta
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../shared/transcript-only-openclaw-assistant.js";
 import { resolveOperatorRolePolicy } from "./operator-role-policy.js";
+import { SerializedJsonArray } from "./serialized-json.js";
 import type { ChatMetadataResult } from "./server-methods/chat-metadata-contract.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { getSessionDefaults } from "./session-utils-model.js";
@@ -98,7 +99,7 @@ export function projectOperatorModelRead<
     metadata?: ChatMetadataResult;
     sessionInfo?: GatewaySessionRow;
     kind?: string;
-    messages?: unknown[];
+    messages?: unknown[] | SerializedJsonArray;
     message?: unknown;
   },
 >(
@@ -130,9 +131,10 @@ export function projectOperatorModelRead<
     ...(result.sessionInfo ? { sessionInfo: presentation.session(result.sessionInfo) } : {}),
     ...(result.messages
       ? {
-          messages: result.messages.map(
-            result.kind === "delta" ? presentation.deltaMessage : presentation.message,
-          ),
+          messages: (result.messages instanceof SerializedJsonArray
+            ? result.messages.materialize()
+            : result.messages
+          ).map(result.kind === "delta" ? presentation.deltaMessage : presentation.message),
         }
       : {}),
     ...(Object.hasOwn(result, "message") ? { message: presentation.message(result.message) } : {}),

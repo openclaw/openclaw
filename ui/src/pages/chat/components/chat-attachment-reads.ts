@@ -87,20 +87,11 @@ export class ChatAttachmentReadLifecycle {
     return this.entries;
   }
 
-  complete(entry: ChatAttachmentRead): void {
+  settle(entry: ChatAttachmentRead, state: "ready" | "error"): void {
     if (!this.entries.includes(entry)) {
       return;
     }
-    entry.state = "ready";
-    entry.cancel = undefined;
-    this.notify();
-  }
-
-  fail(entry: ChatAttachmentRead): void {
-    if (!this.entries.includes(entry)) {
-      return;
-    }
-    entry.state = "error";
+    entry.state = state;
     entry.cancel = undefined;
     this.notify();
   }

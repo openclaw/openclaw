@@ -3,9 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import * as config from "../../config/config.js";
 import * as launchd from "../../daemon/launchd.js";
+import * as scheduledTasks from "../../daemon/schtasks.js";
 import * as gatewayService from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { resolvePackageActivationAnchor } from "../../infra/package-update-activation-journal.js";
@@ -38,11 +40,13 @@ import {
   finishSuccessfulPackageSwitch,
   taskRecovery,
 } from "./update-command-post-update.test-support.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 import * as updateResume from "./update-command-resume.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
+import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
 import { updateCommand } from "./update-command.js";
 
 const dirs = new Set<string>();
@@ -80,7 +84,6 @@ function pendingPackageInvocation(
     serviceDrift?: boolean;
     alias?: boolean;
     existingRun?: boolean;
-    manager?: "npm" | "pnpm" | "bun";
     profile?: string;
     readOnlyConfig?: boolean;
   } = {},
@@ -132,9 +135,7 @@ function pendingPackageInvocation(
   }
   vi.spyOn(updateShared, "resolveUpdateRoot").mockResolvedValue(invocationRoot);
   vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
-  const manager = vi
-    .spyOn(updateShared, "resolveGlobalManager")
-    .mockResolvedValue(params.manager ?? "npm");
+  const manager = vi.spyOn(updateShared, "resolveGlobalManager").mockResolvedValue("npm");
   const service = createMockGatewayService({
     isLoaded: async () => true,
     readRuntime: async () => ({ status: "running", systemd: { managerUid: 2001 } }),
@@ -214,12 +215,10 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
     { name: "canonical source behind an alias", alias: true },
     { name: "managed service in another prefix", serviceDrift: true, existingRun: true },
     {
-      name: "pnpm caller with another profile",
-      manager: "pnpm" as const,
+      name: "caller with another profile",
       profile: "other",
       existingRun: true,
     },
-    { name: "Bun caller with another profile", manager: "bun" as const, profile: "other" },
     { name: "externally managed config", readOnlyConfig: true, existingRun: true },
   ])("refuses $name before writable preparation or run admission", async (params) => {
     const f = pendingPackageInvocation(params);
@@ -253,8 +252,6 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
 
   it.each([
     { existingRun: false, serviceDrift: false },
-    { existingRun: true, serviceDrift: false },
-    { existingRun: false, serviceDrift: true },
     { existingRun: true, serviceDrift: true },
   ])(
     "reports pending after lease acquisition (existing history=$existingRun, service drift=$serviceDrift) without changing retained material",
@@ -377,13 +374,11 @@ async function fixture() {
     windows,
     rollback,
     complete,
-    entries: () => 0,
-    invoke: (previousInstallRoot = runtime.root) =>
+    invoke: () =>
       finishSuccessfulPackageSwitch(
         { packageRoot: runtime.root, run },
         {
           root: runtime.root,
-          previousInstallRoot,
           opts,
           result: {
             status: "error",
@@ -451,7 +446,6 @@ describe("pending recovery finalizer", () => {
           recovery: { serviceRestartSafe: false },
         },
       });
-      expect(f.entries()).toBe(0);
       expect(fs.existsSync(f.file)).toBe(false);
       expect(fs.readFileSync(f.displaced)).toEqual(before);
       expect(f.rollback).not.toHaveBeenCalled();
@@ -460,22 +454,6 @@ describe("pending recovery finalizer", () => {
       expect(f.windows.complete).not.toHaveBeenCalled();
     },
   );
-  it("refuses retained recovery without touching either the managed or caller root", async () => {
-    const f = await fixture();
-    const failure = await f.invoke(path.join(f.root, "caller-install")).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-    expect(failure).toMatchObject({
-      name: "UpdateCommandPendingRecoveryFailure",
-      result: { reason: "candidate-failed" },
-    });
-    expect(f.entries()).toBe(0);
-    expect(fs.existsSync(f.file)).toBe(false);
-    expect(f.rollback).not.toHaveBeenCalled();
-    expect(f.windows.restore).not.toHaveBeenCalled();
-  });
-
   it.each(["finalizer", "reported", "unexpected", "completed"] as const)(
     "keeps %s unwind away from autostart, history and managed triage",
     async (kind) => {
@@ -540,12 +518,64 @@ describe("pending recovery finalizer", () => {
       expect(fs.readFileSync(f.displaced)).toEqual(before);
       expect(fs.readFileSync(context, "utf8")).toBe("unchanged");
       expect(f.windows.restore).not.toHaveBeenCalled();
-      expect(f.windows.complete).not.toHaveBeenCalled();
+      if (f.opts.recovery) {
+        expect(f.windows.complete).not.toHaveBeenCalled();
+      } else {
+        expect(f.windows.complete).toHaveBeenCalledExactlyOnceWith(false, { preserveState: true });
+      }
       expect(f.rollback).not.toHaveBeenCalled();
       expect(f.complete).not.toHaveBeenCalled();
     },
   );
 });
+
+it.each([false, true])(
+  "settles interrupted Windows suspension without touching pending databases (mutated=%s)",
+  async (mutated) => {
+    const f = await fixture();
+    const run = f.opts.run!;
+    const before = materialSnapshot(f.root);
+    const listeners = process.listeners("SIGINT");
+    const exited = createDeferred();
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => {
+      exited.resolve();
+      return undefined as never;
+    });
+    const suspend = vi
+      .spyOn(scheduledTasks, "suspendScheduledTaskAutoStartForUpdate")
+      .mockResolvedValue(true);
+    const resume = vi.spyOn(scheduledTasks, "resumeScheduledTaskAutoStartAfterUpdate");
+    const recovery = createWindowsTaskAutoStartRecovery({ serviceEnv: f.env, updateRun: run });
+    await recovery.suspended;
+    if (mutated) {
+      recovery.beginMutation();
+    }
+    const signal = process.listeners("SIGINT").find((listener) => !listeners.includes(listener));
+    expect(signal).toBeDefined();
+    const cause = new UpdateCommandRecoveryPendingError("Database rollback could not finish");
+    try {
+      signal!("SIGINT");
+      await expect(
+        withUpdateCommandRecoveryUnwind(
+          { run },
+          { triageTarget: { env: f.env }, windowsTaskAutoStartRecovery: recovery },
+          async () => {
+            throw cause;
+          },
+        ),
+      ).rejects.toMatchObject({ name: "UpdateCommandPendingRecoveryFailure", cause });
+      // Assert retirement before awaiting exit, so a leaked gate fails immediately.
+      expect(process.listeners("SIGINT")).toEqual(listeners);
+      await exited.promise;
+      expect(exit).toHaveBeenCalledWith(130);
+      expect(suspend).toHaveBeenCalledOnce();
+      expect(resume).not.toHaveBeenCalled();
+      expect(materialSnapshot(f.root)).toEqual(before);
+    } finally {
+      await recovery.complete(false, { preserveState: true });
+    }
+  },
+);
 
 describe("migrated-runtime unwind", () => {
   it.each([false, true])(

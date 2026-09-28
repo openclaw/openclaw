@@ -15,14 +15,15 @@ import {
 import { describeUnavailableCronAgent } from "../agent-availability.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { withCronMutationCommitHook } from "../mutation-completion.js";
+import { normalizeCronRunJobId } from "../run-history.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { removeCronJobBaseSession } from "../session-reaper.js";
 import { removeStaleCronJobFamilyRows } from "../store.js";
+import type { CronStoreTransactionHooks } from "../store/transaction-hooks.types.js";
 import {
   isSystemMonitorDeclaration,
   systemOwnedDeclarationKeyNamespace,
 } from "../system-owned-declaration.js";
-import { normalizeCronTaskRunJobId } from "../task-run-history.js";
 import {
   resolveCronAuthenticatedCallerOrigin,
   resolveCronAuthenticatedChannelRequester,
@@ -47,7 +48,7 @@ import {
   cronPatchTouchesDeliveryResolution,
   resolveConfiguredChannelsForValidation,
 } from "./jobs-validation.js";
-import { applyJobPatch, applyDeclarativeJobSpec, createJob } from "./jobs.js";
+import { applyDeclarativeJobSpec, applyJobPatch, createJob } from "./jobs.js";
 import {
   getPendingCronSessionCleanup,
   locked,
@@ -55,10 +56,13 @@ import {
 } from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
 import { resolveCurrentDefaultAgentId, resolveEffectiveJobAgentId } from "./ops-shared.js";
-import { cronRunReceiptMutationHooks } from "./run-receipts.js";
+import {
+  cronRunReceiptMutationHooks,
+  prepareCronRunReceiptOwnerMutationHooks,
+} from "./run-receipts.js";
 import type {
-  CronAddResult,
   CronAddOptions,
+  CronAddResult,
   CronServiceState,
   CronUpdateOptions,
   CronUpdatePrecondition,
@@ -66,15 +70,15 @@ import type {
 } from "./state.js";
 import { emit } from "./state.js";
 import {
+  type CronRollbackSnapshot,
   ensureLoaded,
   ensureLoadedForOperation,
   persist,
-  persistOrRestore,
   persistNativeOrRestore,
+  persistOrRestore,
   pruneCronJobScratchAfterCommit,
   runPostPersistCronNotifications,
   snapshotStoreForRollback,
-  type CronRollbackSnapshot,
   warnIfDisabled,
 } from "./store.js";
 import { armTimer } from "./timer.js";
@@ -109,6 +113,7 @@ async function persistUpdatedJob(params: {
   nextJob: CronJob;
   persistStore: typeof persistOrRestore;
   mutationMethod: "cron.add" | "cron.update";
+  ownerHooks?: CronStoreTransactionHooks;
 }) {
   const { state, snapshot, previousJob, nextJob, persistStore } = params;
   const reservation = state.queuedRunReservationsByJobId.get(nextJob.id);
@@ -137,10 +142,6 @@ async function persistUpdatedJob(params: {
     }
   }
 
-  const defaultAgentId = resolveCurrentDefaultAgentId(state);
-  const ownerChanged =
-    resolveEffectiveJobAgentId(previousJob, defaultAgentId) !==
-    resolveEffectiveJobAgentId(nextJob, defaultAgentId);
   const triggerStateChanged =
     !isDeepStrictEqual(previousJob.trigger, nextJob.trigger) ||
     !isDeepStrictEqual(previousJob.state.triggerState, nextJob.state.triggerState) ||
@@ -166,7 +167,7 @@ async function persistUpdatedJob(params: {
       cronRunReceiptMutationHooks({
         state,
         jobId: nextJob.id,
-        ownerChanged,
+        ownerHooks: params.ownerHooks,
         triggerStateChanged,
         messageActionAuthorityChanged,
         messageSourceAuthorityChanged,
@@ -220,7 +221,7 @@ export async function add(
       throw new Error("cron job id must not be blank");
     }
     if (normalizedId) {
-      normalizeCronTaskRunJobId(normalizedId);
+      normalizeCronRunJobId(normalizedId);
       pendingSessionCleanup = getPendingCronSessionCleanup(state, normalizedId);
       if (pendingSessionCleanup) {
         throw RETRY_ADD_AFTER_SESSION_CLEANUP;
@@ -445,6 +446,12 @@ async function updateLoadedJob(params: {
     opts?.captureRuntimeAuthority !== undefined
       ? persistNativeOrRestore
       : persistOrRestore;
+  const ownerPreparation = prepareCronRunReceiptOwnerMutationHooks({
+    state,
+    previousJob: job,
+    nextJob,
+  });
+  const ownerHooks = ownerPreparation ? await ownerPreparation : undefined;
   const runtimeAuthorityMutation = consumeRuntimeAuthorityMutationOptions(opts);
   reconcileRuntimeAuthority({
     job: nextJob,
@@ -468,6 +475,7 @@ async function updateLoadedJob(params: {
     nextJob,
     persistStore,
     mutationMethod: "cron.update",
+    ownerHooks,
   });
   return nextJob;
 }

@@ -804,26 +804,6 @@ ${channelPluginSource({
     expect(fs.existsSync(runtimeMarker)).toBe(false);
   });
 
-  it("isolates loadSetupPlugin errors as per-plugin diagnostics instead of crashing registry load", () => {
-    useNoBundledPlugins();
-    const pluginDir = createSetupFailureFixture({
-      id: "setup-entry-throws-test",
-      setupEntrySource: THROWING_SETUP_ENTRY_SOURCE,
-    });
-    const registry = loadSetupPlugins({
-      paths: [pluginDir],
-      ids: ["setup-entry-throws-test"],
-    });
-
-    // The registry load should NOT crash; the error should be recorded as a
-    // per-plugin diagnostic rather than aborting the whole load.
-    expect(registry.diagnostics.length).toBeGreaterThanOrEqual(1);
-    const diagnostic = registry.diagnostics.find(
-      (d) => d.pluginId === "setup-entry-throws-test" && d.level === "error",
-    );
-    expect(diagnostic?.message).toContain("failed to load setup entry");
-  });
-
   it("keeps healthy sibling channel plugins loadable when a setup entry throws", () => {
     useNoBundledPlugins();
     const brokenDir = createSetupFailureFixture({

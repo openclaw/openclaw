@@ -78,4 +78,6 @@ export type OperatorToolGatewayAuthority = {
   operatorRunAuthority?: AdmittedRunOperatorAuthority;
   signal: AbortSignal;
   assertCurrent?: () => void;
+  /** Pure input policy; applies at effects, never settled results or cleanup. */
+  assertInputCommitAllowed?: () => void;
 };

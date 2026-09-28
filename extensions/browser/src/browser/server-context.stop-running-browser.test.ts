@@ -7,10 +7,6 @@ const pwAiMocks = vi.hoisted(() => {
   const closePlaywrightBrowserConnection = vi.fn(async (_opts?: { cdpUrl?: string }) => {});
   return {
     closePlaywrightBrowserConnection,
-    retirePlaywrightBrowserConnection: vi.fn((opts?: { cdpUrl?: string }) => {
-      void closePlaywrightBrowserConnection(opts);
-      return true;
-    }),
     retirePlaywrightBrowserConnectionExact: vi.fn((opts: { cdpUrl: string }) => ({
       retired: true,
       close: async () => await closePlaywrightBrowserConnection(opts),

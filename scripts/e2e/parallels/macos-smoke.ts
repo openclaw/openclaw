@@ -47,6 +47,7 @@ import { runMacosHostCommand as run } from "./macos-exec.ts";
 import { resolveMacosVmName, waitForVmStatus } from "./parallels-vm.ts";
 import { PhaseRunner } from "./phase-runner.ts";
 import {
+  assertDevChannelUpdate,
   installSmokeRuntimeCompanions,
   npmRegistryEnv,
   packAndServeSmokeArtifact,
@@ -905,29 +906,9 @@ ${guestOpenClawEntryRunner} update status --json`,
 
   private verifyDevChannelUpdate(): void {
     const status = this.guestOpenClawEntryExec(["update", "status", "--json"]);
-    const expectedBranch = this.devTargetCommit ? "HEAD" : "main";
-    for (const needle of [
-      '"installKind": "git"',
-      '"value": "dev"',
-      `"branch": "${expectedBranch}"`,
-    ]) {
-      if (!status.includes(needle)) {
-        throw new Error(`dev update status missing ${needle}`);
-      }
-    }
-    if (this.devTargetCommit) {
-      const checkoutHead =
-        this.guestSh(`git -C ${shellQuote(`${this.guestHome()}/openclaw`)} rev-parse HEAD`)
-          .replaceAll("\r", "")
-          .trim()
-          .split("\n")
-          .at(-1) ?? "";
-      if (checkoutHead !== this.devTargetCommit) {
-        throw new Error(
-          `dev update checkout head ${checkoutHead || "<empty>"} did not match ${this.devTargetCommit}`,
-        );
-      }
-    }
+    assertDevChannelUpdate(status, this.devTargetCommit, () =>
+      this.guestSh(`git -C ${shellQuote(`${this.guestHome()}/openclaw`)} rev-parse HEAD`),
+    );
   }
 
   private startManualGatewayIfNeeded(): void {

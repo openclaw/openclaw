@@ -13,6 +13,7 @@ import {
   withWorkspaceHashMemo,
 } from "./workspace-hash-memo.js";
 import { parseChangedWorkspaceResult } from "./workspace-manifest-comparison.js";
+import type { WorkspaceStageInputSource } from "./workspace-manifest-computation.js";
 import {
   prepareWorkspaceStageInput,
   loadStagedWorkspaceManifest,
@@ -164,24 +165,26 @@ export async function hasWorkerWorkspaceResultRef(params: {
   throw new Error((result.stderr || result.stdout || "git show-ref failed").trim());
 }
 
-async function stageWorkerWorkspaceResult(params: {
-  root: string;
-  stagingRoot: string;
-  stagedResultRef: string;
-  baseManifestRef: string;
-  currentManifestRef: string;
-  baseManifestRaw: string;
-  currentManifestRaw: string;
-  assertCurrent?: () => void;
-}): Promise<string> {
+async function stageWorkerWorkspaceResult(
+  params: WorkspaceStageInputSource<string> & {
+    root: string;
+    stagingRoot: string;
+    stagedResultRef: string;
+    assertCurrent?: () => void;
+  },
+): Promise<string> {
   const root = await ensureWorkerWorkspaceResultRepository(params.root, params.assertCurrent);
   const stagedResultRef = requireWorkerResultStorageRef(params.stagedResultRef);
+  params.assertCurrent?.();
   const temporary = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-workspace-import-"),
   );
   try {
     const inputPath = path.join(temporary, "fast-import");
+    // Preparation owns only a private input file, never the accepted refs.
+    params.assertCurrent?.();
     await prepareWorkspaceStageInput({ ...params, inputPath });
+    params.assertCurrent?.();
     const input = await fs.open(inputPath, "r");
     try {
       await withWorkspaceResultRefMutation(root, (baseEnv) => {
@@ -290,50 +293,44 @@ export async function applyStagedWorkerWorkspaceResult(params: {
     conflictPaths: string[];
   }) => Promise<void>;
 }): Promise<WorkerWorkspaceApplyResult & { changed: boolean }> {
-  return await withWorkspaceHashContext(
-    async () => await applyStagedWorkerWorkspaceResultWithMemo(params),
-  );
-}
-
-async function applyStagedWorkerWorkspaceResultWithMemo(
-  params: Parameters<typeof applyStagedWorkerWorkspaceResult>[0],
-): Promise<WorkerWorkspaceApplyResult & { changed: boolean }> {
-  const root = await fs.realpath(params.root);
-  const staged = await readStagedWorkerWorkspaceResult(root, params.stagedResultRef);
-  if (params.alreadyAccepted || staged.baseManifestRef !== params.expectedBaseManifestRef) {
-    // An acceptance marker proves the mutations already ran even when omitted
-    // local nodes left the manifest ref unchanged. Re-snapshot; never replay.
-    // A base advance proves the same commit-before-acceptance crash window.
-    const accepted = await inspectAcceptedWorkerWorkspace({
-      root,
-      expectedManifestRef: params.expectedBaseManifestRef,
-      allowAdvancedLocalState: true,
-      base: staged.base,
-      current: staged.current,
-    });
-    if (!accepted) {
-      throw new Error("Cloud workspace staged result does not match the placement base");
+  return await withWorkspaceHashContext(async () => {
+    const root = await fs.realpath(params.root);
+    const staged = await readStagedWorkerWorkspaceResult(root, params.stagedResultRef);
+    if (params.alreadyAccepted || staged.baseManifestRef !== params.expectedBaseManifestRef) {
+      // An acceptance marker proves the mutations already ran even when omitted
+      // local nodes left the manifest ref unchanged. Re-snapshot; never replay.
+      // A base advance proves the same commit-before-acceptance crash window.
+      const accepted = await inspectAcceptedWorkerWorkspace({
+        root,
+        expectedManifestRef: params.expectedBaseManifestRef,
+        allowAdvancedLocalState: true,
+        base: staged.base,
+        current: staged.current,
+      });
+      if (!accepted) {
+        throw new Error("Cloud workspace staged result does not match the placement base");
+      }
+      params.assertCurrent?.();
+      params.journal.commit(accepted.manifestRef);
+      return {
+        ...accepted,
+        changed: staged.changed,
+      };
     }
-    params.assertCurrent?.();
-    params.journal.commit(accepted.manifestRef);
-    return {
-      ...accepted,
-      changed: staged.changed,
-    };
-  }
-  return await withMaterializedWorkerWorkspaceResult(staged, async ({ stagingRoot }) => {
-    const applied = await applyStagedWorkerWorkspace({
-      root,
-      stagingRoot,
-      baseManifestRef: staged.baseManifestRef,
-      currentManifestRef: staged.currentManifestRef,
-      base: staged.base,
-      current: staged.current,
-      journal: params.journal,
-      assertCurrent: params.assertCurrent,
-      acceptance: { kind: "reconcile", publish: params.publishAcceptedManifest },
+    return await withMaterializedWorkerWorkspaceResult(staged, async ({ stagingRoot }) => {
+      const applied = await applyStagedWorkerWorkspace({
+        root,
+        stagingRoot,
+        baseManifestRef: staged.baseManifestRef,
+        currentManifestRef: staged.currentManifestRef,
+        base: staged.base,
+        current: staged.current,
+        journal: params.journal,
+        assertCurrent: params.assertCurrent,
+        acceptance: { kind: "reconcile", publish: params.publishAcceptedManifest },
+      });
+      return { ...applied, changed: staged.changed };
     });
-    return { ...applied, changed: staged.changed };
   });
 }
 
@@ -491,7 +488,7 @@ export async function restoreStagedWorkerWorkspaceResultFromCleanup(params: {
 
 export async function deleteWorkerWorkspaceResultCleanupRefs(params: {
   root: string;
-  retainedRefs?: () => ReadonlySet<string>;
+  retainedRefs?: () => ReadonlySet<string> | Promise<ReadonlySet<string>>;
 }): Promise<void> {
   const root = await fs.realpath(params.root);
   const output = await requireGit(root, [
@@ -501,10 +498,10 @@ export async function deleteWorkerWorkspaceResultCleanupRefs(params: {
   ]);
   const cleanupRefs = output.split("\n").filter(Boolean);
   if (cleanupRefs.length > 0) {
-    await updateWorkspaceResultRefs(root, () => {
+    await updateWorkspaceResultRefs(root, async () => {
       // Read fences after inventory and the shared ref queue wait. Later
       // claims cannot appear in these immutable claim refs.
-      const retainedRefs = params.retainedRefs?.();
+      const retainedRefs = await params.retainedRefs?.();
       return cleanupRefs
         .map(requireWorkerResultStorageRef)
         .filter((ref) => !retainedRefs?.has(ref))

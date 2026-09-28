@@ -33,8 +33,9 @@ import {
   turn,
   unusedEnvironments,
 } from "./worker-turn-launcher.test-support.js";
+import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
-import { applyStagedWorkerWorkspace, readActualWorkspaceManifest } from "./workspace-reconcile.js";
+import { applyStagedWorkerWorkspace } from "./workspace-reconcile.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
 
 describe("current attachments in an active remote placement", () => {
@@ -51,8 +52,8 @@ describe("current attachments in an active remote placement", () => {
       for (const directory of [remote, local]) {
         await writeFile(path.join(directory, "remote-edits.txt"), "preserve me");
       }
-      const base = await readActualWorkspaceManifest({ root: local, baseCommit: null });
-      seedActivePlacement(executionMode, remote);
+      const base = await captureWorkspaceManifest({ root: local, baseCommit: null });
+      await seedActivePlacement(executionMode, remote);
       // These arrive after placement: the initial workspace snapshot cannot include them.
       const pdf = Buffer.concat([Buffer.from("%PDF-1.7\n"), Buffer.alloc(220_000, 65)]);
       const image = Buffer.from(

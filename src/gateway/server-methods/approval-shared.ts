@@ -40,12 +40,6 @@ const APPROVAL_ALREADY_RESOLVED_DETAILS = {
   reason: "APPROVAL_ALREADY_RESOLVED",
 } as const;
 
-function resolveRecordedApprovalDecision<TPayload>(
-  record: ExecApprovalRecord<TPayload>,
-): ExecApprovalDecision | undefined {
-  return record.decision ?? record.consumedDecision;
-}
-
 type ApprovalTurnSourceFields = {
   turnSourceChannel?: string | null;
   turnSourceAccountId?: string | null;
@@ -456,7 +450,7 @@ function respondRepeatedApprovalResolution<TPayload>(
 ): void {
   // Identical retries are idempotent; a conflicting retry must never replace
   // or obscure the first durable operator decision.
-  if (resolveRecordedApprovalDecision(record) === decision) {
+  if ((record.decision ?? record.consumedDecision) === decision) {
     respond(true, { ok: true }, undefined);
     return;
   }

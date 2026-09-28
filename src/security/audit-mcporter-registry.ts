@@ -1,9 +1,8 @@
 // Bounded read of the global MCP registry for security audit.
-import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { readFileHandleBounded } from "@openclaw/fs-safe/advanced";
-import { FsSafeError } from "../infra/fs-safe.js";
+import { hasErrnoCode } from "../infra/errno.js";
+import { FsSafeError, readLocalFileSafely } from "../infra/fs-safe.js";
 
 const MAX_MCPORTER_REGISTRY_BYTES = 16 * 1024 * 1024;
 
@@ -17,47 +16,31 @@ export type McporterRegistryReadOutcome =
   | { status: "missing" }
   | { status: "rejected"; reason: McporterRegistryRejectReason };
 
-function isEnoent(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException | null)?.code === "ENOENT";
-}
-
 export async function readBoundedMcporterRegistry(
   stateDir: string,
 ): Promise<McporterRegistryReadOutcome> {
   const registryPath = path.join(stateDir, "skills", "config", "mcporter.json");
-  let handle: fs.FileHandle | undefined;
   try {
-    // Open without O_NOFOLLOW so valid symlinked registries are followed,
-    // while still bounding the read to avoid audit OOM on oversized targets.
-    handle = await fs.open(registryPath, constants.O_RDONLY | constants.O_NONBLOCK);
-  } catch (error) {
-    // ENOENT (including a dangling symlink) means no registry; anything else
-    // means one exists but cannot be inspected.
-    return isEnoent(error) ? { status: "missing" } : { status: "rejected", reason: "unreadable" };
-  }
-  try {
-    const stat = await handle.stat();
-    if (!stat.isFile()) {
-      return { status: "rejected", reason: "non-regular" };
-    }
-    if (stat.size > MAX_MCPORTER_REGISTRY_BYTES) {
-      return { status: "rejected", reason: "oversized" };
-    }
-    const content = await readFileHandleBounded(handle, MAX_MCPORTER_REGISTRY_BYTES);
-    let value: unknown;
+    // Configured registry links may point outside the state directory.
+    const { buffer } = await readLocalFileSafely({
+      filePath: await fs.realpath(registryPath),
+      maxBytes: MAX_MCPORTER_REGISTRY_BYTES,
+    });
     try {
-      value = JSON.parse(content.toString("utf-8"));
+      const value: unknown = JSON.parse(buffer.toString("utf-8"));
+      return { status: "ok", value };
     } catch {
       return { status: "rejected", reason: "malformed" };
     }
-    return { status: "ok", value };
   } catch (error) {
+    const code = error instanceof FsSafeError ? error.code : undefined;
+    if (hasErrnoCode(error, "ENOENT") || code === "not-found") {
+      return { status: "missing" };
+    }
     return {
       status: "rejected",
       reason:
-        error instanceof FsSafeError && error.code === "too-large" ? "oversized" : "unreadable",
+        code === "too-large" ? "oversized" : code === "not-file" ? "non-regular" : "unreadable",
     };
-  } finally {
-    await handle.close();
   }
 }

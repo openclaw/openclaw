@@ -30,27 +30,15 @@ describe("normalizeGatewayEvent IDs", () => {
 });
 
 describe("normalizeGatewayEvent terminal tool item status", () => {
-  it("classifies a failed terminal tool item as tool.call.failed", () => {
-    expect(normalizeGatewayEvent(agentItemEvent({ phase: "end", status: "failed" })).type).toBe(
-      "tool.call.failed",
-    );
-  });
-
-  it("classifies a blocked terminal tool item as tool.call.failed", () => {
-    expect(normalizeGatewayEvent(agentItemEvent({ phase: "end", status: "blocked" })).type).toBe(
-      "tool.call.failed",
-    );
-  });
-
-  it("still classifies a completed terminal tool item as tool.call.completed", () => {
-    expect(normalizeGatewayEvent(agentItemEvent({ phase: "end", status: "completed" })).type).toBe(
-      "tool.call.completed",
-    );
-  });
-
-  it("still classifies a phase:end tool item without status as tool.call.completed", () => {
-    expect(normalizeGatewayEvent(agentItemEvent({ phase: "end" })).type).toBe(
-      "tool.call.completed",
-    );
+  it.each([
+    [{ phase: "end", status: "failed" }, "tool.call.failed"],
+    [{ phase: "end", status: "blocked" }, "tool.call.failed"],
+    [{ phase: "end", status: "completed" }, "tool.call.completed"],
+    [{ phase: "end", status: "skipped" }, "tool.call.failed"],
+    [{ phase: "end" }, "tool.call.completed"],
+  ])("classifies %j as %s", (data, expectedType) => {
+    const event = normalizeGatewayEvent(agentItemEvent(data));
+    expect(event.type).toBe(expectedType);
+    expect(event.data).toEqual(data);
   });
 });

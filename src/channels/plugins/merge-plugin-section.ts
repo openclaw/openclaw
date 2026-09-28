@@ -20,9 +20,7 @@ export function mergeChannelPluginSection<T>(
         merged[key] = value;
       }
     }
-    return {
-      ...merged,
-    } as T; // SAFETY: Base fields and defined overrides share the section type T.
+    return merged as T; // SAFETY: Base fields and defined overrides share the section type T.
   }
   return overrideValue ?? baseValue;
 }

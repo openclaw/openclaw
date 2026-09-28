@@ -77,7 +77,7 @@ vi.mock("./embeddings.js", () => ({
 }));
 
 import { MemoryIndexDatabase } from "./manager-database-context.js";
-import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
+import { MemorySyncTestHarness } from "./manager-sync-ops.test-support.js";
 
 type MemoryIndexEntry = {
   path: string;
@@ -100,7 +100,7 @@ function createDb(): DatabaseSync {
   return db;
 }
 
-class SessionSyncYieldHarness extends MemoryManagerSyncOps {
+class SessionSyncYieldHarness extends MemorySyncTestHarness {
   protected readonly createProvider = (): never => {
     throw new Error("Sync yield harness does not acquire embedding providers");
   };

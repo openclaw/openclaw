@@ -1,3 +1,4 @@
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import {
   listActiveEmbeddedRunSessionIds,
@@ -5,14 +6,7 @@ import {
 } from "../embedded-agent-runner/active-run-projections.js";
 
 function normalizeStringSet(values: Iterable<string> | undefined): Set<string> {
-  const normalized = new Set<string>();
-  for (const value of values ?? []) {
-    const trimmed = value.trim();
-    if (trimmed) {
-      normalized.add(trimmed);
-    }
-  }
-  return normalized;
+  return new Set(normalizeStringEntries(values ? [...values] : undefined));
 }
 
 export function createCurrentProcessOwnerLookup(params: {

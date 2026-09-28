@@ -1,11 +1,10 @@
 package ai.openclaw.app.wear
 
-import ai.openclaw.app.gateway.GatewayRequestRejected
-import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
 import ai.openclaw.app.voice.RealtimeAgentCoordinator
 import ai.openclaw.app.voice.RealtimeAgentSession
+import ai.openclaw.app.voice.requestPhoneRealtimeSessionWithLanguageFallback
 import ai.openclaw.wear.shared.WearProtocol
 import ai.openclaw.wear.shared.WearRealtimeAudioFrameType
 import ai.openclaw.wear.shared.WearRealtimeTalkEntry
@@ -39,7 +38,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 
@@ -146,10 +144,7 @@ internal class WearRealtimeTalkController(
       onWorking = { activeSession ->
         synchronized(lifecycleStateLock) {
           if (sessionId == activeSession.relaySessionId) {
-            updateState(
-              active = true,
-              listening = false,
-              speaking = false,
+            updateActiveState(
               status = WearRealtimeTalkStatus.THINKING,
               statusText = "Agent working",
             )
@@ -188,10 +183,7 @@ internal class WearRealtimeTalkController(
           activeOwner = owner
           ownerSessionKey = sessionKey
           val generation = lifecycleGeneration.get()
-          updateState(
-            active = true,
-            listening = false,
-            speaking = false,
+          updateActiveState(
             status = WearRealtimeTalkStatus.CONNECTING,
             statusText = "Connecting…",
           )
@@ -249,10 +241,7 @@ internal class WearRealtimeTalkController(
             eventDispatchScope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
             startOutputLoop(owner, createdSessionId)
             startAppendLoop(owner, createdSessionId)
-            updateState(
-              active = true,
-              listening = true,
-              speaking = false,
+            updateActiveState(
               status = WearRealtimeTalkStatus.LISTENING,
               statusText = "Listening",
             )
@@ -262,8 +251,7 @@ internal class WearRealtimeTalkController(
       if (!activated) {
         if (!createdSessionId.isNullOrBlank()) {
           runCatching {
-            val params = buildJsonObject { put("sessionId", JsonPrimitive(createdSessionId)) }
-            requestGateway("talk.session.close", params.toString(), 5_000L)
+            closeGatewaySession(createdSessionId)
           }
         }
         return@withLock false
@@ -275,24 +263,14 @@ internal class WearRealtimeTalkController(
   private suspend fun requestRealtimeSession(
     sessionKey: String,
     language: String?,
-  ): String {
-    try {
-      return requestGateway(
+  ): String =
+    requestPhoneRealtimeSessionWithLanguageFallback(language) { requestedLanguage ->
+      requestGateway(
         "talk.session.create",
-        buildSessionCreateParams(sessionKey, language).toString(),
+        buildSessionCreateParams(sessionKey, requestedLanguage).toString(),
         SESSION_CREATE_TIMEOUT_MILLIS,
       )
-    } catch (err: GatewayRequestRejected) {
-      if (language != null && err.gatewayError.isUnsupportedSessionLanguageParam()) {
-        return requestGateway(
-          "talk.session.create",
-          buildSessionCreateParams(sessionKey, language = null).toString(),
-          SESSION_CREATE_TIMEOUT_MILLIS,
-        )
-      }
-      throw err
     }
-  }
 
   private fun buildSessionCreateParams(
     sessionKey: String,
@@ -375,16 +353,7 @@ internal class WearRealtimeTalkController(
     }
   }
 
-  fun abort() {
-    val closingOwner =
-      synchronized(lifecycleStateLock) {
-        lifecycleGeneration.incrementAndGet()
-        val owner = activeOwner
-        resetLocked()
-        owner
-      }
-    closingOwner?.let(onForceCloseWatchChannel)
-  }
+  fun abort() = abort(expectedOwner = null, expectedSessionId = null)
 
   private fun abort(
     expectedOwner: WearRealtimeAttemptOwner?,
@@ -454,12 +423,9 @@ internal class WearRealtimeTalkController(
 
     when (obj["type"].asStringOrNull()) {
       "ready", "inputAudio" -> {
-        updateStateIfCurrent(
+        updateActiveStateIfCurrent(
           owner = owner,
           sessionId = currentSessionId,
-          active = true,
-          listening = true,
-          speaking = false,
           status = WearRealtimeTalkStatus.LISTENING,
           statusText = "Listening",
         )
@@ -487,12 +453,9 @@ internal class WearRealtimeTalkController(
         if (!enqueueOutput(owner, currentSessionId, WearRealtimeAudioFrameType.OUTPUT_PCM, bytes)) {
           return
         }
-        updateStateIfCurrent(
+        updateActiveStateIfCurrent(
           owner = owner,
           sessionId = currentSessionId,
-          active = true,
-          listening = false,
-          speaking = true,
           status = WearRealtimeTalkStatus.SPEAKING,
           statusText = "Speaking…",
         )
@@ -568,10 +531,7 @@ internal class WearRealtimeTalkController(
         "user" -> {
           upsertConversation(WearRealtimeTalkRole.USER, text, final)
           if (final) {
-            updateState(
-              active = true,
-              listening = false,
-              speaking = false,
+            updateActiveState(
               status = WearRealtimeTalkStatus.THINKING,
               statusText = "Agent working",
             )
@@ -690,12 +650,9 @@ internal class WearRealtimeTalkController(
             WearRealtimeAudioFrameType.CLEAR_OUTPUT -> {
               playbackEndsAtMillis = 0L
               playbackIdleJob?.cancel()
-              updateStateIfCurrent(
+              updateActiveStateIfCurrent(
                 owner = owner,
                 sessionId = activeSessionId,
-                active = true,
-                listening = true,
-                speaking = false,
                 status = WearRealtimeTalkStatus.LISTENING,
                 statusText = "Listening",
               )
@@ -803,12 +760,9 @@ internal class WearRealtimeTalkController(
           delay(20L)
         }
         if (isCurrent(owner, activeSessionId)) {
-          updateStateIfCurrent(
+          updateActiveStateIfCurrent(
             owner = owner,
             sessionId = activeSessionId,
-            active = true,
-            listening = true,
-            speaking = false,
             status = WearRealtimeTalkStatus.LISTENING,
             statusText = "Listening",
           )
@@ -891,18 +845,15 @@ internal class WearRealtimeTalkController(
     )
   }
 
-  private fun updateState(
-    active: Boolean,
-    listening: Boolean,
-    speaking: Boolean,
+  private fun updateActiveState(
     status: WearRealtimeTalkStatus,
     statusText: String,
   ) {
     setSnapshot(
       _snapshot.value.copy(
-        active = active,
-        listening = listening,
-        speaking = speaking,
+        active = true,
+        listening = status == WearRealtimeTalkStatus.LISTENING,
+        speaking = status == WearRealtimeTalkStatus.SPEAKING,
         status = status,
         statusText = statusText,
         attemptId = activeOwner?.attemptId,
@@ -910,18 +861,15 @@ internal class WearRealtimeTalkController(
     )
   }
 
-  private fun updateStateIfCurrent(
+  private fun updateActiveStateIfCurrent(
     owner: WearRealtimeAttemptOwner,
     sessionId: String,
-    active: Boolean,
-    listening: Boolean,
-    speaking: Boolean,
     status: WearRealtimeTalkStatus,
     statusText: String,
   ) {
     synchronized(lifecycleStateLock) {
       if (!isCurrent(owner, sessionId)) return
-      updateState(active, listening, speaking, status, statusText)
+      updateActiveState(status, statusText)
     }
   }
 
@@ -957,24 +905,8 @@ internal class WearRealtimeTalkController(
             conversation = _snapshot.value.conversation.map { it.copy(fullTextAvailable = false) },
           ),
         )
-        sessionId = null
-        activeOwner = null
-        ownerSessionKey = null
+        closeTransportLocked()
         conversation = emptyList()
-        audioFrames?.close()
-        audioFrames = null
-        appendJob?.cancel()
-        appendJob = null
-        synchronized(outputQueueLock) { outputQueue.also { outputQueue = null } }
-          ?.messages
-          ?.close()
-        outputJob?.cancel()
-        outputJob = null
-        eventDispatchScope?.cancel()
-        eventDispatchScope = null
-        playbackIdleJob?.cancel()
-        playbackIdleJob = null
-        playbackEndsAtMillis = 0L
         currentOwner
       }
     closingSession?.takeIf(String::isNotBlank)?.let { session ->
@@ -988,9 +920,7 @@ internal class WearRealtimeTalkController(
     requestGateway("talk.session.close", params.toString(), 5_000L)
   }
 
-  private fun resetLocked() {
-    val closingAttemptId = activeOwner?.attemptId
-    realtimeAgentCoordinator.resetTransport()
+  private fun closeTransportLocked() {
     sessionId = null
     activeOwner = null
     ownerSessionKey = null
@@ -1008,6 +938,12 @@ internal class WearRealtimeTalkController(
     playbackIdleJob?.cancel()
     playbackIdleJob = null
     playbackEndsAtMillis = 0L
+  }
+
+  private fun resetLocked() {
+    val closingAttemptId = activeOwner?.attemptId
+    realtimeAgentCoordinator.resetTransport()
+    closeTransportLocked()
     userEntryId = null
     assistantEntryId = null
     conversation = emptyList()
@@ -1033,11 +969,5 @@ internal class WearRealtimeTalkController(
 }
 
 private fun JsonElement?.asBooleanOrNull(): Boolean? = (this as? JsonPrimitive)?.booleanOrNull
-
-private fun GatewaySession.ErrorShape.isUnsupportedSessionLanguageParam(): Boolean =
-  code == "INVALID_REQUEST" &&
-    message
-      .lowercase(Locale.ROOT)
-      .contains("invalid talk.session.create params")
 
 private const val PCM_16_BYTES = 2

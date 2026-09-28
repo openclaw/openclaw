@@ -39,6 +39,7 @@ import {
 } from "./plugin-metadata-snapshot.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { resolveBundledProviderCompatPluginIds } from "./providers.js";
+import { groupPluginRecords } from "./record-groups.js";
 import type { PluginRegistry } from "./registry.js";
 import { listImportedRuntimePluginIds } from "./runtime.js";
 import { buildPluginRuntimeLoadOptions } from "./runtime/load-context.js";
@@ -570,35 +571,18 @@ function buildPluginInspectRecord(
   };
 }
 
-function groupByPluginId<T>(rows: readonly T[], getPluginId: (row: T) => string | undefined) {
-  const grouped = new Map<string, T[]>();
-  for (const row of rows) {
-    const pluginId = getPluginId(row);
-    if (pluginId === undefined) {
-      continue;
-    }
-    const group = grouped.get(pluginId);
-    if (group) {
-      group.push(row);
-    } else {
-      grouped.set(pluginId, [row]);
-    }
-  }
-  return grouped;
-}
-
 export function buildAllPluginInspectReports(params: PluginInspectParams): PluginInspectReport[] {
   const context = resolvePluginInspectContext(params);
   const { report } = context;
   if (report.plugins.length < 2) {
     return report.plugins.map((plugin) => buildPluginInspectRecord(plugin, context));
   }
-  const typedHooks = groupByPluginId(report.typedHooks, (entry) => entry.pluginId);
-  const hooks = groupByPluginId(report.hooks, (entry) => entry.pluginId);
-  const tools = groupByPluginId(report.tools, (entry) => entry.pluginId);
-  const diagnostics = groupByPluginId(report.diagnostics, (entry) => entry.pluginId);
-  const sessionCatalogs = groupByPluginId(report.sessionCatalogs, (entry) => entry.pluginId);
-  const gatewayMethodDescriptors = groupByPluginId(
+  const typedHooks = groupPluginRecords(report.typedHooks, (entry) => entry.pluginId);
+  const hooks = groupPluginRecords(report.hooks, (entry) => entry.pluginId);
+  const tools = groupPluginRecords(report.tools, (entry) => entry.pluginId);
+  const diagnostics = groupPluginRecords(report.diagnostics, (entry) => entry.pluginId);
+  const sessionCatalogs = groupPluginRecords(report.sessionCatalogs, (entry) => entry.pluginId);
+  const gatewayMethodDescriptors = groupPluginRecords(
     report.gatewayMethodDescriptors ?? [],
     (descriptor) => (descriptor.owner.kind === "plugin" ? descriptor.owner.pluginId : undefined),
   );

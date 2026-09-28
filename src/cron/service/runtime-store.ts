@@ -9,6 +9,10 @@ import {
   upsertCronJobRow,
 } from "../store/row-codec.js";
 import {
+  prepareCronRunReceiptWriteSchema,
+  type CronRunReceiptWriteSchema,
+} from "../store/run-receipt-write-admission.js";
+import {
   loadCronRuntimeAuthorities,
   repairCronRuntimeAuthorityRows,
 } from "../store/runtime-authority-store.js";
@@ -57,6 +61,7 @@ export function commitCronRuntimeRows<T>(params: {
   transactionHooks?: CronStoreTransactionHooks;
   mutate: (context: {
     database: DatabaseSync;
+    receiptSchema: CronRunReceiptWriteSchema;
     jobs: ReadonlyMap<string, CronStoredJob>;
   }) => CronRuntimeMutation<T>;
 }): T {
@@ -64,6 +69,7 @@ export function commitCronRuntimeRows<T>(params: {
   const jobIds = new Set(params.jobIds);
   const committed = runOpenClawStateWriteTransaction(
     ({ db }) => {
+      const receiptSchema = prepareCronRunReceiptWriteSchema(db);
       const rows = loadCronRows(db, storeKey, jobIds, {
         includeGrantDefinitionProjection: true,
       });
@@ -79,12 +85,12 @@ export function commitCronRuntimeRows<T>(params: {
         });
       }
       const jobs = new Map(loadedJobs.map((job) => [job.id, job] as const));
-      const mutation = params.mutate({ database: db, jobs });
+      const mutation = params.mutate({ database: db, jobs, receiptSchema });
       const upsertJobIds = [...new Set(mutation.upsertJobIds ?? [])].toSorted();
       const deleteJobIds = [...new Set(mutation.deleteJobIds ?? [])].toSorted();
       const runHooks = mutation.runHooks !== false;
       if (runHooks) {
-        params.transactionHooks?.beforeWrite?.(db);
+        params.transactionHooks?.beforeWrite?.(db, receiptSchema);
       }
       for (const jobId of deleteJobIds) {
         deleteCronJobRowInDatabase(db, storeKey, jobId);
@@ -97,7 +103,7 @@ export function commitCronRuntimeRows<T>(params: {
         }
       }
       if (runHooks) {
-        params.transactionHooks?.afterWrite?.(db);
+        params.transactionHooks?.afterWrite?.(db, receiptSchema);
       }
       return {
         changed: upsertJobIds.length > 0 || deleteJobIds.length > 0,

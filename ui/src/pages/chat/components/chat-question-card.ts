@@ -641,7 +641,7 @@ class ChatQuestionPanel extends OpenClawLightDomElement {
                           aria-label=${t("chat.actions.dismissError")}
                           @click=${props.onDismissError}
                         >
-                          ×
+                          ${icons.x}
                         </button>`
                       : nothing
                   }

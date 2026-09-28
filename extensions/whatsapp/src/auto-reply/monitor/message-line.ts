@@ -33,7 +33,6 @@ export function buildInboundLine(params: {
   const baseLine = `${msg.payload.body}${replyContext ? `\n\n${replyContext}` : ""}`;
   const sender = getSenderIdentity(msg);
 
-  // Wrap with standardized envelope for the agent.
   return formatInboundEnvelope({
     channel: "WhatsApp",
     from: conversationKind === "group" ? conversationId : conversationId.replace(/^whatsapp:/, ""),

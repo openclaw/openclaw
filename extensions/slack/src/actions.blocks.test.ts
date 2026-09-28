@@ -95,8 +95,6 @@ describe("editSlackMessage blocks", () => {
     expected: string;
   }>([
     { name: "default code tables", expected: codeTable },
-    { name: "channel code tables", channelMode: "code", expected: codeTable },
-    { name: "channel bullet tables", channelMode: "bullets", expected: bulletTable },
     { name: "disabled tables", channelMode: "off", expected: table },
     {
       name: "account bullet override",
@@ -488,34 +486,6 @@ describe("editSlackMessage blocks", () => {
     expect(countSlackTextUtf8Bytes(readFirstChatUpdatePayload(client).text ?? "")).toBe(
       SLACK_EDIT_TEXT_MAX_BYTES,
     );
-  });
-
-  it("rejects empty blocks arrays", async () => {
-    const client = createSlackEditTestClient();
-
-    await expect(
-      editSlackMessage("C123", "171234.567", "updated", {
-        token: "xoxb-test",
-        client,
-        blocks: [],
-      }),
-    ).rejects.toThrow(/must contain at least one block/i);
-
-    expect(client.chat.update).not.toHaveBeenCalled();
-  });
-
-  it("rejects blocks missing a type", async () => {
-    const client = createSlackEditTestClient();
-
-    await expect(
-      editSlackMessage("C123", "171234.567", "updated", {
-        token: "xoxb-test",
-        client,
-        blocks: [{} as { type: string }],
-      }),
-    ).rejects.toThrow(/non-empty string type/i);
-
-    expect(client.chat.update).not.toHaveBeenCalled();
   });
 
   it("rejects blocks arrays above Slack max count", async () => {

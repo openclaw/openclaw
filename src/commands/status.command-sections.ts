@@ -1,6 +1,3 @@
-// Section-level value and row builders for the standard status report.
-// These helpers own compact operator text for agents, tasks, memory, health, sessions, and footers.
-
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   buildPairingConnectRecoveryTitle,
@@ -9,6 +6,7 @@ import {
 } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { TableColumn } from "../../packages/terminal-core/src/table.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
+import { formatMissingChildRuntimeWarning } from "../infra/child-runtime-viability.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { Tone } from "../memory-host-sdk/status.js";
@@ -27,7 +25,7 @@ type AgentStatusLike = {
   agents: AgentLocalStatus[];
 };
 
-type SummaryLike = Pick<StatusSummary, "tasks" | "taskAudit" | "heartbeat" | "sessions">;
+type SummaryLike = Pick<StatusSummary, "heartbeat" | "sessions">;
 type MemoryLike = MemoryStatusSnapshot | null;
 type SessionsRecentLike = StatusSummary["sessions"]["recent"][number];
 type EventLoopHealthLike = NonNullable<HealthSummary["eventLoop"]>;
@@ -63,7 +61,6 @@ export const statusHealthColumns: TableColumn[] = [
   { key: "Detail", header: "Detail", flex: true, minWidth: 28 },
 ];
 
-/** Formats the agents overview row value, including default-agent recent activity. */
 export function buildStatusAgentsValue(params: {
   agentStatus: AgentStatusLike;
   formatTimeAgo: (ageMs: number) => string;
@@ -79,52 +76,19 @@ export function buildStatusAgentsValue(params: {
   return `${params.agentStatus.agents.length} · ${pending} · sessions ${params.agentStatus.totalSessions}${defSuffix}`;
 }
 
-/** Formats task counters and audit state for the overview table. */
-export function buildStatusTasksValue(params: {
-  summary: Pick<SummaryLike, "tasks" | "taskAudit">;
-  warn: (value: string) => string;
-  muted: (value: string) => string;
-}) {
-  if (params.summary.tasks.total <= 0) {
-    return params.muted("none");
-  }
-  return [
-    `${params.summary.tasks.active} active`,
-    `${params.summary.tasks.byStatus.queued} queued`,
-    `${params.summary.tasks.byStatus.running} running`,
-    params.summary.tasks.failures > 0
-      ? params.warn(
-          `${params.summary.tasks.failures} issue${params.summary.tasks.failures === 1 ? "" : "s"}`,
-        )
-      : params.muted("no issues"),
-    params.summary.taskAudit.errors > 0
-      ? params.warn(
-          `audit ${params.summary.taskAudit.errors} error${params.summary.taskAudit.errors === 1 ? "" : "s"} · ${params.summary.taskAudit.warnings} warn`,
-        )
-      : params.summary.taskAudit.warnings > 0
-        ? params.muted(`audit ${params.summary.taskAudit.warnings} warn`)
-        : params.muted("audit clean"),
-    `${params.summary.tasks.total} tracked`,
-  ].join(" · ");
-}
-
-/** Formats configured heartbeat intervals by agent. */
 export function buildStatusHeartbeatValue(params: { summary: Pick<SummaryLike, "heartbeat"> }) {
-  const parts = params.summary.heartbeat.agents
-    .map((agent) => {
-      if (!agent.enabled || !agent.everyMs) {
-        return `disabled (${agent.agentId})`;
-      }
-      if (agent.waitingForRoute) {
-        return `${agent.every} (${agent.agentId}; waiting for delivery route — set commands.ownerAllowFrom=["telegram:123456789"] or channel allowFrom; explicit delivery: heartbeat.target="telegram" with heartbeat.to="123456789")`;
-      }
-      return `${agent.every} (${agent.agentId})`;
-    })
-    .filter(Boolean);
+  const parts = params.summary.heartbeat.agents.map((agent) => {
+    if (!agent.enabled || !agent.everyMs) {
+      return `disabled (${agent.agentId})`;
+    }
+    if (agent.waitingForRoute) {
+      return `${agent.every} (${agent.agentId}; waiting for delivery route — set commands.ownerAllowFrom=["telegram:123456789"] or channel allowFrom; explicit delivery: heartbeat.target="telegram" with heartbeat.to="123456789")`;
+    }
+    return `${agent.every} (${agent.agentId})`;
+  });
   return parts.length > 0 ? parts.join(", ") : "disabled";
 }
 
-/** Formats the last observed heartbeat when deep status queried the gateway. */
 export function buildStatusLastHeartbeatValue(params: {
   deep?: boolean;
   gatewayReachable: boolean;
@@ -158,7 +122,6 @@ export function buildStatusLastHeartbeatValue(params: {
     .join(" · ");
 }
 
-/** Formats memory plugin/index/cache state for the overview table. */
 export function buildStatusMemoryValue(
   params: {
     memory: MemoryLike;
@@ -211,7 +174,6 @@ export function buildStatusMemoryValue(
   return parts.join(" · ");
 }
 
-/** Builds the security audit text section for status output. */
 export function buildStatusSecurityAuditLines(params: {
   securityAudit: {
     summary: { critical: number; warn: number; info: number };
@@ -252,7 +214,7 @@ export function buildStatusSecurityAuditLines(params: {
           : params.theme.muted("INFO");
     const sevRank = (sev: "critical" | "warn" | "info") =>
       sev === "critical" ? 0 : sev === "warn" ? 1 : 2;
-    const shown = [...importantFindings]
+    const shown = importantFindings
       // Always show critical findings before warnings, regardless of audit insertion order.
       .toSorted((a, b) => sevRank(a.severity) - sevRank(b.severity))
       .slice(0, 6);
@@ -276,7 +238,6 @@ export function buildStatusSecurityAuditLines(params: {
   return lines;
 }
 
-/** Builds gateway, channel, and delivery queue health table rows. */
 export function buildStatusHealthRows(params: {
   health: HealthSummary;
   sqliteWal?: StatusSummary["sqliteWal"];
@@ -292,6 +253,16 @@ export function buildStatusHealthRows(params: {
       Detail: `${params.health.durationMs}ms`,
     },
   ];
+  const childRuntimeWarning = params.health.childRuntime
+    ? formatMissingChildRuntimeWarning(params.health.childRuntime)
+    : undefined;
+  if (childRuntimeWarning) {
+    rows.push({
+      Item: "Gateway runtime",
+      Status: params.warn("WARN"),
+      Detail: childRuntimeWarning,
+    });
+  }
   const sqliteWalWarning = formatSqliteWalHealthWarning(params.sqliteWal);
   if (sqliteWalWarning) {
     rows.push({ Item: "SQLite WAL", Status: params.warn("WARN"), Detail: sqliteWalWarning });
@@ -332,7 +303,6 @@ export function buildStatusHealthRows(params: {
   return rows;
 }
 
-/** Formats event-loop latency/utilization health into one table detail string. */
 function formatEventLoopHealthDetail(eventLoop: EventLoopHealthLike): string {
   const parts = [
     eventLoop.degraded && eventLoop.degradedSinceMs != null
@@ -347,7 +317,6 @@ function formatEventLoopHealthDetail(eventLoop: EventLoopHealthLike): string {
   return parts.filter((part): part is string => part !== null).join(" · ");
 }
 
-/** Builds recent session table rows, optionally including prompt-cache data. */
 export function buildStatusSessionsRows(params: {
   recent: SessionsRecentLike[];
   verbose?: boolean;
@@ -357,9 +326,6 @@ export function buildStatusSessionsRows(params: {
   formatPromptCacheCompact: (value: SessionsRecentLike) => string | null;
   muted: (value: string) => string;
 }) {
-  if (params.recent.length === 0) {
-    return [];
-  }
   return params.recent.map((sess) => ({
     Key: params.shortenText(sess.key, 32),
     Kind: sess.kind,
@@ -424,7 +390,6 @@ export function buildStatusModelSelectionLines(params: {
   return lines;
 }
 
-/** Builds footer links and next-step commands for the current gateway state. */
 export function buildStatusFooterLines(params: {
   updateHint: string | null;
   warn: (value: string) => string;
@@ -450,7 +415,6 @@ export function buildStatusFooterLines(params: {
   ];
 }
 
-/** Builds plugin compatibility lines, capped to keep status output readable. */
 export function buildStatusPluginCompatibilityLines<
   TNotice extends PluginCompatibilityNoticeLike,
 >(params: {
@@ -475,7 +439,6 @@ export function buildStatusPluginCompatibilityLines<
   ];
 }
 
-/** Builds recovery guidance when the gateway reports device pairing is required. */
 export function buildStatusPairingRecoveryLines(params: {
   pairingRecovery: PairingRecoveryLike | null;
   warn: (value: string) => string;
@@ -509,7 +472,6 @@ export function buildStatusPairingRecoveryLines(params: {
   ];
 }
 
-/** Builds the queued system-events table rows. */
 export function buildStatusSystemEventsRows(params: {
   queuedSystemEvents: string[];
   limit?: number;
@@ -521,7 +483,6 @@ export function buildStatusSystemEventsRows(params: {
   return params.queuedSystemEvents.slice(0, limit).map((event) => ({ Event: event }));
 }
 
-/** Builds the overflow trailer for queued system events. */
 export function buildStatusSystemEventsTrailer(params: {
   queuedSystemEvents: string[];
   limit?: number;

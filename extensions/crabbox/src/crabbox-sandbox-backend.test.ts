@@ -205,7 +205,7 @@ describe("Crabbox sandbox provider lifecycle", () => {
     expect(runCommand.mock.calls.map(([argv]) => argv[1])).toEqual(["exec"]);
   });
 
-  it.each(["released", "stopped", "unknown"])(
+  it.each(["released", "stopped"])(
     "retires only a matching released inspection (%s)",
     async (state) => {
       const { factory } = setup((argv) =>

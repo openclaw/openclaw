@@ -86,3 +86,37 @@ export function hasAuthoredProviderRequestParams(
     Object.entries(modelParams ?? {}).some(([key, value]) => !isAgentRuntimeModelParam(key, value)),
   );
 }
+
+export function sanitizeExtraParamsRecord(
+  value: object | undefined,
+): Record<string, unknown> | undefined {
+  if (!value) {
+    return undefined;
+  }
+  return Object.fromEntries(
+    Object.entries(value).filter(
+      ([key]) => key !== "__proto__" && key !== "prototype" && key !== "constructor",
+    ),
+  );
+}
+
+/** Later sources win; each source's first own alias wins, including null and undefined. */
+export function resolveAliasedParamValue(
+  sources: ReadonlyArray<Record<string, unknown> | undefined>,
+  keys: readonly string[],
+): unknown {
+  let resolved: unknown = undefined;
+  for (const source of sources) {
+    if (!source) {
+      continue;
+    }
+    for (const key of keys) {
+      if (!Object.hasOwn(source, key)) {
+        continue;
+      }
+      resolved = source[key];
+      break;
+    }
+  }
+  return resolved;
+}
