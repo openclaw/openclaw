@@ -24,7 +24,8 @@ const maxMetadataBytes = 64 * 1024 * 1024;
 const maxSourceBytes = 8 * 1024 * 1024 * 1024;
 // fsck --connectivity-only enumerates every stored object and walks the ref's full history,
 // so cost follows object-store size (~126 s for a 19 GiB, 1,679-pack store on current hardware).
-// 30 s per GiB leaves ~5x headroom for slower hosts.
+// 30 s per GiB leaves ~5x headroom for slower hosts. Automatic recovery runs before a
+// successful wrapper command exits, so it keeps the base bound; explicit recovery scales.
 const baseBudgetMs = 120_000;
 const budgetPerGiBMs = 30_000;
 const maxBudgetMs = 30 * 60_000;
@@ -468,6 +469,7 @@ export async function verifySourceWitness(params: {
   source: FrozenSource;
   witness: SourceWitness;
   payloadRoot: string;
+  automatic?: boolean;
   signal?: AbortSignal;
 }): Promise<SourceWitnessResult> {
   try {
@@ -484,10 +486,12 @@ export async function verifySourceWitness(params: {
     const before = storageIdentity(gitDir, payloadRoot, refName, started + baseBudgetMs);
     const deadline =
       started +
-      Math.min(
-        maxBudgetMs,
-        baseBudgetMs + Math.ceil((Number(before.objectBytes) / 1024 ** 3) * budgetPerGiBMs),
-      );
+      (params.automatic
+        ? baseBudgetMs
+        : Math.min(
+            maxBudgetMs,
+            baseBudgetMs + Math.ceil((Number(before.objectBytes) / 1024 ** 3) * budgetPerGiBMs),
+          ));
     const unsupported = gitRead(
       location,
       [

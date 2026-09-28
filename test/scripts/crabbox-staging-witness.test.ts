@@ -1,19 +1,30 @@
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
+import { execFileSync, type SpawnSyncOptions } from "node:child_process";
+import {
+  existsSync,
+  mkdirSync,
+  realpathSync,
+  truncateSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { verifySourceWitness, type FrozenSource } from "../../scripts/crabbox-staging-witness.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
 
-const timeout = vi.hoisted(() => ({ fsck: false }));
+const fsck = vi.hoisted(() => ({ timeOut: false, budgets: [] as Array<number | undefined> }));
 
 vi.mock("node:child_process", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:child_process")>();
   return {
     ...original,
-    spawnSync: (...args: Parameters<typeof original.spawnSync>) => {
-      if (timeout.fsck && Array.isArray(args[1]) && args[1].includes("fsck")) {
+    spawnSync: (command: string, args: readonly string[], options: SpawnSyncOptions) => {
+      if (!args.includes("fsck")) {
+        return original.spawnSync(command, args, options);
+      }
+      fsck.budgets.push(options.timeout);
+      if (fsck.timeOut) {
         return {
           pid: 0,
           output: [],
@@ -24,7 +35,7 @@ vi.mock("node:child_process", async (importOriginal) => {
           error: Object.assign(new Error("spawnSync git ETIMEDOUT"), { code: "ETIMEDOUT" }),
         };
       }
-      return original.spawnSync(...args);
+      return original.spawnSync(command, args, options);
     },
   };
 });
@@ -32,7 +43,8 @@ vi.mock("node:child_process", async (importOriginal) => {
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.unstubAllEnvs();
-  timeout.fsck = false;
+  fsck.timeOut = false;
+  fsck.budgets.length = 0;
 });
 
 function fixture() {
@@ -162,7 +174,7 @@ exec '${realGit.replaceAll("'", "'\\''")}' "$@"
 
   it("a Git read cut off by the budget reports budget exhaustion, not missing objects", async () => {
     const f = fixture();
-    timeout.fsck = true;
+    fsck.timeOut = true;
 
     const result = await verifySourceWitness(f.params);
     expect(result).toMatchObject({
@@ -172,5 +184,22 @@ exec '${realGit.replaceAll("'", "'\\''")}' "$@"
     if (!result.ok) {
       expect(result.reason).not.toContain("fsck");
     }
+  });
+
+  it("explicit recovery scales fsck time with object storage; automatic recovery keeps the base bound", async () => {
+    const f = fixture();
+    // A sparse file stands in for a 4 GiB object store without allocating disk.
+    const sizing = join(f.params.witness.gitDir, "objects", "info", "sizing");
+    mkdirSync(join(sizing, ".."), { recursive: true });
+    writeFileSync(sizing, "");
+    truncateSync(sizing, 4 * 1024 ** 3);
+
+    expect(await verifySourceWitness(f.params)).toMatchObject({ ok: true });
+    expect(await verifySourceWitness({ ...f.params, automatic: true })).toMatchObject({
+      ok: true,
+    });
+    const [explicit, automatic] = fsck.budgets;
+    expect(explicit).toBeGreaterThan(200_000);
+    expect(automatic).toBeLessThanOrEqual(120_000);
   });
 });
