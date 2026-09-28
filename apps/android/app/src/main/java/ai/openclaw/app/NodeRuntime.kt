@@ -1106,6 +1106,7 @@ class NodeRuntime private constructor(
     val tlsFingerprintSha256: String?,
     val connectAuth: ((nonce: String, signedAt: Long) -> JsonObject)? = null,
     val browserFocusAvailable: Boolean = false,
+    val legacyAuth: (() -> JsonObject)? = null,
   )
 
   private val appContext = context.applicationContext
@@ -5193,41 +5194,59 @@ class NodeRuntime private constructor(
     val grantedScopes = _operatorScopes.value
     val client = connectionManager.buildOperatorConnectOptions().client
     lateinit var page: GatewayControlPage
+
+    fun withCurrentCredential(action: (NativeControlUiCredential) -> JsonObject): JsonObject {
+      val currentLease = checkNotNull(lease) { "Reconnect the app to authenticate this page" }
+      var result: JsonObject? = null
+      // Preserve session -> runtime lock order, including the older UI bootstrap.
+      val committed =
+        currentLease.commitIfCurrent {
+          synchronized(gatewayDataScopeLock) {
+            val isCurrentPage = {
+              connection != null && activeGatewayConnection === connection &&
+                gatewayScope != null && isGatewayDataScopeCurrent(gatewayScope) &&
+                _gatewayControlPage.value === page && _operatorScopes.value == grantedScopes
+            }
+            check(isCurrentPage()) { "Reconnect the app to authenticate this page" }
+            val currentCredential = {
+              currentLease.controlUiCredential ?: NativeControlUiCredential.DeviceToken(
+                checkNotNull(loadStoredRoleDeviceAuthEntry(endpoint, "operator")?.token) {
+                  "Reconnect the app to restore its paired device access"
+                },
+              )
+            }
+            val credential = currentCredential()
+            val value = action(credential)
+            check(isCurrentPage() && currentCredential() == credential) { "Native device access changed; reconnect" }
+            result = value
+          }
+        }
+      check(committed) { "Reconnect the app to authenticate this page" }
+      return checkNotNull(result)
+    }
     page =
       GatewayControlPage(
         baseUrl = gatewayControlPageBaseUrl(endpoint),
         tlsFingerprintSha256 = gatewayControlPageTlsFingerprint(prefs, endpoint),
         connectAuth = { nonce, signedAt ->
-          val currentLease = checkNotNull(lease) { "Reconnect the app to authenticate this page" }
-          var result: JsonObject? = null
-          // Preserve the session -> runtime lock order used by hello publication. Signing is
-          // synchronous; a retired socket/page cannot publish credentials after reconnect.
-          val committed =
-            currentLease.commitIfCurrent {
-              synchronized(gatewayDataScopeLock) {
-                val isCurrentPage = {
-                  connection != null && activeGatewayConnection === connection &&
-                    gatewayScope != null && isGatewayDataScopeCurrent(gatewayScope) &&
-                    _gatewayControlPage.value === page && _operatorScopes.value == grantedScopes
-                }
-                check(isCurrentPage()) { "Reconnect the app to authenticate this page" }
-                val currentCredential = {
-                  currentLease.controlUiCredential ?: NativeControlUiCredential.DeviceToken(
-                    checkNotNull(loadStoredRoleDeviceAuthEntry(endpoint, "operator")?.token) {
-                      "Reconnect the app to restore its paired device access"
-                    },
-                  )
-                }
-                val credential = currentCredential()
-                val signed = buildNativeControlUiConnectAuth(identityStore, client, grantedScopes, credential, nonce, signedAt)
-                check(isCurrentPage() && currentCredential() == credential) { "Native device access changed; reconnect" }
-                result = signed
-              }
-            }
-          check(committed) { "Reconnect the app to authenticate this page" }
-          checkNotNull(result)
+          withCurrentCredential { credential ->
+            buildNativeControlUiConnectAuth(identityStore, client, grantedScopes, credential, nonce, signedAt)
+          }
         },
         browserFocusAvailable = browserFocusAvailable,
+        legacyAuth = {
+          withCurrentCredential { credential ->
+            buildJsonObject {
+              // v2026.9.6 UI only understands these shipped shared-auth fields.
+              // A device grant cannot authenticate another browser identity.
+              when (credential) {
+                is NativeControlUiCredential.Token -> put("token", JsonPrimitive(credential.value))
+                is NativeControlUiCredential.Password -> put("password", JsonPrimitive(credential.value))
+                is NativeControlUiCredential.DeviceToken -> Unit
+              }
+            }
+          }
+        },
       )
     _gatewayControlPage.value = page
   }

@@ -175,7 +175,8 @@ struct DashboardWindowOwnershipTests {
             replacementServer.url("/").absoluteString)
         let bootstrap = try await dashboardNativeAuthSnapshot(recoveredController)
         #expect(bootstrap["nativeConnectAuth"] as? Bool == true)
-        #expect(bootstrap["token"] is NSNull)
+        #expect(bootstrap["token"] == nil)
+        #expect(bootstrap["password"] == nil)
         #expect(recoveredController.auth.token == "after")
 
         await manager._testHandleControlChannelStateChange(.connected)
@@ -237,7 +238,8 @@ struct DashboardWindowOwnershipTests {
             currentServer.url("/").absoluteString)
         let bootstrap = try await dashboardNativeAuthSnapshot(currentController)
         #expect(bootstrap["nativeConnectAuth"] as? Bool == true)
-        #expect(bootstrap["token"] is NSNull)
+        #expect(bootstrap["token"] == nil)
+        #expect(bootstrap["password"] == nil)
         #expect(currentController.auth.token == "current")
     }
 
@@ -280,7 +282,8 @@ struct DashboardWindowOwnershipTests {
         #expect(replacement._testDashboardWebViewIdentity != originalDocument)
         let bootstrap = try await dashboardNativeAuthSnapshot(replacement)
         #expect(bootstrap["nativeConnectAuth"] as? Bool == true)
-        #expect(bootstrap["token"] is NSNull)
+        #expect(bootstrap["token"] == nil)
+        #expect(bootstrap["password"] == nil)
         #expect(replacement.auth.token == "after")
     }
 
@@ -700,12 +703,9 @@ struct DashboardWindowOwnershipTests {
                 gatewayEntriesProvider: { [Self.primaryGateway] })
             defer { manager.close() }
 
-            if mode == .local {
-                #expect(manager.showConfiguredWindowIfPossible())
-            } else {
-                #expect(!manager.showConfiguredWindowIfPossible())
-                try await manager.show()
-            }
+            // First presentation resolves native readiness even for local mode.
+            #expect(!manager.showConfiguredWindowIfPossible())
+            try await manager.show()
             let controller = try #require(manager._testController())
             #expect(controller.isWindowOpen)
             #expect(controller.currentURL.absoluteString ==

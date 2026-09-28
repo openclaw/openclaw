@@ -61,9 +61,10 @@ struct DashboardLinkRequest: Equatable {
 
 enum DashboardWindowAuth: Equatable {
     case sharedCredentials(gatewayUrl: String?, token: String?, password: String?)
-    // Credentials remain native-only lifecycle metadata: rotation replaces the
-    // privileged document, but the script exposes only challenge-based authority.
-    case nativeDevice(gatewayUrl: String, token: String?, password: String?)
+    // Token/password track config changes for document replacement. Only the
+    // separate accepted legacyCredentials map may reach a released UI; current
+    // UI uses native signing and never browser fallback. nil means not ready.
+    case nativeDevice(gatewayUrl: String, token: String?, password: String?, legacyCredentials: [String: String]? = nil)
     case browserIdentity(gatewayUrl: String)
 
     init(gatewayUrl: String?, token: String?, password: String?) {
@@ -74,22 +75,32 @@ enum DashboardWindowAuth: Equatable {
         switch self {
         case let .sharedCredentials(gatewayUrl, _, _): gatewayUrl
         case let .browserIdentity(gatewayUrl): gatewayUrl
-        case let .nativeDevice(gatewayUrl, _, _): gatewayUrl
+        case let .nativeDevice(gatewayUrl, _, _, _): gatewayUrl
         }
     }
 
     var token: String? {
         switch self {
-        case let .sharedCredentials(_, token, _), let .nativeDevice(_, token, _): token
+        case let .sharedCredentials(_, token, _), let .nativeDevice(_, token, _, _): token
         case .browserIdentity: nil
         }
     }
 
     var password: String? {
         switch self {
-        case let .sharedCredentials(_, _, password), let .nativeDevice(_, _, password): password
+        case let .sharedCredentials(_, _, password), let .nativeDevice(_, _, password, _): password
         case .browserIdentity: nil
         }
+    }
+
+    var legacyCredentials: [String: String] {
+        if case let .nativeDevice(_, _, _, credentials) = self { return credentials ?? [:] }
+        return [:]
+    }
+
+    var hasAcceptedNativeBinding: Bool {
+        if case let .nativeDevice(_, _, _, credentials) = self { return credentials != nil }
+        return false
     }
 
     var usesBrowserIdentity: Bool {

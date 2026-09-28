@@ -5,12 +5,12 @@ import test from "node:test";
 const source = fs.readFileSync(new URL("../ui/native-control-auth.js", import.meta.url), "utf8");
 const config = { origin: "https://gateway.example", base: "/control", gatewayUrl: "wss://gateway.example/control" };
 const challenge = { id: "request", nonce: "server-nonce", signedAt: 1800000000000 };
-function fixture({ origin = config.origin, pathname = "/control/chat", child = false, invoke = async () => ({id: challenge.id, result: {}}) } = {}) {
+function fixture({ origin = config.origin, pathname = "/control/chat", child = false, legacyAuth = {}, invoke = async () => ({id: challenge.id, result: {}}) } = {}) {
   const listeners = new Map();
   const window = { addEventListener: (type, listener) => listeners.set(type, listener), __TAURI_INTERNALS__: { invoke } };
   window.top = child ? {} : window;
   const location = { origin, pathname };
-  new Function("window", "location", `return (${source});`)(window, location)(config);
+  new Function("window", "location", `return (${source});`)(window, location)({ ...config, legacyAuth });
   return { window, location, ready: (token = "document-token") => listeners.get("openclaw:gateway-ready")?.({detail: {token}}) };
 }
 
@@ -21,7 +21,18 @@ test("bridge only installs in the configured top-level dashboard without bootstr
     assert.equal(window.__OPENCLAW_NATIVE_CONTROL_AUTH__, undefined);
   }
   const {window} = fixture();
-  assert.deepEqual(window.__OPENCLAW_NATIVE_CONTROL_AUTH__, { gatewayUrl: config.gatewayUrl, nativeConnectAuth: true, token: null });
+  assert.deepEqual(window.__OPENCLAW_NATIVE_CONTROL_AUTH__, { gatewayUrl: config.gatewayUrl, nativeConnectAuth: true });
+});
+
+test("accepted shared bootstrap fields remain usable by released UIs without replacing native signing", () => {
+  for (const legacyAuth of [{token: "accepted-token"}, {password: "accepted-password"}, {}]) {
+    const {window} = fixture({legacyAuth});
+    assert.deepEqual(window.__OPENCLAW_NATIVE_CONTROL_AUTH__, {
+      gatewayUrl: config.gatewayUrl, ...legacyAuth,
+      ...("password" in legacyAuth ? {token: null} : {}), nativeConnectAuth: true,
+    });
+    assert.equal(typeof window.OpenClawNativeGatewayAuth.postMessage, "function");
+  }
 });
 
 test("challenge waits for document readiness and uses its native route token", async () => {

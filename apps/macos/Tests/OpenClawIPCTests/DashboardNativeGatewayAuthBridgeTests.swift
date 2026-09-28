@@ -8,28 +8,36 @@ import WebKit
 
 @MainActor
 func waitForNativeDashboardDocument(_ controller: DashboardWindowController) async throws {
-    let deadline = ContinuousClock.now + .seconds(5)
-    while ContinuousClock.now < deadline {
-        if controller.webView.url == controller.currentURL,
-           await (try? controller.webView.evaluateJavaScript("document.readyState === 'complete'")) as? Bool == true
-        { return }
-        try await Task.sleep(for: .milliseconds(10))
+    try await waitForNativeDashboardDocument(webView: controller.webView, dashboardURL: controller.currentURL)
+}
+
+@MainActor
+func waitForNativeDashboardDocument(webView: WKWebView, dashboardURL: URL) async throws {
+    let events = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+    let observation = webView.observe(\.isLoading, options: [.initial, .new]) { _, _ in
+        events.continuation.yield(())
     }
-    throw URLError(.timedOut)
+    defer {
+        observation.invalidate()
+        events.continuation.finish()
+    }
+    try await AsyncTimeout.withTimeout(seconds: 5, onTimeout: { URLError(.timedOut) }) {
+        for await _ in events.stream {
+            let ready = await MainActor.run {
+                !webView.isLoading &&
+                    ControlUIDocumentHost.isTrustedLinkSource(webView.url, dashboardURL: dashboardURL)
+            }
+            if ready { return }
+        }
+        throw CancellationError()
+    }
 }
 
 @MainActor
 func dashboardNativeAuthSnapshot(_ controller: DashboardWindowController) async throws -> [String: Any] {
-    let deadline = ContinuousClock.now + .seconds(5)
-    while ContinuousClock.now < deadline {
-        if let value = try? await controller.webView.evaluateJavaScript(
-            "document.readyState === 'complete' ? window.__OPENCLAW_NATIVE_CONTROL_AUTH__ : null") as? [String: Any]
-        {
-            return value
-        }
-        try await Task.sleep(for: .milliseconds(10))
-    }
-    throw URLError(.timedOut)
+    try await waitForNativeDashboardDocument(controller)
+    return try #require(try await controller.webView.evaluateJavaScript(
+        "window.__OPENCLAW_NATIVE_CONTROL_AUTH__") as? [String: Any])
 }
 
 @Suite(.serialized)
@@ -52,41 +60,49 @@ struct DashboardNativeGatewayAuthBridgeTests {
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
         let calls = LockIsolated(0)
-        controller.nativeGatewayAuthProvider = { _, _ in
+        controller.documentHost.nativeGatewayAuthProvider = { _, _ in
             calls.withValue { $0 += 1 }
             throw CancellationError()
         }
-        controller.show()
+        controller.show(url: controller.currentURL, auth: controller.auth)
         try await waitForNativeDashboardDocument(controller)
-        let request = """
-        window.webkit.messageHandlers.OpenClawNativeGatewayAuth.postMessage({
-          id:'request', nonce:'challenge', signedAt:Date.now()
-        }).then(value => { parent.nativeReply = value; },
-                error => { parent.nativeReply = {rejected:true}; });
-        """
-        if source == "subframe" {
-            _ = try await controller.webView.callAsyncJavaScript("""
-            const frame = document.createElement('iframe');
-            frame.srcdoc = '<html><body><script>' + request + '</script></body></html>';
-            document.body.append(frame);
-            """, arguments: ["request": request], in: nil, contentWorld: .page)
-        } else {
-            if source == "untrusted-path" {
-                _ = try await controller.webView.evaluateJavaScript("history.pushState({}, '', '/outside')")
-            }
-            _ = try await controller.webView.evaluateJavaScript(request + "null;")
+        if source == "untrusted-path" {
+            _ = try await controller.webView.evaluateJavaScript("history.pushState({}, '', '/outside')")
         }
-        var reply: [String: Any]?
-        let deadline = ContinuousClock.now + .seconds(5)
-        while reply == nil, ContinuousClock.now < deadline {
-            reply = try await controller.webView.evaluateJavaScript("window.nativeReply") as? [String: Any]
-            if reply == nil { try await Task.sleep(for: .milliseconds(10)) }
+        let value = try await controller.webView.callAsyncJavaScript("""
+        const request = `window.webkit.messageHandlers.OpenClawNativeGatewayAuth.postMessage({
+          id:'request', nonce:'challenge', signedAt:123
+        }).then(value => { parent.finishNativeReply(value); },
+                error => { parent.finishNativeReply({rejected:true}); });`;
+        if (!subframe) {
+          try {
+            return await window.webkit.messageHandlers.OpenClawNativeGatewayAuth.postMessage({
+              id:'request', nonce:'challenge', signedAt:123
+            });
+          } catch (error) { return {rejected:true}; }
         }
-        #expect(try #require(reply)["rejected"] as? Bool == true)
+        return await new Promise(resolve => {
+          window.finishNativeReply = resolve;
+          const frame = document.createElement('iframe');
+          frame.srcdoc = '<html><body><script>' + request + '</script></body></html>';
+          document.body.append(frame);
+        });
+        """, arguments: ["subframe": source == "subframe"], in: nil, contentWorld: .page)
+        let reply = try #require(value as? [String: Any])
+        #expect(reply["rejected"] as? Bool == true)
         #expect(calls.value == 0)
     }
 
-    @Test(arguments: ["current", "document", "provider", "socket", "browser-identity"])
+    @Test(arguments: [
+        "current",
+        "current-password",
+        "current-device-only",
+        "document",
+        "provider",
+        "socket",
+        "browser-identity",
+        "close",
+    ])
     func `WK challenge replies are owned by the native socket and current dashboard document`(
         _ transition: String) async throws
     {
@@ -97,7 +113,10 @@ struct DashboardNativeGatewayAuthBridgeTests {
             url: server.url("/control/"),
             auth: .nativeDevice(
                 gatewayUrl: server.websocketURL("/control/").absoluteString,
-                token: "must-not-be-injected", password: "must-not-be-injected-either"),
+                token: "must-not-be-injected", password: "must-not-be-injected-either",
+                legacyCredentials: transition == "current-password"
+                    ? ["password": "accepted-legacy-password"]
+                    : transition == "current-device-only" ? [:] : ["token": "accepted-legacy-token"]),
             websiteDataStore: .nonPersistent(), windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
@@ -105,7 +124,7 @@ struct DashboardNativeGatewayAuthBridgeTests {
         let release = AsyncTestGate()
         defer { release.open() }
         let current = LockIsolated(true)
-        controller.nativeGatewayAuthProvider = { nonce, signedAt in
+        controller.documentHost.nativeGatewayAuthProvider = { nonce, signedAt in
             #expect(nonce == "challenge")
             #expect(signedAt > 0)
             requested.open()
@@ -114,38 +133,50 @@ struct DashboardNativeGatewayAuthBridgeTests {
                 json: Data(#"{"auth":{"deviceToken":"native-grant"},"scopes":["operator.read"]}"#.utf8),
                 isCurrent: { current.value })
         }
-        controller.show()
+        controller.show(url: controller.currentURL, auth: controller.auth)
         let bootstrap = try await dashboardNativeAuthSnapshot(controller)
         #expect(bootstrap["nativeConnectAuth"] as? Bool == true)
-        #expect(bootstrap["token"] is NSNull)
-        #expect(bootstrap["password"] is NSNull)
+        if transition == "current-password" {
+            #expect(bootstrap["token"] is NSNull)
+            #expect(bootstrap["password"] as? String == "accepted-legacy-password")
+        } else if transition == "current-device-only" {
+            #expect(bootstrap["token"] == nil)
+            #expect(bootstrap["password"] == nil)
+        } else {
+            #expect(bootstrap["token"] as? String == "accepted-legacy-token")
+            #expect(bootstrap["password"] == nil)
+        }
         #expect(controller.currentURL.fragment == nil)
-        _ = try await controller.webView.evaluateJavaScript("""
-        window.nativeReply = null;
-        window.webkit.messageHandlers.OpenClawNativeGatewayAuth.postMessage({
-          id: 'request', nonce: 'challenge', signedAt: Date.now()
-        }).then(value => { window.nativeReply = value; },
-                error => { window.nativeReply = {error: String(error)}; });
-        null;
-        """)
-        try await AsyncTimeout.withTimeout(
-            seconds: 5, onTimeout: { URLError(.timedOut) }, operation: { await requested.wait() })
-        switch transition {
-        case "document": controller.webView(controller.webView, didCommit: nil)
-        case "provider": controller.nativeGatewayAuthProvider = nil
-        case "socket": current.setValue(false)
-        case "browser-identity": controller.auth = .browserIdentity(gatewayUrl: server.websocketURL().absoluteString)
-        default: break
+        let pending = Task {
+            try await controller.webView.callAsyncJavaScript("""
+            try {
+              return JSON.stringify(await window.webkit.messageHandlers.OpenClawNativeGatewayAuth.postMessage({
+                id: 'request', nonce: 'challenge', signedAt:123
+              }));
+            } catch (error) { return JSON.stringify({error:String(error)}); }
+            """, in: nil, contentWorld: .page) as? String
         }
-        release.open()
-        let deadline = ContinuousClock.now + .seconds(5)
-        var reply: [String: Any]?
-        while reply == nil, ContinuousClock.now < deadline {
-            reply = try await controller.webView.evaluateJavaScript("window.nativeReply") as? [String: Any]
-            if reply == nil { try await Task.sleep(for: .milliseconds(10)) }
+        do {
+            try await AsyncTimeout.withTimeout(
+                seconds: 5, onTimeout: { URLError(.timedOut) }, operation: { await requested.wait() })
+            switch transition {
+            case "document": controller.webView(controller.webView, didCommit: nil)
+            case "provider": controller.documentHost.nativeGatewayAuthProvider = nil
+            case "socket": current.setValue(false)
+            case "close": controller.closeDashboard()
+            case "browser-identity": controller
+                .auth = .browserIdentity(gatewayUrl: server.websocketURL().absoluteString)
+            default: break
+            }
+            release.open()
+        } catch {
+            release.open()
+            _ = await pending.result
+            throw error
         }
-        let received = try #require(reply)
-        if transition == "current" {
+        let json = try #require(try await pending.value)
+        let received = try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        if transition.hasPrefix("current") {
             let result = try #require(received["result"] as? [String: Any])
             #expect((result["auth"] as? [String: String])?["deviceToken"] == "native-grant")
             #expect(received["id"] as? String == "request")

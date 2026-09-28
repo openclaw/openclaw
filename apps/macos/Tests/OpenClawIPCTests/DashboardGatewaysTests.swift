@@ -212,19 +212,19 @@ struct DashboardGatewaysBridgeTests {
         defer { controller.closeDashboard() }
 
         #expect(controller._testTLSParams == params)
-        #expect(DashboardWindowController.isExpectedTLSAuthority(
+        #expect(ControlUIDocumentHost.isExpectedTLSAuthority(
             host: "gateway.example",
             port: 0,
             dashboardURL: url))
-        #expect(DashboardWindowController.isExpectedTLSAuthority(
+        #expect(ControlUIDocumentHost.isExpectedTLSAuthority(
             host: "gateway.example",
             port: 443,
             dashboardURL: url))
-        #expect(!DashboardWindowController.isExpectedTLSAuthority(
+        #expect(!ControlUIDocumentHost.isExpectedTLSAuthority(
             host: "gateway.example",
             port: 8443,
             dashboardURL: url))
-        #expect(!DashboardWindowController.isExpectedTLSAuthority(
+        #expect(!ControlUIDocumentHost.isExpectedTLSAuthority(
             host: "other.example",
             port: 443,
             dashboardURL: url))
@@ -232,17 +232,17 @@ struct DashboardGatewaysBridgeTests {
 
     @Test func `media capture trust requires the dashboard origin`() throws {
         let url = try #require(URL(string: "https://gateway.example/control/"))
-        #expect(DashboardWindowController.isTrustedMediaCaptureOrigin(
+        #expect(ControlUIDocumentHost.isTrustedMediaCaptureOrigin(
             protocol: "https",
             host: "gateway.example",
             port: 443,
             dashboardURL: url))
-        #expect(!DashboardWindowController.isTrustedMediaCaptureOrigin(
+        #expect(!ControlUIDocumentHost.isTrustedMediaCaptureOrigin(
             protocol: "https",
             host: "other.example",
             port: 443,
             dashboardURL: url))
-        #expect(!DashboardWindowController.isTrustedMediaCaptureOrigin(
+        #expect(!ControlUIDocumentHost.isTrustedMediaCaptureOrigin(
             protocol: "http",
             host: "gateway.example",
             port: 80,
@@ -720,7 +720,8 @@ struct DashboardManagerGatewayTargetTests {
         for instance in refreshed {
             let bootstrap = try await dashboardNativeAuthSnapshot(instance.controller)
             #expect(bootstrap["nativeConnectAuth"] as? Bool == true)
-            #expect(bootstrap["token"] is NSNull)
+            #expect(bootstrap["token"] == nil)
+            #expect(bootstrap["password"] == nil)
         }
     }
 
@@ -1087,8 +1088,8 @@ extension DashboardManagerGatewayTargetTests {
             defer { state.connectionMode = previousMode }
             let gate = DashboardWindowOwnershipPresentationGate(released: true)
             let manager = DashboardManager._testMake(
-                primaryEndpointProvider: { _ in
-                    await gate.waitForRelease()
+                primaryEndpointProvider: { mode in
+                    if mode == .remote { await gate.waitForRelease() }
                     return GatewayConnection.EndpointSnapshot(
                         config: (url: server.websocketURL(), token: "primary", password: nil), routeAuthority: nil)
                 },
@@ -1112,8 +1113,14 @@ extension DashboardManagerGatewayTargetTests {
                 {"gateway":{"port":\(server.port),"auth":{"token":"primary"}}}
                 """
                 try Data(config.utf8).write(to: URL(fileURLWithPath: configPath))
-                // Only a local endpoint may open synchronously while the older remote lookup is suspended.
+                // The native-ready endpoint may supersede a suspended lookup,
+                // but configured credentials alone cannot present a fresh document.
                 state.connectionMode = .local
+                #expect(!manager.showConfiguredWindowIfPossible())
+                // A newer explicit navigation resolves the now-ready local
+                // owner independently of the suspended remote presentation.
+                await manager.show(atPath: "/chat", target: .primary)
+                #expect(manager._testController()?.auth.hasAcceptedNativeBinding == true)
                 #expect(manager.showConfiguredWindowIfPossible())
             }
             let source = try #require(manager._testController())

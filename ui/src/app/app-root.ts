@@ -438,6 +438,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
     return html`
       <openclaw-board-document
         .gatewaySnapshot=${gatewaySnapshot}
+        .sessions=${this.context?.sessions}
         .sessionKey=${route.data.sessionKey}
         .preparedSession=${
           route.data.agentId
@@ -560,6 +561,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
       return html`
         <openclaw-desktop-panel
           .client=${gatewayConnected ? gatewaySnapshot.client : null}
+          .sessions=${context.sessions}
           .available=${desktopAvailable}
           .documentMode=${true}
           .requestedSource=${source}

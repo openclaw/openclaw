@@ -127,6 +127,7 @@ struct GatewayConnectionControlUIAuthTests {
                 selection: MacGatewaySelectionPreferences(defaults: defaults),
                 connectionProvider: { _ in connection },
                 browserIdentityURLProvider: nil,
+                legacyCredentialsProvider: nil,
                 automaticGatewayProfileRefreshEnabled: false)
             let result: Result<Void, Error>
             do {
@@ -135,6 +136,12 @@ struct GatewayConnectionControlUIAuthTests {
                 #expect(session.snapshotMakeCount() == 0)
                 let configuration = try await manager.dashboardConfiguration(
                     endpoint: endpoint, mode: .remote, target: .profile("reconnect"), token: nil)
+                let expectedLegacy = switch method {
+                case "token": ["token": "accepted-token"]
+                case "password": ["password": "accepted-password"]
+                default: [String: String]()
+                }
+                #expect(configuration.auth.legacyCredentials == expectedLegacy)
                 let provider = try #require(configuration.nativeAuthProvider)
                 let originalLease = try #require(await connection.captureServerLease())
                 let original = try await provider("original-challenge", 123)
@@ -235,7 +242,11 @@ struct GatewayConnectionControlUIAuthTests {
                     scopes: ["operator.read"],
                     method: method.hasPrefix("legacy-") ? nil : method)))
             try await withControlUIConnection(connection) {
-                _ = try await connection.request(method: "health", params: nil, retryTransportFailures: false)
+                #expect(await connection.captureServerLease() == nil)
+                let legacy = try await connection.controlUiLegacyCredentials(endpoint: endpoint)
+                #expect(legacy.credentials ==
+                    [usesPassword ? "password" : "token": usesPassword ? "shared-password" : "shared-token"])
+                #expect(await connection.captureServerLease() != nil)
                 let signed = try await connection.controlUiNativeAuth(
                     endpoint: endpoint,
                     nonce: "web-nonce",
@@ -251,9 +262,19 @@ struct GatewayConnectionControlUIAuthTests {
 
                 source.setEndpoint(.init(config: route, routeAuthority: 8, deviceAuthGatewayID: "other", revision: 2))
                 #expect(!signed.isCurrent())
+                #expect(!legacy.isCurrent())
                 await #expect(throws: CancellationError.self) {
                     try await connection.controlUiNativeAuth(endpoint: endpoint, nonce: "other-nonce", signedAt: 124)
                 }
+                await #expect(throws: CancellationError.self) {
+                    try await connection.controlUiLegacyCredentials(endpoint: endpoint)
+                }
+                let rotated = GatewayConnection.EndpointSnapshot(
+                    config: (route.url, usesPassword ? nil : "rotated-token", usesPassword ? "rotated-password" : nil),
+                    routeAuthority: 9, deviceAuthGatewayID: "native-dashboard", revision: 3)
+                source.setEndpoint(rotated)
+                #expect(try await connection.controlUiLegacyCredentials(endpoint: rotated).credentials ==
+                    [usesPassword ? "password" : "token": usesPassword ? "rotated-password" : "rotated-token"])
             }
         }
     }
@@ -296,6 +317,7 @@ struct GatewayConnectionControlUIAuthTests {
                 }
                 _ = try await connection.request(method: "health", params: nil, retryTransportFailures: false)
                 #expect(await connection.authSource() == .deviceToken)
+                #expect(try await connection.controlUiLegacyCredentials(endpoint: endpoint).credentials.isEmpty)
                 let lease = try #require(await connection.captureServerLease())
                 let signed = try await connection.controlUiNativeAuth(endpoint: endpoint, nonce: "nonce", signedAt: 123)
                 let value = try #require(JSONSerialization.jsonObject(with: signed.json) as? [String: Any])
@@ -380,6 +402,7 @@ struct GatewayConnectionControlUIAuthTests {
                 }
                 _ = try await connection.request(method: "health", params: nil, retryTransportFailures: false)
                 #expect(await connection.authSource() == .deviceToken)
+                #expect(try await connection.controlUiLegacyCredentials(endpoint: endpoint).credentials.isEmpty)
                 await #expect(throws: CancellationError.self) {
                     try await connection.controlUiNativeAuth(endpoint: endpoint, nonce: "nonce", signedAt: 123)
                 }

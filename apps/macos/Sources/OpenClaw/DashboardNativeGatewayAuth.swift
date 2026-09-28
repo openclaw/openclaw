@@ -7,6 +7,13 @@ import OpenClawProtocol
 struct DashboardNativeGatewayAuth: Sendable {
     typealias Provider = @Sendable (String, Int64) async throws -> Self
 
+    /// The released UI startup projection retains its exact socket owner.
+    struct LegacyCredentials: Sendable {
+        let credentials: [String: String]
+        let isCurrent: @Sendable () -> Bool
+        let waitForInvalidation: (@Sendable () async -> Void)?
+    }
+
     enum Credential: Equatable, Sendable {
         case token(String)
         case password(String)

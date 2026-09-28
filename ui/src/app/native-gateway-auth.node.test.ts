@@ -114,7 +114,14 @@ describe("native authenticated Control UI", () => {
       location,
       localStorage: storage,
       OpenClawNativeGatewayAuth: bridge,
-      __OPENCLAW_NATIVE_CONTROL_AUTH__: { gatewayUrl, token: null, nativeConnectAuth: true },
+      // Updated native apps retain these shipped bootstrap fields for older UIs.
+      // Current UI must ignore them even when the native bridge refuses or times out.
+      __OPENCLAW_NATIVE_CONTROL_AUTH__: {
+        gatewayUrl,
+        token: "legacy-bootstrap-token",
+        password: "legacy-bootstrap-password",
+        nativeConnectAuth: true,
+      },
     });
     Object.assign(host, { top: host });
     vi.stubGlobal("window", host);

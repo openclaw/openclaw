@@ -20,6 +20,8 @@ fn native_control_authority_retires_with_document_primary_or_profile() {
                 lifetime: source.lifetime.clone(),
                 nonce: Some(source.nonce.clone()),
                 url: url.clone(),
+                navigation_url: url.clone(),
+                native_auth: true,
                 phase: NavigationPhase::Active,
                 navigation: 1,
                 native_navigation: None,

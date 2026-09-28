@@ -12,7 +12,8 @@ private let chatSendingLogger = Logger(subsystem: "ai.openclaw", category: "Open
 
 extension OpenClawChatViewModel {
     public var canSend: Bool {
-        !isSubmittingDraft &&
+        !self.usesWebConversation &&
+            !isSubmittingDraft &&
             !isSending &&
             self.attachmentStagingCount == 0 &&
             !self.hasBlockingRunActivity &&
@@ -40,6 +41,7 @@ extension OpenClawChatViewModel {
     }
 
     public func send() {
+        guard !self.usesWebConversation else { return }
         logDiagnostic(
             "chat.ui send invoked sessionKey=\(sessionKey) "
                 + "inputLen=\(input.count) attachments=\(attachments.count) "
@@ -734,7 +736,8 @@ extension OpenClawChatViewModel {
         if canPreserveInOutbox,
            let durableSessionSettingsExpectation,
            attempt.encodedAttachments.isEmpty,
-           !(error is GatewayResponseError)
+           !(error is GatewayResponseError),
+           !(error is OpenClawChatSendOwnershipError)
         {
             runMessageScopesByRunID.removeValue(forKey: attempt.runId)
             clearPendingRun(attempt.runId)

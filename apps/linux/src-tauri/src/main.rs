@@ -318,7 +318,7 @@ mod native_browser_tests {
             window.top = window;
             new Function('window', 'location', process.argv[1])(window, {origin: 'https://gateway.example.com', pathname: '/control/chat'});
             const auth = window.__OPENCLAW_NATIVE_CONTROL_AUTH__;
-            if (!auth?.nativeConnectAuth || auth.gatewayUrl !== 'wss://gateway.example.com/control' || auth.token !== null || 'password' in auth) {
+            if (!auth?.nativeConnectAuth || auth.gatewayUrl !== 'wss://gateway.example.com/control' || 'token' in auth || 'password' in auth) {
               throw new Error('Primary must use native challenge authentication, not bootstrap credentials');
             }
             if (typeof window.OpenClawNativeGatewayAuth?.postMessage !== 'function') throw new Error('native challenge bridge missing');
@@ -1159,15 +1159,46 @@ impl DesktopState {
         navigation: &mut NavigationState,
         returning_from_settings: bool,
     ) -> Result<(), String> {
-        if !app
+        let selection = app
             .state::<gateway_windows::GatewayWindows>()
             .primary_selected(
                 app,
                 &dashboard,
-                Some(script.clone()),
+                Some(script),
                 gateway_ws::GatewayOwnership::Remote,
-            )?
-        {
+            )?;
+        let generation = navigation.watch_generation;
+        let installed = selection.install(|auth_script| {
+            let bridge = app.state::<native_browser_bridge::NativeBrowserBridgeState>();
+            let bridge_script = bridge
+                .select(app, &dashboard, true)?
+                .ok_or_else(|| "Could not prepare the native browser.".to_string())?;
+            match replace_main_webview(
+                app,
+                dashboard.clone(),
+                Some(format!(
+                    "{}\n{bridge_script}",
+                    auth_script.unwrap_or_default()
+                )),
+                Some(generation),
+            ) {
+                Ok(_) => Ok(()),
+                Err(_) => {
+                    navigation.cancel_watchdog();
+                    bridge.clear(app);
+                    let mut local = self.inner.local_url.clone();
+                    local
+                        .query_pairs_mut()
+                        .append_pair("mode", "connectionSettings");
+                    let _ = replace_main_webview(app, local, None, None);
+                    Err(
+                        "Could not open the remote Gateway dashboard. Try connecting again."
+                            .to_string(),
+                    )
+                }
+            }
+        })?;
+        if !installed {
             if returning_from_settings
                 && main_window(app)
                     .ok()
@@ -1178,32 +1209,6 @@ impl DesktopState {
             }
             return Ok(());
         }
-        let generation = navigation.watch_generation;
-        let bridge = app.state::<native_browser_bridge::NativeBrowserBridgeState>();
-        let bridge_script = bridge
-            .select(app, &dashboard, true)?
-            .ok_or_else(|| "Could not prepare the native browser.".to_string())?;
-        match replace_main_webview(
-            app,
-            dashboard.clone(),
-            Some(format!("{script}\n{bridge_script}")),
-            Some(generation),
-        ) {
-            Ok(_) => {}
-            Err(_) => {
-                navigation.cancel_watchdog();
-                bridge.clear(app);
-                let mut local = self.inner.local_url.clone();
-                local
-                    .query_pairs_mut()
-                    .append_pair("mode", "connectionSettings");
-                let _ = replace_main_webview(app, local, None, None);
-                return Err(
-                    "Could not open the remote Gateway dashboard. Try connecting again."
-                        .to_string(),
-                );
-            }
-        };
         #[cfg(target_os = "linux")]
         {
             if !self.is_quitting()
@@ -1382,7 +1387,8 @@ impl DesktopState {
         session_key: &str,
         agent_id: &str,
     ) -> Result<(), String> {
-        // Match connection publication's NAV -> Gateway config lock order.
+        // Keep NAV -> route-publication ordering. Native navigation callbacks
+        // may read authentication without recursively locking Gateway config.
         // This entry is already on the native thread; do not nest on_main.
         let monitor = {
             let mut navigation = self.inner.navigation.lock().expect("navigation");
@@ -1781,7 +1787,10 @@ impl DesktopState {
         let windows = app.state::<gateway_windows::GatewayWindows>();
         let base = Url::parse(target).map_err(|_| "Dashboard returned an invalid URL.")?;
         if dashboard {
-            if !windows.primary_selected(app, &base, None, gateway_ws::GatewayOwnership::Local)? {
+            if !windows
+                .primary_selected(app, &base, None, gateway_ws::GatewayOwnership::Local)?
+                .follows_primary()
+            {
                 return Ok(());
             }
         } else if !windows.main_is_primary(app) {

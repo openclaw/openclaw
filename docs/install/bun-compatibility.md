@@ -73,6 +73,22 @@ The browser plugin starts its helper processes with the Bun executable that runs
 - **Chrome MCP:** [existing-session profiles](/tools/browser/existing-session) start the packaged Chrome DevTools MCP server on Bun for `--autoConnect`, `browserUrl`, and `wsEndpoint` attaches. Actions, snapshots, screenshots, coordinate clicks, waits across cross-site navigations, and cleanup of the server process tree behave as on Node. A custom `mcpCommand` runs as configured.
 - **Chrome extension:** on macOS and Linux, the native messaging host and the relay daemon it starts use the runtime that ran `openclaw browser extension install`.
 
+## Bun-only installs
+
+Pin the Gateway service to your Bun executable so updates and Doctor retain it. Without Node, the `openclaw` launcher cannot start, so run the package entry point with Bun:
+
+```sh
+<bun> <package-root>/openclaw.mjs gateway install --runtime bun --runtime-path <bun> --force
+```
+
+Update, repair, and Doctor maintenance children use the running Bun executable. The Bun package-manager command resolves as `bun` from PATH; the CLI prepends its own executable directory, so the executable must be named `bun` for package-manager operations.
+
+First installs and updater staging without a persistent Node require `OPENCLAW_PACKAGE_BUN_LAUNCHER` set to the absolute Bun executable that launches the CLI. The updater sets it automatically when running under Bun; an app must set it for its first `bun add -g --trust openclaw@<version>`. Preinstall validates that launcher as Bun 1.4+. Without the marker, preinstall still requires a persistent Node; a Node found on PATH must satisfy the package's Node requirements even when the marker is set.
+
+Published updaters through 2026.9.6 cannot update a Bun-only install. They do not set this marker, so the new package's preinstall stops staging (`global-install-failed`). If the caller sets the marker, their own bare `node` probe fails to start instead (`update-executor-settlement-failed`). Both refusals happen before the Gateway stops, and it keeps running. A fixed version must drive the update; installing a fixed candidate cannot change the updater already running.
+
+Npm-sourced plugins still require npm and Node.
+
 ## Known limitations
 
 - **Desktop WebSockets:** OpenClaw uses the installed `ws` transport for desktop observers and paired-node desktop/portal streams. Bun 1.4.2's built-in `ws` server adapter lacks pause/resume and the Duplex stream bridge; the installed transport preserves backpressure, payload limits, and cleanup when a desktop disconnects.
@@ -83,6 +99,7 @@ The browser plugin starts its helper processes with the Bun executable that runs
 - **Launched desktop apps:** Node marks inherited descriptors close-on-exec at startup and Bun 1.4.2 does not, so an app that Gateway computer control launches inherits the helper's standard streams. The Gateway's 30-second cleanup timeout then stops the app when its execution closes. OpenClaw's Bun fork adopts Node's behavior in [openclaw/bun#12](https://github.com/openclaw/bun/pull/12).
 - **SQLite handles:** Bun 1.4.2 can retain statement handles and WAL/shared-memory files after `DatabaseSync.close()` or `Symbol.dispose()`; OpenClaw cannot finalize them through Bun's public `node:sqlite` API. See the [upstream close fix](https://github.com/oven-sh/bun/pull/40005); use Node when prompt file release matters.
 - **SQLite storage workers:** Bun uses one worker per distinct database and can use up to 64 dedicated workers within the host's 64-client cap. Clients of the same database share its worker. Closing the last client waits for worker exit to release native handles; capacity exhaustion rejects new work without interrupting existing stores. Node multiplexes databases across four shared workers. Bun's dedicated layout can be revisited after the upstream close fix ships and repeated close/reopen tests prove native handles and locks are released.
+- **Headless node updates:** a node host running on Bun checks for new releases without npm. Preparing the separate update runtime still runs npm, so a Bun-only host without Node logs that failure at each hourly check and keeps running its current version.
 - **Workspace installation:** `bun install` cannot resolve this repository's pnpm workspace layout. Use `pnpm install`.
 
 See [Bun](/install/bun) for the workflow and lifecycle trust commands.
@@ -91,6 +108,8 @@ See [Bun](/install/bun) for the workflow and lifecycle trust commands.
 
 | Release                            | Change                                                                                                                                                                                               |
 | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unreleased (main)                  | Keeps Bun maintenance children and service runtime selection, and adds `OPENCLAW_PACKAGE_BUN_LAUNCHER` for preinstall validation of Bun-only installs and updater staging.                           |
+| Unreleased (main)                  | Headless node update checks read the npm registry in-process under Bun instead of running `npm view`; preparing an update still needs npm. #160154                                                   |
 | Unreleased (main)                  | Tool Search code mode (`tool_search_code`) is retired; structured Tool Search needs no Node under Bun.                                                                                               |
 | Unreleased (main)                  | Starts the packaged Chrome DevTools MCP server with the current runtime, so existing-session browser profiles no longer require a Node installation under Bun.                                       |
 | Unreleased (main)                  | Gateway computer control runs its host worker on the Gateway's own runtime, so a Bun Gateway controls its managed desktop without an installed Node.                                                 |

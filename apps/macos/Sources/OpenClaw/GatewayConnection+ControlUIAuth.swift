@@ -3,6 +3,50 @@ import OpenClawKit
 import OpenClawProtocol
 
 extension GatewayConnection {
+    /// The released v2026.9.6 UI understands only shared startup credentials.
+    /// Wait for native hello and project its accepted method, never saved candidates
+    /// or a device grant that belongs to a different identity than that older browser.
+    func controlUiLegacyCredentials(
+        endpoint: EndpointSnapshot) async throws -> DashboardNativeGatewayAuth.LegacyCredentials
+    {
+        _ = try await self.controlUiBrowserIdentityURL(config: endpoint.config)
+        guard self.includeDeviceIdentity, endpoint.browserSession == nil,
+              let lease = await self.captureServerLease(),
+              lease.route.matches(config: endpoint.config), lease.route.browserSession == nil,
+              GatewayTLSRoute.hasSameConnectionIdentity(lease.route.tls, endpoint.tls),
+              endpoint.routeAuthority == nil || endpoint.routeAuthority == lease.route.authority,
+              endpoint.revision == nil || endpoint.revision == lease.endpointRevision,
+              endpoint.deviceAuthGatewayID == nil || endpoint.deviceAuthGatewayID == lease.route.deviceAuthGatewayID
+        else { throw CancellationError() }
+        let binding = try await self.controlUiAuthBinding(ifCurrentServerLease: lease)
+        guard let snapshot = self.lastSnapshot,
+              snapshot.auth["role"]?.value as? String == "operator",
+              await self.isCurrentServerLease(lease)
+        else { throw CancellationError() }
+        let method = snapshot.auth["method"].map { $0.value as? String } ??
+            (binding.source == .sharedToken ? "token" : binding.source.rawValue)
+        let credential = method.flatMap {
+            Self.controlUiCredential(method: $0, source: binding.source, config: endpoint.config, token: nil)
+        }
+        let credentials: [String: String] = switch credential {
+        case .token, .password: credential?.auth ?? [:]
+        default: [:]
+        }
+        let isCurrent: @Sendable () -> Bool = { self.serverLeaseMatchesCurrentState(lease) }
+        return DashboardNativeGatewayAuth.LegacyCredentials(
+            credentials: credentials,
+            isCurrent: isCurrent,
+            waitForInvalidation: {
+                // Subscribe before checking so retirement cannot fall between
+                // the initial lease check and observer installation.
+                let deliveries = await self.subscribe(bufferingNewest: 1)
+                guard isCurrent() else { return }
+                for await _ in deliveries {
+                    if Task.isCancelled || !isCurrent() { return }
+                }
+            })
+    }
+
     func controlUiNativeAuth(
         endpoint: EndpointSnapshot,
         nonce: String,

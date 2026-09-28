@@ -364,7 +364,11 @@ previously deleted captured files or recreate a missing ownership directory.
 Startup and hourly cleanup also reclaim tokenless `openclaw-plugin-build-*` and
 `openclaw-model-catalog-*` roots in the selected state's temporary directory and
 the current system temporary directory. Roots must be older than one hour and
-have no custody token. A complete process census that finds another OpenClaw
+have no custody token. On macOS and Linux, cleanup rechecks that each legacy root belongs
+to the current UID immediately before its rename, preserving other users' captures even in
+privileged runs. Windows has no equivalent UID check, so privileged Windows cleanup keeps
+the age and rename-probe rules below.
+A complete process census that finds another OpenClaw
 producer preserves legacy roots. When the census is unavailable, including on
 Windows, cleanup uses age and a rename probe instead; sharing violations leave
 locked roots for a later cycle. This is best-effort cleanup of reconstructible

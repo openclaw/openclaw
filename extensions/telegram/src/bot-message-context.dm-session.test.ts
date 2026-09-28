@@ -27,6 +27,7 @@ import {
   normalizeSessionDeliveryState,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -416,6 +417,7 @@ describe("Telegram recorded session destinations", () => {
     });
     await bot.stop();
     resetTelegramTopicNameCacheForTest();
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     setTelegramPluginStateRuntimeForTests();
     const reopened = await createBot(false, true, cfg);

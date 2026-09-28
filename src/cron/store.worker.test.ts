@@ -343,6 +343,24 @@ it.each([true, false])(
             ),
         },
         {
+          name: "guarded owner update",
+          invoke: (callback) =>
+            service.update(
+              "first",
+              {
+                agentId: "other",
+                sessionTarget: "isolated",
+                payload: { kind: "agentTurn", message: "owner update" },
+              },
+              { commitGuard: callback },
+            ),
+        },
+        {
+          name: "captured owner update",
+          invoke: (callback) =>
+            service.update("first", { agentId: "main" }, { captureRuntimeAuthority: callback }),
+        },
+        {
           name: "precondition update",
           precondition: true,
           invoke: (callback) =>

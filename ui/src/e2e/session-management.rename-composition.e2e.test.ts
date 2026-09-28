@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import type { SessionCapability } from "../lib/sessions/session-capability.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
@@ -100,6 +101,17 @@ suite.define(() => {
           expect(await input.inputValue()).toBe(draft);
           expect(patches).toEqual([]);
 
+          // Prime the shared descriptor cache before the rename's reconciliation read.
+          await page.evaluate(async (sessionKey) => {
+            const app = document.querySelector("openclaw-app") as HTMLElement & {
+              runtime: { context: { sessions: SessionCapability } };
+            };
+            await app.runtime.context.sessions.describe({ key: sessionKey, agentId: "main" });
+          }, original.key);
+          const rosterMatch = { includeGlobal: true };
+          await gateway.deferNext("sessions.list", rosterMatch);
+          const listCountBeforeRename = (await gateway.getRequests("sessions.list", rosterMatch))
+            .length;
           await input.fill(finalTitle);
           await input.press("Enter");
           const committed = await waitForPatch(gateway, (params) => params.label === finalTitle);
@@ -110,7 +122,28 @@ suite.define(() => {
           });
           expect(await gateway.getRequests("sessions.patch")).toHaveLength(1);
           await input.waitFor({ state: "detached" });
+          await gateway.waitForRequest("sessions.list", {
+            after: listCountBeforeRename,
+            match: rosterMatch,
+          });
+          // Replay a cached descriptor after the newer roster read starts. Its original
+          // sampling clock must keep the old title from winning by delivery order.
+          const describesBeforeReplay = (await gateway.getRequests("sessions.describe")).length;
+          await page.evaluate(async (sessionKey) => {
+            const app = document.querySelector("openclaw-app") as HTMLElement & {
+              runtime: { context: { sessions: SessionCapability } };
+            };
+            const sessions = app.runtime.context.sessions;
+            const reconcile = sessions.captureReconcile();
+            const { session } = await sessions.describe({ key: sessionKey, agentId: "main" });
+            reconcile(session ?? undefined);
+          }, original.key);
+          expect(await gateway.getRequests("sessions.describe")).toHaveLength(
+            describesBeforeReplay,
+          );
+          await gateway.resolveDeferred("sessions.list");
           await expect.poll(() => title.textContent()).toContain(finalTitle);
+          await expect.poll(() => sidebarRow.textContent()).toContain(finalTitle);
         },
       );
     },

@@ -147,9 +147,8 @@ export function assertGatewayServiceManagementAllowedForUpdate(
   try {
     assertGatewayServiceMutationAllowed("manage the gateway service during update", env);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
     throw new GatewayServiceUpdateOwnershipError(
-      message,
+      err instanceof Error ? err.message : String(err),
       err,
       undefined,
       "service-mutation-refused",
@@ -186,9 +185,7 @@ function serviceInspectionWarningMessage(state: GatewayServiceState): string {
     return `${GATEWAY_SERVICE_INSPECTION_WARNING} Processes remain in the systemd service cgroup (${tasksCurrent} tasks). Have their owner stop them before state maintenance.`;
   }
   const detail = runtime?.inspectionFailure?.detail;
-  return detail
-    ? `${GATEWAY_SERVICE_INSPECTION_WARNING} ${detail}`
-    : GATEWAY_SERVICE_INSPECTION_WARNING;
+  return GATEWAY_SERVICE_INSPECTION_WARNING + (detail ? ` ${detail}` : "");
 }
 
 export function observedSystemdManagerUid(state: GatewayServiceState): number | undefined {
@@ -239,16 +236,14 @@ export async function inspectManagedGatewayServiceBeforeUpdate(params: {
   ) {
     return unavailable();
   }
-  // Stable updaters through 2026.9.4 omit known-empty systemd override metadata.
-  // Keep their fingerprint while the full snapshot retains authored defaults for runtime pinning.
-  const {
-    managedDefinition: _managedDefinition,
-    managedOverrides: _managedOverrides,
-    ...effectiveCommand
-  } = command;
-  const serialized = stableStringify(
-    hasGatewayServiceDefinitionOverrides(command) ? command : effectiveCommand,
-  );
+  // Updaters through 2026.9.4 omit selection provenance and known-empty systemd overrides.
+  // Keep their fingerprint while discovery and runtime pinning retain the full snapshot.
+  const { startupEntryPaths: _startupEntryPaths, ...fingerprintCommand } = command;
+  if (!hasGatewayServiceDefinitionOverrides(fingerprintCommand)) {
+    delete fingerprintCommand.managedDefinition;
+    delete fingerprintCommand.managedOverrides;
+  }
+  const serialized = stableStringify(fingerprintCommand);
   if (Buffer.byteLength(serialized) > 4 * 1024 * 1024) {
     return unavailable();
   }
@@ -428,6 +423,10 @@ export async function resolvePackageRuntimePreflight(params: {
     if (!target) {
       return ok(unchanged());
     }
+    // The current Bun already passed its startup guard; Node engines do not apply.
+    if (!nodeRunner && process.versions.bun) {
+      return ok({ ...unchanged(), targetVersion: target.version });
+    }
     const runtime = await resolvePackageRuntimeForPreflight({
       nodeRunner,
       timeoutMs: params.timeoutMs,
@@ -447,6 +446,7 @@ export async function resolvePackageRuntimePreflight(params: {
     const fallbackNodeRunner =
       params.fallbackNodeRunner ??
       (params.shouldRestart &&
+      !process.versions.bun &&
       nodeRunner &&
       (params.alreadyCurrent
         ? canRefreshCurrentService

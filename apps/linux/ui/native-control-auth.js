@@ -11,7 +11,15 @@
     ready();
   });
   Object.defineProperty(window, "__OPENCLAW_NATIVE_CONTROL_AUTH__", {
-    value: { gatewayUrl: config.gatewayUrl, nativeConnectAuth: true, token: null },
+    // Released UIs consume only the accepted shared fields. Current UI ignores
+    // them and always requests native signing, including after bridge failures.
+    value: {
+      gatewayUrl: config.gatewayUrl,
+      ...config.legacyAuth,
+      // Released UI otherwise retains its old token ahead of an accepted password.
+      ...(typeof config.legacyAuth?.password === "string" ? { token: null } : {}),
+      nativeConnectAuth: true,
+    },
     configurable: true,
   });
   Object.defineProperty(window, "OpenClawNativeGatewayAuth", {

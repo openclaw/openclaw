@@ -396,6 +396,7 @@ pub(crate) struct CanvasSurfaceState {
 
 #[derive(Default)]
 struct GatewayClientInner {
+    route_publication: Mutex<()>,
     config: Mutex<Option<GatewayWsConfig>>,
     config_generation: AtomicU64,
     commands: Mutex<Option<mpsc::Sender<DriverCommand>>>,
@@ -464,21 +465,31 @@ impl GatewayClient {
         self.inner.desktop_demand.store(active, Ordering::SeqCst);
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", test))]
     pub(crate) fn with_desktop_route<T>(
         &self,
         generation: u64,
         action: impl FnOnce(Option<&str>) -> Result<T, String>,
     ) -> Result<T, String> {
-        let config = self
+        // Keep route replacement fenced without holding the config read across
+        // UI navigation: its callbacks read the live native bootstrap again.
+        let _publication = self
             .inner
-            .config
+            .route_publication
             .lock()
             .map_err(|_| "Gateway route unavailable")?;
-        if self.inner.config_generation.load(Ordering::SeqCst) != generation {
-            return Err("Desktop Gateway changed; refresh before trying again.".into());
-        }
-        action(config.as_ref().map(|config| config.ws_url.as_str()))
+        let url = {
+            let config = self
+                .inner
+                .config
+                .lock()
+                .map_err(|_| "Gateway route unavailable")?;
+            if self.inner.config_generation.load(Ordering::SeqCst) != generation {
+                return Err("Desktop Gateway changed; refresh before trying again.".into());
+            }
+            config.as_ref().map(|config| config.ws_url.clone())
+        };
+        action(url.as_deref())
     }
 
     #[cfg(target_os = "linux")]
@@ -558,6 +569,11 @@ impl GatewayClient {
     }
 
     fn replace_configuration(&self, config: Option<GatewayWsConfig>) -> u64 {
+        let _publication = self
+            .inner
+            .route_publication
+            .lock()
+            .expect("gateway route publication mutex poisoned");
         // Publish the route and its generation together, including same-URL mode changes.
         let mut current = self
             .inner
@@ -629,6 +645,46 @@ impl GatewayClient {
         .map_err(|_| {
             "The native Gateway connection is not ready. Retry after the app connects.".to_string()
         })?
+    }
+
+    // Keep the live native binding held while the routing owner samples or
+    // publishes its startup projection. Never await in action.
+    pub(crate) fn with_native_control_bootstrap<T>(
+        &self,
+        generation: GatewayGeneration,
+        action: impl FnOnce(Url, String) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let config = self
+            .inner
+            .config
+            .lock()
+            .map_err(|_| "Gateway configuration unavailable.")?;
+        let config = config
+            .as_ref()
+            .ok_or("Gateway configuration unavailable.")?;
+        if self.generation() != generation || config.ownership != GatewayOwnership::Remote {
+            return Err("Native Gateway connection changed.".into());
+        }
+        let session = self
+            .inner
+            .native_control_session
+            .lock()
+            .map_err(|_| "Native authentication unavailable.")?;
+        // A retired/not-ready session still owns a secret-free native marker.
+        // Publishing that projection retires installed shared credentials too.
+        let legacy_auth = session
+            .as_ref()
+            .filter(|_| self.is_connected())
+            .map(NativeControlSession::legacy_auth)
+            .unwrap_or_else(|| json!({}));
+        let gateway = Url::parse(&config.ws_url).map_err(|_| "Invalid native Gateway address.")?;
+        let dashboard = crate::remote_gateway::dashboard_url(&gateway)?;
+        let script = crate::gateway_control_auth::initialization_script_with_legacy_auth(
+            &dashboard,
+            &gateway,
+            legacy_auth,
+        )?;
+        action(dashboard, script)
     }
 
     pub(crate) fn native_control_auth(
@@ -1523,8 +1579,22 @@ impl GatewayClient {
             )))
         });
         self.inner.connection_changed.notify_waiters();
-        if let Ok(Some(event)) = event {
-            let _ = app.emit_to(QUICKCHAT_LABEL, GATEWAY_STATE_EVENT, event);
+        if let Ok(event) = event {
+            if let Some(event) = event {
+                let _ = app.emit_to(QUICKCHAT_LABEL, GATEWAY_STATE_EVENT, event);
+            }
+            // Configuration replacement can already have stored Down. Refresh
+            // even without a state event: every retired native owner must also
+            // retire its cached and installed startup credential projection.
+            let client = self.clone();
+            let current_app = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                if let Some(owner) =
+                    current_app.try_state::<crate::gateway_windows::GatewayWindows>()
+                {
+                    let _ = owner.refresh_primary_native_auth(&current_app, &client, generation);
+                }
+            });
         }
     }
 

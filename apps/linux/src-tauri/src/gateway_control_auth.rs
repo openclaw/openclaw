@@ -33,10 +33,19 @@ impl Challenge {
 }
 
 pub(crate) fn initialization_script(dashboard: &Url, gateway: &Url) -> Result<String, String> {
+    initialization_script_with_legacy_auth(dashboard, gateway, json!({}))
+}
+
+pub(crate) fn initialization_script_with_legacy_auth(
+    dashboard: &Url,
+    gateway: &Url,
+    legacy_auth: Value,
+) -> Result<String, String> {
     let config = json!({
         "origin": dashboard.origin().ascii_serialization(),
         "base": dashboard.path().trim_end_matches('/'),
         "gatewayUrl": gateway.as_str(),
+        "legacyAuth": legacy_auth,
     });
     Ok(format!(
         "({})({config});",
@@ -80,6 +89,16 @@ impl NativeControlSession {
             auth,
             scopes: scopes?,
         })
+    }
+
+    pub(crate) fn legacy_auth(&self) -> Value {
+        // v2026.9.6 understands shared bootstrap credentials, not this app's
+        // device grant. Only an accepted hello can create this session fact.
+        match &self.auth {
+            GatewayAuth::SharedToken(token) => json!({"token": token}),
+            GatewayAuth::SharedPassword(password) => json!({"password": password}),
+            _ => json!({}),
+        }
     }
 
     pub(crate) fn current_auth(
@@ -209,6 +228,7 @@ mod tests {
                     None,
                 )
                 .unwrap();
+                assert_eq!(session.legacy_auth(), json!({(field):credential}));
                 let auth = session
                     .current_auth(&store, "wss://gateway.example")
                     .unwrap();

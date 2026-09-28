@@ -41,15 +41,11 @@ const sourceUrl = (relative: string) =>
     import.meta.url.endsWith(".js") ? relative.replace(/\.ts$/u, ".js") : relative,
     import.meta.url,
   ).href;
-const recoveryClockOwners = new Set([
-  sourceUrl("./daemon-cli/restart-health.ts"),
-  sourceUrl("./daemon-cli/restart-health-probe.ts"),
-]);
 // Keep native/HTTP observations and their full budgets; only recovery polling advances time.
 const recoveryClockUrl = `data:text/javascript,${encodeURIComponent(`
 const realMonotonicNow = performance.now.bind(performance);
 const realWallNow = Date.now;
-let elapsed = 0;
+export let elapsed = 0;
 Object.defineProperty(performance, 'now', { value: () => realMonotonicNow() + elapsed });
 Date.now = () => realWallNow() + Math.floor(elapsed);
 export async function sleep(ms, signal) {
@@ -60,6 +56,16 @@ export async function sleep(ms, signal) {
   signal?.throwIfAborted();
 }
 `)}`;
+// Exhaust the recovery budget in its first interval, so real reads cannot race
+// a nearly spent fake deadline. HTTP probe sleeps must keep their own increments.
+const recoveryIntervalClockUrl = `data:text/javascript,${encodeURIComponent(`
+import { sleep as advance } from ${JSON.stringify(recoveryClockUrl)};
+export const sleep = (ms, signal) => advance(ms + 3_600_000, signal);
+`)}`;
+const recoveryClockUrls = new Map([
+  [sourceUrl("./daemon-cli/restart-health.ts"), recoveryIntervalClockUrl],
+  [sourceUrl("./daemon-cli/restart-health-probe.ts"), recoveryClockUrl],
+]);
 const doctorSource = `
 import { intro, note, outro } from ${JSON.stringify(pathToFileURL(require.resolve("@clack/prompts")).href)};
 export async function doctorCommand() {
@@ -211,7 +217,8 @@ export const preparePostCorePluginConfig = async () => ({
   ],
   [
     sourceUrl("../daemon/gateway-entrypoint.ts"),
-    `export const resolveGatewayInstallEntrypoint = async () => ${JSON.stringify(installedEntry)};`,
+    `export * from ${JSON.stringify(`${sourceUrl("../daemon/gateway-entrypoint.ts")}?fixture-original`)};\n` +
+      `export const resolveGatewayInstallEntrypoint = async () => ${JSON.stringify(installedEntry)};`,
   ],
 ]);
 const blockedPhase = repairDeadline
@@ -266,6 +273,20 @@ export async function runInteractiveUpdateFailureAction({ runtime }) {
   );
 }
 if (scenario === "doctor-error") {
+  // Model a loaded runner's next port read without a real delay. Recovery must
+  // exhaust this fixture's polling budget in the interval, before another read.
+  const portsUrl = sourceUrl("../infra/ports-inspect.ts");
+  stubs.set(
+    portsUrl,
+    `export * from ${JSON.stringify(`${portsUrl}?fixture-original`)};
+import { inspectPortUsage as inspectOriginal } from ${JSON.stringify(`${portsUrl}?fixture-original`)};
+import { elapsed, sleep } from ${JSON.stringify(recoveryClockUrl)};
+export async function inspectPortUsage(port, options) {
+  const usage = await inspectOriginal(port, options);
+  if (elapsed > 0) await sleep(3_600_000, options?.signal);
+  return usage;
+}`,
+  );
   // The timeout-report case owns an uninspectable service, not the host's manager.
   // Admit that fixture identity while leaving recovery inspection, HTTP probes,
   // polling, and failure recording real; no service mutation is permitted.
@@ -301,11 +322,12 @@ registerHooks({
     if (specifier.startsWith(".") || specifier.startsWith("file:")) {
       const resolved = new URL(specifier, context.parentURL).href;
       const url = import.meta.url.endsWith(".js") ? resolved : resolved.replace(/\.js$/u, ".ts");
+      const recoverySleepUrl = recoveryClockUrls.get(context.parentURL ?? "");
       if (
         [sourceUrl("../utils.ts"), sourceUrl("../utils/sleep.ts")].includes(url) &&
-        recoveryClockOwners.has(context.parentURL ?? "")
+        recoverySleepUrl
       ) {
-        return { url: recoveryClockUrl, shortCircuit: true };
+        return { url: recoverySleepUrl, shortCircuit: true };
       }
       const source = stubs.get(url);
       if (source !== undefined) {

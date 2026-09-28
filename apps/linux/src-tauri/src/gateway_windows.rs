@@ -29,11 +29,41 @@ struct Route {
     auth_script: Option<String>,
 }
 
+impl Route {
+    fn retained_destination(&self, previous_base: &Url, current: &Url) -> Option<Url> {
+        (self.url == *previous_base && matches_route(current, &self.url)).then(|| current.clone())
+    }
+}
+
+pub(crate) struct PrimarySelection {
+    follows: bool,
+    auth_script: Option<String>,
+}
+
+impl PrimarySelection {
+    pub(crate) fn follows_primary(&self) -> bool {
+        self.follows
+    }
+
+    pub(crate) fn install(
+        self,
+        replace: impl FnOnce(Option<String>) -> Result<(), String>,
+    ) -> Result<bool, String> {
+        if !self.follows {
+            return Ok(false);
+        }
+        replace(self.auth_script)?;
+        Ok(true)
+    }
+}
+
 #[derive(Clone)]
 struct Document {
     lifetime: String,
     nonce: Option<String>,
     url: Url,
+    navigation_url: Url,
+    native_auth: bool,
     phase: NavigationPhase,
     navigation: u64,
     native_navigation: Option<u64>,
@@ -153,6 +183,7 @@ struct Intent {
     generation: u64,
     source: Option<DocumentAuthority>,
     source_url: Option<Url>,
+    navigation_url: Option<Url>,
     target: String,
 }
 
@@ -217,6 +248,107 @@ struct Routing {
 }
 
 impl Routing {
+    fn select_primary(
+        &mut self,
+        url: &Url,
+        auth_script: Option<String>,
+        accepted: Option<String>,
+        ownership: GatewayOwnership,
+    ) -> (PrimarySelection, Vec<Intent>) {
+        // The initial main replacement must consume the same accepted script
+        // published to routing; a later identical Up callback will not reload it.
+        let auth_script = accepted.or(auth_script);
+        let (follows, reconnects) =
+            self.publish_primary(url, auth_script.clone(), ownership, false);
+        (
+            PrimarySelection {
+                follows,
+                auth_script,
+            },
+            reconnects,
+        )
+    }
+
+    fn publish_primary(
+        &mut self,
+        url: &Url,
+        auth_script: Option<String>,
+        ownership: GatewayOwnership,
+        refresh_main: bool,
+    ) -> (bool, Vec<Intent>) {
+        let changed = self
+            .primary
+            .as_ref()
+            .is_none_or(|previous| previous.url != *url || previous.auth_script != auth_script);
+        if changed {
+            self.primary_generation = self.primary_generation.wrapping_add(1);
+        }
+        self.primary = Some(Route {
+            url: url.clone(),
+            auth_script,
+        });
+        self.primary_ownership = Some(ownership);
+        let mut labels = if changed {
+            self.primary_refresh_targets()
+        } else {
+            Vec::new()
+        };
+        // Normal primary selection replaces main in DesktopState. A later hello
+        // is a credential transition, so this routing owner replaces main too.
+        if changed
+            && refresh_main
+            && !labels.iter().any(|label| label == "main")
+            && self.windows.get("main").is_some_and(|route| {
+                route.target == PRIMARY
+                    && route.pending.is_none()
+                    && route.recovery.is_none()
+                    && route
+                        .document
+                        .as_ref()
+                        .is_some_and(|doc| matches_route(&doc.navigation_url, &doc.url))
+            })
+        {
+            labels.push("main".into());
+        }
+        let reconnects = labels
+            .into_iter()
+            .map(|label| self.refresh_primary(&label))
+            .collect();
+        (self.follows_primary(), reconnects)
+    }
+
+    fn primary_route(
+        &self,
+        client: Option<&crate::gateway_ws::GatewayClient>,
+    ) -> Result<Route, String> {
+        let mut route = self
+            .primary
+            .clone()
+            .ok_or("The Primary Gateway is not ready yet.")?;
+        if self.primary_ownership == Some(GatewayOwnership::Remote) {
+            let client = client.ok_or("Native Gateway connection is unavailable.")?;
+            route.auth_script = Some(client.with_native_control_bootstrap(
+                client.generation(),
+                |dashboard, script| {
+                    if dashboard != route.url {
+                        return Err(STALE.into());
+                    }
+                    Ok(script)
+                },
+            )?);
+        }
+        Ok(route)
+    }
+
+    fn native_document(&self, label: &str, lifetime: &str, url: &Url) -> bool {
+        self.windows.get(label).is_some_and(|route| {
+            route.target == PRIMARY
+                && route.document.as_ref().is_some_and(|doc| {
+                    doc.native_auth && doc.lifetime == lifetime && matches_route(url, &doc.url)
+                })
+        })
+    }
+
     fn document_navigation(&mut self, label: &str, lifetime: &str, url: &Url) -> bool {
         if self.closing {
             return false;
@@ -235,15 +367,60 @@ impl Routing {
         if doc.phase == NavigationPhase::Failed {
             return false;
         }
+        // An installed initialization script belongs to this document's Primary
+        // projection. Block a reload before it can replay retired credentials.
+        if self.native_document(label, lifetime, url)
+            && self.windows[label].primary_generation != Some(self.primary_generation)
+        {
+            return false;
+        }
         self.retire_initial_document(label);
         let route = self.windows.get_mut(label).expect("current document");
         route.generation = route.generation.wrapping_add(1);
         route.pending = None;
         let doc = route.document.as_mut().expect("current document");
         doc.navigation = doc.navigation.wrapping_add(1);
+        doc.navigation_url = url.clone();
         doc.phase = NavigationPhase::Active;
         doc.nonce = None;
         true
+    }
+
+    fn admit_document_navigation(
+        &mut self,
+        label: &str,
+        lifetime: &str,
+        url: &Url,
+    ) -> (bool, Option<Intent>) {
+        if self.document_navigation(label, lifetime, url) {
+            return (true, None);
+        }
+        let replace = !self.closing
+            && self.native_document(label, lifetime, url)
+            && self.windows.get(label).is_some_and(|route| {
+                route
+                    .document
+                    .as_ref()
+                    .is_some_and(|doc| doc.phase == NavigationPhase::Active)
+                    && route.primary_generation != Some(self.primary_generation)
+                    && route
+                        .pending
+                        .as_ref()
+                        .is_none_or(|pending| pending.intent.target == PRIMARY)
+            });
+        let replacement = replace.then(|| {
+            let mut intent = self.refresh_primary(label);
+            intent.navigation_url = Some(url.clone());
+            self.windows
+                .get_mut(label)
+                .unwrap()
+                .pending
+                .as_mut()
+                .unwrap()
+                .intent = intent.clone();
+            intent
+        });
+        (false, replacement)
     }
 
     fn document_event(&self, label: &str, lifetime: &str) -> Option<DocumentEvent> {
@@ -513,6 +690,7 @@ impl Routing {
             generation: route.generation,
             source,
             source_url: None,
+            navigation_url: None,
             target: target.to_string(),
         };
         let completion = if route.target == target {
@@ -549,6 +727,18 @@ impl Routing {
             .get(label)
             .and_then(|route| route.pending.as_ref())
             .map(|pending| (pending.intent.clone(), pending.completion));
+        let source_url = self
+            .windows
+            .get(label)
+            .and_then(|route| route.document.as_ref())
+            .map(|doc| doc.navigation_url.clone());
+        let previous_base = self
+            .windows
+            .get(label)
+            .filter(|route| route.target == PRIMARY)
+            .and_then(|route| route.document.as_ref())
+            .map(|doc| doc.url.clone());
+        let mut destination = source_url.clone();
         let document_completion = self
             .windows
             .get(label)
@@ -561,14 +751,15 @@ impl Routing {
                 .as_ref()
                 .and_then(|(intent, _)| intent.source.clone()),
         );
+        next.source_url = source_url;
         if let Some((previous, completion)) = inherited {
             next.source_url = previous.source_url;
+            destination = previous.navigation_url.or(destination);
             if let Some(pending) = self
                 .windows
                 .get_mut(label)
                 .and_then(|route| route.pending.as_mut())
             {
-                pending.intent = next.clone();
                 pending.completion = completion;
             }
         } else if let Some(completion) = document_completion {
@@ -579,6 +770,22 @@ impl Routing {
             {
                 pending.completion = completion;
             }
+        }
+        next.navigation_url =
+            previous_base
+                .as_ref()
+                .zip(destination.as_ref())
+                .and_then(|(base, destination)| {
+                    self.primary
+                        .as_ref()
+                        .and_then(|primary| primary.retained_destination(base, destination))
+                });
+        if let Some(pending) = self
+            .windows
+            .get_mut(label)
+            .and_then(|route| route.pending.as_mut())
+        {
+            pending.intent = next.clone();
         }
         next
     }
@@ -909,14 +1116,45 @@ impl DocumentRegistration {
     pub fn configure(&self, builder: WebviewBuilder<tauri::Wry>) -> WebviewBuilder<tauri::Wry> {
         let registration = self.clone();
         let builder = builder.on_navigation(move |url| {
-            registration
-                .app
-                .state::<GatewayWindows>()
+            let app = &registration.app;
+            let owner = app.state::<GatewayWindows>();
+            let native = owner.routing.lock().is_ok_and(|state| {
+                state.native_document(&registration.label, &registration.lifetime, url)
+            });
+            if native {
+                let Some(client) = app.try_state::<crate::gateway_ws::GatewayClient>() else {
+                    return false;
+                };
+                // Revalidate here even before a queued connection-state callback:
+                // a reload must not execute the old installed startup script.
+                if owner
+                    .refresh_primary_native_auth(app, &client, client.generation())
+                    .is_err()
+                {
+                    return false;
+                }
+            }
+            let (allowed, replacement) = owner
                 .routing
                 .lock()
-                .is_ok_and(|mut state| {
-                    state.document_navigation(&registration.label, &registration.lifetime, url)
+                .map(|mut state| {
+                    state.admit_document_navigation(
+                        &registration.label,
+                        &registration.lifetime,
+                        url,
+                    )
                 })
+                .unwrap_or((false, None));
+            if let Some(intent) = replacement {
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let label = intent.label.clone();
+                    if let Err(error) = select_intent(app.clone(), intent).await {
+                        show_error(&app, &label, &error);
+                    }
+                });
+            }
+            allowed
         });
         #[cfg(target_os = "windows")]
         if let Some(data) = &self.browser_data {
@@ -1124,31 +1362,30 @@ impl GatewayWindows {
         url: &Url,
         auth_script: Option<String>,
         ownership: GatewayOwnership,
-    ) -> Result<bool, String> {
-        let (follows, reconnects) = {
+    ) -> Result<PrimarySelection, String> {
+        let (selection, reconnects) = {
             let mut state = self.routing.lock().map_err(|_| STALE)?;
-            let changed = state
-                .primary
-                .as_ref()
-                .is_none_or(|previous| previous.url != *url || previous.auth_script != auth_script);
-            if changed {
-                state.primary_generation = state.primary_generation.wrapping_add(1);
-            }
-            state.primary = Some(Route {
-                url: url.clone(),
-                auth_script,
-            });
-            state.primary_ownership = Some(ownership);
-            let labels = if changed {
-                state.primary_refresh_targets()
+            // A fast native hello may precede this route's publication. Sample
+            // its accepted binding here as well as in the later Up callback.
+            let accepted = if ownership == GatewayOwnership::Remote {
+                app.try_state::<crate::gateway_ws::GatewayClient>()
+                    .and_then(|client| {
+                        client
+                            .with_native_control_bootstrap(
+                                client.generation(),
+                                |dashboard, script| {
+                                    if dashboard != *url {
+                                        return Err(STALE.into());
+                                    }
+                                    Ok(script)
+                                },
+                            )
+                            .ok()
+                    })
             } else {
-                Vec::new()
+                None
             };
-            let reconnects = labels
-                .into_iter()
-                .map(|label| state.refresh_primary(&label))
-                .collect::<Vec<_>>();
-            (state.follows_primary(), reconnects)
+            state.select_primary(url, auth_script, accepted, ownership)
         };
         for intent in reconnects {
             let app = app.clone();
@@ -1160,7 +1397,53 @@ impl GatewayWindows {
             });
         }
         self.publish(app);
-        Ok(follows)
+        Ok(selection)
+    }
+
+    pub(crate) fn refresh_primary_native_auth(
+        &self,
+        app: &AppHandle,
+        client: &crate::gateway_ws::GatewayClient,
+        generation: crate::gateway_ws::GatewayGeneration,
+    ) -> Result<(), String> {
+        let reconnects = {
+            // Same routing -> native config/session lock order as connectAuth.
+            let mut state = self.routing.lock().map_err(|_| STALE)?;
+            // History API transitions do not necessarily trigger a navigation
+            // callback. Capture the live destination before fencing replacement.
+            for (label, route) in &mut state.windows {
+                if let (Some(document), Some(url)) = (
+                    route.document.as_mut(),
+                    app.get_webview(label).and_then(|view| view.url().ok()),
+                ) {
+                    document.navigation_url = url;
+                }
+            }
+            client.with_native_control_bootstrap(generation, |dashboard, script| {
+                if state.primary_ownership != Some(GatewayOwnership::Remote)
+                    || state
+                        .primary
+                        .as_ref()
+                        .is_none_or(|route| route.url != dashboard)
+                {
+                    return Err(STALE.into());
+                }
+                Ok(state
+                    .publish_primary(&dashboard, Some(script), GatewayOwnership::Remote, true)
+                    .1)
+            })?
+        };
+        for intent in reconnects {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let label = intent.label.clone();
+                if let Err(error) = select_intent(app.clone(), intent).await {
+                    show_error(&app, &label, &error);
+                }
+            });
+        }
+        self.publish(app);
+        Ok(())
     }
 
     pub fn main_is_primary(&self, _app: &AppHandle) -> bool {
@@ -1308,6 +1591,8 @@ impl GatewayWindows {
         {
             let mut state = self.routing.lock().map_err(|_| STALE)?;
             let primary_generation = (target_id == PRIMARY).then_some(state.primary_generation);
+            let native_auth =
+                target_id == PRIMARY && state.primary_ownership == Some(GatewayOwnership::Remote);
             let route = state.windows.entry(label.to_string()).or_default();
             let completion = route
                 .pending
@@ -1331,6 +1616,8 @@ impl GatewayWindows {
                 lifetime: lifetime.clone(),
                 nonce: None,
                 url: url.clone(),
+                navigation_url: Url::parse("about:blank").expect("blank URL"),
+                native_auth,
                 phase: NavigationPhase::Preparing,
                 navigation: 0,
                 native_navigation: None,
@@ -1670,10 +1957,10 @@ fn prepare(app: &AppHandle, intent: &Intent) -> Result<Prepared, String> {
     if intent.target == PRIMARY {
         let state = owner.routing.lock().map_err(|_| STALE)?;
         return Ok(Prepared {
-            route: state
-                .primary
-                .clone()
-                .ok_or("The Primary Gateway is not ready yet.")?,
+            route: state.primary_route(
+                app.try_state::<crate::gateway_ws::GatewayClient>()
+                    .as_deref(),
+            )?,
             profile: None,
             primary_generation: Some(state.primary_generation),
             tunnel: None,
@@ -1841,7 +2128,21 @@ async fn select_intent(app: AppHandle, intent: Intent) -> Result<(), String> {
         {
             return Err(STALE.into());
         }
-        if intent.label == "main" {
+        if intent.target == PRIMARY {
+            let state = owner.routing.lock().map_err(|_| STALE)?;
+            prepared.route = state.primary_route(
+                app.try_state::<crate::gateway_ws::GatewayClient>()
+                    .as_deref(),
+            )?;
+        }
+        if intent
+            .navigation_url
+            .as_ref()
+            .is_some_and(|url| !matches_route(url, &prepared.route.url))
+        {
+            return Err(STALE.into());
+        }
+        let view = if intent.label == "main" {
             crate::replace_dashboard_webview(
                 app,
                 prepared.route.url,
@@ -1851,6 +2152,9 @@ async fn select_intent(app: AppHandle, intent: Intent) -> Result<(), String> {
         } else {
             replace_auxiliary(app, &intent.label, &intent.target, prepared.route)?
         };
+        if let Some(url) = intent.navigation_url {
+            owner.navigate_document(&view, url)?;
+        }
         owner.commit_tunnel(
             app,
             &intent.label,
@@ -2208,7 +2512,10 @@ fn reconcile_primary(app: &AppHandle, label: &str) -> Result<(), String> {
             return Ok(());
         }
         (
-            state.primary.clone().ok_or(STALE)?,
+            state.primary_route(
+                app.try_state::<crate::gateway_ws::GatewayClient>()
+                    .as_deref(),
+            )?,
             state
                 .windows
                 .get(label)
@@ -2217,25 +2524,32 @@ fn reconcile_primary(app: &AppHandle, label: &str) -> Result<(), String> {
         )
     };
     let current = app.get_webview(label).and_then(|view| view.url().ok());
-    let allowed = current.is_some_and(|url| match &document_url {
-        Some(expected) => matches_route(&url, expected),
+    let destination = document_url
+        .as_ref()
+        .zip(current.as_ref())
+        .and_then(|(base, current)| route.retained_destination(base, current));
+    let allowed = current.as_ref().is_some_and(|url| match &document_url {
+        Some(expected) => matches_route(url, expected),
         None => {
             label == "main"
                 && app
                     .state::<crate::DesktopState>()
-                    .main_window_has_local_url(&url)
+                    .main_window_has_local_url(url)
                 && !app
                     .state::<crate::DesktopState>()
-                    .main_window_has_connection_settings_url(&url)
+                    .main_window_has_connection_settings_url(url)
         }
     });
     if !allowed {
         return Ok(());
     }
-    if label == "main" {
-        crate::replace_dashboard_webview(app, route.url, route.auth_script, PRIMARY)?;
+    let view = if label == "main" {
+        crate::replace_dashboard_webview(app, route.url, route.auth_script, PRIMARY)?
     } else {
-        replace_auxiliary(app, label, PRIMARY, route)?;
+        replace_auxiliary(app, label, PRIMARY, route)?
+    };
+    if let Some(destination) = destination {
+        owner.navigate_document(&view, destination)?;
     }
     owner.commit_tunnel(app, label, None)?;
     Ok(())
@@ -2451,10 +2765,10 @@ fn show_primary_route(app: &AppHandle, mut target: Option<Url>) -> Result<(), St
         if state.closing {
             return Err(STALE.into());
         }
-        let primary = state
-            .primary
-            .clone()
-            .ok_or("The Primary Gateway is not ready yet.")?;
+        let primary = state.primary_route(
+            app.try_state::<crate::gateway_ws::GatewayClient>()
+                .as_deref(),
+        )?;
         if target
             .as_ref()
             .is_some_and(|target| !matches_route(target, &primary.url))
@@ -3242,6 +3556,8 @@ mod tests {
             lifetime: lifetime.into(),
             nonce: Some("ready-nonce".into()),
             url: Url::parse("https://gateway.example/team").unwrap(),
+            navigation_url: Url::parse("https://gateway.example/team").unwrap(),
+            native_auth: false,
             phase: NavigationPhase::Active,
             navigation: 1,
             native_navigation: None,
@@ -3259,6 +3575,362 @@ mod tests {
             completion: Some(completion),
             ..document(lifetime)
         }
+    }
+
+    #[test]
+    fn fast_native_hello_installs_accepted_auth_in_the_first_main_document() {
+        let url = Url::parse("https://gateway.example/control").unwrap();
+        let gateway = Url::parse("wss://gateway.example/control").unwrap();
+        for legacy_auth in [
+            json!({"token": "accepted-token"}),
+            json!({"password": "accepted-password"}),
+        ] {
+            let mut routing = Routing::default();
+            let initial =
+                crate::gateway_control_auth::initialization_script(&url, &gateway).unwrap();
+            let accepted = crate::gateway_control_auth::initialization_script_with_legacy_auth(
+                &url,
+                &gateway,
+                legacy_auth.clone(),
+            )
+            .unwrap();
+            let (selection, reconnects) = routing.select_primary(
+                &url,
+                Some(initial),
+                Some(accepted.clone()),
+                GatewayOwnership::Remote,
+            );
+            assert!(reconnects.is_empty());
+            let mut installed_script = None;
+            assert!(selection
+                .install(|script| {
+                    installed_script = script;
+                    Ok(())
+                })
+                .unwrap());
+            // Execute the script handed to the native replacement seam, not the routing cache.
+            let runner = r#"
+                const window = {addEventListener() {}, __TAURI_INTERNALS__: {invoke() {}}};
+                window.top = window;
+                new Function('window', 'location', process.argv[1])(window, {origin: 'https://gateway.example', pathname: '/control'});
+                const auth = window.__OPENCLAW_NATIVE_CONTROL_AUTH__;
+                const expected = JSON.parse(process.argv[2]);
+                if (!auth?.nativeConnectAuth) throw new Error('native auth marker lost');
+                for (const [field, value] of Object.entries(expected)) {
+                    if (auth[field] !== value) throw new Error('accepted credential not installed: ' + field);
+                }
+                if ('password' in expected && auth.token !== null) throw new Error('cached token not retired');
+                if ('token' in expected && 'password' in auth) throw new Error('unexpected password');
+            "#;
+            let result = std::process::Command::new("node")
+                .args([
+                    "-e",
+                    runner,
+                    installed_script.as_deref().unwrap(),
+                    &legacy_auth.to_string(),
+                ])
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            assert!(
+                routing
+                    .publish_primary(&url, Some(accepted), GatewayOwnership::Remote, true)
+                    .1
+                    .is_empty(),
+                "the delayed Up callback cannot be relied on to install the same cached script"
+            );
+        }
+    }
+
+    #[test]
+    fn primary_publication_does_not_install_over_an_independent_main_selection() {
+        let url = document("primary").url;
+        for selected in ["saved-profile", "pending-profile"] {
+            let mut routing = Routing::default();
+            if selected == "saved-profile" {
+                routing.windows.insert(
+                    "main".into(),
+                    WindowRoute {
+                        target: selected.into(),
+                        ..Default::default()
+                    },
+                );
+            } else {
+                routing.begin("main", selected, None);
+            }
+            let (selection, _) = routing.select_primary(
+                &url,
+                Some("native-only".into()),
+                Some("accepted".into()),
+                GatewayOwnership::Remote,
+            );
+            assert!(!selection
+                .install(|_| panic!("independent main must not be replaced"))
+                .unwrap());
+        }
+    }
+
+    #[test]
+    fn native_hello_and_rotation_replace_primary_documents_without_touching_saved_profiles() {
+        for ready_before_publication in [false, true] {
+            let mut state = Routing::default();
+            let url = document("initial").url;
+            let initial = if ready_before_publication {
+                "accepted-token"
+            } else {
+                "native-only"
+            };
+            state.publish_primary(&url, Some(initial.into()), GatewayOwnership::Remote, false);
+            for (label, target) in [
+                ("main", PRIMARY),
+                ("aux", PRIMARY),
+                ("saved", "independent"),
+            ] {
+                state.windows.insert(
+                    label.into(),
+                    WindowRoute {
+                        target: target.into(),
+                        primary_generation: (target == PRIMARY).then_some(state.primary_generation),
+                        document: Some(document(label)),
+                        ..Default::default()
+                    },
+                );
+            }
+            let saved = state.windows["saved"]
+                .document
+                .as_ref()
+                .unwrap()
+                .lifetime
+                .clone();
+            let first = state
+                .publish_primary(
+                    &url,
+                    Some("accepted-token".into()),
+                    GatewayOwnership::Remote,
+                    true,
+                )
+                .1;
+            assert_eq!(first.len(), if ready_before_publication { 0 } else { 2 });
+            assert_eq!(
+                state.primary.as_ref().unwrap().auth_script.as_deref(),
+                Some("accepted-token")
+            );
+            let rotated = state
+                .publish_primary(
+                    &url,
+                    Some("rotated-password".into()),
+                    GatewayOwnership::Remote,
+                    true,
+                )
+                .1;
+            let labels: HashSet<_> = rotated.iter().map(|intent| intent.label.as_str()).collect();
+            assert_eq!(labels, HashSet::from(["main", "aux"]));
+            assert!(first.iter().all(|intent| !state.current(intent)));
+            for label in ["main", "aux"] {
+                assert!(
+                    authorize_control_auth(
+                        &state,
+                        &DocumentAuthority {
+                            label: label.into(),
+                            lifetime: label.into(),
+                            nonce: "ready-nonce".into(),
+                        },
+                        &url
+                    )
+                    .is_err(),
+                    "old document cannot use authority after credential rotation"
+                );
+            }
+            assert_eq!(
+                state.windows["saved"].document.as_ref().unwrap().lifetime,
+                saved
+            );
+            assert!(state.windows["saved"].pending.is_none());
+        }
+    }
+
+    #[test]
+    fn native_credential_refresh_preserves_primary_destinations_only_for_the_same_route() {
+        let mut state = Routing::default();
+        let base = Url::parse("https://gateway.example/team").unwrap();
+        state.publish_primary(
+            &base,
+            Some("accepted-token".into()),
+            GatewayOwnership::Remote,
+            false,
+        );
+        let destinations = [
+            (
+                "main",
+                "https://gateway.example/team/settings/providers?tab=oauth#account",
+            ),
+            (
+                "aux",
+                "https://gateway.example/team/chat?session=agent%3Amain%3Akept",
+            ),
+        ];
+        for (label, destination) in destinations {
+            state.windows.insert(
+                label.into(),
+                WindowRoute {
+                    primary_generation: Some(state.primary_generation),
+                    document: Some(Document {
+                        navigation_url: Url::parse(destination).unwrap(),
+                        native_auth: true,
+                        ..document(label)
+                    }),
+                    ..Default::default()
+                },
+            );
+        }
+        // A fast reconnect can supersede an uninstalled disconnect projection.
+        for auth in ["native-only", "rotated-token"] {
+            let replacements = state
+                .publish_primary(&base, Some(auth.into()), GatewayOwnership::Remote, true)
+                .1;
+            assert_eq!(replacements.len(), 2);
+            for replacement in replacements {
+                let expected = Url::parse(
+                    destinations
+                        .iter()
+                        .find(|(label, _)| *label == replacement.label)
+                        .unwrap()
+                        .1,
+                )
+                .unwrap();
+                assert_eq!(replacement.source_url, Some(expected.clone()));
+                assert_eq!(replacement.navigation_url, Some(expected));
+                assert!(state.current(&replacement));
+            }
+        }
+        let replacements = state
+            .publish_primary(
+                &Url::parse("https://gateway.example/other").unwrap(),
+                Some("other-owner".into()),
+                GatewayOwnership::Remote,
+                true,
+            )
+            .1;
+        assert_eq!(replacements.len(), 2);
+        assert!(replacements
+            .iter()
+            .all(|intent| intent.navigation_url.is_none()));
+    }
+
+    #[test]
+    fn primary_window_reads_cannot_use_cached_auth_without_its_native_owner() {
+        let mut state = Routing::default();
+        let url = document("primary").url;
+        state.publish_primary(
+            &url,
+            Some("retired-accepted-token".into()),
+            GatewayOwnership::Remote,
+            false,
+        );
+        let client = crate::gateway_ws::GatewayClient::new();
+        assert!(state.primary_route(Some(&client)).is_err());
+        assert!(state.primary_route(None).is_err());
+        state.publish_primary(
+            &url,
+            Some("local-cli-owned-script".into()),
+            GatewayOwnership::Local,
+            false,
+        );
+        assert_eq!(
+            state.primary_route(None).unwrap().auth_script.as_deref(),
+            Some("local-cli-owned-script"),
+            "local CLI-owned bootstrap must not depend on the remote native signer"
+        );
+    }
+
+    #[test]
+    fn native_auth_refresh_preserves_connection_settings_and_retired_reload_is_blocked() {
+        let mut state = Routing::default();
+        let url = document("primary").url;
+        state.publish_primary(
+            &url,
+            Some("accepted-token".into()),
+            GatewayOwnership::Remote,
+            false,
+        );
+        for label in ["main", "aux"] {
+            state.windows.insert(
+                label.into(),
+                WindowRoute {
+                    primary_generation: Some(state.primary_generation),
+                    document: Some(Document {
+                        native_auth: true,
+                        ..document(label)
+                    }),
+                    ..Default::default()
+                },
+            );
+        }
+        let settings = Url::parse("tauri://localhost/index.html?mode=connectionSettings").unwrap();
+        assert!(state.document_navigation("main", "main", &settings));
+        let reconnects = state
+            .publish_primary(
+                &url,
+                Some("native-only".into()),
+                GatewayOwnership::Remote,
+                true,
+            )
+            .1;
+        assert_eq!(
+            reconnects
+                .iter()
+                .map(|intent| intent.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["aux"],
+            "connection settings must keep its document and unsaved input"
+        );
+        assert!(state.windows["main"].pending.is_none());
+        assert_eq!(
+            state.windows["main"].document.as_ref().unwrap().lifetime,
+            "main"
+        );
+        assert!(
+            !state.document_navigation("aux", "aux", &url),
+            "reload cannot replay the retired startup script"
+        );
+        assert!(
+            state.current(&reconnects[0]),
+            "blocked reload must not cancel the replacement"
+        );
+        let destination = Url::parse("https://gateway.example/team/chat?session=kept").unwrap();
+        let (allowed, replacement) = state.admit_document_navigation("main", "main", &destination);
+        assert!(!allowed);
+        let replacement = replacement
+            .expect("explicit settings return replaces the retired initialization script");
+        assert_eq!(replacement.source_url, Some(settings.clone()));
+        assert_eq!(replacement.navigation_url, Some(destination));
+        assert!(state.current(&replacement));
+        assert!(state.document_navigation("main", "main", &settings));
+        assert!(
+            !state.current(&replacement),
+            "a newer settings navigation wins over the deferred return"
+        );
+        state.begin("aux", "saved-profile", None);
+        let (_, replacement) = state.admit_document_navigation("aux", "aux", &url);
+        assert!(
+            replacement.is_none(),
+            "reload cannot overtake an independent saved selection"
+        );
+        state.primary_ownership = Some(GatewayOwnership::Local);
+        assert!(
+            state.native_document("aux", "aux", &url),
+            "switching Primary must not forget an old installed native script"
+        );
+        assert!(!state.document_navigation("aux", "aux", &url));
+        state.closing = true;
+        assert!(state
+            .admit_document_navigation("main", "main", &url)
+            .1
+            .is_none());
     }
 
     #[test]

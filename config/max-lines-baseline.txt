@@ -35,9 +35,7 @@ extensions/codex/src/app-server/elicitation-bridge.ts
 extensions/codex/src/app-server/native-subagent-monitor.test.ts
 extensions/codex/src/app-server/native-subagent-monitor.ts
 extensions/codex/src/app-server/plugin-thread-config.test.ts
-extensions/codex/src/app-server/run-attempt.context-engine.test.ts
 extensions/codex/src/app-server/run-attempt.test.ts
-extensions/codex/src/app-server/run-attempt.turn-watches.test.ts
 extensions/codex/src/app-server/runtime-artifact.ts
 extensions/codex/src/app-server/session-binding.test.ts
 extensions/codex/src/app-server/session-binding.ts
@@ -251,7 +249,6 @@ src/agents/agent-tools.before-tool-call.e2e.test.ts
 src/agents/agent-tools.before-tool-call.integration.e2e.test.ts
 src/agents/agent-tools.create-openclaw-coding-tools.test.ts
 src/agents/agent-tools.read.ts
-src/agents/agent-tools.schema.test.ts
 src/agents/agent-tools.ts
 src/agents/auth-profiles/oauth-manager.ts
 src/agents/auth-profiles/persisted.ts
@@ -263,7 +260,6 @@ src/agents/bash-tools.exec-host-gateway.test.ts
 src/agents/bash-tools.exec-host-gateway.ts
 src/agents/bash-tools.exec-host-node.test.ts
 src/agents/bash-tools.exec-runtime.ts
-src/agents/bash-tools.exec.approval-id.test.ts
 src/agents/btw.test.ts
 src/agents/btw.ts
 src/agents/cli-runner.reliability.test.ts
@@ -300,7 +296,6 @@ src/agents/embedded-agent-runner/tool-result-truncation.test.ts
 src/agents/embedded-agent-runner/tool-result-truncation.ts
 src/agents/embedded-agent-runner/transcript-file-state.test.ts
 src/agents/embedded-agent-subscribe.handlers.tools.test.ts
-src/agents/embedded-agent-subscribe.subscribe-embedded-agent-session.subscribeembeddedagentsession.test.ts
 src/agents/harness/native-hook-relay.test.ts
 src/agents/harness/selection.test.ts
 src/agents/main-session-recovery/main-session-restart-recovery.test.ts

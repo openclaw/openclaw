@@ -57,6 +57,29 @@ The slowest Node test families are split or balanced so each job stays small wit
 - `check-additional-boundaries` runs the complete supplemental guard list (`scripts/run-additional-boundary-checks.mts`) with four concurrent child processes and per-check timings. Its 20 checks retain individual failures, deadlines and process cleanup. The shared four-rule focused scan runs once across all source roots; the narrower public lint commands remain available. Prompt snapshots run in their separate lane. Package-boundary compile/canary work stays together, and runtime topology architecture runs separately from the gateway watch coverage embedded in `build-artifacts`.
 - On the 32-vCPU self-hosted build runner, Gateway watch, channel tests, and the core support-boundary shard start together inside `build-artifacts` after `dist/` and `dist-runtime/` are already built. GitHub-hosted fallback runs keep Gateway watch serial so low-core contention cannot consume its readiness deadline. Full Node builds then verify Discord component attachment filenames through a serial public Gateway message action, checking the built revision and retaining the named-test JSON result; frozen targets that predate the case explicitly report unavailable proof. Both paths then run the two built TUI PTY artifact canaries alone.
 
+The Discord proof uploader runs only after its producer step completes with
+success or failure. It preserves diagnostics for a real proof failure and still
+requires the declared files. When an earlier failure or cancellation skips the
+producer, or cancels it before completion, the uploader stays skipped; that
+coverage remains unrun.
+
+PR owner plans first use the existing compact rows, then split work toward a
+150-second test budget. If those splits exceed the final Node matrix cap, the
+planner retains the compact selected-owner rows, including plugin work. This
+keeps the selected files, configs, worker limits, and process owners intact; broad
+PRs may have longer rows instead of failing preflight solely because of splitting.
+Dist descriptors do not consume the Node row budget.
+If the retained plan still exceeds the cap, only changed-target chunks are
+partitioned by build and concurrency requirements, then balanced by predicted
+seconds into the remaining rows while preserving every selected target. Plans
+that cannot fit those separate policies or whose other owners already fill the
+cap still fail preflight.
+
+Explicitly selected plugin tests retain their canonical config, native-loader
+isolation, worker policy, and group timing. The release-only switch controls the
+full plugin sweep, not the availability of its owner metadata; unrelated PRs
+still do not acquire that sweep.
+
 The fixed PR smoke inventory lives in `PR_SMOKE_TEST_FILES` in
 `scripts/lib/ci-changed-node-test-plan.mts`. It selects six complete existing files:
 

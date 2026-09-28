@@ -28,6 +28,7 @@ import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import androidx.webkit.WebViewOutcomeReceiver
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
@@ -66,6 +67,29 @@ class ControlUiWebViewAuthTest {
   }
 
   @Test
+  fun startupProjectionFollowsAcceptedSharedCredentialAndDropsRetiredBindings() {
+    var accepted: JsonObject? = null
+    val page =
+      NodeRuntime.GatewayControlPage(
+        baseUrl = "https://gateway.example/control/",
+        tlsFingerprintSha256 = null,
+        legacyAuth = { checkNotNull(accepted) { "Native connection unavailable" } },
+      )
+    val nativeOnly = Json.parseToJsonElement("""{"gatewayUrl":"wss://gateway.example/control/","nativeConnectAuth":true}""").jsonObject
+    assertEquals(nativeOnly, controlUiStartupAuth(page))
+    for (method in listOf("token", "password")) {
+      accepted = JsonObject(mapOf(method to JsonPrimitive("accepted-$method")))
+      val retiredToken = if (method == "password") mapOf("token" to JsonNull) else emptyMap()
+      assertEquals(JsonObject(nativeOnly + requireNotNull(accepted) + retiredToken), controlUiStartupAuth(page))
+    }
+    accepted = null
+    assertEquals(nativeOnly, controlUiStartupAuth(page))
+    // Device-only sessions project no reusable browser credential.
+    accepted = JsonObject(emptyMap())
+    assertEquals(nativeOnly, controlUiStartupAuth(page))
+  }
+
+  @Test
   fun mountedBridgeSignsNativeIdentityAndCurrentTokenWithoutExportingStartupSecrets() {
     val app = RuntimeEnvironment.getApplication()
     val storage = app.getSharedPreferences("native-control-auth-test", Context.MODE_PRIVATE)
@@ -82,8 +106,6 @@ class ControlUiWebViewAuthTest {
       }
     try {
       val script = ControlUiAuthCompatShadow.scripts.getValue(mounted.view)
-      assertTrue(script.contains("\"nativeConnectAuth\":true"))
-      assertTrue(script.contains("\"token\":null"))
       assertFalse(script.contains("first-device-token"))
       assertFalse(script.contains(identity.privateKeyPkcs8Base64))
       assertEquals(setOf("https://gateway.example:8443"), mounted.registration.origins)
@@ -139,6 +161,48 @@ class ControlUiWebViewAuthTest {
     } finally {
       mounted.close()
     }
+  }
+
+  @Test
+  fun directBridgeRejectsPathsThatEscapeTheGatewayMountWhenDecoded() {
+    var signed = 0
+    val mounted =
+      mount { _, _ ->
+        signed += 1
+        JsonObject(emptyMap())
+      }
+    try {
+      for (path in listOf("openclaw%2F..%2Fother/", "openclaw/%2f..%2f..%2fother/", "openclaw/%5c..%5c..%5cother/", "openclaw/%2e%2e/other/", "openclaw/../other/", "openclaw-other/")) {
+        // The origin-wide platform listener is callable without our startup script.
+        // Exercise it with the WebView's current URL, not a helper path predicate.
+        mounted.view.loadUrl("https://gateway.example:8443/$path")
+        assertNull(path, mounted.deliver())
+        assertEquals(path, 0, signed)
+      }
+    } finally {
+      mounted.close()
+    }
+  }
+
+  @Test
+  fun mountedBridgePreservesEncodedRoutesUnicodeMountsAndQueryData() {
+    var signed = 0
+    for (mountPath in listOf("openclaw", "%E6%8E%A7%E5%88%B6", "控制")) {
+      val mounted =
+        mount(baseUrl = "https://gateway.example:8443/$mountPath/") { _, _ ->
+          signed += 1
+          JsonObject(emptyMap())
+        }
+      try {
+        for (path in listOf("dashboard/~key/notes%2Ftoday", "dashboard/~key/report%20%E6%97%A5%E5%BF%97", "focus/browser?sessionKey=agent%3Amain%3Atest&next=..%2Fother")) {
+          mounted.view.loadUrl("https://gateway.example:8443/$mountPath/$path")
+          assertTrue(path, mounted.request().containsKey("result"))
+        }
+      } finally {
+        mounted.close()
+      }
+    }
+    assertEquals(9, signed)
   }
 
   @Test
@@ -414,8 +478,10 @@ class ControlUiWebViewAuthTest {
     try {
       val client = mounted.view.webViewClient
       client.onPageStarted(mounted.view, mounted.view.url, null)
-      client.onPageFinished(mounted.view, "https://foreign.example/")
-      assertTrue(platform.transfers.isEmpty())
+      for (url in listOf("https://foreign.example/", "https://gateway.example:8443/openclaw%2F..%2Fother/", "https://gateway.example:8443/openclaw/%2F..%2F..%2Fother/")) {
+        client.onPageFinished(mounted.view, url)
+        assertTrue(url, platform.transfers.isEmpty())
+      }
       client.onPageFinished(mounted.view, mounted.view.url)
       val browserPort =
         platform.transfers

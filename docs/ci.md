@@ -12,6 +12,11 @@ CI continues during Full Release Validation; the legacy release-priority variabl
 does not pause workflow admission. See [deferred CI recovery](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#deferred-ci-recovery)
 for runs already deferred by older workflow revisions.
 
+Native video smoke coverage uses four shards of four providers. Each provider has a ten-minute operation timeout plus 30 seconds of test overhead; each shard has a 50-minute job budget, leaving eight minutes for setup. These shards keep full-mode video testing disabled.
+
+Broad PRs retain their compact selected-owner Node plan when time-based splitting
+would exceed the 130-row matrix cap. See [Node test lanes](/ci/scope-and-routing/node-test-lanes).
+
 This page is an index. CI is documented on nine pages, one per reader
 job. Open the page that matches your task.
 
@@ -43,9 +48,11 @@ file, so large PRs do not lose test-planning inputs to Actions output or environ
 size limits. Frozen targets that predate this transport retain their bounded JSON
 output contract. Missing or invalid inputs still reject current PR Node planning.
 
-The [Testbox check workflow](/ci/local-proof#testbox-validation) defaults to a four-hour outer job budget for delegated full-suite proof. Individual test deadlines remain unchanged.
+The [Testbox check workflow](/ci/local-proof#testbox-validation) requests the Blacksmith 32-class for dispatched proof and defaults to a four-hour outer job budget. PR hydration checks stay on hosted Ubuntu; individual test deadlines remain unchanged.
 
-Full GitHub and hybrid type checks run the five core stripes independently, retaining two compiler children per job. Current hybrid runs also split extension lint across six hosted jobs. Trusted hybrid first attempts place the heavy first packed core-lint row on the Blacksmith 16-class, the second on the 8-class, and the final gate on the 4-class to avoid serial hosted assignment delays. Frozen targets keep their earlier layout; see [static checks](/ci/runners#runner-backend-modes).
+Full GitHub and hybrid type checks run the five core stripes independently, retaining two compiler children per job. Current hybrid full runs use three hosted extension-lint jobs; targeted layouts retain six stripe identities. Trusted hybrid first attempts place the heavy first packed core-lint row on the Blacksmith 16-class, the second on the 8-class, and the final gate on the 4-class to avoid serial hosted assignment delays. Frozen targets keep their earlier layout; see [static checks](/ci/runners#runner-backend-modes).
+
+Additional checks start directly after preflight. Known full compiler selections skip discovery while retaining the core graph boundary in an existing required owner; see [pipeline ordering](/ci/pipeline#fail-fast-order).
 
 Core lint discovers separate source and UI TypeScript projects, retaining shared ambient declarations and imported dependencies. The source project also includes `src/**/*.test-support.cjs`; unrelated JavaScript files are not added as roots. See [local checks](/ci/local-proof#local-equivalents).
 
@@ -164,6 +171,20 @@ To reserve capacity outside ordinary PR/main pools:
 1. Create an org runner group with Linux runners labelled `ubuntu-latest`/`ubuntu-24.04`, plus the Windows/macOS labels used by validation.
 2. Grant `openclaw/openclaw` access to the group.
 3. Set `OPENCLAW_RELEASE_RUNNER_GROUP` to the group name; unset it to release the reservation and restore ordinary routing.
+
+Linux runners for jobs that set `semantic-checks: true` also require:
+
+- systemd as PID 1 and an active `systemd-logind` service.
+- Noninteractive sudo access to check logind, enable linger for the runner user,
+  and start that user's systemd manager.
+- cgroup v2 with memory and swap accounting, delegated to the user manager.
+
+These requirements apply to custom release groups as well as ordinary runners.
+The shared setup action starts the user manager and verifies a real 64 MiB scope
+with swap disabled and group OOM termination before checks run. Unsupported
+runners fail setup; provision these capabilities before assigning the validation
+labels, or unset the release-group override to restore ordinary routing. Setup
+qualifies the backend; it does not itself limit later lint or compiler commands.
 
 Full Release Validation starts source-only children alongside artifact producers
 after admission and reuse selection. Candidate consumers start as soon as the

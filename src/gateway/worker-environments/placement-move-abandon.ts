@@ -3,7 +3,6 @@ import {
   isUnavailableEnvironment,
   type WorkerDispatchPlacement,
 } from "./placement-dispatch-failure.js";
-import type { PlacementRecoveryDeps } from "./placement-dispatch-pending-results.js";
 import {
   forceAbandonWorkerEnvironment,
   reportWorkerAbandonmentCleanupError,
@@ -14,6 +13,7 @@ import {
   FORCED_WORKER_ABANDONMENT_ERROR,
   isForceAbandonedWorkerPlacement,
 } from "./placement-record.js";
+import type { PlacementRecoveryDeps } from "./placement-recovery-contract.js";
 import type {
   WorkerPlacementAuthorization,
   WorkerPlacementMoveRequest,
@@ -47,16 +47,15 @@ export function createWorkerPlacementMoveAbandonment(
         sessionId
           ? { sessionId, ownerEpoch: environment.ownerEpoch }
           : undefined;
-      await forceAbandonWorkerEnvironment({
-        placements,
-        environmentId,
-        resolveWorkspace: options.resolveWorkspace,
-        onCleanupError,
-      });
       try {
-        return await (abandonment
-          ? environments.destroy(environmentId, abandonment)
-          : environments.destroy(environmentId));
+        return await environments.destroy(environmentId, abandonment, () =>
+          forceAbandonWorkerEnvironment({
+            placements,
+            environmentId,
+            resolveWorkspace: options.resolveWorkspace,
+            onCleanupError,
+          }),
+        );
       } catch (error) {
         const current = environments.get(environmentId);
         if (!current || !isUnavailableEnvironment(current)) {

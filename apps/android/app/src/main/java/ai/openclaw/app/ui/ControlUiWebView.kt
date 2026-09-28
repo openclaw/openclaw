@@ -238,6 +238,16 @@ private fun controlUiWebViewContext(
 
 private const val NATIVE_GATEWAY_AUTH_BRIDGE = "OpenClawNativeGatewayAuth"
 
+// Encoded separators are valid session-key data, but must not hide traversal
+// segments that a reverse proxy can decode outside the accepted Control UI mount.
+private val controlUiDotSegmentPattern = Regex("""(?:^|/|%2f|%5c)(?:\.|%2e){1,2}(?=$|/|%2f|%5c)""", RegexOption.IGNORE_CASE)
+
+private fun controlUiPath(url: String): String? =
+  url
+    .toHttpUrlOrNull()
+    ?.encodedPath
+    ?.takeUnless(controlUiDotSegmentPattern::containsMatchIn)
+
 /** scheme://host[:port] origin for WebView script rules; brackets IPv6 hosts. */
 internal fun controlUiOriginRule(baseUrl: String): String? {
   val uri = baseUrl.toUri()
@@ -256,6 +266,19 @@ private fun sameControlUiOrigin(
   val second = right.toHttpUrlOrNull() ?: return false
   return first.scheme == second.scheme && first.host == second.host && first.port == second.port
 }
+
+/** Released UIs consume the accepted shared fields; current UI selects native signing. */
+internal fun controlUiStartupAuth(page: NodeRuntime.GatewayControlPage): JsonObject =
+  buildJsonObject {
+    put("gatewayUrl", page.baseUrl.replaceFirst("http", "ws"))
+    put("nativeConnectAuth", true)
+    // Before hello or after retirement, omit credentials instead of clearing the
+    // released UI's own saved browser login. Never export a native device grant.
+    val legacy = runCatching { page.legacyAuth?.invoke() }.getOrNull()
+    legacy?.forEach { (key, value) -> put(key, value) }
+    // The released UI otherwise prefers its cached token over an accepted password.
+    if (legacy?.containsKey("password") == true) put("token", JsonNull)
+  }
 
 private const val X509_CERTIFICATE_BUNDLE_KEY = "x509-certificate"
 
@@ -276,17 +299,12 @@ private class ControlUiWebViewClient(
   private var usesMessagePort = false
   private var authPort: WebMessagePort? = null
   private val gatewayUrl = page.baseUrl.replaceFirst("http", "ws")
+  private val basePath = controlUiPath(page.baseUrl)?.trimEnd('/')
 
   fun isGatewayPage(url: String?): Boolean {
-    val candidate = url?.toUri() ?: return false
+    val path = url?.let(::controlUiPath) ?: return false
     if (!sameControlUiOrigin(url, page.baseUrl)) return false
-    val root =
-      page.baseUrl
-        .toUri()
-        .path
-        .orEmpty()
-        .trimEnd('/')
-    val path = candidate.path.orEmpty()
+    val root = basePath ?: return false
     return path == root || path.startsWith("$root/")
   }
 
@@ -309,6 +327,7 @@ private class ControlUiWebViewClient(
 
   fun installAuth(view: WebView): Boolean {
     val origin = controlUiOriginRule(page.baseUrl) ?: return false
+    val root = basePath ?: return false
     if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
       if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
         WebViewCompat.addWebMessageListener(view, NATIVE_GATEWAY_AUTH_BRIDGE, setOf(origin)) { source, message, sourceOrigin, isMainFrame, reply ->
@@ -328,18 +347,16 @@ private class ControlUiWebViewClient(
         return true
       }
       authInstalled = true
-      val payload =
-        buildJsonObject {
-          put("gatewayUrl", gatewayUrl)
-          put("nativeConnectAuth", true)
-          put("token", JsonNull)
-        }
+      val payload = controlUiStartupAuth(page)
       authScript =
         WebViewCompat.addDocumentStartJavaScript(
           view,
           """
           (() => {
             if (window.top !== window) return;
+            const base = ${JsonPrimitive(root)};
+            if (new RegExp(${JsonPrimitive(controlUiDotSegmentPattern.pattern)}, "i").test(location.pathname)) return;
+            if (base && location.pathname !== base && !location.pathname.startsWith(base + "/")) return;
             Object.defineProperty(window, "__OPENCLAW_NATIVE_CONTROL_AUTH__", {
               value: $payload,
               configurable: true,
