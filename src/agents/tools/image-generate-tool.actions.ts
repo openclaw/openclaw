@@ -21,7 +21,7 @@ function formatImageGenerationAuthHint(provider: {
   authEnvVars: readonly string[];
 }): string | undefined {
   if (provider.id === "openai") {
-    return "set OPENAI_API_KEY or configure OpenAI Codex OAuth for openai/gpt-image-2";
+    return "set OPENAI_API_KEY or configure an OpenClaw Codex login OAuth profile (not SIWC) for openai/gpt-image-2";
   }
   if (provider.authEnvVars.length === 0) {
     return undefined;

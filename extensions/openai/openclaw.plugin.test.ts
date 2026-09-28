@@ -156,7 +156,7 @@ describe("OpenAI plugin manifest", () => {
     expect(openAiDeviceCode?.groupHint).toBe("Codex login, Sign in with ChatGPT, or API key");
     expect(signInWithChatGpt?.choiceLabel).toBe("Sign in with ChatGPT");
     expect(signInWithChatGpt?.choiceHint).toBe(
-      "Use your Codex allowance with per-instance usage tracking and token limits",
+      "Authorize OpenClaw for eligible Responses models using your Codex allowance",
     );
     for (const choice of [openAiDeviceCode, openAiLogin, apiKey]) {
       expect(signInWithChatGpt?.assistantPriority).toBeLessThan(

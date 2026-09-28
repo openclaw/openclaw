@@ -2277,7 +2277,7 @@ describe("createImageGenerateTool", () => {
     expect(text).toContain("gemini-3-pro-image-preview");
     expect(text).toContain("auth: set GEMINI_API_KEY / GOOGLE_API_KEY to use google/*");
     expect(text).toContain(
-      "auth: set OPENAI_API_KEY or configure OpenAI Codex OAuth for openai/gpt-image-2",
+      "auth: set OPENAI_API_KEY or configure an OpenClaw Codex login OAuth profile (not SIWC) for openai/gpt-image-2",
     );
     expect(text).toContain("editing up to 5 refs");
     expect(text).toContain("aspect ratios 1:1, 16:9");

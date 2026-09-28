@@ -611,7 +611,7 @@ suite.define(() => {
                       id: "openai-token-sharing",
                       brandId: "openai",
                       label: "Sign in with ChatGPT",
-                      hint: "Use your Codex allowance with per-instance usage tracking and token limits",
+                      hint: "Authorize OpenClaw for eligible Responses models using your Codex allowance",
                       kind: "oauth",
                       featured: false,
                     },
