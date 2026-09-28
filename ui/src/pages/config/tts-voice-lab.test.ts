@@ -109,5 +109,12 @@ describe("TTS voice lab", () => {
         "Bobby",
       )?.id,
     ).toBe("voice_new");
+    expect(
+      storedVoiceCreatedSince(
+        before,
+        [{ id: "voice_other", name: "Alice", category: "replicated" }],
+        "Bobby",
+      ),
+    ).toBeUndefined();
   });
 });

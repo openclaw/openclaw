@@ -99,13 +99,7 @@ export function storedVoiceCreatedSince(
   }
   const expected = name?.trim();
   if (expected) {
-    const named = created.find((voice) => (voice.name ?? "").trim() === expected);
-    if (named) {
-      return named;
-    }
-    if (created.length > 1) {
-      return undefined;
-    }
+    return created.find((voice) => (voice.name ?? "").trim() === expected);
   }
   return created.length === 1 ? created[0] : undefined;
 }

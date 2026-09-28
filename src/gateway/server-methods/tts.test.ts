@@ -75,6 +75,9 @@ vi.mock("../../tts/tts.js", () => ({
   isTtsEnabled: vi.fn(() => true),
   isTtsProviderConfigured: mocks.isTtsProviderConfigured,
   listTtsPersonas: vi.fn(() => []),
+  listSpeechVoices: vi.fn(async () => []),
+  designSpeechVoice: vi.fn(),
+  replicateSpeechVoice: vi.fn(),
   resolveExplicitTtsOverrides:
     mocks.resolveExplicitTtsOverrides as typeof import("../../tts/tts.js").resolveExplicitTtsOverrides,
   resolveTtsAutoMode: vi.fn(() => false),
@@ -423,5 +426,28 @@ describe("ttsHandlers", () => {
       },
     });
     expect(mocks.synthesizeSpeech).not.toHaveBeenCalled();
+  });
+
+  it("rejects a revoked writer before replicating a Google voice", async () => {
+    const { ttsHandlers } = await import("./tts.js");
+    const { replicateSpeechVoice } = await import("../../tts/tts.js");
+    const respond = vi.fn();
+    await expect(
+      expectDefined(ttsHandlers["tts.replicateVoice"])({
+        params: {
+          provider: "google",
+          displayName: "Bobby",
+          sourceAudioBase64: Buffer.from("source").toString("base64"),
+          consentAudioBase64: Buffer.from("consent").toString("base64"),
+        },
+        respond,
+        context: { getRuntimeConfig: mocks.getRuntimeConfig },
+        hasCurrentClientAuthority: () => false,
+      } as never),
+    ).rejects.toMatchObject({
+      name: "SessionMutationAuthorizationChangedError",
+      error: { code: ErrorCodes.FORBIDDEN },
+    });
+    expect(replicateSpeechVoice).not.toHaveBeenCalled();
   });
 });

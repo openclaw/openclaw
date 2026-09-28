@@ -169,6 +169,40 @@ describe("Google speech provider", () => {
     expect(transcodeAudioBufferToOpusMock).not.toHaveBeenCalled();
   });
 
+  it("speaks a stored voice_ id through SpeechConfig.voiceConfig.voice", async () => {
+    const requestMock = installGoogleTtsRequestMock();
+    const provider = buildGoogleSpeechProvider();
+    await provider.synthesize({
+      text: "Hello from the stored clone.",
+      cfg: {},
+      providerConfig: {
+        apiKey: "***",
+        voiceName: "voice_semeno8vont3",
+      },
+      target: "audio-file",
+      timeoutMs: 8_000,
+    });
+    expectRecordFields(requireFirstRecordArg(requestMock, "Google stored TTS request"), {
+      url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash-tts:generateContent",
+      body: {
+        contents: [
+          {
+            role: "user",
+            parts: [{ text: "Hello from the stored clone." }],
+          },
+        ],
+        generationConfig: {
+          responseModalities: ["AUDIO"],
+          speechConfig: {
+            voiceConfig: {
+              voice: "voice_semeno8vont3",
+            },
+          },
+        },
+      },
+    });
+  });
+
   it("bounds oversized Gemini TTS success JSON responses and cancels the stream", async () => {
     let cancelCount = 0;
     const release = vi.fn(async () => {});

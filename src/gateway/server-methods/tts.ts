@@ -37,11 +37,27 @@ import {
   synthesizeSpeech,
   textToSpeech,
 } from "../../tts/tts.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { formatForLog } from "../ws-log.js";
 import { respondUnavailableOnThrow } from "./response.js";
 import { inferSpeechMimeType } from "./speech-mime.js";
-import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
+import type {
+  GatewayRequestHandler,
+  GatewayRequestHandlerOptions,
+  GatewayRequestHandlers,
+} from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+function assertCurrentTtsWriteCaller(options: GatewayRequestHandlerOptions): void {
+  options.sessionMutationCommitGuard?.();
+  options.sessionMutationAuthorization?.assertCurrent();
+  options.signal?.throwIfAborted();
+  if (options.client?.invalidated || options.hasCurrentClientAuthority?.() === false) {
+    throw new SessionMutationAuthorizationChangedError(
+      errorShape(ErrorCodes.FORBIDDEN, "TTS voice-store caller is no longer authorized."),
+    );
+  }
+}
 
 function yieldBeforeTtsStatusSetup(): Promise<void> {
   return new Promise((resolve) => {
@@ -346,7 +362,8 @@ export const ttsHandlers: GatewayRequestHandlers = {
       respond(true, { provider, voices });
     });
   },
-  "tts.designVoice": async ({ params, respond, context }) => {
+  "tts.designVoice": async (options) => {
+    const { params, respond, context } = options;
     if (!assertValidParams(params, validateTtsDesignVoiceParams, "tts.designVoice", respond)) {
       return;
     }
@@ -365,6 +382,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
+      assertCurrentTtsWriteCaller(options);
       const cfg = context.getRuntimeConfig();
       const designed = await designSpeechVoice({
         cfg,
@@ -384,7 +402,8 @@ export const ttsHandlers: GatewayRequestHandlers = {
       });
     });
   },
-  "tts.replicateVoice": async ({ params, respond, context }) => {
+  "tts.replicateVoice": async (options) => {
+    const { params, respond, context } = options;
     if (
       !assertValidParams(params, validateTtsReplicateVoiceParams, "tts.replicateVoice", respond)
     ) {
@@ -406,6 +425,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
+      assertCurrentTtsWriteCaller(options);
       const cfg = context.getRuntimeConfig();
       const replicated = await replicateSpeechVoice({
         cfg,
