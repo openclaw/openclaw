@@ -21,6 +21,7 @@ import {
 } from "../lib/model-auth-request-state.ts";
 import { modelCatalogEventInvalidation } from "../lib/model-catalog-cache.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
+import { showToast } from "../lib/toast.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { ApplicationContext } from "./context.ts";
 import { hasOperatorWriteAccess } from "./operator-access.ts";
@@ -187,6 +188,15 @@ export class ShellGatewayOwner {
       if (context) {
         this.host.recoverDeletedActiveSession(context.sessions.state);
       }
+      return;
+    }
+    if (event.event === "session.redaction") {
+      // A gateway session carried a model-visible redaction marker/notice. Surface it as a
+      // notification panel so the operator notices a secret was masked before the model saw it.
+      showToast({
+        message:
+          "OpenClaw redacted sensitive value(s) from a session before the model saw them.",
+      });
       return;
     }
     if (event.event === "config.changed") {
