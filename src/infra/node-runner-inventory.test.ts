@@ -68,11 +68,11 @@ it("keeps retired dialect markers observational and empty declarations valid", (
 });
 
 describe("idle worker capacity negotiation", () => {
-  const declaration = (capacity: unknown, idleRetention?: unknown) => ({
+  const idleDeclaration = (slots: unknown, idleRetention?: unknown) => ({
     protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
     workerHost: {
       enabled: true,
-      capacity,
+      capacity: slots,
       statusWait: 1,
       ...(idleRetention === undefined ? {} : { idleRetention }),
     },
@@ -82,12 +82,10 @@ describe("idle worker capacity negotiation", () => {
     [{ total: 1, available: 1 }, undefined],
     [{ total: 1, available: 0, reclaimableIdle: 1 }, true],
     [{ total: 4, available: 1, reclaimableIdle: 2 }, true],
-  ])("preserves exact negotiated inventory shape %j", (capacity, idleRetention) => {
-    const input = declaration(capacity, idleRetention);
+  ])("preserves exact negotiated inventory shape %j", (slots, idleRetention) => {
+    const input = idleDeclaration(slots, idleRetention);
     expect(parseNodeRunnerInventoryDeclaration(input)).toEqual(input);
-    expect(availableWorkerSlots(capacity)).toBe(
-      capacity.available + (capacity.reclaimableIdle ?? 0),
-    );
+    expect(availableWorkerSlots(slots)).toBe(slots.available + (slots.reclaimableIdle ?? 0));
   });
 
   it.each([
@@ -98,8 +96,8 @@ describe("idle worker capacity negotiation", () => {
     [{ total: 1, available: 0, reclaimableIdle: 0.5 }, true],
     [{ total: 1, available: 0, reclaimableIdle: 0 }, false],
     [{ total: 1, available: 0, busy: 1 }, true],
-  ])("rejects unnegotiated or invalid reclaimable capacity %j", (capacity, idleRetention) => {
-    expect(parseNodeRunnerInventoryDeclaration(declaration(capacity, idleRetention))).toBeNull();
+  ])("rejects unnegotiated or invalid reclaimable capacity %j", (slots, idleRetention) => {
+    expect(parseNodeRunnerInventoryDeclaration(idleDeclaration(slots, idleRetention))).toBeNull();
   });
 
   it.each([
@@ -108,11 +106,11 @@ describe("idle worker capacity negotiation", () => {
     { enabled: true, capacity: { total: 1, available: 1 }, bundleStatus: 1 },
     { enabled: true, capacity: { total: 1, available: 1 }, preparedWorkspace: 2 },
     Object.create({ enabled: true, capacity: { total: 1, available: 1 } }),
-  ])("preserves closed host declarations and capability dependencies %j", (workerHost) => {
+  ])("preserves closed host declarations and capability dependencies %j", (host) => {
     expect(
       parseNodeRunnerInventoryDeclaration({
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost,
+        workerHost: host,
       }),
     ).toBeNull();
   });
