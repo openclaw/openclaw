@@ -65,6 +65,7 @@ import {
   type ReplyLine,
 } from "./chat-reply-attribution.ts";
 import type { ReplyPreviewLookup } from "./chat-reply-preview.types.ts";
+import { chatResponsiveLayout } from "./chat-responsive-layout.ts";
 import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
 import {
   renderBrowserTabPreviews,
@@ -460,6 +461,23 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
         ? "workspace-conflict"
         : "other";
   const avatarPlacement = opts.avatarPlacement ?? "gutter";
+  const renderSenderIdentity = () => html`${
+    !showSenderName
+      ? nothing
+      : renderPersonName(
+          who,
+          // Only other people's messages: your own name links nowhere useful.
+          isPeerGroup && group.sender?.identity?.type === "profile"
+            ? personActivityLink(group.sender.identity.id, opts.personActivity, who)
+            : null,
+          "chat-sender-name",
+        )
+  }
+  ${
+    visibleSources?.length
+      ? html`<span class="chat-message-source">${messageClientSourcesLabel(visibleSources)}</span>`
+      : nothing
+  }`;
 
   const meta = extractGroupMeta(group, opts.contextWindow ?? null);
 
@@ -576,60 +594,78 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
         ${renderReplyLine(replyLine, opts)}
         ${
           opts.frameContent ??
-          repeat(
-            preparedMessages,
-            (prepared) => prepared.item.key,
-            (prepared, index) => {
-              const { item, actions: actionDetails } = prepared;
-              // Assistant groups carry one line; your own replies keep theirs in the
-              // bubble, and a participant's sits above the message beside its avatar.
-              const line =
-                normalizedRole === "assistant"
-                  ? NO_REPLY_LINE
-                  : resolveMessageReplyLine(
-                      prepared.source.normalizedMessage,
-                      opts.resolveReplyPreview,
-                      opts.userId,
-                      isPeerGroup || group.replyShared,
-                    );
-              const peerHoldsRow = isPeerGroup && line.state !== "hidden";
-              const message = renderPreparedGroupMessage(
-                group,
-                index,
-                {
-                  ...opts,
-                  isForwarded: forwardedSource,
-                  replyLine: isPeerGroup ? undefined : line,
-                  avatar:
-                    !peerHoldsRow && inlineUserAvatar && (isPeerGroup || index === lastMessageIndex)
-                      ? avatar
-                      : undefined,
-                },
-                prepared,
-              );
-              const peerLine = isPeerGroup ? renderReplyLine(line, opts) : nothing;
-              return html`
-                ${
-                  peerHoldsRow
-                    ? html`<div class="chat-message--reply">
-                        ${peerLine} ${message}${avatar} ${renderReplyLineConnector(line, avatar)}
-                      </div>`
-                    : html`${peerLine}${message}`
-                }
-                ${
+          chatResponsiveLayout((mobile) =>
+            repeat(
+              preparedMessages,
+              (prepared) => prepared.item.key,
+              (prepared, index) => {
+                const { item, actions: actionDetails } = prepared;
+                const actions =
                   actionDetails &&
                   (actionDetails.markdown || (actionDetails.replyTarget && opts.onReply)) &&
                   index < lastMessageIndex &&
                   !isTurnBlock
-                    ? html`
-                        <div class="chat-message-actions-row" data-message-actions-for=${item.key}>
+                    ? mobile
+                      ? html`<div class="chat-group-footer chat-message-footer">
+                          <div class="chat-group-footer__meta">
+                            ${renderSenderIdentity()}
+                            ${renderMessageMeta(prepared.source.normalizedMessage.timestamp, null)}
+                          </div>
+                          <div
+                            class="chat-group-footer-actions"
+                            data-message-actions-for=${item.key}
+                          >
+                            ${renderMessageActionButtons(actionDetails, opts)}
+                          </div>
+                        </div>`
+                      : html`<div
+                          class="chat-message-actions-row"
+                          data-message-actions-for=${item.key}
+                        >
                           ${renderMessageActionButtons(actionDetails, opts)}
-                        </div>
-                      `
-                    : nothing
-                }
-              `;
-            },
+                        </div>`
+                    : nothing;
+                // Assistant groups carry one line; your own replies keep theirs in the
+                // bubble, and a participant's sits above the message beside its avatar.
+                const line =
+                  normalizedRole === "assistant"
+                    ? NO_REPLY_LINE
+                    : resolveMessageReplyLine(
+                        prepared.source.normalizedMessage,
+                        opts.resolveReplyPreview,
+                        opts.userId,
+                        isPeerGroup || group.replyShared,
+                      );
+                const peerHoldsRow = isPeerGroup && line.state !== "hidden";
+                const message = renderPreparedGroupMessage(
+                  group,
+                  index,
+                  {
+                    ...opts,
+                    isForwarded: forwardedSource,
+                    replyLine: isPeerGroup ? undefined : line,
+                    avatar:
+                      !peerHoldsRow &&
+                      inlineUserAvatar &&
+                      (isPeerGroup || index === lastMessageIndex)
+                        ? avatar
+                        : undefined,
+                  },
+                  prepared,
+                );
+                const peerLine = isPeerGroup ? renderReplyLine(line, opts) : nothing;
+                return html`
+                  ${
+                    peerHoldsRow
+                      ? html`<div class="chat-message--reply">
+                          ${peerLine} ${message}${avatar} ${renderReplyLineConnector(line, avatar)}
+                        </div>`
+                      : html`${peerLine}${message}`
+                  }
+                  ${actions}
+                `;
+              },
+            ),
           )
         }
         ${
@@ -671,26 +707,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                       ? renderChatAuthorAvatar(group.sender)
                       : nothing
                   }
-                  ${
-                    !showSenderName
-                      ? nothing
-                      : renderPersonName(
-                          who,
-                          // Only other people's messages: your own name links nowhere useful.
-                          isPeerGroup && group.sender?.identity?.type === "profile"
-                            ? personActivityLink(group.sender.identity.id, opts.personActivity, who)
-                            : null,
-                          "chat-sender-name",
-                        )
-                  }
-                  ${
-                    visibleSources?.length
-                      ? html`<span class="chat-message-source"
-                          >${messageClientSourcesLabel(visibleSources)}</span
-                        >`
-                      : nothing
-                  }
-                  ${renderChatSendStatus(sendStatus, opts)}
+                  ${renderSenderIdentity()} ${renderChatSendStatus(sendStatus, opts)}
                   ${renderMessageMeta(group.timestamp, meta)}
                 </div>
                 ${
