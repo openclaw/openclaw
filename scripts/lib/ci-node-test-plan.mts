@@ -3688,10 +3688,15 @@ function splitOversizedCompactGroup(
             (a, b) => weightForValue(b) - weightForValue(a) || discoveryOrder(a, b),
           ),
           // Overflow may fill the pinned workers beside an indivisible file,
-          // but cannot extend that file's existing wall or increase its workers.
+          // but cannot extend its wall, workers, or the serial job ceiling.
           (bin, file) =>
             batchWeight([...bin, file]) <=
-            (splitHostedToolingTails ? Math.max(secondsCap, batchWeight(bin)) : secondsCap),
+            (splitHostedToolingTails
+              ? Math.max(
+                  secondsCap,
+                  Math.min(COMPACT_SERIAL_NODE_TEST_JOB_SECONDS, batchWeight(bin)),
+                )
+              : secondsCap),
         ).map((batch) => batch.toSorted(discoveryOrder));
       // Full children plus small tails can strand a whole row even when the
       // files fit. On overflow, expose smaller file envelopes for placement.
