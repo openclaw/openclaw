@@ -22,7 +22,10 @@ import { gatewayClientUploadPolicyError } from "../upload-policy.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { isFreshChatSendStarted } from "./session-create-initial-turn.js";
-import { bindGatewayRequestHandlerMutationAuthority } from "./session-mutation-guards.js";
+import {
+  bindGatewayRequestHandlerMutationAuthority,
+  readGatewayRequestMutationAuthority,
+} from "./session-mutation-guards.js";
 import { sessionCreateHandlers } from "./sessions-create.js";
 import { isAgentMainSessionKey, requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
@@ -140,6 +143,8 @@ async function handleSessionSend(
   const explicitIdempotencyKey = normalizeOptionalString(p.idempotencyKey);
   const idempotencyKey = explicitIdempotencyKey ?? randomUUID();
   const respond = options.respond;
+  const requestAuthority = readGatewayRequestMutationAuthority(options);
+  const sessionAuthorization = options.sessionMutationAuthorization;
   const dispatchChatSend = async (dispatchRespond: RespondFn) => {
     const forwarded = bindGatewayRequestHandlerMutationAuthority(
       options,
@@ -232,6 +237,14 @@ async function handleSessionSend(
           runId: startedRunId,
           task: p.message,
           gatewayContextResolver: options.context.resolveGatewayContext,
+          assertCurrent: () => {
+            if (sessionAuthorization?.assertAdmittedInputCurrent) {
+              sessionAuthorization.assertAdmittedInputCurrent();
+            } else {
+              requestAuthority.assertCurrent();
+              sessionAuthorization?.assertCurrent();
+            }
+          },
         });
       } catch (error) {
         if (startedRunId) {

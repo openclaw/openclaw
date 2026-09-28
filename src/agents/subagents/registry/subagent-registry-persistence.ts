@@ -22,7 +22,8 @@ type PendingRegistryWrite = {
   uncertain?: SubagentRegistryWriteError;
   retired?: boolean;
   unregister?: () => void;
-  killClaim?: { entry: SubagentRunRecord; settled: ReturnType<typeof createDeferredCore<void>> };
+  settled: ReturnType<typeof createDeferredCore<void>>;
+  killClaim?: SubagentRunRecord;
 };
 const pendingWrites = new Set<PendingRegistryWrite>();
 
@@ -45,11 +46,25 @@ export function waitForPendingSubagentKillClaim(
 ): Promise<void> | undefined {
   assertSubagentRegistryWriteOutcomeKnown([entry.runId], admission);
   for (const pending of pendingWrites) {
-    if (pending.killClaim?.entry === entry && matchesSource(pending, admission)) {
-      return pending.killClaim.settled.promise;
+    if (pending.killClaim === entry && matchesSource(pending, admission)) {
+      return pending.settled.promise;
     }
   }
   return undefined;
+}
+
+/** Joins only the already-admitted writes for the selected physical source and rows. */
+export function waitForPendingSubagentRegistryWrites(
+  runIds: readonly string[],
+  admission: OpenClawStateWorkerContext["admission"],
+): Promise<void> | undefined {
+  assertSubagentRegistryWriteOutcomeKnown(runIds, admission);
+  const writes = [...pendingWrites].filter(
+    (pending) => matchesSource(pending, admission) && runIds.some((id) => pending.runIds.has(id)),
+  );
+  return writes.length > 0
+    ? Promise.all(writes.map((pending) => pending.settled.promise)).then(() => undefined)
+    : undefined;
 }
 
 function matchesSource(
@@ -171,12 +186,11 @@ export async function withSubagentRegistryWriteAuthority<T>(
     runIds: new Set(runIds),
     superseded: new Set(),
     admission: context.admission,
-    killClaim: options.pendingKillClaim
-      ? { entry: options.pendingKillClaim, settled: createDeferredCore() }
-      : undefined,
+    settled: createDeferredCore(),
+    killClaim: options.pendingKillClaim,
   };
   // A waiter may not exist; the actual mutation caller still owns the same rejection.
-  void pending.killClaim?.settled.promise.catch(() => {});
+  void pending.settled.promise.catch(() => {});
   const assertDatabase = () => assertSubagentRegistryWriteSourceCurrent(context);
   const assertCurrent = () => {
     assertDatabase();
@@ -214,9 +228,9 @@ export async function withSubagentRegistryWriteAuthority<T>(
     throw error;
   } finally {
     if (pending.uncertain) {
-      pending.killClaim?.settled.reject(pending.uncertain);
+      pending.settled.reject(pending.uncertain);
     } else {
-      pending.killClaim?.settled.resolve();
+      pending.settled.resolve();
     }
     if (!pending.uncertain) {
       unregister();
