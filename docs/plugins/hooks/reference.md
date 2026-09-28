@@ -158,6 +158,7 @@ contracts above; a modifying hook is not an observation hook.
 | `inbound_claim`             | Claim         | Claim an inbound message for the plugin that owns its conversation binding |
 | `channel_pairing_requested` | Observe       | Observe newly created DM pairing requests                                  |
 | `message_received`          | Observe       | Observe inbound content, sender, thread, and metadata                      |
+| `poll_vote_received`        | Observe       | Observe decoded WhatsApp poll votes when the WhatsApp opt-in is enabled     |
 | `message_sending`           | Modify / gate | Rewrite outbound content or cancel delivery                                |
 | `reply_payload_sending`     | Modify / gate | Mutate or cancel normalized reply payloads before delivery                 |
 | `message_sent`              | Observe       | Observe outbound delivery success or failure                               |

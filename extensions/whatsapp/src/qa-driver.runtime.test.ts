@@ -12,6 +12,8 @@ import { startWhatsAppQaDriverSession, type WhatsAppQaDriverSession } from "./qa
 import { DEFAULT_WHATSAPP_SOCKET_TIMING } from "./socket-timing.js";
 
 const AUTH_DIR = "/tmp/openclaw-whatsapp-auth";
+const SELF_JID = "11111@s.whatsapp.net";
+const SELF_LID = "11111@lid";
 const mocks = vi.hoisted(() => ({
   createWebSendApi: vi.fn(),
   createWaSocket: vi.fn(),
@@ -41,6 +43,7 @@ function createMockSocket() {
     end: vi.fn(),
     ev: new EventEmitter(),
     sendMessage: mocks.socketSendMessage,
+    user: { id: SELF_JID, lid: SELF_LID },
   };
 }
 
@@ -468,6 +471,43 @@ describe("startWhatsAppQaDriverSession", () => {
         selectedOptions: ["Yes"],
         timestamp: 1_700_000_100_000,
       },
+    });
+  });
+
+  it("uses the stable self LID to decode a vote on a poll sent to a LID chat", async () => {
+    const session = await startSession();
+    const chatJid = "22222@lid";
+    const pollMsgId = "poll-lid-1";
+    const { message: pollCreationMessage, pollEncKey } = buildPollCreationMessageForTests({
+      section: "pollCreationMessage",
+      options: ["Yes", "No"],
+    });
+    const creationKey = { id: pollMsgId, remoteJid: chatJid, fromMe: true };
+    emitMessages(incoming(pollCreationMessage, creationKey));
+
+    const vote = encryptPollVoteForTests({
+      selectedOptionNames: ["Yes"],
+      pollEncKey,
+      pollCreatorJid: SELF_LID,
+      pollMsgId,
+      voterJid: chatJid,
+    });
+    emitMessages(
+      incoming(buildPollUpdateMessageForTests({ creationKey, vote }), {
+        id: "vote-lid-1",
+        remoteJid: chatJid,
+      }),
+    );
+
+    const observed = await session.waitForMessage({
+      match: (message) => message.kind === "poll_vote",
+      timeoutMs: 1_000,
+    });
+    expect(observed.pollVote).toMatchObject({
+      pollMessageId: pollMsgId,
+      chatJid,
+      voter: chatJid,
+      selectedOptions: ["Yes"],
     });
   });
 

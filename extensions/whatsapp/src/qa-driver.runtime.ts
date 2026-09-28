@@ -5,6 +5,7 @@ import {
   isRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "./auth-store.js";
 import {
   readWhatsAppBaileysCacheEntry,
   rememberWhatsAppBaileysCacheEntry,
@@ -322,6 +323,8 @@ export async function startWhatsAppQaDriverSession(params: {
   let closed = false;
   let closedError: Error | undefined;
   let receivedPendingNotifications = false;
+  let selfJid: string | null | undefined = sock.user?.id;
+  let selfLid: string | null | undefined = sock.user?.lid;
 
   const removeWaiter = (waiter: Waiter) => {
     waiters.delete(waiter);
@@ -375,7 +378,8 @@ export async function startWhatsAppQaDriverSession(params: {
           key: rawMessage.key,
           getCachedMessage: (voteRemoteJid, voteMessageId) =>
             readWhatsAppBaileysCacheEntry(rawMessageCache, `${voteRemoteJid}:${voteMessageId}`),
-          selfJid: sock.user?.id,
+          selfJid,
+          selfLid,
         });
         if (vote) {
           observe(buildPollVoteObservedMessage(rawMessage, vote));
@@ -423,6 +427,14 @@ export async function startWhatsAppQaDriverSession(params: {
   sock.ev.on("connection.update", onConnectionUpdate);
   try {
     await waitForWaConnection(sock, { timeoutMs: params.connectionTimeoutMs ?? 45_000 });
+    const selfIdentity = await readWebSelfIdentityForDecision(params.authDir, sock.user);
+    if (selfIdentity.outcome === "unstable") {
+      throw new WhatsAppAuthUnstableError(
+        "WhatsApp auth state is still stabilizing; retrying QA driver attach.",
+      );
+    }
+    selfJid = selfIdentity.identity.jid;
+    selfLid = selfIdentity.identity.lid;
     if (params.waitForPendingNotifications) {
       await new Promise<void>((resolve, reject) => {
         if (receivedPendingNotifications) {
