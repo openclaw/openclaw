@@ -6,8 +6,6 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { createWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import type { ExecutionIdentityInspectionQuery } from "../audit/execution-identity-inspection.types.js";
-import * as boundaryPath from "../infra/boundary-path.js";
-import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
@@ -20,46 +18,6 @@ import { createOpenClawStateReadTransport } from "./openclaw-state-read-worker.j
 import type { OpenClawStateReadReply } from "./openclaw-state-read.types.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
-
-it("reuses monitored ownership across read preparation, dispatch, and reply boundaries", async () => {
-  const { pathname, options } = source();
-  vi.useFakeTimers();
-  const owner = acquireGatewayStateOwner({
-    databasePath: pathname,
-    payload: {
-      pid: process.pid,
-      createdAt: new Date().toISOString(),
-      configPath: path.join(options.env.OPENCLAW_STATE_DIR, "openclaw.json"),
-      role: "gateway",
-    },
-  });
-  const dispatch = createDeferredCore();
-  const task = queueTask(dispatch.promise);
-  const resolve = vi.spyOn(boundaryPath, "resolveIdentityPathViaExistingAncestorSync");
-  const open = vi.spyOn(fs, "openSync");
-  const resolutions = () => resolve.mock.calls.filter(([target]) => target === pathname).length;
-  const result = executeExistingOpenClawStateRead(options, { type: "fleet.list" });
-  try {
-    expect(resolutions()).toBe(1);
-    expect(open).not.toHaveBeenCalled();
-    resolve.mockClear();
-    dispatch.resolve();
-    await task.captured;
-    expect(resolutions()).toBe(0);
-    task.result.resolve(emptyReply);
-    await expect(result).resolves.toEqual(emptyReply);
-    expect(resolutions()).toBe(0);
-    expect(open).not.toHaveBeenCalled();
-  } finally {
-    dispatch.resolve();
-    task.result.resolve(emptyReply);
-    await Promise.allSettled([result]);
-    resolve.mockRestore();
-    open.mockRestore();
-    owner.release();
-    vi.useRealTimers();
-  }
-});
 
 it("captures queued read routing and schema facts without reading unrelated environment values", async () => {
   const { root, pathname } = source();

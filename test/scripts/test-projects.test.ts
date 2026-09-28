@@ -1305,7 +1305,10 @@ describe("scripts/test-projects changed-target routing", () => {
     },
     {
       changedPath: ".github/actions/setup-node-env/action.yml",
-      exactTargets: ["test/scripts/setup-node-env-bun.test.ts"],
+      exactTargets: [
+        "test/scripts/setup-node-env-bun.test.ts",
+        "test/scripts/setup-node-env-semantic-memory.test.ts",
+      ],
     },
   ])("unions exact owners and references for $changedPath", ({ changedPath, exactTargets }) => {
     withTinyGitRepo(

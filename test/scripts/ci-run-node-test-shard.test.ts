@@ -1148,6 +1148,79 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     expect(runtimes).toEqual(groups.map(() => "node"));
   });
 
+  it.each([false, true])(
+    "shares one compiler across admitted mixed scheduling groups (serial first=%s)",
+    async (serialFirst) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(true);
+      vi.spyOn(os, "availableParallelism").mockReturnValue(2);
+      vi.spyOn(os, "totalmem").mockReturnValue(8 * 1024 ** 3);
+      vi.spyOn(process, "constrainedMemory").mockReturnValue(8 * 1024 ** 3);
+      const createWorker = vi.spyOn(workerOwner, "createVitestWorkerRun");
+      const groups = [
+        {
+          configs: ["test/vitest/vitest.extension-database-workers.config.ts"],
+          shard_name: "changed-extensions-config-54",
+          includePatterns: [
+            "extensions/telegram/src/telegram-ingress-spool.test.ts",
+            "extensions/telegram/src/webhook.test.ts",
+          ],
+          env: { OPENCLAW_VITEST_MAX_WORKERS: "2", OPENCLAW_TEST_PROJECTS_PARALLEL: "2" },
+        },
+        {
+          configs: ["test/vitest/vitest.extension-imessage.config.ts"],
+          shard_name: "changed-extensions-config-13",
+          includePatterns: ["extensions/imessage/src/conversation-route.test.ts"],
+          env: { OPENCLAW_VITEST_MAX_WORKERS: "1" },
+        },
+      ];
+      if (serialFirst) {
+        groups.reverse();
+      }
+      const runChild = vi.fn(async (_args: string[], env: NodeJS.ProcessEnv, label: string) => {
+        const group = groups.find((candidate) => candidate.shard_name === label)!;
+        expect(env.OPENCLAW_TEST_PROJECTS_PARALLEL).toBe(
+          group.env.OPENCLAW_TEST_PROJECTS_PARALLEL ?? "1",
+        );
+        expect(env.OPENCLAW_VITEST_MAX_WORKERS).toBe(group.env.OPENCLAW_VITEST_MAX_WORKERS);
+        expect(JSON.parse(readFileSync(env.OPENCLAW_VITEST_INCLUDE_FILE!, "utf8"))).toEqual(
+          group.includePatterns,
+        );
+        return 0;
+      });
+      await expect(
+        runShardPlans(
+          resolveShardPlans({
+            OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: encodeNodeTestGroups(groups),
+          }),
+          {
+            concurrency: 1,
+            env: {
+              CI: "1",
+              RUNNER_ENVIRONMENT: "self-hosted",
+              FROZEN_TARGET: "false",
+              OPENCLAW_CI_TEST_RUNTIME_POLICY: "bun-compatible",
+              OPENCLAW_VITEST_MAX_WORKERS: "2",
+            },
+            scratchDir: makeScratchDir(),
+            runChild,
+          },
+        ),
+      ).resolves.toBe(0);
+      expect(runChild.mock.calls.map((call) => call[2])).toEqual(
+        groups.map((group) => group.shard_name),
+      );
+      expect(createWorker).toHaveBeenCalledExactlyOnceWith({
+        CI: "1",
+        RUNNER_ENVIRONMENT: "self-hosted",
+        FROZEN_TARGET: "false",
+        OPENCLAW_CI_TEST_RUNTIME_POLICY: "bun-compatible",
+        RAYON_NUM_THREADS: "1",
+        TOKIO_WORKER_THREADS: "1",
+      });
+    },
+  );
+
   it("builds child env with per-plan cache isolation, includes, and env overlays", () => {
     const scratchDir = makeScratchDir();
     const entry = {

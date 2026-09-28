@@ -2888,7 +2888,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   [".github/workflows/update-migration.yml", [packageAcceptance, workflowGuards]],
   [
     ".github/actions/setup-node-env/action.yml",
-    ["setup-node-env-bun", packageAcceptance, workflowGuards],
+    ["setup-node-env-bun", "setup-node-env-semantic-memory", packageAcceptance, workflowGuards],
   ],
   [
     ".github/actions/setup-node-env/dependency-fingerprint.mjs",

@@ -10,7 +10,6 @@ import {
   resolveGatewayLockDir,
   resolveGatewayLockDirForCanonicalStateDir,
 } from "../config/paths.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import {
@@ -27,57 +26,112 @@ import {
   type LockPayload,
   parseGatewayLockPayload,
 } from "./gateway-lock-payload.js";
-import { applyPrivateModeSync } from "./private-mode.js";
+import {
+  ensureOwnerDirectory,
+  removeCreatedProjectionDirectories,
+  type StateOwnerDirectoryIdentity,
+} from "./gateway-state-owner-directory.js";
 import { normalizeSqliteNonNegativeInteger } from "./sqlite-busy-timeout.js";
 import { runWithSqliteCleanup } from "./sqlite-lifecycle-errors.js";
 import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
 
 export type StateDatabaseSchemaLease = {
   readonly path: string;
-  readonly compromiseMonitor: {
-    compromiseCheckIntervalMs: number;
-    onCompromised(this: void): void;
-  };
   assertCurrent(this: void): void;
   assertDatabaseAccess(this: void, databasePath: string): void;
   run<T>(this: void, operation: () => T): T;
   release(this: void): void;
 };
 
+export type GatewayStateProjection = {
+  readonly lockPath: string;
+  readonly verifiedAt: number | undefined;
+  verifyStillHeld(): boolean;
+  retain(): GatewayStateProjection;
+  release(): void;
+};
+
+/** Carry the same physical sidecar through relocation and accepted schema work. */
+export function createGatewayStateProjection(
+  lock: ReturnType<typeof acquireFileLockSync>,
+): GatewayStateProjection {
+  let references = 1;
+  let verifiedAt: number | undefined;
+  const verify = () => {
+    verifiedAt = undefined;
+    if (!lock.verifyStillHeld()) {
+      return false;
+    }
+    verifiedAt = performance.now();
+    return true;
+  };
+  const reference = (): GatewayStateProjection => {
+    let released = false;
+    return {
+      lockPath: lock.lockPath,
+      get verifiedAt() {
+        return released ? undefined : verifiedAt;
+      },
+      verifyStillHeld: () => !released && verify(),
+      retain() {
+        if (released || !verify()) {
+          throw new Error("Gateway state projection is no longer current");
+        }
+        references += 1;
+        return reference();
+      },
+      release() {
+        readOwnerPaths.clear();
+        if (released) {
+          return;
+        }
+        if (references === 1) {
+          lock.release();
+        }
+        references -= 1;
+        released = true;
+      },
+    };
+  };
+  return reference();
+}
+
 type ProcessOwner = {
   kind: "process" | "schema";
   payload: LockPayload;
   projectionPath?: string;
+  getProjection?: () => GatewayStateProjection | undefined;
   locks: Set<ReturnType<typeof acquireFileLockSync>>;
-  projectionDirectories: { path: string; dev: bigint; ino: bigint }[];
+  projectionDirectories: StateOwnerDirectoryIdentity[];
   // Retained leases keep custody after this stops new admission.
   accepting: boolean;
-  compromised: boolean;
+  verifiedAt?: number;
 };
 
 function hasPhysicalOwnership(owner: ProcessOwner): boolean {
-  return !owner.compromised && (owner.locks.values().next().value?.verifyStillHeld() ?? false);
+  return verifyOwnerLock(owner, owner.locks.values().next().value);
 }
 
-// Only explicit reads tolerate this window; a competing process normally needs
-// longer than one second for startup/migrations. Mutations still verify freshly.
-const OWNERSHIP_MONITOR_INTERVAL_MS = 1000;
-const log = createSubsystemLogger("gateway/state-owner");
+function verifyOwnerLock(
+  owner: ProcessOwner,
+  lock: ReturnType<typeof acquireFileLockSync> | undefined,
+): boolean {
+  owner.verifiedAt = undefined;
+  if (!lock?.verifyStillHeld()) {
+    return false;
+  }
+  owner.verifiedAt = performance.now();
+  return true;
+}
+
+// Only explicit reads reuse proof for one second; overdue dispatch verifies
+// synchronously, so event-loop stalls cannot extend the read ownership window.
+const READ_OWNERSHIP_MAX_AGE_MS = 1000;
 
 const readOwnerPaths = resolveGlobalSingleton(
   Symbol.for("openclaw.gatewayStateReadOwnerPaths"),
   () => new Map<string, { pathname: string; owner: ProcessOwner; expiresAt: number }>(),
 );
-
-function markOwnerCompromised(owner: ProcessOwner, pathname: string): void {
-  if (!owner.compromised) {
-    owner.compromised = true;
-    readOwnerPaths.clear();
-    log.error(
-      `OpenClaw state ownership is no longer current at ${pathname}; refusing database access`,
-    );
-  }
-}
 
 const owners = resolveGlobalSingleton(
   Symbol.for("openclaw.gatewayStateOwners"),
@@ -194,74 +248,6 @@ export function resolveGatewayStateOwnerPath(databasePath: string): string {
   );
 }
 
-function ensureOwnerDirectory(
-  directory: string,
-  created?: ProcessOwner["projectionDirectories"],
-): void {
-  const firstCreated = fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  if (firstCreated && created) {
-    // Windows mkdir returns a namespaced path even when its input has no prefix.
-    const boundary = path.toNamespacedPath(firstCreated);
-    const directories: ProcessOwner["projectionDirectories"] = [];
-    for (let current = directory; ;) {
-      const { dev, ino } = fs.lstatSync(current, { bigint: true });
-      directories.push({ path: current, dev, ino });
-      if (path.toNamespacedPath(current) === boundary) {
-        break;
-      }
-      const parent = path.dirname(current);
-      if (parent === current) {
-        throw new Error("Created state ownership directory is outside its expected ancestry");
-      }
-      current = parent;
-    }
-    for (const entry of directories) {
-      const previous = created.findIndex((candidate) => candidate.path === entry.path);
-      if (previous < 0) {
-        created.push(entry);
-      } else {
-        created[previous] = entry;
-      }
-    }
-  }
-  const observed = fs.lstatSync(directory);
-  const uid = process.getuid?.();
-  if (!observed.isDirectory() || (uid !== undefined && observed.uid !== uid)) {
-    throw new Error("State ownership directory must be a user-owned real directory");
-  }
-  if (process.platform !== "win32" && (observed.mode & 0o7777) !== 0o700) {
-    applyPrivateModeSync(directory, 0o700);
-    if ((fs.lstatSync(directory).mode & 0o077) !== 0) {
-      throw new Error("State ownership directory permissions are not private");
-    }
-  }
-}
-
-function removeCreatedProjectionDirectories(
-  directories: ProcessOwner["projectionDirectories"],
-): void {
-  let directory = directories[0];
-  while (directory) {
-    try {
-      const observed = fs.lstatSync(directory.path, { bigint: true });
-      if (
-        observed.isDirectory() &&
-        observed.dev === directory.dev &&
-        observed.ino === directory.ino
-      ) {
-        fs.rmdirSync(directory.path);
-      }
-    } catch (error) {
-      const code = extractErrorCode(error);
-      if (code !== "ENOENT" && code !== "ENOTEMPTY" && code !== "EEXIST") {
-        throw error;
-      }
-    }
-    directories.shift();
-    directory = directories[0];
-  }
-}
-
 function defaultPayload(
   databasePath: string,
   role: GatewayLockRole = "sqlite-maintenance",
@@ -283,7 +269,6 @@ function acquireOwnerFile(
   databasePath: string,
   pathname: string,
   payload: LockPayload,
-  onCompromised: () => void,
   busyTimeoutMs = 0,
   createdDirectories?: ProcessOwner["projectionDirectories"],
 ) {
@@ -323,8 +308,6 @@ function acquireOwnerFile(
             : { retries: 0 },
         timeoutMs: Math.max(0, Math.ceil(deadline - performance.now())),
         staleMs: Infinity,
-        compromiseCheckIntervalMs: OWNERSHIP_MONITOR_INTERVAL_MS,
-        onCompromised,
         staleRecovery: "remove-if-unchanged",
         reentrantOwner: payload.ownerId,
         payload: () => payload,
@@ -353,20 +336,15 @@ function leaseForFile(
   pathname: string,
   lock: ReturnType<typeof acquireFileLockSync>,
   owner: ProcessOwner,
-  projection?: ReturnType<typeof acquireFileLockSync>,
+  projection?: Pick<GatewayStateProjection, "verifyStillHeld" | "release">,
 ): StateDatabaseSchemaLease {
   let released = false;
   const lease: StateDatabaseSchemaLease = {
     path: pathname,
-    compromiseMonitor: {
-      compromiseCheckIntervalMs: OWNERSHIP_MONITOR_INTERVAL_MS,
-      onCompromised: () => markOwnerCompromised(owner, pathname),
-    },
     assertCurrent() {
       if (
         released ||
-        owner.compromised ||
-        !lock.verifyStillHeld() ||
+        !verifyOwnerLock(owner, lock) ||
         (projection && !projection.verifyStillHeld())
       ) {
         throw new Error("OpenClaw state ownership is no longer current");
@@ -375,10 +353,9 @@ function leaseForFile(
     assertDatabaseAccess(databasePath) {
       if (
         released ||
-        owner.compromised ||
         owners.get(pathname) !== owner ||
         resolveGatewayStateOwnerPath(databasePath) !== pathname ||
-        !lock.verifyStillHeld() ||
+        !verifyOwnerLock(owner, lock) ||
         (projection && !projection.verifyStillHeld())
       ) {
         throw new Error("OpenClaw state maintenance does not own this database");
@@ -423,6 +400,7 @@ export function acquireGatewayStateOwner(params: {
   databasePath: string;
   payload?: LockPayload;
   projectionPath?: string;
+  getProjection?: () => GatewayStateProjection | undefined;
 }): StateDatabaseSchemaLease {
   const pathname = resolveGatewayStateOwnerPath(params.databasePath);
   if (owners.has(pathname)) {
@@ -435,21 +413,25 @@ export function acquireGatewayStateOwner(params: {
     kind: "process",
     payload,
     projectionPath: params.projectionPath,
+    getProjection: params.getProjection,
     locks: new Set(),
     projectionDirectories: [],
     accepting: true,
-    compromised: false,
   };
-  const lock = acquireOwnerFile(params.databasePath, pathname, payload, () =>
-    markOwnerCompromised(owner, pathname),
-  );
+  const lock = acquireOwnerFile(params.databasePath, pathname, payload);
   owner.locks.add(lock);
   readOwnerPaths.clear();
   owners.set(pathname, owner);
   const lease = leaseForFile(pathname, lock, owner);
+  try {
+    lease.assertCurrent();
+  } catch (error) {
+    return runWithSqliteCleanup(lease, "state process ownership verification", () => {
+      throw error;
+    });
+  }
   return {
     path: pathname,
-    compromiseMonitor: lease.compromiseMonitor,
     assertCurrent() {
       if (!owner.accepting || owners.get(pathname) !== owner) {
         throw new Error("OpenClaw state process owner is no longer current");
@@ -483,11 +465,6 @@ export function acquireStateDatabaseSchemaLease(
     ...defaultPayload(databasePath),
     stateOwnerKind: "schema" as const,
   };
-  const onCompromised = () => {
-    if (owner) {
-      markOwnerCompromised(owner, pathname);
-    }
-  };
   let lock: ReturnType<typeof acquireFileLockSync>;
   const projectionDirectories: ProcessOwner["projectionDirectories"] = [];
   try {
@@ -495,7 +472,6 @@ export function acquireStateDatabaseSchemaLease(
       databasePath,
       pathname,
       payload,
-      onCompromised,
       owner ? 0 : (options.busyTimeoutMs ?? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS),
       projectionDirectories,
     );
@@ -521,21 +497,21 @@ export function acquireStateDatabaseSchemaLease(
       ),
       "gateway.state.lock",
     );
-  let projection: ReturnType<typeof acquireFileLockSync>;
+  let projection: Pick<GatewayStateProjection, "verifyStillHeld" | "release">;
   try {
-    // Published Gateways know this sidecar, not the external owner. Retain the
-    // same fs-safe reference as the root until this accepted schema work settles.
-    projection = acquireOwnerFile(
-      databasePath,
-      projectionPath,
-      {
-        ...payload,
-        role: payload.role === "gateway" ? "gateway" : "agent-embedded",
-      },
-      onCompromised,
-      0,
-      projectionDirectories,
-    );
+    // The process owner retains its exact sidecar even when its root path moves.
+    projection =
+      owner?.getProjection?.()?.retain() ??
+      acquireOwnerFile(
+        databasePath,
+        projectionPath,
+        {
+          ...payload,
+          role: payload.role === "gateway" ? "gateway" : "agent-embedded",
+        },
+        0,
+        projectionDirectories,
+      );
   } catch (error) {
     return runWithSqliteCleanup(
       {
@@ -561,7 +537,6 @@ export function acquireStateDatabaseSchemaLease(
       locks: new Set([lock]),
       projectionDirectories,
       accepting: true,
-      compromised: false,
     };
     owners.set(pathname, owner);
   }
@@ -603,7 +578,11 @@ export function hasActiveGatewayStateOwner(databasePath: string): boolean {
   );
 }
 
-/** The dedicated read transport may borrow monitored local ownership, never mutation authority. */
+function hasRecentVerification(verifiedAt: number | undefined, now: number): boolean {
+  return verifiedAt !== undefined && now - verifiedAt < READ_OWNERSHIP_MAX_AGE_MS;
+}
+
+/** Only explicit reads reuse recent physical verification; mutations always check freshly. */
 export function assertStateDatabaseReadAllowed(databasePath: string): void {
   if (owners.size === 0) {
     assertStateDatabaseAccessAllowed(databasePath);
@@ -611,33 +590,42 @@ export function assertStateDatabaseReadAllowed(databasePath: string): void {
   }
   const key = path.resolve(databasePath);
   const now = performance.now();
-  let cached = readOwnerPaths.get(key);
-  if (!cached || now >= cached.expiresAt || owners.get(cached.pathname) !== cached.owner) {
-    readOwnerPaths.delete(key);
-    const pathname = resolveGatewayStateOwnerPath(databasePath);
-    const owner = owners.get(pathname);
-    const role = owner?.payload.role ?? "gateway";
-    if (
-      owner?.kind === "process" &&
-      owner.accepting &&
-      (role === "gateway" || role === "agent-embedded")
-    ) {
-      cached = { pathname, owner, expiresAt: now + OWNERSHIP_MONITOR_INTERVAL_MS };
-      readOwnerPaths.set(key, cached);
-    } else {
-      cached = undefined;
-    }
+  const cached = readOwnerPaths.get(key);
+  const projection = cached?.owner.getProjection?.();
+  if (
+    cached &&
+    now < cached.expiresAt &&
+    owners.get(cached.pathname) === cached.owner &&
+    cached.owner.accepting &&
+    hasRecentVerification(cached.owner.verifiedAt, now) &&
+    (!cached.owner.getProjection ||
+      (projection && hasRecentVerification(projection.verifiedAt, now)))
+  ) {
+    return;
   }
-  if (!cached || !cached.owner.accepting) {
+  readOwnerPaths.delete(key);
+  const pathname = resolveGatewayStateOwnerPath(databasePath);
+  const owner = owners.get(pathname);
+  const role = owner?.payload.role ?? "gateway";
+  if (
+    !owner ||
+    owner.kind !== "process" ||
+    !owner.accepting ||
+    (role !== "gateway" && role !== "agent-embedded")
+  ) {
     // Maintenance/schema authority and foreign owners keep their existing fresh checks.
     assertStateDatabaseAccessAllowed(databasePath);
     return;
   }
-  if (cached.owner.compromised) {
+  if (
+    !hasPhysicalOwnership(owner) ||
+    (owner.getProjection && !owner.getProjection()?.verifyStillHeld())
+  ) {
     throw new Error(
       `OpenClaw state ownership at ${databasePath} could not be verified; retry after maintenance finishes.`,
     );
   }
+  readOwnerPaths.set(key, { pathname, owner, expiresAt: now + READ_OWNERSHIP_MAX_AGE_MS });
 }
 
 /** Ordinary SQLite access observes maintenance; it never borrows schema authority. */

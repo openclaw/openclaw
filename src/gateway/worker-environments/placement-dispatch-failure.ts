@@ -94,6 +94,7 @@ export type WorkerDispatchEnvironmentService = Pick<
   | "createWithRequest"
   | "destroy"
   | "get"
+  | "fenceWorkerTurnForRecovery"
   | "reconcileEnvironment"
   | "reconcileOnce"
   | "startTunnel"

@@ -50,7 +50,7 @@ function createAliasedDatabases() {
   };
 }
 
-describe("monitored Gateway state reads", () => {
+describe("bounded Gateway state reads", () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -60,7 +60,7 @@ describe("monitored Gateway state reads", () => {
   });
 
   it.each(["owner", "projection"] as const)(
-    "rejects a replaced %s immediately for strict access and after one tick for reads",
+    "rechecks a replaced %s when the read verification window expires",
     async (kind) => {
       const root = tempDirs.make("openclaw-owner-read-replaced-");
       const databasePath = createDatabase(root);
@@ -78,16 +78,16 @@ describe("monitored Gateway state reads", () => {
         assertStateDatabaseReadAllowed(databasePath);
         fs.unlinkSync(replacedPath);
         fs.writeFileSync(replacedPath, "replacement");
-        expect(() =>
-          kind === "owner"
-            ? assertStateDatabaseAccessAllowed(databasePath)
-            : gateway.assertCurrent(),
-        ).toThrow(kind === "owner" ? "could not be verified" : "no longer current");
         expect(() => assertStateDatabaseReadAllowed(databasePath)).not.toThrow();
         vi.advanceTimersByTime(999);
         expect(() => assertStateDatabaseReadAllowed(databasePath)).not.toThrow();
         vi.advanceTimersByTime(1);
         expect(() => assertStateDatabaseReadAllowed(databasePath)).toThrow("could not be verified");
+        expect(() =>
+          kind === "owner"
+            ? assertStateDatabaseAccessAllowed(databasePath)
+            : gateway.assertCurrent(),
+        ).toThrow(kind === "owner" ? "could not be verified" : "no longer current");
       } finally {
         await gateway.release();
       }
@@ -168,7 +168,7 @@ describe("monitored Gateway state reads", () => {
     },
   );
 
-  it("does not resolve or open ownership paths for warmed reads between monitor ticks", () => {
+  it("does not resolve or open ownership paths for warmed reads within the verification window", () => {
     const databasePath = createDatabase(tempDirs.make("openclaw-owner-read-syscalls-"));
     const owner = acquireServingOwner(databasePath);
     try {

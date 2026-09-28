@@ -88,7 +88,7 @@ permissions:
 run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.dispatch_id != '' && format('CI {0}', inputs.dispatch_id) || (github.event_name == 'workflow_dispatch' && inputs.release_gate && format('CI release gate {0}', inputs.target_ref) || 'CI') }}
 
 concurrency:
-  # Main parity slots preserve active runs; iOS serializes itself. Passive drafts must not replace pending PR work; converted_to_draft still cancels it.
+  # Keep main parity slots; isolate passive drafts except converted_to_draft.
   group: >-
     ${{ github.event_name == 'pull_request' && github.event.pull_request.draft &&
         github.event.action != 'converted_to_draft' && format('{0}-draft-v1-{1}', github.workflow, github.run_id) ||
@@ -3968,6 +3968,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          semantic-checks: "true"
           cache-mode: *cache_mode
           install-bun: ${{ matrix.task == 'bun-launcher' && 'true' || 'false' }}
           dependency-cache: *trusted_dependency_cache
@@ -4376,6 +4377,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          semantic-checks: "true"
           cache-mode: *cache_mode
           node-version: "24.16.0"
           install-bun: "false"
@@ -4437,6 +4439,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          semantic-checks: "true"
           cache-mode: *cache_mode
           node-version: "${{ (matrix.runner == 'runson-c8i-8xlarge' || startsWith(matrix.check_name, 'checks-node-runson-cron-')) && env.NODE_VERSION || matrix.node_version || '24.x' }}"
           install-bun: "false"
@@ -4641,6 +4644,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          semantic-checks: "true"
           cache-mode: *cache_mode
           install-bun: "false"
           dependency-cache: ${{ runner.environment == 'self-hosted' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'true' || 'false' }}
@@ -4692,7 +4696,8 @@ jobs:
       - name: Setup Node environment
         if: steps.npm-lock-scope.outputs.skip != 'true'
         uses: ./.ci-harness/.github/actions/setup-node-env
-        with:
+        with: &semantic_node_inputs
+          semantic-checks: "true"
           cache-mode: *cache_mode
           install-bun: "false"
           dependency-cache: *trusted_dependency_cache
@@ -5157,7 +5162,10 @@ jobs:
       matrix: ${{ fromJSON((needs.preflight.outputs.run_check_plan == 'true' && needs.check-plan.outputs.lint_core_matrix || needs.preflight.outputs.lint_core_matrix)) }}
     steps:
       - *linux_node_checkout_step
-      - *linux_node_setup_step
+      - &semantic_node_setup_step
+        name: Setup Node environment
+        uses: ./.ci-harness/.github/actions/setup-node-env
+        with: *semantic_node_inputs
 
       - name: Compute extension boundary input fingerprint
         id: extension-boundary-inputs
@@ -5253,6 +5261,7 @@ jobs:
         name: Setup Node environment
         uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          semantic-checks: "true"
           cache-mode: *cache_mode
           install-bun: "false"
 
@@ -5301,7 +5310,7 @@ jobs:
       matrix: ${{ fromJSON((needs.preflight.outputs.run_check_plan == 'true' && needs.check-plan.outputs.core_type_matrix || needs.preflight.outputs.core_type_matrix)) }}
     steps:
       - *linux_node_checkout_step
-      - *linux_node_setup_step
+      - *semantic_node_setup_step
 
       - name: Restore core test-type incremental state
         id: test-type-cache
@@ -5383,7 +5392,7 @@ jobs:
         with:
           base-sha: ${{ needs.preflight.outputs.diff_head_revision }}
           fetch-ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_gate && format('refs/pull/{0}/merge', inputs.pull_request_number) || github.event_name == 'pull_request' && github.event.pull_request.base.ref || github.event.repository.default_branch }}
-      - *linux_node_setup_step
+      - *semantic_node_setup_step
 
       - name: Compute extension boundary input fingerprint
         id: extension-boundary-inputs

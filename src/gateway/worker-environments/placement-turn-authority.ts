@@ -25,9 +25,8 @@ export type PlacementTurnClaimAuthority = {
 
 type ClaimChange = {
   sessionId: string;
-  facts?: WorkerSessionTurnClaimFacts;
   sequence?: number;
-};
+} & ({ kind: "claim"; facts?: WorkerSessionTurnClaimFacts } | { kind: "workspace-result" });
 type RetainedClaim = {
   claim: WorkerSessionTurnClaim;
   facts?: WorkerSessionTurnClaimFacts;
@@ -41,6 +40,7 @@ type PlacementAuthorityOwner = {
   identity: DatabasePathIdentity;
   active: boolean;
   claims: Map<string, Set<RetainedClaim>>;
+  observations: Map<string, Set<{ revoked: boolean }>>;
   pending: Set<ClaimChange>;
   sequence: number;
   published: Map<string, number>;
@@ -73,6 +73,7 @@ function closeOwner(owner: PlacementAuthorityOwner): void {
     notifyRevoked(claim);
   }
   owner.claims.clear();
+  owner.observations.clear();
 }
 
 const owners = resolveGlobalSingleton(
@@ -95,6 +96,7 @@ function ownerFor(identity: DatabasePathIdentity): PlacementAuthorityOwner {
     identity,
     active: true,
     claims: new Map(),
+    observations: new Map(),
     pending: new Set(),
     sequence: 0,
     published: new Map(),
@@ -120,6 +122,7 @@ registerOpenClawStateDatabaseLifecycleListener((event) => {
 
 function allows(change: ClaimChange, claim: WorkerSessionTurnClaim): boolean {
   return (
+    change.kind === "workspace-result" ||
     change.sessionId !== claim.sessionId ||
     Boolean(change.facts && isCurrentPlacementTurnClaim(change.facts, claim))
   );
@@ -139,6 +142,13 @@ function commitChange(owner: PlacementAuthorityOwner, change: ClaimChange, seque
   if (!owner.active) {
     return;
   }
+  for (const observation of owner.observations.get(change.sessionId) ?? []) {
+    observation.revoked = true;
+  }
+  if (change.kind === "workspace-result") {
+    prunePublication(owner, change.sessionId);
+    return;
+  }
   owner.published.set(
     change.sessionId,
     Math.max(owner.published.get(change.sessionId) ?? 0, sequence),
@@ -156,6 +166,38 @@ function commitChange(owner: PlacementAuthorityOwner, change: ClaimChange, seque
     retained.revoked ||= !allows(change, retained.claim);
   }
   prunePublication(owner, change.sessionId);
+}
+
+/** Retain placement custody across a read-worker wait and pending claim commits. */
+export function observePlacementAuthority(pathname: string, sessionId: string) {
+  const context = captureOpenClawStateWorkerContext({ path: pathname });
+  const owner = ownerFor(context.admission.identity);
+  const observation = { revoked: false };
+  const observations = owner.observations.get(sessionId) ?? new Set<{ revoked: boolean }>();
+  observations.add(observation);
+  owner.observations.set(sessionId, observations);
+  let released = false;
+  return {
+    assertCurrent(this: void) {
+      context.admission.assertCurrent();
+      if (
+        released ||
+        observation.revoked ||
+        !owner.active ||
+        owners.get(owner.identity.key) !== owner ||
+        [...owner.pending].some((change) => change.sessionId === sessionId)
+      ) {
+        throw new Error(`Session ${sessionId} placement authority changed`);
+      }
+    },
+    release(this: void) {
+      released = true;
+      observations.delete(observation);
+      if (observations.size === 0) {
+        owner.observations.delete(sessionId);
+      }
+    },
+  };
 }
 
 function stageChange(db: DatabaseSync, change: ClaimChange): void {
@@ -196,7 +238,8 @@ export function stagePlacementTurnClaimWorkerPublication(
 ): { commit: () => void; rollback: () => void; invalidate: () => void } {
   const owner = ownerFor(identity);
   const sequence = ++owner.sequence;
-  const change: ClaimChange = {
+  const change: Extract<ClaimChange, { kind: "claim" }> = {
+    kind: "claim",
     sessionId: facts.sessionId,
     facts: structuredClone(facts),
     sequence,
@@ -246,6 +289,7 @@ export function publishPlacementTurnClaimState(
   const { sessionId, agentId, sessionKey, state, executionMode, environmentId, activeOwnerEpoch } =
     record;
   stageChange(db, {
+    kind: "claim",
     sessionId,
     facts: {
       sessionId,
@@ -261,7 +305,11 @@ export function publishPlacementTurnClaimState(
 }
 
 export function publishPlacementTurnClaimCleared(db: DatabaseSync, sessionId: string): void {
-  stageChange(db, { sessionId });
+  stageChange(db, { kind: "claim", sessionId });
+}
+
+export function publishPlacementWorkspaceResultState(db: DatabaseSync, sessionId: string): void {
+  stageChange(db, { kind: "workspace-result", sessionId });
 }
 
 /** Prepare once through the placement reader; subsequent checks use this retained incarnation. */

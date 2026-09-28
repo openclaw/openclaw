@@ -426,11 +426,8 @@ export async function getOpenClawStateDatabaseTerminalFailureAsync(
 }
 
 /** Reject shared-state access after a process-local terminal failure. */
-function assertOpenClawStateDatabaseOpenAllowed(
-  pathname: string,
-  ownership?: "monitored-read",
-): void {
-  if (ownership === "monitored-read") {
+function assertOpenClawStateDatabaseOpenAllowed(pathname: string, ownership?: "cached-read"): void {
+  if (ownership === "cached-read") {
     assertStateDatabaseReadAllowed(pathname);
   } else {
     assertStateDatabaseAccessAllowed(pathname);

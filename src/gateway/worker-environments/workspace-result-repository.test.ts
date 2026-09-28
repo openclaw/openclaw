@@ -247,6 +247,9 @@ describe("repository workspace result ownership", () => {
         publishAcceptedWorkspace,
       });
     const environments: WorkerDispatchEnvironmentService = {
+      fenceWorkerTurnForRecovery: () => {
+        throw new Error("Repository result fixture does not synthesize startup claims");
+      },
       prepareProjectIntent: async () => {
         throw new Error("unexpected local-project preparation");
       },
