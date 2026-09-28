@@ -105,7 +105,11 @@ async function probePortOnHost(
     await tryListenOnPort({ port, host, exclusive: true, ...(signal ? { signal } : {}) });
     // A successful scoped bind can coexist with a wildcard listener on macOS.
     // Confirm the endpoint before declaring it free, even without lsof or ss.
-    return await probeTcpListener(port, host, signal);
+    const confirmed = await probeTcpListener(port, host, signal);
+    // Connecting to a wildcard reaches that family's loopback, which may be unavailable
+    // (IPv6 disabled on Linux). With no listener answering, the wildcard bind is conclusive.
+    const wildcard = host === "0.0.0.0" || host === "::";
+    return confirmed === "unknown" && wildcard ? "free" : confirmed;
   } catch (err) {
     signal?.throwIfAborted();
     if (isErrno(err) && err.code === "EADDRINUSE") {

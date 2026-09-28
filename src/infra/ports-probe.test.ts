@@ -180,4 +180,37 @@ describe("probePortUsage", () => {
       "127.0.0.2",
     );
   });
+
+  // Linux with IPv6 disabled accepts a dual-stack `::` bind, but its `::1` target
+  // times out on some kernels and fails with EADDRNOTAVAIL on others.
+  it.for([
+    { host: "::", answer: "timeout", expected: "free" },
+    { host: "::", answer: "EADDRNOTAVAIL", expected: "free" },
+    { host: "127.0.0.1", answer: "timeout", expected: "unknown" },
+  ] as const)(
+    "reports $expected when $host binds but its confirming connect gets $answer",
+    async ({ host, answer, expected }, { skip }) => {
+      let port: number;
+      try {
+        port = await tryListenOnPort({ port: 0, host });
+      } catch {
+        skip(`cannot bind ${host}`);
+        return;
+      }
+      const connect = vi.spyOn(net, "connect").mockImplementation(() => {
+        const socket = new net.Socket();
+        if (answer === "EADDRNOTAVAIL") {
+          const error = Object.assign(new Error("connect EADDRNOTAVAIL"), { code: answer });
+          queueMicrotask(() => socket.destroy(error));
+        }
+        return socket;
+      });
+      try {
+        await expect(probePortUsage(port, [host])).resolves.toBe(expected);
+        expect(connect).toHaveBeenCalledOnce();
+      } finally {
+        connect.mockRestore();
+      }
+    },
+  );
 });
