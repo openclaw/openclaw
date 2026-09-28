@@ -63,7 +63,8 @@ export async function acquireDistArtifactOwnership(
           retainOnExit: true,
           lockRoot,
           payload: () => ({ pid: process.pid, startedAt: new Date().toISOString() }),
-          timeoutMs: wait ? LOCK_POLL_MS : 0,
+          // Published updaters call without a signal; retain fs-safe's original wait.
+          timeoutMs: wait ? (signal ? LOCK_POLL_MS : Number.POSITIVE_INFINITY) : 0,
           retry: { minTimeout: LOCK_POLL_MS, maxTimeout: LOCK_POLL_MS, factor: 1 },
           staleRecovery: "fail-closed",
           shouldReclaim: ({ payload }) => {
@@ -98,6 +99,7 @@ export async function acquireDistArtifactOwnership(
       } catch (error) {
         if (
           !wait ||
+          !signal ||
           !error ||
           typeof error !== "object" ||
           !("code" in error) ||

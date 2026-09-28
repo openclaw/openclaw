@@ -147,3 +147,14 @@ it("does not acquire for an already cancelled waiter", async () => {
   );
   expect(acquire).not.toHaveBeenCalled();
 });
+
+it("keeps the published two-argument wait inside one native acquisition", async () => {
+  const acquire = vi.mocked(fileLock.acquireFileLock);
+  const failure = Object.assign(new Error("native timeout"), { code: "file_lock_timeout" });
+  acquire.mockRejectedValue(failure);
+  await expect(withDistArtifactOwnership(createRoot(), vi.fn())).rejects.toMatchObject({
+    cause: failure,
+  });
+  expect(acquire).toHaveBeenCalledOnce();
+  expect(acquire.mock.calls[0]?.[1]?.timeoutMs).toBe(Number.POSITIVE_INFINITY);
+});
