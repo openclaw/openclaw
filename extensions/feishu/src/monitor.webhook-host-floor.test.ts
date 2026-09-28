@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { getActivePluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { acquireTestPortBlock } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { cleanupFeishuMonitorStateForTests } from "./monitor.cleanup.test-helpers.js";
@@ -25,6 +26,7 @@ vi.mock("openclaw/plugin-sdk/webhook-ingress", async (importOriginal) => {
 });
 
 const running: Array<{ abort: AbortController; monitor: Promise<void> }> = [];
+const portClaims: Array<Awaited<ReturnType<typeof acquireTestPortBlock>>> = [];
 beforeEach(() => {
   host.ownsLegacyListeners = false;
 });
@@ -33,6 +35,10 @@ afterEach(async () => {
     entry.abort.abort();
   }
   await Promise.allSettled(running.splice(0).map((entry) => entry.monitor));
+  await using claims = new AsyncDisposableStack();
+  for (const claim of portClaims.splice(0)) {
+    claims.defer(() => claim.release());
+  }
   await cleanupFeishuMonitorStateForTests();
 });
 
@@ -41,7 +47,7 @@ afterAll(() => {
   vi.resetModules();
 });
 
-async function reservePort(port = 0) {
+async function reservePort(port: number) {
   const server = createServer();
   server.listen(port, "127.0.0.1");
   await once(server, "listening");
@@ -58,9 +64,9 @@ async function reservePort(port = 0) {
   };
 }
 
-async function freePort() {
-  const claim = await reservePort();
-  await claim.close();
+async function claimPort() {
+  const claim = await acquireTestPortBlock({ offsets: [0] });
+  portClaims.push(claim);
   return claim.port;
 }
 
@@ -115,7 +121,7 @@ async function start(
 }
 
 it("serves the shipped account endpoint with the existing signature and path checks", async () => {
-  const port = await freePort();
+  const port = await claimPort();
   const entry = await start(port);
   const url = `http://127.0.0.1:${port}${entry.path}`;
   const wrongPath = await postSignedPayload(`${url}/other`, { schema: "2.0", event: {} });
@@ -137,7 +143,7 @@ it("serves the shipped account endpoint with the existing signature and path che
 });
 
 it("stops listener admission before draining an authenticated response and permits rebinding", async () => {
-  const port = await freePort();
+  const port = await claimPort();
   const entered = createDeferred<void>();
   const release = createDeferred<void>();
   const entry = await start(port, {
@@ -176,7 +182,7 @@ it("stops listener admission before draining an authenticated response and permi
 });
 
 it("keeps the shipped per-account bind refusal without disturbing the live account", async () => {
-  const port = await freePort();
+  const port = await claimPort();
   const first = await start(port, { accountId: "first" });
   await expect(start(port, { accountId: "second" })).rejects.toMatchObject({ code: "EADDRINUSE" });
   const response = await postSignedPayload(`http://127.0.0.1:${port}${first.path}`, {
@@ -193,7 +199,7 @@ it("keeps the shipped per-account bind refusal without disturbing the live accou
 it.each(["capable-host", "disabled", "already-aborted"] as const)(
   "does not own a listener for %s",
   async (mode) => {
-    const port = await freePort();
+    const port = await claimPort();
     host.ownsLegacyListeners = mode === "capable-host";
     const abort = new AbortController();
     if (mode === "already-aborted") {
