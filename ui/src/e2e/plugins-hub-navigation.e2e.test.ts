@@ -225,7 +225,7 @@ suite.define(() => {
     const local: PluginsListResult = {
       plugins: ["novita", "zai"].map((id) => {
         const snapshot = metadataSnapshot({
-          enabled: false,
+          enabled: true,
           id,
           name: id === "zai" ? "Z.AI" : "Novita",
           categories: ["models"],
@@ -238,13 +238,13 @@ suite.define(() => {
           clawhubPackage: "@openclaw/" + id,
           origin: "bundled",
           installed: true,
-          enabled: false,
-          state: "disabled" as const,
+          enabled: true,
+          state: "enabled" as const,
           description: "Model inference and video generation.",
         };
         return Object.assign(
           plugin,
-          projectPluginCatalogCategoryFacts(snapshot.byPluginId.get(id)),
+          projectPluginCatalogCategoryFacts(snapshot.byPluginId.get(id), plugin.enabled),
         );
       }),
       diagnostics: [],

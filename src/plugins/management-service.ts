@@ -342,7 +342,7 @@ export const listManagedPlugins = withManagedPluginCache(
         }),
         removable,
       };
-      Object.assign(plugin, projectPluginCatalogCategoryFacts(manifest));
+      Object.assign(plugin, projectPluginCatalogCategoryFacts(manifest, enabled));
       if (record.packageName) {
         plugin.packageName = record.packageName;
       }

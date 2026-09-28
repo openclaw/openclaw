@@ -406,8 +406,8 @@ describe("plugin discovery identity and local join", () => {
         clawhubPackage: "@openclaw/novita",
         origin,
         installed: true,
-        enabled: false,
-        state: "disabled" as const,
+        enabled: true,
+        state: "enabled" as const,
         categories: ["models"],
         capabilityCategories: ["media"],
       };
@@ -430,7 +430,7 @@ describe("plugin discovery identity and local join", () => {
       const first = joinClawHubPluginCatalog({ ...options, remote: [] });
       expect(first).toHaveLength(1);
       expect(first[0]?.catalog.categories).toEqual(["models", "media"]);
-      expect(first[0]?.local).toMatchObject({ enabled: false, action: "manage" });
+      expect(first[0]?.local).toMatchObject({ enabled: true, action: "manage" });
       const published = {
         ...remote,
         packageName: provider.packageName,
@@ -445,6 +445,30 @@ describe("plugin discovery identity and local join", () => {
       expect(joinClawHubPluginCatalog({ ...options, remote: [published] })).toHaveLength(1);
       expect(joinClawHubPluginCatalog({ ...options, category: "voice", remote: [] })).toEqual([]);
       expect(joinClawHubPluginCatalog({ ...options, query: "novita", remote: [] })).toHaveLength(1);
+      const disabled = {
+        ...provider,
+        enabled: false,
+        state: "disabled" as const,
+        capabilityCategories: undefined,
+      };
+      const disabledOptions = { ...options, local: { ...local, plugins: [disabled] } };
+      expect(joinClawHubPluginCatalog({ ...disabledOptions, remote: [] })).toEqual([]);
+      if (origin === "bundled") {
+        const disabledModelsLocal = joinClawHubPluginCatalog({
+          ...disabledOptions,
+          category: "models",
+          remote: [],
+        });
+        expect(disabledModelsLocal[0]?.catalog.categories).toEqual(["models"]);
+      }
+      const disabledModels = joinClawHubPluginCatalog({
+        ...disabledOptions,
+        category: "models",
+        remote: [published],
+        cursor: "next",
+      });
+      expect(disabledModels[0]?.catalog.categories).toEqual(["models"]);
+      expect(disabledModels[0]?.local).toMatchObject({ enabled: false, action: "manage" });
       expect(provider.categories).toEqual(["models"]);
       expect(published.categories).toEqual(["models"]);
       const legacy = { ...provider, categories: ["models", "tools", "runtime"] };
