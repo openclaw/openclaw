@@ -119,7 +119,15 @@ export async function persistSubagentSessionTiming(
   const agentId = resolveAgentIdFromSessionKey(childSessionKey);
   const storePath =
     options?.session?.storePath ?? resolveSessionStorePathCore(cfg.session?.store, { agentId });
+  const refused = new Error("Subagent timing owner changed before commit");
+  const assertGenerationCurrent = () => {
+    if (options?.isCurrentGeneration?.() === false) {
+      throw refused;
+    }
+    options?.assertCommitAllowed?.();
+  };
   const persist = async (selected: SessionEntry | undefined, assertSessionCurrent: () => void) => {
+    assertGenerationCurrent();
     assertSessionCurrent();
     if (!selected) {
       return;
@@ -127,8 +135,8 @@ export async function persistSubagentSessionTiming(
     const sessionId = selected.sessionId;
     const lifecycleRevision = selected.lifecycleRevision;
     const assertCommitAllowed = () => {
+      assertGenerationCurrent();
       assertSessionCurrent();
-      options?.assertCommitAllowed?.();
     };
     const startedAt = getSubagentSessionStartedAt(entry);
     const endedAt =
@@ -205,7 +213,6 @@ export async function persistSubagentSessionTiming(
       }
       return next;
     };
-    const refused = new Error("Subagent timing owner changed before commit");
     const persisted = await applySessionEntryExactReplacements({
       storePath,
       agentId,
@@ -213,12 +220,7 @@ export async function persistSubagentSessionTiming(
       activeSessionKey: childSessionKey,
       requireWriteSuccess: true,
       skipMaintenance: true,
-      assertCommitAllowed: () => {
-        assertCommitAllowed();
-        if (options?.isCurrentGeneration?.() === false) {
-          throw refused;
-        }
-      },
+      assertCommitAllowed,
       update(entries) {
         const current = entries.find(({ sessionKey }) => sessionKey === childSessionKey)?.entry;
         const next = current ? update(current) : null;
@@ -227,11 +229,6 @@ export async function persistSubagentSessionTiming(
           replacements: next ? [{ sessionKey: childSessionKey, entry: next }] : [],
         };
       },
-    }).catch((error: unknown) => {
-      if (error === refused) {
-        return null;
-      }
-      throw error;
     });
     if (persisted && lastRunError) {
       await recordGatewaySessionRunFailure({
@@ -248,20 +245,27 @@ export async function persistSubagentSessionTiming(
       });
     }
   };
-  if (options?.session) {
-    await persist(options.session.entry, options.session.assertCurrent);
-    return;
+  try {
+    if (options?.session) {
+      await persist(options.session.entry, options.session.assertCurrent);
+      return;
+    }
+    await withSessionEntryReadOnlyInWorker(
+      { storePath, sessionKey: childSessionKey, agentId },
+      assertGenerationCurrent,
+      async (read, owner) => {
+        if (!read.ok) {
+          throw read.error;
+        }
+        await persist(read.value, owner.assertCurrent);
+      },
+    );
+  } catch (error) {
+    // A duplicate completion can retire this generation while its reader drains.
+    if (error !== refused) {
+      throw error;
+    }
   }
-  await withSessionEntryReadOnlyInWorker(
-    { storePath, sessionKey: childSessionKey, agentId },
-    () => options?.assertCommitAllowed?.(),
-    async (read, owner) => {
-      if (!read.ok) {
-        throw read.error;
-      }
-      await persist(read.value, owner.assertCurrent);
-    },
-  );
 }
 
 /** Best-effort async removal for a subagent attachment directory. */
