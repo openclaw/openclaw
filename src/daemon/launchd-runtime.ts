@@ -203,6 +203,10 @@ export async function readCorrespondingLaunchAgentCommand(
   ) {
     delete loadedEnvironment.XPC_SERVICE_NAME;
   }
+  // launchd adds logging metadata even when the plist declares no environment.
+  if (!Object.hasOwn(environment, "OSLogRateLimit")) {
+    delete loadedEnvironment.OSLogRateLimit;
+  }
   if (
     !isDeepStrictEqual(args, observation.programArguments) ||
     (plist?.WorkingDirectory || undefined) !== observation.workingDirectory ||

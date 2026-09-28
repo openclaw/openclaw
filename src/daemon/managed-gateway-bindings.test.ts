@@ -25,6 +25,9 @@ it.each([
   { loaded: "global", target: "global", edited: false, refused: true },
   { loaded: "local", target: "local", edited: true, refused: true },
   { loaded: "local", target: "local", edited: false, refused: false, selected: "generated" },
+  { loaded: "local", target: "local", edited: false, refused: false, selected: "native logging" },
+  { loaded: "local", target: "local", edited: false, refused: false, selected: "authored logging" },
+  { loaded: "local", target: "local", edited: false, refused: true, selected: "changed logging" },
   { loaded: "local", target: "local", edited: false, refused: true, selected: "extra environment" },
   {
     loaded: "local",
@@ -86,6 +89,10 @@ it.each([
       };
       const selectedScenario = "selected" in scenario ? scenario.selected : undefined;
       const wrapped = selectedScenario && selectedScenario !== "explicit Program";
+      const authoredLogging =
+        selectedScenario === "authored logging" || selectedScenario === "changed logging"
+          ? { OSLogRateLimit: "synthetic-authored-value" }
+          : {};
       const rawArgv = (root: string) =>
         wrapped
           ? [
@@ -112,7 +119,7 @@ it.each([
           programArguments: rawArgv(
             scenario.edited && kind === "local" ? locations.global.root : location.root,
           ),
-          environment: wrapped ? undefined : environment,
+          environment: wrapped ? authoredLogging : environment,
           stdoutPath: path.join(directory, "stdout.log"),
           stderrPath: path.join(directory, "stderr.log"),
         });
@@ -176,6 +183,10 @@ it.each([
                 ...(wrapped ? {} : environment),
                 XPC_SERVICE_NAME:
                   selectedScenario === "wrong native marker" ? "another.job" : label,
+                ...authoredLogging,
+                ...(selectedScenario === "native logging" || selectedScenario === "changed logging"
+                  ? { OSLogRateLimit: "synthetic-native-value" }
+                  : {}),
                 ...(selectedScenario === "extra environment"
                   ? { NODE_OPTIONS: "--inspect=0" }
                   : {}),
