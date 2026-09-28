@@ -41,3 +41,9 @@ Import `admitQaRepositoryCheckpointCommand` or pass the same JSON object on stdi
 to `node --import ./scripts/tsx.mjs scripts/qa/repository-checkpoint-admission.ts`.
 Freeze the adapter with the campaign tooling; preserve the enclosing sandbox,
 environment sanitization, current-owner checks, and decision evidence.
+
+### Script checkout and artifact roots
+
+The maintained test-file runner expands `${repoRoot}` to the selected checkout
+and `${outputDir}` to the scenario's artifact directory. Script scenarios can
+pass these as distinct arguments without embedding a campaign path or SHA.
