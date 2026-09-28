@@ -1,5 +1,6 @@
 .agent-chat__composer-shell {
   --chat-queue-divider: color-mix(in srgb, var(--text-strong) 6%, transparent);
+  --chat-stack-header-height: 40px;
   --chat-stack-icon-size: 14px;
   --chat-stack-leading-inset: 13px;
   --chat-stack-trailing-control-size: 24px;
@@ -25,6 +26,12 @@
 }
 
 .chat-queue__scroll {
+  --chat-queue-fade-in:
+    transparent 2px, rgb(0 0 0 / 12%) 6px, rgb(0 0 0 / 50%) 12px, rgb(0 0 0 / 88%) 18px, black 24px;
+  --chat-queue-fade-out:
+    black calc(100% - 24px), rgb(0 0 0 / 88%) calc(100% - 18px), rgb(0 0 0 / 50%) calc(100% - 12px),
+    rgb(0 0 0 / 12%) calc(100% - 6px), transparent calc(100% - 2px);
+
   box-sizing: border-box;
   min-width: 0;
   overflow: hidden;
@@ -55,26 +62,15 @@
 }
 
 .chat-queue__scroll[data-scrollable="true"][data-at-start="true"][data-at-end="false"] {
-  mask-image: linear-gradient(
-    to bottom,
-    rgb(0 0 0) 0,
-    rgb(0 0 0) calc(100% - 22px),
-    transparent 100%
-  );
+  mask-image: linear-gradient(to bottom, var(--chat-queue-fade-out));
 }
 
 .chat-queue__scroll[data-scrollable="true"][data-at-start="false"][data-at-end="true"] {
-  mask-image: linear-gradient(to bottom, transparent 0, rgb(0 0 0) 16px, rgb(0 0 0) 100%);
+  mask-image: linear-gradient(to bottom, var(--chat-queue-fade-in));
 }
 
 .chat-queue__scroll[data-scrollable="true"][data-at-start="false"][data-at-end="false"] {
-  mask-image: linear-gradient(
-    to bottom,
-    transparent 0,
-    rgb(0 0 0) 16px,
-    rgb(0 0 0) calc(100% - 22px),
-    transparent 100%
-  );
+  mask-image: linear-gradient(to bottom, var(--chat-queue-fade-in), var(--chat-queue-fade-out));
 }
 
 .chat-queue__scroll::-webkit-scrollbar {

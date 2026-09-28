@@ -70,9 +70,13 @@ function connect(
   const socket = Object.assign(new EventEmitter(), {
     readyState: 1,
     bufferedAmount: 0,
-    send: (wire: string, callback?: () => void) => {
-      frames.push(JSON.parse(wire));
-      completeWrite(callback);
+    send: (
+      wire: string | Buffer,
+      options?: { binary: false } | (() => void),
+      callback?: () => void,
+    ) => {
+      frames.push(JSON.parse(wire.toString()));
+      completeWrite(typeof options === "function" ? options : callback);
     },
     close: vi.fn(),
     terminate: vi.fn(),
@@ -298,8 +302,13 @@ it.each(["native", "dispatch", "abort", "retry", "clearRun", "clear"] as const)(
     const socket = Object.assign(new EventEmitter(), {
       readyState: 1,
       bufferedAmount: 0,
-      send: (wire: string, callback?: () => void) => {
-        frames.push(JSON.parse(wire));
+      send: (
+        wire: string | Buffer,
+        options?: { binary: false } | (() => void),
+        onSent?: () => void,
+      ) => {
+        const callback = typeof options === "function" ? options : onSent;
+        frames.push(JSON.parse(wire.toString()));
         if (callback) {
           callbacks.push(callback);
         }

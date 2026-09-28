@@ -1,12 +1,16 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
+import { listAvailableExtensionIds } from "../../scripts/lib/changed-extensions.mts";
 import {
-  createChangedExtensionFallbackShards,
   createChangedNodeTestShards,
   createPrExemptExtensionTestShards,
   hasControlUiPerformanceAffectingChange,
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
+import {
+  createChangedExtensionConfigShards,
+  packChangedExtensionConfigShards,
+} from "../../scripts/lib/ci-extension-test-shards.mts";
 import {
   createNodeTestShardBundles,
   createUiTestShardGroups,
@@ -20,6 +24,7 @@ import {
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
 import { buildVitestRunPlans } from "../../scripts/test-projects.test-support.mts";
 import * as testProjects from "../../scripts/test-projects.test-support.mts";
+import { intersectIncludePatterns } from "../vitest/vitest.include-patterns.js";
 
 // Real-checkout compositions share the planner's process-scoped import-graph cache.
 // Small synthetic graphs and canonical process selection remain in the unit file.
@@ -44,15 +49,29 @@ it("retains every PR-exempt file in hourly and release plans with its canonical 
     includeReleaseOnlyPluginShards: false,
     includeReleaseOnlyRuntimeTests: false,
   };
-  const pr = createNodeTestShardBundles({
-    ...common,
-    compactMode: "pull-request",
-    includePrExemptRuntimeTests: false,
-    includeReleaseOnlyToolingShards: true,
-  });
-  const extensionPr = createChangedExtensionFallbackShards(["tsconfig.json"], {
-    includePrExemptRuntimeTests: false,
-  });
+  // The census needs the full inventory, without resolving a synthetic changed subject's
+  // import graph. Changed-subject and broad-fallback opt-in are exercised below.
+  const extensionRoots = listAvailableExtensionIds().map((id) => `extensions/${id}`);
+  const createPrGroups = (changedPaths: string[]) => [
+    ...createNodeTestShardBundles({
+      ...common,
+      compactMode: "pull-request",
+      changedPaths,
+      includePrExemptRuntimeTests: false,
+      includeReleaseOnlyToolingShards: true,
+    }).flatMap((job) => job.groups),
+    ...fallbackGroups(
+      packChangedExtensionConfigShards(
+        createChangedExtensionConfigShards(extensionRoots, {
+          changedPaths,
+          includePrExemptRuntimeTests: false,
+          fullConfigInventory: true,
+        }),
+      ),
+    ),
+  ];
+  const prGroups = createPrGroups([]);
+  const changedPrGroups = createPrGroups(prExemptFiles);
   const retainedExtensions = createPrExemptExtensionTestShards();
   const hourly = createNodeTestShardBundles({
     ...common,
@@ -72,25 +91,46 @@ it("retains every PR-exempt file in hourly and release plans with its canonical 
   expect(
     [...hourly, ...retainedExtensions].filter((job) => !job.requiresDist).length,
   ).toBeLessThanOrEqual(70);
-  const prGroups = [...pr.flatMap((job) => job.groups), ...fallbackGroups(extensionPr)];
   const hourlyGroups = [
     ...hourly.flatMap((job) => job.groups),
     ...fallbackGroups(retainedExtensions),
   ];
   const releaseGroups = fallbackGroups([...release, ...retainedExtensions]);
-  for (const file of prExemptFiles) {
-    const rawConfig = expectDefined(buildVitestRunPlans([file])[0]?.config, file);
-    const config = resolveCanonicalNodeTestConfig(file, rawConfig) ?? rawConfig;
-    const owners = (groups: typeof prGroups) =>
-      groups.filter(
-        (group) =>
-          group.configs.includes(config) &&
-          (!group.includePatterns ||
-            group.includePatterns.some((pattern) => path.matchesGlob(file, pattern))),
+  const configsByFile = new Map(
+    prExemptFiles.map((file) => {
+      const rawConfig = expectDefined(buildVitestRunPlans([file])[0]?.config, file);
+      return [file, resolveCanonicalNodeTestConfig(file, rawConfig) ?? rawConfig];
+    }),
+  );
+  const indexOwners = (groups: typeof prGroups) => {
+    const owners = new Map<string, typeof groups>();
+    for (const group of groups) {
+      const candidates = prExemptFiles.filter((file) =>
+        group.configs.includes(expectDefined(configsByFile.get(file), file)),
       );
-    expect(owners(prGroups), file).toHaveLength(0);
-    expect(owners(hourlyGroups), file).toHaveLength(1);
-    expect(owners(releaseGroups), file).toHaveLength(1);
+      const files = group.includePatterns
+        ? expectDefined(
+            intersectIncludePatterns(group.includePatterns, candidates, path.matchesGlob),
+            group.shard_name,
+          )
+        : candidates;
+      for (const file of files) {
+        const entries = owners.get(file) ?? [];
+        entries.push(group);
+        owners.set(file, entries);
+      }
+    }
+    return owners;
+  };
+  const prOwners = indexOwners(prGroups);
+  const changedPrOwners = indexOwners(changedPrGroups);
+  const hourlyOwners = indexOwners(hourlyGroups);
+  const releaseOwners = indexOwners(releaseGroups);
+  for (const file of prExemptFiles) {
+    expect(prOwners.get(file) ?? [], file).toHaveLength(0);
+    expect(changedPrOwners.get(file)?.length ?? 0, file).toBeGreaterThan(0);
+    expect(hourlyOwners.get(file) ?? [], file).toHaveLength(1);
+    expect(releaseOwners.get(file) ?? [], file).toHaveLength(1);
     if (file.startsWith("ui/")) {
       expect(uiPr?.includePatterns, file).not.toContain(file);
       expect(uiHourly?.includePatterns, file).toContain(file);
@@ -190,6 +230,8 @@ it("keeps UI fallback with its complete canonical owners beside precise core cha
     changedPaths: paths,
     compactMode: "pull-request",
     runnerBackend: "hybrid",
+    includeReleaseOnlyPluginShards: false,
+    includeReleaseOnlyToolingShards: true,
     includeReleaseOnlyRuntimeTests: false,
   });
   const uiOwners = full.filter((shard) =>
@@ -278,6 +320,8 @@ it("keeps UI fallback with its complete canonical owners beside precise core cha
       compactMode: "pull-request",
       runnerBackend: "hybrid",
       includeReleaseOnlyPluginShards: false,
+      includeReleaseOnlyToolingShards: true,
+      includeProofTests: false,
       includeReleaseOnlyRuntimeTests: true,
     });
   } finally {

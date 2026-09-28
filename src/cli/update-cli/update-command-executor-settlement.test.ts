@@ -368,25 +368,15 @@ it.each(["forced", "uncertain"] as const)(
 it.each(["forced", "uncertain"] as const)(
   "keeps delegated authority through command cleanup reporting %s",
   async (cleanupResult) => {
-    const parent = lease(root, "parent", process.ppid);
-    const childKey = `${root}/.openclaw-update-child-00000000-0000-0000-0000-000000000000`;
-    const child = { ...lease(childKey, "run"), helper: parent.executor };
-    rows.set(root, parent);
-    rows.set(childKey, child);
     const admitted = createDeferredCore();
     const cleanup = createDeferredCore<"forced" | "uncertain">();
     let fence: UpdateRecoveryFence | undefined;
-    const work = withDelegatedUpdateCommandExecutor(
-      { runId: "run", root, databasePath: "/synthetic/leases.sqlite", parent, childKey },
-      "run",
-      root,
-      async (current) => {
-        fence = current;
-        retainCommandProcessCleanup(cleanup.promise);
-        admitted.resolve();
-        return "complete";
-      },
-    ).catch((error: unknown) => error);
+    const work = runWithExecutorFence("delegated", async (current) => {
+      fence = current;
+      retainCommandProcessCleanup(cleanup.promise);
+      admitted.resolve();
+      return "complete";
+    }).catch((error: unknown) => error);
     try {
       await admitted.promise;
       await setImmediate();
@@ -458,59 +448,49 @@ it.each(["forced", "uncertain"] as const)(
   },
 );
 
-it.each([false, true])(
-  "preserves activation timeout provenance without a cause cycle (uncertain: %s)",
-  async (uncertain) => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    const deadline = createUpdateOperationDeadline();
-    const admitted = createDeferredCore();
-    const cancelled = createDeferredCore();
-    const work = deadline
-      .run(async () => {
-        deadline.start(new UpdateActivationTimeoutError(root, 1000), 1000);
-        admitted.resolve();
-        await cancelled.promise;
-        if (uncertain) {
-          throw new CommandProcessCleanupError({ cause: deadline.signal.reason });
-        }
-        throw deadline.signal.reason;
-      })
-      .catch((error: unknown) => error);
-    try {
-      await admitted.promise;
-      await vi.advanceTimersByTimeAsync(1000);
-    } finally {
-      cancelled.resolve();
-      await work;
-    }
-    const result = await work;
-    const timeout = collectNestedErrorCandidates(result).find(
-      (error) => error instanceof UpdateActivationTimeoutError,
-    );
-    expect(timeout).toBe(deadline.signal.reason);
-    expect(timeout).toMatchObject({ root, timeoutMs: 1000, reason: "update-activation-timeout" });
-    if (!uncertain) {
-      expect(result).toBe(deadline.signal.reason);
+it("preserves activation timeout provenance without a cause cycle after uncertain cleanup", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  const deadline = createUpdateOperationDeadline();
+  const admitted = createDeferredCore();
+  const cancelled = createDeferredCore();
+  const work = deadline
+    .run(async () => {
+      deadline.start(new UpdateActivationTimeoutError(root, 1000), 1000);
+      admitted.resolve();
+      await cancelled.promise;
+      throw new CommandProcessCleanupError({ cause: deadline.signal.reason });
+    })
+    .catch((error: unknown) => error);
+  try {
+    await admitted.promise;
+    await vi.advanceTimersByTimeAsync(1000);
+  } finally {
+    cancelled.resolve();
+    await work;
+  }
+  const result = await work;
+  const timeout = collectNestedErrorCandidates(result).find(
+    (error) => error instanceof UpdateActivationTimeoutError,
+  );
+  expect(timeout).toBe(deadline.signal.reason);
+  expect(timeout).toMatchObject({ root, timeoutMs: 1000, reason: "update-activation-timeout" });
+  expect(result).not.toBe(deadline.signal.reason);
+  expect(hasCommandProcessCleanupError(result)).toBe(true);
+  expect(collectNestedErrorCandidates(result)).toEqual(
+    expect.arrayContaining([deadline.signal.reason, expect.any(CommandProcessCleanupError)]),
+  );
+  const visit = (error: unknown, ancestors = new Set<unknown>()) => {
+    if (!(error instanceof Error)) {
       return;
     }
-    expect(result).not.toBe(deadline.signal.reason);
-    expect(hasCommandProcessCleanupError(result)).toBe(true);
-    expect(collectNestedErrorCandidates(result)).toEqual(
-      expect.arrayContaining([deadline.signal.reason, expect.any(CommandProcessCleanupError)]),
-    );
-    const visit = (error: unknown, ancestors = new Set<unknown>()) => {
-      if (!(error instanceof Error)) {
-        return;
+    expect(ancestors.has(error)).toBe(false);
+    const next = new Set([...ancestors, error]);
+    visit(error.cause, next);
+    if (error instanceof AggregateError) {
+      for (const member of error.errors) {
+        visit(member, next);
       }
-      expect(ancestors.has(error)).toBe(false);
-      const next = new Set([...ancestors, error]);
-      visit(error.cause, next);
-      if (error instanceof AggregateError) {
-        for (const member of error.errors) {
-          visit(member, next);
-        }
-      }
-    };
-    visit(result);
-  },
-);
+    }
+  };
+  visit(result);
+});

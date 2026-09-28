@@ -230,27 +230,31 @@ export function bindSqliteWorkerBackend(
     if (command.type === "session.transcript.appendMessage") {
       return runOpenClawAgentWriteTransaction<
         SessionMetadataWorkerOperations["session.transcript.appendMessage"]["output"]
-      >((database) => {
-        if (database.db !== context.database) {
-          throw new Error("Session message lost its borrowed canonical connection");
-        }
-        context.admit("transaction");
-        let projectionNeedsReconcile = false;
-        const snapshot = appendTranscriptMessageSnapshotSync(
-          scope,
-          { message: command.input.message, cwd: command.input.cwd },
-          undefined,
-          {
-            messageAlreadyRedacted: true,
-            scheduleProjectionReconcile: false,
-            onProjectionReconcileNeeded: () => {
-              projectionNeedsReconcile = true;
+      >(
+        (database) => {
+          if (database.db !== context.database) {
+            throw new Error("Session message lost its borrowed canonical connection");
+          }
+          context.admit("transaction");
+          let projectionNeedsReconcile = false;
+          const snapshot = appendTranscriptMessageSnapshotSync(
+            scope,
+            { message: command.input.message, cwd: command.input.cwd },
+            undefined,
+            {
+              messageAlreadyRedacted: true,
+              scheduleProjectionReconcile: false,
+              onProjectionReconcileNeeded: () => {
+                projectionNeedsReconcile = true;
+              },
             },
-          },
-        );
-        context.admit("commit");
-        return { ok: true, value: { snapshot, projectionNeedsReconcile } };
-      }, options);
+          );
+          context.admit("commit");
+          return { ok: true, value: { snapshot, projectionNeedsReconcile } };
+        },
+        options,
+        { operationLabel: command.type },
+      );
     }
     if (command.type === "session.metadata.append" && command.input.event.type === "message") {
       const { event, message } = command.input;
@@ -287,50 +291,54 @@ export function bindSqliteWorkerBackend(
       SessionMetadataWorkerOperations[
         | "session.metadata.initialize"
         | "session.metadata.append"]["output"]
-    >((database) => {
-      if (database.db !== context.database) {
-        throw new Error("Session metadata lost its borrowed canonical connection");
-      }
-      context.admit("transaction");
-      if (command.type === "session.metadata.initialize") {
-        const result = ensureSessionEntryInTransaction(
-          database,
-          resolved,
-          scope,
-          command.input.entry,
-          command.input.initialWriterRunId,
-        );
+    >(
+      (database) => {
+        if (database.db !== context.database) {
+          throw new Error("Session metadata lost its borrowed canonical connection");
+        }
+        context.admit("transaction");
+        if (command.type === "session.metadata.initialize") {
+          const result = ensureSessionEntryInTransaction(
+            database,
+            resolved,
+            scope,
+            command.input.entry,
+            command.input.initialWriterRunId,
+          );
+          context.admit("commit");
+          return { ok: true, value: result };
+        }
+        let projectionNeedsReconcile = false;
+        const projection = {
+          scheduleProjectionReconcile: false,
+          onProjectionReconcileNeeded: () => {
+            projectionNeedsReconcile = true;
+          },
+        } as const;
+        const { event, message } = command.input;
+        const snapshot =
+          event.type === "message" && message
+            ? appendTranscriptMessageSnapshotSync(
+                scope,
+                {
+                  ...command.input.options,
+                  message: event.message,
+                  eventId: event.id,
+                  parentId: event.parentId,
+                  now: Date.parse(event.timestamp),
+                  cwd: message.cwd,
+                  idempotencyLookup: message.idempotencyLookup,
+                },
+                message.prepared,
+                projection,
+              )
+            : appendTranscriptEventSnapshotSync(scope, event, command.input.options, projection);
         context.admit("commit");
-        return { ok: true, value: result };
-      }
-      let projectionNeedsReconcile = false;
-      const projection = {
-        scheduleProjectionReconcile: false,
-        onProjectionReconcileNeeded: () => {
-          projectionNeedsReconcile = true;
-        },
-      } as const;
-      const { event, message } = command.input;
-      const snapshot =
-        event.type === "message" && message
-          ? appendTranscriptMessageSnapshotSync(
-              scope,
-              {
-                ...command.input.options,
-                message: event.message,
-                eventId: event.id,
-                parentId: event.parentId,
-                now: Date.parse(event.timestamp),
-                cwd: message.cwd,
-                idempotencyLookup: message.idempotencyLookup,
-              },
-              message.prepared,
-              projection,
-            )
-          : appendTranscriptEventSnapshotSync(scope, event, command.input.options, projection);
-      context.admit("commit");
-      return { ok: true, value: { snapshot, projectionNeedsReconcile } };
-    }, options);
+        return { ok: true, value: { snapshot, projectionNeedsReconcile } };
+      },
+      options,
+      { operationLabel: command.type },
+    );
     if (
       command.type === "session.metadata.append" &&
       command.input.event.type !== "session" &&

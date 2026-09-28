@@ -1,6 +1,3 @@
-/**
- * Waits for completion-required async tasks before finalizing an attempt.
- */
 import { createAbortError as createNamedAbortError } from "../../../infra/abort-signal.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { toErrorObject } from "../../../infra/errors.js";
@@ -20,7 +17,6 @@ export type AsyncStartedToolMeta = {
   asyncTaskId?: string;
 };
 
-/** Summary of completion-required async task waits performed before a cron run can finish. */
 export type CompletionRequiredAsyncTaskWaitResult = {
   waitedRunIds: string[];
   timedOutRunIds: string[];
@@ -40,7 +36,7 @@ function resolveAsyncTaskPollIntervalMs(): number {
 
 function createAbortError(signal: AbortSignal): Error {
   return createNamedAbortError("aborted", {
-    cause: "reason" in signal ? (signal as { reason?: unknown }).reason : undefined,
+    cause: signal.reason,
   });
 }
 
@@ -79,6 +75,13 @@ async function sleepWithAbort(
   });
 }
 
+function isPendingCompletionTask(task: MediaGenerationOperation): boolean {
+  return (
+    COMPLETION_REQUIRED_TASK_KINDS.has(task.taskKind) &&
+    !isTerminalMediaGenerationStatus(task.status)
+  );
+}
+
 function collectAsyncTaskRunIds(
   toolMetas: readonly AsyncStartedToolMeta[],
   sessionKey: string | undefined,
@@ -104,10 +107,7 @@ function collectAsyncTaskRunIds(
   // Registry lookup catches completion-required tasks started before their
   // tool metadata reached the current attempt result.
   for (const task of listMediaGenerationOperations(normalizedSessionKey)) {
-    if (!COMPLETION_REQUIRED_TASK_KINDS.has(task.taskKind ?? "")) {
-      continue;
-    }
-    if (isTerminalMediaGenerationStatus(task.status)) {
+    if (!isPendingCompletionTask(task)) {
       continue;
     }
     addRunId(task.runId);
@@ -132,7 +132,6 @@ function findTerminalTasks(runIds: readonly string[]): {
   return { pendingRunIds, terminalTasks };
 }
 
-/** Returns whether a cron run has non-terminal generated-media tasks that must settle first. */
 export function requiresCompletionRequiredAsyncTaskWait(params: {
   sessionKey: string | undefined;
   toolMetas: readonly AsyncStartedToolMeta[];
@@ -151,14 +150,10 @@ export function requiresCompletionRequiredAsyncTaskWait(params: {
     return true;
   }
   return listMediaGenerationOperations(sessionKey).some(
-    (task) =>
-      COMPLETION_REQUIRED_TASK_KINDS.has(task.taskKind ?? "") &&
-      !isTerminalMediaGenerationStatus(task.status) &&
-      Boolean(task.runId?.trim()),
+    (task) => isPendingCompletionTask(task) && Boolean(task.runId?.trim()),
   );
 }
 
-/** Returns whether the current attempt should synchronously wait for media tasks. */
 export function shouldWaitForCompletionRequiredAsyncTasks(params: {
   sessionKey: string | undefined;
   toolMetas: readonly AsyncStartedToolMeta[];
@@ -177,12 +172,6 @@ export function shouldWaitForCompletionRequiredAsyncTasks(params: {
   });
 }
 
-/**
- * Polls completion-required async tasks until they reach terminal state, time
- * out at the run deadline, or abort. Newly discovered task run ids are folded
- * into later poll rounds so task metadata and registry state can arrive in any
- * order.
- */
 export async function waitForCompletionRequiredAsyncTasks(params: {
   getToolMetas: () => readonly AsyncStartedToolMeta[];
   sessionKey?: string;

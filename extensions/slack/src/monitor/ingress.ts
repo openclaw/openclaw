@@ -26,6 +26,10 @@ const SLACK_INGRESS_POLL_INTERVAL_MS = 1_000;
 const SLACK_BOLT_AUTHORIZATION_ERROR = "slack_bolt_authorization_error";
 
 const SLACK_INGRESS_LIFECYCLE_CONTEXT_KEY = "openclawIngressLifecycle";
+// Socket/HTTP receivers authenticate before admission; the durable kind preserves
+// that provenance across restarts, independently of the current configured mode.
+const SLACK_NATIVE_INGRESS_CONTEXT_KEY = "openclawSlackNativeIngress";
+const nativeIngress = Symbol("slack-native-ingress");
 
 type SlackIngressPayload = SlackIngressBody & { version: number };
 
@@ -141,7 +145,11 @@ function decodeSlackIngressPayload(
     }
     return { version: payload.version, body: payload };
   }
-  if (!asOptionalRecord(payload.body) || resolveSlackEventId(payload.body) !== eventId) {
+  if (
+    payload.kind !== "events-api" ||
+    !asOptionalRecord(payload.body) ||
+    resolveSlackEventId(payload.body) !== eventId
+  ) {
     throw new SlackIngressPayloadError(`Slack ingress payload ${eventId} was invalid.`);
   }
   return { version: payload.version, body: payload };
@@ -200,6 +208,12 @@ export function resolveSlackIngressTurnLifecycle(
   return typeof lifecycle.onAdopted === "function" && lifecycle.abortSignal instanceof AbortSignal
     ? (lifecycle as SlackIngressTurnLifecycle)
     : null;
+}
+
+export function resolveSlackSenderAuthentication(context: unknown): "verified" | "asserted" {
+  return asOptionalRecord(context)?.[SLACK_NATIVE_INGRESS_CONTEXT_KEY] === nativeIngress
+    ? "verified"
+    : "asserted";
 }
 
 export function createSlackDurableIngress(
@@ -390,6 +404,7 @@ export function createSlackDurableIngress(
             ...(raw.retryReason === undefined ? {} : { retryReason: raw.retryReason }),
             customProperties: {
               [SLACK_INGRESS_LIFECYCLE_CONTEXT_KEY]: routedLifecycle,
+              [SLACK_NATIVE_INGRESS_CONTEXT_KEY]: nativeIngress,
             },
           });
         }
@@ -431,7 +446,13 @@ export function createSlackDurableIngress(
       if (!app) {
         throw new Error("Slack ingress receiver is not attached to a Bolt app.");
       }
-      await app.processEvent(event);
+      await app.processEvent({
+        ...event,
+        customProperties: {
+          ...event.customProperties,
+          [SLACK_NATIVE_INGRESS_CONTEXT_KEY]: nativeIngress,
+        },
+      });
       return;
     }
     await monitor.admit({

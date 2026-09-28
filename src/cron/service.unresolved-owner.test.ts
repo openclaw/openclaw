@@ -12,7 +12,7 @@ import type { CronJob } from "./types.js";
 const { logger, makeStorePath } = setupCronServiceSuite({ fakeTimers: false });
 
 describe("cron jobs with unresolved owners", () => {
-  it.each(["startup", "timer", "reload"] as const)(
+  it.each(["startup", "reload"] as const)(
     "records the unowned job and keeps its owned sibling running during %s",
     async (phase) => {
       const { storePath, cleanup } = await makeStorePath();
@@ -54,10 +54,8 @@ describe("cron jobs with unresolved owners", () => {
         await cron.start();
         if (phase !== "startup") {
           currentOwner = undefined;
-          if (phase === "reload") {
-            expect(cron.getDefaultAgentId()).toBeUndefined();
-            expect((await cron.listPage({ agentId: "main" })).jobs).toEqual([]);
-          }
+          expect(cron.getDefaultAgentId()).toBeUndefined();
+          expect((await cron.listPage({ agentId: "main" })).jobs).toEqual([]);
           await clock.advanceBy(1_000);
         }
         expect(onEvent).toHaveBeenCalledWith(

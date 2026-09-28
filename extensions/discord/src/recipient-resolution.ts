@@ -4,7 +4,7 @@ import { resolveDiscordAccount } from "./accounts.js";
 import { parseAndResolveDiscordTarget } from "./target-resolver.js";
 import type { DiscordTargetParseOptions } from "./targets.js";
 
-type DiscordRecipient =
+export type DiscordRecipient =
   | {
       kind: "user";
       id: string;

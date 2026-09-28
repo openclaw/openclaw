@@ -504,6 +504,9 @@ describe("chat pane typing presence", () => {
     expect(container.querySelector(".agent-chat__typing-summary")?.textContent).toBe(
       "Several people are typing…",
     );
+    expect(container.querySelector("[role=status]")?.textContent).toBe(
+      "Several people are typing…",
+    );
     const stable = pane.typingActorViews();
     const requestUpdate = vi.spyOn(pane, "requestUpdate");
     for (let index = 0; index < 100; index += 1) {

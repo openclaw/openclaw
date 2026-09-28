@@ -3811,17 +3811,20 @@ public struct ChatAbortParams: Codable, Sendable {
     public let agentid: String?
     public let runid: String?
     public let preservesideruns: Bool?
+    public let discardpendinginput: Bool?
 
     public init(
         sessionkey: String,
         agentid: String? = nil,
         runid: String? = nil,
-        preservesideruns: Bool? = nil)
+        preservesideruns: Bool? = nil,
+        discardpendinginput: Bool? = nil)
     {
         self.sessionkey = sessionkey
         self.agentid = agentid
         self.runid = runid
         self.preservesideruns = preservesideruns
+        self.discardpendinginput = discardpendinginput
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -3829,6 +3832,7 @@ public struct ChatAbortParams: Codable, Sendable {
         case agentid = "agentId"
         case runid = "runId"
         case preservesideruns = "preserveSideRuns"
+        case discardpendinginput = "discardPendingInput"
     }
 }
 
@@ -15274,6 +15278,28 @@ public struct SessionOwner: Codable, Sendable {
     }
 }
 
+public struct SessionOwnerSessionCount: Codable, Sendable {
+    public let profileid: String
+    public let _open: Int
+    public let running: Int
+
+    public init(
+        profileid: String,
+        _open: Int,
+        running: Int)
+    {
+        self.profileid = profileid
+        self._open = _open
+        self.running = running
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case profileid = "profileId"
+        case _open = "open"
+        case running
+    }
+}
+
 public struct SessionParticipant: Codable, Sendable {
     public let identity: SessionParticipantIdentity
     public let label: String?
@@ -17696,6 +17722,8 @@ public struct SessionsListParams: Codable, Sendable {
     public let limit: Int?
     public let offset: Int?
     public let activeminutes: Int?
+    public let activitypulsesince: Double?
+    public let activitypulseuntil: Double?
     public let activeonly: Bool?
     public let requirelastinteraction: Bool?
     public let sortby: AnyCodable?
@@ -17722,6 +17750,7 @@ public struct SessionsListParams: Codable, Sendable {
     public let profilerelation: [String: AnyCodable]?
     public let involvingprofileid: String?
     public let includepeople: Bool?
+    public let includeownersessioncounts: Bool?
     public let spawnedby: String?
     public let agentid: String?
     public let search: String?
@@ -17731,6 +17760,8 @@ public struct SessionsListParams: Codable, Sendable {
         limit: Int? = nil,
         offset: Int? = nil,
         activeminutes: Int? = nil,
+        activitypulsesince: Double? = nil,
+        activitypulseuntil: Double? = nil,
         activeonly: Bool? = nil,
         requirelastinteraction: Bool? = nil,
         sortby: AnyCodable? = nil,
@@ -17757,6 +17788,7 @@ public struct SessionsListParams: Codable, Sendable {
         profilerelation: [String: AnyCodable]? = nil,
         involvingprofileid: String? = nil,
         includepeople: Bool? = nil,
+        includeownersessioncounts: Bool? = nil,
         spawnedby: String? = nil,
         agentid: String? = nil,
         search: String? = nil,
@@ -17765,6 +17797,8 @@ public struct SessionsListParams: Codable, Sendable {
         self.limit = limit
         self.offset = offset
         self.activeminutes = activeminutes
+        self.activitypulsesince = activitypulsesince
+        self.activitypulseuntil = activitypulseuntil
         self.activeonly = activeonly
         self.requirelastinteraction = requirelastinteraction
         self.sortby = sortby
@@ -17791,6 +17825,7 @@ public struct SessionsListParams: Codable, Sendable {
         self.profilerelation = profilerelation
         self.involvingprofileid = involvingprofileid
         self.includepeople = includepeople
+        self.includeownersessioncounts = includeownersessioncounts
         self.spawnedby = spawnedby
         self.agentid = agentid
         self.search = search
@@ -17801,6 +17836,8 @@ public struct SessionsListParams: Codable, Sendable {
         case limit
         case offset
         case activeminutes = "activeMinutes"
+        case activitypulsesince = "activityPulseSince"
+        case activitypulseuntil = "activityPulseUntil"
         case activeonly = "activeOnly"
         case requirelastinteraction = "requireLastInteraction"
         case sortby = "sortBy"
@@ -17827,6 +17864,7 @@ public struct SessionsListParams: Codable, Sendable {
         case profilerelation = "profileRelation"
         case involvingprofileid = "involvingProfileId"
         case includepeople = "includePeople"
+        case includeownersessioncounts = "includeOwnerSessionCounts"
         case spawnedby = "spawnedBy"
         case agentid = "agentId"
         case search
@@ -19331,19 +19369,22 @@ public struct SkillsLibrarySaveParams: Codable, Sendable {
     public let slug: String
     public let content: String
     public let files: [[String: AnyCodable]]?
+    public let retainfiles: [String]?
 
     public init(
         skillid: String? = nil,
         expectedrevision: AnyCodable,
         slug: String,
         content: String,
-        files: [[String: AnyCodable]]? = nil)
+        files: [[String: AnyCodable]]? = nil,
+        retainfiles: [String]? = nil)
     {
         self.skillid = skillid
         self.expectedrevision = expectedrevision
         self.slug = slug
         self.content = content
         self.files = files
+        self.retainfiles = retainfiles
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -19352,6 +19393,7 @@ public struct SkillsLibrarySaveParams: Codable, Sendable {
         case slug
         case content
         case files
+        case retainfiles = "retainFiles"
     }
 }
 

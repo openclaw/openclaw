@@ -467,14 +467,24 @@ export async function withSessionEntriesFromStoresInWorker<T>(
 }
 
 /** The ordinary return API returns data, never a retained authority claim. */
-export function readSessionEntriesFromStoreInWorker(input: SessionEntryWorkerRead) {
-  return withSessionEntriesFromStoreInWorker(input, async (read) => read.result, true);
+export function readSessionEntriesFromStoreInWorker(
+  input: SessionEntryWorkerRead,
+  /** Register keyed publication custody after source selection, before the row-read yield. */
+  prepareSource?: (database: PreparedSessionEntryWorkerRead["database"]) => void,
+) {
+  return withSessionEntriesFromStoreInWorker(
+    input,
+    async (read) => read.result,
+    true,
+    prepareSource,
+  );
 }
 
 async function withSessionEntriesFromStoreInWorker<T>(
   input: SessionEntryWorkerRead,
   consume: (read: PreparedSessionEntryWorkerRead) => Promise<T>,
   dataOnly = false,
+  prepareSource?: (database: PreparedSessionEntryWorkerRead["database"]) => void,
 ): Promise<T> {
   const request = {
     sessionKeys: [...new Set(input.sessionKeys)],
@@ -487,6 +497,8 @@ async function withSessionEntriesFromStoreInWorker<T>(
   return withSessionStoreReaderInWorker(
     input,
     async (owner, database, continuation, assertCurrent) => {
+      prepareSource?.(database);
+      assertCurrent();
       const result = await owner.readExactEntries({ ...request, env: database.env, continuation });
       assertCurrent();
       return consume({ result, database, assertCurrent });

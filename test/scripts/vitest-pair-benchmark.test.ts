@@ -8,19 +8,21 @@ import {
   assertExecutionDigest,
   assertInventoryAvailable,
   assertSingleWorkflowAttempt,
-  buildBenchmarkCommandEnv,
   buildBenchmarkSchedule,
   loadBenchmarkManifest,
   parseVitestExecutionReport,
-  resolvePackageManagerIdentity,
-  runOwnedCommand,
   validateBenchmarkManifest,
-  VITEST_PAIR_HARNESS_DEADLINE_MS,
-  withVitestPairDeadline,
   withTerminalManifest,
   writeJsonAtomic,
   type BenchmarkManifest,
   type BenchmarkRunRecord,
+} from "../../scripts/lib/vitest-pair-benchmark-contract.mts";
+import {
+  buildBenchmarkCommandEnv,
+  resolvePackageManagerIdentity,
+  runOwnedCommand,
+  VITEST_PAIR_HARNESS_DEADLINE_MS,
+  withVitestPairDeadline,
 } from "../../scripts/lib/vitest-pair-benchmark.mts";
 import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
 import { waitForDead, waitForFile } from "../helpers/process-wait.js";

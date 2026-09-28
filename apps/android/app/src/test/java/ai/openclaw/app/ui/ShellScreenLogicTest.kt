@@ -280,32 +280,6 @@ class ShellScreenLogicTest {
   }
 
   @Test
-  fun skillWorkshopSummaryPrioritizesPendingAndHeldProposals() {
-    assertEquals(
-      "2 pending",
-      skillWorkshopSummaryText(
-        GatewaySkillWorkshopSummary(
-          proposals =
-            listOf(
-              skillWorkshopProposal("one", "pending"),
-              skillWorkshopProposal("two", "pending"),
-              skillWorkshopProposal("three", "applied"),
-            ),
-        ),
-      ),
-    )
-    assertEquals(
-      "1 held",
-      skillWorkshopSummaryText(
-        GatewaySkillWorkshopSummary(proposals = listOf(skillWorkshopProposal("held", "quarantined"))),
-      ),
-    )
-    assertEquals(null, skillWorkshopStatus(GatewaySkillWorkshopSummary(proposals = emptyList())))
-    assertEquals(false, skillWorkshopStatus(GatewaySkillWorkshopSummary(proposals = listOf(skillWorkshopProposal("pending", "pending")))))
-    assertEquals(true, skillWorkshopStatus(GatewaySkillWorkshopSummary(proposals = listOf(skillWorkshopProposal("applied", "applied")))))
-  }
-
-  @Test
   fun skillWorkshopFilteringMatchesHeldAndSearchText() {
     val proposals =
       listOf(
@@ -800,7 +774,7 @@ class ShellScreenLogicTest {
   }
 
   @Test
-  fun settingsSectionsPreserveMeaningfulOrder() {
+  fun settingsSectionsSeparatePersonalConfigurationFromWorkspaceAndFeaturedRoutes() {
     val sections =
       settingsSections(
         listOf(
@@ -820,11 +794,11 @@ class ShellScreenLogicTest {
 
     assertEquals(
       listOf(
-        "Connection" to listOf(SettingsRoute.Gateway, SettingsRoute.NodesDevices),
-        "Agents & automation" to listOf(SettingsRoute.SystemAgent, SettingsRoute.ProvidersModels, SettingsRoute.Approvals, SettingsRoute.CronJobs),
-        "Phone context & privacy" to listOf(SettingsRoute.Voice, SettingsRoute.PhoneCapabilities, SettingsRoute.Notifications),
-        "Profile & device" to listOf(SettingsRoute.Appearance),
-        "Diagnostics" to listOf(SettingsRoute.Health),
+        "Profile & appearance" to listOf(SettingsRoute.Appearance),
+        "This phone" to listOf(SettingsRoute.Voice, SettingsRoute.PhoneCapabilities, SettingsRoute.Notifications),
+        "Connections" to listOf(SettingsRoute.Gateway, SettingsRoute.NodesDevices),
+        "Configuration" to listOf(SettingsRoute.ProvidersModels, SettingsRoute.Approvals),
+        "System" to listOf(SettingsRoute.Health),
       ),
       sections.map { section -> section.title.resolveNativeText() to section.rows.map { it.route } },
     )

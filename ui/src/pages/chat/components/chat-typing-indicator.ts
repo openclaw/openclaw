@@ -67,8 +67,9 @@ export function renderChatTypingIndicator(
           .map((actor) => `${actor.label} — ${t("chat.sessionSuggestions.typingDraftState")}`)
           .join("; ")
       : undefined;
-  const status =
-    active.length === 0
+  const status = overflow?.several
+    ? (groupLabel?.text ?? "")
+    : active.length === 0
       ? ""
       : active.length === 1
         ? t("chat.sessionSuggestions.typing", { name: active[0]?.label ?? "" })
@@ -169,8 +170,6 @@ export function renderChatTypingIndicator(
           </div>`
         : nothing
     }
-    <span class="sr-only" role="status"
-      >${[status, overflow?.several ? groupLabel?.text : ""].filter(Boolean).join(" ")}</span
-    >
+    <span class="sr-only" role="status">${status}</span>
   </div>`;
 }

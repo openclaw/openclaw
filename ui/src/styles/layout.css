@@ -1245,6 +1245,13 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-shell__body {
+  /* Ease row backgrounds to clear before the clip instead of leaving an edge. */
+  --sidebar-fade-in:
+    transparent 2px, rgb(0 0 0 / 12%) 8px, rgb(0 0 0 / 50%) 16px, rgb(0 0 0 / 88%) 24px, black 32px;
+  --sidebar-fade-out:
+    black calc(100% - 32px), rgb(0 0 0 / 88%) calc(100% - 24px), rgb(0 0 0 / 50%) calc(100% - 16px),
+    rgb(0 0 0 / 12%) calc(100% - 8px), transparent calc(100% - 2px);
+
   min-height: 0;
   flex: 1;
   display: flex;
@@ -1501,26 +1508,15 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-shell__body--scroll-top {
-  --sidebar-body-mask: linear-gradient(
-    to bottom,
-    black 0,
-    black calc(100% - 23px),
-    transparent 100%
-  );
+  --sidebar-body-mask: linear-gradient(to bottom, var(--sidebar-fade-out));
 }
 
 .sidebar-shell__body--scroll-middle {
-  --sidebar-body-mask: linear-gradient(
-    to bottom,
-    transparent 0,
-    black 23px,
-    black calc(100% - 23px),
-    transparent 100%
-  );
+  --sidebar-body-mask: linear-gradient(to bottom, var(--sidebar-fade-in), var(--sidebar-fade-out));
 }
 
 .sidebar-shell__body--scroll-bottom {
-  --sidebar-body-mask: linear-gradient(to bottom, transparent 0, black 23px, black 100%);
+  --sidebar-body-mask: linear-gradient(to bottom, var(--sidebar-fade-in));
 }
 
 .sidebar-shell__body--scroll-top,
@@ -2561,7 +2557,8 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-online__person {
   flex: 1;
-  display: flex;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) 38px 54px;
   align-items: center;
   gap: 8px;
   width: 100%;
@@ -2596,8 +2593,7 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-online__person-status {
-  flex: none;
-  margin-left: auto;
+  display: block;
   color: var(--muted);
   font-size: calc(11px * var(--control-ui-text-scale));
 }
@@ -2615,6 +2611,7 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-online__person-name {
+  display: block;
   min-width: 0;
   overflow: hidden;
   color: inherit;
@@ -2624,33 +2621,98 @@ openclaw-settings-save-indicator:empty {
   white-space: nowrap;
 }
 
-.sidebar-online__person-action {
-  display: inline-flex;
+.sidebar-online__person-copy {
+  min-width: 0;
+}
+
+.sidebar-online__columns,
+.sidebar-online__totals {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 38px 54px;
   align-items: center;
-  justify-content: center;
-  flex: none;
+  gap: 8px;
+  padding: 4px 8px;
   color: var(--muted);
-  opacity: 0;
-  transition: opacity var(--duration-fast) ease;
+  font-size: calc(10px * var(--control-ui-text-scale));
 }
 
-.sidebar-online__person:hover .sidebar-online__person-action,
-.sidebar-online__person:focus-visible .sidebar-online__person-action,
-.sidebar-online__person[aria-expanded="true"] .sidebar-online__person-action {
-  opacity: 1;
+.sidebar-online__column,
+.sidebar-online__filter,
+.sidebar-online__retry {
+  min-width: 0;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: right;
 }
 
-.sidebar-online__person-action svg {
-  display: block;
-  width: 13px;
-  height: 13px;
+.sidebar-online__column[aria-pressed="true"],
+.sidebar-online__filter[aria-pressed="true"] {
+  color: var(--ok);
+}
+
+.sidebar-online__filter {
+  justify-self: start;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  text-align: left;
+}
+
+.sidebar-online__column:focus-visible,
+.sidebar-online__filter:focus-visible,
+.sidebar-online__retry:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.sidebar-online__count {
+  color: var(--text);
+  font-size: calc(12px * var(--control-ui-text-scale));
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.sidebar-online__count--running {
+  justify-self: end;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+  color: var(--ok);
+}
+
+.sidebar-online__count--zero {
+  padding-right: 6px;
+  color: var(--muted);
+}
+
+.sidebar-online__totals {
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+
+.sidebar-online__totals [data-session-total] {
+  text-align: right;
+}
+
+.sidebar-online__totals [data-session-total="running"] {
+  padding-right: 6px;
+  color: var(--ok);
+}
+
+.sidebar-online__empty,
+.sidebar-online__retry {
+  margin: 4px 8px;
+  color: var(--muted);
+  font-size: calc(11px * var(--control-ui-text-scale));
+  text-align: left;
 }
 
 @media (hover: none), (pointer: coarse) {
-  .sidebar-online__person-action {
-    opacity: 1;
-  }
-
   .sidebar-online__person {
     min-height: 44px;
   }
@@ -2659,8 +2721,7 @@ openclaw-settings-save-indicator:empty {
 @media (prefers-reduced-motion: reduce) {
   .sidebar-recent-sessions__head,
   .sidebar-recent-sessions__head .sidebar-recent-sessions__label-text,
-  .sidebar-online__person,
-  .sidebar-online__person-action {
+  .sidebar-online__person {
     transition: none;
   }
 }

@@ -135,7 +135,24 @@ function parseUnit(content) {
   if ([...directives.keys()].some((key) => !supported.has(key))) {
     fail();
   }
+  // Generated units use whole seconds. Missing policy follows systemd's 90s
+  // default; zero/infinity disable the deadline. Reject unsupported spans and
+  // timer overflow instead of silently scheduling Node's 1ms overflow timer.
+  const stopSeconds = single("TimeoutStopSec") || "90";
+  const unlimitedStop = stopSeconds === "infinity" || stopSeconds === "0";
+  const stopTimeoutMs = unlimitedStop
+    ? Infinity
+    : /^\d+$/.test(stopSeconds)
+      ? Number(stopSeconds) * 1_000
+      : Number.NaN;
+  if (
+    !unlimitedStop &&
+    (!Number.isSafeInteger(stopTimeoutMs) || stopTimeoutMs <= 0 || stopTimeoutMs > 2_147_483_647)
+  ) {
+    fail("Unsupported generated TimeoutStopSec policy.");
+  }
   return {
+    stopTimeoutMs,
     programArguments,
     workingDirectory,
     environment,
@@ -157,8 +174,11 @@ function readUnit(reload = false, requireLoaded = false) {
     if (error.code !== "ENOENT") {
       throw error;
     }
-    if (!requireLoaded) {
+    if (reload) {
       fs.rmSync(loadedPath, { force: true });
+    } else if (fs.existsSync(loadedPath)) {
+      // Ordinary status/command inspection cannot unload an admitted definition.
+      return { ...parseUnit(fs.readFileSync(loadedPath, "utf8")), reloadPending: true };
     }
     return null;
   }
@@ -227,7 +247,8 @@ function nativeRuntime() {
       )
     : false;
   const unsettled = counts?.starting || supervisorPid || groupPid || populated;
-  const successful = !last || last.code === 0;
+  const stopFailed = counts?.stopFailed === true;
+  const successful = !stopFailed && (!last || last.code === 0);
   return {
     pid,
     // A manager draining descendants or awaiting restart is not a settled service.
@@ -235,6 +256,7 @@ function nativeRuntime() {
     sub: pid ? "running" : unsettled ? "auto-restart" : "dead",
     generation: counts?.entered ?? 0,
     settled: !pid && !unsettled,
+    stopFailed,
     controlGroup: pid || unsettled ? paths.controlGroup || "" : "",
     restarts: counts?.restarts ?? 0,
     result: successful ? "success" : "exit-code",
@@ -444,6 +466,16 @@ function run() {
     }
     return;
   }
+  if (operation === "check-stopped" && !args.length) {
+    const runtime = nativeRuntime();
+    if (!runtime.settled) {
+      fail("Survivor service processes have not settled.");
+    }
+    if (runtime.stopFailed) {
+      fail("Survivor stop policy read failed; process cleanup completed.");
+    }
+    return;
+  }
   if (operation === "is-active" && !args.length) {
     const runtime = nativeRuntime();
     process.exitCode = runtime.pid ? 0 : runtime.settled ? 3 : 1;
@@ -478,6 +510,27 @@ function run() {
   }
   if (operation === "reload" && !args.length) {
     readUnit(true);
+    return;
+  }
+  if (["stop-policy", "stop-timeout-ms"].includes(operation) && !args.length) {
+    // A running generation keeps its loaded policy even if an on-disk edit is
+    // invalid or removed. Only a successful reload replaces that snapshot.
+    const unit = fs.existsSync(loadedPath)
+      ? parseUnit(fs.readFileSync(loadedPath, "utf8"))
+      : readUnit();
+    if (operation === "stop-policy") {
+      console.log(`LoadState=${unit ? "loaded" : "not-found"}`);
+      if (unit) {
+        console.log(
+          `TimeoutStopUSec=${unit.stopTimeoutMs === Infinity ? "infinity" : `${unit.stopTimeoutMs / 1_000}s`}`,
+        );
+      }
+    } else {
+      if (!unit) {
+        fail("Cannot stop an absent fixture unit.");
+      }
+      console.log(unit.stopTimeoutMs);
+    }
     return;
   }
   if (operation === "load-state" && !args.length) {

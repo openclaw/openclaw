@@ -26,6 +26,7 @@ type ApplicationConfig = {
   /** Null until the serving Gateway publishes its bootstrap policy. */
   newSessionModelDefaults?: "last-used" | "configured" | null;
   terminalEnabled: boolean;
+  uploadsEnabled: boolean;
   cliAgentsEnabled?: boolean;
   pluginAssetsRequireAuth: boolean;
   pluginFrameGrants: ControlUiPluginFrameGrantAck[];
@@ -60,6 +61,7 @@ const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
   communityInvite: false,
   newSessionModelDefaults: null,
   terminalEnabled: readDocumentTerminalEnabled() ?? false,
+  uploadsEnabled: true,
   cliAgentsEnabled: false,
   pluginAssetsRequireAuth: true,
   pluginFrameGrants: [],
@@ -107,6 +109,7 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
     communityInvite: parsed.communityInvite === true,
     newSessionModelDefaults: parsed.newSessionModelDefaults ?? "last-used",
     terminalEnabled: Boolean(parsed.terminalEnabled),
+    uploadsEnabled: parsed.uploadsEnabled !== false,
     cliAgentsEnabled: Boolean(parsed.cliAgentsEnabled),
     pluginAssetsRequireAuth: parsed.pluginAssetsRequireAuth !== false,
     pluginFrameGrants: (parsed.pluginFrameGrants ?? [])

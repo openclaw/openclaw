@@ -404,6 +404,7 @@ const fs=require('node:fs'),path=require('node:path'),{spawnSync}=require('node:
 const args=process.argv.slice(2);
 fs.appendFileSync(path.join(process.cwd(),'compiler-events.jsonl'),JSON.stringify(args)+'\\n');
 const result=spawnSync(${JSON.stringify(native)},args,{stdio:'inherit'});
+if(process.env.TSGO_FIXTURE_STDERR==='1') process.stderr.write('unclassified compiler failure\\n');
 process.exit(result.status??1);
 `,
       );
@@ -530,6 +531,74 @@ process.exit(result.status??1);
       expect(renamed.result.stdout + renamed.result.stderr).toMatch(
         /consumer\.test\.ts\(1,\d+\): error TS2307/u,
       );
+      write(leaf, "export const invalid: number = 'broken';\n");
+      const selectedGraphs = ["core-test-agents-other", "core-test-agents-tools"];
+      for (const mode of ["default", "evidence", "unknown"] as const) {
+        write("compiler-events.jsonl", "");
+        const result = await lifetime.track(
+          runNodeScript(
+            [
+              "--import",
+              pathToFileURL(path.join(sourceRoot, "scripts/tsx.mjs")).href,
+              driver,
+              "--ci-graphs-json",
+              JSON.stringify(selectedGraphs),
+            ],
+            {
+              ...env,
+              OPENCLAW_CI_STATIC_EVIDENCE: mode === "default" ? "0" : "1",
+              TSGO_FIXTURE_STDERR: mode === "unknown" ? "1" : "0",
+            },
+            undefined,
+            { cwd: root, signal, requireProcessTreeExit: true },
+          ),
+        );
+        expect(result.status, result.stderr).toBe(2);
+        expect(result.stdout).toContain("leaf.test.ts(1,14): error TS2322");
+        const invocations = fs
+          .readFileSync(path.join(root, "compiler-events.jsonl"), "utf8")
+          .trim()
+          .split("\n")
+          .filter(Boolean);
+        expect(invocations).toHaveLength(mode === "evidence" ? 2 : 1);
+        const receipts = result.stdout
+          .split("\n")
+          .filter((line) => line.startsWith("[ci-static:tsgo:"));
+        if (mode !== "evidence") {
+          expect(receipts).toEqual([]);
+          if (mode === "unknown") {
+            expect(result.stderr).toContain("unclassified compiler failure");
+          }
+          continue;
+        }
+        expect(receipts).toHaveLength(3);
+        const leaves = receipts.slice(0, 2).map(
+          (line) =>
+            JSON.parse(line.slice(line.indexOf(" ") + 1)) as {
+              id: string;
+              config: string;
+              exitCode: number;
+              stdout: string;
+              stderr: string;
+            },
+        );
+        expect(
+          leaves.map(({ config, exitCode, stderr }) => ({ config, exitCode, stderr })),
+        ).toEqual([
+          { config: "test/tsconfig/tsconfig.core.test.agents-other.json", exitCode: 2, stderr: "" },
+          { config: "test/tsconfig/tsconfig.core.test.agents-tools.json", exitCode: 2, stderr: "" },
+        ]);
+        expect(leaves[0]!.stdout).toContain("leaf.test.ts(1,14): error TS2322");
+        expect(leaves[1]!.stdout).toContain("consumer.test.ts(1,26): error TS2307");
+        expect(JSON.parse(receipts[2]!.slice(receipts[2]!.indexOf(" ") + 1))).toEqual({
+          version: 1,
+          id: expect.any(String),
+          planned: 2,
+          completed: 2,
+          leaves: leaves.map(({ id: leafId }) => leafId),
+        });
+        expect(fs.readdirSync(path.join(root, ".artifacts/dist-artifacts.lock"))).toEqual([]);
+      }
       // Target only the boundary owner PID; its managed compiler must forward and join its group.
       write(
         "node_modules/.bin/tsgo",

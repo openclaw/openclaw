@@ -30,15 +30,6 @@ import { DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS } from "./browser/constants.js";
 import { finalizeRoleSnapshot, findRoleSnapshotLineRef } from "./browser/pw-role-snapshot.js";
 import { neutralizeMediaDirectives } from "./browser/vision.js";
 
-type BrowserExternalJsonKind =
-  | "snapshot"
-  | "console"
-  | "requests"
-  | "errors"
-  | "tabs"
-  | "act"
-  | "download";
-
 const BROWSER_EXTERNAL_JSON_TRUNCATION_MARKERS = {
   snapshot: "\n[truncated — retry with a smaller maxChars or limit]",
   console: "\n[truncated — retry with a stricter level or targetId]",
@@ -47,7 +38,9 @@ const BROWSER_EXTERNAL_JSON_TRUNCATION_MARKERS = {
   tabs: "\n[truncated — retry with action=snapshot and a specific targetId]",
   act: "\n[truncated — inspect the affected targetId with action=snapshot]",
   download: "\n[truncated — retry with a specific targetId and download ref]",
-} satisfies Record<BrowserExternalJsonKind, string>;
+};
+
+type BrowserExternalJsonKind = keyof typeof BROWSER_EXTERNAL_JSON_TRUNCATION_MARKERS;
 
 function truncateBrowserToolText(value: string, marker: string, maxChars: number) {
   const bounded = truncateSanitizedExternalContent(value, maxChars);

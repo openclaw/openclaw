@@ -3,7 +3,6 @@ import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-con
 import type { AgentTool } from "../../runtime/index.js";
 import type { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
 import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
-/** Shared contracts for the prepared attempt execution phases. */
 import type { createPromptBuildToolPolicy } from "./attempt-prompt-support.js";
 import type { prepareEmbeddedAttemptSessionRuntime } from "./attempt-session-runtime-prepare.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";

@@ -11,15 +11,18 @@ import type {
   SkillsLibraryMutateParams,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import { GatewayRequestError } from "../../api/gateway.ts";
+import type { ApplicationConfigCapability } from "../../app/config.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { assertUploadsEnabled, uploadsEnabled } from "../../lib/uploads.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { libraryFileText, readLibraryFiles, uploadLibraryArchive } from "./library-files.ts";
 
 export type LibraryView = "workspace" | "mine" | "team" | "all";
 export type LibraryDraft = {
+  importedFiles?: boolean;
   target: "workspace" | "personal";
   connection: GatewayConnectionScope;
   agentId: string | null;
@@ -28,6 +31,7 @@ export type LibraryDraft = {
   description: string;
   content: string;
   files: SkillLibraryFile[];
+  baseFiles: readonly Readonly<SkillLibraryFile>[];
   revisions: SkillsLibraryReadResult["revisions"];
   selectedFile: string;
   rollbackRevision: string;
@@ -56,6 +60,7 @@ export class SkillLibraryController {
     private readonly gateway: GatewayPageController,
     private readonly selectedAgent: () => string | null,
     private readonly refreshWorkspace: () => Promise<void>,
+    private readonly config: () => ApplicationConfigCapability | undefined = () => undefined,
   ) {}
 
   changed() {
@@ -90,6 +95,9 @@ export class SkillLibraryController {
   }
   get showWorkspace() {
     return this.view === null || this.view === "workspace";
+  }
+  get uploadsEnabled() {
+    return uploadsEnabled(this.config());
   }
   get canWrite() {
     return canCallGatewayMethod(this.gateway.snapshot, "skills.library.save", "operator.write", {
@@ -169,6 +177,7 @@ export class SkillLibraryController {
       description: "",
       content: "",
       files: [],
+      baseFiles: [],
       revisions: [],
       selectedFile: "SKILL.md",
       rollbackRevision: "",
@@ -216,6 +225,7 @@ export class SkillLibraryController {
         description: read.entry.description,
         content: read.content,
         files: read.files,
+        baseFiles: read.files.map((file) => ({ ...file })),
         revisions: read.revisions,
         selectedFile: "SKILL.md",
         rollbackRevision: "",
@@ -280,8 +290,14 @@ export class SkillLibraryController {
       if (!this.gateway.isCurrent(draft.connection)) {
         throw new Error(t("skillLibrary.connectionChanged"));
       }
+      if (draft.importedFiles) {
+        assertUploadsEnabled(this.config());
+      }
       const client = draft.connection.client;
       if (draft.target === "workspace") {
+        if (draft.files.length) {
+          assertUploadsEnabled(this.config());
+        }
         if (!draft.agentId) {
           throw new Error(t("skillLibrary.selectAgent"));
         }
@@ -306,21 +322,44 @@ export class SkillLibraryController {
           return;
         }
         draft.proposal = proposal;
+        draft.importedFiles = false;
         draft.dirty = false;
         this.notice = t("skillLibrary.pending", { id: proposal.record.id, agent: draft.agentId });
         return;
+      }
+      const savedFiles = draft.files.map((file) => ({ ...file }));
+      const baseFiles = new Map(draft.baseFiles.map((file) => [file.path, file]));
+      const retainFiles: string[] = [];
+      const files = savedFiles.filter((file) => {
+        const base = draft.entry ? baseFiles.get(file.path) : undefined;
+        if (
+          base &&
+          base.content === file.content &&
+          base.encoding === file.encoding &&
+          base.executable === file.executable
+        ) {
+          retainFiles.push(file.path);
+          return false;
+        }
+        return true;
+      });
+      if (files.length) {
+        assertUploadsEnabled(this.config());
       }
       const receipt = await client.request<SkillsLibraryReceipt>("skills.library.save", {
         ...(draft.entry ? { skillId: draft.entry.skillId } : {}),
         expectedRevision: draft.entry?.revision ?? null,
         slug: draft.slug,
         content: draft.content,
-        files: draft.files,
+        files,
+        ...(retainFiles.length ? { retainFiles } : {}),
       });
       if (!this.gateway.isCurrent(draft.connection)) {
         return;
       }
       draft.entry = receipt.entry;
+      draft.baseFiles = savedFiles;
+      draft.importedFiles = false;
       draft.dirty = false;
       draft.revisions = [
         { revision: receipt.entry.revision, createdAt: receipt.entry.updatedAt },
@@ -408,6 +447,7 @@ export class SkillLibraryController {
           }
           draft.content = read.content;
           draft.files = read.files;
+          draft.baseFiles = read.files.map((file) => ({ ...file }));
           draft.revisions = read.revisions;
           draft.selectedFile = "SKILL.md";
           draft.rollbackRevision = "";
@@ -426,6 +466,7 @@ export class SkillLibraryController {
       return;
     }
     await this.perform(async () => {
+      assertUploadsEnabled(this.config());
       const [file] = files;
       if (file && files.length === 1 && file.name.toLowerCase().endsWith(".zip")) {
         if (this.createTarget === "workspace") {
@@ -434,8 +475,12 @@ export class SkillLibraryController {
         if (!this.list?.profileId) {
           throw new Error(t("skillLibrary.signIn"));
         }
-        const receipt = await uploadLibraryArchive(connection.client, file, this.importSlug, () =>
-          this.gateway.isCurrent(connection),
+        const receipt = await uploadLibraryArchive(
+          connection.client,
+          file,
+          this.importSlug,
+          () => this.gateway.isCurrent(connection),
+          this.config(),
         );
         if (this.gateway.isCurrent(connection)) {
           this.importOpen = false;
@@ -443,13 +488,18 @@ export class SkillLibraryController {
         }
         return;
       }
-      const bundle = await readLibraryFiles(files);
+      const bundle = await readLibraryFiles(files, this.config());
+      assertUploadsEnabled(this.config());
       if (!this.gateway.isCurrent(connection)) {
         return;
       }
       this.create();
       if (this.draft) {
-        Object.assign(this.draft, bundle, { slug: this.importSlug, dirty: true });
+        Object.assign(this.draft, bundle, {
+          slug: this.importSlug,
+          dirty: true,
+          importedFiles: true,
+        });
         this.importOpen = false;
       }
     });

@@ -1,6 +1,3 @@
-/**
- * Installs context guards for oversized tool-result histories.
- */
 import type {
   ContextEngine,
   ContextEngineRuntimeContext,
@@ -35,8 +32,6 @@ type GuardableTransformContext = (
   messages: AgentMessage[],
   signal: AbortSignal,
 ) => AgentMessage[] | Promise<AgentMessage[]>;
-
-type GuardableAgent = object;
 
 type GuardableAgentRecord = {
   transformContext?: GuardableTransformContext;
@@ -271,7 +266,7 @@ function toMidTurnPrecheckRequest(
  * attempts retain their eager lifecycle and finalization checkpoint.
  */
 export function installContextEngineLoopHook(params: {
-  agent: GuardableAgent;
+  agent: object;
   contextEngine: ContextEngine;
   sessionId: string;
   sessionKey?: string;
@@ -299,7 +294,7 @@ export function installContextEngineLoopHook(params: {
   let lastSourceMessages: AgentMessage[] | null = null;
   const transcriptProjectionCache = new WeakMap<AgentMessage, AgentMessage>();
 
-  mutableAgent.transformContext = (async (messages: AgentMessage[], signal: AbortSignal) => {
+  mutableAgent.transformContext = async (messages, signal) => {
     signal?.throwIfAborted();
     const transformed = originalTransformContext
       ? await originalTransformContext.call(mutableAgent, messages, signal)
@@ -424,7 +419,7 @@ export function installContextEngineLoopHook(params: {
     }
 
     return providerMessages;
-  }) as GuardableTransformContext;
+  };
 
   return () => {
     mutableAgent.transformContext = originalTransformContext;
@@ -432,7 +427,7 @@ export function installContextEngineLoopHook(params: {
 }
 
 export function installToolResultContextGuard(params: {
-  agent: GuardableAgent;
+  agent: object;
   contextWindowTokens: number;
   midTurnPrecheck?: MidTurnPrecheckOptions;
 }): () => void {
@@ -444,7 +439,7 @@ export function installToolResultContextGuard(params: {
   const originalTransformContext = mutableAgent.transformContext;
   let lastSeenLength: number | null = null;
 
-  mutableAgent.transformContext = (async (messages: AgentMessage[], signal: AbortSignal) => {
+  mutableAgent.transformContext = async (messages, signal) => {
     const transformed = originalTransformContext
       ? await originalTransformContext.call(mutableAgent, messages, signal)
       : messages;
@@ -495,7 +490,7 @@ export function installToolResultContextGuard(params: {
       lastSeenLength = contextMessages.length;
     }
     return contextMessages;
-  }) as GuardableTransformContext;
+  };
 
   return () => {
     mutableAgent.transformContext = originalTransformContext;

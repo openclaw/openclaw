@@ -4790,7 +4790,7 @@ jobs:
           - suite_id: native-live-extensions-media-video-c
             suite_group: native-live-extensions-media-video
             label: Native live media video plugins C
-            command: OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=openai,openrouter,xai node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-video
+            command: OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=openrouter,xai node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-video
             timeout_minutes: 30
             profile_env_only: false
             profiles: full

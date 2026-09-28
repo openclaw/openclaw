@@ -68,6 +68,8 @@ export function initializeSessionReadContext(context: GatewayRequestContext) {
               return {
                 placements: records,
                 moves: placements.getPlacementMoves?.(sessionIds) ?? new Map(),
+                pendingResults: new Map(),
+                workspaceJournalOwnerSessionIds: new Set(),
                 workspaceResultReconcilingSessionIds:
                   placements.getWorkspaceResultReconcilingSessionIds?.(sessionIds) ?? new Set(),
                 workspaceRecoveryPendingSessionIds: new Set(),

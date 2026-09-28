@@ -13,8 +13,6 @@ import {
 } from "./native-subagent-monitor.test-support.js";
 import { setupRunAttemptTestHooks } from "./run-attempt-test-harness.js";
 
-setupRunAttemptTestHooks();
-
 const result = "Keep the accepted native result.";
 const completedChild = () =>
   childTurnCompletedNotification({
@@ -22,7 +20,8 @@ const completedChild = () =>
     items: [{ type: "agentMessage", id: "final", phase: "final_answer", text: result }],
   });
 
-describe("native completion settlement", () => {
+describe("native completion durable receipts", () => {
+  setupRunAttemptTestHooks();
   it("keeps a durable delivery receipt when its next ownership read fails", async () => {
     const f = await fixture();
     const client = createClient();
@@ -77,7 +76,9 @@ describe("native completion settlement", () => {
       await Promise.allSettled(writes);
     }
   });
+});
 
+describe("native completion settlement", () => {
   it.each(["receipt", "retired-turn-receipt", "retirement"] as const)(
     "rechecks %s while completion delivery is in flight",
     async (change) => {

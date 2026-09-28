@@ -313,8 +313,6 @@ export function createLegacyStateMigrationPlan(params: {
     };
   });
   const warnings = [...(params.warnings ?? []), ...(params.advisoryWarnings ?? [])];
-  const candidateRefusal =
-    candidate.artifact.outcome === "deferred" ? candidate.artifact.refusal : undefined;
   const refusal =
     params.refusal ??
     (params.warnings?.length
@@ -322,7 +320,7 @@ export function createLegacyStateMigrationPlan(params: {
           code: "migration-planning-warning",
           message: params.warnings.join("\n"),
         }
-      : candidateRefusal);
+      : candidate.artifact.refusal);
   const plan = {
     schemaVersion: LEGACY_STATE_MIGRATION_PLAN_SCHEMA_VERSION,
     mutationAllowed: false as const,

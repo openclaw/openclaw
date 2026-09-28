@@ -12,6 +12,7 @@ import {
   patchSessionEntry,
 } from "../../plugin-sdk/session-store-runtime.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { tryFastAbortFromMessage } from "./abort.js";
 import { handleStopCommand } from "./commands-session-abort.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -93,8 +94,11 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
     const state = await setupStop();
     const { getOrCreateSessionMcpRuntime } =
       await import("../../agents/agent-bundle-mcp-manager.test-support.js");
-    const { getSessionMcpRuntimeManagerForTesting } =
+    const { getSessionMcpRuntimeManagerForTesting, setSessionMcpRuntimeScheduler } =
       await import("../../agents/agent-bundle-mcp-manager-api.js");
+    const scheduler = createTestGatewayScheduler();
+    onTestFinished(() => scheduler.stop());
+    await setSessionMcpRuntimeScheduler(scheduler);
     const manager = getSessionMcpRuntimeManagerForTesting();
     try {
       await getOrCreateSessionMcpRuntime({

@@ -14,6 +14,7 @@ import {
   resolveCodexDeliveryHintPreservedInputRange,
   resolveContextEngineBootstrapProjectionDecision,
 } from "./attempt-context.js";
+import { isNonEmptyString } from "./attempt-workspace-context.js";
 import {
   CODEX_TURN_START_TEXT_INPUT_MAX_CHARS,
   fitCodexProjectedContextForTurnStart,
@@ -27,7 +28,7 @@ import { joinPresentSections } from "./developer-instruction-sections.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import type { CodexAttemptContext } from "./run-attempt-context.js";
 import { estimateCodexAppServerProjectedTurnTokens } from "./run-attempt-lifecycle.js";
-import { isNonEmptyString, prependCurrentInboundContext } from "./run-attempt-state.js";
+import { prependCurrentInboundContext } from "./run-attempt-state.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
 import {
   buildContextEngineBinding,
@@ -237,7 +238,6 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       });
       assertProjectionCurrent();
       contextImageGroups = projectionDecision.project ? (projection.imageGroups ?? []) : [];
-      const decisionBinding = decisionStartupBinding;
       embeddedAgentLog.info("codex app-server context-engine projection decision", {
         sessionId: params.sessionId,
         sessionKey: contextSessionKey,
@@ -245,9 +245,9 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         mode: contextEngineProjection?.mode ?? assembled.contextProjection?.mode ?? "per_turn",
         epoch: contextEngineProjection?.epoch,
         fingerprint: contextEngineProjection?.fingerprint,
-        previousThreadId: decisionBinding?.threadId,
-        previousEpoch: decisionBinding?.contextEngine?.projection?.epoch,
-        previousFingerprint: decisionBinding?.contextEngine?.projection?.fingerprint,
+        previousThreadId: decisionStartupBinding?.threadId,
+        previousEpoch: decisionStartupBinding?.contextEngine?.projection?.epoch,
+        previousFingerprint: decisionStartupBinding?.contextEngine?.projection?.fingerprint,
         projected: projectionDecision.project,
         reason: projectionDecision.reason,
         assembledMessages: assembled.messages.length,

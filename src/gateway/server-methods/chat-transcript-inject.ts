@@ -193,7 +193,8 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
             idempotencyLookup: "scan-assistant",
             ...(params.abortMeta
               ? {
-                  shouldAppendInTransaction: (latestAssistantMessage: unknown) => {
+                  shouldAppendInTransaction: (readLatestAssistantMessage) => {
+                    const latestAssistantMessage = readLatestAssistantMessage();
                     const committedRunId = resolveTerminalAssistantTranscriptRunId(
                       latestAssistantMessage,
                       readSessionTranscriptRunId(latestAssistantMessage),

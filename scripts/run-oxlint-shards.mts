@@ -1,5 +1,6 @@
 // Splits oxlint into resource-aware shards with heartbeat and timeout handling.
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs, { type Dirent } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -58,8 +59,12 @@ type RunnerOptions = {
   extraArgs: string[];
   runner: string;
 };
-type ShardRunnerOptions = RunnerOptions & { shard: OxlintShard };
-type ShardBatchOptions = RunnerOptions & { concurrency: number; entries: OxlintShard[] };
+type ShardRunnerOptions = RunnerOptions & { shard: OxlintShard; onCompleted?: () => void };
+type ShardBatchOptions = RunnerOptions & {
+  concurrency: number;
+  entries: OxlintShard[];
+  evidenceId?: string;
+};
 type ActiveShardChild = { child: ChildProcess; killGraceMs: number };
 
 const ACTIVE_SHARD_CHILDREN = new Set<ActiveShardChild>();
@@ -398,6 +403,8 @@ export async function main(
     selectedShards,
     shardArgs.oxlintArgs,
   );
+  const evidenceId = env.OPENCLAW_CI_STATIC_EVIDENCE === "1" ? randomUUID() : undefined;
+  let completed = 0;
   const run = async () => {
     if (needsArtifacts) {
       const code = await runManagedCommand({
@@ -432,10 +439,24 @@ export async function main(
       env,
       extraArgs: shardArgs.oxlintArgs,
       runner,
+      evidenceId,
     });
-    return results.find((status) => status !== 0) ?? 0;
+    completed = results.completed;
+    return results.statuses.find((status) => status !== 0) ?? 0;
   };
-  return needsArtifacts ? await withDistArtifactOwnership(process.cwd(), run) : await run();
+  const status = needsArtifacts ? await withDistArtifactOwnership(process.cwd(), run) : await run();
+  if (evidenceId && completed === selectedShards.length && !isParentTerminationRequested()) {
+    console.log(
+      `[ci-static:oxlint:completion] ${JSON.stringify({
+        version: 1,
+        id: evidenceId,
+        planned: selectedShards.length,
+        completed,
+        leaves: selectedShards.map((_, index) => `${evidenceId}:${index}`),
+      })}`,
+    );
+  }
+  return status;
 }
 
 if (import.meta.main) {
@@ -671,24 +692,56 @@ export function resolveOxlintShardConcurrency({
   );
 }
 
-async function runShards({ concurrency, entries, env, extraArgs, runner }: ShardBatchOptions) {
+async function runShards({
+  concurrency,
+  entries,
+  env,
+  extraArgs,
+  runner,
+  evidenceId,
+}: ShardBatchOptions) {
   // Dependency-less worktrees establish their primary-checkout toolchain link
   // before this lazy import, avoiding a top-level package-resolution failure.
   const { default: pMap } = await import("p-map");
+  let completed = 0;
   const results = await pMap(
     entries,
-    async (shard) => {
+    async (shard, index) => {
       if (isParentTerminationRequested()) {
         return undefined;
       }
-      return await runShard({ env, extraArgs, runner, shard });
+      const targets = shard.args.slice(2);
+      const boundedTargets =
+        (shard.name.startsWith("core:") &&
+          (targets.length === 1 ||
+            targets.every((target) => !ISOLATED_CORE_TARGETS.has(target)))) ||
+        (shard.name.startsWith("extensions:") && targets.length <= DEFAULT_EXTENSION_CHUNK_SIZE);
+      const boundedArgs =
+        boundedTargets &&
+        extraArgs.every((arg) => /^--(?:threads=[12]|format=(?:json|stylish))$/u.test(arg));
+      return await runShard({
+        env: {
+          ...env,
+          ...(evidenceId ? { OPENCLAW_CI_STATIC_EVIDENCE_ID: `${evidenceId}:${index}` } : {}),
+          OPENCLAW_OXLINT_BATCH_CONCURRENCY: String(concurrency),
+          OPENCLAW_OXLINT_BOUNDED_SHARD_ARGS: boundedArgs
+            ? JSON.stringify([...shard.args, ...extraArgs])
+            : "",
+        },
+        extraArgs,
+        runner,
+        shard,
+        onCompleted: () => {
+          completed++;
+        },
+      });
     },
     { concurrency, stopOnError: false },
   );
-  return results.filter((status) => status !== undefined);
+  return { statuses: results.filter((status) => status !== undefined), completed };
 }
 
-export async function runShard({ env, extraArgs, runner, shard }: ShardRunnerOptions) {
+export async function runShard({ env, extraArgs, runner, shard, onCompleted }: ShardRunnerOptions) {
   console.error(`[oxlint:${shard.name}] starting`);
   const startedAt = Date.now();
   const heartbeatMs = resolveShardHeartbeatMs(env);
@@ -716,7 +769,28 @@ export async function runShard({ env, extraArgs, runner, shard }: ShardRunnerOpt
       OPENCLAW_OXLINT_SKIP_PREPARE: "1",
     },
   });
-  child.stdout.pipe(process.stdout, { end: false });
+  const collectEvidence = env.OPENCLAW_CI_STATIC_EVIDENCE === "1";
+  let output = "";
+  let outputOverflow = false;
+  if (collectEvidence) {
+    // Concurrent shards must publish each native JSON report and receipt together.
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      if (!outputOverflow && output.length + chunk.length > 16 * 1024 * 1024) {
+        outputOverflow = true;
+        process.stdout.write(output);
+        output = "";
+        console.error(`[oxlint:${shard.name}] evidence output exceeded its limit`);
+      }
+      if (outputOverflow) {
+        process.stdout.write(chunk);
+      } else {
+        output += chunk;
+      }
+    });
+  } else {
+    child.stdout.pipe(process.stdout, { end: false });
+  }
   child.stderr.pipe(process.stderr, { end: false });
   const unregisterShardChild = registerShardChild({ child, killGraceMs });
 
@@ -771,6 +845,10 @@ export async function runShard({ env, extraArgs, runner, shard }: ShardRunnerOpt
       }
       forceKillAt = null;
       unregisterShardChild();
+      if (collectEvidence && output) {
+        process.stdout.write(output);
+        output = "";
+      }
       console.error(
         `[oxlint:${shard.name}] ${status === 0 ? "passed" : `failed (exit ${status})`}`,
       );
@@ -807,7 +885,7 @@ export async function runShard({ env, extraArgs, runner, shard }: ShardRunnerOpt
       console.error(error);
       finish(1);
     });
-    child.once("close", (status) => {
+    child.once("close", (status, signal) => {
       const exitStatus = parentTerminationSignal
         ? getSignalExitCode(parentTerminationSignal)
         : timedOut
@@ -816,6 +894,15 @@ export async function runShard({ env, extraArgs, runner, shard }: ShardRunnerOpt
       if (isChildProcessGroupAlive(child)) {
         void finishAfterForcedTeardown(exitStatus);
         return;
+      }
+      if (
+        !parentTerminationSignal &&
+        !timedOut &&
+        !signal &&
+        !outputOverflow &&
+        (status === 0 || status === 1)
+      ) {
+        onCompleted?.();
       }
       finish(exitStatus);
     });

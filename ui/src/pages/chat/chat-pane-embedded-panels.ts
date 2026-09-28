@@ -6,7 +6,10 @@ import type { ControlUiPanel } from "../../../../src/plugin-sdk/control-ui.js";
 import type { ControlUiLinkReaderDescriptor } from "../../../../src/shared/control-ui-link-reader.js";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
-import type { BrowserTabSelection } from "../../components/browser/browser-target.ts";
+import type {
+  BrowserTabSelection,
+  BrowserTabTarget,
+} from "../../components/browser/browser-target.ts";
 import { icons } from "../../components/icons.ts";
 import { EMPTY_LINK_READERS } from "../../components/link-reader-target.ts";
 import { renderPanelLoadingSkeleton } from "../../components/panel-loading-skeleton.ts";
@@ -53,6 +56,7 @@ type SidebarPanelDefinitionParams = {
   terminalTabsInHeader: boolean;
   browserRefreshOnPresentation: boolean;
   preferredBrowserTab?: BrowserTabSelection;
+  sessionBrowserTabs?: BrowserTabTarget[];
   desktopPresented: boolean;
   desktopRefreshOnPresentation: boolean;
   desktopAvailable: boolean;
@@ -185,6 +189,7 @@ export function sidebarPanelDefinitions(
         .refreshOnPresentation=${params?.browserRefreshOnPresentation ?? true}
         .sessionKey=${state.sessionKey}
         .preferredTab=${params?.preferredBrowserTab}
+        .sessionTabs=${params?.sessionBrowserTabs ?? []}
         .resourceBasePath=${state.resourceBasePath}
         .authToken=${resolveControlUiAuthToken(state)}
       ></openclaw-browser-panel>`
@@ -207,6 +212,7 @@ export function sidebarPanelDefinitions(
         .onSubmit=${params.onCompanionSubmit}
         .onDraftChange=${params.onCompanionDraftChange}
         .onAttachmentsChange=${params.onCompanionAttachmentsChange}
+        .uploadConfig=${state?.uploadConfig}
         .attachmentLimits=${state?.hello?.policy?.attachments}
         .onVisibilityChange=${params.onCompanionVisibilityChange}
       ></openclaw-chat-session-rail>`

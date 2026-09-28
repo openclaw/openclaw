@@ -8,7 +8,6 @@ import {
   createToolSearchTools,
   registerHeadlessToolSearchCatalog,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
-  TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "./tool-search.js";
 
@@ -60,6 +59,8 @@ function expectProtected(text: string) {
 describe("Tool Search metadata provenance", () => {
   it.each([
     ["mcp", TOOL_SEARCH_RAW_TOOL_NAME],
+    ["client", TOOL_SEARCH_RAW_TOOL_NAME],
+    ["mcp", TOOL_DESCRIBE_RAW_TOOL_NAME],
     ["client", TOOL_DESCRIBE_RAW_TOOL_NAME],
   ] as const)(
     "protects direct %s %s text without rewriting exact descriptors",
@@ -75,28 +76,6 @@ describe("Tool Search metadata provenance", () => {
           ? [descriptor]
           : { ...descriptor, parameters: target.parameters },
       );
-      expectProtected(modelText(result));
-      expect(target.execute).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    ["client", "search"],
-    ["mcp", "describe"],
-  ] as const)(
-    "protects Node tool_search_code direct %s %s without a preceding search or call",
-    async (source, method) => {
-      const { target, entry, tool } = setup(source);
-      const result = await tool(TOOL_SEARCH_CODE_MODE_TOOL_NAME).execute("node-metadata-direct", {
-        code:
-          method === "search"
-            ? `return (await openclaw.tools.search(${JSON.stringify(entry.id)}, { limit: 1 }))[0];`
-            : `return await openclaw.tools.describe(${JSON.stringify(entry.id)});`,
-      });
-      expect(result.details).toMatchObject({
-        ok: true,
-        value: { id: entry.id, description: hostile },
-      });
       expectProtected(modelText(result));
       expect(target.execute).not.toHaveBeenCalled();
     },

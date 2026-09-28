@@ -1,9 +1,4 @@
-import {
-  ACCESS_MODE_ALL,
-  ACCESS_MODE_SELECTED,
-  nearestGroupColor,
-  parsePairingString,
-} from "./relay-core.js";
+import { ACCESS_MODE_ALL, ACCESS_MODE_SELECTED, parsePairingString } from "./relay-core.js";
 import { isTabSelected } from "./relay-tab-groups.js";
 import { isValidTabId } from "./tab-eligibility.js";
 
@@ -109,7 +104,7 @@ export function createPopupMessageHandler({
         policy.beginTransition();
       }
       try {
-        await pairingConfigStore.save(parsed, nearestGroupColor(), normalizedMode);
+        await pairingConfigStore.save(parsed, "orange", normalizedMode);
         assertCurrent();
         await reconcileAccessMode(normalizedMode, { transitioning: downgrading });
         assertCurrent();

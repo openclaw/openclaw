@@ -1,6 +1,3 @@
-/**
- * Recovers sensitive stop reasons by wrapping provider stream functions.
- */
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
 import type { StreamFn } from "../../runtime/index.js";
@@ -20,6 +17,14 @@ function normalizeUnhandledStopReasonMessage(message: unknown): string | undefin
     return undefined;
   }
   return `The model stopped because the provider returned an unhandled stop reason: ${stopReason}. Please rephrase and try again.`;
+}
+
+function normalizeUnhandledStopReasonError(error: unknown): string {
+  const message = normalizeUnhandledStopReasonMessage(formatErrorMessage(error));
+  if (!message) {
+    throw error;
+  }
+  return message;
 }
 
 function patchUnhandledStopReasonInAssistantMessage(message: unknown): void {
@@ -67,13 +72,9 @@ function wrapStreamHandleUnhandledStopReason(
       patchUnhandledStopReasonInAssistantMessage(message);
       return message;
     } catch (err) {
-      const normalizedMessage = normalizeUnhandledStopReasonMessage(formatErrorMessage(err));
-      if (!normalizedMessage) {
-        throw err;
-      }
       return buildStreamErrorAssistantMessage({
         model,
-        errorMessage: normalizedMessage,
+        errorMessage: normalizeUnhandledStopReasonError(err),
       });
     }
   };
@@ -98,10 +99,7 @@ function wrapStreamHandleUnhandledStopReason(
             }
             return result;
           } catch (err) {
-            const normalizedMessage = normalizeUnhandledStopReasonMessage(formatErrorMessage(err));
-            if (!normalizedMessage) {
-              throw err;
-            }
+            const normalizedMessage = normalizeUnhandledStopReasonError(err);
             // The provider stream failed before yielding a terminal event. Emit a
             // synthetic error event once so callers still receive a normal stream
             // shape and iterator completion.
@@ -137,22 +135,13 @@ export function wrapStreamFnHandleSensitiveStopReason(baseFn: StreamFn): StreamF
       if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
         return Promise.resolve(maybeStream).then(
           (stream) => wrapStreamHandleUnhandledStopReason(model, stream),
-          (err: unknown) => {
-            const normalizedMessage = normalizeUnhandledStopReasonMessage(formatErrorMessage(err));
-            if (!normalizedMessage) {
-              throw err;
-            }
-            return buildUnhandledStopReasonErrorStream(model, normalizedMessage);
-          },
+          (err: unknown) =>
+            buildUnhandledStopReasonErrorStream(model, normalizeUnhandledStopReasonError(err)),
         );
       }
       return wrapStreamHandleUnhandledStopReason(model, maybeStream);
     } catch (err) {
-      const normalizedMessage = normalizeUnhandledStopReasonMessage(formatErrorMessage(err));
-      if (!normalizedMessage) {
-        throw err;
-      }
-      return buildUnhandledStopReasonErrorStream(model, normalizedMessage);
+      return buildUnhandledStopReasonErrorStream(model, normalizeUnhandledStopReasonError(err));
     }
   };
 }

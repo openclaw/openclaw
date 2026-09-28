@@ -59,7 +59,6 @@ extensions/copilot/harness.ts
 extensions/copilot/src/attempt.test.ts
 extensions/copilot/src/tool-bridge.test.ts
 extensions/crabbox/src/crabbox-worker-provider.test.ts
-extensions/device-pair/index.ts
 extensions/diagnostics-otel/src/service.test.ts
 extensions/diagnostics-prometheus/src/service.ts
 extensions/discord/src/actions/runtime.test.ts
@@ -479,7 +478,6 @@ src/cron/isolated-agent/delivery-target.test.ts
 src/cron/isolated-agent/run-executor.ts
 src/cron/isolated-agent/run.message-tool-policy.test.ts
 src/cron/isolated-agent/run.test-harness.ts
-src/cron/service.jobs.test.ts
 src/cron/service/ops.test.ts
 src/cron/service/timer.regression.test.ts
 src/cron/store.test.ts

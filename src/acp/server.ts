@@ -148,6 +148,8 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
 
   const gateway = new GatewayClient({
     url: bootstrap.url,
+    deviceAuthScope: bootstrap.deviceAuthScope,
+    ...(bootstrap.sshTunnel ? { sshTunnel: bootstrap.sshTunnel } : {}),
     token: bootstrap.auth.token,
     password: bootstrap.auth.password,
     preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,

@@ -116,6 +116,10 @@ NODE
   *) exit "$context_status" ;;
 esac
 openclaw_resolve_frozen_upgrade_survivor_capabilities "$ROOT_DIR"
+UPGRADE_COMPAT_ENV_ARGS+=(
+  -e "OPENCLAW_FROZEN_UPGRADE_SURVIVOR_TOOL_SEARCH_RECIPE=$OPENCLAW_FROZEN_UPGRADE_SURVIVOR_TOOL_SEARCH_RECIPE"
+  -e "OPENCLAW_FROZEN_UPGRADE_SURVIVOR_MEMBERSHIP_MODE=$OPENCLAW_FROZEN_UPGRADE_SURVIVOR_MEMBERSHIP_MODE"
+)
 if [ "$UPGRADE_TARGET_TRAIN" = extended-stable ]; then
   if [ -n "${OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS:-}" ]; then
     echo "Selected extended-stable target does not support OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS with its frozen upgrade survivor runner." >&2
@@ -155,6 +159,7 @@ if [ "$UPGRADE_TARGET_TRAIN" = extended-stable ]; then
   cp -R "$UPGRADE_SCENARIO_DIR/." "$UPGRADE_SCENARIO_STAGE/"
   cp "$UPGRADE_DIAGNOSTICS" "$UPGRADE_SCENARIO_STAGE/diagnostics.mjs"
   cp "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/backup-rollback-summary.mjs" "$UPGRADE_SCENARIO_STAGE/backup-rollback-summary.mjs"
+  cp "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/native-assignment-summary.mjs" "$UPGRADE_SCENARIO_STAGE/native-assignment-summary.mjs"
   cp "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/plugin-policy-summary.mjs" "$UPGRADE_SCENARIO_STAGE/plugin-policy-summary.mjs"
   chmod 0755 "$UPGRADE_SCENARIO_STAGE"
   UPGRADE_SCENARIO_ARGS+=(

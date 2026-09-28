@@ -67,10 +67,27 @@
 }
 
 /* Chat thread - scrollable middle section, transparent */
+.chat-thread-viewport,
 .chat-thread {
   --chat-thread-padding-top: clamp(20px, 3vh, 28px);
   --chat-thread-padding-bottom: calc(6px + var(--chat-transcript-fade-height, 0px));
+}
 
+.chat-thread-viewport {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 0;
+  padding: var(--chat-thread-padding-top) 0 var(--chat-thread-padding-bottom);
+}
+
+.chat-thread-viewport > .chat-thread {
+  position: absolute;
+  inset: 0 auto auto 0;
+  height: 100%;
+  width: 100%;
+}
+
+.chat-thread {
   container: chat-transcript / size;
   flex: 1 1 0;
   /* Grow, shrink, and use 0 base for proper scrolling */
@@ -140,7 +157,14 @@
   position: absolute;
   inset: calc(0px - var(--chat-transcript-fade-height)) var(--chat-thread-gutter) auto;
   height: var(--chat-transcript-fade-height);
-  background: linear-gradient(to bottom, transparent, var(--chat-surface));
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    color-mix(in srgb, var(--chat-surface) 12%, transparent) 25%,
+    color-mix(in srgb, var(--chat-surface) 50%, transparent) 50%,
+    color-mix(in srgb, var(--chat-surface) 88%, transparent) 75%,
+    var(--chat-surface) calc(100% - 2px)
+  );
   content: "";
   pointer-events: none;
 }

@@ -353,6 +353,8 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     if (!state) {
       return;
     }
+    // Upload controls read the live config capability; refresh every policy publication.
+    state.requestUpdate?.();
     const previousTerminalAvailable = state.terminalAvailable;
     state.terminalAvailable =
       config.terminalEnabled &&

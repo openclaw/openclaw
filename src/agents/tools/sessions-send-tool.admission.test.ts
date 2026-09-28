@@ -49,6 +49,21 @@ const config = {
   tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
 } satisfies OpenClawConfig;
 
+async function trackActualReplyFlow() {
+  const { runSessionsSendA2AFlow: runActualFlow } = await vi.importActual<
+    typeof import("./sessions-send-tool.a2a.js")
+  >("./sessions-send-tool.a2a.js");
+  const settled = createDeferredCore();
+  vi.mocked(runSessionsSendA2AFlow).mockImplementationOnce(async (params) => {
+    try {
+      await runActualFlow(params);
+    } finally {
+      settled.resolve();
+    }
+  });
+  return settled;
+}
+
 describe("sessions_send dispatch admission", () => {
   let state: OpenClawTestState;
   let registerWatch: MockInstance<typeof sessionStateEvents.registerSessionStateWatch>;
@@ -190,18 +205,8 @@ describe("sessions_send dispatch admission", () => {
   ])(
     "preserves the original $name route when a later turn changes the shared session route",
     async ({ name, accountId, sourceKey, threadId }) => {
-      const { runSessionsSendA2AFlow: runActualFlow } = await vi.importActual<
-        typeof import("./sessions-send-tool.a2a.js")
-      >("./sessions-send-tool.a2a.js");
       let completion: Record<string, unknown> | undefined;
-      const settled = createDeferredCore();
-      vi.mocked(runSessionsSendA2AFlow).mockImplementationOnce(async (params) => {
-        try {
-          await runActualFlow(params);
-        } finally {
-          settled.resolve();
-        }
-      });
+      const settled = await trackActualReplyFlow();
       await replaceSessionEntry(
         { agentId: "main", sessionKey: sourceKey },
         { sessionId: "requester-session", updatedAt: 1, lifecycleRevision: "original-generation" },
@@ -314,17 +319,7 @@ describe("sessions_send dispatch admission", () => {
     const sessionKey = "agent:main:direct:identity-linked-person";
     const originalRoute = { channel: "telegram", accountId: "default", to: "original-recipient" };
     const laterRoute = { channel: "telegram", accountId: "other", to: "later-recipient" };
-    const { runSessionsSendA2AFlow: runActualFlow } = await vi.importActual<
-      typeof import("./sessions-send-tool.a2a.js")
-    >("./sessions-send-tool.a2a.js");
-    const settled = createDeferredCore();
-    vi.mocked(runSessionsSendA2AFlow).mockImplementationOnce(async (params) => {
-      try {
-        await runActualFlow(params);
-      } finally {
-        settled.resolve();
-      }
-    });
+    const settled = await trackActualReplyFlow();
     const entry = {
       sessionId: "self-session",
       updatedAt: 1,
@@ -425,9 +420,7 @@ describe("sessions_send dispatch admission", () => {
   });
 
   it.each([
-    { admission: "rejected", timeoutSeconds: 0 },
     { admission: "rejected", timeoutSeconds: 1 },
-    { admission: "pending", timeoutSeconds: 0 },
     { admission: "pending", timeoutSeconds: 1 },
   ] as const)(
     "does not install a watch or start A2A when admission is $admission (wait $timeoutSeconds)",

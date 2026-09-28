@@ -111,6 +111,26 @@ async function retryThroughReload(page: Page, error: ReturnType<Page["locator"]>
 
 const focusedCases = [
   {
+    name: "browser",
+    label: "browser panel",
+    path: focusPath({
+      kind: "browser",
+      sessionKey,
+      tab: { target: "host", profile: "work", targetId: "existing" },
+    }),
+    chunk: /\/assets\/browser-document-[^/?]+\.js(?:\?.*)?$/u,
+    gateway: {
+      featureMethods: ["browser.request"],
+      operatorScopes: ["operator.read"],
+    },
+    ready: (page: Page) =>
+      page
+        .getByText(
+          "Browser control is unavailable for this connection. Reconnect with browser access.",
+        )
+        .waitFor(),
+  },
+  {
     name: "terminal",
     label: "terminal panel",
     path: focusPath({ kind: "terminal" }),
