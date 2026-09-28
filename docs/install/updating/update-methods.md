@@ -75,6 +75,16 @@ so preparing an update cannot prune dependencies used by the serving Gateway.
 The candidate's temporary workspace settings are restored before checking for
 source changes; the live checkout's workspace settings are preserved.
 
+Before activating a package or Git update, the updater also checks discoverable
+managed Gateways that share the physical installation. A live sibling blocks
+publication; stop it through its own service manager or exact Startup entry,
+then retry. The updater does not stop or restart sibling services. Package
+`--no-restart` still permits the selected service to keep running, but that
+exception does not cover another service or Startup entry using the same files.
+This is a check of observed consumers, not a lock against new service starts;
+unavailable inspection does not prove that the installation has no consumers.
+Already-running older updaters retain their own activation behavior.
+
 For package installs with a managed Gateway service, `openclaw update` targets
 the package root used by that service. If the shell `openclaw` command comes
 from a different install, the updater prints both roots and the managed
@@ -99,7 +109,9 @@ openclaw gateway start
 
 Stop every listed sibling before building and start each one afterward. Preserve
 its profile and custom service overrides, or use the matching native service
-commands. A Startup-only sibling must be stopped using the exact Startup-file
+commands. For a listed LaunchAgent, use its named job and loaded plist to select
+those controls; the profile name alone can identify a different definition.
+A Startup-only sibling must be stopped using the exact Startup-file
 guidance and restarted through that same Startup entry; updating the selected
 service cannot stop that sibling. Start services only after the build succeeds.
 If this checkout's built runtime is missing and the CLI cannot run, use those

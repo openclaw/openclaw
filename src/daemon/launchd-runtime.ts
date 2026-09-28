@@ -1,9 +1,12 @@
 /** launchctl state parsing, inspection, and bootstrap primitives. */
 import fs from "node:fs/promises";
+import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import {
   parseStrictInteger,
   parseStrictPositiveInteger,
 } from "@openclaw/normalization-core/number-coercion";
+import { isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
@@ -20,7 +23,10 @@ import {
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import {
   LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
+  decodeLaunchdPlistMetadata,
   readLaunchAgentProgramArgumentsFromFile,
+  resolveLaunchAgentProgramArguments,
+  resolveGeneratedEnvWrapperLayout,
 } from "./launchd-plist.js";
 import {
   resolveLaunchAgentPlistPath,
@@ -42,7 +48,174 @@ import type {
   GatewayServiceEnv,
   GatewayServiceEnvArgs,
   GatewayServiceReadOptions,
+  GatewayServiceState,
 } from "./service-types.js";
+
+/** Operation-local facts; never serialized into a command fingerprint or used as control authority. */
+export type LoadedLaunchAgentState = GatewayServiceState & {
+  launchAgent?: {
+    readonly target: string;
+    readonly sourcePath: string;
+    readonly program: string;
+    readonly programArguments: readonly string[];
+    readonly workingDirectory?: string;
+    readonly environment: Readonly<Record<string, string>>;
+  };
+};
+
+/** Parse only the selected job's root fields; nested jobs and environments are not its identity. */
+export function parseLaunchctlJob(output: string, serviceTarget: string) {
+  if (!output.startsWith(`${serviceTarget} = {\n`)) {
+    throw new Error(`Cannot parse launchd job ${serviceTarget}`);
+  }
+  const fields = new Map<string, string>();
+  for (const [, name, value] of output.matchAll(/^\t([^\t\n=]+) = (.+)$/gm)) {
+    if (fields.has(name!)) {
+      throw new Error(`Duplicate launchd job field ${name}`);
+    }
+    fields.set(name!, value!);
+  }
+  const block = (name: string) =>
+    output.match(new RegExp(`^\\t${name} = \\{\\n([\\s\\S]*?)^\\t\\}`, "m"))?.[1];
+  return {
+    fields,
+    arguments: block("arguments")
+      ?.split("\n")
+      .filter((line) => line.startsWith("\t\t"))
+      .map((line) => line.slice(2)),
+    environment: block("environment") ?? "",
+    environmentBlocks: [
+      ...output.matchAll(/^\t(?:inherited |default )?environment = \{\n([\s\S]*?)^\t\}/gm),
+    ]
+      .map((match) => match[1] ?? "")
+      .join("\n"),
+  };
+}
+
+/** Observe a GUI job's loaded command and runtime together, without granting lifecycle authority. */
+export async function readLoadedLaunchAgentState(
+  env: GatewayServiceEnv,
+  options: { plistPath?: string; timeoutMs?: number } = {},
+): Promise<LoadedLaunchAgentState> {
+  const label = resolveLaunchAgentLabel(env);
+  const target = `${resolveLaunchAgentGuiDomain()}/${label}`;
+  const result = await execLaunchctl(["print", target], options.timeoutMs ?? 5_000);
+  const empty: GatewayServiceState = {
+    installed: false,
+    loadState: { status: "not-loaded" },
+    running: false,
+    env,
+    command: null,
+    runtime: { status: "stopped" },
+  };
+  if (isLaunchctlNotLoaded(result)) {
+    return empty;
+  }
+  if (result.code !== 0) {
+    throw new Error(`Cannot inspect launchd job ${target}: ${formatLaunchctlResultDetail(result)}`);
+  }
+  const job = parseLaunchctlJob(result.stdout, target);
+  const sourcePath = job.fields.get("path");
+  const expectedPath = options.plistPath ?? resolveLaunchAgentPlistPath(env);
+  if (!sourcePath || !path.isAbsolute(sourcePath)) {
+    throw new Error("Loaded LaunchAgent definition path is unavailable.");
+  }
+  if (path.resolve(sourcePath) !== path.resolve(expectedPath)) {
+    return empty;
+  }
+  const program = job.fields.get("program");
+  if (!program || !path.isAbsolute(program) || !job.arguments?.length) {
+    throw new Error("Loaded LaunchAgent command is unavailable.");
+  }
+  const args = [program, ...job.arguments.slice(1)];
+  const layout = resolveGeneratedEnvWrapperLayout(
+    args,
+    resolveLaunchAgentEnvironmentReadOptions(env, label),
+  );
+  const environment: Record<string, string> = {};
+  for (const line of job.environment.split("\n").filter(Boolean)) {
+    const match = /^\t\t([A-Za-z_][A-Za-z0-9_]*) => (.*)$/.exec(line);
+    if (!match || Object.hasOwn(environment, match[1]!)) {
+      throw new Error("Loaded LaunchAgent environment is unavailable.");
+    }
+    environment[match[1]!] = match[2]!;
+  }
+  const command: GatewayServiceCommandConfig = {
+    programArguments: layout ? args.slice(layout.commandStartIndex) : args,
+    ...(job.fields.get("working directory")
+      ? { workingDirectory: job.fields.get("working directory") }
+      : {}),
+    ...(Object.keys(environment).length ? { environment } : {}),
+    sourcePath,
+  };
+  const parsed = parseLaunchctlPrint(
+    [...job.fields].map(([name, value]) => `${name} = ${value}`).join("\n"),
+  );
+  const running = parsed.state === "running" || (parsed.pid !== undefined && parsed.pid > 1);
+  return {
+    installed: true,
+    loadState: { status: "loaded" },
+    running,
+    env: mergeGatewayServiceEnv(env, command),
+    command,
+    runtime: { ...parsed, status: running ? "running" : "stopped" },
+    launchAgent: {
+      target,
+      sourcePath,
+      program,
+      programArguments: job.arguments,
+      workingDirectory: command.workingDirectory,
+      environment,
+    },
+  };
+}
+
+/** A selected package no-restart exemption still requires its current, unchanged definition. */
+export async function readCorrespondingLaunchAgentCommand(
+  env: GatewayServiceEnv,
+  observation: NonNullable<LoadedLaunchAgentState["launchAgent"]>,
+  timeoutMs: number,
+): Promise<GatewayServiceCommandConfig | null> {
+  const label = resolveLaunchAgentLabel(env);
+  const plistPath = resolveLaunchAgentPlistPath(env);
+  if (
+    observation.target !== `${resolveLaunchAgentGuiDomain()}/${label}` ||
+    path.resolve(observation.sourcePath) !== path.resolve(plistPath)
+  ) {
+    return null;
+  }
+  const plist = await decodeLaunchdPlistMetadata(await fs.readFile(plistPath), timeoutMs);
+  const args = plist?.ProgramArguments;
+  const environment = plist?.EnvironmentVariables ?? {};
+  if (
+    !Array.isArray(args) ||
+    !args.every((arg): arg is string => typeof arg === "string") ||
+    !isStringRecord(environment) ||
+    (plist?.Program ?? args[0]) !== observation.program
+  ) {
+    return null;
+  }
+  const loadedEnvironment = { ...observation.environment };
+  // launchd-current-service recognizes this native label marker. It is not a user override.
+  if (
+    !Object.hasOwn(environment, "XPC_SERVICE_NAME") &&
+    loadedEnvironment.XPC_SERVICE_NAME === label
+  ) {
+    delete loadedEnvironment.XPC_SERVICE_NAME;
+  }
+  if (
+    !isDeepStrictEqual(args, observation.programArguments) ||
+    (plist?.WorkingDirectory || undefined) !== observation.workingDirectory ||
+    !isDeepStrictEqual(environment, loadedEnvironment)
+  ) {
+    return null;
+  }
+  return resolveLaunchAgentProgramArguments(plist, plistPath, {
+    ...resolveLaunchAgentEnvironmentReadOptions(env, label),
+    requireEffective: true,
+    timeoutMs,
+  });
+}
 
 export async function readLaunchAgentProgramArguments(
   env: GatewayServiceEnv,

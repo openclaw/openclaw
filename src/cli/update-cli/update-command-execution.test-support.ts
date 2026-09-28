@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, vi } from "vitest";
+import * as gatewayBindings from "../../daemon/managed-gateway-bindings.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
 import type { executeMutableUpdate } from "./update-command-execution.js";
@@ -207,6 +208,7 @@ function inspectOrStopService(phase: "inspect" | "prepare" = "prepare"): PreMana
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.spyOn(gatewayBindings, "discoverManagedGatewayBindings").mockResolvedValue([]);
   mocks.serviceStopped = false;
   mocks.validateCanary.mockResolvedValue({
     status: "ok",
