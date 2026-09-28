@@ -52,6 +52,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "logging.consoleLevel": "Console Log Level",
   "logging.consoleStyle": "Console Log Style",
   "logging.redactPatterns": "Custom Redaction Patterns",
+  "logging.redactAllowPatterns": "Redaction Allowlist",
   update: "Updates",
   "update.channel": "Update Channel",
   "update.checkOnStart": "Update Check on Start",
