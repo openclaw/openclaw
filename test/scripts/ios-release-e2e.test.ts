@@ -893,9 +893,27 @@ describe("native command adapter", () => {
                     { role: "assistant", content: marker },
                     {
                       role: "user",
-                      content: missing
-                        ? "No requested marker here."
-                        : `Reply exactly with ${marker} and no other text.`,
+                      content: [
+                        {
+                          type: "input_text",
+                          text:
+                            "[Sun 2026-09-27 21:02 CDT] " +
+                            (missing
+                              ? "No requested marker here."
+                              : `Reply exactly with ${marker} and no other text.`),
+                        },
+                      ],
+                    },
+                    {
+                      role: "user",
+                      content: [
+                        {
+                          type: "input_text",
+                          text:
+                            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\n" +
+                            "OPENCLAW_E2E_FIRST\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+                        },
+                      ],
                     },
                   ],
                   metadata: { title: marker },

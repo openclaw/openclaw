@@ -5,6 +5,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { DevicePairSetupCodeResult } from "../../packages/gateway-protocol/src/schema/devices.js";
 import { isGatewayTransportError } from "../../src/gateway/transport-error.js";
+import { stripEnvelope } from "../../src/shared/chat-envelope.js";
 import type { OpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 import { applyMockOpenAiModelConfig } from "../e2e/lib/fixtures/mock-openai-config.mjs";
 import { readMockUserText } from "../e2e/lib/mock-inference-facts.js";
@@ -829,10 +830,12 @@ export async function createNativeDependencies(options: {
                     const latestUser = Array.isArray(body.input)
                       ? body.input.map(readMockUserText).findLast((text) => text !== undefined)
                       : undefined;
+                    const userText =
+                      latestUser === undefined ? undefined : stripEnvelope(latestUser);
                     received.push(
                       CHAT_MARKERS.find(
                         ([, marker]) =>
-                          latestUser === `Reply exactly with ${marker} and no other text.`,
+                          userText === `Reply exactly with ${marker} and no other text.`,
                       )?.[0],
                     );
                   }
