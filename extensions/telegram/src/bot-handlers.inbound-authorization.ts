@@ -65,7 +65,6 @@ export interface TelegramHandlerAuthorization {
     chatId: number;
     isGroup: boolean;
     senderId: string;
-    senderUsername: string;
     context: TelegramEventAuthorizationContext;
   }) => Promise<boolean>;
   authorizeInboundMessage: (params: {

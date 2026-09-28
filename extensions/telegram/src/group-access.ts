@@ -82,16 +82,7 @@ type TelegramGroupPolicyAccessResult =
       groupPolicy: "open" | "disabled" | "allowlist";
     };
 
-export const resolveTelegramRuntimeGroupPolicy = (params: {
-  providerConfigPresent: boolean;
-  groupPolicy?: TelegramAccountConfig["groupPolicy"];
-  defaultGroupPolicy?: TelegramAccountConfig["groupPolicy"];
-}) =>
-  resolveOpenProviderRuntimeGroupPolicy({
-    providerConfigPresent: params.providerConfigPresent,
-    groupPolicy: params.groupPolicy,
-    defaultGroupPolicy: params.defaultGroupPolicy,
-  });
+export const resolveTelegramRuntimeGroupPolicy = resolveOpenProviderRuntimeGroupPolicy;
 
 export const resolveTelegramEffectiveGroupPolicy = (params: {
   cfg: OpenClawConfig;

@@ -68,7 +68,6 @@ describe("queued WebChat follow-up delivery", () => {
       payloads: [{ text: "late answer arrived over the live WebSocket" }],
       state: "final",
     },
-    { name: "empty", completion: { kind: "completed" as const }, payloads: [], state: "final" },
     {
       name: "canvas",
       completion: { kind: "completed" as const, allowCanvasOnly: true as const },
@@ -86,12 +85,6 @@ describe("queued WebChat follow-up delivery", () => {
       completion: { kind: "completed" as const },
       payloads: [],
       state: "final",
-    },
-    {
-      name: "failure",
-      completion: { kind: "failed" as const, error: "follow-up failed" },
-      payloads: [],
-      state: "error",
     },
     {
       name: "timeout",

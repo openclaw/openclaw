@@ -42,7 +42,10 @@ import {
   stateStartupCorpusTestFiles,
 } from "../vitest/vitest.startup-corpus-paths.mjs";
 import { assertStartupCorpusCommand } from "./ci-startup-corpus.test-support.js";
-import { runCiManifestFixture } from "./ci-workflow-manifest.test-support.js";
+import {
+  CI_MANIFEST_FIXTURE_TARGETS,
+  runCiManifestFixture,
+} from "./ci-workflow-manifest.test-support.js";
 import {
   AMBIGUOUS_MAIN_PUSH_DIAGNOSTIC,
   CACHE_SAVE_V5,
@@ -64,6 +67,21 @@ import {
 } from "./ci-workflow.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function resolveSelectedUiIncludes(encoded: string): string[][] {
+  const decoded = decodeNodeTestGroups(encoded);
+  if (decoded.length === 0) {
+    return [];
+  }
+  const plans = resolveShardPlans({ OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: encoded });
+  expect(plans).toHaveLength(decoded.length);
+  return plans.map((entry) => {
+    if (entry.kind !== "group" || !entry.plan.includePatterns) {
+      throw new Error("Selected UI plans require an explicit group file filter");
+    }
+    return entry.plan.includePatterns;
+  });
+}
 
 function runCiGateFixture(jobResults: string, env: Record<string, string> = {}) {
   const gateStep = readCiWorkflow().jobs["ci-gate"].steps.find(
@@ -274,7 +292,7 @@ function runRunnerProfileFixture(options: {
 function runCandidateTrustClassification(options: {
   checkoutRevision: string;
   defaultRevision?: string;
-  eventName: "pull_request" | "push" | "workflow_dispatch";
+  eventName: "pull_request" | "push" | "schedule" | "workflow_dispatch";
   historicalTarget?: boolean;
   ref?: string;
   releaseCandidateTarget?: boolean;
@@ -908,40 +926,43 @@ describe("release fast lane", () => {
     }
   }
 
-  it("admits tooling PRs with only changed Node rows and required checks", () => {
-    const result = runCiManifestFixture(fixture);
-    expect(result.status, result.output).toBe(0);
-    expect(result.outputs.release_fast_lane).toBe("true");
-    for (const key of [
-      "run_check",
-      "run_check_docs",
-      "run_format_check",
-      "run_protocol_event_coverage",
-      "run_checks_node_core_nondist",
-    ]) {
-      expect(result.outputs[key], key).toBe("true");
-    }
-    expectNonNodeLanesSkipped(result.outputs);
-    expect(result.outputs.run_build_artifacts).toBe("false");
-    expect(result.outputs.run_checks_node_core_dist).toBe("false");
-    expect(
-      JSON.parse(expectDefined(result.outputs.checks_node_core_nondist_matrix, "Node matrix"))
-        .include,
-    ).toEqual([
-      expect.objectContaining({
-        check_name: "changed-node-plan",
-        requires_dist: false,
-        targets: ["test/scripts/openclaw-release-ready.test.ts"],
-      }),
-    ]);
-    expect(result.output).toContain("changed-node-plan-options:");
-    expect(result.output).toContain('"releaseFastLane":true');
-    expect(result.output).toContain("::notice title=Release fast lane::Admitted");
-    expect(result.summary).toContain("### Release fast lane");
-    expect(result.summary).toContain("Admitted by label `release-fast-lane`");
-    expect(result.summary).toContain("and 1 changed Node rows.");
-    expect(result.summary).not.toContain("build-artifacts for built-CLI rows");
-  });
+  it.each([false, true])(
+    "admits tooling PRs with changed Node rows and required checks (legacy fast-only=%s)",
+    (nodeFastOnly) => {
+      const result = runCiManifestFixture({ ...fixture, nodeFastOnly });
+      expect(result.status, result.output).toBe(0);
+      expect(result.outputs.release_fast_lane).toBe("true");
+      for (const key of [
+        "run_check",
+        "run_check_docs",
+        "run_format_check",
+        "run_protocol_event_coverage",
+        "run_checks_node_core_nondist",
+      ]) {
+        expect(result.outputs[key], key).toBe("true");
+      }
+      expectNonNodeLanesSkipped(result.outputs);
+      expect(result.outputs.run_build_artifacts).toBe("false");
+      expect(result.outputs.run_checks_node_core_dist).toBe("false");
+      expect(
+        JSON.parse(expectDefined(result.outputs.checks_node_core_nondist_matrix, "Node matrix"))
+          .include,
+      ).toEqual([
+        expect.objectContaining({
+          check_name: "changed-node-plan",
+          requires_dist: false,
+          targets: ["test/scripts/openclaw-release-ready.test.ts"],
+        }),
+      ]);
+      expect(result.output).toContain("changed-node-plan-options:");
+      expect(result.output).toContain('"releaseFastLane":true');
+      expect(result.output).toContain("::notice title=Release fast lane::Admitted");
+      expect(result.summary).toContain("### Release fast lane");
+      expect(result.summary).toContain("Admitted by label `release-fast-lane`");
+      expect(result.summary).toContain("and 1 changed Node rows.");
+      expect(result.summary).not.toContain("build-artifacts for built-CLI rows");
+    },
+  );
 
   it("retains build artifacts when a changed Node row requires dist", () => {
     const result = runCiManifestFixture({
@@ -954,6 +975,8 @@ describe("release fast lane", () => {
         }];
         export const createChangedExtensionFallbackShards = () => [];
         export const hasBuildArtifactAffectingChange = () => false;
+        export const hasQaSmokeAffectingChange = () => false;
+        export const hasSqliteSessionLifecycleAffectingChange = () => false;
       `,
       scopeEnv: { ...scopeEnv, OPENCLAW_CI_DOCS_CHANGED: "false" },
     });
@@ -965,7 +988,7 @@ describe("release fast lane", () => {
     expect(result.outputs.run_check_docs).toBe("false");
     expectNonNodeLanesSkipped(result.outputs);
     expect(result.summary).toContain(
-      "and 1 changed Node rows, build-artifacts for built-CLI rows.",
+      "and 1 changed Node rows, build-artifacts for selected owners.",
     );
   });
 
@@ -1020,8 +1043,13 @@ describe("release fast lane", () => {
       options: { changedPaths: ["docs/ci.md"], scopeEnv: { OPENCLAW_CI_DOCS_ONLY: "true" } },
     },
     {
-      name: "fast-only Node PRs",
-      options: { nodeFastOnly: true, nodeFastPluginContracts: true, nodeFastCiRouting: true },
+      name: "fast-only noncanonical Node PRs",
+      options: {
+        repository: "fixture/openclaw",
+        nodeFastOnly: true,
+        nodeFastPluginContracts: true,
+        nodeFastCiRouting: true,
+      },
     },
     {
       name: "release gates",
@@ -1061,7 +1089,7 @@ describe("release fast lane", () => {
     expect(ordinary.output).not.toContain("Release fast lane");
   });
 
-  it("reports broad fallback while retaining the compact Node plan", () => {
+  it("reports bounded owner selection without admitting the broad Node plan", () => {
     const result = runCiManifestFixture({
       ...fixture,
       changedPaths: ["scripts/lib/ci-node-test-plan.mts"],
@@ -1069,17 +1097,30 @@ describe("release fast lane", () => {
     expect(result.status, result.output).toBe(0);
     expect(result.outputs.release_fast_lane).toBe("true");
     expect(
-      JSON.parse(
-        expectDefined(result.outputs.checks_node_core_nondist_matrix, "fallback Node matrix"),
-      ).include,
-    ).toEqual([expect.objectContaining({ check_name: "bundled-node-plan" })]);
+      JSON.parse(expectDefined(result.outputs.checks_node_core_nondist_matrix, "owner Node matrix"))
+        .include,
+    ).toEqual([expect.objectContaining({ check_name: "changed-owner-plan" })]);
     expectNonNodeLanesSkipped(result.outputs);
-    expect(result.outputs.run_build_artifacts).toBe("true");
-    expect(result.output).toContain("Node test plan broad fallback: stub fallback");
-    expect(result.output).toContain('"compactMode":"pull-request"');
-    expect(result.summary).toContain(
-      "Node plan: broad fallback (stub fallback); the complete compact Node plan still runs.",
+    expect(result.outputs.run_build_artifacts).toBe("false");
+    expect(result.output).toContain("Node test plan owner selection: stub owner selection");
+    expect(result.output).not.toContain("node-test-plan-options:");
+    expect(result.summary).toContain("Node plan: bounded owner selection (stub owner selection).");
+  });
+
+  it("retains Docker and QA owners for labeled release tooling changes", () => {
+    const result = runCiManifestFixture({
+      ...fixture,
+      changedPaths: [".github/workflows/ci.yml"],
+    });
+    expect(result.status, result.output).toBe(0);
+    expect(result.outputs.release_fast_lane).toBe("true");
+    expect(result.outputs.run_docker_seed_e2e).toBe("true");
+    expect(result.outputs.docker_seed_lanes).toBe(
+      "published-upgrade-survivor mcp-channels cron-mcp-cleanup mcp-code-mode-gateway",
     );
+    expect(result.outputs.run_qa_smoke_ci).toBe("true");
+    expect(result.outputs.run_check).toBe("true");
+    expect(result.outputs.run_checks_node_core_nondist).toBe("true");
   });
 });
 
@@ -1139,18 +1180,13 @@ describe("ci workflow guards", () => {
       },
     );
 
-    const changedPlannerSource = (requiresDist = false, fallback = false) => `
+    const changedPlannerSource = (requiresDist = false) => `
       export const createChangedNodeTestShards = (_paths, options) => {
         console.log("build-owner:" + JSON.stringify(options.dedicatedBuildArtifacts));
-        return ${
-          fallback
-            ? "null"
-            : `[{ checkName: "selected-test", shardName: "selected-test",
+        return [{ checkName: "selected-test", shardName: "selected-test",
           configs: [], targets: ["src/selected.test.ts"], requiresDist: ${requiresDist},
-          runner: "ubuntu-24.04" }]`
-        };
+          runner: "ubuntu-24.04" }];
       };
-      export const createChangedExtensionFallbackShards = () => [];
       export const hasBuildArtifactAffectingChange = () => true;
       export const hasSqliteSessionLifecycleAffectingChange = () => false;
       export const hasPromptSnapshotAffectingChange = () => false;
@@ -1160,34 +1196,29 @@ describe("ci workflow guards", () => {
     it.each([
       {
         path: "src/shared/runtime.ts",
-        tasks: [
-          "guards",
-          "bundled-channel-config-metadata",
-          "prod-types",
-          "lint",
-          "dependencies",
-          "test-types",
-        ],
-        fastTasks: ["startup-corpus", "bundled-protocol", "bun-launcher"],
+        tasks: ["guards", "prod-types", "lint", "dependencies", "test-types"],
+        fastTasks: [],
         baselineRatchets: true,
-        contracts: true,
+        contracts: false,
+        channelContracts: false,
         performance: false,
         coreStripes: [1, 4],
         lintCoreStripes: [1, 2],
         lintExtensionStripes: [],
-        lintPackage: ".",
+        lintCentralScripts: true,
       },
       {
         path: "src/agents/session.test.ts",
         tasks: ["guards", "lint", "dependencies", "test-types"],
-        fastTasks: ["startup-corpus"],
+        fastTasks: [],
         baselineRatchets: true,
-        contracts: true,
+        contracts: false,
+        channelContracts: false,
         performance: false,
         coreStripes: [1],
         lintCoreStripes: [1, 2],
         lintExtensionStripes: [],
-        lintPackage: ".",
+        lintCentralScripts: true,
         graphs: ["core-test-agents-root", "test-root"],
       },
       {
@@ -1196,49 +1227,38 @@ describe("ci workflow guards", () => {
         fastTasks: [],
         baselineRatchets: false,
         contracts: false,
+        channelContracts: false,
         performance: false,
         coreStripes: [],
         lintCoreStripes: [],
         lintExtensionStripes: [],
-        lintPackage: "ui",
+        lintCentralScripts: false,
       },
       {
         path: "packages/ui-shared/index.ts",
-        tasks: [
-          "guards",
-          "bundled-channel-config-metadata",
-          "prod-types",
-          "lint",
-          "dependencies",
-          "test-types",
-        ],
-        fastTasks: ["startup-corpus", "bundled-protocol", "bun-launcher"],
+        tasks: ["guards", "prod-types", "lint", "dependencies", "test-types"],
+        fastTasks: [],
         baselineRatchets: true,
-        contracts: true,
+        contracts: false,
+        channelContracts: false,
         performance: true,
         coreStripes: [1, 4],
         lintCoreStripes: [1],
         lintExtensionStripes: [],
-        lintPackage: "packages/ui-shared",
+        lintCentralScripts: false,
       },
       {
         path: "extensions/telegram/src/send.ts",
-        tasks: [
-          "guards",
-          "bundled-channel-config-metadata",
-          "prod-types",
-          "lint",
-          "dependencies",
-          "test-types",
-        ],
-        fastTasks: ["startup-corpus", "bundled-protocol", "bun-launcher"],
+        tasks: ["guards", "prod-types", "lint", "dependencies", "test-types"],
+        fastTasks: [],
         baselineRatchets: true,
-        contracts: true,
+        contracts: false,
+        channelContracts: false,
         performance: false,
         coreStripes: [],
         lintCoreStripes: [],
         lintExtensionStripes: [3],
-        lintPackage: "extensions/telegram",
+        lintCentralScripts: false,
         graphs: ["extensions", "extensions-test", "test-root"],
       },
     ])(
@@ -1249,11 +1269,12 @@ describe("ci workflow guards", () => {
         fastTasks,
         baselineRatchets,
         contracts,
+        channelContracts,
         performance,
         coreStripes,
         lintCoreStripes,
         lintExtensionStripes,
-        lintPackage,
+        lintCentralScripts,
         graphs,
       }) => {
         const paths = [changedPath];
@@ -1261,7 +1282,7 @@ describe("ci workflow guards", () => {
           core: lintCoreStripes.map((stripe) => ({
             stripe,
             lint_selection_json: JSON.stringify({
-              packages: [lintPackage],
+              files: [changedPath],
               coreStripes: stripe === 1 ? [1, 2] : [3, 4, 5],
               extensionStripes: [],
               groups: [],
@@ -1271,7 +1292,7 @@ describe("ci workflow guards", () => {
           extensions: lintExtensionStripes.map((stripe) => ({
             stripe,
             lint_selection_json: JSON.stringify({
-              packages: [lintPackage],
+              files: [changedPath],
               coreStripes: [],
               extensionStripes: [stripe],
               groups: [],
@@ -1279,10 +1300,10 @@ describe("ci workflow guards", () => {
             }),
           })),
           central: {
-            packages: [lintPackage],
+            files: lintCentralScripts ? ["scripts/selected-lint.mts"] : [],
             coreStripes: [],
             extensionStripes: [],
-            groups: lintPackage === "." ? ["scripts"] : [],
+            groups: lintCentralScripts ? ["scripts"] : [],
             central: true,
           },
         };
@@ -1325,7 +1346,7 @@ describe("ci workflow guards", () => {
         ).toEqual(fastTasks);
         expect(manifest.outputs.run_baseline_ratchets).toBe(String(baselineRatchets));
         expect(manifest.outputs.run_plugin_contracts_shards).toBe(String(contracts));
-        expect(manifest.outputs.run_channel_contracts_shards).toBe(String(contracts));
+        expect(manifest.outputs.run_channel_contracts_shards).toBe(String(channelContracts));
         expect(
           evaluateWorkflowExpression(
             workflow.jobs.preflight.outputs.narrow_check_paths_json,
@@ -1343,8 +1364,8 @@ describe("ci workflow guards", () => {
           (candidate: WorkflowStep) => candidate.name === "Run additional check shard",
         );
         expect(
-          evaluateWorkflowExpression(boundaryStep.env.TYPE_GRAPH_BOUNDARY_CHECKED, context),
-        ).toBe(String(tasks.includes("test-types")));
+          evaluateWorkflowExpression(boundaryStep.env.TYPE_GRAPH_BOUNDARY_OWNER, context),
+        ).toBe(tasks.includes("test-types") ? "check-plan" : "");
         expect(
           evaluateWorkflowExpression(
             workflow.jobs["check-test-types-hosted-core-shard"].if,
@@ -1378,7 +1399,98 @@ describe("ci workflow guards", () => {
       },
     );
 
-    it.each(["pull_request", "push"] as const)(
+    it.each([false, true])(
+      "keeps JSON compiler boundary proof in the required planner (fails=%s)",
+      (ciTypeBoundaryFailure) => {
+        const manifest = runCiManifestFixture({
+          bundledPlanner: true,
+          checkFamilyScope: true,
+          eventName: "pull_request",
+          runnerProfile: "hybrid",
+          changedPaths: ["ui/src/settings.json"],
+          changedPlannerSource: changedPlannerSource(),
+          ciTypeBoundaryFailure,
+        });
+        expect(manifest.outputs.run_check_plan).toBe("true");
+        expect(manifest.outputs.run_checks_node_core_nondist).toBe("true");
+        expect(manifest.outputs.type_graph_boundary_owner).toBe("check-plan");
+        expect(manifest.outputs.run_check_additional).toBe("false");
+        expect(manifest.output).toContain("fixture: core compiler boundary checked");
+        expect(manifest.status, manifest.output).toBe(ciTypeBoundaryFailure ? 1 : 0);
+        if (ciTypeBoundaryFailure) {
+          expect(manifest.output).toContain("core compiler graph includes a bundled extension");
+          expect(manifest.checkPlanOutputs).toEqual({});
+        }
+        const plannerResult = manifest.status === 0 ? "success" : "failure";
+        const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
+          eventName: "pull_request",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          runnerProfile: "hybrid",
+          preflightOutputs: manifest.outputs,
+          additionalNeeds: {
+            "check-plan": { outputs: manifest.checkPlanOutputs, result: plannerResult },
+          },
+        };
+        expect(
+          evaluateWorkflowExpression(readCiWorkflow().jobs["check-additional-shard"].if, context),
+        ).toBe(false);
+        const gate = runCiGateFixture(
+          renderCiGateEnvironment(context, {
+            "check-plan": plannerResult,
+            "check-additional-shard": "skipped",
+          }),
+        );
+        expect(gate.status, `${gate.stdout}${gate.stderr}`).toBe(ciTypeBoundaryFailure ? 1 : 0);
+      },
+    );
+
+    it.each([
+      { paths: ["src/config/settings.json"], owner: "check-plan", boundaryRow: false },
+      {
+        paths: ["src/shared/runtime.ts", "src/config/settings.json"],
+        owner: "additional-checks",
+        boundaryRow: true,
+      },
+    ])(
+      "retains full compiler proof without adding a boundary row for $paths",
+      ({ paths, owner, boundaryRow }) => {
+        const manifest = runCiManifestFixture({
+          bundledPlanner: true,
+          checkFamilyScope: true,
+          eventName: "pull_request",
+          runnerProfile: "hybrid",
+          changedPaths: paths,
+          changedPlannerSource: changedPlannerSource(),
+        });
+        expect(manifest.status, manifest.output).toBe(0);
+        expect(manifest.outputs.type_graph_boundary_owner).toBe(owner);
+        const rows = JSON.parse(
+          expectDefined(manifest.outputs.check_additional_matrix, "additional matrix"),
+        ).include;
+        expect(rows.some((row: { group: string }) => row.group === "boundaries")).toBe(boundaryRow);
+        expect(manifest.output.includes("fixture: core compiler boundary checked")).toBe(
+          owner === "check-plan",
+        );
+        const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
+          eventName: "pull_request",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          runnerProfile: "hybrid",
+          preflightOutputs: manifest.outputs,
+          additionalNeeds: {
+            "check-plan": { outputs: manifest.checkPlanOutputs, result: "success" },
+          },
+        };
+        const ownerJob = owner === "check-plan" ? "check-plan" : "check-additional-shard";
+        for (const result of ["success", "failure", "cancelled", "skipped"] as const) {
+          const gate = runCiGateFixture(renderCiGateEnvironment(context, { [ownerJob]: result }));
+          expect(gate.status, `${gate.stdout}${gate.stderr}`).toBe(result === "success" ? 0 : 1);
+        }
+      },
+    );
+
+    it.each(["push"] as const)(
       "keeps full families on %s when narrowing is unavailable",
       (eventName) => {
         const manifest = runCiManifestFixture({
@@ -1387,7 +1499,7 @@ describe("ci workflow guards", () => {
           eventName,
           runnerProfile: "hybrid",
           changedPaths: ["ui/src/styles/chat.css"],
-          changedPlannerSource: changedPlannerSource(false, true),
+          changedPlannerSource: changedPlannerSource(),
         });
         expect(manifest.status, manifest.output).toBe(0);
         const workflow = readCiWorkflow();
@@ -1412,6 +1524,11 @@ describe("ci workflow guards", () => {
           "dependencies",
           "test-types",
         ]);
+        expect(
+          JSON.parse(
+            expectDefined(manifest.outputs.checks_fast_core_matrix, "fast checks matrix"),
+          ).include.some((row: { task: string }) => row.task === "coercion-helpers"),
+        ).toBe(false);
         expect(manifest.outputs.narrow_check_paths_json).toBe("");
         expect(manifest.outputs.run_baseline_ratchets).toBe("true");
         expect(manifest.outputs.run_plugin_contracts_shards).toBe("true");
@@ -1427,6 +1544,40 @@ describe("ci workflow guards", () => {
       },
     );
 
+    it("retains independent check ownership alongside a bounded PR Node plan", () => {
+      const changedPaths = ["ui/src/styles/chat.css"];
+      const manifest = runCiManifestFixture({
+        bundledPlanner: true,
+        checkFamilyScope: true,
+        eventName: "pull_request",
+        changedPaths,
+        ciLintPlan: {
+          core: [],
+          extensions: [],
+          central: {
+            files: [],
+            coreStripes: [],
+            extensionStripes: [],
+            groups: [],
+            central: true,
+          },
+        },
+        changedPlannerSource: changedPlannerSource(),
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      expect(manifest.outputs.narrow_check_paths_json).toBe(JSON.stringify(changedPaths));
+      expect(manifest.outputs.run_check_plan).toBe("true");
+      expect(manifest.outputs.run_plugin_contracts_shards).toBe("false");
+      expect(manifest.outputs.run_channel_contracts_shards).toBe("false");
+      expect(manifest.outputs.run_baseline_ratchets).toBe("false");
+      expect(manifest.outputs.run_checks_node_core_nondist).toBe("true");
+      expect(
+        JSON.parse(expectDefined(manifest.outputs.check_matrix, "scoped check matrix")).include.map(
+          (row: { task: string }) => row.task,
+        ),
+      ).toEqual(["lint"]);
+    });
+
     it("requires a successful selected check planner before admitting its consumers", () => {
       const manifest = runCiManifestFixture({
         bundledPlanner: true,
@@ -1438,7 +1589,7 @@ describe("ci workflow guards", () => {
           core: [{ stripe: 1, lint_selection_json: "{}" }],
           extensions: [{ stripe: 1, lint_selection_json: "{}" }],
           central: {
-            packages: ["."],
+            files: ["scripts/selected-lint.mts"],
             coreStripes: [],
             extensionStripes: [],
             groups: ["scripts"],
@@ -1466,7 +1617,6 @@ describe("ci workflow guards", () => {
         };
         for (const job of [
           "check-shard",
-          "check-additional-shard",
           "check-test-types-hosted-core-shard",
           "check-lint-hosted-core-shard",
           "check-lint-hosted-extension-shard",
@@ -1477,6 +1627,15 @@ describe("ci workflow guards", () => {
             `${job}: ${result}`,
           ).toBe(result === "success");
         }
+        const additional = workflow.jobs["check-additional-shard"];
+        expect(additional.needs).toEqual(["preflight"]);
+        expect(evaluateWorkflowExpression(additional.if, context)).toBe(true);
+        const additionalStep = additional.steps.find(
+          (step: WorkflowStep) => step.name === "Run additional check shard",
+        );
+        expect(
+          evaluateWorkflowExpression(additionalStep.env.TYPE_GRAPH_BOUNDARY_OWNER, context),
+        ).toBe("check-plan");
         const gate = runCiGateFixture(renderCiGateEnvironment(context, { "check-plan": result }));
         expect(gate.status, `${gate.stdout}${gate.stderr}`).toBe(result === "success" ? 0 : 1);
       }
@@ -1532,6 +1691,8 @@ describe("ci workflow guards", () => {
           eventName: "workflow_dispatch",
           releaseGate: true,
           nodeRunnerBackend: "runson",
+          selectedTestTargets: ["src/cron/schedule.test.ts"],
+          changedPlannerSource: undefined,
         },
         expected: [1, 2],
       },
@@ -1545,17 +1706,21 @@ describe("ci workflow guards", () => {
         checkFamilyScope: true,
         historicalCompatibility: false,
         runnerProfile: "hybrid",
-        changedPaths: ["ui/src/styles/chat.css"],
-        changedPlannerSource: changedPlannerSource(false, true),
+        changedPaths: ["tsconfig.json"],
+        changedPlannerSource: changedPlannerSource(),
         ...options,
       });
       expect(manifest.status, manifest.output).toBe(0);
+      expect(manifest.outputs.run_check_plan).toBe("false");
       const workflow = readCiWorkflow();
       const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
         eventName: options.eventName ?? "workflow_dispatch",
         repository: "openclaw/openclaw",
         runAttempt: 1,
         preflightOutputs: manifest.outputs,
+        additionalNeeds: {
+          "check-plan": { outputs: manifest.checkPlanOutputs, result: "success" },
+        },
       };
       expect(
         evaluateWorkflowExpression(workflow.jobs["check-shard"].strategy.matrix, context).include,
@@ -1650,7 +1815,7 @@ describe("ci workflow guards", () => {
         expect(manifest.outputs.changed_core_test_paths_json).toBe(
           changedCorePaths ? JSON.stringify(paths) : "",
         );
-        expect(manifest.checkPlanOutputs.type_graph_boundary_checked).toBe("true");
+        expect(manifest.outputs.type_graph_boundary_owner).toBe("check-plan");
         const workflow = readCiWorkflow();
         const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
           eventName: "pull_request" as const,
@@ -1864,129 +2029,144 @@ describe("ci workflow guards", () => {
       includeReleaseOnlyTests: true,
     },
     {
-      name: "older Tooling without the real-Gateway shard helper",
-      eventName: "pull_request" as const,
+      name: "older manual Tooling without the real-Gateway shard helper",
+      eventName: "workflow_dispatch" as const,
       changedPaths: ["ui/src/components/app-sidebar.ts"],
-      includeReleaseOnlyTests: false,
+      includeReleaseOnlyTests: true,
       uiRealGatewayShards: false,
     },
-  ])("forwards the UI release-tier selection for $name to all three test jobs", (scenario) => {
-    const uiRealGatewayShards =
-      !("uiRealGatewayShards" in scenario) || scenario.uiRealGatewayShards;
-    const manifest = runCiManifestFixture({
-      bundledPlanner: true,
-      uiReleaseTier: true,
-      uiRealGatewayShards,
-      historicalCompatibility: false,
-      eventName: scenario.eventName,
-      changedPaths: scenario.changedPaths,
-      scopeEnv: {
-        OPENCLAW_CI_RUN_UI_TESTS: "true",
-        OPENCLAW_CI_WORKFLOW_REVISION: "a".repeat(40),
-      },
-    });
-    expect(manifest.status, manifest.output).toBe(0);
-    const workflow = readCiWorkflow();
-    const context = {
-      eventName: scenario.eventName,
-      repository: "openclaw/openclaw",
-      runAttempt: 1,
-      preflightOutputs: manifest.outputs,
-      steps: { manifest: { outputs: manifest.outputs } },
-    };
-    const fixtureTier = JSON.stringify({
-      includeReleaseOnlyTests: scenario.includeReleaseOnlyTests,
-      includePrExemptRuntimeTests: scenario.eventName !== "pull_request",
-      changedPaths: scenario.changedPaths,
-    });
-    for (const [name, config, output, job, stepName] of [
-      ["ui", "ui/vitest.config.ts", "ui_test_groups_gzip_base64", "checks-ui", "Test Control UI"],
-      [
-        "e2e",
-        "test/vitest/vitest.ui-e2e.config.ts",
-        "ui_e2e_test_groups_gzip_base64",
-        "checks-ui-e2e",
-        "Test Control UI end-to-end",
-      ],
-    ] as const) {
-      const packed = expectDefined(manifest.outputs[output], `${name} packed test selection`);
-      expect(decodeNodeTestGroups(packed)).toEqual([
-        {
-          configs: [config],
-          shard_name: name,
-          env: { fixtureTier },
+  ])(
+    "projects selected targets from UI descriptors while retaining release tiers for $name",
+    (scenario) => {
+      const uiRealGatewayShards =
+        !("uiRealGatewayShards" in scenario) || scenario.uiRealGatewayShards;
+      const selectedTestTargets = [
+        ...CI_MANIFEST_FIXTURE_TARGETS.ui,
+        ...CI_MANIFEST_FIXTURE_TARGETS.mocked,
+        ...CI_MANIFEST_FIXTURE_TARGETS.real,
+        ...CI_MANIFEST_FIXTURE_TARGETS.browser,
+      ];
+      const manifest = runCiManifestFixture({
+        selectedTestTargets,
+        bundledPlanner: true,
+        uiReleaseTier: true,
+        uiRealGatewayShards,
+        historicalCompatibility: false,
+        eventName: scenario.eventName,
+        changedPaths: scenario.changedPaths,
+        scopeEnv: {
+          OPENCLAW_CI_RUN_UI_TESTS: "true",
+          OPENCLAW_CI_WORKFLOW_REVISION: "a".repeat(40),
         },
-      ]);
-      expect(evaluateWorkflowExpression(workflow.jobs.preflight.outputs[output], context)).toBe(
-        packed,
-      );
-      const step = expectDefined(
-        workflow.jobs[job].steps.find((candidate: WorkflowStep) => candidate.name === stepName),
-        `${name} test command`,
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      const workflow = readCiWorkflow();
+      const context = {
+        eventName: scenario.eventName,
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        preflightOutputs: manifest.outputs,
+        steps: { manifest: { outputs: manifest.outputs } },
+      };
+      const fixtureTier = JSON.stringify({
+        includeReleaseOnlyTests: scenario.includeReleaseOnlyTests,
+        includePrExemptRuntimeTests: true,
+        changedPaths:
+          scenario.eventName === "pull_request" ? selectedTestTargets : scenario.changedPaths,
+      });
+      for (const [name, config, output, job, stepName] of [
+        ["ui", "ui/vitest.config.ts", "ui_test_groups_gzip_base64", "checks-ui", "Test Control UI"],
+        [
+          "e2e",
+          "test/vitest/vitest.ui-e2e.config.ts",
+          "ui_e2e_test_groups_gzip_base64",
+          "checks-ui-e2e",
+          "Test Control UI end-to-end",
+        ],
+      ] as const) {
+        const packed = expectDefined(manifest.outputs[output], `${name} packed test selection`);
+        expect(decodeNodeTestGroups(packed)).toEqual([
+          {
+            configs: [config],
+            shard_name: name,
+            includePatterns:
+              name === "ui"
+                ? CI_MANIFEST_FIXTURE_TARGETS.ui
+                : [...CI_MANIFEST_FIXTURE_TARGETS.mocked, ...CI_MANIFEST_FIXTURE_TARGETS.real],
+            env: { fixtureTier },
+          },
+        ]);
+        expect(evaluateWorkflowExpression(workflow.jobs.preflight.outputs[output], context)).toBe(
+          packed,
+        );
+        const step = expectDefined(
+          workflow.jobs[job].steps.find((candidate: WorkflowStep) => candidate.name === stepName),
+          `${name} test command`,
+        );
+        expect(
+          evaluateWorkflowExpression(step.env.OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64, context),
+        ).toBe(packed);
+      }
+      const packedMatrix = expectDefined(
+        manifest.outputs.ui_real_gateway_matrix,
+        "real-Gateway matrix",
       );
       expect(
-        evaluateWorkflowExpression(step.env.OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64, context),
-      ).toBe(packed);
-    }
-    const packedMatrix = expectDefined(
-      manifest.outputs.ui_real_gateway_matrix,
-      "real-Gateway matrix",
-    );
-    expect(
-      evaluateWorkflowExpression(workflow.jobs.preflight.outputs.ui_real_gateway_matrix, context),
-    ).toBe(packedMatrix);
-    const matrix: {
-      include: Array<{
-        shard: number;
-        shard_count: number;
-        run_desktop: boolean;
-        test_groups_gzip_base64: string;
-      }>;
-    } = JSON.parse(packedMatrix);
-    const sharded = uiRealGatewayShards;
-    expect(matrix.include.map(({ test_groups_gzip_base64: _groups, ...row }) => row)).toEqual(
-      sharded
-        ? [
-            { shard: 1, shard_count: 2, run_desktop: true },
-            { shard: 2, shard_count: 2, run_desktop: false },
-          ]
-        : [{ shard: 1, shard_count: 1, run_desktop: true }],
-    );
-    const job = workflow.jobs["checks-ui-e2e-real-gateway"];
-    const step = expectDefined(
-      job.steps.find(
-        (candidate: WorkflowStep) =>
-          candidate.name === "Test Control UI suites with a real Gateway",
-      ),
-      "real-Gateway test command",
-    );
-    for (const row of matrix.include) {
-      const packed = row.test_groups_gzip_base64;
-      expect(decodeNodeTestGroups(packed)).toEqual(
+        evaluateWorkflowExpression(workflow.jobs.preflight.outputs.ui_real_gateway_matrix, context),
+      ).toBe(packedMatrix);
+      const matrix: {
+        include: Array<{
+          shard: number;
+          shard_count: number;
+          run_desktop: boolean;
+          test_groups_gzip_base64: string;
+        }>;
+      } = JSON.parse(packedMatrix);
+      const sharded = uiRealGatewayShards;
+      expect(matrix.include.map(({ test_groups_gzip_base64: _groups, ...row }) => row)).toEqual(
         sharded
           ? [
-              {
-                configs: ["test/vitest/vitest.ui-e2e-prebuilt.config.ts"],
-                shard_name: `real-gateway-${row.shard}`,
-                includePatterns: [`ui/src/e2e/fixture-${row.shard}.real-gateway.e2e.test.ts`],
-                env: { fixtureTier },
-              },
+              { shard: 1, shard_count: 2, run_desktop: true, run_tests: true },
+              { shard: 2, shard_count: 2, run_desktop: false, run_tests: true },
             ]
-          : decodeNodeTestGroups(
-              expectDefined(
-                manifest.outputs.ui_e2e_test_groups_gzip_base64,
-                "real-Gateway test groups",
-              ),
-            ),
+          : [{ shard: 1, shard_count: 1, run_desktop: true, run_tests: true }],
       );
-      expect(
-        evaluateWorkflowExpression(step.env.OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64, {
-          ...context,
-          matrix: row,
-        }),
-      ).toBe(packed);
-    }
-  });
+      const job = workflow.jobs["checks-ui-e2e-real-gateway"];
+      const step = expectDefined(
+        job.steps.find(
+          (candidate: WorkflowStep) =>
+            candidate.name === "Test Control UI suites with a real Gateway",
+        ),
+        "real-Gateway test command",
+      );
+      for (const row of matrix.include) {
+        const packed = row.test_groups_gzip_base64;
+        expect(decodeNodeTestGroups(packed)).toEqual(
+          sharded
+            ? [
+                {
+                  configs: ["test/vitest/vitest.ui-e2e-prebuilt.config.ts"],
+                  shard_name: `real-gateway-${row.shard}`,
+                  includePatterns: [CI_MANIFEST_FIXTURE_TARGETS.real[row.shard - 1]],
+                  env: { fixtureTier },
+                },
+              ]
+            : decodeNodeTestGroups(
+                expectDefined(
+                  manifest.outputs.ui_e2e_test_groups_gzip_base64,
+                  "real-Gateway test groups",
+                ),
+              ),
+        );
+        expect(
+          evaluateWorkflowExpression(step.env.OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64, {
+            ...context,
+            matrix: row,
+          }),
+        ).toBe(packed);
+      }
+    },
+  );
 
   it.each([
     { eventName: "push" as const },
@@ -1998,6 +2178,10 @@ describe("ci workflow guards", () => {
   ])("retains UI E2E outside current known unit-only PR selection %j", (options) => {
     const manifest = runCiManifestFixture({
       bundledPlanner: true,
+      selectedTestTargets: [
+        ...CI_MANIFEST_FIXTURE_TARGETS.ui,
+        ...CI_MANIFEST_FIXTURE_TARGETS.mocked,
+      ],
       changedPaths: ["ui/src/pages/activity/activity-page.test.ts"],
       scopeEnv: { OPENCLAW_CI_RUN_UI_TESTS: "true" },
       ...options,
@@ -2081,13 +2265,14 @@ describe("ci workflow guards", () => {
       );
       expect(plan).toMatchObject({
         includeProofTests: true,
-        includeReleaseOnlyToolingShards: release,
+        includeReleaseOnlyToolingShards: true,
         includeReleaseOnlyRuntimeTests: release,
         includePrExemptRuntimeTests: true,
         includeReleaseOnlyPluginShards: false,
         compact: !release,
+        compactNodeJobCap: release ? 70 : 77,
       });
-      expect(plan.compactMode).toBe(release ? undefined : "push");
+      expect(plan.compactMode).toBe(release ? undefined : "pull-request");
       expect(
         decodeNodeTestGroups(
           expectDefined(manifest.outputs.ui_test_groups_gzip_base64, "UI groups"),
@@ -2586,29 +2771,7 @@ describe("ci workflow guards", () => {
       expect(actual).toContain("checks-baseline-ratchets");
       expect(actual).not.toContain("check-plan");
       expect(Number(qualification.outputs.hybrid_hosted_base_rows)).toBe(
-        emittedHostedRows(
-          {
-            ...qualification.outputs,
-            hybrid_hosted_offload: "false",
-            node_runner_backend: "runson",
-          },
-          {
-            eventName: "workflow_dispatch",
-            releaseGate: true,
-            runnerBackend: "runson",
-            runnerProfile: "hybrid",
-          },
-        ).length,
-      );
-      expect(Number(ordinary.outputs.hybrid_hosted_base_rows)).toBe(
-        emittedHostedRows(
-          {
-            ...ordinary.outputs,
-            hybrid_hosted_offload: "false",
-            node_runner_backend: "runson",
-          },
-          { eventName: "pull_request" },
-        ).length,
+        Number(ordinary.outputs.hybrid_hosted_base_rows) + 2,
       );
       expect(Number(qualification.outputs.hybrid_hosted_total_rows)).toBe(actual.length);
     });
@@ -2641,22 +2804,35 @@ describe("ci workflow guards", () => {
       });
     }
 
-    it("counts both mutating and read-only PR observers in the hosted inventory", () => {
+    it("reserves the fork observer before admitting optional hosted rows", () => {
       const eventName = "pull_request" as const;
       const changedPaths = [".github/workflows/ci.yml"];
-      for (const headRepository of ["openclaw/openclaw", "contributor/openclaw"]) {
-        const manifest = manifestWithHostedNodeRows(1, {
-          eventName,
-          changedPaths,
-          scopeEnv: { OPENCLAW_CI_HEAD_REPOSITORY: headRepository },
-        });
-        expect(manifest.status, manifest.output).toBe(0);
-        const hostedRows = emittedHostedRows(manifest.outputs, { eventName, headRepository });
-        expect(Number(manifest.outputs.hybrid_hosted_base_rows)).toBe(hostedRows.length);
-        expect(Number(manifest.outputs.hybrid_hosted_total_rows)).toBe(hostedRows.length);
-        expect(manifest.outputs.hybrid_hosted_offload).toBe("false");
-        expect(hostedRows.filter((name) => name === "pr-fail-fast")).toHaveLength(1);
-      }
+      const baseline = manifestWithHostedNodeRows(1, { eventName, changedPaths });
+      expect(baseline.status, baseline.output).toBe(0);
+      const nodeRows = 1 + 40 - Number(baseline.outputs.hybrid_hosted_base_rows);
+      expect(nodeRows).toBeGreaterThan(0);
+      const sameRepository = manifestWithHostedNodeRows(nodeRows, { eventName, changedPaths });
+      const fork = manifestWithHostedNodeRows(nodeRows, {
+        eventName,
+        changedPaths,
+        scopeEnv: { OPENCLAW_CI_HEAD_REPOSITORY: "contributor/openclaw" },
+      });
+      expect(sameRepository.status, sameRepository.output).toBe(0);
+      expect(fork.status, fork.output).toBe(0);
+      expect(Number(sameRepository.outputs.hybrid_hosted_base_rows)).toBe(40);
+      const sameRows = emittedHostedRows(sameRepository.outputs, { eventName });
+      const forkRows = emittedHostedRows(fork.outputs, {
+        eventName,
+        headRepository: "contributor/openclaw",
+      });
+      const hostedForkJobs = ["check-plan", "checks-baseline-ratchets", "docker-seed-e2e"].filter(
+        (name) => forkRows.includes(name) && !sameRows.includes(name),
+      ).length;
+      expect(Number(fork.outputs.hybrid_hosted_base_rows)).toBe(40 + hostedForkJobs + 1);
+      expect(sameRepository.outputs.hybrid_hosted_offload).toBe("true");
+      expect(fork.outputs.hybrid_hosted_offload).toBe("false");
+      expect(Number(fork.outputs.hybrid_hosted_total_rows)).toBeLessThanOrEqual(45);
+      expect(forkRows).toContain("pr-fail-fast");
     });
 
     it.each([true, false])("bounds hosted rows with Android=%s", (androidSelected) => {
@@ -2757,25 +2933,40 @@ describe("ci workflow guards", () => {
     });
 
     it.each([
-      { eventName: "push" as const, ref: "refs/heads/main", windows: false, admitted: true },
-      { eventName: "push" as const, ref: "refs/heads/feature", windows: false, admitted: false },
+      {
+        eventName: "push" as const,
+        ref: "refs/heads/main",
+        windows: false,
+        admitted: true,
+        healthProbe: true,
+      },
+      {
+        eventName: "push" as const,
+        ref: "refs/heads/feature",
+        windows: false,
+        admitted: false,
+        healthProbe: false,
+      },
       {
         eventName: "pull_request" as const,
         ref: "refs/pull/1/merge",
         windows: false,
         admitted: false,
+        healthProbe: false,
       },
       {
         eventName: "pull_request" as const,
         ref: "refs/pull/1/merge",
         windows: true,
-        admitted: true,
+        admitted: false,
+        healthProbe: true,
       },
     ])(
       "requires a measured workload with slack ($eventName, Windows=$windows, $ref)",
-      ({ eventName, ref, windows, admitted }) => {
+      ({ eventName, ref, windows, admitted, healthProbe }) => {
         const manifest = manifestWithHostedNodeRows(0, {
           eventName,
+          selectedTestTargets: CI_MANIFEST_FIXTURE_TARGETS.windows,
           changedPaths: ["src/commands/doctor-config-preflight.plugin-persistence.test.ts"],
           changedCoreTestSupport: true,
           changedPlannerDependencies: [
@@ -2801,9 +2992,7 @@ describe("ci workflow guards", () => {
         expect(manifest.status, manifest.output).toBe(0);
         expect(manifest.outputs.run_check).toBe("true");
         expect(manifest.outputs.run_checks_windows).toBe(String(windows));
-        expect(manifest.outputs.hybrid_hosted_checks).toBe(
-          String(admitted && eventName === "push"),
-        );
+        expect(manifest.outputs.hybrid_hosted_checks).toBe(String(admitted));
         if (eventName === "pull_request") {
           expect(manifest.outputs.changed_core_test_paths_json).toBe(
             '["src/commands/doctor-config-preflight.plugin-persistence.test.ts"]',
@@ -2812,7 +3001,7 @@ describe("ci workflow guards", () => {
         const hosted = emittedHostedRows(manifest.outputs, { eventName, ref });
         expect(Number(manifest.outputs.hybrid_hosted_total_rows)).toBe(hosted.length);
         expect(hosted.filter((name) => name === "check-test-types-hosted-core-shard")).toHaveLength(
-          eventName === "pull_request" || admitted ? 5 : 0,
+          admitted ? 5 : 0,
         );
         expect(manifest.outputs.hybrid_hosted_main_checks).toBe(
           String(admitted && eventName === "push"),
@@ -2830,9 +3019,7 @@ describe("ci workflow guards", () => {
               matrix: { task, runner: "blacksmith-16vcpu-ubuntu-2404" },
             }),
           ).toBe(
-            eventName === "pull_request" || admitted
-              ? "ubuntu-24.04"
-              : "blacksmith-16vcpu-ubuntu-2404",
+            admitted && eventName === "push" ? "ubuntu-24.04" : "blacksmith-16vcpu-ubuntu-2404",
           );
         }
         expect(
@@ -2844,7 +3031,7 @@ describe("ci workflow guards", () => {
             runnerBackend: "hybrid",
             preflightOutputs: manifest.outputs,
           }),
-        ).toBe(eventName === "pull_request" ? "ubuntu-24.04" : "blacksmith-16vcpu-ubuntu-2404");
+        ).toBe("blacksmith-16vcpu-ubuntu-2404");
         const step = readCiWorkflow().jobs.preflight.steps.find(
           (candidate: WorkflowStep) => candidate.id === "hosted_health",
         );
@@ -2865,7 +3052,7 @@ describe("ci workflow guards", () => {
               },
             },
           }),
-        ).toBe(admitted);
+        ).toBe(healthProbe);
       },
     );
 
@@ -2970,73 +3157,48 @@ describe("ci workflow guards", () => {
         eventName: "pull_request" as const,
         runnerProfile: "hybrid" as const,
         headRepository: "openclaw/openclaw",
-        hostedNodeRows: 0,
-      },
-      {
-        label: "broad PR above optional offload budget",
-        eventName: "pull_request" as const,
-        runnerProfile: "hybrid" as const,
-        headRepository: "openclaw/openclaw",
-        hostedNodeRows: 130,
       },
       {
         label: "trusted fork PR",
         eventName: "pull_request" as const,
         runnerProfile: "github" as const,
         headRepository: "contributor/openclaw",
-        hostedNodeRows: 0,
       },
       {
         label: "main",
         eventName: "push" as const,
         runnerProfile: "hybrid" as const,
         headRepository: "openclaw/openclaw",
-        hostedNodeRows: 0,
       },
-    ])(
-      "counts all selected rows for $label",
-      ({ eventName, runnerProfile, headRepository, hostedNodeRows }) => {
-        const manifest = manifestWithHostedNodeRows(hostedNodeRows, {
-          eventName,
-          runnerProfile,
-          ...(hostedNodeRows > 0 ? { nodeRunnerBackend: "github" as const } : {}),
-          changedPaths: ["apps/ios/Sources/Foo.swift"],
-          scopeEnv: {
-            OPENCLAW_CI_HEAD_REPOSITORY: headRepository,
-            OPENCLAW_CI_RUN_MACOS_NODE: "true",
-            OPENCLAW_CI_RUN_IOS_SCREENSHOTS: "true",
-          },
-        });
-        expect(manifest.status, manifest.output).toBe(0);
-        expect(manifest.outputs.hybrid_hosted_offload).toBe(String(eventName !== "pull_request"));
-        const context = { eventName, runnerProfile, headRepository };
-        const outputs = { ...manifest.outputs, run_ios_screenshots: "true" };
-        const base = emittedHostedRows({ ...outputs, hybrid_hosted_offload: "false" }, context);
-        expect(Number(manifest.outputs.hybrid_hosted_base_rows)).toBe(base.length);
-        expect(Number(manifest.outputs.hybrid_hosted_total_rows)).toBe(
-          emittedHostedRows(outputs, context).length,
-        );
-        expect(base.filter((name) => name === "macos-node")).toHaveLength(3);
-        expect(base.filter((name) => name === "ios-screenshot-shard")).toHaveLength(2);
-        expect(base.filter((name) => name === "ios-screenshot-evidence")).toHaveLength(1);
-        expect(base.filter((name) => name === "checks-ui")).toHaveLength(
-          eventName === "pull_request" ? 3 : 0,
-        );
-        if (hostedNodeRows > 0) {
-          expect(base.length).toBeGreaterThan(130);
-          expect(Number(manifest.outputs.hybrid_hosted_total_rows)).toBe(base.length);
-        }
-        expect(base.filter((name) => name === "ci-gate")).toHaveLength(
-          eventName === "pull_request" ? 1 : 0,
-        );
-        expect(base.filter((name) => name === "check-lint-hosted-core-shard")).toHaveLength(
-          eventName === "pull_request" ? (runnerProfile === "hybrid" ? 2 : 5) : 0,
-        );
-        expect(base.filter((name) => name === "check-lint-hosted-extension-shard")).toHaveLength(
-          runnerProfile === "hybrid" ? 3 : 0,
-        );
-      },
-    );
+    ])("counts all selected rows for $label", ({ eventName, runnerProfile, headRepository }) => {
+      const manifest = manifestWithHostedNodeRows(0, {
+        eventName,
+        runnerProfile,
+        changedPaths: ["apps/ios/Sources/Foo.swift"],
+        scopeEnv: {
+          OPENCLAW_CI_HEAD_REPOSITORY: headRepository,
+          OPENCLAW_CI_RUN_MACOS_NODE: "true",
+          OPENCLAW_CI_RUN_IOS_SCREENSHOTS: "true",
+        },
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      expect(manifest.outputs.hybrid_hosted_offload).toBe("true");
+      const context = { eventName, runnerProfile, headRepository };
+      const outputs = { ...manifest.outputs, run_ios_screenshots: "true" };
+      const base = emittedHostedRows({ ...outputs, hybrid_hosted_offload: "false" }, context);
+      expect(Number(manifest.outputs.hybrid_hosted_base_rows)).toBe(base.length);
+      expect(Number(manifest.outputs.hybrid_hosted_total_rows)).toBe(
+        emittedHostedRows(outputs, context).length,
+      );
+      expect(base.filter((name) => name === "macos-node")).toHaveLength(3);
+      expect(base.filter((name) => name === "ios-screenshot-shard")).toHaveLength(2);
+      expect(base.filter((name) => name === "ios-screenshot-evidence")).toHaveLength(1);
+      expect(base).not.toContain("ci-gate");
+      expect(base).not.toContain("check-lint-hosted-core-shard");
+      expect(base.filter((name) => name === "check-lint-hosted-extension-shard")).toHaveLength(
+        runnerProfile === "hybrid" ? 3 : 0,
+      );
+    });
 
     it.each<{ label: string } & Partial<Parameters<typeof runCiManifestFixture>[0]>>([
       { label: "retry", scopeEnv: { GITHUB_RUN_ATTEMPT: "2" } },
@@ -3066,28 +3228,22 @@ describe("ci workflow guards", () => {
       },
     );
 
-    it.each([
-      ["push", "blacksmith-4vcpu-ubuntu-2404"],
-      ["pull_request", "ubuntu-24.04"],
-    ] as const)(
-      "runs security after %s preflight failures and skips a cancelled workflow",
-      (eventName, runner) => {
-        const job = readCiWorkflow().jobs["security-fast"];
-        expect(job.needs).toEqual(["preflight"]);
-        const context = {
-          eventName,
-          repository: "openclaw/openclaw",
-          runAttempt: 1,
-          runnerBackend: "hybrid" as const,
-          failed: true,
-          preflightResult: "failure",
-          preflightOutputs: {},
-        };
-        expect(evaluateWorkflowExpression(job.if, context)).toBe(true);
-        expect(evaluateWorkflowExpression(job["runs-on"], context)).toBe(runner);
-        expect(evaluateWorkflowExpression(job.if, { ...context, cancelled: true })).toBe(false);
-      },
-    );
+    it("runs security after preflight failures and skips a cancelled workflow", () => {
+      const job = readCiWorkflow().jobs["security-fast"];
+      expect(job.needs).toEqual(["preflight"]);
+      const context = {
+        eventName: "push" as const,
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        runnerBackend: "hybrid" as const,
+        failed: true,
+      };
+      expect(evaluateWorkflowExpression(job.if, context)).toBe(true);
+      expect(evaluateWorkflowExpression(job["runs-on"], context)).toBe(
+        "blacksmith-4vcpu-ubuntu-2404",
+      );
+      expect(evaluateWorkflowExpression(job.if, { ...context, cancelled: true })).toBe(false);
+    });
   });
 
   it.each<{
@@ -3095,16 +3251,35 @@ describe("ci workflow guards", () => {
     production: boolean;
     expected: boolean;
     legacyPlanner?: boolean;
+    releaseGate?: boolean;
+    invalid?: boolean;
   }>([
     { eventName: "pull_request" as const, production: false, expected: false },
-    { eventName: "pull_request" as const, production: true, expected: false },
+    { eventName: "pull_request" as const, production: true, expected: true },
+    { eventName: "workflow_dispatch", releaseGate: true, production: false, expected: false },
+    { eventName: "workflow_dispatch", releaseGate: true, production: true, expected: true },
     { eventName: "push" as const, production: false, expected: true },
     { eventName: "push" as const, production: true, expected: true },
     { eventName: "workflow_dispatch" as const, production: false, expected: true },
     { eventName: "push", production: false, expected: true, legacyPlanner: true },
     { eventName: "workflow_dispatch", production: false, expected: true, legacyPlanner: true },
+    {
+      eventName: "pull_request",
+      production: true,
+      expected: false,
+      legacyPlanner: true,
+      invalid: true,
+    },
+    {
+      eventName: "workflow_dispatch",
+      releaseGate: true,
+      production: true,
+      expected: false,
+      legacyPlanner: true,
+      invalid: true,
+    },
   ])(
-    "routes published-upgrade proof for $eventName (production=$production, legacy=$legacyPlanner)",
+    "routes published-upgrade proof for $eventName (production=$production, legacy=$legacyPlanner, releaseGate=$releaseGate)",
     (options) => {
       const changedPaths = [
         "src/commands/doctor-config-preflight.admission.process.test.ts",
@@ -3116,13 +3291,20 @@ describe("ci workflow guards", () => {
         runNode: false,
         changedPaths,
         eventName: options.eventName,
+        releaseGate: options.releaseGate,
         scopeEnv: { GITHUB_REF: "refs/heads/main" },
         ...(options.legacyPlanner ? { dockerSeedPlannerSource: "export {};" } : {}),
       });
+      if (options.invalid) {
+        expect(result.status, result.output).toBe(1);
+        expect(result.output).toContain("Current PR CI requires the Docker owner selector");
+        expect(result.outputs.run_docker_seed_e2e).toBeUndefined();
+        return;
+      }
       expect(result.status, result.output).toBe(0);
       expect(result.outputs.run_docker_seed_e2e).toBe(String(options.expected));
       expect(result.outputs.docker_seed_lanes).toBe(
-        options.eventName === "workflow_dispatch" && !options.legacyPlanner
+        options.eventName === "workflow_dispatch" && !options.releaseGate && !options.legacyPlanner
           ? "published-upgrade-survivor mcp-channels cron-mcp-cleanup mcp-code-mode-gateway update-channel-switch fleet-cache"
           : options.expected
             ? "published-upgrade-survivor"
@@ -3177,8 +3359,28 @@ describe("ci workflow guards", () => {
     {
       eventName: "pull_request" as const,
       changedPaths: ["extensions/telegram/src/index.ts"],
-      qa: false,
+      qa: true,
       performance: false,
+    },
+    {
+      eventName: "pull_request" as const,
+      changedPaths: ["extensions/qa-lab/src/ci-smoke-plan.ts"],
+      qa: true,
+      performance: false,
+    },
+    {
+      eventName: "workflow_dispatch" as const,
+      releaseGate: true,
+      changedPaths: ["extensions/qa-lab/src/ci-smoke-plan.ts"],
+      qa: true,
+      performance: true,
+    },
+    {
+      eventName: "workflow_dispatch" as const,
+      releaseGate: true,
+      changedPaths: ["src/cli/cron-cli/shared.ts"],
+      qa: false,
+      performance: true,
     },
     { eventName: "push" as const, changedPaths: ["ui/src/main.ts"], qa: false, performance: true },
     {
@@ -3206,8 +3408,7 @@ describe("ci workflow guards", () => {
         import { hasQaSmokeAffectingChange, hasControlUiPerformanceAffectingChange as performance } from ${JSON.stringify(plannerUrl)};
         export { hasQaSmokeAffectingChange };
         export const hasControlUiPerformanceAffectingChange = paths => performance(paths, { cwd: ${JSON.stringify(process.cwd())} });
-        export const createChangedNodeTestShards = () => null;
-        export const createChangedExtensionFallbackShards = () => [];
+        export const createChangedNodeTestShards = () => [];
       `,
     });
     expect(result.status, result.output).toBe(0);
@@ -3224,10 +3425,12 @@ describe("ci workflow guards", () => {
     const manifest = runCiManifestFixture({
       ...fixture,
       bundledPlanner: true,
+      selectedTestTargets: Object.values(CI_MANIFEST_FIXTURE_TARGETS).flat(),
       historicalCompatibility: false,
       changedPaths: [
         "package.json",
         "scripts/e2e/docker-openai-seed.ts",
+        "extensions/qa-lab/src/ci-smoke-plan.ts",
         "src/sqlite-session-owner.ts",
       ],
       scopeEnv: {
@@ -3237,31 +3440,28 @@ describe("ci workflow guards", () => {
       },
     });
     expect(manifest.status, manifest.output).toBe(0);
-    for (const flag of [
-      "run_proof_tier",
-      "run_docker_seed_e2e",
-      "run_qa_smoke_ci",
-      "run_sqlite_session_lifecycle",
-    ]) {
-      expect(manifest.outputs[flag], flag).toBe(String(fixture.proof));
-    }
-    for (const flag of [
-      "run_build_artifacts",
-      "run_ui_tests",
-      "run_ui_e2e",
-      "run_checks_windows",
-      "run_channel_contracts_shards",
-    ]) {
+    expect(manifest.outputs.run_proof_tier).toBe(String(fixture.proof));
+    expect(manifest.outputs.run_sqlite_session_lifecycle).toBe("true");
+    expect(manifest.outputs.run_docker_seed_e2e).toBe("true");
+    expect(manifest.outputs.run_qa_smoke_ci).toBe("true");
+    for (const flag of ["run_ui_tests", "run_ui_e2e", "run_checks_windows"]) {
       expect(manifest.outputs[flag], flag).toBe("true");
     }
+    expect(manifest.outputs.run_build_artifacts).toBe("true");
+    expect(manifest.outputs.run_checks_node_core_dist).toBe("false");
+    expect(manifest.outputs.run_channel_contracts_shards).toBe(String(fixture.proof));
     const nodeRows = JSON.parse(
       expectDefined(manifest.outputs.checks_node_core_nondist_matrix, "Node matrix"),
     ).include;
     expect(nodeRows).toContainEqual(
-      expect.objectContaining({
-        check_name: "bundled-node-plan",
-        env: expect.objectContaining({ OPENCLAW_CI_TEST_PROOF_TIER: String(fixture.proof) }),
-      }),
+      expect.objectContaining(
+        fixture.proof
+          ? {
+              check_name: "bundled-node-plan",
+              env: expect.objectContaining({ OPENCLAW_CI_TEST_PROOF_TIER: "true" }),
+            }
+          : { check_name: "changed-owner-plan" },
+      ),
     );
 
     const workflow = readCiWorkflow();
@@ -3269,7 +3469,8 @@ describe("ci workflow guards", () => {
       ...fixture,
       repository: "openclaw/openclaw",
       runAttempt: 1,
-      preflightOutputs: { ...manifest.outputs, run_checks_node_core_dist: "true" },
+      preflightOutputs: manifest.outputs,
+      steps: { built_artifact_checks: { outputs: {}, outcome: "success" as const } },
     };
     const evaluateCondition = (expression: string) =>
       evaluateWorkflowExpression(
@@ -3277,19 +3478,29 @@ describe("ci workflow guards", () => {
         context,
       );
     expect(evaluateCondition(workflow.jobs["checks-ui-e2e"].if)).toBe(true);
-    expect(evaluateCondition(workflow.jobs["checks-ui-e2e-real-gateway"].if)).toBe(fixture.proof);
+    expect(evaluateCondition(workflow.jobs["checks-ui-e2e-real-gateway"].if)).toBe(true);
     const steps = workflow.jobs["build-artifacts"].steps as WorkflowStep[];
     const verifiers = expectDefined(
       steps.find((step) => step.name === "Run built artifact checks"),
       "built verifiers",
     );
-    for (const name of ["RUN_PROCESS_PROOFS", "RUN_GATEWAY_WATCH", "RUN_TUI_PTY"]) {
+    for (const name of [
+      "RUN_DOCTOR_PLUGIN_INDEX",
+      "RUN_DISCORD_COMPONENT_PROOF",
+      "RUN_GATEWAY_WATCH",
+    ]) {
       expect(String(evaluateWorkflowExpression(verifiers.env?.[name], context)), name).toBe(
         String(fixture.proof),
       );
     }
-    for (const name of ["RUN_CHANNELS", "RUN_CORE_SUPPORT_BOUNDARY"]) {
-      expect(String(evaluateWorkflowExpression(verifiers.env?.[name], context)), name).toBe("true");
+    expect(evaluateWorkflowExpression(verifiers.env?.RUN_TUI_PTY, context)).toBe("false");
+    expect(String(evaluateWorkflowExpression(verifiers.env?.RUN_CHANNELS, context))).toBe(
+      String(fixture.proof),
+    );
+    for (const name of ["RUN_CORE_SUPPORT_BOUNDARY"]) {
+      expect(String(evaluateWorkflowExpression(verifiers.env?.[name], context)), name).toBe(
+        "false",
+      );
     }
     expect(evaluateWorkflowExpression(verifiers.env?.CHANNEL_NODE_OPTIONS, context)).toBe(
       "--max-old-space-size=8192",
@@ -3305,6 +3516,131 @@ describe("ci workflow guards", () => {
         name,
       );
       expect(evaluateCondition(expectDefined(step.if, name)), name).toBe(fixture.proof);
+    }
+  });
+
+  it.each([
+    {
+      file: "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts",
+      output: "run_browser_native_host",
+      build: true,
+    },
+    {
+      file: "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
+      protectedOptIn: true,
+      output: "run_doctor_plugin_index",
+      build: true,
+    },
+    {
+      file: "test/e2e/qa-lab/plugins/discord-show-widget-contextual-presenter.e2e.test.ts",
+      protectedOptIn: true,
+      output: "run_discord_component_proof",
+      build: true,
+    },
+    {
+      file: "test/scripts/check-gateway-watch-regression.test.ts",
+      output: "run_gateway_watch",
+      build: true,
+    },
+    { file: "src/tui/tui-pty-local.e2e.test.ts", output: "run_tui_pty", build: true },
+    {
+      file: "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
+      protectedOptIn: true,
+      output: "run_sqlite_session_lifecycle",
+      build: true,
+    },
+    ...[
+      "test/scripts/build-all.test.ts",
+      "test/scripts/tsdown-build.test.ts",
+      "test/scripts/dist-artifact-ownership.test.ts",
+      "test/scripts/write-plugin-sdk-entry-dts.test.ts",
+      "test/scripts/write-unified-entry-dts.test.ts",
+      "test/scripts/check-openclaw-package-tarball.test.ts",
+    ].map((file) => ({ file, output: null, build: true })),
+    { file: "src/unrelated.test.ts", output: null, build: false },
+  ])("admits only selected artifact owners for $file", (scenario) => {
+    const { file, output, build } = scenario;
+    const sourcePaths =
+      "protectedOptIn" in scenario ? [[file], ["scripts/lib/ci-node-test-plan.mts"]] : [[file]];
+    const eventKinds = [
+      { eventName: "pull_request", releaseGate: false },
+      { eventName: "workflow_dispatch", releaseGate: true },
+    ] as const;
+    const events = eventKinds.flatMap(({ eventName, releaseGate }) =>
+      sourcePaths.map((changedPaths) => ({ eventName, releaseGate, changedPaths })),
+    );
+    for (const { eventName, releaseGate, changedPaths } of events) {
+      const manifest = runCiManifestFixture({
+        bundledPlanner: true,
+        historicalCompatibility: false,
+        eventName,
+        releaseGate,
+        changedPaths,
+        selectedTestTargets: [file],
+        scopeEnv: {
+          OPENCLAW_CI_RUN_WINDOWS: "false",
+          OPENCLAW_CI_RUN_UI_TESTS: "false",
+          OPENCLAW_CI_WORKFLOW_REVISION: "a".repeat(40),
+        },
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      expect(manifest.outputs.run_proof_tier).toBe("false");
+      expect(manifest.outputs.run_build_artifacts).toBe(String(build));
+      expect(manifest.outputs.run_checks_node_core_dist).toBe("false");
+      expect(manifest.outputs.run_channel_contracts_shards).toBe("false");
+      for (const flag of [
+        "run_browser_native_host",
+        "run_doctor_plugin_index",
+        "run_discord_component_proof",
+        "run_gateway_watch",
+        "run_tui_pty",
+        "run_sqlite_session_lifecycle",
+      ]) {
+        expect(manifest.outputs[flag], `${eventName}: ${flag}`).toBe(String(output === flag));
+      }
+      const workflow = readCiWorkflow();
+      const context = {
+        eventName,
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        preflightOutputs: manifest.outputs,
+        steps: { built_artifact_checks: { outputs: {}, outcome: "success" as const } },
+      };
+      const steps = workflow.jobs["build-artifacts"].steps as WorkflowStep[];
+      const verifiers = expectDefined(
+        steps.find((step) => step.name === "Run built artifact checks"),
+        "built verifier command",
+      );
+      for (const [flag, variable] of [
+        ["run_doctor_plugin_index", "RUN_DOCTOR_PLUGIN_INDEX"],
+        ["run_discord_component_proof", "RUN_DISCORD_COMPONENT_PROOF"],
+        ["run_gateway_watch", "RUN_GATEWAY_WATCH"],
+        ["run_tui_pty", "RUN_TUI_PTY"],
+        ["run_sqlite_session_lifecycle", "RUN_SQLITE_SESSION_LIFECYCLE"],
+      ] as const) {
+        expect(evaluateWorkflowExpression(verifiers.env?.[variable], context), variable).toBe(
+          String(output === flag),
+        );
+      }
+      expect(evaluateWorkflowExpression(verifiers.env?.RUN_CHANNELS, context)).toBe(false);
+      for (const [flag, name] of [
+        ["run_browser_native_host", "Verify built browser native host"],
+        ["run_discord_component_proof", "Upload Discord component attachment proof"],
+        ["run_gateway_watch", "Upload gateway watch regression artifacts"],
+      ] as const) {
+        const step = expectDefined(
+          steps.find((candidate) => candidate.name === name),
+          name,
+        );
+        const condition = expectDefined(step.if, name);
+        expect(
+          evaluateWorkflowExpression(
+            condition.startsWith("${{") ? condition : `\${{ ${condition} }}`,
+            context,
+          ),
+          name,
+        ).toBe(output === flag);
+      }
     }
   });
 
@@ -3615,7 +3951,7 @@ describe("ci workflow guards", () => {
           bundledPlanner: !legacy,
           eventName,
           releaseGate,
-          historicalCompatibility: true,
+          historicalCompatibility: !releaseGate,
           changedPaths: ["apps/android/app/src/main/java/ai/openclaw/app/Example.kt"],
         });
         expect(manifest.status, manifest.output).toBe(0);
@@ -4099,10 +4435,14 @@ describe("ci workflow guards", () => {
       nativeChecks: { macos: false, ios: false, android: true },
     },
   ])(
-    "composes dedicated suite coverage before precise planning (build=$buildImpact, UI=$uiE2e, dist=$distRequired)",
+    "composes static and native coverage without broad PR runtime jobs (build=$buildImpact, UI=$uiE2e, dist=$distRequired)",
     ({ buildImpact, uiE2e, distRequired, nativePaths, nativeChecks }) => {
       const runnerProfile = buildImpact || distRequired ? "hybrid" : "blacksmith";
+      const selectedTestTargets = uiE2e
+        ? Object.values(CI_MANIFEST_FIXTURE_TARGETS).flat()
+        : ["src/owner.test.ts"];
       const manifest = runCiManifestFixture({
+        selectedTestTargets,
         runnerProfile,
         bundledPlanner: true,
         eventName: "pull_request",
@@ -4134,19 +4474,20 @@ describe("ci workflow guards", () => {
       });
       expect(manifest.status, manifest.output).toBe(0);
       const dedicated = ["plugin", "channel"].flatMap((family) => {
-        expect(manifest.outputs[`run_${family}_contracts_shards`]).toBe("true");
+        expect(manifest.outputs[`run_${family}_contracts_shards`]).toBe("false");
         const rows = JSON.parse(
           expectDefined(manifest.outputs[`${family}_contracts_matrix`], family),
         ).include;
-        expect(rows).toHaveLength(1);
+        expect(rows).toHaveLength(0);
         return rows.flatMap((row: { groups: unknown[] }) => row.groups);
       });
-      expect(dedicated).toHaveLength(4);
+      expect(dedicated).toHaveLength(0);
       const coverage = expectDefined(
         manifest.output.split("\n").find((line) => line.startsWith("dedicated-coverage:")),
         "precise planner coverage input",
       );
       expect(JSON.parse(coverage.slice("dedicated-coverage:".length))).toEqual({
+        compactNodeJobCap: 130,
         includeReleaseOnlyToolingShards: false,
         includeReleaseOnlyRuntimeTests: false,
         includePrExemptRuntimeTests: false,
@@ -4154,8 +4495,11 @@ describe("ci workflow guards", () => {
         runnerBackend: runnerProfile,
         dedicatedContractShards: dedicated,
         dedicatedCoreTypeChecks: true,
+        dedicatedBuildArtifacts: false,
         dedicatedNativeChecks: nativeChecks,
+        dedicatedUiTests: uiE2e,
         dedicatedUiE2e: uiE2e,
+        selectedTestTargets,
         dedicatedMaxLinesRatchet: true,
       });
       const workflow = readCiWorkflow();
@@ -4210,7 +4554,7 @@ describe("ci workflow guards", () => {
             preflightOutputs: manifest.outputs,
           }),
           job,
-        ).toBe(job === "checks-ui-e2e" && uiE2e);
+        ).toBe(uiE2e);
       }
       const nodeRows = JSON.parse(
         expectDefined(manifest.outputs.checks_node_core_nondist_matrix, "precise matrix"),
@@ -4220,8 +4564,8 @@ describe("ci workflow guards", () => {
           ? []
           : [expect.objectContaining({ shard_name: "changed-boundary" })],
       );
-      expect(manifest.outputs.run_build_artifacts).toBe(String(buildImpact || distRequired));
-      expect(manifest.outputs.run_checks_node_core_dist).toBe(String(buildImpact || distRequired));
+      expect(manifest.outputs.run_build_artifacts).toBe(String(distRequired));
+      expect(manifest.outputs.run_checks_node_core_dist).toBe(String(distRequired));
     },
   );
 
@@ -4263,24 +4607,13 @@ describe("ci workflow guards", () => {
     },
   );
 
-  it("resolves event-aware check and Node runner profiles", () => {
+  it("resolves one event-aware logical runner profile without changing physical routing", () => {
     const scenarios: {
       expected: string;
       expectedNode?: string;
       name: string;
       options: Parameters<typeof runRunnerProfileFixture>[0];
     }[] = [
-      ...["", "blacksmith", "hybrid", "github"].map((configuredProfile) => ({
-        expected: configuredProfile || "blacksmith",
-        expectedNode: "github",
-        name: `canonical PR uses hosted checks and Node with ${configuredProfile || "default"} backend`,
-        options: {
-          authorAssociation: "CONTRIBUTOR",
-          configuredProfile,
-          eventName: "pull_request" as const,
-          targetSupportsContract: true,
-        },
-      })),
       {
         expected: "github",
         name: "current manual dispatch ignores configured Blacksmith",
@@ -4367,8 +4700,8 @@ describe("ci workflow guards", () => {
         },
       },
       ...[
-        { name: "trusted canonical PR", expected: "hybrid", expectedNode: "github" },
-        { name: "PR retry", expected: "hybrid", expectedNode: "github", runAttempt: 2 },
+        { name: "trusted canonical PR", expected: "hybrid", expectedNode: "runson" },
+        { name: "PR retry", expected: "hybrid", expectedNode: "hybrid", runAttempt: 2 },
         { name: "returning-contributor fork", expected: "github", headRepository: "fork/openclaw" },
         { name: "untrusted author", expected: "github", authorAssociation: "NONE" },
         { name: "noncanonical repository", expected: "github", repository: "fork/openclaw" },
@@ -4407,16 +4740,11 @@ describe("ci workflow guards", () => {
       })),
     ];
 
-    for (const { expected, expectedNode, name, options } of scenarios) {
+    for (const { expected, expectedNode = expected, name, options } of scenarios) {
       const result = runRunnerProfileFixture(options);
       expect(result.status, `${name}: ${result.output}`).toBe(0);
       expect(result.outputs.runner_profile, name).toBe(expected);
-      expect(result.outputs.node_runner_backend, name).toBe(
-        expectedNode ??
-          (options.eventName === "pull_request" && options.targetSupportsContract
-            ? "github"
-            : expected),
-      );
+      expect(result.outputs.node_runner_backend, name).toBe(expectedNode);
       expect(result.outputs.hosted_runner_profile_contract, name).toBe(
         String(options.targetSupportsContract),
       );
@@ -4447,6 +4775,7 @@ describe("ci workflow guards", () => {
       historicalCompatibility: false,
       runnerBackend: "blacksmith",
       runnerProfile: "github",
+      scopeEnv: { OPENCLAW_CI_RUN_UI_TESTS: "true" },
     });
     expect(dispatchManifest.status, dispatchManifest.output).toBe(0);
     expect(
@@ -4900,16 +5229,15 @@ describe("ci workflow guards", () => {
     expect(manifest.status, manifest.output).toBe(0);
     expect(Number(manifest.outputs.hybrid_hosted_base_rows)).toBeGreaterThan(0);
     const options = JSON.parse(
-      expectDefined(manifest.output.match(/node-test-plan-options:(.+)/u)?.[1], "Node options"),
+      expectDefined(manifest.output.match(/changed-node-plan-options:(.+)/u)?.[1], "Node options"),
     );
     expect(options).toMatchObject({
-      compact: true,
-      compactMode: "pull-request",
       runnerBackend: "runson",
       includeReleaseOnlyToolingShards: false,
-      includeProofTests: false,
+      includePrExemptRuntimeTests: false,
+      dedicatedBuildArtifacts: false,
     });
-    expect(options.compactNodeJobCap).toBeLessThanOrEqual(130);
+    expect(manifest.output).not.toContain("\nnode-test-plan-options:");
     const rows = JSON.parse(
       expectDefined(manifest.outputs.checks_node_core_nondist_matrix, "qualification Node rows"),
     ).include as Record<string, unknown>[];
@@ -4941,7 +5269,7 @@ describe("ci workflow guards", () => {
       expectDefined(ordinaryPr.outputs.checks_node_core_nondist_matrix, "ordinary PR Node rows"),
     ).include as Record<string, unknown>[];
     expect(rows).toHaveLength(ordinaryRows.length + 2);
-    expect(ordinaryRows.every((row) => row.runner === "ubuntu-24.04")).toBe(true);
+    expect(ordinaryRows.some((row) => row.runner === "runson-c8i-8xlarge")).toBe(true);
     expect(ordinaryRows.some((row) => String(row.check_name).endsWith("-control"))).toBe(false);
     const fastRows = JSON.parse(
       expectDefined(manifest.outputs.checks_fast_core_matrix, "qualification fast checks"),
@@ -4984,7 +5312,7 @@ describe("ci workflow guards", () => {
           expect(
             evaluateWorkflowExpression(artifactRunner, { ...context, runnerBackend, eventName }),
             `build-artifacts: ${runnerBackend || "default"}/${eventName}/frozen=${frozenTarget}`,
-          ).toBe(eventName === "pull_request" ? "ubuntu-24.04" : expected);
+          ).toBe(expected);
         }
       }
       for (const override of [
@@ -5115,41 +5443,10 @@ describe("ci workflow guards", () => {
     expect(lintMount.with.key).toBe(boundaryMount.with.key);
     for (const gate of [boundaryMount, lintMount]) {
       expect(gate.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'");
-      for (const runnerEnvironment of ["github-hosted", "self-hosted"] as const) {
-        expect(
-          evaluateWorkflowExpression(`\${{ ${gate.if} }}`, {
-            eventName: "pull_request",
-            repository: "openclaw/openclaw",
-            runAttempt: 1,
-            runnerBackend: "blacksmith",
-            runnerEnvironment,
-            matrix: { task: "lint", group: "extension-package-boundary" },
-            steps: { "extension-boundary-inputs": { outputs: { enabled: "true" } } },
-          }),
-        ).toBe(runnerEnvironment === "self-hosted");
-      }
     }
     expect(hostedLintCache.if).toBe(
-      "needs.preflight.outputs.cache_mode != 'off' && matrix.task == 'lint' && steps.extension-boundary-inputs.outputs.enabled == 'true' && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid' || (github.event_name == 'pull_request' && runner.environment == 'github-hosted'))",
+      "needs.preflight.outputs.cache_mode != 'off' && matrix.task == 'lint' && steps.extension-boundary-inputs.outputs.enabled == 'true' && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid')",
     );
-    for (const eventName of ["pull_request", "push"] as const) {
-      for (const cacheMode of ["off", "restore"] as const) {
-        for (const enabled of ["false", "true"] as const) {
-          expect(
-            evaluateWorkflowExpression(`\${{ ${hostedLintCache.if} }}`, {
-              eventName,
-              repository: "openclaw/openclaw",
-              runAttempt: 1,
-              runnerProfile: "blacksmith",
-              runnerEnvironment: "github-hosted",
-              matrix: { task: "lint" },
-              preflightOutputs: { cache_mode: cacheMode },
-              steps: { "extension-boundary-inputs": { outputs: { enabled } } },
-            }),
-          ).toBe(eventName === "pull_request" && cacheMode !== "off" && enabled === "true");
-        }
-      }
-    }
     expect(boundaryCache.if).toBe(
       "needs.preflight.outputs.cache_mode != 'off' && matrix.group == 'extension-package-boundary' && steps.extension-boundary-inputs.outputs.enabled == 'true'",
     );
@@ -5158,12 +5455,22 @@ describe("ci workflow guards", () => {
     );
     for (const cache of [hostedLintCache, hostedCoreCache]) {
       expect(cache.uses).toBe(CACHE_V5);
-      expect(cache.with).toEqual(boundaryCache.with);
+      expect(cache.with.path).toEqual(boundaryCache.with.path);
+      expect(cache.with.key).toBe(
+        "${{ runner.os }}-extension-package-boundary-v4-${{ steps.extension-boundary-inputs.outputs.fingerprint }}",
+      );
+      expect(cache.with["restore-keys"].trim()).toBe(
+        "${{ runner.os }}-extension-package-boundary-v4-",
+      );
     }
     const fingerprintReference = "${{ steps.extension-boundary-inputs.outputs.fingerprint }}";
     expect(boundaryCache.with.key).toBe(
-      "${{ runner.os }}-extension-package-boundary-v4-${{ steps.extension-boundary-inputs.outputs.fingerprint }}",
+      "${{ runner.os }}-${{ runner.arch }}-${{ runner.environment }}-extension-package-boundary-compiled-v1-${{ steps.extension-boundary-inputs.outputs.fingerprint }}",
     );
+    expect(boundaryCache.with["restore-keys"].trim().split("\n")).toEqual([
+      "${{ runner.os }}-${{ runner.arch }}-${{ runner.environment }}-extension-package-boundary-compiled-v1-",
+      "${{ runner.os }}-extension-package-boundary-v4-",
+    ]);
     expect(boundaryCache.with.path.trim().split("\n")).toEqual([
       "packages/plugin-sdk/dist",
       ".artifacts/extension-package-boundary/plugins",
@@ -5197,10 +5504,10 @@ describe("ci workflow guards", () => {
       ),
     );
     expect(
-      hostedCoreJob.steps.some((step: WorkflowStep) =>
-        step.uses?.startsWith("actions/cache/save@"),
-      ),
-    ).toBe(false);
+      hostedCoreJob.steps
+        .filter((step: WorkflowStep) => step.uses?.startsWith("actions/cache/save@"))
+        .map((step: WorkflowStep) => step.name),
+    ).toEqual(["Save hosted SDK boundary cache"]);
     const warmerBoundaryRestore = expectDefined(
       warmer.jobs.warm.steps.find(
         (step: WorkflowStep) => step.name === "Restore native SDK boundary cache",
@@ -5214,8 +5521,142 @@ describe("ci workflow guards", () => {
       "warmer boundary save",
     );
     expect(warmerBoundaryRestore.with.path).toBe(boundaryCache.with.path);
-    expect(warmerBoundaryRestore.with["restore-keys"]).toBe(boundaryCache.with["restore-keys"]);
+    expect(warmerBoundaryRestore.with["restore-keys"]).toBe(hostedLintCache.with["restore-keys"]);
     expect(warmerBoundarySave.with.path).toBe(boundaryCache.with.path);
+    const sdkSave = expectDefined(
+      hostedCoreJob.steps.find(
+        (step: WorkflowStep) => step.name === "Save hosted SDK boundary cache",
+      ),
+      "hosted SDK writer",
+    );
+    const extensionJob = readCiWorkflow().jobs["check-lint-hosted-extension-shard"];
+    expect(extensionJob.steps.find((step: WorkflowStep) => step.name === sdkSave.name)).toEqual(
+      sdkSave,
+    );
+    expect(sdkSave.uses).toBe(CACHE_SAVE_V5);
+    expect(sdkSave.with.path).toBe(hostedCoreCache.with.path);
+    expect(sdkSave.with.path).toBe(
+      extensionJob.steps.find((step: WorkflowStep) => step.id === "sdk-boundary-cache").with.path,
+    );
+    expect(sdkSave.with.key).toBe("${{ steps.sdk-boundary-cache.outputs.cache-primary-key }}");
+    for (const job of [hostedCoreJob, extensionJob]) {
+      const saveIndex = job.steps.findIndex((step: WorkflowStep) => step.name === sdkSave.name);
+      const lintIndex = job.steps.findIndex((step: WorkflowStep) =>
+        step.name?.startsWith("Run hosted"),
+      );
+      expect(saveIndex).toBeGreaterThan(lintIndex);
+    }
+    const sdkContext: Parameters<typeof evaluateWorkflowExpression>[1] = {
+      eventName: "schedule",
+      repository: "openclaw/openclaw",
+      ref: "refs/heads/main",
+      runAttempt: 1,
+      runnerEnvironment: "github-hosted",
+      matrix: { stripe: 1 },
+      preflightOutputs: {
+        candidate_trust: "main",
+        cache_write_allowed: "true",
+        cache_mode: "restore",
+        frozen_target: "false",
+        compatibility_target: "false",
+      },
+      steps: {
+        "extension-boundary-inputs": { outputs: { enabled: "true", fingerprint: "a".repeat(40) } },
+        "sdk-boundary-cache": { outputs: { "cache-hit": "false" } },
+      },
+    };
+    expect(evaluateWorkflowExpression(sdkSave.if, sdkContext)).toBe(true);
+    for (const rejected of [
+      { matrix: { stripe: 2 } },
+      { matrix: { stripe: 1, lint_selection_json: "{}" } },
+      { runnerEnvironment: "self-hosted" as const },
+      { failed: true },
+      { cancelled: true },
+      { repository: "contributor/openclaw" },
+      { ref: "refs/heads/feature" },
+      { releaseGate: true },
+      { preflightOutputs: { ...sdkContext.preflightOutputs, frozen_target: "true" } },
+      { preflightOutputs: { ...sdkContext.preflightOutputs, compatibility_target: "true" } },
+      { preflightOutputs: { ...sdkContext.preflightOutputs, cache_mode: "off" } },
+      { preflightOutputs: { ...sdkContext.preflightOutputs, cache_write_allowed: "false" } },
+      {
+        steps: {
+          ...sdkContext.steps,
+          "extension-boundary-inputs": {
+            outputs: { enabled: "false", fingerprint: "a".repeat(40) },
+          },
+        },
+      },
+      {
+        steps: { ...sdkContext.steps, "sdk-boundary-cache": { outputs: { "cache-hit": "true" } } },
+      },
+    ]) {
+      expect(evaluateWorkflowExpression(sdkSave.if, { ...sdkContext, ...rejected })).toBe(false);
+    }
+    const compiledSave = expectDefined(
+      additionalJob.steps.find(
+        (step: WorkflowStep) => step.name === "Save compiled extension package boundary artifacts",
+      ),
+      "compiled boundary cache writer",
+    );
+    expect(compiledSave.uses).toBe(CACHE_SAVE_V5);
+    expect(compiledSave.with.path).toBe(boundaryCache.with.path);
+    expect(compiledSave.with.key).toBe(
+      "${{ steps.extension-package-boundary-cache.outputs.cache-primary-key }}",
+    );
+    expect(additionalJob.steps.indexOf(compiledSave)).toBeGreaterThan(
+      additionalJob.steps.indexOf(runStep),
+    );
+    const writer: Parameters<typeof evaluateWorkflowExpression>[1] = {
+      eventName: "schedule",
+      repository: "openclaw/openclaw",
+      ref: "refs/heads/main",
+      runAttempt: 1,
+      matrix: { group: "extension-package-boundary" },
+      preflightOutputs: {
+        candidate_trust: "main",
+        cache_write_allowed: "true",
+        cache_mode: "restore",
+        frozen_target: "false",
+        compatibility_target: "false",
+      },
+      steps: {
+        "extension-boundary-inputs": { outputs: { enabled: "true" } },
+        "extension-package-boundary-cache": { outputs: { "cache-hit": "false" } },
+      },
+    };
+    for (const eventName of ["push", "schedule", "workflow_dispatch"] as const) {
+      expect(evaluateWorkflowExpression(compiledSave.if, { ...writer, eventName })).toBe(true);
+    }
+    for (const rejected of [
+      { eventName: "pull_request" as const },
+      { failed: true },
+      { cancelled: true },
+      { repository: "contributor/openclaw" },
+      { ref: "refs/heads/feature" },
+      { releaseGate: true },
+      { matrix: { group: "boundaries" } },
+      ...Object.entries({
+        candidate_trust: "same-repository-pr",
+        cache_write_allowed: "false",
+        cache_mode: "off",
+        frozen_target: "true",
+        compatibility_target: "true",
+      }).map(([name, value]) => ({
+        preflightOutputs: { ...writer.preflightOutputs, [name]: value },
+      })),
+      {
+        steps: { ...writer.steps, "extension-boundary-inputs": { outputs: { enabled: "false" } } },
+      },
+      {
+        steps: {
+          ...writer.steps,
+          "extension-package-boundary-cache": { outputs: { "cache-hit": "true" } },
+        },
+      },
+    ]) {
+      expect(evaluateWorkflowExpression(compiledSave.if, { ...writer, ...rejected })).toBe(false);
+    }
     // Single semantic writer: protected pushes commit explicitly (not
     // on-change/if-missing, whose allocated-byte heuristic can strand a stale
     // marker); PR clones and the lint consumer stay read-only.
@@ -5288,15 +5729,12 @@ describe("ci workflow guards", () => {
       "extension-package-boundary",
       "runtime-topology-architecture",
     ];
-    for (const [eventName, differentRevision] of [
+    for (const [eventName, frozen] of [
       ["push", false],
       ["pull_request", false],
-      ["pull_request", true],
       ["workflow_dispatch", false],
       ["workflow_dispatch", true],
     ] as const) {
-      // A PR stays current-source even when its workflow revision differs.
-      const frozen = eventName === "workflow_dispatch" && differentRevision;
       const manifest = runCiManifestFixture({
         bundledPlanner: true,
         eventName,
@@ -5304,7 +5742,7 @@ describe("ci workflow guards", () => {
         changedPaths: [],
         scopeEnv: {
           OPENCLAW_CI_CHECKOUT_REVISION: "a".repeat(40),
-          OPENCLAW_CI_WORKFLOW_REVISION: (differentRevision ? "b" : "a").repeat(40),
+          OPENCLAW_CI_WORKFLOW_REVISION: (frozen ? "b" : "a").repeat(40),
         },
       });
       expect(manifest.status, manifest.output).toBe(0);
@@ -5343,12 +5781,15 @@ describe("ci workflow guards", () => {
         ...selection,
       });
       expect(manifest.status, manifest.output).toBe(0);
-      expect(manifest.outputs.run_check_additional).toBe("false");
-      expect(
-        JSON.parse(
-          expectDefined(manifest.outputs.check_additional_matrix, "additional check matrix"),
-        ).include,
-      ).toEqual([]);
+      expect(manifest.outputs.run_check_additional).toBe(String(selection.runNode !== false));
+      const rows = JSON.parse(
+        expectDefined(manifest.outputs.check_additional_matrix, "additional check matrix"),
+      ).include;
+      if (selection.runNode === false) {
+        expect(rows).toEqual([]);
+      } else {
+        expect(rows).toContainEqual(expect.objectContaining({ group: "boundaries" }));
+      }
     }
 
     expect(workflow.jobs.preflight.outputs.diff_head_revision).toBe(
@@ -5561,6 +6002,15 @@ describe("ci workflow guards", () => {
         expected: { cache_mode: "restore", cache_write_allowed: "true", trust: "main" },
         options: {
           checkoutRevision: defaultRevision,
+          eventName: "schedule" as const,
+          ref: "refs/heads/main",
+          workflowRevision,
+        },
+      },
+      {
+        expected: { cache_mode: "restore", cache_write_allowed: "true", trust: "main" },
+        options: {
+          checkoutRevision: defaultRevision,
           eventName: "push" as const,
           ref: "refs/heads/main",
           workflowRevision,
@@ -5569,9 +6019,59 @@ describe("ci workflow guards", () => {
     ];
 
     for (const testCase of cases) {
-      const result = runCandidateTrustClassification(testCase.options);
+      const ref = "refs/heads/main";
+      const result = runCandidateTrustClassification({ ...testCase.options, ref });
       expect(result.status, result.output).toBe(0);
       expect(result.outputs).toMatchObject(testCase.expected);
+      const writer = expectDefined(
+        readCiWorkflow().jobs["check-additional-shard"].steps.find(
+          (step: WorkflowStep) =>
+            step.name === "Save compiled extension package boundary artifacts",
+        ),
+        "compiled boundary cache writer",
+      );
+      const sdkWriter = expectDefined(
+        readCiWorkflow().jobs["check-lint-hosted-extension-shard"].steps.find(
+          (step: WorkflowStep) => step.name === "Save hosted SDK boundary cache",
+        ),
+        "hosted SDK cache writer",
+      );
+      // Dependency setup remains restore-only; publication consumes the same producer facts.
+      const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
+        eventName: testCase.options.eventName,
+        releaseGate: "releaseGate" in testCase.options && testCase.options.releaseGate,
+        repository: "openclaw/openclaw",
+        ref,
+        runAttempt: 1,
+        matrix: { group: "extension-package-boundary" },
+        preflightOutputs: {
+          candidate_trust: result.outputs.trust!,
+          cache_mode: result.outputs.cache_mode!,
+          cache_write_allowed: result.outputs.cache_write_allowed!,
+          frozen_target: "false",
+          compatibility_target: "false",
+        },
+        steps: {
+          "extension-boundary-inputs": { outputs: { enabled: "true" } },
+          "extension-package-boundary-cache": { outputs: { "cache-hit": "false" } },
+        },
+      };
+      expect(evaluateWorkflowExpression(writer.if, context)).toBe(
+        testCase.expected.trust === "main",
+      );
+      expect(
+        evaluateWorkflowExpression(sdkWriter.if, {
+          ...context,
+          runnerEnvironment: "github-hosted",
+          matrix: { stripe: 1 },
+          steps: {
+            "extension-boundary-inputs": {
+              outputs: { enabled: "true", fingerprint: testCase.options.checkoutRevision },
+            },
+            "sdk-boundary-cache": { outputs: { "cache-hit": "false" } },
+          },
+        }),
+      ).toBe(testCase.expected.trust === "main");
     }
   });
 
@@ -5820,7 +6320,9 @@ describe("ci workflow guards", () => {
     });
     if ("invalid" in options) {
       expect(manifest.status).not.toBe(0);
-      expect(manifest.output).toContain("Current PR CI requires complete changed paths");
+      expect(manifest.output).toContain(
+        "Current PR CI requires complete changed paths for Node test planning",
+      );
       expect(manifest.outputs.changed_core_test_paths_json).toBeUndefined();
     } else {
       expect(manifest.status, manifest.output).toBe(0);
@@ -6385,7 +6887,7 @@ describe("ci workflow guards", () => {
       label: "unknown source",
       scopeEnv: { OPENCLAW_CI_CHECKOUT_REVISION: "", OPENCLAW_CI_WORKFLOW_REVISION: "" },
     },
-    { label: "fast-only PR", nodeFastOnly: true },
+    { label: "fast-only hint without corpus coverage", nodeFastOnly: true, nodeTestShards: [] },
     { label: "Node not admitted", runNode: false, startupRow: false },
     { label: "different repository", repository: "fixture/openclaw" },
     { label: "release merge", eventName: "workflow_dispatch", releaseGate: true },
@@ -6817,7 +7319,13 @@ describe("ci workflow guards", () => {
       "OPENCLAW_E2E_SKIP_BUILD=1 OPENCLAW_TEST_BUN_LAUNCHER=1 pnpm test test/openclaw-launcher.e2e.test.ts",
     );
     expect(checksFastRun.run).toContain(
-      "if [[ -f src/plugins/plugin-module-generation.test.ts ]]; then",
+      "if [[ -f src/plugins/plugin-module-generation.bun.test.ts ]]; then",
+    );
+    expect(checksFastRun.run).toContain(
+      "OPENCLAW_TEST_BUN_LAUNCHER=1 pnpm test src/plugins/plugin-module-generation.bun.test.ts",
+    );
+    expect(checksFastRun.run).toContain(
+      "elif [[ -f src/plugins/plugin-module-generation.test.ts ]]; then",
     );
     expect(checksFastRun.run).toContain(
       'elif [[ "${{ needs.preflight.outputs.frozen_target }}" != "true" ]]; then',
@@ -6906,33 +7414,28 @@ describe("ci workflow guards", () => {
       bundledPlanner: true,
       eventName: "pull_request",
       historicalCompatibility: false,
+      changedPaths: ["scripts/lib/changed-path-facts.mjs"],
       nodeFastOnly: true,
       nodeFastPluginContracts: true,
     });
     expect(fastOnly.status, fastOnly.output).toBe(0);
-    expect(fastOnly.outputs.run_check).toBe("false");
+    expect(fastOnly.outputs.run_check).toBe("true");
     expect(fastOnly.outputs.run_checks_fast_core).toBe("true");
     expect(
       JSON.parse(expectDefined(fastOnly.outputs.checks_fast_core_matrix, "fast-only checks matrix"))
         .include,
-    ).toEqual([
-      {
-        check_name: "checks-fast-startup-corpus",
-        runtime: "node",
-        task: "startup-corpus",
-      },
-      {
-        check_name: "checks-fast-coercion-helpers",
-        runtime: "node",
-        task: "coercion-helpers",
-      },
-    ]);
+    ).toContainEqual({
+      check_name: "checks-fast-bundled-protocol",
+      runtime: "node",
+      task: "bundled-protocol",
+    });
 
     const releaseGate = runCiManifestFixture({
       bundledPlanner: true,
       eventName: "workflow_dispatch",
       historicalCompatibility: false,
       releaseGate: true,
+      changedPaths: ["scripts/lib/changed-path-facts.mjs"],
       runnerProfile: "github",
     });
     expect(releaseGate.status, releaseGate.output).toBe(0);
@@ -6963,20 +7466,23 @@ describe("ci workflow guards", () => {
       label: "test-only routing",
       changedPath: "test/scripts/changed-path-facts.test.ts",
       taskOverride: null,
+      fullStatic: false,
     },
     {
       label: "source-only routing",
       changedPath: "scripts/lib/changed-path-facts.mjs",
       taskOverride: null,
+      fullStatic: true,
     },
     {
       label: "legacy combined contract and routing task",
       changedPath: "test/scripts/changed-path-facts.test.ts",
       taskOverride: "contracts-plugins-ci-routing",
+      fullStatic: false,
     },
   ])(
-    "executes standalone changed-path-facts coverage for $label",
-    ({ changedPath, taskOverride }) => {
+    "selects changed-path-facts owner tests and preserves legacy task execution for $label",
+    ({ changedPath, taskOverride, fullStatic }) => {
       const root = tempDirs.make("openclaw-fast-ci-routing-");
       const changedPaths = [changedPath];
       const scopeEnv = Object.fromEntries(
@@ -6987,26 +7493,38 @@ describe("ci workflow guards", () => {
       );
       const manifest = runCiManifestFixture({
         bundledPlanner: true,
+        checkFamilyScope: true,
+        changedPlannerSource: `export const createChangedNodeTestShards = () => [{
+          checkName: "changed-routing", shardName: "changed-routing", configs: [],
+          targets: ["test/scripts/changed-path-facts.test.ts"], requiresDist: false,
+          runner: "ubuntu-24.04",
+        }];`,
         eventName: "pull_request",
         historicalCompatibility: false,
         changedPaths,
         scopeEnv: { ...scopeEnv, OPENCLAW_CI_DOCS_CHANGED: "false" },
       });
       expect(manifest.status, manifest.output).toBe(0);
-      expect(
-        Object.entries(manifest.outputs)
-          .filter(([key, value]) => key.startsWith("run_") && value === "true")
-          .map(([key]) => key)
-          .toSorted(),
-      ).toEqual([
+      for (const flag of [
         "run_baseline_ratchets",
-        "run_checks_fast_core",
+        "run_check",
+        "run_check_additional",
+        "run_checks_node_core_nondist",
         "run_format_check",
         "run_node",
         "run_protocol_event_coverage",
+      ]) {
+        expect(manifest.outputs[flag], flag).toBe("true");
+      }
+      expect(manifest.outputs.run_check_plan).toBe(String(!fullStatic));
+      expect(manifest.outputs.run_checks_fast_core).toBe(String(fullStatic));
+      const nodeRows = JSON.parse(
+        expectDefined(manifest.outputs.checks_node_core_nondist_matrix, "owner matrix"),
+      ).include;
+      expect(nodeRows).toEqual([
+        expect.objectContaining({ targets: ["test/scripts/changed-path-facts.test.ts"] }),
       ]);
       for (const matrix of [
-        "checks_node_core_nondist_matrix",
         "plugin_contracts_matrix",
         "channel_contracts_matrix",
         "checks_windows_matrix",
@@ -7020,15 +7538,7 @@ describe("ci workflow guards", () => {
       const fastTasks = JSON.parse(
         expectDefined(manifest.outputs.checks_fast_core_matrix, "fast checks matrix"),
       ).include as Array<{ task: string }>;
-      expect(fastTasks.map(({ task }) => task)).toEqual([
-        "startup-corpus",
-        "coercion-helpers",
-        "ci-routing",
-      ]);
-      const routingTask = expectDefined(
-        fastTasks.find(({ task }) => task === "ci-routing"),
-        "CI routing task",
-      );
+      expect(fastTasks.map(({ task }) => task)).toEqual(fullStatic ? ["bundled-protocol"] : []);
       const runStep = readCiWorkflow().jobs["checks-fast-core"].steps.find(
         (step: WorkflowStep) => step.name === "Run ${{ matrix.task }} (${{ matrix.runtime }})",
       );
@@ -7039,14 +7549,14 @@ describe("ci workflow guards", () => {
         "#!/usr/bin/env node",
         'require("node:fs").appendFileSync(process.env.PNPM_CALLS, JSON.stringify(process.argv.slice(2)) + "\\n");',
       ]);
-      // The current manifest selects ci-routing; exercise the retained combined Bash case directly.
+      // Historical release checkouts retain these tasks; current PRs select the owner row above.
       const run = spawnSync("bash", ["-c", runStep.run], {
         encoding: "utf8",
         env: {
           ...process.env,
           PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
           PNPM_CALLS: callsPath,
-          TASK: taskOverride ?? routingTask.task,
+          TASK: taskOverride ?? "ci-routing",
         },
       });
       expect(run.status, `${run.stdout}${run.stderr}`).toBe(0);
@@ -7117,7 +7627,7 @@ describe("ci workflow guards", () => {
       changedPath: "apps/ios/Sources/Foo.swift",
       eventName: "workflow_dispatch",
       releaseGate: true,
-      selectedJobs: ["checks-windows", "ios-build", "android"],
+      selectedJobs: ["ios-build", "android"],
     },
     {
       label: "shared native",
@@ -7152,20 +7662,20 @@ describe("ci workflow guards", () => {
       selectedJobs: ["macos-node", "macos-swift", "checks-windows", "ios-build"],
     },
     {
-      label: "historical Mac scope without native Node output",
+      label: "historical manual Mac source without native Node output",
       changedPath: "apps/macos/Sources/Foo.swift",
       eventName: "workflow_dispatch",
-      releaseGate: true,
+      releaseGate: false,
       legacyOutput: true,
-      selectedJobs: ["macos-node", "macos-swift", "checks-windows", "android"],
+      selectedJobs: ["macos-node", "macos-swift", "checks-windows"],
     },
     {
-      label: "historical non-Mac scope without native Node output",
+      label: "historical manual config source without native Node output",
       changedPath: "src/config/defaults.ts",
       eventName: "workflow_dispatch",
-      releaseGate: true,
+      releaseGate: false,
       legacyOutput: true,
-      selectedJobs: ["checks-windows", "android"],
+      selectedJobs: ["macos-node", "macos-swift", "checks-windows"],
     },
   ])(
     "routes native CI jobs through scope output and manifest ($label)",
@@ -7203,6 +7713,7 @@ describe("ci workflow guards", () => {
       );
       const manifest = runCiManifestFixture({
         bundledPlanner: !legacyOutput,
+        selectedTestTargets: CI_MANIFEST_FIXTURE_TARGETS.windows,
         historicalCompatibility: Boolean(legacyOutput),
         changedPaths,
         eventName,
@@ -7491,7 +8002,7 @@ describe("ci workflow guards", () => {
       ).include;
       expect(rows).toHaveLength(docsOnly ? 0 : 1);
       if (!docsOnly) {
-        expect(rows[0].check_name).toBe("bundled-node-plan");
+        expect(rows[0].check_name).toBe("changed-owner-plan");
       }
     },
   );
@@ -7579,7 +8090,10 @@ describe("ci workflow guards", () => {
             if (options.includePrExemptRuntimeTests !== false) {
               throw new Error("automatic precise plan must defer unrelated PR-exempt tests");
             }
-            return null;
+            console.log("changed-node-plan-options:" + JSON.stringify(options));
+            return [{ checkName: "changed-owner-plan", shardName: "changed-owner-plan",
+              configs: ["test/vitest/owner.config.ts"], includePatterns: _paths,
+              requiresDist: false, runner: "ubuntu-24.04" }];
           };
           export const createChangedExtensionFallbackShards = () => [];
         `,
@@ -7589,33 +8103,38 @@ describe("ci workflow guards", () => {
         releaseGate,
       });
       expect(manifest.status, manifest.output).toBe(0);
+      const prefix = forwardsChangedPaths
+        ? "changed-node-plan-options:"
+        : "node-test-plan-options:";
       const plannerOptions = JSON.parse(
         expectDefined(
-          manifest.output.split("\n").find((line) => line.startsWith("node-test-plan-options:")),
+          manifest.output.split("\n").find((line) => line.startsWith(prefix)),
           "Node planner invocation",
-        ).slice("node-test-plan-options:".length),
+        ).slice(prefix.length),
       );
       expect(plannerOptions).toMatchObject({
-        includeReleaseOnlyPluginShards: false,
+        ...(!forwardsChangedPaths ? { includeReleaseOnlyPluginShards: false } : {}),
         includeReleaseOnlyToolingShards:
-          eventName === "workflow_dispatch" || repository !== "openclaw/openclaw",
+          (eventName === "workflow_dispatch" && !releaseGate) || repository !== "openclaw/openclaw",
         includeReleaseOnlyRuntimeTests:
           (eventName === "workflow_dispatch" && !releaseGate) || repository !== "openclaw/openclaw",
         includePrExemptRuntimeTests:
           (eventName !== "pull_request" && !releaseGate) || repository !== "openclaw/openclaw",
       });
       const rows = JSON.parse(
-        expectDefined(manifest.outputs.checks_node_core_nondist_matrix, "fallback matrix"),
+        expectDefined(manifest.outputs.checks_node_core_nondist_matrix, "selected matrix"),
       ).include;
       expect(rows).toHaveLength(1);
-      expect(rows[0].check_name).toBe("bundled-node-plan");
+      expect(rows[0].check_name).toBe(
+        forwardsChangedPaths ? "changed-owner-plan" : "bundled-node-plan",
+      );
       const plans = resolveShardPlans({
         OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: rows[0].groups_gzip_base64,
         OPENCLAW_NODE_TEST_CONFIGS_JSON: JSON.stringify(rows[0].configs),
         OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: JSON.stringify(rows[0].includePatterns),
       });
       expect(plans).toHaveLength(1);
-      const plan = expectDefined(plans[0], "resolved fallback plan");
+      const plan = expectDefined(plans[0], "resolved selected plan");
       expect(plan.kind === "group" ? (plan.plan.includePatterns ?? null) : undefined).toEqual(
         forwardsChangedPaths ? changedPaths : null,
       );
@@ -7643,16 +8162,17 @@ describe("ci workflow guards", () => {
   );
 
   it.each([
-    ["pull_request", "compact", "blacksmith", 130],
-    ["pull_request", "precise", "github", 130],
-    ["push", "compact", "hybrid", 70],
-    ["workflow_dispatch", "compact", "blacksmith", null],
+    ["pull_request", "selected", "blacksmith", 130, "full"],
+    ["pull_request", "precise", "github", 130, "full"],
+    ["push", "compact", "hybrid", 70, "full"],
+    ["schedule", "compact", "hybrid", 77, "main"],
+    ["workflow_dispatch", "compact", "blacksmith", 77, "main"],
+    ["workflow_dispatch", "compact", "blacksmith", null, "full"],
   ] as const)(
-    "bounds the final Node matrix for %s %s plans",
-    (eventName, selection, runnerProfile, limit) => {
+    "bounds the final Node matrix for %s %s plans (%s, cap %s, tier %s)",
+    (eventName, selection, runnerProfile, limit, validationTier) => {
       for (const count of [limit ?? 130, (limit ?? 130) + 1]) {
-        const hasFallback = eventName === "pull_request" && selection === "compact";
-        const nodeTestShards = Array.from({ length: count - Number(hasFallback) }, (_, index) => ({
+        const nodeTestShards = Array.from({ length: count }, (_, index) => ({
           checkName: `node-admission-${index}`,
           shardName: `node-admission-${index}`,
           configs: ["test/vitest/vitest.infra.config.ts"],
@@ -7668,6 +8188,14 @@ describe("ci workflow guards", () => {
                  export const createChangedExtensionFallbackShards = () => [];`
               : undefined,
           eventName,
+          historicalCompatibility: validationTier === "main" ? false : undefined,
+          scopeEnv:
+            validationTier === "main"
+              ? {
+                  OPENCLAW_CI_VALIDATION_TIER: validationTier,
+                  OPENCLAW_CI_WORKFLOW_REVISION: "a".repeat(40),
+                }
+              : undefined,
           nodeTestShards: [
             ...nodeTestShards,
             {
@@ -7692,17 +8220,16 @@ describe("ci workflow guards", () => {
           const rows = JSON.parse(
             expectDefined(result.outputs.checks_node_core_nondist_matrix, "bounded Node matrix"),
           ).include;
-          expect(rows.map((row: { check_name: string }) => row.check_name)).toEqual([
-            ...(hasFallback ? ["changed-extension-fallback-plan"] : []),
-            ...nodeTestShards.map((shard) => shard.checkName),
-          ]);
+          expect(rows.map((row: { check_name: string }) => row.check_name)).toEqual(
+            nodeTestShards.map((shard) => shard.checkName),
+          );
           expect(result.outputs.run_checks_node_core_dist).toBe("true");
         }
       }
     },
   );
 
-  it("admits slow compact and plugin fallback rows before shorter work", () => {
+  it("admits slower selected owner rows before shorter work", () => {
     const result = runCiManifestFixture({
       bundledPlanner: true,
       changedPaths: ["extensions/matrix/src/channel.ts"],
@@ -7723,11 +8250,10 @@ describe("ci workflow guards", () => {
     expect(rows.map((row: { check_name: string }) => row.check_name)).toEqual([
       "compact-1",
       "compact-2",
-      "changed-extension-fallback-plan",
       "compact-0",
     ]);
     expect(rows.map((row: { predicted_seconds: number }) => row.predicted_seconds)).toEqual([
-      240, 240, 120, 30,
+      240, 240, 30,
     ]);
   });
 
@@ -7903,15 +8429,15 @@ describe("ci workflow guards", () => {
           "changed PR node matrix output",
         ),
       ).include,
-    ).not.toContainEqual(
-      expect.objectContaining({ check_name: "changed-extension-fallback-plan" }),
-    );
-    expect(changedPullRequest.outputs.run_checks_node_core_dist).toBe("true");
+    ).not.toContainEqual(expect.objectContaining({ check_name: "changed-extension-owner-plan" }));
+    expect(changedPullRequest.outputs.run_checks_node_core_dist).toBe("false");
     expect(changedPullRequest.outputs.run_sqlite_session_lifecycle).toBe("false");
-    expect(changedPullRequest.outputs.run_docker_seed_e2e).toBe("false");
-    expect(changedPullRequest.outputs.docker_seed_lanes).toBe("");
+    expect(changedPullRequest.outputs.run_docker_seed_e2e).toBe("true");
+    expect(changedPullRequest.outputs.docker_seed_lanes).toBe(
+      "mcp-channels cron-mcp-cleanup mcp-code-mode-gateway",
+    );
 
-    const mixedFallbackPullRequest = runCiManifestFixture({
+    const mixedOwnerPullRequest = runCiManifestFixture({
       bundledPlanner: true,
       changedPaths: [
         "packages/gateway-protocol/src/frame-guards.ts",
@@ -7919,30 +8445,21 @@ describe("ci workflow guards", () => {
       ],
       eventName: "pull_request",
     });
-    expect(mixedFallbackPullRequest.status, mixedFallbackPullRequest.output).toBe(0);
+    expect(mixedOwnerPullRequest.status, mixedOwnerPullRequest.output).toBe(0);
     expect(
       JSON.parse(
         expectDefined(
-          mixedFallbackPullRequest.outputs.checks_node_core_nondist_matrix,
-          "mixed fallback PR node matrix output",
+          mixedOwnerPullRequest.outputs.checks_node_core_nondist_matrix,
+          "mixed owner PR node matrix output",
         ),
       ).include,
-    ).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          check_name: "bundled-node-plan",
-          env: {
-            OPENCLAW_CI_TEST_COMPACT_MODE: "pull-request",
-            OPENCLAW_CI_TEST_COMPACT_NODE_JOB_CAP: "129",
-            OPENCLAW_CI_TEST_RUNNER_BACKEND: "blacksmith",
-            OPENCLAW_CI_TEST_PROOF_TIER: "false",
-          },
-        }),
-        expect.objectContaining({ check_name: "changed-extension-fallback-plan" }),
-      ]),
-    );
+    ).toEqual([
+      expect.objectContaining({ check_name: "changed-extension-owner-plan" }),
+      expect.objectContaining({ check_name: "changed-owner-plan", requires_dist: false }),
+    ]);
+    expect(mixedOwnerPullRequest.output).not.toContain("\nnode-test-plan-options:");
 
-    const matrixFallbackPullRequest = runCiManifestFixture({
+    const matrixOwnerPullRequest = runCiManifestFixture({
       bundledPlanner: true,
       changedPaths: [
         "packages/gateway-protocol/src/frame-guards.ts",
@@ -7950,28 +8467,28 @@ describe("ci workflow guards", () => {
       ],
       eventName: "pull_request",
     });
-    expect(matrixFallbackPullRequest.status, matrixFallbackPullRequest.output).toBe(0);
-    const matrixFallbackRows = JSON.parse(
+    expect(matrixOwnerPullRequest.status, matrixOwnerPullRequest.output).toBe(0);
+    const matrixOwnerRows = JSON.parse(
       expectDefined(
-        matrixFallbackPullRequest.outputs.checks_node_core_nondist_matrix,
-        "Matrix fallback PR node matrix output",
+        matrixOwnerPullRequest.outputs.checks_node_core_nondist_matrix,
+        "Matrix owner PR node matrix output",
       ),
     ).include;
-    const matrixFallbackRow = expectDefined(
-      matrixFallbackRows.find(
-        (row: { check_name: string }) => row.check_name === "changed-extension-fallback-plan",
+    const matrixOwnerRow = expectDefined(
+      matrixOwnerRows.find(
+        (row: { check_name: string }) => row.check_name === "changed-extension-owner-plan",
       ),
-      "Matrix fallback row",
+      "Matrix owner row",
     );
     expect(
       resolveShardPlans({
-        OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: matrixFallbackRow.groups_gzip_base64,
-        OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(matrixFallbackRow.groups),
-        OPENCLAW_NODE_TEST_CONFIGS_JSON: JSON.stringify(matrixFallbackRow.configs),
-        OPENCLAW_NODE_TEST_ENV_JSON: JSON.stringify(matrixFallbackRow.env),
-        OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: JSON.stringify(matrixFallbackRow.includePatterns),
-        OPENCLAW_NODE_TEST_TARGETS_JSON: JSON.stringify(matrixFallbackRow.targets),
-        OPENCLAW_VITEST_SHARD_NAME: matrixFallbackRow.shard_name,
+        OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: matrixOwnerRow.groups_gzip_base64,
+        OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(matrixOwnerRow.groups),
+        OPENCLAW_NODE_TEST_CONFIGS_JSON: JSON.stringify(matrixOwnerRow.configs),
+        OPENCLAW_NODE_TEST_ENV_JSON: JSON.stringify(matrixOwnerRow.env),
+        OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: JSON.stringify(matrixOwnerRow.includePatterns),
+        OPENCLAW_NODE_TEST_TARGETS_JSON: JSON.stringify(matrixOwnerRow.targets),
+        OPENCLAW_VITEST_SHARD_NAME: matrixOwnerRow.shard_name,
       }),
     ).toEqual([
       expect.objectContaining({
@@ -7992,8 +8509,9 @@ describe("ci workflow guards", () => {
       eventName: "pull_request",
     });
     expect(sqliteLifecycleTestPullRequest.status, sqliteLifecycleTestPullRequest.output).toBe(0);
-    expect(sqliteLifecycleTestPullRequest.outputs.run_sqlite_session_lifecycle).toBe("false");
-    expect(sqliteLifecycleTestPullRequest.outputs.run_build_artifacts).toBe("false");
+    expect(sqliteLifecycleTestPullRequest.outputs.run_sqlite_session_lifecycle).toBe("true");
+    expect(sqliteLifecycleTestPullRequest.outputs.run_build_artifacts).toBe("true");
+    expect(sqliteLifecycleTestPullRequest.outputs.run_checks_node_core_dist).toBe("false");
 
     const emptyPullRequest = runCiManifestFixture({
       bundledPlanner: true,
@@ -8004,7 +8522,7 @@ describe("ci workflow guards", () => {
     const emptyRows = JSON.parse(
       expectDefined(emptyPullRequest.outputs.checks_node_core_nondist_matrix, "empty PR matrix"),
     ).include;
-    expect(emptyRows).toEqual([expect.objectContaining({ check_name: "bundled-node-plan" })]);
+    expect(emptyRows).toEqual([expect.objectContaining({ check_name: "changed-owner-plan" })]);
     const [emptyRow] = emptyRows;
     expect(
       resolveShardPlans({
@@ -8019,7 +8537,7 @@ describe("ci workflow guards", () => {
     ).toEqual([
       expect.objectContaining({
         kind: "group",
-        plan: expect.objectContaining({ includePatterns: [] }),
+        plan: expect.objectContaining({ includePatterns: ["src/smoke.test.ts"] }),
       }),
     ]);
 
@@ -8031,8 +8549,8 @@ describe("ci workflow guards", () => {
         "Current PR CI target does not export createChangedNodeTestShards",
       ],
       [
-        "export const createChangedNodeTestShards = () => [];",
-        "Current PR CI target does not export createChangedExtensionFallbackShards",
+        'export const createChangedNodeTestShards = (_paths, options) => { options.onFallback("unresolved owner"); return null; };',
+        "Current PR CI requires a bounded changed-owner Node plan: unresolved owner",
       ],
       [
         `export const createChangedNodeTestShards = () => { throw new Error("precise planning failure"); };
@@ -8042,18 +8560,35 @@ describe("ci workflow guards", () => {
       [
         `export const createChangedNodeTestShards = () => null;
          export const createChangedExtensionFallbackShards = () => { throw new Error("fallback planning failure"); };`,
-        "fallback planning failure",
+        "Current PR CI requires a bounded changed-owner Node plan",
       ],
     ] as const) {
-      const failure = runCiManifestFixture({
+      for (const releaseGate of [false, true]) {
+        const failure = runCiManifestFixture({
+          bundledPlanner: true,
+          changedPaths: ["package.json", "extensions/codex/src/focused.ts"],
+          changedPlannerSource,
+          eventName: releaseGate ? "workflow_dispatch" : "pull_request",
+          releaseGate,
+        });
+        expect(failure.status, failure.output).toBe(1);
+        expect(failure.output).toContain(error);
+        expect(failure.outputs.checks_node_core_nondist_matrix).toBeUndefined();
+      }
+    }
+    for (const releaseGate of [false, true]) {
+      const missingSelector = runCiManifestFixture({
         bundledPlanner: true,
-        changedPaths: ["package.json", "extensions/codex/src/focused.ts"],
-        changedPlannerSource,
-        eventName: "pull_request",
+        targetSelector: false,
+        changedPaths: ["src/owner.ts"],
+        eventName: releaseGate ? "workflow_dispatch" : "pull_request",
+        releaseGate,
       });
-      expect(failure.status, failure.output).toBe(1);
-      expect(failure.output).toContain(error);
-      expect(failure.outputs.checks_node_core_nondist_matrix).toBeUndefined();
+      expect(missingSelector.status, missingSelector.output).toBe(1);
+      expect(missingSelector.output).toContain(
+        "Current PR CI requires a bounded changed-owner target selector",
+      );
+      expect(missingSelector.outputs.checks_node_core_nondist_matrix).toBeUndefined();
     }
     for (const changedPaths of [undefined, null]) {
       const failure = runCiManifestFixture({
@@ -8416,7 +8951,15 @@ describe("ci workflow guards", () => {
         expect(
           JSON.parse(expectDefined(manifest.outputs.ui_real_gateway_matrix, "real-Gateway matrix")),
         ).toEqual({
-          include: [{ shard: 1, shard_count: 1, run_desktop: true, test_groups_gzip_base64: "" }],
+          include: [
+            {
+              shard: 1,
+              shard_count: 1,
+              run_desktop: true,
+              run_tests: true,
+              test_groups_gzip_base64: "",
+            },
+          ],
         });
         expect(
           JSON.parse(
@@ -8542,34 +9085,302 @@ describe("ci workflow guards", () => {
     ).toBe(false);
   });
 
+  it.each([
+    {
+      label: "all selected families",
+      emptyDesktopCarrier: true,
+      windowsArea: true,
+      unitOwner: false,
+      ui: [0],
+      mocked: [2],
+      real: [1],
+      browser: [0],
+      windows: [2],
+    },
+    {
+      label: "unit and smoke without Windows ownership",
+      windowsArea: false,
+      unitOwner: false,
+      ui: [1],
+      mocked: [],
+      real: [],
+      browser: [],
+      windows: [0],
+    },
+    {
+      label: "Windows owner without UI",
+      windowsArea: true,
+      unitOwner: false,
+      ui: [],
+      mocked: [],
+      real: [],
+      browser: [],
+      windows: [],
+    },
+    {
+      label: "full unit owner with one selected test",
+      windowsArea: false,
+      unitOwner: true,
+      ui: [0],
+      mocked: [],
+      real: [],
+      browser: [],
+      windows: [],
+    },
+  ])("projects one selected test set into dedicated jobs: $label", (scenario) => {
+    const selected = {
+      ui: scenario.ui.map((index) =>
+        expectDefined(CI_MANIFEST_FIXTURE_TARGETS.ui[index], "UI fixture"),
+      ),
+      mocked: scenario.mocked.map((index) =>
+        expectDefined(CI_MANIFEST_FIXTURE_TARGETS.mocked[index], "mocked fixture"),
+      ),
+      real: scenario.real.map((index) =>
+        expectDefined(CI_MANIFEST_FIXTURE_TARGETS.real[index], "real-Gateway fixture"),
+      ),
+      browser: scenario.browser.map((index) =>
+        expectDefined(CI_MANIFEST_FIXTURE_TARGETS.browser[index], "browser fixture"),
+      ),
+      windows: scenario.windows.map((index) =>
+        expectDefined(CI_MANIFEST_FIXTURE_TARGETS.windows[index], "Windows fixture"),
+      ),
+    };
+    const selectedTestTargets = ["src/owner.test.ts", ...Object.values(selected).flat()];
+    const manifest = runCiManifestFixture({
+      bundledPlanner: true,
+      historicalCompatibility: false,
+      eventName: "pull_request",
+      changedPaths: ["src/owner.ts"],
+      selectedTestTargets,
+      scopeEnv: {
+        OPENCLAW_CI_RUN_WINDOWS: String(scenario.windowsArea),
+        OPENCLAW_CI_RUN_UI_TESTS: String(scenario.unitOwner),
+      },
+      changedPlannerSource: `
+      export const hasUiE2eAffectingChange = () => false;
+      export const createChangedNodeTestShards = (_paths, options) => {
+        console.log("selected-projection:" + JSON.stringify(options));
+        return [];
+      };`,
+    });
+    expect(manifest.status, manifest.output).toBe(0);
+    const plannerOptions = JSON.parse(
+      expectDefined(
+        manifest.output.match(/selected-projection:(.+)/u)?.[1],
+        "Node selection receipt",
+      ),
+    );
+    expect(plannerOptions.selectedTestTargets).toEqual(selectedTestTargets);
+    const expectedUi = scenario.unitOwner ? CI_MANIFEST_FIXTURE_TARGETS.ui : selected.ui;
+    expect(plannerOptions.dedicatedUiTests).toBe(expectedUi.length > 0);
+    expect(manifest.outputs.run_ui_tests).toBe(String(expectedUi.length > 0));
+    expect(manifest.outputs.run_ui_e2e).toBe(
+      String(selected.mocked.length + selected.browser.length > 0),
+    );
+    expect(manifest.outputs.run_ui_real_gateway).toBe(String(selected.real.length > 0));
+    expect(JSON.parse(expectDefined(manifest.outputs.ui_test_matrix, "UI matrix")).include).toEqual(
+      expectedUi.map((_, index) => ({ shard: index + 1 })),
+    );
+    expect(manifest.outputs.ui_test_shard_count).toBe(String(expectedUi.length));
+    expect(
+      resolveSelectedUiIncludes(
+        expectDefined(manifest.outputs.ui_test_groups_gzip_base64, "UI selection"),
+      ).flat(),
+    ).toEqual(expectedUi);
+    expect(
+      resolveSelectedUiIncludes(
+        expectDefined(manifest.outputs.ui_e2e_test_groups_gzip_base64, "E2E selection"),
+      ).flat(),
+    ).toEqual([...selected.mocked, ...selected.real]);
+    const e2eRows = JSON.parse(expectDefined(manifest.outputs.ui_e2e_matrix, "E2E matrix")).include;
+    expect(e2eRows.map((row: { task: string }) => row.task)).toEqual([
+      ...selected.mocked.map(() => "control-ui"),
+      ...selected.browser.map(() => "browser-extension"),
+    ]);
+    const realRows = JSON.parse(
+      expectDefined(manifest.outputs.ui_real_gateway_matrix, "real-Gateway matrix"),
+    ).include as Array<{
+      run_desktop: boolean;
+      run_tests: boolean;
+      test_groups_gzip_base64: string;
+    }>;
+    expect(
+      realRows.flatMap((row) => resolveSelectedUiIncludes(row.test_groups_gzip_base64).flat()),
+    ).toEqual(selected.real);
+    if ("emptyDesktopCarrier" in scenario) {
+      expect(realRows.some((row) => row.run_desktop && !row.run_tests)).toBe(true);
+    }
+    const realJob = readCiWorkflow().jobs["checks-ui-e2e-real-gateway"];
+    const suiteStep = expectDefined(
+      realJob.steps.find(
+        (step: WorkflowStep) => step.name === "Test Control UI suites with a real Gateway",
+      ),
+      "real-Gateway suite step",
+    );
+    const desktopStep = expectDefined(
+      realJob.steps.find(
+        (step: WorkflowStep) => step.name === "Prove desktop resize over node and SSH",
+      ),
+      "desktop proof step",
+    );
+    for (const row of realRows) {
+      const groups = resolveSelectedUiIncludes(row.test_groups_gzip_base64);
+      const hasSuiteTargets = groups.some((files) => files.length > 0);
+      expect(row.run_tests).toBe(hasSuiteTargets);
+      expect(groups.every((files) => files.length > 0)).toBe(true);
+      const context = {
+        eventName: "pull_request" as const,
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        matrix: row,
+      };
+      expect(evaluateWorkflowExpression(`\${{ ${suiteStep.if} }}`, context)).toBe(hasSuiteTargets);
+      expect(evaluateWorkflowExpression(`\${{ ${desktopStep.if} }}`, context)).toBe(
+        row.run_desktop,
+      );
+      if (!hasSuiteTargets) {
+        expect(row.run_desktop).toBe(true);
+      }
+    }
+    const windowsRows = JSON.parse(
+      expectDefined(manifest.outputs.checks_windows_matrix, "Windows matrix"),
+    ).include as Array<{ targets: string[] }>;
+    expect(windowsRows.flatMap((row) => row.targets)).toEqual(
+      scenario.windowsArea ? CI_MANIFEST_FIXTURE_TARGETS.windows : [],
+    );
+    expect(windowsRows).toHaveLength(
+      scenario.windowsArea ? CI_MANIFEST_FIXTURE_TARGETS.windows.length : 0,
+    );
+    expect(manifest.outputs.run_checks_windows).toBe(String(scenario.windowsArea));
+  });
+
+  it.each([
+    { control: false, browser: false, real: false },
+    { control: true, browser: false, real: true },
+    { control: false, browser: true, real: false },
+    { control: true, browser: true, real: true },
+    { control: false, browser: false, real: true },
+  ])(
+    "routes browser owners independently (control=$control, browser=$browser, real=$real)",
+    ({ control, browser, real }) => {
+      const manifest = runCiManifestFixture({
+        bundledPlanner: true,
+        selectedTestTargets: ["src/owner.test.ts"],
+        eventName: "pull_request",
+        changedPaths: ["src/gateway/control-ui.ts"],
+        uiE2eProjectsCapability: true,
+        uiReleaseTier: true,
+        nodeTestGroupsCodec: true,
+        scopeEnv: { OPENCLAW_CI_RUN_UI_TESTS: "false" },
+        changedPlannerSource: `
+        export const hasUiE2eAffectingChange = (_paths, { family }) => family === "browser-extension" ? ${browser} : family === "real-gateway" ? ${real} : ${control};
+        export const createChangedNodeTestShards = () => [];
+        export const createChangedExtensionFallbackShards = () => [];
+      `,
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      expect(manifest.outputs.run_ui_tests).toBe("false");
+      expect(manifest.outputs.run_ui_e2e).toBe(String(control || browser));
+      expect(manifest.outputs.run_ui_real_gateway).toBe(String(real));
+      expect(
+        resolveSelectedUiIncludes(
+          expectDefined(manifest.outputs.ui_e2e_test_groups_gzip_base64, "owned E2E inventory"),
+        ).flat(),
+      ).toEqual([
+        ...(control ? CI_MANIFEST_FIXTURE_TARGETS.mocked : []),
+        ...(real ? CI_MANIFEST_FIXTURE_TARGETS.real : []),
+      ]);
+      if (real) {
+        expect(manifest.outputs.ui_e2e_test_groups_gzip_base64).not.toBe("");
+      }
+      const rows = JSON.parse(
+        expectDefined(manifest.outputs.ui_e2e_matrix, "browser matrix"),
+      ).include;
+      expect(rows.map((row: { shard: number }) => row.shard)).toEqual([
+        ...(control ? [1, 2, 3, 4, 5, 6, 7, 8] : []),
+        ...(browser ? [control ? 9 : 1] : []),
+      ]);
+      for (const row of rows) {
+        expect(row).toMatchObject({
+          shard_count: control ? 9 : 1,
+          vitest_shard_count: control ? 8 : 0,
+        });
+      }
+      for (const name of ["checks-ui-e2e", "checks-ui-e2e-real-gateway"]) {
+        expect(
+          evaluateWorkflowExpression(`\${{ ${readCiWorkflow().jobs[name].if} }}`, {
+            eventName: "pull_request",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            preflightOutputs: manifest.outputs,
+          }),
+        ).toBe(name === "checks-ui-e2e" ? control || browser : real);
+      }
+    },
+  );
+
+  it.each([
+    { paths: ["extensions/telegram/src/send.ts"], selected: false },
+    { paths: ["src/process/exec.ts", "ui/src/styles/chat.css"], selected: true },
+  ])(
+    "keeps exact-head PR Windows/browser jobs scoped to their owners ($selected)",
+    ({ paths, selected }) => {
+      const scope = detectChangedScope(paths);
+      const step = readCiWorkflow().jobs.preflight.steps.find(
+        (candidate: WorkflowStep) => candidate.id === "manifest",
+      );
+      const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
+        eventName: "workflow_dispatch",
+        releaseGate: true,
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        steps: {
+          changed_scope: {
+            outputs: {
+              run_windows: String(scope.runWindows),
+              run_ui_tests: String(scope.runUiTests),
+            },
+          },
+          runner_profile: {
+            outputs: { node_runner_backend: "blacksmith", ci_qualification: "false" },
+          },
+        },
+      };
+      const scopeEnv = Object.fromEntries(
+        ["OPENCLAW_CI_RUN_WINDOWS", "OPENCLAW_CI_RUN_UI_TESTS"].map((key) => [
+          key,
+          String(evaluateWorkflowExpression(step.env[key], context)),
+        ]),
+      );
+      expect(Object.values(scopeEnv)).toEqual([String(selected), String(selected)]);
+      const planner = pathToFileURL(path.resolve("scripts/lib/ci-changed-node-test-plan.mts")).href;
+      const manifest = runCiManifestFixture({
+        bundledPlanner: true,
+        selectedTestTargets: selected
+          ? Object.values(CI_MANIFEST_FIXTURE_TARGETS).flat()
+          : ["src/owner.test.ts"],
+        checkFamilyScope: true,
+        historicalCompatibility: false,
+        eventName: "workflow_dispatch",
+        releaseGate: true,
+        changedPaths: paths,
+        scopeEnv,
+        changedPlannerSource: `export { hasUiE2eAffectingChange } from ${JSON.stringify(planner)};
+          export const createChangedNodeTestShards = () => [];`,
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      expect(manifest.outputs.run_checks_windows).toBe(String(selected));
+      expect(manifest.outputs.run_ui_e2e).toBe(String(selected));
+      expect(manifest.outputs.run_ui_real_gateway).toBe(String(selected));
+      expect(manifest.outputs.run_check_plan).toBe("true");
+    },
+  );
+
   it("gates current Control UI changes on ordinary and real-Gateway Chromium E2E", () => {
     const workflow = readCiWorkflow();
     const ui = workflow.jobs["checks-ui"];
     const uiE2e = workflow.jobs["checks-ui-e2e"];
     const uiE2eRealGateway = workflow.jobs["checks-ui-e2e-real-gateway"];
-
-    for (const runnerBackend of ["", "blacksmith", "hybrid", "github"] as const) {
-      for (const task of ["control-ui", "browser-extension"]) {
-        for (const eventName of ["pull_request", "push", "workflow_dispatch"] as const) {
-          expect(
-            evaluateWorkflowExpression(uiE2e["runs-on"], {
-              eventName,
-              repository: "openclaw/openclaw",
-              runAttempt: 1,
-              runnerBackend,
-              matrix: { task },
-            }),
-            `${eventName}/${runnerBackend || "default"}/${task}`,
-          ).toBe(
-            eventName !== "push" || runnerBackend === "github"
-              ? "ubuntu-24.04"
-              : task === "control-ui"
-                ? "blacksmith-16vcpu-ubuntu-2404"
-                : "blacksmith-8vcpu-ubuntu-2404",
-          );
-        }
-      }
-    }
 
     expect(readFileSync("test/vitest/vitest.ui-e2e.config.ts", "utf8")).toContain(
       "ui-e2e-projects-contract-v1",
@@ -8603,12 +9414,13 @@ describe("ci workflow guards", () => {
         for (const runAttempt of ["1", "2", ""]) {
           const manifest = runCiManifestFixture({
             bundledPlanner: true,
+            selectedTestTargets: Object.values(CI_MANIFEST_FIXTURE_TARGETS).flat(),
             changedPaths: [],
             eventName,
             historicalCompatibility: false,
             runnerBackend,
             uiE2eProjectsCapability: true,
-            scopeEnv: { GITHUB_RUN_ATTEMPT: runAttempt },
+            scopeEnv: { GITHUB_RUN_ATTEMPT: runAttempt, OPENCLAW_CI_RUN_UI_TESTS: "true" },
           });
           const assertionName = `${runnerBackend} ${eventName} attempt ${runAttempt || "missing"}`;
           expect(manifest.status, manifest.output).toBe(0);
@@ -8625,7 +9437,7 @@ describe("ci workflow guards", () => {
     expect(uiE2eRealGateway.permissions).toEqual(uiE2e.permissions);
     expect(uiE2eRealGateway.needs).toEqual(uiE2e.needs);
     expect(uiE2eRealGateway.if).toBe(
-      "needs.preflight.outputs.run_proof_tier == 'true' && needs.preflight.outputs.run_ui_e2e == 'true' && needs.preflight.outputs.compatibility_target != 'true'",
+      "needs.preflight.outputs.run_ui_real_gateway == 'true' && needs.preflight.outputs.compatibility_target != 'true'",
     );
     expect(uiE2eRealGateway.env).toBeUndefined();
     expect(uiE2eRealGateway.strategy).toEqual({
@@ -8802,9 +9614,7 @@ describe("ci workflow guards", () => {
     for (const { blacksmithRunner, job, matrix, name: jobName, setup } of routedUiE2eJobs) {
       for (const { context, expected, name: scenarioName } of routingScenarios) {
         const assertionName = `${jobName}: ${scenarioName}`;
-        const hostedPullRequest = job === uiE2e && context.eventName === "pull_request";
-        const usesBlacksmith = expected.blacksmith && !hostedPullRequest;
-        const expectedRunner = usesBlacksmith ? blacksmithRunner : "ubuntu-24.04";
+        const expectedRunner = expected.blacksmith ? blacksmithRunner : "ubuntu-24.04";
         expect(
           String(job.name).replace(/\$\{\{[\s\S]*?\}\}/gu, (expression) =>
             String(evaluateWorkflowExpression(expression, { ...context, matrix })),
@@ -8819,10 +9629,10 @@ describe("ci workflow guards", () => {
           evaluateWorkflowExpression(setup.with?.["dependency-cache"], {
             ...context,
             matrix,
-            runnerEnvironment: usesBlacksmith ? "self-hosted" : "github-hosted",
+            runnerEnvironment: expected.blacksmith ? "self-hosted" : "github-hosted",
           }),
           assertionName,
-        ).toBe(hostedPullRequest ? "false" : expected.dependencyCache);
+        ).toBe(expected.dependencyCache);
         expect(setup.with?.["cache-mode"], assertionName).toBe(
           "${{ needs.preflight.outputs.cache_mode }}",
         );
@@ -9567,6 +10377,7 @@ describe("ci workflow guards", () => {
         eventName: "workflow_dispatch",
         historicalCompatibility: false,
         releaseGate: true,
+        changedPaths: ["src/infra/manual-inventory/owner.ts"],
         scopeEnv: { OPENCLAW_CI_WORKFLOW_REVISION: "a".repeat(40) },
         nodeTestShards: [
           {
@@ -9648,7 +10459,7 @@ describe("ci workflow guards", () => {
         releaseGate,
         scopeEnv: { OPENCLAW_CI_WORKFLOW_REVISION: "a".repeat(40) },
         nodeTestShards: createNodeTestShardBundles({
-          compactMode: eventName === "pull_request" ? "pull-request" : undefined,
+          compactMode: eventName === "pull_request" || releaseGate ? "pull-request" : undefined,
           includeProofTests: eventName !== "pull_request" && !releaseGate,
           includeReleaseOnlyPluginShards: false,
           runnerBackend: runnerProfile,

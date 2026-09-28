@@ -2,7 +2,7 @@ import { normalizeNullableString } from "@openclaw/normalization-core/string-coe
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { hasOperatorApprovalsAccess } from "../../app/operator-access.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
+import type { SessionCapability, SessionMessageSubscription } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
@@ -72,6 +72,28 @@ async function retryPendingSessionMessageSubscriptionReleases(
   );
 }
 
+async function releaseDetachedSessionMessageSubscription(
+  unsubscribeMessages: SessionCapability["unsubscribeMessages"],
+  subscription: SessionMessageSubscription,
+  isCurrent?: () => boolean,
+): Promise<void> {
+  let retryDelayMs = SESSION_MESSAGE_RELEASE_RETRY_MS;
+  for (let attempt = 0; attempt < MAX_SESSION_MESSAGE_RELEASE_ATTEMPTS; attempt += 1) {
+    try {
+      await unsubscribeMessages(subscription);
+      return;
+    } catch (error) {
+      if (isCurrent?.() || attempt + 1 === MAX_SESSION_MESSAGE_RELEASE_ATTEMPTS) {
+        throw error;
+      }
+      await new Promise<void>((resolve) => {
+        globalThis.setTimeout(resolve, retryDelayMs);
+      });
+      retryDelayMs = Math.min(retryDelayMs * 2, 30_000);
+    }
+  }
+}
+
 export function disposeSelectedSessionMessageSubscription(state: ChatState): void {
   const requests = chatHistoryRequests(state);
   requests.subscriptionGeneration += 1;
@@ -89,25 +111,9 @@ export function disposeSelectedSessionMessageSubscription(state: ChatState): voi
   }
   const unsubscribeMessages = sessions.unsubscribeMessages.bind(sessions);
   for (const subscription of subscriptions) {
-    // A detached pane cannot drain another queue. Retry on its longer-lived
-    // session owner, but stop after terminal failures so timers cannot leak.
-    void (async () => {
-      let retryDelayMs = SESSION_MESSAGE_RELEASE_RETRY_MS;
-      for (let attempt = 0; attempt < MAX_SESSION_MESSAGE_RELEASE_ATTEMPTS; attempt += 1) {
-        try {
-          await unsubscribeMessages(subscription);
-          return;
-        } catch {
-          if (attempt + 1 === MAX_SESSION_MESSAGE_RELEASE_ATTEMPTS) {
-            return;
-          }
-          await new Promise<void>((resolve) => {
-            globalThis.setTimeout(resolve, retryDelayMs);
-          });
-          retryDelayMs = Math.min(retryDelayMs * 2, 30_000);
-        }
-      }
-    })();
+    void releaseDetachedSessionMessageSubscription(unsubscribeMessages, subscription).catch(
+      () => undefined,
+    );
   }
 }
 
@@ -214,7 +220,11 @@ export async function syncSelectedSessionMessageSubscription(
     if (unsubscribeResult.status === "rejected") {
       if (subscribeResult.status === "fulfilled" && subscribeResult.value) {
         try {
-          await state.sessions.unsubscribeMessages(subscribeResult.value);
+          await releaseDetachedSessionMessageSubscription(
+            state.sessions.unsubscribeMessages.bind(state.sessions),
+            subscribeResult.value,
+            isCurrent,
+          );
         } catch (replacementReleaseError) {
           if (isCurrent()) {
             if (previousSubscription) {
@@ -252,7 +262,10 @@ export async function syncSelectedSessionMessageSubscription(
     if (!isCurrent()) {
       // Generation advances before awaiting, so only the newest lease can reach assignment below.
       try {
-        await state.sessions.unsubscribeMessages(subscribed);
+        await releaseDetachedSessionMessageSubscription(
+          state.sessions.unsubscribeMessages.bind(state.sessions),
+          subscribed,
+        );
       } catch {
         // A rejected release still owns its live Gateway observer; retain the
         // exact handle so the next sync can complete the original unsubscribe.

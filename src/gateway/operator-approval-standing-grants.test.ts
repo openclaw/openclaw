@@ -299,7 +299,7 @@ describe("cron standing grant mint", () => {
     const revision = seedCronJob(databaseOptions);
     await mintGrant({ databaseOptions, jobConfigRevision: revision });
     const pathname = openOpenClawStateDatabase(databaseOptions).path;
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
 
     const previousReader = new DatabaseSync(pathname);
     try {
@@ -627,7 +627,7 @@ describe("cron standing grant consumption", () => {
       stateDb.selectFrom("cron_jobs").selectAll().where("job_id", "=", "job-1"),
     ).rows[0]!;
     const pathname = database.path;
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
     const previousWriter = new DatabaseSync(pathname);
     try {
       previousWriter.prepare("DELETE FROM cron_jobs WHERE job_id = ?").run("job-1");

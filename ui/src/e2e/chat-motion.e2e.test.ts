@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
@@ -11,21 +12,110 @@ import {
 const suite = createChatFlowE2eSuite();
 const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR;
 type MotionArrival = { text: string; opacity: string; transform: string };
+type SendMotionFrame = { top: number; y: number | null; opacity: string | null; same: boolean };
+type SendMotionProbe = { frames: SendMotionFrame[]; jumps: number[]; stop: () => void };
+
+async function observeSendMotion(page: Page, prompt: string) {
+  await page.evaluate((text) => {
+    const thread = document.querySelector<HTMLElement>(".chat-thread")!;
+    const scrollTo = thread.scrollTo.bind(thread);
+    const probe: SendMotionProbe = { frames: [], jumps: [], stop: () => {} };
+    window.openclawSendMotion = probe;
+    let firstBubble: HTMLElement | undefined;
+    let frame = 0;
+    // Native smooth scrolling moves asynchronously. An immediate offset change
+    // exposes a competing instant command even if it happens between paints.
+    thread.scrollTo = function (options?: ScrollToOptions | number, y?: number) {
+      const before = this.scrollTop;
+      if (typeof options === "number") {
+        scrollTo(options, y ?? 0);
+      } else {
+        scrollTo(options);
+      }
+      probe.jumps.push(this.scrollTop - before);
+    };
+    const sample = () => {
+      const bubble = [...thread.querySelectorAll<HTMLElement>(".chat-bubble")].find(
+        (element) => element.dataset.messageText === text,
+      );
+      firstBubble ??= bubble;
+      probe.frames.push({
+        top: thread.scrollTop,
+        y: bubble?.getBoundingClientRect().top ?? null,
+        opacity: bubble ? getComputedStyle(bubble).opacity : null,
+        same: bubble === firstBubble,
+      });
+      frame = requestAnimationFrame(sample);
+    };
+    probe.stop = () => {
+      cancelAnimationFrame(frame);
+      thread.scrollTo = scrollTo;
+    };
+    sample();
+  }, prompt);
+}
+
+async function finishSendMotion(page: Page, reducedMotion: string) {
+  const { frames, jumps } = await page.evaluate(() => {
+    const probe = window.openclawSendMotion!;
+    probe.stop();
+    return { frames: probe.frames, jumps: probe.jumps };
+  });
+  const visible = frames.slice(frames.findIndex((frame) => frame.y !== null));
+  expect(visible.length).toBeGreaterThan(0);
+  expect(visible.every((frame) => frame.y !== null && frame.opacity === "1" && frame.same)).toBe(
+    true,
+  );
+  if (reducedMotion !== "reduce") {
+    expect(
+      jumps.every((delta) => Math.abs(delta) <= 1),
+      JSON.stringify(jumps),
+    ).toBe(true);
+    expect(
+      visible.every((frame, index) => {
+        const previous = visible[index - 1];
+        return !previous || (frame.y !== null && previous.y !== null && frame.y <= previous.y + 1);
+      }),
+      JSON.stringify(visible),
+    ).toBe(true);
+    expect(new Set(visible.map((frame) => frame.top)).size).toBeGreaterThan(2);
+  }
+}
 
 declare global {
   interface Window {
     openclawMotionArrivals?: MotionArrival[];
+    openclawSendMotion?: SendMotionProbe;
   }
 }
 
 suite.define(() => {
   it.each([
-    { name: "desktop", width: 1280, height: 900, reducedMotion: "no-preference" as const },
-    { name: "mobile", width: 390, height: 844, reducedMotion: "no-preference" as const },
-    { name: "reduced-motion", width: 1280, height: 900, reducedMotion: "reduce" as const },
+    {
+      name: "desktop",
+      width: 1280,
+      height: 900,
+      lines: 1,
+      reducedMotion: "no-preference" as const,
+    },
+    {
+      name: "multiline",
+      width: 1280,
+      height: 900,
+      lines: 8,
+      reducedMotion: "no-preference" as const,
+    },
+    { name: "mobile", width: 390, height: 844, lines: 8, reducedMotion: "no-preference" as const },
+    {
+      name: "reduced-motion",
+      width: 1280,
+      height: 900,
+      lines: 8,
+      reducedMotion: "reduce" as const,
+    },
   ])(
     "animates new prompts without hiding streamed replies on $name",
-    async ({ name, width, height, reducedMotion }) => {
+    async ({ name, width, height, lines, reducedMotion }) => {
       const viewport = { width, height };
       const dir = createControlUiE2eArtifactDir(`chat-motion-${name}`, artifactDir);
       const context = await suite.newBrowserContext({
@@ -76,19 +166,25 @@ suite.define(() => {
         if (dir) {
           await page.screenshot({ path: path.join(dir, "01-history.png") });
         }
-        await page
-          .locator(".agent-chat__composer-combobox textarea")
-          .fill("Make this feel fast and smooth");
+        const prompt =
+          "Make this feel fast and smooth" + "\nKeep every detail steady.".repeat(lines - 1);
+        await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+        await waitForChatScrollIdle(page);
+        await gateway.deferNext("chat.send");
+        await observeSendMotion(page, prompt);
         await page.getByRole("button", { name: "Send message", exact: true }).click();
         const request = await gateway.waitForRequest("chat.send");
         const runId = requireString(requireRecord(request.params).idempotencyKey, "run id");
         const expected = reducedMotion === "reduce" ? 0 : 1;
-        const sendBubble = page.locator(
-          '.chat-bubble[data-message-text="Make this feel fast and smooth"]',
-        );
+        await gateway.resolveDeferred("chat.send");
+        const sendBubble = page
+          .locator(".chat-bubble")
+          .filter({ hasText: "Make this feel fast and smooth" });
         await expect
           .poll(() => sendBubble.evaluate((el) => getComputedStyle(el).opacity))
           .toBe("1");
+        await waitForChatScrollIdle(page);
+        await finishSendMotion(page, reducedMotion);
         if (dir) {
           await page.screenshot({ path: path.join(dir, "02-prompt.png") });
         }

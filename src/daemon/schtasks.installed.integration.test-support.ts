@@ -16,6 +16,7 @@ import { DEFAULT_RESTART_HEALTH_DELAY_MS } from "../cli/daemon-cli/restart-healt
 import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import { run, type CommandRecord } from "./schtasks.installed-command.test-support.js";
 import {
+  assertInstalledSiblingBuildRefusal,
   doctorReportSchema,
   inspectDisabledDiscoveryTasks,
   inspectInstalledUpdateFailure,
@@ -328,6 +329,26 @@ export async function runInstalledLifecycle(
       const peerConfig = await fs.readFile(peer.configPath);
       const peerInstallBefore = await hashInstall(peer.installRoot);
       await recordProgress("peer-before-update:hash-verified");
+      if (key === "2026.9.4") {
+        observations.siblingBuildRefusal = await assertInstalledSiblingBuildRefusal({
+          toolingEntry: path.resolve("scripts/run-node.mjs"),
+          selected,
+          peer,
+          commands,
+          signal,
+          recordProgress,
+          verifyContinuity: async () => {
+            assert.equal(
+              (await status(selected, beforeIdentity)).service.runtime.pid,
+              before.service.runtime.pid,
+            );
+            assert.equal(
+              (await status(peer, peerIdentity)).service.runtime.pid,
+              peerBefore.service.runtime.pid,
+            );
+          },
+        });
+      }
       const driverBefore = await hashFile(selected.entry);
       observations.driver = {
         version: key,

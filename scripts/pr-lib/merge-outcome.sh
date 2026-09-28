@@ -185,7 +185,8 @@ merge_outcome_load_local() {
           (.priorCiAdmin | .version == 1 and .head == $record.head and .pr == $record.pr and
             .repository == $record.repo.nameWithOwner and (.priorHead | oid) and
             (.evidenceSha256 | test("^[0-9a-f]{64}$")) and (.deltaSha256 | test("^[0-9a-f]{64}$")) and
-            (.actor | type == "string" and length > 0)) else true end) and
+            (.actor | type == "string" and length > 0) and
+            (if .changeKind == "pre-existing-failure" then (.testedMerge | oid) else true end)) else true end) and
         (.accepted | type == "boolean") and
         (if .phase == "intent" then .landed == null else
           (.phase == "merged" or .phase == "commenting" or .phase == "commented" or .phase == "complete") and (.landed | oid) end))
@@ -194,7 +195,7 @@ merge_outcome_load_local() {
       merge_outcome_stop "invalid retained repository identity"; return 1;
     }
     parents=$(GIT_NO_LAZY_FETCH=1 pr_git cat-file commit "$MERGE_OUTCOME_OID" | awk 'NF == 0 {exit} $1 == "parent" {printf "%s ", $2}') || return 1
-    for retained in $(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r '[.head,.main,.landed,.localHead,.legacyRefusal.head,.legacyRefusal.preparedBase,.priorCiAdmin.priorHead] | .[] | select(. != null)'); do
+    for retained in $(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r '[.head,.main,.landed,.localHead,.legacyRefusal.head,.legacyRefusal.preparedBase,.priorCiAdmin.priorHead,.priorCiAdmin.testedMerge] | .[] | select(. != null)'); do
       case " $parents " in *" $retained "*) ;; *) merge_outcome_stop "record does not retain required commit $retained"; return 1 ;; esac
       GIT_NO_LAZY_FETCH=1 pr_git cat-file -e "$retained^{commit}" || { merge_outcome_stop "required historical commit $retained is unavailable"; return 1; }
     done
@@ -263,7 +264,7 @@ merge_outcome_write() {
   shift
   mark_pr_operation_side_effects_started || return 1
   local parents=()
-  for parent in $(printf '%s\n' "$record" | jq -r '[.head,.main,.landed,.localHead,.legacyRefusal.head,.legacyRefusal.preparedBase,.priorCiAdmin.priorHead] | unique | .[] | select(. != null)'); do
+  for parent in $(printf '%s\n' "$record" | jq -r '[.head,.main,.landed,.localHead,.legacyRefusal.head,.legacyRefusal.preparedBase,.priorCiAdmin.priorHead,.priorCiAdmin.testedMerge] | unique | .[] | select(. != null)'); do
     parents+=(-p "$parent")
   done
   [ -z "$MERGE_OUTCOME_OID" ] || parents+=(-p "$MERGE_OUTCOME_OID")
@@ -459,15 +460,44 @@ merge_outcome_observe() {
   merge_outcome_require_main "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)"
 }
 
+verify_prior_ci_main_advance() {
+  local previous="$1" main="$2" local_only="${3:-false}"
+  [ "$main" != "$previous" ] || [ "$main" != "$PR_MAIN_SHA" ] || return 0
+  if [ "$local_only" = true ]; then
+    # The CLI switch fails closed on Git versions that ignore the environment variable.
+    GIT_NO_LAZY_FETCH=1 pr_git --no-lazy-fetch cat-file -e "$main^{commit}" 2>/dev/null || {
+      merge_outcome_stop "final prior-CI main cannot be verified with local-only Git; no fetch after authority verification"; return 1;
+    }
+  else
+    merge_outcome_require_main "$main" || return 1
+  fi
+  if ! pr_git merge-base --is-ancestor "$previous" "$main" ||
+    ! pr_git merge-base --is-ancestor "$PR_MAIN_SHA" "$main"; then
+    merge_outcome_stop "prior-CI main must advance from both observed and verified main"; return 1
+  fi
+  # The fixed CI/security proof remains bound to its verified main ancestor.
+  # Prove the new composition without changing the pinned intent/audit anchor.
+  [ "$main" = "$previous" ] || verify_merge_candidate_tree "$main" "$PREP_HEAD_SHA"
+}
+
 merge_outcome_stable() {
-  local reread main
+  local reread main local_only="${2:-false}"
   reread=$(merge_outcome_read_remote "$1") || {
     merge_outcome_stop "observation reread: observed=unavailable or invalid; expected=authoritative PR/main metadata"; return 1;
   }
-  # Ordinary admission pins the head; GitHub applies it to the current base. Keep
-  # the main used for local tree proof and intent while rechecking every PR fact.
-  if [ "${MERGE_ADMISSION_ACTIVE:-false}" = true ] && [ "${MERGE_USE_CRABBOX_ADMIN_BYPASS:-false}" = false ] && [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" = false ]; then
-    reread=$(printf '%s\n' "$reread" | jq -c --arg main "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)" '.main=$main') || return 1
+  # Keep the main used for local tree proof and intent while rechecking every PR
+  # fact. Prior-CI admission additionally proves forward ancestry and composition.
+  if [ "${MERGE_ADMISSION_ACTIVE:-false}" = true ] && [ "${MERGE_USE_CRABBOX_ADMIN_BYPASS:-false}" = false ]; then
+    if [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" != true ] ||
+      printf '%s\n' "$reread" | jq -e --argjson observed "$MERGE_OBSERVATION" \
+        'del(.main) == ($observed | del(.main))' >/dev/null; then
+      if [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" = true ]; then
+        verify_prior_ci_main_advance \
+          "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)" \
+          "$(printf '%s\n' "$reread" | jq -r .main)" "$local_only" || return 1
+      fi
+      reread=$(printf '%s\n' "$reread" | jq -c --arg main "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)" '.main=$main') || return 1
+    fi
   fi
   [ "$reread" = "$MERGE_OBSERVATION" ] && return 0
   # Both APIs bind the same PR/main facts. Compare REST policy evidence whenever
@@ -652,7 +682,11 @@ merge_outcome_comment_body() {
   case "$route:$method" in
     admin:*)
       if printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e 'has("priorCiAdmin")' >/dev/null; then
-        label="explicitly authorized admin squash with prior CI and scoped validation"
+        if [ "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .priorCiAdmin.changeKind)" = pre-existing-failure ]; then
+          label="explicitly authorized admin squash with attributed pre-existing CI failures"
+        else
+          label="explicitly authorized admin squash with prior CI and scoped validation"
+        fi
       else
         label="admin squash with trusted Crabbox infrastructure proof"
       fi

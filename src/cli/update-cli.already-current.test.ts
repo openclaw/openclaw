@@ -635,7 +635,6 @@ describe("update-cli", () => {
     await mockPackageInstallAtCaseDir();
     readPackageVersion.mockResolvedValue("2026.4.22");
     primeNpmChannelTag("latest", null);
-    mockCurrentProcessFreshDoctor();
 
     await updateCommand({});
 
@@ -664,7 +663,6 @@ describe("update-cli", () => {
 
   registerUpdatePreflightTests({
     mockPackageInstallAtCaseDir,
-    mockCurrentProcessFreshDoctor,
     statfsFixture,
     resolveNpmChannelTag,
     fetchNpmPackageTargetStatus,

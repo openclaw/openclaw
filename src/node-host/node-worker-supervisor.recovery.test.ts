@@ -10,6 +10,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
 import { NodeWorkerCapacity } from "./node-worker-capacity.js";
@@ -324,21 +325,22 @@ describe("node worker supervisor recovery", () => {
           if (operation === "owner-replaced" || operation === "identity-reused") {
             const signal = vi.spyOn(process, "kill");
             try {
-              const database = openOpenClawStateDatabase({ env }).db;
               const current = requireNodeWorkerProcessIdentity(process.pid);
-              if (operation === "owner-replaced") {
-                database
-                  .prepare(
-                    "UPDATE node_worker_launches SET supervisor_pid = ?, supervisor_start_time = ? WHERE launch_id = ?",
-                  )
-                  .run(current.pid, current.startTime, input.launchId);
-              } else {
-                database
-                  .prepare(
-                    "UPDATE node_worker_launches SET worker_start_time = ? WHERE launch_id = ?",
-                  )
-                  .run(anchor.startTime - 1, input.launchId);
-              }
+              // Service worker admission while waiting for the fixture's journal write lock.
+              runOpenClawStateWriteTransaction(
+                ({ db }) => {
+                  if (operation === "owner-replaced") {
+                    db.prepare(
+                      "UPDATE node_worker_launches SET supervisor_pid = ?, supervisor_start_time = ? WHERE launch_id = ?",
+                    ).run(current.pid, current.startTime, input.launchId);
+                  } else {
+                    db.prepare(
+                      "UPDATE node_worker_launches SET worker_start_time = ? WHERE launch_id = ?",
+                    ).run(anchor.startTime - 1, input.launchId);
+                  }
+                },
+                { env },
+              );
               expect(await replacement.status(input.launchId)).toMatchObject({ state: "running" });
               expect(
                 signal.mock.calls.filter(
@@ -997,11 +999,14 @@ describe("node worker supervisor recovery", () => {
       const lifecycle = new NodeWorkerContainerLifecycle(engine, bundleRoot, store);
       const replaceOwner = async () => {
         await Promise.resolve();
-        openOpenClawStateDatabase({ env })
-          .db.prepare(
-            "UPDATE node_worker_launches SET supervisor_pid = ?, supervisor_start_time = ? WHERE launch_id = ?",
-          )
-          .run(current.pid, current.startTime, input.launchId);
+        runOpenClawStateWriteTransaction(
+          ({ db }) => {
+            db.prepare(
+              "UPDATE node_worker_launches SET supervisor_pid = ?, supervisor_start_time = ? WHERE launch_id = ?",
+            ).run(current.pid, current.startTime, input.launchId);
+          },
+          { env },
+        );
       };
       const initialize = vi.spyOn(lifecycle, "initialize").mockImplementation(replaceOwner);
       const inspect = vi.spyOn(lifecycle, "inspect").mockImplementation(async () => {

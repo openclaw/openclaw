@@ -173,6 +173,116 @@ It dispatches the protected REST merge with the exact head pinned and retains
 the prior run, inspected delta, scoped evidence, and operator in the existing
 merge outcome. Accepted or uncertain outcomes still require reconciliation.
 
+#### Explicitly approved pre-existing failures
+
+When the operator specifically authorizes ignoring independently attributed
+pre-existing CI failures, use the same flags and `github_pending` preparation.
+Keep `tests.result: "fail"` in the exact-head review and add `tests.preExistingCi`
+with `head`, numeric `runId` and `runAttempt`, and a nonempty `reason`. A READY
+review can retain that exception; ordinary merge admission still rejects it.
+The confirmed admin route must verify the same head and failed attempt. Product
+findings, enforced reviews, and security requirements are never waived.
+
+Use the existing version-1 admin evidence with
+`changeKind: "pre-existing-failure"`. Here `priorHead` is the recorded main
+baseline, `head` is the exact prepared and tested PR head, and `runId`/`runAttempt`
+identify its completed failed or cancelled CI attempt. No prior successful run
+or conflict-resolution claim is required. Keep the inspected `deltaSha256`,
+operator `reason`, affected `contracts`, and actual passing scoped `checks`.
+Retain these additional fields:
+
+- `testedMerge`: the actual checkout from inspected CI evidence. Its retained
+  Git object must have exactly two ordered parents, `priorHead` and `head`, and
+  its tree must equal Git's successful merge of those parents. This prevents a
+  submitted merge tree from omitting PR changes. The baseline must be an ancestor
+  of the captured protected main. Which checkout the selected CI attempt executed
+  remains an inspected attestation bound to the named artifacts below.
+- `artifacts`: named regular files with `name`, `path`, and `sha256`. Reuse
+  existing checkout logs, failure logs, and independent qualification receipts;
+  do not create another proof system. `checkout` contains `reason` and `evidence`
+  (an array of these artifact names) identifying the inspected checkout binding.
+- `failures`: exactly one entry per non-aggregate failed job, with numeric
+  `jobId`, observed failing `cases`, repository-relative `sourcePaths`, `reason`,
+  and `evidence` names. The verifier compares each named blob/tree between the
+  baseline and tested merge. Qualification must explain why those inputs cover
+  the failure and why the PR cannot cause it; changed or unattributed failures
+  stay blocked.
+- `aggregate`: the CI gate's `jobId`, `causedBy` (all admitted failed-job IDs),
+  `reason`, and `evidence` names establishing the downstream failure.
+- `cancellation`, only when sibling jobs were cancelled: their exhaustive
+  `jobIds`, the same `causedBy` root IDs, `reason`, and `evidence` names, plus the
+  successful `pr-fail-fast` job's `jobId` and cancellation-step number `step`.
+  This records inspected cancellation provenance, never passing coverage.
+
+For the existing Node matrix's native fail-fast (including fork PRs whose monitor
+is skipped), use `cancellation.kind: "matrix-fail-fast"` and
+`workflowJob: "checks-node-core-test-nondist-shard"` instead of monitor `jobId`/`step`.
+Add `members`, the exact `{ jobId, name }` bindings for every admitted failed root
+and cancelled row. Retain the tested workflow blob locally. The verifier requires
+that workflow to match the baseline, use the existing preflight matrix/name wiring,
+enable PR fail-fast, and have no `continue-on-error`. GitHub's job API omits matrix
+ownership; membership and cancellation cause remain explicitly inspected operator
+attestations supported by the named artifacts, not facts inferred from prefixes.
+Either mechanism refuses cancelled jobs with failed steps or missing step evidence;
+those cannot be hidden as collateral cancellation. The successful monitor route
+has one narrowly qualified historical exception: the Discord attachment uploader
+ran after cancellation skipped its entire built-artifact producer. This does not
+apply to matrix-only cancellation, test/cleanup failures, upload transport errors,
+or a producer that ran and failed or was cancelled.
+
+For that exact shape, add one `cancellation.secondaryFailures` entry with
+`kind: "missing-artifact-after-skipped-producer"`, numeric `jobId`, failed upload
+`step`, skipped `producerStep`, `log` (an existing artifact name), `reason`, and
+`evidence` names including that log. Keep this job in the exhaustive cancelled
+`jobIds`; do not add it to `failures` or either `causedBy` root list.
+
+The log must be the complete retained `gh run view --job --log` output with job,
+step, and timestamp columns, including multiline continuations and final cleanup.
+Its existing artifact SHA-256 is rechecked. The verifier binds the unique live
+build/producer/upload step names and numbers, successful monitor, cancelled build,
+skipped producer, and upload timing. It requires the tested workflow to equal the
+baseline, the reviewed historical producer body digest, and exact pinned uploader,
+selection, paths, and missing-file error policy. The log must identify the tested
+checkout/workflow and show only build cancellation followed by the absence of
+both declared JSON/log outputs. Other error annotations or failed steps block.
+The producer digest recognizes this inspected skipped-output contract; it grants
+no authority and does not evaluate arbitrary shell code. Source/log provenance
+and causal interpretation remain inspected attestations. This retains the
+secondary failure explicitly without turning cancellation into passing coverage.
+
+The tool verifies live run/attempt/PR/head identities, complete job accounting,
+the current effective GitHub Actions gate check-run, and source/artifact hashes.
+During active prior-CI admission, unrelated main movement can pass when it is
+forward from both captured main anchors and produces a conflict-free, nonempty
+merge. Exact PR/policy facts and final live authority checks still apply; the
+intent and landing-parent audit retain their original main anchor. The last
+reread uses local objects only, so a newly unavailable main is a pre-dispatch
+refusal, not permission to fetch after authority verification. Crabbox admission
+and retained-outcome reconciliation keep their existing strict main binding.
+A fork run with an empty GitHub PR association must match the current PR's exact
+head, branch, and source repository identity as well as that check-run; an
+explicit association with another PR is rejected. The retained result names
+this source/check correlation rather than claiming an API-provided association.
+A new or running attempt invalidates the old failure attribution. Checkout
+identification and causal independence remain explicit operator attestations,
+supported by the retained evidence; source equality alone is not a causal proof.
+A baseline reproduction is useful when needed, but an independently inspected
+failure before changed code is reached can also qualify. Describe unknowns
+honestly—for example, an initial bind collision need not invent an occupant.
+Other required checks and exactly one `security-fast` job must pass. The outcome and completion
+comment retain the exception without turning failed or cancelled CI into green.
+
+The same-name Security Review commit status remains a separate gate. Admission
+binds it to a successful protected-main publisher attempt and the exact PR/head
+enforcement step, verifies the publisher's checked-out sources against the current
+owner, and reads complete current statuses. The existing security owner interprets
+its CI-only failure/success/waiting projection, requires current independent guard
+clearance when rollout applies, and revalidates approval and PR/rollout identity.
+Historical green guard statuses alone are insufficient. Missing, stale, foreign,
+failed, or changed clearance blocks admission; only the identified combined status
+may be excused with the attributed Actions CI gate. These facts are obtained live,
+not supplied as an operator security waiver. Ordinary merge behavior is unchanged.
+
 ### Completed-evidence follow-through
 
 For a requested diagnosis or the completed-evidence path, watch one exact head

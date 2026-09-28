@@ -13,7 +13,7 @@ import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { formatCrabboxGateCheckSummary } from "../../scripts/pr-lib/crabbox-gate-contract.mjs";
 import { validateCrabboxMergeBypass } from "../../scripts/pr-lib/crabbox-merge-bypass.mjs";
-import { validClawsweeperReviewCommentPages } from "./pr-review-artifact-fixture.js";
+import { validClawsweeperReviewCommentPages, validReview } from "./pr-review-artifact-fixture.js";
 
 const baseSha = "b".repeat(40);
 const headSha = "a".repeat(40);
@@ -328,6 +328,11 @@ function runProtectedShell(
   const bin = join(root, "bin");
   mkdirSync(bin);
   mkdirSync(join(root, ".local"));
+  const review = validReview(headSha);
+  review.pr.number = 131091;
+  review.recommendation = "READY FOR /prepare-pr";
+  review.issueValidation.status = "valid";
+  writeFileSync(join(root, ".local/review.json"), JSON.stringify(review));
   writeFileSync(join(root, "calls.jsonl"), "");
   const evidence = {
     ...input(),
@@ -585,7 +590,7 @@ mark_pr_operation_side_effects_started() { :; }
 is_canonical_pr_number() { [[ "$1" =~ ^[1-9][0-9]*$ ]]; }
 merge_outcome_load_local() { MERGE_OUTCOME_OID=""; MERGE_OUTCOME_RECORD=""; }
 merge_outcome_write() { MERGE_OUTCOME_RECORD="$1"; printf '%s\\n' "$1" > .local/intent.json; }
-for artifact in review.json pr-meta.env pr-meta.json prep.md; do
+for artifact in pr-meta.env pr-meta.json prep.md; do
   echo fixture > ".local/$artifact"
 done
 printf '%s\\n' PREP_HEAD_SHA=${headSha} PREP_REPLACED_HOSTED_ANCESTRY=false PREP_AUTHOR_ACCESS=maintainer > .local/prep.env

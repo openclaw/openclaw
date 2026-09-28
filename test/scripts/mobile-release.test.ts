@@ -51,6 +51,7 @@ function fixture(platform = "ios") {
   );
   for (const file of [
     "scripts/mobile-release-notes.ts",
+    "scripts/lib/mobile-release-evidence.ts",
     "scripts/lib/mobile-release-notes.ts",
     "scripts/mobile-release-ref.ts",
     "scripts/lib/android-store-version.ts",

@@ -353,10 +353,11 @@ export async function executeRemoteExecTurn(params: {
   await recoverWorkspaceBeforeTurn(params);
   params.assertRunCurrent?.();
   const tunnel = await waitForTurnOperation({
-    operation: params.environments.startTunnel({
-      environmentId: params.placement.environmentId,
-      ownerEpoch: params.placement.activeOwnerEpoch,
-    }),
+    start: () =>
+      params.environments.startTunnel({
+        environmentId: params.placement.environmentId,
+        ownerEpoch: params.placement.activeOwnerEpoch,
+      }),
     ...(params.turn.abortSignal ? { signal: params.turn.abortSignal } : {}),
     timeoutMs: params.turn.timeoutMs,
   });
