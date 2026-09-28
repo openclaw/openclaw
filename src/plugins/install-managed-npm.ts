@@ -243,8 +243,8 @@ export async function installPluginFromManagedNpmRoot(
     if (!initialPeerSync.ok) {
       return { ok: false, error: initialPeerSync.error };
     }
-    const npmInstallArgs = resolveNpmCommand(
-      createSafeNpmInstallArgs({
+    const npmInstallArgs = resolveNpmCommand([
+      ...createSafeNpmInstallArgs({
         omitDev: true,
         omitPeer: true,
         loglevel: "error",
@@ -252,7 +252,7 @@ export async function installPluginFromManagedNpmRoot(
         noAudit: true,
         noFund: true,
       }),
-    );
+    ]);
     const npmInstallOptions = {
       cwd: npmRoot,
       timeoutMs: resolveInstallWorkTimeoutMs(workTimeoutMs, Math.max(timeoutMs, 300_000)),
@@ -606,7 +606,7 @@ export async function installPluginFromManagedNpmRoot(
         copyErrorPrefix: "Failed to publish managed npm project",
         beforePersistentApply: () => {
           params.signal?.throwIfAborted();
-          params.beforePersistentApply?.();
+          return params.beforePersistentApply?.();
         },
         hasDeps: false,
         sourceHardlinks: "package-manager",
