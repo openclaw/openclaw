@@ -211,10 +211,10 @@ it("archives unindexed history pointer sidecars with their receipt-bound transcr
     for (const file of [storePath, history, trajectory, pointer]) {
       expect(fs.existsSync(file)).toBe(false);
     }
-    const [settled] = archivedMoves(pointer);
-    expect(fs.readFileSync(expectDefined(settled, "pointer archive").archivePath)).toEqual(
-      pointerBytes,
-    );
+    const settledMoves = archivedMoves(pointer);
+    expect(settledMoves).toHaveLength(1);
+    const settledArchive = expectDefined(settledMoves[0], "pointer archive").archivePath;
+    expect(fs.readFileSync(settledArchive)).toEqual(pointerBytes);
     for (const [file, bytes] of untouched) {
       expect(fs.readFileSync(file)).toEqual(bytes);
     }
@@ -237,9 +237,10 @@ it("archives unindexed history pointer sidecars with their receipt-bound transcr
     );
     await run();
     expect(fs.existsSync(pointer)).toBe(false);
-    const recovered = archivedMoves(pointer).find((move) => move !== settled);
+    const recovered = archivedMoves(pointer).filter((move) => move.archivePath !== settledArchive);
+    expect(recovered).toHaveLength(1);
     expect(
-      fs.readFileSync(expectDefined(recovered, "stranded pointer archive").archivePath),
+      fs.readFileSync(expectDefined(recovered[0], "stranded pointer archive").archivePath),
     ).toEqual(pointerBytes);
     expect((await inspect()).targets.flatMap((entry) => entry.issues)).toEqual([]);
     const repeated = await run();
