@@ -136,6 +136,11 @@ export async function acquireDistArtifactOwnership(
       { cause: error },
     );
   }
+  // Acquisition can finish after cancellation; direct callers must never inherit that lock.
+  if (signal?.aborted) {
+    await lock.release();
+    signal.throwIfAborted();
+  }
   return lock;
 }
 

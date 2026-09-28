@@ -3,6 +3,7 @@ import path from "node:path";
 import * as fileLock from "@openclaw/fs-safe/file-lock";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
+  acquireDistArtifactOwnership,
   resolveDistArtifactLockPath,
   withDistArtifactOwnership,
 } from "../../scripts/lib/dist-artifact-lock.mts";
@@ -69,9 +70,14 @@ it("cancels an already contended same-process waiter without disturbing the owne
   expect(fs.existsSync(ownerPath)).toBe(false);
 });
 
-it.for([false, true])(
-  "joins acquisition-race release before rejecting (release fails=$0)",
-  async (fails) => {
+it.for([
+  { direct: false, fails: false },
+  { direct: false, fails: true },
+  { direct: true, fails: false },
+  { direct: true, fails: true },
+])(
+  "joins acquisition-race release before rejecting (direct=$direct, release fails=$fails)",
+  async ({ direct, fails }) => {
     const root = createRoot();
     const entered = createDeferred<void>();
     const acquired = createDeferred<fileLock.FileLockHandle>();
@@ -90,7 +96,11 @@ it.for([false, true])(
       return await acquired.promise;
     });
     let settled = false;
-    const waiter = withDistArtifactOwnership(root, callback, controller.signal)
+    const waiter = (
+      direct
+        ? acquireDistArtifactOwnership(root, true, controller.signal)
+        : withDistArtifactOwnership(root, callback, controller.signal)
+    )
       .catch((error: unknown) => error)
       .finally(() => {
         settled = true;
