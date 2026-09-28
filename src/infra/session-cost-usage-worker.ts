@@ -1,5 +1,8 @@
 import type { ModelCostConfig } from "@openclaw/llm-core";
-import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import {
+  collectErrorGraphCandidates,
+  toErrorObject,
+} from "@openclaw/normalization-core/error-coercion";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
@@ -393,6 +396,9 @@ export async function executeUsageCostWorker(
   const requestedFiles = (
     await resolveUsageCostTranscriptFiles(operation.sessionFiles ?? [], access)
   ).filter((file) => file !== undefined);
+  if (requestedFiles.length !== (operation.sessionFiles?.length ?? 0)) {
+    throw new WorkerTaskError("A requested usage transcript is unavailable", "unavailable");
+  }
   const filesByPath = new Map(discovered.map((file) => [file.filePath, file]));
   for (const file of requestedFiles) {
     filesByPath.set(file.filePath, file);
@@ -524,6 +530,7 @@ export async function executeUsageCostWorker(
       return read();
     }
   };
+  let changed = false;
   for (const { file, row, envelope, rebuild } of stale.slice(0, maxFiles)) {
     control.throwIfCancelled();
     await host("refresh-session", { sessionFile: file.filePath });
@@ -559,31 +566,19 @@ export async function executeUsageCostWorker(
     if (!written) {
       throw new Error(`usage rollup changed while refreshing: ${file.filePath}`);
     }
+    changed = true;
   }
-  return { kind: "refresh" };
+  return { kind: "refresh", changed };
 }
 
 export function usageCostWorkerFailure(
   error: unknown,
 ): Extract<UsageCostWorkerReply, { ok: false }> {
-  const pending = [error];
-  const seen = new Set<unknown>();
-  let hostFailure: UsageCostHostEffectError | undefined;
-  for (const entry of pending) {
-    if (seen.has(entry)) {
-      continue;
-    }
-    seen.add(entry);
-    if (entry instanceof UsageCostHostEffectError) {
-      hostFailure ??= entry;
-    }
-    if (entry instanceof Error && entry.cause) {
-      pending.push(entry.cause);
-    }
-    if (entry instanceof AggregateError) {
-      pending.push(...entry.errors);
-    }
-  }
+  const hostFailure = collectErrorGraphCandidates(error, (entry) =>
+    entry instanceof Error
+      ? [entry.cause, ...(entry instanceof AggregateError ? entry.errors : [])]
+      : [],
+  ).find((entry): entry is UsageCostHostEffectError => entry instanceof UsageCostHostEffectError);
   return {
     ok: false,
     error: {

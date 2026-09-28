@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   validateFullReleaseCandidateBinding,
   validateFullReleaseCandidateRequest,
+  validateRecordedFullReleaseCandidateRequest,
 } from "./full-release-candidate-contract.mjs";
 import {
   FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT,
@@ -11,20 +12,15 @@ import {
   validatePublicationSourceBinding,
 } from "./full-release-publication-contract.mjs";
 import { hasRequiredCrossOsSuites } from "./lib/cross-os-release-checks/suite-filter.mjs";
+import { candidateArtifactJsonFromBinding } from "./lib/full-release-candidate-reuse.mjs";
+import {
+  MAX_RELEASE_ARTIFACT_BYTES,
+  serializeReleaseArtifact,
+} from "./lib/full-release-evidence.mjs";
 import { changelogEntryPath, isReleaseChangelogPath } from "./lib/release-changelog.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 
-// Full profiles carry over 500 job records. Keep complete evidence under one
-// shared wire budget instead of letting producers exceed smaller reader limits.
-export const MAX_RELEASE_ARTIFACT_BYTES = 1024 * 1024;
-
-export function serializeReleaseArtifact(payload) {
-  const json = `${JSON.stringify(payload)}\n`;
-  if (Buffer.byteLength(json, "utf8") > MAX_RELEASE_ARTIFACT_BYTES) {
-    throw new Error("release artifact exceeds the size limit");
-  }
-  return json;
-}
+export { MAX_RELEASE_ARTIFACT_BYTES, serializeReleaseArtifact };
 
 export function buildReleaseValidationManifest({ plan, drain, context }) {
   const childEvidence = Object.fromEntries(
@@ -65,6 +61,7 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
     targetSha: plan.targetSha,
     candidateBinding: plan.candidate,
     publicationArtifacts: context.publicationArtifacts ?? { npmPreflight: null, docker: null },
+    publishInputs: context.publishInputs,
     childEvidence,
     executionPlanSha256: plan.sha256,
     sourceParentRunAttempt: Number(plan.parentRunAttempt),
@@ -375,6 +372,12 @@ const CHILD_SPECS = Object.freeze([
     suffix: "",
     workflow: "openclaw-performance.yml",
   },
+]);
+const UNPHASED_CHILD_SPECS = Object.freeze([
+  CHILD_SPECS.find((spec) => spec.key === "normalCi"),
+  ...LEGACY_CHILD_SPECS,
+  CHILD_SPECS.find((spec) => spec.key === "npmTelegram"),
+  CHILD_SPECS.find((spec) => spec.key === "productPerformance"),
 ]);
 const HISTORICAL_EXECUTION_PLAN_KEYS = Object.freeze(
   [
@@ -956,14 +959,7 @@ export function buildReleaseExecutionPlan(input) {
       stringValue(input.releasePackageSpec).trim(),
     );
   const phasedChildren = Number(input.childPhaseVersion) === 3;
-  const childSpecs = phasedChildren
-    ? CHILD_SPECS
-    : [
-        CHILD_SPECS.find((spec) => spec.key === "normalCi"),
-        ...LEGACY_CHILD_SPECS,
-        CHILD_SPECS.find((spec) => spec.key === "npmTelegram"),
-        CHILD_SPECS.find((spec) => spec.key === "productPerformance"),
-      ];
+  const childSpecs = phasedChildren ? CHILD_SPECS : UNPHASED_CHILD_SPECS;
   const children = childSpecs.map((spec) => {
     const raw = childInputs[spec.key] ?? {};
     const required = releaseExecutionChildRequired(spec, input, npmTelegramForAll);
@@ -990,12 +986,6 @@ export function buildReleaseExecutionPlan(input) {
       name: "Resolve target ref",
       required: true,
       result: stringValue(input.resolveTargetResult, "missing"),
-    },
-    {
-      name: "Verify Docker runtime image assets",
-      required:
-        !reused && rerunGroup === "all" && stringValue(input.targetVersion).includes("-alpha."),
-      result: stringValue(input.dockerPreflightResult, "skipped"),
     },
     {
       name: phasedChildren ? "Acquire full release candidate" : "Prepare shared release candidate",
@@ -1113,6 +1103,7 @@ function releaseExecutionPlanShape(payload) {
     ...new Set([
       ...basePlanKeys,
       ...(Object.hasOwn(payload, "knownFlakyJobs") ? ["knownFlakyJobs"] : []),
+      ...(Object.hasOwn(payload, "childReuse") ? ["childReuse"] : []),
       ...(Object.hasOwn(payload, "telegramWaiver") ? ["targetVersion", "telegramWaiver"] : []),
       ...(Object.hasOwn(payload, "coveragePolicy") ? ["targetVersion", "coveragePolicy"] : []),
       ...(Object.hasOwn(payload, "sourceAdmissionContract")
@@ -1122,7 +1113,7 @@ function releaseExecutionPlanShape(payload) {
         ? ["publicationAdmissionContract", "publicationAdmission"]
         : []),
     ]),
-  ].toSorted((left, right) => left.localeCompare(right));
+  ].toSorted((left, right) => (left === right ? 0 : left < right ? -1 : 1));
   const expectedChildKeys = hasAttemptEvidence
     ? ATTEMPT_AWARE_EXECUTION_PLAN_CHILD_KEYS
     : HISTORICAL_EXECUTION_PLAN_CHILD_KEYS;
@@ -1185,6 +1176,7 @@ function executionPlanDigestPayload(plan) {
     ...publication,
     ...waiver,
     ...coverage,
+    ...(plan.childReuse !== undefined ? { childReuse: plan.childReuse } : {}),
     ...(Object.hasOwn(plan, "knownFlakyJobs") ? { knownFlakyJobs: plan.knownFlakyJobs } : {}),
     attemptEvidenceVersion: plan.attemptEvidenceVersion,
     blockers: plan.blockers,
@@ -1218,6 +1210,7 @@ export function buildReleaseExecutionPlanArtifact({
   candidate = null,
   coveragePolicy,
   children,
+  childReuse,
   errors = [],
   evidenceReuse,
   expected,
@@ -1256,15 +1249,7 @@ export function buildReleaseExecutionPlanArtifact({
       { sourceParentAttempt: attemptAware },
     );
   });
-  const artifactSpecs =
-    normalizedAttemptEvidenceVersion === 3
-      ? CHILD_SPECS
-      : [
-          CHILD_SPECS.find((spec) => spec.key === "normalCi"),
-          ...LEGACY_CHILD_SPECS,
-          CHILD_SPECS.find((spec) => spec.key === "npmTelegram"),
-          CHILD_SPECS.find((spec) => spec.key === "productPerformance"),
-        ];
+  const artifactSpecs = normalizedAttemptEvidenceVersion === 3 ? CHILD_SPECS : UNPHASED_CHILD_SPECS;
   for (const spec of artifactSpecs) {
     if (
       !normalizedChildren.some((child) => child.key === spec.key) &&
@@ -1288,6 +1273,7 @@ export function buildReleaseExecutionPlanArtifact({
       : {}),
     ...(waiver ? { telegramWaiver: waiver, targetVersion } : {}),
     ...(coveragePolicy !== undefined ? { coveragePolicy, targetVersion } : {}),
+    ...(childReuse !== undefined ? { childReuse: structuredClone(childReuse) } : {}),
     version: 1,
     kind: "openclaw.full-release-execution-plan",
     parentRunId: String(expected.parentRunId),
@@ -1307,8 +1293,10 @@ export function buildReleaseExecutionPlanArtifact({
   validatePlanSourceAdmission(basePlan, expected);
   validatePlanPublicationAdmission(basePlan, expected);
   if (!attemptAware) {
-    if (coveragePolicy !== undefined) {
-      throw new Error("release coverage policy requires a phase-three execution plan");
+    if (coveragePolicy !== undefined || childReuse !== undefined) {
+      throw new Error(
+        "release coverage policy and child reuse require an attempt-aware execution plan",
+      );
     }
     const result = { ...basePlan, sha256: releaseExecutionPlanSha256(basePlan) };
     serializeReleaseArtifact(result);
@@ -1324,6 +1312,7 @@ export function buildReleaseExecutionPlanArtifact({
     candidate: candidate === null ? null : validateFullReleaseCandidateBinding(candidate),
   };
   validateCandidatePlanBinding(plan, expected.candidateRequest);
+  validateChildReuseBindings(plan);
   const result = { ...plan, sha256: releaseExecutionPlanSha256(plan) };
   serializeReleaseArtifact(result);
   return result;
@@ -1369,7 +1358,7 @@ function validatePlanSourceAdmission(plan, expected) {
 }
 
 function validateCandidatePlanBinding(plan, expectedCandidateRequest) {
-  const request = validateFullReleaseCandidateRequest(plan.candidateRequest);
+  const request = validateRecordedFullReleaseCandidateRequest(plan.candidateRequest);
   if (plan.coveragePolicy !== undefined && plan.attemptEvidenceVersion !== 3) {
     throw new Error("release coverage policy requires a phase-three execution plan");
   }
@@ -1390,7 +1379,7 @@ function validateCandidatePlanBinding(plan, expectedCandidateRequest) {
   if (
     expectedCandidateRequest !== undefined &&
     JSON.stringify(request) !==
-      JSON.stringify(validateFullReleaseCandidateRequest(expectedCandidateRequest))
+      JSON.stringify(validateRecordedFullReleaseCandidateRequest(expectedCandidateRequest))
   ) {
     throw new Error("release candidate request differs from the expected plan inputs");
   }
@@ -1464,6 +1453,7 @@ export function validateReleaseExecutionPlanArtifact(payload, expected = {}) {
     sourceParentAttempt: shape !== "historical",
   });
   validateExecutionPlanChildBindings(children, payload);
+  validateChildReuseBindings(payload);
   const plan = {
     ...payload,
     parentRunAttempt: positiveInteger(payload.parentRunAttempt),
@@ -1478,7 +1468,7 @@ export function validateReleaseExecutionPlanArtifact(payload, expected = {}) {
       ? {
           attemptEvidenceVersion: payload.attemptEvidenceVersion,
           repository: String(payload.repository),
-          candidateRequest: validateFullReleaseCandidateRequest(payload.candidateRequest),
+          candidateRequest: validateRecordedFullReleaseCandidateRequest(payload.candidateRequest),
           candidate:
             payload.candidate === null
               ? null
@@ -1525,15 +1515,11 @@ function isFailedJob(job) {
   );
 }
 
-function failedJobsForPolicy(child) {
-  return child.jobs.filter(isFailedJob);
-}
-
 export function terminalPolicyPass(child) {
   return (
     child.status === "completed" &&
     child.conclusion === "success" &&
-    failedJobsForPolicy(child).length === 0
+    child.jobs.filter(isFailedJob).length === 0
   );
 }
 
@@ -1590,7 +1576,7 @@ export function classifyReleaseSnapshot({
     (child.errors ?? []).filter((error) => error.kind !== "dispatch_missing"),
   );
   const childJobBlockers = selected.flatMap((child) =>
-    failedJobsForPolicy(child).map((job) => ({
+    child.jobs.filter(isFailedJob).map((job) => ({
       child: child.key,
       conclusion: job.conclusion,
       job: job.name,
@@ -1813,16 +1799,7 @@ function validatePlan(value, options = {}) {
 }
 
 function validateExecutionPlanChildBindings(children, payload) {
-  const expectedKeys = (
-    payload.attemptEvidenceVersion === 3
-      ? CHILD_SPECS
-      : [
-          CHILD_SPECS.find((spec) => spec.key === "normalCi"),
-          ...LEGACY_CHILD_SPECS,
-          CHILD_SPECS.find((spec) => spec.key === "npmTelegram"),
-          CHILD_SPECS.find((spec) => spec.key === "productPerformance"),
-        ]
-  )
+  const expectedKeys = (payload.attemptEvidenceVersion === 3 ? CHILD_SPECS : UNPHASED_CHILD_SPECS)
     .map((spec) => spec.key)
     .toSorted();
   if (
@@ -1867,6 +1844,81 @@ function validateExecutionPlanChildBindings(children, payload) {
     ) {
       throw new Error(`release execution plan child identity is invalid: ${child.key}`);
     }
+  }
+}
+
+function validateChildReuseBindings(plan) {
+  if (plan.childReuse === undefined) {
+    return;
+  }
+  if (
+    plan.attemptEvidenceVersion !== 3 ||
+    plan.evidenceReuse.requested ||
+    !plan.childReuse ||
+    typeof plan.childReuse !== "object" ||
+    Array.isArray(plan.childReuse)
+  ) {
+    throw new Error("release child reuse requires an independent phase-three plan");
+  }
+  for (const [role, selection] of Object.entries(plan.childReuse)) {
+    const child = plan.children.find((entry) => entry.key === role);
+    const spec = releaseChildSpec(role);
+    if (
+      !child?.selected ||
+      child.source !== "reused" ||
+      child.result !== "success" ||
+      selection?.role !== role ||
+      selection.repository !== plan.repository ||
+      selection.targetSha !== plan.targetSha ||
+      child.runId !== selection.runId ||
+      child.runAttempt !== 1 ||
+      child.workflowSha !== selection.workflowSha ||
+      child.workflowRef !== selection.workflowRef ||
+      child.displayTitle !== selection.displayTitle ||
+      child.url !== selection.url ||
+      child.sourceParentAttempt !== selection.sourceParentAttempt ||
+      !/^[1-9][0-9]*$/u.test(selection.sourceParentRunId) ||
+      !Number.isSafeInteger(selection.sourceParentAttempt) ||
+      selection.sourceParentAttempt < 1 ||
+      child.displayTitle !==
+        `${spec.displayName} full-release-validation-${selection.sourceParentRunId}-${selection.sourceParentAttempt}${spec.suffix}` ||
+      !Number.isSafeInteger(selection.runAttempt) ||
+      selection.runAttempt < 1 ||
+      !/^[a-f0-9]{40}$/u.test(selection.workflowSha) ||
+      !/^[a-f0-9]{64}$/u.test(selection.receiptSha256) ||
+      !selection.inputs ||
+      typeof selection.inputs !== "object" ||
+      Array.isArray(selection.inputs) ||
+      Object.values(selection.inputs).some((value) => typeof value !== "string") ||
+      Object.hasOwn(selection.inputs, "dispatch_id")
+    ) {
+      throw new Error(`release child reuse differs from its immutable plan: ${role}`);
+    }
+    const targetKey =
+      role === "npmTelegram"
+        ? "harness_ref"
+        : role.startsWith("releaseChecks")
+          ? "ref"
+          : "target_ref";
+    if (
+      selection.inputs[targetKey] !== plan.targetSha ||
+      (role.endsWith("Candidate") && selection.inputs.phase !== "candidate") ||
+      (role.endsWith("Independent") && selection.inputs.phase !== "independent") ||
+      (selection.inputs.candidate_artifact_json &&
+        (!plan.candidate ||
+          selection.inputs.candidate_artifact_json !==
+            candidateArtifactJsonFromBinding(plan.candidate)))
+    ) {
+      throw new Error(`release child reuse target or candidate changed: ${role}`);
+    }
+  }
+  if (
+    plan.children.some(
+      (child) =>
+        child.selected && child.source === "reused" && !Object.hasOwn(plan.childReuse, child.key),
+    )
+  ) {
+    throw new Error("release child reuse omitted a selected receipt");
   }
 }
 
@@ -2450,6 +2502,7 @@ export function affectedActiveRunIds(children, blockers, cancelledRunIds = new S
   return children
     .filter(
       (child) =>
+        child.source !== "reused" &&
         child.status !== "completed" &&
         affected.has(String(child.runId)) &&
         !cancelledRunIds.has(String(child.runId)),

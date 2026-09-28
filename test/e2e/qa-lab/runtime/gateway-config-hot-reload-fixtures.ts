@@ -179,7 +179,15 @@ export async function startHotReloadUpstreams(mockBaseUrl: string) {
       const body = Buffer.concat(chunks).toString("utf8");
       const upstream = await fetch(`${mockBaseUrl}${url.pathname}${url.search}`, {
         method: req.method,
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          ...(typeof req.headers.session_id === "string"
+            ? { session_id: req.headers.session_id }
+            : {}),
+          ...(typeof req.headers["x-session-affinity"] === "string"
+            ? { "x-session-affinity": req.headers["x-session-affinity"] }
+            : {}),
+        },
         ...(body ? { body } : {}),
       });
       res.statusCode = upstream.status;

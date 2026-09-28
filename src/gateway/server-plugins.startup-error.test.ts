@@ -131,11 +131,14 @@ it.each(["module-load", "entry-open"] as const)(
       await server.startupSettled;
       const connected = await connectWebchatClient({ port, scopes: ["operator.admin"] });
       socket = connected;
-      await expect
-        .poll(async () => (await rpcReq(connected, INSTANCE_BINDING_PROBE_METHOD, {})).payload, {
-          timeout: 30_000,
-        })
-        .toMatchObject({ reloadSettled: true });
+      const waitForReloadSettlement = async () => {
+        await expect
+          .poll(async () => (await rpcReq(connected, INSTANCE_BINDING_PROBE_METHOD, {})).payload, {
+            timeout: 30_000,
+          })
+          .toMatchObject({ reloadSettled: true });
+      };
+      await waitForReloadSettlement();
       const initial = getActivePluginRegistry();
       assert(initial);
       const broken = initial.plugins.find((record) => record.id === "startup-broken");
@@ -197,6 +200,8 @@ it.each(["module-load", "entry-open"] as const)(
         sessionsId: after.payload?.sessionsId,
         placementId: after.payload?.placementId,
       });
+      // A rejected reload leaves config reconciliation queued after its RPC lease releases.
+      await waitForReloadSettlement();
 
       const registrationsBeforeRepair = coordinator.runtimes.length;
       if (failureKind === "entry-open") {
@@ -248,6 +253,7 @@ it.each(["module-load", "entry-open"] as const)(
         ),
       ).toEqual(diagnostics);
 
+      await waitForReloadSettlement();
       const disabled = await rpcReq(socket, "plugins.setEnabled", {
         pluginId: "instance-binding-probe",
         enabled: false,

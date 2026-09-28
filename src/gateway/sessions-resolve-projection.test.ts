@@ -17,10 +17,7 @@ import { artifactsHandlers } from "./server-methods/artifacts.js";
 import { identifiedClient } from "./server-methods/sessions-read-cache.test-support.js";
 import { sessionReadHandlers } from "./server-methods/sessions-read.js";
 import type { RespondFn } from "./server-methods/types.js";
-import {
-  resetResolvedSessionKeyForRunCacheForTest,
-  resolveSessionKeyForRun,
-} from "./server-session-key.js";
+import { resolveSessionKeyForRun } from "./server-session-key.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
@@ -263,7 +260,9 @@ describe("session resolution metadata", () => {
         });
       await request();
       const pending = request();
-      replaceSessionEntrySync(scope, { ...visible, visibility: "draft" });
+      queueMicrotask(() => {
+        replaceSessionEntrySync(scope, { ...visible, visibility: "draft" });
+      });
       await pending;
       await request();
 
@@ -271,8 +270,7 @@ describe("session resolution metadata", () => {
       const missing = [true, { ok: false }, undefined];
       expect(publications).toHaveLength(3);
       expect(publications[0]).toEqual({ visibility: "shared", response: found });
-      const raced = publications[1]!;
-      expect(raced.response).toEqual(raced.visibility === "shared" ? found : missing);
+      expect(publications[1]).toEqual({ visibility: "shared", response: found });
       expect(publications[2]).toEqual({ visibility: "draft", response: missing });
     });
   });
@@ -390,8 +388,12 @@ describe("gateway session lookups", () => {
     await withOpenClawTestState({ label: "lookup-runid-projection" }, async () => {
       setRuntimeConfigSnapshot(cfg);
       seedStore();
-      resetResolvedSessionKeyForRunCacheForTest();
 
+      const projection = await projectionFor();
+      const context = bindSessionRowProjection(
+        createDirectChatContext({ getRuntimeConfig: () => cfg }),
+        () => projection,
+      );
       const parse = vi.spyOn(JSON, "parse");
       try {
         for (const runId of ["target-id", "absent-run-id"]) {
@@ -401,7 +403,7 @@ describe("gateway session lookups", () => {
             "artifact list handler",
           )({
             params: { runId, agentId: "main" },
-            context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
+            context,
             req: { type: "req", id: runId, method: "artifacts.list" },
             client: null,
             isWebchatConnect: () => false,
@@ -422,7 +424,6 @@ describe("gateway session lookups", () => {
         expect(parse.mock.calls.some(([json]) => json.includes(SIBLING_MARKER))).toBe(false);
       } finally {
         parse.mockRestore();
-        resetResolvedSessionKeyForRunCacheForTest();
       }
     });
   });
@@ -448,13 +449,38 @@ describe("gateway session lookups", () => {
           skillsSnapshot: { prompt: SIBLING_PROMPT, skills: [] },
         },
       );
-      resetResolvedSessionKeyForRunCacheForTest();
 
-      const observed = measureSiblingDecodes(() =>
-        resolveSessionKeyForRun("shared-id", { agentId: "main" }),
-      );
+      const projection = await projectionFor();
+      const statements = vi.spyOn(DatabaseSync.prototype, "prepare");
+      const observed = measureSiblingDecodes(() => {
+        for (let run = 0; run < 20; run++) {
+          expect(resolveSessionKeyForRun(`orphan-${run}`, { projection })).toBeUndefined();
+        }
+        return resolveSessionKeyForRun("shared-id", { agentId: "main", projection });
+      });
+      expect(statements).not.toHaveBeenCalled();
+      statements.mockRestore();
       expect(observed.result).toBe("fresh");
       expect(observed.decodes).toBe(0);
+      replaceSessionEntrySync(
+        { ...scope, sessionKey: "agent:main:stale" },
+        { sessionId: "shared-id", updatedAt: 100 },
+      );
+      expect(resolveSessionKeyForRun("shared-id", { projection })).toBe("stale");
+      expect(resolveSessionKeyForRun("late-id", { projection })).toBeUndefined();
+      replaceSessionEntrySync(
+        { ...scope, sessionKey: "agent:main:late" },
+        { sessionId: "late-id", updatedAt: 1 },
+      );
+      expect(resolveSessionKeyForRun("late-id", { projection })).toBe("late");
+      replaceSessionEntrySync(
+        { ...scope, sessionKey: "agent:main:late" },
+        { sessionId: "rolled-id", updatedAt: 2 },
+      );
+      expect(resolveSessionKeyForRun("late-id", { projection })).toBeUndefined();
+      expect(resolveSessionKeyForRun("rolled-id", { projection })).toBe("late");
+      projection.dispose();
+      expect(resolveSessionKeyForRun("rolled-id", { projection })).toBeUndefined();
     });
   });
 });

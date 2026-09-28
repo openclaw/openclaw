@@ -16,7 +16,7 @@ import {
   pluginInstanceState,
   resolvePluginInstanceOwner,
 } from "./plugin-instance-scope.js";
-import type { PluginRecord, PluginRegistry } from "./registry-types.js";
+import type { PluginChannelRegistration, PluginRecord, PluginRegistry } from "./registry-types.js";
 import { getPluginRegistryState } from "./runtime-state.js";
 
 type PluginRegistryLifecycleState = {
@@ -39,6 +39,17 @@ type PluginRegistryLifecycleStore = {
   registryLoads?: WeakMap<PluginCache, PluginLoaderCacheState<PluginRegistry>>;
   registryResourceOwners?: WeakMap<PluginRegistry, PluginRegistry>;
   registryLifetimes?: WeakMap<PluginRegistry, PluginRegistryLifetime>;
+  gatewayOwners?: WeakMap<PluginRegistry, PluginRegistryGatewayOwner | null>;
+  gatewayChannels?: WeakMap<
+    PluginRegistry,
+    ReadonlyMap<string, Pick<PluginChannelRegistration, "pluginId" | "plugin">>
+  >;
+};
+
+/** The Gateway registry owner that admitted work in a registry generation. */
+export type PluginRegistryGatewayOwner = {
+  /** The owner's published registry while it stays open; closing owners return undefined. */
+  readonly current: () => PluginRegistry | undefined;
 };
 
 const lifecycle = resolveGlobalSingleton<PluginRegistryLifecycleStore>(
@@ -57,6 +68,9 @@ const loaderCaches = (lifecycle.loaderCaches ??= new WeakMap());
 const registryLoads = (lifecycle.registryLoads ??= new WeakMap());
 const registryResourceOwners = (lifecycle.registryResourceOwners ??= new WeakMap());
 const registryLifetimes = (lifecycle.registryLifetimes ??= new WeakMap());
+// Registries from a published build carry no owner link; recovery then stays strict.
+const gatewayOwners = (lifecycle.gatewayOwners ??= new WeakMap());
+const gatewayChannels = (lifecycle.gatewayChannels ??= new WeakMap());
 const loadRegistryDisposer = (lifecycle.loadRegistryDisposer ??= createLazyRuntimeNamedExport(
   () => import("./runtime.js"),
   "disposePluginRegistryInstances",
@@ -81,6 +95,52 @@ export function bindPluginRegistryResourceOwner(
 
 export function getPluginRegistryResourceOwner(registry: PluginRegistry): PluginRegistry {
   return registryResourceOwners.get(registry) ?? registry;
+}
+
+/**
+ * Links a registry to the Gateway owner that published it or admitted a turn
+ * into it. A registry claimed by two owners keeps no owner.
+ */
+export function bindPluginRegistryGatewayOwner(
+  registry: PluginRegistry,
+  owner: PluginRegistryGatewayOwner,
+  admittedFrom?: PluginRegistry,
+): void {
+  const key = getPluginRegistryResourceOwner(registry);
+  const existing = gatewayOwners.get(key);
+  if (existing === undefined) {
+    // Disposal clears a retired registry's arrays. Keep its admitted registrations,
+    // not callable authority, for successor continuity checks while turns retain it.
+    const inherited =
+      admittedFrom && getPluginRegistryGatewayOwner(admittedFrom) === owner
+        ? gatewayChannels.get(getPluginRegistryResourceOwner(admittedFrom))
+        : undefined;
+    if (admittedFrom) {
+      if (inherited) {
+        gatewayChannels.set(key, inherited);
+      }
+    } else {
+      gatewayChannels.set(
+        key,
+        new Map(registry.channels.map(({ pluginId, plugin }) => [plugin.id, { pluginId, plugin }])),
+      );
+    }
+  }
+  gatewayOwners.set(key, existing === undefined || existing === owner ? owner : null);
+}
+
+export function getPluginRegistryGatewayOwner(
+  registry: PluginRegistry,
+): PluginRegistryGatewayOwner | undefined {
+  return gatewayOwners.get(getPluginRegistryResourceOwner(registry)) ?? undefined;
+}
+
+/** Publication-time identity survives teardown; the live Gateway owner still admits every send. */
+export function getPluginRegistryGatewayChannelRegistration(
+  registry: PluginRegistry,
+  channel: string,
+): Pick<PluginChannelRegistration, "pluginId" | "plugin"> | undefined {
+  return gatewayChannels.get(getPluginRegistryResourceOwner(registry))?.get(channel);
 }
 
 /** The creation owner lends existing custody; lookup never takes ownership of an external host. */

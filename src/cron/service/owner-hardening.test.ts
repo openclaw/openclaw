@@ -4,7 +4,9 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { observeCronJobWrites } from "../../../test/helpers/cron/runtime-mutation.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
@@ -18,6 +20,10 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateDirForDatabasePath } from "../../state/openclaw-state-db.paths.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../test-utils/gateway-scheduler-clock.js";
 import { advanceCronActiveJobGeneration, isCronJobActive } from "../active-jobs.js";
 import { cronOwnerHardeningEntrypoints } from "../owner-hardening-runtime.test-support.js";
 import { CronService } from "../service.js";
@@ -26,21 +32,22 @@ import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import { upsertCronJobRow } from "../store/row-codec.js";
 import {
-  claimCronRunReceiptInDatabase,
   finishCronRunReceipt,
   isCronRunReceiptOwnerStale,
   prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
-import * as runReceiptStore from "../store/run-receipt-store.js";
-import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
+import {
+  claimCronRunReceiptInDatabaseForTest,
+  inspectActiveCronRunReceipt,
+} from "../store/run-receipt-store.test-support.js";
 import type { CronJob } from "../types.js";
 import { listForeignReceipts } from "./foreign-receipt-monitor.js";
+import { findCronRunRecoveryInDatabase } from "./run-history-recovery.js";
 import type { CronServiceState } from "./state.js";
-import { findCronTaskRunRecoveryInDatabase } from "./task-runs.js";
 
 const serviceUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.service);
-const stateDatabaseUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.stateDatabase);
+const schedulerClockUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.schedulerClock);
 
 const children = new Set<ChildProcess>();
 let scriptRoot = "";
@@ -70,11 +77,16 @@ beforeEach(async () => {
     `
       import fs from "node:fs";
       import { CronService } from ${JSON.stringify(serviceUrl.href)};
-      import { openOpenClawStateDatabase } from ${JSON.stringify(stateDatabaseUrl.href)};
+      import { deserialize } from "node:v8";
+      import { MessagePort } from "node:worker_threads";
+      import { createTestGatewayScheduler } from ${JSON.stringify(schedulerClockUrl.href)};
       const [storePath, jobId, mode, releasePath, outputPath] = process.argv.slice(2);
       const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       const logger = { debug() {}, info() {}, warn() {}, error() {} };
+      let activationClock = Date.now();
       const cron = new CronService({
+        ...(mode === "crash-activation" ? { nowMs: () => ++activationClock } : {}),
+        scheduler: createTestGatewayScheduler(),
         storePath,
         cronEnabled: true,
         log: logger,
@@ -95,7 +107,6 @@ beforeEach(async () => {
           fs.appendFileSync(outputPath, job.agentId + ":" + process.pid + "\\n");
           process.stdout.write("started\\n");
           if (mode === "block" || mode === "barrier-block") await new Promise(() => {});
-          if (mode === "hold") while (!fs.existsSync(releasePath)) await sleep(10);
           await sleep(150);
           return { status: "ok", summary: "done" };
         },
@@ -107,24 +118,25 @@ beforeEach(async () => {
         await cron.run(jobId, "force");
       }
       if (mode === "crash-activation") {
-        const database = openOpenClawStateDatabase().db;
-        database.function("crash_activation", () => {
-          process.kill(process.pid, "SIGKILL");
-          return 0;
-        });
-        database.exec(\`
-          CREATE TEMP TRIGGER crash_cron_activation
-          BEFORE UPDATE OF state_json ON cron_jobs
-          WHEN json_extract(OLD.state_json, '$.runningAtMs') IS NULL
-            AND json_extract(NEW.state_json, '$.runningAtMs') IS NOT NULL
-          BEGIN
-            SELECT crash_activation();
-          END;
-        \`);
+        const originalOn = MessagePort.prototype.on;
+        MessagePort.prototype.on = function (event, listener) {
+          if (event !== "message") return originalOn.call(this, event, listener);
+          return originalOn.call(this, event, function (message) {
+            // The worker has changed both receipt and job rows, and is waiting
+            // for the real owner to admit COMMIT. Death here must roll both back.
+            if (message?.stage === "commit" && message.facts?.bytes instanceof Uint8Array) {
+              const outcome = deserialize(message.facts.bytes);
+              if (outcome?.activation?.job?.id === jobId) {
+                process.kill(process.pid, "SIGKILL");
+              }
+            }
+            return Reflect.apply(listener, this, [message]);
+          });
+        };
         await cron.run(jobId, "force");
       }
       if (mode === "manual-postcommit-crash") await cron.run(jobId, "due");
-      if (mode === "block" || mode === "hold" || mode === "hold-alive") {
+      if (mode === "block" || mode === "hold-alive") {
         await cron.run(jobId, "force");
       }
       if (mode === "hold-alive") {
@@ -160,7 +172,6 @@ function spawnRunner(params: {
   mode:
     | "barrier-block"
     | "block"
-    | "hold"
     | "hold-alive"
     | "trigger"
     | "due"
@@ -255,24 +266,13 @@ async function waitForExit(child: ChildProcess): Promise<void> {
   });
 }
 
-async function waitForImmediate(
-  predicate: () => boolean,
-  description: string,
-  timeoutMs = 1_000,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!predicate()) {
-    if (Date.now() >= deadline) {
-      throw new Error(`Timed out waiting for ${description}`);
-    }
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-  }
-}
-
-function makeParentService(storePath: string, runCommandJob = vi.fn()) {
+function makeParentService(
+  storePath: string,
+  runCommandJob = vi.fn(),
+  scheduler: GatewayScheduler = createTestGatewayScheduler(),
+) {
   return new CronService({
+    scheduler,
     storePath,
     cronEnabled: true,
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -312,13 +312,14 @@ function databaseUpdateReceiptToRunning(receiptId: string): void {
 
 function claimMarkerlessReceipt(storePath: string, job: CronJob, startedAtMs: number) {
   const prepared = prepareCronRunReceiptClaim({
+    observed: undefined,
     storePath,
     job,
     agentId: job.agentId!,
     startedAtMs,
   });
   return runOpenClawStateWriteTransaction(({ db }) =>
-    claimCronRunReceiptInDatabase({
+    claimCronRunReceiptInDatabaseForTest({
       database: db,
       prepared,
       resolveAgentId: (current) => current.agentId!,
@@ -327,27 +328,32 @@ function claimMarkerlessReceipt(storePath: string, job: CronJob, startedAtMs: nu
 }
 
 describe("cron durable run ownership", () => {
-  it("does not execute when the durable receipt cannot be recorded", async () => {
+  it("rolls back the receipt and queued marker when reservation commit admission is refused", async () => {
     vi.useRealTimers();
     const { storePath } = await makeStorePath();
     const now = Date.now();
     const job = makeCommandJob("receipt-required", now + 60_000);
     await saveCronStore(storePath, { version: 1, jobs: [job] });
     inspectActiveCronRunReceipt({ storePath, jobId: job.id });
-    const claim = vi
-      .spyOn(runReceiptStore, "claimCronRunReceiptInDatabase")
-      .mockImplementation(() => {
-        throw new Error("receipt unavailable");
-      });
+    const rejectCommit = vi.fn(() => {
+      throw new Error("receipt commit refused");
+    });
+    const stopObserving = observeCronJobWrites(job.id, (written) => {
+      if (written.queuedAtMs !== undefined) {
+        rejectCommit();
+      }
+    });
     const runner = vi.fn(async () => ({ status: "ok" as const }));
     const cron = makeParentService(storePath, runner);
     try {
-      await expect(cron.run(job.id, "force")).rejects.toThrow("receipt unavailable");
-      expect(claim).toHaveBeenCalledOnce();
+      await expect(cron.run(job.id, "force")).rejects.toThrow("receipt commit refused");
+      expect(rejectCommit).toHaveBeenCalledOnce();
       expect(runner).not.toHaveBeenCalled();
+      expect(receipts(storePath, job.id)).toEqual([]);
+      expect((await loadCronStore(storePath)).jobs[0]?.state.queuedAtMs).toBeUndefined();
     } finally {
       cron.stop();
-      claim.mockRestore();
+      stopObserving();
     }
   });
 
@@ -369,6 +375,12 @@ describe("cron durable run ownership", () => {
     await waitForExit(child);
     expect(child.signalCode).toBe("SIGKILL");
     expect(fs.existsSync(outputPath)).toBe(false);
+    const rolledBack = (await loadCronStore(storePath)).jobs[0];
+    expect(rolledBack?.state.queuedAtMs).toEqual(expect.any(Number));
+    expect(rolledBack?.state.runningAtMs).toBeUndefined();
+    expect(receipts(storePath, job.id)).toMatchObject([
+      { status: "running", startedAtMs: rolledBack?.state.queuedAtMs },
+    ]);
 
     const recovered = makeParentService(storePath);
     try {
@@ -391,7 +403,7 @@ describe("cron durable run ownership", () => {
     inspectActiveCronRunReceipt({ storePath, jobId: job.id });
     const database = openOpenClawStateDatabase().db;
     database.exec(`
-      CREATE TRIGGER reject_cron_run_receipt_finish
+      CREATE TEMP TRIGGER reject_cron_run_receipt_finish
       BEFORE UPDATE OF status ON cron_run_receipts
       WHEN OLD.status = 'running' AND NEW.status != 'running'
       BEGIN
@@ -414,7 +426,7 @@ describe("cron durable run ownership", () => {
       expect((await loadCronStore(storePath)).jobs[0]?.state.runningAtMs).toBe(
         retained?.startedAtMs,
       );
-      const recovery = findCronTaskRunRecoveryInDatabase({
+      const recovery = findCronRunRecoveryInDatabase({
         database,
         jobId: job.id,
         startedAt: retained!.startedAtMs,
@@ -519,7 +531,12 @@ describe("cron durable run ownership", () => {
     const job = makeCommandJob("restart-mid-run", now + 60_000);
     await saveCronStore(storePath, { version: 1, jobs: [job] });
     const replacementRunner = vi.fn(async () => ({ status: "ok" as const }));
-    const replacement = makeParentService(storePath, replacementRunner);
+    const clock = createGatewaySchedulerClock(now);
+    const replacement = makeParentService(
+      storePath,
+      replacementRunner,
+      createTestGatewayScheduler(clock.clock),
+    );
     let owner: ChildProcess | undefined;
     try {
       await replacement.start();
@@ -541,15 +558,11 @@ describe("cron durable run ownership", () => {
 
       owner.kill("SIGKILL");
       await waitForExit(owner);
-      await vi.waitFor(
-        async () => {
-          expect(receipts(storePath, job.id)[0]).toMatchObject({ status: "interrupted" });
-          const recoveredState = (await loadCronStore(storePath)).jobs[0]?.state;
-          expect(recoveredState?.lastError).toContain("interrupted by gateway restart");
-          expect(recoveredState?.nextRunAtMs).toEqual(expect.any(Number));
-        },
-        { timeout: 6_000, interval: 50 },
-      );
+      await clock.advanceBy(2_000);
+      expect(receipts(storePath, job.id)[0]).toMatchObject({ status: "interrupted" });
+      const recoveredState = (await loadCronStore(storePath)).jobs[0]?.state;
+      expect(recoveredState?.lastError).toContain("interrupted by gateway restart");
+      expect(recoveredState?.nextRunAtMs).toEqual(expect.any(Number));
 
       await expect(replacement.run(job.id, "force")).resolves.toEqual({ ok: true, ran: true });
       expect(replacementRunner).toHaveBeenCalledOnce();
@@ -588,7 +601,12 @@ describe("cron durable run ownership", () => {
       )
       .run(job.id);
 
-    const replacement = makeParentService(storePath);
+    const clock = createGatewaySchedulerClock(now);
+    const replacement = makeParentService(
+      storePath,
+      undefined,
+      createTestGatewayScheduler(clock.clock),
+    );
     try {
       await replacement.start();
       const replacementState = (replacement as unknown as { state: CronServiceState }).state;
@@ -596,18 +614,14 @@ describe("cron durable run ownership", () => {
       const completed = waitForLine(owner, "completed");
       await fsPromises.writeFile(releasePath, "release");
       await completed;
-      await vi.waitFor(
-        async () => {
-          expect(replacementState.timer).not.toBe(staleTimer);
-          const persisted = await loadCronStore(storePath);
-          expect(persisted.jobs.find((entry) => entry.id === job.id)?.state.nextRunAtMs).toEqual(
-            expect.any(Number),
-          );
-          expect(
-            persisted.jobs.find((entry) => entry.id === unrelated.id)?.state.nextRunAtMs,
-          ).toEqual(expect.any(Number));
-        },
-        { timeout: 10_000, interval: 50 },
+      await clock.advanceBy(2_000);
+      expect(replacementState.timer).not.toBe(staleTimer);
+      const persisted = await loadCronStore(storePath);
+      expect(persisted.jobs.find((entry) => entry.id === job.id)?.state.nextRunAtMs).toEqual(
+        expect.any(Number),
+      );
+      expect(persisted.jobs.find((entry) => entry.id === unrelated.id)?.state.nextRunAtMs).toEqual(
+        expect.any(Number),
       );
     } finally {
       replacement.stop();
@@ -634,11 +648,15 @@ describe("cron durable run ownership", () => {
     await waitForLine(first, "started");
 
     const replacementRunner = vi.fn(async () => ({ status: "ok" as const }));
-    const replacement = makeParentService(storePath, replacementRunner);
+    const clock = createGatewaySchedulerClock(now);
+    const replacement = makeParentService(
+      storePath,
+      replacementRunner,
+      createTestGatewayScheduler(clock.clock),
+    );
     let suspension: ReturnType<typeof tryBeginGatewaySuspendAdmission> | undefined;
     let second: ChildProcess | undefined;
     try {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       await replacement.start();
       const replacementState = (replacement as unknown as { state: CronServiceState }).state;
       suspension = tryBeginGatewaySuspendAdmission(() => {});
@@ -658,22 +676,14 @@ describe("cron durable run ownership", () => {
       await waitForLine(second, "started");
       const secondReceiptId = receipts(storePath, job.id)[0]?.receiptId;
       expect(secondReceiptId).toBeDefined();
-      await vi.advanceTimersByTimeAsync(2_000);
-      await waitForImmediate(
-        () => listForeignReceipts(replacementState)[0]?.receiptId === secondReceiptId,
-        "replacement foreign receipt enrollment",
-      );
+      await clock.advanceBy(2_000);
+      expect(listForeignReceipts(replacementState)[0]?.receiptId).toBe(secondReceiptId);
       second.kill("SIGKILL");
       await waitForExit(second);
-      await vi.advanceTimersByTimeAsync(2_000);
+      await clock.advanceBy(2_000);
 
-      await vi.waitFor(
-        async () => {
-          expect(receipts(storePath, job.id)[0]).toMatchObject({ status: "interrupted" });
-          expect((await loadCronStore(storePath)).jobs[0]?.state.runningAtMs).toBeUndefined();
-        },
-        { timeout: 1_000, interval: 10 },
-      );
+      expect(receipts(storePath, job.id)[0]).toMatchObject({ status: "interrupted" });
+      expect((await loadCronStore(storePath)).jobs[0]?.state.runningAtMs).toBeUndefined();
       expect(replacementState.schedulingPaused).toBe(true);
       expect(replacementState.timer).toBeNull();
       expect(replacementRunner).not.toHaveBeenCalled();
@@ -867,7 +877,7 @@ describe("cron durable run ownership", () => {
       consecutiveErrors: 10,
     });
     expect(receipts(storePath, job.id)[0]).toMatchObject({ status: "error" });
-    const recovered = findCronTaskRunRecoveryInDatabase({
+    const recovered = findCronRunRecoveryInDatabase({
       database: openOpenClawStateDatabase().db,
       jobId: job.id,
       startedAt: persisted!.state.lastRunAtMs!,

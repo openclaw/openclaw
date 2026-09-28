@@ -5,12 +5,18 @@ import {
   resolveInboundDebounceMs,
 } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { buildTelegramInboundDebounceKey } from "./bot-handlers.debounce-key.js";
 import {
-  buildTelegramInboundDebounceConversationKey,
-  buildTelegramInboundDebounceKey,
-} from "./bot-handlers.debounce-key.js";
+  buildSyntheticContext,
+  buildSyntheticTextMessage,
+  formatTelegramAmbientTranscriptBody,
+  latestPromptContextAmbientWatermark,
+  latestPromptContextMinTimestampMs,
+  promptContextBoundaryOptions,
+} from "./bot-handlers.message-context.js";
 import type { TelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
 import type {
   RegisterTelegramHandlerParams,
@@ -24,12 +30,12 @@ import type {
 import type { TelegramSpooledReplayDeferredParticipant } from "./bot-processing-outcome.js";
 import {
   buildTelegramThreadParams,
+  buildTelegramGroupPeerId,
   getTelegramTextParts,
   joinTelegramTextParts,
   type TelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
-import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
 
 type TelegramDebounceLane = "default" | "forward";
 
@@ -45,22 +51,21 @@ export type TelegramDebounceEntry = {
   threadSpec: TelegramThreadSpec;
   promptContextMinTimestampMs?: number;
   promptContextAmbientWatermark?: TelegramAmbientTranscriptWatermark;
-  dispatchDedupeClaims: TelegramMessageDispatchReplayClaim[];
+  dispatchDedupeClaims: ChannelReplayClaimHandle[];
   spooledReplayParticipant?: TelegramSpooledReplayDeferredParticipant;
   channelIngressResolvers: readonly TelegramChannelIngressResolver[];
 };
 
 interface TelegramInboundBuffers {
   cancelPending: (target: TelegramPendingInboundTarget) => void;
-  inboundDebouncer: {
-    enqueue: (entry: TelegramDebounceEntry) => Promise<void>;
-    shouldBuffer: (entry: TelegramDebounceEntry) => boolean;
-    flushKey: (key: string) => Promise<void>;
-    cancelKey: (key: string) => boolean;
-    drain: () => Promise<void>;
-  };
+  inboundDebouncer: ReturnType<typeof createInboundDebouncer<TelegramDebounceEntry>>;
   resolveTelegramDebounceLane: (msg: Message) => TelegramDebounceLane;
 }
+
+const spooledReplayParticipants = (entries: readonly TelegramDebounceEntry[]) =>
+  entries.flatMap((entry) =>
+    entry.spooledReplayParticipant ? [entry.spooledReplayParticipant] : [],
+  );
 
 export function createTelegramInboundBuffers({
   params: { cfg, accountId, bot, runtime, opts },
@@ -70,17 +75,11 @@ export function createTelegramInboundBuffers({
   message: TelegramMessagePipeline;
 }): TelegramInboundBuffers {
   const {
-    promptContextBoundaryOptions,
-    latestPromptContextMinTimestampMs,
-    latestPromptContextAmbientWatermark,
     mergeDispatchDedupeClaims,
     releaseDispatchDedupeClaims,
     buildFailedProcessingResult,
     settleSpooledReplayParticipants,
     spooledReplayOptions,
-    buildSyntheticTextMessage,
-    buildSyntheticContext,
-    formatTelegramAmbientTranscriptBody,
     processMessageWithReplyChain,
   } = message;
   const readConfig = createRuntimeConfigReader(cfg);
@@ -157,12 +156,7 @@ export function createTelegramInboundBuffers({
             50_000)),
     onFlush: (entries) => {
       const completion = (async () => {
-        const participants = entries
-          .map((entry) => entry.spooledReplayParticipant)
-          .filter(
-            (participant): participant is TelegramSpooledReplayDeferredParticipant =>
-              participant !== undefined,
-          );
+        const participants = spooledReplayParticipants(entries);
         const last = entries.at(-1);
         if (!last) {
           return;
@@ -257,12 +251,7 @@ export function createTelegramInboundBuffers({
       return { admission: completion, completion };
     },
     onError: (error, items) => {
-      const participants = items
-        .map((item) => item.spooledReplayParticipant)
-        .filter(
-          (participant): participant is TelegramSpooledReplayDeferredParticipant =>
-            participant !== undefined,
-        );
+      const participants = spooledReplayParticipants(items);
       settleSpooledReplayParticipants(participants, buildFailedProcessingResult(error));
       runtime.error?.(danger(`telegram debounce flush failed: ${String(error)}`));
       if (participants.length > 0) {
@@ -286,15 +275,7 @@ export function createTelegramInboundBuffers({
       releaseDispatchDedupeClaims(
         mergeDispatchDedupeClaims(...items.map((item) => item.dispatchDedupeClaims)),
       );
-      settleSpooledReplayParticipants(
-        items
-          .map((item) => item.spooledReplayParticipant)
-          .filter(
-            (participant): participant is TelegramSpooledReplayDeferredParticipant =>
-              participant !== undefined,
-          ),
-        { kind: "skipped" },
-      );
+      settleSpooledReplayParticipants(spooledReplayParticipants(items), { kind: "skipped" });
     },
   });
 
@@ -302,7 +283,7 @@ export function createTelegramInboundBuffers({
     if (!senderId) {
       return;
     }
-    const conversationKey = buildTelegramInboundDebounceConversationKey({ chatId, threadSpec });
+    const conversationKey = buildTelegramGroupPeerId(chatId, threadSpec);
     inboundDebouncer.cancelKey(
       buildTelegramInboundDebounceKey({ accountId, conversationKey, senderId }),
     );

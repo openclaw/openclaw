@@ -10,7 +10,6 @@ import type {
   ToolsCatalogResult,
   ToolsEffectiveResult,
 } from "../../api/types.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForAgentPanel } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import {
@@ -19,7 +18,6 @@ import {
   createPanelRefreshStatus,
   failPanelRefresh,
 } from "../../components/panel-refresh-status.ts";
-import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
 import { t } from "../../i18n/index.ts";
@@ -67,6 +65,7 @@ import {
   reloadAgentFile,
   retainAgentFileDrafts,
   resetAgentFile,
+  resetAgentFiles,
   saveAgentFile,
   type RetainedAgentFileDrafts,
 } from "./files.ts";
@@ -86,9 +85,8 @@ import {
 } from "./route-navigation.ts";
 import type { AgentsRouteData } from "./route.ts";
 import { clearAgentSkillFilter, loadAgentSkills } from "./skills.ts";
-import { renderAgents } from "./view.ts";
+import { renderAgents, renderAgentsPageHeader } from "./view.ts";
 
-const AGENTS_DOCS_URL = "https://docs.openclaw.ai/concepts/multi-agent";
 type AgentsRequestSources = Partial<
   Pick<ApplicationContext, "agents" | "agentIdentity" | "sessions">
 >;
@@ -123,8 +121,8 @@ class AgentsPage
   @state() agentFilesError: string | null = null;
   @state() agentFilesList: AgentsFilesListResult | null = null;
   @state() agentFileContents: Record<string, string> = {};
-  @state() agentFileBaseHashes: Record<string, string> = {};
-  @state() agentFileHashes: Record<string, string> = {};
+  @state() agentFileBaseVersions: RetainedAgentFileDrafts["versions"] = {};
+  @state() agentFileVersions: RetainedAgentFileDrafts["versions"] = {};
   @state() agentFileConflict: string | null = null;
   @state() agentFileDrafts: Record<string, string> = {};
   @state() agentFileActive: string | null = null;
@@ -195,6 +193,10 @@ class AgentsPage
     ensureInitialData: () => this.ensureInitialData(),
   });
   private readonly subscriptions = new SubscriptionsController(this)
+    .watch(
+      () => this.context?.config,
+      (config, notify) => config.subscribe(notify),
+    )
     .watch(() => this.client, subscribeModelCatalogCache)
     .effect(
       () => this.context?.settingsAgentSelection,
@@ -398,7 +400,7 @@ class AgentsPage
       if (retained && selectedId) {
         this.retainedFileDrafts.delete(selectedId);
         this.agentFileDrafts = retained.drafts;
-        this.agentFileHashes = retained.hashes;
+        this.agentFileVersions = retained.versions;
         this.agentFileActive = retained.active;
         this.agentFileConflict = retained.conflict;
         // Loaded bases stay empty: returning must read disk while retaining the draft's ancestry.
@@ -835,6 +837,7 @@ class AgentsPage
     const agentIdentity = this.context.agentIdentity;
     void saveIdentityDraft({
       host: this,
+      config: this.context.config,
       expectedClient: client,
       agentId,
       agents,
@@ -852,17 +855,7 @@ class AgentsPage
   private resetSelectionState() {
     this.gateway.invalidate();
     this.resetModelCatalog();
-    this.agentFilesList = null;
-    this.agentFilesError = null;
-    this.agentFileActive = null;
-    this.agentFileContents = {};
-    this.agentFileBaseHashes = {};
-    this.agentFileHashes = {};
-    this.agentFileConflict = null;
-    this.agentFileDrafts = {};
-    this.agentFileWriteRevisions.clear();
-    this.agentFilesLoading = false;
-    this.agentFileSaving = false;
+    resetAgentFiles(this);
     this.agentSkillsReport = null;
     this.agentSkillsLoading = false;
     this.agentSkillsError = null;
@@ -922,15 +915,12 @@ class AgentsPage
   }
 
   private saveAgentConfig() {
-    if (!this.canCall("config.set", "operator.admin")) {
+    const client = this.client;
+    if (!client || !this.canCall("config.set", "operator.admin")) {
       return;
     }
-    const client = this.client;
     const generation = this.requestGeneration;
     const agents = this.context.agents;
-    if (!client) {
-      return;
-    }
     void (async () => {
       if (!(await this.context.runtimeConfig.save())) {
         return;
@@ -939,6 +929,7 @@ class AgentsPage
       if (!this.isCurrentRequest(client, generation, undefined, { agents })) {
         return;
       }
+      resetToolsEffectiveState(this);
       this.syncAgentState(agents);
       this.ensureAgentIdentities();
       this.loadActivePanelData();
@@ -1036,17 +1027,11 @@ class AgentsPage
     };
     this.syncGitHubIdentity(selectedAgentId);
     return html`
-      <section class="content-header">
-        <div>
-          <div class="page-title">${titleForRoute("agents")}</div>
-          <div class="page-subtitle">
-            ${subtitleForRoute("agents")} ${renderLearnMoreLink(AGENTS_DOCS_URL)}
-          </div>
-        </div>
-      </section>
+      ${renderAgentsPageHeader()}
       ${renderSettingsWorkspace(
         this.identityAvatarLoader.withActiveRoutes(() =>
           renderAgents({
+            applicationConfig: this.context.config,
             access,
             basePath: this.context.basePath,
             loading: agentsState.agentsLoading,
@@ -1178,7 +1163,7 @@ class AgentsPage
                 selectedAgentId === this.agentsSelectedId &&
                 this.canCall("agents.update", "operator.admin")
               ) {
-                selectIdentityAvatar(this, file);
+                selectIdentityAvatar(this, file, this.context.config);
               }
             },
             onIdentitySave: () => this.saveIdentityDraft(),

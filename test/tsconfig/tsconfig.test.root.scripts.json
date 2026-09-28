@@ -1,0 +1,34 @@
+{
+  "extends": "./tsconfig.test.root.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "../../.artifacts/tsgo-cache/test-root-scripts.tsbuildinfo"
+  },
+  "include": [
+    "../../test/scripts/**/*.ts",
+    "../../test/scripts/**/*.tsx",
+    "../../test/**/*.d.ts",
+    "../../test/**/*.d.mts",
+    "../../test/**/*.d.cts",
+    "../../src/**/*.d.ts",
+    "../../packages/**/*.d.ts",
+    "../../ui/**/*.d.ts"
+  ],
+  "exclude": [
+    "../../node_modules",
+    "../../dist",
+    "../../**/dist/**",
+    "../../test/fixtures/**",
+    "../../test/e2e/qa-lab/runtime/system-agent-first-run-docker-client.ts",
+    "../../test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts",
+    "../../test/scripts/ci-*.ts",
+    "../../test/scripts/ci-*.tsx",
+    "../../test/scripts/check-*.ts",
+    "../../test/scripts/check-*.tsx",
+    "../../test/scripts/pr-*.ts",
+    "../../test/scripts/pr-*.tsx",
+    "../../test/scripts/release-*.ts",
+    "../../test/scripts/release-*.tsx",
+    "../../test/scripts/vitest-*.ts",
+    "../../test/scripts/vitest-*.tsx"
+  ]
+}

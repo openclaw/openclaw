@@ -1,14 +1,22 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   countUnsafeAssertions,
   isGovernedAssertionSourcePath,
   main,
 } from "../../scripts/check-assertion-safety-ratchet.mts";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { parseRatchetCounts } from "../../scripts/lib/shrink-ratchet.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
+
+function parseFixture(source: string, fileName: string) {
+  return [source, fileName, parser.parseSourceFile(fileName, source), parser] as const;
+}
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const nestedGitEnvKeys = [
@@ -68,13 +76,19 @@ describe("check-assertion-safety-ratchet", () => {
       "const angleUnknown = <unknown>value;",
     ].join("\n");
 
-    expect(countUnsafeAssertions(source, "src/example.ts")).toBe(3);
+    expect(countUnsafeAssertions(...parseFixture(source, "src/example.ts"))).toBe(3);
     expect(
-      countUnsafeAssertions("value as unknown as Shape;", "src/agents/agent-model-discovery.ts"),
+      countUnsafeAssertions(
+        ...parseFixture("value as unknown as Shape;", "src/agents/agent-model-discovery.ts"),
+      ),
     ).toBe(1);
-    expect(countUnsafeAssertions("value as unknown as Shape;", "src/example.ts")).toBe(1);
     expect(
-      countUnsafeAssertions("declare const value: unknown as Shape;", "src/example.d.ts"),
+      countUnsafeAssertions(...parseFixture("value as unknown as Shape;", "src/example.ts")),
+    ).toBe(1);
+    expect(
+      countUnsafeAssertions(
+        ...parseFixture("declare const value: unknown as Shape;", "src/example.d.ts"),
+      ),
     ).toBe(0);
     expect(isGovernedAssertionSourcePath("src/example.ts")).toBe(true);
     expect(isGovernedAssertionSourcePath("extensions/example/src/index.tsx")).toBe(true);
@@ -95,7 +109,7 @@ describe("check-assertion-safety-ratchet", () => {
       "const unsafe = value as Shape;",
     ].join("\n");
 
-    expect(countUnsafeAssertions(source, "src/example.ts")).toBe(1);
+    expect(countUnsafeAssertions(...parseFixture(source, "src/example.ts"))).toBe(1);
   });
 
   it("blocks new debt, accepts SAFETY comments, and prunes reduced counts", () => {

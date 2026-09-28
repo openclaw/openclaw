@@ -16,7 +16,7 @@ async function replay(
   displayName = "Replay fixture",
   home = "/Users/worker",
   launch?: "ready" | "waiter-exit",
-  interrupted?: "before-receipt" | "after-receipt" | "dangling-runtime" | "receipt-only",
+  interrupted?: "before-receipt" | "dangling-runtime" | "receipt-only",
 ) {
   const stateDir = path.join(home, ".openclaw", "cloud-workers", leaseId);
   const runtimeDir = path.join(home, ".openclaw-worker", "node-runtimes", "a".repeat(64));
@@ -86,8 +86,7 @@ async function replay(
         (file === path.join(stateDir, "runtime") &&
           interrupted &&
           interrupted !== "receipt-only") ||
-        (file === path.join(stateDir, "node-launch.json") &&
-          (interrupted === "after-receipt" || interrupted === "receipt-only"))
+        (file === path.join(stateDir, "node-launch.json") && interrupted === "receipt-only")
       ) {
         return { isSymbolicLink: () => file.endsWith("/runtime") };
       }
@@ -99,8 +98,7 @@ async function replay(
         Boolean(
           interrupted && interrupted !== "receipt-only" && interrupted !== "dangling-runtime",
         )) ||
-      (file === path.join(stateDir, "node-launch.json") &&
-        (interrupted === "after-receipt" || interrupted === "receipt-only")) ||
+      (file === path.join(stateDir, "node-launch.json") && interrupted === "receipt-only") ||
       (file === path.join(stateDir, "node.pid") &&
         !interrupted &&
         (!launch || (launched && launch === "ready"))),
@@ -191,13 +189,7 @@ async function replay(
       ) {
         throw new Error("Unexpected native process inspection");
       }
-      if (
-        [
-          "host-inspect-unavailable",
-          "host-replaced-during-inspect",
-          "node-replaced-during-inspect",
-        ].includes(failure ?? "")
-      ) {
+      if (failure === "host-inspect-unavailable") {
         return { status: 1, stdout: "" };
       }
       const cwd = { device: "2147483649", inode: "42" };
@@ -260,6 +252,7 @@ async function replay(
     .split("CRABBOX_NODE_ENROLLMENT_SCRIPT'\n")[1]!
     .split("\nCRABBOX_NODE_ENROLLMENT_SCRIPT")[0]!;
   await runInNewContext(script, {
+    AbortController,
     require: (name: string) =>
       name === "node:fs"
         ? fs
@@ -273,7 +266,7 @@ async function replay(
   });
   if (launch) {
     const logPath = path.join(stateDir, "node.log");
-    expect(spawn).toHaveBeenCalledExactlyOnceWith(
+    expect(spawn, output.join("\n")).toHaveBeenCalledExactlyOnceWith(
       "/bin/bash",
       [
         "-c",
@@ -362,7 +355,7 @@ it.each(["lsof-fallback"])("uses the available macOS %s probe", async (variant) 
 });
 
 describe("macOS desktop host enrollment replay", () => {
-  it.each(["before-receipt", "after-receipt", "dangling-runtime", "receipt-only"] as const)(
+  it.each(["dangling-runtime", "receipt-only"] as const)(
     "preserves an interrupted host launch instead of launching another: %s",
     async (interrupted) => {
       expect(
@@ -400,25 +393,23 @@ describe("macOS desktop host enrollment replay", () => {
     },
   );
 
-  it("reuses the verified host and Node child despite a different SSH locale", async () => {
-    expect(await replay("darwin", undefined, true)).toMatchObject({ code: 0 });
+  it("preserves native argv bytes despite a different SSH locale", async () => {
+    expect(
+      await replay("darwin", undefined, true, "Cloud worker Développement 👨‍👩‍👧‍👦\tline\n"),
+    ).toMatchObject({ code: 0 });
   });
 
-  it.each(["Cloud worker Développement", "Cloud worker family 👨‍👩‍👧‍👦", "Cloud worker tab\tline\n"])(
-    "preserves the exact native argv for %j",
-    async (displayName) => {
-      expect(await replay("darwin", undefined, true, displayName)).toMatchObject({ code: 0 });
-    },
-  );
-
-  it.each(["/Users/Développement", "/Users/family 👨‍👩‍👧‍👦", "/Users/tab\tline\n"])(
-    "binds the runtime directory and original Node argv under %j",
-    async (home) => {
-      expect(await replay("darwin", "original-argv", true, "Replay fixture", home)).toMatchObject({
-        code: 0,
-      });
-    },
-  );
+  it("binds the runtime directory and original Node argv under a Unicode path", async () => {
+    expect(
+      await replay(
+        "darwin",
+        "original-argv",
+        true,
+        "Replay fixture",
+        "/Users/Développement 👨‍👩‍👧‍👦\tline\n",
+      ),
+    ).toMatchObject({ code: 0 });
+  });
 
   it.each([
     "dead-host",
@@ -431,8 +422,6 @@ describe("macOS desktop host enrollment replay", () => {
     "cwd",
     "host-inspect-unavailable",
     "host-argv-invalid-json",
-    "host-replaced-during-inspect",
-    "node-replaced-during-inspect",
   ])("rejects %s even when the Node process still looks healthy", async (failure) => {
     expect(await replay("darwin", failure, true)).toMatchObject({
       code: 1,

@@ -347,6 +347,6 @@ struct DashboardReconnectTests {
         #expect(recoveredController !== failureController)
         #expect(!failureController.isWindowOpen)
         #expect(recoveredController.currentURL.absoluteString ==
-            replacementServer.url("/#token=route-b-device-token").absoluteString)
+            replacementServer.url("/").absoluteString)
     }
 }

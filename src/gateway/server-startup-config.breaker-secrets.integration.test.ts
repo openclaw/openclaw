@@ -18,10 +18,8 @@ import {
   prepareSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import {
-  createRuntimeSecretsActivator,
-  prepareGatewayStartupConfig,
-} from "./server-startup-config.js";
+import { prepareGatewayStartupConfig } from "./server-startup-config-helpers.js";
+import { createRuntimeSecretsActivator } from "./server-startup-config.js";
 import { buildTestConfigSnapshot } from "./test-helpers.config-snapshots.js";
 
 const GATEWAY_TOKEN_ENV = "BREAKER_GATEWAY_AUTH_TOKEN";

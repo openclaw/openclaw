@@ -1,3 +1,5 @@
+import type { PreparedSessionHistoryReadTarget } from "../../gateway/session-history-read.types.js";
+import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { SessionLifecycleArchivedTranscript } from "./session-accessor.lifecycle-types.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
 import type { TranscriptEvent } from "./session-accessor.types.js";
@@ -41,6 +43,7 @@ export type TranscriptArchiveWorkerMessage = {
 };
 
 export type TranscriptArchivePublishPlan = {
+  databaseIdentity?: string;
   agentId: string;
   archiveDirectory: string;
   databasePath: string;
@@ -67,13 +70,57 @@ export type TranscriptArchiveReadPlan = {
   sessionId?: string;
   sessionKey: string;
   runId: string;
+  expectedIdentity: DatabasePathIdentity | undefined;
+};
+
+export type TranscriptArchivePresenceRead = {
+  database: { agentId: string; path: string };
+  env: NodeJS.ProcessEnv;
+  logicalAgentId: string;
+  sessionId?: string;
+  sessionKey: string;
+  expectedIdentity: DatabasePathIdentity;
 };
 
 export type TranscriptArchiveReadResult = { event?: TranscriptEvent };
 
+export type TranscriptArchivePageBinding = {
+  sessionId: string;
+  generation: string;
+  sha256: string;
+};
+
+export type TranscriptArchivePageOptions = {
+  runId: string;
+  limit?: number;
+  maxBytes?: number;
+  cursor?: string;
+  contextMaxMessages?: number;
+  projectionSources?: Pick<PreparedSessionHistoryReadTarget, "stateDatabase" | "sourceDatabases">;
+};
+
+export type TranscriptArchivePagePlan = Omit<TranscriptArchiveReadPlan, "expectedIdentity"> & {
+  limit: number;
+  maxBytes: number;
+  cursor?: string;
+  verifyBinding?: TranscriptArchivePageBinding;
+  contextMaxMessages?: number;
+  projectionSources?: Pick<PreparedSessionHistoryReadTarget, "stateDatabase" | "sourceDatabases">;
+};
+
+export type TranscriptArchivePageResult = {
+  entries: Array<{ event: TranscriptEvent; seq: number; coordinationHidden?: true }>;
+  contextEntries?: Array<{ event: TranscriptEvent; seq: number; coordinationHidden?: true }>;
+  binding: TranscriptArchivePageBinding;
+  nextCursor?: string;
+  omittedOversized?: true;
+  totalMessages: number;
+};
+
 export type SqliteArchiveOperation =
   | { operation: "materialize"; plans: readonly TranscriptArchiveWorkerPlan[] }
   | { operation: "publish"; plans: readonly TranscriptArchivePublishPlan[] }
+  | { operation: "read-page"; plans: readonly TranscriptArchivePagePlan[] }
   | { operation: "read-final"; plans: readonly TranscriptArchiveReadPlan[] };
 
 export type SqliteArchiveSessionRequest = SqliteArchiveOperation & {
@@ -85,8 +132,9 @@ export type SqliteArchiveSessionResponse = {
   operationId: number;
   settled: true;
 } & (
-  | { type: "done"; results: TranscriptArchiveWorkerResult[] }
-  | { type: "published"; results: TranscriptArchivePublishResult[] }
+  | TranscriptArchiveWorkerMessage
+  | TranscriptArchivePublishWorkerMessage
+  | { type: "page-read"; results: Array<TranscriptArchivePageResult | undefined> }
   | { type: "final-read"; results: TranscriptArchiveReadResult[] }
 );
 export type SessionTranscriptMaintenanceSizingInput = {

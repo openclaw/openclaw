@@ -159,7 +159,7 @@ export function applyEmbeddingBatchOutputLine(params: {
   if (statusCode >= 400) {
     const messageFromObject =
       response?.body && typeof response.body === "object"
-        ? (response.body as { error?: { message?: string } }).error?.message
+        ? response.body.error?.message
         : undefined;
     const messageFromString = typeof response?.body === "string" ? response.body : undefined;
     params.errors.push(

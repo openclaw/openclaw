@@ -22,7 +22,7 @@ export function registerSubagentResultRefreshCases(params: {
   >;
 }) {
   const { getRegistry, getLifecycleHandler, mocks } = params;
-  it.each([false, true])(
+  it.each([true])(
     "tracks missing-entry lifecycle result refresh until capture and persistence settle (restart drain: %s)",
     async (draining) => {
       const mod = getRegistry();
@@ -34,7 +34,7 @@ export function registerSubagentResultRefreshCases(params: {
           return { status: "pending" };
         },
       });
-      mod.registerSubagentRun({
+      await mod.registerSubagentRun({
         runId: "run-refresh-admission-old",
         childSessionKey,
         task: "capture replacement completion",

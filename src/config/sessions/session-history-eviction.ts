@@ -25,10 +25,7 @@ import type {
   SqliteSessionReclamationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
-import {
-  planSessionStateDeleteIfUnreferenced,
-  readReferencedSessionIds,
-} from "./session-accessor.sqlite-lifecycle-state.js";
+import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-lifecycle-state.js";
 import { refreshSqliteSessionPlannerStatisticsBestEffort } from "./session-accessor.sqlite-maintenance.js";
 import { withSqliteSessionPageReclamation } from "./session-accessor.sqlite-page-reclamation.js";
 import {
@@ -419,14 +416,8 @@ async function enforceSessionHistoryMaintenanceForDatabase(
                 sessionId,
                 storePath: params.storePath,
               });
-              for (const referenced of readReferencedSessionIds(
-                database,
-                undefined,
-                [sessionId],
-                params.maintenance,
-              )) {
-                protectedBeforeArchive.add(referenced);
-              }
+              // Worker discovery checked node references; the reclamation transaction
+              // checks them again before persisting the archive or deleting history.
               return planSessionStateDeleteIfUnreferenced({
                 archiveDirectory,
                 archiveTranscript: true,

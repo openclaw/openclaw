@@ -7,7 +7,9 @@ import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import {
   adoptUpdateCampaignMock,
   cancelManagedServiceUpdateHandoffMock,
+  detectRespawnSupervisorMock,
   invokeUpdateRun,
+  mockGlobalInstallSurface,
   resolveUpdateInstallSurfaceMock,
   resolveStartupInstallStatusMock,
   scheduleGatewayRestartMock,
@@ -17,6 +19,37 @@ import {
 } from "./update.test-harness.js";
 
 describe("update.run unexpected-error diagnostics", () => {
+  it("logs a terminal failure at warning level with its public reason", async () => {
+    mockGlobalInstallSurface();
+    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
+    startManagedServiceUpdateHandoffMock.mockRejectedValueOnce(
+      new Error("synthetic helper launch failure"),
+    );
+    const logGateway = { warn: vi.fn(), info: vi.fn() };
+    let payload: { runId: string; result: UpdateRunResult } | undefined;
+    await invokeUpdateRun(
+      {},
+      (_ok, response) => {
+        payload = response as typeof payload;
+      },
+      undefined,
+      { logGateway },
+    );
+    const response = expectDefined(payload, "update response");
+    expect(response.result).toMatchObject({
+      status: "error",
+      reason: "managed-service-handoff-failed",
+    });
+    expect(logGateway.warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `status=error reason=managed-service-handoff-failed error="Error code=Error"`,
+      ),
+    );
+    expect(logGateway.info).not.toHaveBeenCalledWith(
+      expect.stringContaining("update.run completed"),
+    );
+  });
+
   it("keeps the primary exception when optional history reads fail", async () => {
     const original = Object.assign(new TypeError("campaign admission failed"), { code: "EACCES" });
     adoptUpdateCampaignMock.mockImplementationOnce(() => {
@@ -276,8 +309,13 @@ describe("update.run unexpected-error diagnostics", () => {
         expect(JSON.stringify(recordedRun)).not.toContain(privateText);
         expect(report.body).not.toContain(privateText);
       }
-      expect(logGateway.warn).toHaveBeenCalledOnce();
+      expect(logGateway.warn).toHaveBeenCalledTimes(2);
       expect(logGateway.warn).toHaveBeenCalledWith(expect.stringContaining("EACCES"));
+      expect(logGateway.warn).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `status=error reason=unexpected-error error="Error code=EACCES exitCode=1"`,
+        ),
+      );
     },
   );
 });

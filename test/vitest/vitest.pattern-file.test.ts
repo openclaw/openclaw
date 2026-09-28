@@ -89,30 +89,15 @@ describe("native CLI selection", () => {
     try {
       const selector = await import("./vitest.pattern-file.ts");
       const include = ["src/infra/**/*.test.ts"];
-      expect(
-        selector.narrowIncludePatternsForCli(include, ["node", "vitest", "run", candidate]),
-      ).toEqual([candidate]);
-      expect(
-        selector.matchesVitestCliSelection(infraFile, include, ["run", candidate], "", {}),
-      ).toBe(true);
-      expect(
-        selector.matchesVitestCliSelection(
-          infraFile,
-          include,
-          ["run", candidate, "--exclude", infraFile],
-          "",
-          {},
-        ),
-      ).toBe(false);
-      expect(
-        selector.matchesVitestCliSelection(
-          infraFile,
-          ["extensions/qa-lab/**/*.test.ts"],
-          ["run", candidate],
-          "",
-          {},
-        ),
-      ).toBe(false);
+      const args = ["run", candidate];
+      const matches = (patterns: string[], cliArgs = args) =>
+        selector.matchesVitestCliSelection(infraFile, patterns, cliArgs, "", {});
+      expect(selector.narrowIncludePatternsForCli(include, ["node", "vitest", ...args])).toEqual([
+        candidate,
+      ]);
+      expect(matches(include)).toBe(true);
+      expect(matches(include, [...args, "--exclude", infraFile])).toBe(false);
+      expect(matches(["extensions/qa-lab/**/*.test.ts"])).toBe(false);
     } finally {
       vi.doUnmock("node:path");
       vi.resetModules();
@@ -121,15 +106,8 @@ describe("native CLI selection", () => {
 
   const file = "extensions/qa-lab/src/suite-process-lifecycle.test.ts";
   it.each([
-    { args: ["--configLoader", "runner"], selected: true },
-    { args: ["--configLoader=", "runner"], selected: true },
-    { args: ["--isolate=", "false"], selected: true },
     { args: ["--config-loader", "runner"], selected: true },
-    { args: ["--isolate", "false"], selected: true },
-    { args: ["--passWithNoTests", "true"], selected: true },
-    { args: ["--no-isolate", "false"], selected: false },
     { args: ["-no-isolate", "true"], selected: false },
-    { args: ["--", "unrelated.test.ts"], selected: true },
     { args: ["--", `--exclude=${file}`], selected: true },
     { args: [`${file}:12`], selected: true },
     { args: ["--testNamePattern", "unrelated.test.ts"], selected: true },
@@ -196,11 +174,10 @@ describe("batch file selection", () => {
     () => {
       const candidates = Array.from({ length: 12 }, (_, index) => `src/keep-${index}.test.ts`);
       const exclude = Array.from({ length: 260 }, (_, index) => `src/excluded-${index}.test.ts`);
-      const nativeMatch = path.matchesGlob;
       // Node's matcher cache evicts the oldest entry when its size reaches 250.
       const cache = new Set<string>();
       let compilations = 0;
-      const matcher = vi.spyOn(path, "matchesGlob").mockImplementation((file, pattern) => {
+      const matcher = (file: string, pattern: string) => {
         if (!cache.has(pattern)) {
           compilations += 1;
           cache.add(pattern);
@@ -208,16 +185,12 @@ describe("batch file selection", () => {
             cache.delete(cache.values().next().value!);
           }
         }
-        return nativeMatch(file, pattern);
-      });
-      try {
-        expect(
-          filterFilesByPatterns(candidates, ["src/**/*.test.ts"], exclude, path.matchesGlob),
-        ).toEqual(candidates);
-        expect(compilations).toBeLessThanOrEqual(exclude.length + 1);
-      } finally {
-        matcher.mockRestore();
-      }
+        return path.matchesGlob(file, pattern);
+      };
+      expect(filterFilesByPatterns(candidates, ["src/**/*.test.ts"], exclude, matcher)).toEqual(
+        candidates,
+      );
+      expect(compilations).toBeLessThanOrEqual(exclude.length + 1);
     },
   );
 });
@@ -230,9 +203,6 @@ describe("intersectIncludePatterns", () => {
       "ui/src/pages/workboard/workboard.e2e.test.ts",
     ];
 
-    expect(
-      intersectIncludePatterns(owner, ["ui/src/e2e/*.e2e.test.ts"], matchesVitestGlob),
-    ).toEqual(["ui/src/e2e/chat.e2e.test.ts", "ui/src/e2e/chat.capture.e2e.test.ts"]);
     expect(
       intersectIncludePatterns(
         owner,

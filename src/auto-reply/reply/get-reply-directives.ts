@@ -464,7 +464,6 @@ export async function resolveReplyDirectives(params: {
     allowTextCommands,
     command,
     directives,
-    messageProviderKey,
     elevatedEnabled,
     elevatedAllowed,
     elevatedFailures,

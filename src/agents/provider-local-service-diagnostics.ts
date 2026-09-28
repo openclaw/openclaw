@@ -29,22 +29,15 @@ export function appendLocalServiceOutputTail(
   healthHeaders: HeadersInit | undefined,
 ): string {
   let redacted = redactSensitiveText(`${current}${chunk.toString()}`, { mode: "tools" });
-  for (const value of Object.values(serviceEnv ?? {})) {
-    if (value) {
-      redacted = redacted.replaceAll(value, "[redacted]");
-    }
-  }
-  for (const [key, value] of Object.entries(inheritedEnv)) {
-    if (value && isSensitiveFieldKey(key)) {
-      redacted = redacted.replaceAll(value, "[redacted]");
-    }
-  }
-  for (const value of serviceArgs ?? []) {
-    if (value) {
-      redacted = redacted.replaceAll(value, "[redacted]");
-    }
-  }
-  for (const [, value] of new Headers(healthHeaders)) {
+  const secretValues = [
+    ...Object.values(serviceEnv ?? {}),
+    ...Object.entries(inheritedEnv).flatMap(([key, value]) =>
+      value && isSensitiveFieldKey(key) ? [value] : [],
+    ),
+    ...(serviceArgs ?? []),
+    ...new Headers(healthHeaders).values(),
+  ];
+  for (const value of secretValues) {
     if (value) {
       redacted = redacted.replaceAll(value, "[redacted]");
     }

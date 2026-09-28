@@ -22,10 +22,10 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 import type { JsonObject, JsonValue } from "./protocol.js";
+import { createSessionExecServer } from "./sandbox-exec-server-session.test-support.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import { requireNumber, requireObject, requireString } from "./sandbox-exec-server/json-rpc.js";
 import { CodexSandboxExecSession } from "./sandbox-exec-server/session.js";
-import type { OpenClawExecServer } from "./sandbox-exec-server/types.js";
 import { useAutoCleanupTempDirTracker } from "./test-support.js";
 
 useIsolatedStateGuard();
@@ -100,23 +100,7 @@ describe("Codex sandbox process exit and output drain", () => {
         finalizeExec,
         runShellCommand,
       });
-      if (!sandbox.backend || !sandbox.fsBridge) {
-        throw new Error("The sandbox fixture must provide its backend and filesystem bridge");
-      }
-      const execServer: OpenClawExecServer = {
-        environmentId: "exit-drain-test",
-        authPath: "/exit-drain-test",
-        refCount: 1,
-        closed: false,
-        url: "ws://localhost/exit-drain-test",
-        sandbox,
-        backend: sandbox.backend,
-        fsBridge: sandbox.fsBridge,
-        networkIsolated: true,
-        children: new Set(),
-        cleanupTasks: new Set(),
-        server: { clients: [], close: (callback) => callback() },
-      };
+      const execServer = createSessionExecServer(sandbox);
       const messages: JsonObject[] = [];
       const session = new CodexSandboxExecSession(execServer, {
         send: (message) => messages.push(message),

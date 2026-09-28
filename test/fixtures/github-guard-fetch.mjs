@@ -48,6 +48,14 @@ globalThis.fetch = async (url, options = {}) => {
     advanceClock(value.advanceMs);
     value = value.response;
   }
+  if (value?.requestTimeout) {
+    const expire = () => advanceClock(30_000);
+    if (value.requestTimeout === "body") {
+      return new Response(new ReadableStream({ pull: expire }, { highWaterMark: 0 }));
+    }
+    expire();
+    return new Promise(() => {});
+  }
   if (value?.recordStatusBeforeError) recordStatus();
   if (value?.transportError) {
     throw new TypeError("fetch failed", {

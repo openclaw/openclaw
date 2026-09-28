@@ -316,10 +316,8 @@ export function setupGatewaySessionsTestHarness(setup?: GatewaySessionsSuiteSetu
 }
 
 function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewaySessionsSuiteSetup) {
-  const { requireHarness, requireSharedSessionStoreDir } = installGatewaySessionsTestResources(
-    startServer,
-    setup,
-  );
+  const { requireHarness, requireSharedSessionStoreDir, withSessionTestState } =
+    installGatewaySessionsTestResources(startServer, setup);
   afterEach(disposeSessionReadContexts);
   let sessionStoreCaseSeq = 0;
 
@@ -513,6 +511,7 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
     openClient,
     resetConfiguredGlobalAgentSessionStore,
     seedActiveMainSession,
+    withSessionTestState,
   };
 }
 

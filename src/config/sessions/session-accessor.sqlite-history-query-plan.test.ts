@@ -3,30 +3,39 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import {
   appendTranscriptEvent,
   persistSessionTranscriptTurn,
   waitForSessionTranscriptProjection,
   type SessionTranscriptReadScope,
 } from "./session-accessor.js";
+import { readRecentSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history-events.js";
 import {
-  readRecentSessionTranscriptHistoryEvents,
+  insertSyntheticHistory,
   readSessionTranscriptHistoryEventCount,
-} from "./session-accessor.sqlite-history-events.js";
-import { insertSyntheticHistory } from "./session-accessor.sqlite-history.test-support.js";
+} from "./session-accessor.sqlite-history.test-support.js";
+import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { transcriptMessage } from "./transcript-message.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
-  vi.restoreAllMocks();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-});
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
 function readHistoryWithMarkerPlan(
   database: OpenClawAgentDatabase,
@@ -108,6 +117,7 @@ it.each([false, true])("keeps history marker reads selective (analyzed=%s)", asy
     parentId = id;
   }
   if (analyzed) {
+    await waitForSessionTranscriptIndexReconcile(scope);
     database.db.exec("ANALYZE");
   }
   const { page, drivingSearch } = readHistoryWithMarkerPlan(database, scope);
@@ -145,6 +155,7 @@ it.each([false, true])("keeps history marker reads selective (analyzed=%s)", asy
   });
   await waitForSessionTranscriptProjection(denseScope);
   if (analyzed) {
+    await waitForSessionTranscriptIndexReconcile(scope);
     database.db.exec("ANALYZE");
   }
   const branch = readHistoryWithMarkerPlan(database, denseScope);
@@ -176,6 +187,7 @@ it.each([false, true])("keeps history marker reads selective (analyzed=%s)", asy
   });
   await waitForSessionTranscriptProjection(plainScope);
   if (analyzed) {
+    await waitForSessionTranscriptIndexReconcile(scope);
     database.db.exec("ANALYZE");
   }
   const sparseBranch = readHistoryWithMarkerPlan(database, plainScope);

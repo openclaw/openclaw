@@ -1,5 +1,5 @@
 import type { MeetingRealtimeAudioFormat } from "./realtime-audio-format.js";
-import { buildMeetingSoxAudioCommands } from "./sox-audio-command.js";
+import { buildMeetingSoxAudioCommands, type MeetingSoxAudioFormat } from "./sox-audio-command.js";
 
 export type MeetingAudioBackend = "blackhole-2ch" | "pipewire-pulse";
 export type MeetingAudioBackendSelection = "auto" | MeetingAudioBackend;
@@ -7,13 +7,7 @@ export type MeetingAudioBackendSelection = "auto" | MeetingAudioBackend;
 type MeetingAudioCommandConfig = {
   backend?: MeetingAudioBackendSelection;
   bufferBytes: number;
-  format: {
-    sampleRate: number;
-    channels: number;
-    encoding: string;
-    bits: number;
-    endian?: "little" | "big";
-  };
+  format: MeetingSoxAudioFormat;
   inputCommand?: readonly string[];
   outputCommand?: readonly string[];
 };

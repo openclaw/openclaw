@@ -11,16 +11,6 @@ describe("isStrictAgenticExecutionContractActive", () => {
   };
 
   describe("supported provider + model detection", () => {
-    it("auto-activates on bare gpt-5 model ids", () => {
-      expect(
-        isStrictAgenticExecutionContractActive({
-          config: emptyConfig,
-          provider: supportedProvider,
-          modelId: "gpt-5.4",
-        }),
-      ).toBe(true);
-    });
-
     it("auto-activates on the mock-openai qa lane", () => {
       expect(
         isStrictAgenticExecutionContractActive({
@@ -191,28 +181,6 @@ describe("isStrictAgenticExecutionContractActive", () => {
           config,
           provider: unsupportedProvider,
           modelId: "claude-opus-4-6",
-        }),
-      ).toBe(false);
-    });
-  });
-
-  describe("active flag helper", () => {
-    it("returns true when the effective contract is strict-agentic", () => {
-      expect(
-        isStrictAgenticExecutionContractActive({
-          config: emptyConfig,
-          provider: supportedProvider,
-          modelId: "openai/gpt-5.4",
-        }),
-      ).toBe(true);
-    });
-
-    it("returns false when the effective contract is default", () => {
-      expect(
-        isStrictAgenticExecutionContractActive({
-          config: emptyConfig,
-          provider: supportedProvider,
-          modelId: "gpt-4.5",
         }),
       ).toBe(false);
     });

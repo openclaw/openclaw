@@ -143,6 +143,9 @@ When `timeline` is enabled only from config, the earliest config-loading spans
 are missing because OpenClaw has not read config yet; subsequent startup spans
 are captured normally.
 
+Gateway client commands read timeline flags from source config without opening the shared
+state database. This also works when the Gateway is offline.
+
 `OPENCLAW_DIAGNOSTICS=1`, `=all`, and `=*` also enable the timeline, since they
 enable every flag. Prefer the scoped `timeline` flag when you only want the
 JSONL artifact and not every other diagnostics flag.

@@ -33,10 +33,8 @@ import {
   repairRetiredModelSlots,
   repairModelRefAuthProfile,
 } from "../shared/retired-model-ref-repair.js";
-import { migrateLegacyDreamingPayloadShape } from "./dreaming-payload-migration.js";
 import { migrateLegacyNotifyFallback } from "./legacy-notify.js";
 import {
-  archiveLegacyCronQuarantineForMigration,
   loadLegacyCronQuarantineForMigration,
   type LegacyCronQuarantine,
 } from "./legacy-quarantine-migration.js";
@@ -45,6 +43,7 @@ import {
   migrateLegacyCronRunLogsToSqlite,
 } from "./legacy-run-log-migration.js";
 import {
+  archiveLegacyCronFile,
   archiveLegacyCronStoreForMigration,
   assertLegacyCronMigrationSourceCurrent,
   legacyCronStoreFilesExist,
@@ -293,7 +292,6 @@ export async function applyLegacyCronStoreRepair(params: {
     jobs: state.rawJobs,
     legacyWebhook,
   });
-  const dreamingMigration = migrateLegacyDreamingPayloadShape(state.rawJobs);
   warnings.push(...notifyMigration.warnings);
   const retirementChanges: string[] = [];
   if (resolveRetired) {
@@ -338,7 +336,6 @@ export async function applyLegacyCronStoreRepair(params: {
     state.invalidConfigRows.length > 0 ||
     normalized.mutated ||
     notifyMigration.changed ||
-    dreamingMigration.changed ||
     quarantineRecovery.recoveredJobs.length > 0;
   const changed =
     state.legacyStoreDetected ||
@@ -430,7 +427,10 @@ export async function applyLegacyCronStoreRepair(params: {
   }
 
   if (state.legacyQuarantine) {
-    const archiveResult = await archiveLegacyCronQuarantineForMigration(state.legacyQuarantine);
+    const archiveResult = await archiveLegacyCronFile(
+      state.legacyQuarantine.path,
+      state.legacyQuarantine.sourceSha256,
+    );
     if (archiveResult.ok) {
       changes.push(
         `Cron quarantine migrated to SQLite from ${shortenHomePath(state.legacyQuarantine.path)}.`,
@@ -489,11 +489,6 @@ export async function applyLegacyCronStoreRepair(params: {
     );
   } else if (storeChanged) {
     changes.push(`Cron store normalized at ${shortenHomePath(state.storePath)}.`);
-  }
-  if (dreamingMigration.rewrittenCount > 0) {
-    changes.push(
-      `Rewrote ${pluralize(dreamingMigration.rewrittenCount, "managed dreaming job")} to run as an isolated agent turn so dreaming no longer requires heartbeat.`,
-    );
   }
   if (normalized.legacyTriggerScriptJobs.length > 0) {
     changes.push(
@@ -609,15 +604,7 @@ export async function repairCronCodexModelRefsAfterConfigWrite(params: {
     }
     const state = await loadLegacyCronRepairState({ cfg: params.cfg });
     return state
-      ? await applyLegacyCronStoreRepair({
-          cfg: params.cfg,
-          retiredModelRefConfig: params.retiredModelRefConfig,
-          authProfileIdMap: params.authProfileIdMap,
-          state,
-          migrateCodexModelRefs: params.migrateCodexModelRefs,
-          repairRetiredModelRefs: params.repairRetiredModelRefs,
-          blockedModelIdentities: params.blockedModelIdentities,
-        })
+      ? await applyLegacyCronStoreRepair({ ...params, state })
       : { changes: [], warnings: [] };
   } catch (err) {
     rethrowSqliteSchemaVersionError(err);

@@ -1,6 +1,7 @@
 /**
  * Builds session tool allowlists from registered and core tool names.
  */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentTool } from "../runtime/index.js";
 import type { ClientToolDefinition } from "./run/params.js";
 
@@ -11,10 +12,7 @@ import type { ClientToolDefinition } from "./run/params.js";
 export const AGENT_RESERVED_TOOL_NAMES = ["bash", "edit", "find", "grep", "ls", "read", "write"];
 
 function addName(names: Set<string>, value: unknown): void {
-  if (typeof value !== "string") {
-    return;
-  }
-  const trimmed = value.trim();
+  const trimmed = normalizeOptionalString(value);
   if (trimmed) {
     names.add(trimmed);
   }
@@ -24,10 +22,7 @@ export function collectAllowedToolNames(params: {
   tools: AgentTool[];
   clientTools?: ClientToolDefinition[];
 }): Set<string> {
-  const names = new Set<string>();
-  for (const tool of params.tools) {
-    addName(names, tool.name);
-  }
+  const names = collectRegisteredToolNames(params.tools);
   for (const tool of params.clientTools ?? []) {
     addName(names, tool.function?.name);
   }

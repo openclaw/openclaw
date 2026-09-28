@@ -1,83 +1,17 @@
-import { getPublicKey, type Event, type Filter } from "nostr-tools";
+import type { Event } from "nostr-tools";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const relayMocks = vi.hoisted(() => ({
-  roomMetadataEvents: [] as Event[],
-  subscriptions: [] as Array<{
-    filters: Filter[];
-    handlers: {
-      onevent: (event: Event) => void;
-      oneose?: () => void;
-      onclose: (reason: string) => void;
-    };
-  }>,
-  close: vi.fn(),
-}));
-
 vi.mock("nostr-tools", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("nostr-tools")>();
-  return {
-    ...actual,
-    Relay: class {
-      connected = true;
-      onauth?: (template: unknown) => Promise<unknown>;
-      connect = vi.fn(async () => {});
-      auth = vi.fn(async () => "ok");
-      publish = vi.fn(async () => "");
-      send = vi.fn(async () => {});
-      close = relayMocks.close;
-      scheduleIdleClose = vi.fn();
-
-      prepareSubscription(
-        filters: Filter[],
-        handlers: {
-          onevent: (event: Event) => void;
-          oneose?: () => void;
-          onclose: (reason: string) => void;
-        },
-      ) {
-        relayMocks.subscriptions.push({ filters, handlers });
-        const filter = filters[0] ?? {};
-        if (filter.kinds?.includes(39_000)) {
-          for (const event of relayMocks.roomMetadataEvents) {
-            const roomId = event.tags.find((tag) => tag[0] === "d")?.[1];
-            if (!filter["#d"] || (roomId && filter["#d"]?.includes(roomId))) {
-              handlers.onevent(event);
-            }
-          }
-        } else if (filter.kinds?.includes(39_002)) {
-          handlers.onevent(MEMBERSHIP_EVENT);
-        }
-        handlers.oneose?.();
-        return {
-          id: `sub:${relayMocks.subscriptions.length}`,
-          close: vi.fn(),
-          closed: false,
-        };
-      }
-    },
-  };
+  const { mockBuzzRelay } = await import("./buzz-bus.test-helpers.js");
+  return { ...(await importOriginal<typeof import("nostr-tools")>()), ...mockBuzzRelay() };
 });
 
-import { startBuzzBus } from "./buzz-bus.js";
+import { useBuzzBusLifecycleFixture } from "./buzz-bus.lifecycle.test-harness.js";
+import { relayMocks } from "./buzz-bus.test-helpers.js";
 import { BUZZ_MEMBER_ADDED_NOTIFICATION_KIND } from "./room-membership-notification.js";
 
-const PRIVATE_KEY = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
-const BOT_PUBLIC_KEY = getPublicKey(Uint8Array.from(Buffer.from(PRIVATE_KEY, "hex")));
-const CHANNEL_ID = "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c";
-const RELAY_PUBLIC_KEY = "f".repeat(64);
-const MEMBERSHIP_EVENT: Event = {
-  id: "membership-1",
-  kind: 39_002,
-  pubkey: RELAY_PUBLIC_KEY,
-  created_at: 1_700_000_000,
-  content: "",
-  sig: "e".repeat(128),
-  tags: [
-    ["d", CHANNEL_ID],
-    ["p", BOT_PUBLIC_KEY, "", "bot"],
-  ],
-};
+const { BOT_PUBLIC_KEY, CHANNEL_ID, RELAY_PUBLIC_KEY, startTestBus, subscriptionIncludesKind } =
+  useBuzzBusLifecycleFixture();
 
 function roomMetadata(params: { id: string; createdAt: number; archived: boolean }): Event {
   return {
@@ -95,26 +29,11 @@ function roomMetadata(params: { id: string; createdAt: number; archived: boolean
   };
 }
 
-function subscriptionIncludesKind(
-  subscription: (typeof relayMocks.subscriptions)[number],
-  kind: number,
-): boolean {
-  return subscription.filters.some((filter) => filter.kinds?.includes(kind));
-}
-
 describe("Buzz archived room lifecycle", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    relayMocks.subscriptions.length = 0;
-    relayMocks.roomMetadataEvents = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        Response.json({
-          self: RELAY_PUBLIC_KEY,
-          software: "https://github.com/block/buzz",
-        }),
-      ),
+    relayMocks.auth.mockResolvedValue("ok");
+    relayMocks.membershipEvents[0]!.tags = relayMocks.membershipEvents[0]!.tags.filter(
+      (tag) => tag[0] !== "p" || tag[1] === BOT_PUBLIC_KEY,
     );
   });
 
@@ -123,13 +42,7 @@ describe("Buzz archived room lifecycle", () => {
       roomMetadata({ id: "room-metadata-archived", createdAt: 1_700_000_000, archived: true }),
     ];
 
-    const bus = await startBuzzBus({
-      accountId: "default",
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      onMessage: async () => {},
-    });
+    const bus = await startTestBus();
 
     expect(relayMocks.subscriptions.some((entry) => subscriptionIncludesKind(entry, 9))).toBe(
       false,
@@ -149,12 +62,7 @@ describe("Buzz archived room lifecycle", () => {
       roomMetadata({ id: "room-metadata-active", createdAt: 1_700_000_000, archived: false }),
     ];
     const onFatalError = vi.fn();
-    const bus = await startBuzzBus({
-      accountId: "default",
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      onMessage: async () => {},
+    const bus = await startTestBus({
       onFatalError,
     });
     relayMocks.roomMetadataEvents = [
@@ -189,12 +97,7 @@ describe("Buzz archived room lifecycle", () => {
       roomMetadata({ id: "room-metadata-archived", createdAt: 1_700_000_000, archived: true }),
     ];
     const onFatalError = vi.fn();
-    const bus = await startBuzzBus({
-      accountId: "default",
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      onMessage: async () => {},
+    const bus = await startTestBus({
       onFatalError,
     });
     relayMocks.subscriptions

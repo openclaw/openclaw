@@ -1,4 +1,4 @@
-// QA Lab mock provider input and tool-output extraction.
+import { isInternalRuntimeContextCarrierText } from "../shared/runtime-context.js";
 import {
   type ResponsesInputItem,
   type MockOpenAiRequestKind,
@@ -6,8 +6,6 @@ import {
   QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE,
   QA_SUBAGENT_TERMINAL_MATRIX_WORKER_RE,
   QA_SUBAGENT_PRIVATE_WORKER_RE,
-  INTERNAL_RUNTIME_CONTEXT_BEGIN,
-  INTERNAL_RUNTIME_CONTEXT_END,
   QA_SLACK_MPIM_HISTORY_RECALL_PROMPT_RE,
   QA_SLACK_MPIM_HISTORY_SEED_PROMPT_RE,
   buildSlackMpimHistoryBotReply,
@@ -156,6 +154,13 @@ function isSubagentRecoveryText(text: string): boolean {
   );
 }
 
+export function isMockSubagentSettledWake(text: string): boolean {
+  // Installed-candidate QA can still send the earlier session-wide wording.
+  return /^(?:\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} [^\]\r\n]+\] )?\[Subagent Context\] Every subagent (?:in this batch|spawned from this session) has now settled\b/mu.test(
+    text,
+  );
+}
+
 export function resolveMockSubagentTurn(input: ResponsesInputItem[]):
   | {
       kind: "kickoff" | "worker" | "completion" | "settled" | "other";
@@ -184,11 +189,7 @@ export function resolveMockSubagentTurn(input: ResponsesInputItem[]):
     if (isInternalRuntimeContextCarrierText(current)) {
       continue;
     }
-    if (
-      /^(?:\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} [^\]\r\n]+\] )?\[Subagent Context\] Every subagent spawned from this session has now settled/mu.test(
-        current,
-      )
-    ) {
+    if (isMockSubagentSettledWake(current)) {
       settled = true;
       continue;
     }
@@ -249,14 +250,6 @@ function isUserTurn(item: ResponsesInputItem) {
   );
 }
 
-function isInternalRuntimeContextCarrierText(text: string) {
-  const trimmed = text.trim();
-  return (
-    trimmed.includes(INTERNAL_RUNTIME_CONTEXT_BEGIN) &&
-    trimmed.endsWith(INTERNAL_RUNTIME_CONTEXT_END)
-  );
-}
-
 function isContinuationUserText(text: string) {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -265,6 +258,12 @@ function isContinuationUserText(text: string) {
   return (
     /^(?:continue|keep going|resume|retry|carry on)(?:[.!?])?$/i.test(trimmed) ||
     /\b(?:continue|continuation|compaction|post-compaction|retry|resume)\b/i.test(trimmed)
+  );
+}
+
+function readFunctionCallOutputText(record: Record<string, unknown>) {
+  return [record.text, record.output_text, record.content].find(
+    (value): value is string => typeof value === "string",
   );
 }
 
@@ -281,31 +280,15 @@ function stringifyFunctionCallOutput(output: unknown): string {
         if (!entry || typeof entry !== "object") {
           return "";
         }
-        const record = entry as Record<string, unknown>;
-        if (typeof record.text === "string") {
-          return record.text;
-        }
-        if (typeof record.output_text === "string") {
-          return record.output_text;
-        }
-        if (typeof record.content === "string") {
-          return record.content;
-        }
-        return "";
+        return readFunctionCallOutputText(entry as Record<string, unknown>) ?? "";
       })
       .filter(Boolean)
       .join("\n");
   }
   if (output && typeof output === "object") {
-    const record = output as Record<string, unknown>;
-    if (typeof record.text === "string") {
-      return record.text;
-    }
-    if (typeof record.output_text === "string") {
-      return record.output_text;
-    }
-    if (typeof record.content === "string") {
-      return record.content;
+    const text = readFunctionCallOutputText(output as Record<string, unknown>);
+    if (text !== undefined) {
+      return text;
     }
     try {
       return JSON.stringify(output);
@@ -320,30 +303,19 @@ function isResponsesToolCallOutput(item: ResponsesInputItem) {
   return item.type === "function_call_output" || item.type === "custom_tool_call_output";
 }
 
-function extractFunctionCallOutputText(item: ResponsesInputItem) {
-  if (!isResponsesToolCallOutput(item)) {
-    return "";
-  }
-  return stringifyFunctionCallOutput(item.output);
-}
-
 function findCurrentToolOutput(input: ResponsesInputItem[]): ResponsesInputItem | undefined {
-  const lastUserIndex = input.findLastIndex(isUserTurn);
-  for (const item of input.slice(lastUserIndex + 1).toReversed()) {
-    if (isResponsesToolCallOutput(item)) {
+  let hasLaterContinuation = false;
+  for (const item of input.toReversed()) {
+    const userTurn = isUserTurn(item);
+    if (isResponsesToolCallOutput(item) && (hasLaterContinuation || !userTurn)) {
       return item;
     }
-  }
-  for (const [candidateIndex, candidateItem] of Array.from(input.entries()).toReversed()) {
-    if (!isResponsesToolCallOutput(candidateItem)) {
-      continue;
-    }
-    const laterUserTexts = input
-      .slice(candidateIndex + 1)
-      .filter(isUserTurn)
-      .map((laterItem) => extractInputText(laterItem.content));
-    if (laterUserTexts.length > 0 && laterUserTexts.every(isContinuationUserText)) {
-      return candidateItem;
+    if (userTurn) {
+      // A fresh authored turn fences old results; continuation turns do not.
+      if (!isContinuationUserText(extractInputText(item.content))) {
+        return undefined;
+      }
+      hasLaterContinuation = true;
     }
   }
   return undefined;
@@ -379,17 +351,13 @@ export function extractToolOutputCallId(input: ResponsesInputItem[]) {
 }
 
 export function extractLatestToolOutput(input: ResponsesInputItem[]) {
-  for (const item of input.toReversed()) {
-    if (isResponsesToolCallOutput(item)) {
-      return stringifyFunctionCallOutput(item.output);
-    }
-  }
-  return "";
+  return stringifyFunctionCallOutput(input.findLast(isResponsesToolCallOutput)?.output);
 }
 
 export function extractAllToolOutputText(input: ResponsesInputItem[]) {
   return input
-    .map((item) => extractFunctionCallOutputText(item))
+    .filter(isResponsesToolCallOutput)
+    .map((item) => stringifyFunctionCallOutput(item.output))
     .filter(Boolean)
     .join("\n");
 }
@@ -588,14 +556,15 @@ export function buildWhatsAppGroupDispatchReply(allInputText: string) {
   return QA_WHATSAPP_REPLY_TO_BOT_SEED_MARKER_RE.exec(allInputText)?.[0];
 }
 
-export function buildWhatsAppBatchedReply(allInputText: string) {
-  const finalMatch = QA_WHATSAPP_BATCHED_FINAL_MARKER_RE.exec(allInputText);
+export function buildWhatsAppBatchedReply(prompt: string) {
+  const { current } = splitMockConversationContext(prompt);
+  const finalMatch = QA_WHATSAPP_BATCHED_FINAL_MARKER_RE.exec(current);
   const suffix = finalMatch?.[1];
   if (!suffix) {
     return undefined;
   }
   const firstMarker = `WHATSAPP_QA_BATCHED_FIRST_${suffix}`;
-  if (!allInputText.includes(firstMarker)) {
+  if (!current.includes(firstMarker)) {
     return `WHATSAPP_QA_BATCHED_MISSING_CONTEXT_${suffix}`;
   }
   return finalMatch[0];
@@ -633,26 +602,16 @@ export function countImageInputs(value: unknown): number {
 }
 
 function extractLatestImageUserTurn(input: ResponsesInputItem[]) {
-  const latestUserIndex = input.findLastIndex(isUserTurn);
-  if (latestUserIndex < 0) {
-    return { text: "", imageInputCount: 0 };
-  }
-
-  const latestUserItem = input[latestUserIndex];
+  const latestUserItem = input.findLast(isUserTurn);
   if (!latestUserItem) {
     return { text: "", imageInputCount: 0 };
   }
-
-  const imageTurnItems = [latestUserItem];
-  const imageInputCount = countImageInputs(imageTurnItems.map((item) => item.content));
+  const imageInputCount = countImageInputs([latestUserItem.content]);
   if (imageInputCount === 0) {
     return { text: "", imageInputCount: 0 };
   }
   return {
-    text: imageTurnItems
-      .map((item) => extractInputText(item.content))
-      .filter(Boolean)
-      .join("\n"),
+    text: extractInputText(latestUserItem.content),
     imageInputCount,
   };
 }

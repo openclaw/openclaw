@@ -475,7 +475,6 @@ describe("Codex app-server dynamic tool build", () => {
       "tool_call",
       "tool_describe",
       "tool_search",
-      "tool_search_code",
       "web_search",
       "message",
       "heartbeat_respond",
@@ -2839,7 +2838,7 @@ describe("Codex app-server dynamic tool build", () => {
     expect(sourceReplySchema.properties).toMatchObject({
       final: {
         type: "boolean",
-        description: expect.stringContaining("Ignored for other sends"),
+        description: expect.stringContaining("For react, set true only when"),
       },
     });
 

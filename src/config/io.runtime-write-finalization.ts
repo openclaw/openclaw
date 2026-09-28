@@ -26,17 +26,10 @@ import { ConfigWritePostCommitError, type ConfigWriteRollbackStatus } from "./io
 import { assertBaseSnapshotStillCurrent } from "./io.write-safety.js";
 import { formatConfigIssueSummary } from "./issue-format.js";
 import {
-  createRuntimeConfigWriteNotification,
   finalizeRuntimeSnapshotWrite,
-  getRuntimeConfigSnapshot,
-  notifyRuntimeConfigWriteListeners,
-  projectRuntimeConfigWritePreparedCandidates,
   type RuntimeConfigWritePreparedCandidate,
 } from "./runtime-snapshot.js";
-import {
-  attachRuntimeConfigWriteApplication,
-  getRuntimeConfigWriteApplication,
-} from "./runtime-write-application.js";
+import { publishRuntimeConfigWrite } from "./runtime-write-application.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 
 export async function finalizeCommittedConfigWrite(params: {
@@ -123,34 +116,16 @@ export async function finalizeCommittedConfigWrite(params: {
   }
 
   const notifyCommittedWrite = () => {
-    const currentRuntimeConfig = getRuntimeConfigSnapshot();
-    const notificationRuntimeConfig = deferRuntimeActivation
-      ? canonicalRuntimeConfig
-      : currentRuntimeConfig;
-    if (!notificationRuntimeConfig) {
-      return;
-    }
-    const notificationPreparedCandidates = projectRuntimeConfigWritePreparedCandidates(
-      managedPreparedCandidates,
-      canonicalRuntimeConfig,
-      canonicalSourceConfig,
-    );
-    notifyRuntimeConfigWriteListeners(
-      attachRuntimeConfigWriteApplication(
-        createRuntimeConfigWriteNotification({
-          configPath: io.configPath,
-          sourceConfig: canonicalSourceConfig,
-          runtimeConfig: notificationRuntimeConfig,
-          persistedHash: canonicalPersistedHash,
-          afterWrite: options.afterWrite,
-          runtimeRefresh: options.runtimeRefresh,
-          ...(notificationPreparedCandidates.size > 0
-            ? { preparedCandidatesByOwner: notificationPreparedCandidates }
-            : {}),
-        }),
-        getRuntimeConfigWriteApplication(options),
-      ),
-    );
+    publishRuntimeConfigWrite({
+      configPath: io.configPath,
+      snapshot: expectDefined(canonicalRead, "canonical config reread").snapshot,
+      sourceConfig: canonicalSourceConfig,
+      runtimeConfig: canonicalRuntimeConfig,
+      persistedHash: canonicalPersistedHash,
+      deferRuntimeActivation,
+      preparedCandidates: managedPreparedCandidates,
+      writeOptions: options,
+    });
   };
 
   try {

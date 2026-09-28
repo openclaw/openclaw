@@ -15,6 +15,7 @@ import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { ModelProvidersData } from "./model-providers/load.ts";
 import { createEmptyModelProvidersRouteData } from "./model-providers/model-providers-page.test-support.ts";
 import type { ModelProvidersRouteData } from "./model-providers/route.ts";
+import type { SessionDeleteRow } from "./sessions/selection.ts";
 import type { SkillsRouteData } from "./skills/skills-page.ts";
 import { createSkill } from "./skills/view.test-support.ts";
 import type { UsageRefreshPolicy } from "./usage/refresh-policy.ts";
@@ -26,7 +27,6 @@ import "./logs/logs-page.ts";
 import "./model-providers/model-providers-page.ts";
 import "./sessions/sessions-page.ts";
 import "./skills/skills-page.ts";
-import "./tasks/tasks-page.ts";
 import "./usage/usage-page.ts";
 
 // Mirrors the module-private default usage TTL asserted below.
@@ -816,17 +816,18 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const client = {} as GatewayBrowserClient;
     const page = createPage("openclaw-sessions-page", contextWithClient(client)) as TestPage & {
       result: unknown;
-      selectedKeys: Set<string>;
+      selectedSessions: Map<string, SessionDeleteRow>;
     };
     document.body.append(page);
     await page.updateComplete;
-    page.result = { sessions: [{ key: "old" }] };
-    page.selectedKeys = new Set(["old"]);
+    const row = { key: "old", sessionId: "old-session" };
+    page.result = { sessions: [row] };
+    page.selectedSessions = new Map([[row.key, row]]);
 
     await replaceContext(page, client);
 
     expect(page.result).toBeNull();
-    expect(page.selectedKeys.size).toBe(0);
+    expect(page.selectedSessions.size).toBe(0);
   });
 
   it("clears usage loaded by the previous provider", async () => {
@@ -1023,25 +1024,5 @@ describe("gateway source replacement across reconnect with a reused client", () 
 
     expect(page.cron.cronStatus).toBeNull();
     expect(page.cron.cronJobs).toEqual([]);
-  });
-
-  it("clears tasks loaded by the previous provider", async () => {
-    const client = {} as GatewayBrowserClient;
-    const page = createPage("openclaw-tasks-page", contextWithClient(client)) as TestPage & {
-      tasks: unknown[];
-      error: string | null;
-      cancellingTaskIds: Set<string>;
-    };
-    document.body.append(page);
-    await page.updateComplete;
-    page.tasks = [{ taskId: "old" }];
-    page.error = "old error";
-    page.cancellingTaskIds = new Set(["old"]);
-
-    await replaceContext(page, client);
-
-    expect(page.tasks).toEqual([]);
-    expect(page.error).toBeNull();
-    expect(page.cancellingTaskIds.size).toBe(0);
   });
 });

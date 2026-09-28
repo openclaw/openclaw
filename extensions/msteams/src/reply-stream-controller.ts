@@ -1,5 +1,4 @@
 import {
-  type AgentPlanStep,
   createChannelProgressDraftCompositor,
   resolveChannelPreviewStreamMode,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -228,6 +227,27 @@ export function createTeamsReplyStreamController(params: {
     return payloads;
   };
 
+  const finalizeWithoutReceipt = (
+    logicalContent?: string,
+    canceled = false,
+  ): MSTeamsNativeDeliveryFinalization => {
+    const pending = pendingFinalPayload;
+    pendingFinalPayload = undefined;
+    const fallback =
+      pending && !canceled ? fallbackPayloadAfterAcknowledgedText(pending) : undefined;
+    const postNativePayloads =
+      replacementSettlementPending && !canceled ? takeDeferredReplacementPayloads(fallback) : [];
+    if (canceled) {
+      deferredReplacementEntries = [];
+    }
+    return {
+      ...acknowledgedNativeDelivery(),
+      ...(!canceled && logicalContent ? { logicalContent } : {}),
+      ...(!replacementSettlementPending && fallback ? { fallbackPayload: fallback } : {}),
+      ...(postNativePayloads.length > 0 ? { postNativePayloads } : {}),
+    };
+  };
+
   // Teams cannot delete an empty interim card; final delivery settles it.
   const progressDraft = createChannelProgressDraftCompositor({
     preparedItems: true,
@@ -256,12 +276,6 @@ export function createTeamsReplyStreamController(params: {
   });
 
   return {
-    async onReplyStart(): Promise<void> {
-      // Starting a reply is not enough to decide that native streaming should
-      // own delivery. Wait for text tokens or explicit progress work so
-      // no-token replies keep the normal block-delivery path.
-    },
-
     onPartialReply(payload: { text?: string }): void {
       // Partial-token streaming only fires in "partial" mode. Progress-mode
       // final payloads arrive at preparePayload instead.
@@ -340,24 +354,10 @@ export function createTeamsReplyStreamController(params: {
     pushItemEvent: progressDraft.pushItemEvent.bind(progressDraft),
     pushToolEvent: progressDraft.pushToolEvent,
 
-    async pushReasoningProgress(text?: string, options?: { snapshot?: boolean }): Promise<void> {
-      await progressDraft.pushReasoningProgress(text, options);
-    },
-
-    resetReasoningProgress: () => progressDraft.resetReasoningProgress(),
-
-    async pushApprovalEvent(
-      payload: Parameters<typeof progressDraft.pushApprovalEvent>[0],
-    ): Promise<void> {
-      await progressDraft.pushApprovalEvent(payload);
-    },
-
-    async pushPlanProgress(
-      steps?: AgentPlanStep[],
-      options?: { explanation?: string; explanationFormat?: "plain" },
-    ): Promise<void> {
-      await progressDraft.pushPlanProgress(steps, options);
-    },
+    pushReasoningProgress: progressDraft.pushReasoningProgress.bind(progressDraft),
+    resetReasoningProgress: progressDraft.resetReasoningProgress,
+    pushApprovalEvent: progressDraft.pushApprovalEvent.bind(progressDraft),
+    pushPlanProgress: progressDraft.pushPlanProgress.bind(progressDraft),
 
     preparePayload(payload: ReplyPayload): Maybe<ReplyPayload> {
       if (!stream) {
@@ -374,11 +374,7 @@ export function createTeamsReplyStreamController(params: {
         progressDraft.markFinalReplyStarted();
       }
       if (replacementSettlementPending) {
-        if (!replacementFinalPending) {
-          deferredReplacementEntries.push({ kind: "payload", payload });
-          return undefined;
-        }
-        if (!payload.text) {
+        if (!replacementFinalPending || !payload.text) {
           // The native stream activity was created before final payloads and
           // remains the provider-visible root. Preserve deferred block order
           // after that root; sending early would leak content after Stop.
@@ -527,30 +523,7 @@ export function createTeamsReplyStreamController(params: {
         const result = await stream.close();
         streamFinalizationPending = false;
         if (!result) {
-          const fallback = pendingFinalPayload;
-          pendingFinalPayload = undefined;
-          const canceled = wasCanceled();
-          const replacementFallback =
-            replacementSettlementPending && fallback && !canceled
-              ? fallbackPayloadAfterAcknowledgedText(fallback)
-              : undefined;
-          const fallbackPayload =
-            !replacementSettlementPending && fallback && !canceled
-              ? fallbackPayloadAfterAcknowledgedText(fallback)
-              : undefined;
-          const postNativePayloads =
-            replacementSettlementPending && !canceled
-              ? takeDeferredReplacementPayloads(replacementFallback)
-              : [];
-          if (canceled) {
-            deferredReplacementEntries = [];
-          }
-          return {
-            ...acknowledgedNativeDelivery(),
-            ...(!canceled && logicalContent ? { logicalContent } : {}),
-            ...(fallbackPayload ? { fallbackPayload } : {}),
-            ...(postNativePayloads.length > 0 ? { postNativePayloads } : {}),
-          };
+          return finalizeWithoutReceipt(logicalContent, wasCanceled());
         }
         const replacementFallback =
           replacementSettlementPending && replacementEmitFailed && pendingFinalPayload
@@ -585,25 +558,7 @@ export function createTeamsReplyStreamController(params: {
         streamFailed = true;
         streamFinalizationPending = false;
         params.log?.warn?.(`msteams stream finalize failed: ${coerceErrorMessage(err)}`);
-        const fallback = pendingFinalPayload;
-        pendingFinalPayload = undefined;
-        const replacementFallback =
-          replacementSettlementPending && fallback
-            ? fallbackPayloadAfterAcknowledgedText(fallback)
-            : undefined;
-        const fallbackPayload =
-          !replacementSettlementPending && fallback
-            ? fallbackPayloadAfterAcknowledgedText(fallback)
-            : undefined;
-        const postNativePayloads = replacementSettlementPending
-          ? takeDeferredReplacementPayloads(replacementFallback)
-          : [];
-        return {
-          ...acknowledgedNativeDelivery(),
-          ...(logicalContent ? { logicalContent } : {}),
-          ...(fallbackPayload ? { fallbackPayload } : {}),
-          ...(postNativePayloads.length > 0 ? { postNativePayloads } : {}),
-        };
+        return finalizeWithoutReceipt(logicalContent);
       } finally {
         // This segment's acknowledged-prefix fallback has been consumed.
         failedSegmentFallbackPrepared = true;

@@ -1,5 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { retainCodexAppServerLiveThread } from "./client-runtime.js";
 import { itemNotification, turnCompleted } from "./protocol.test-helpers.js";
 import {
   createStartedThreadHarness,
@@ -15,20 +16,31 @@ describe("native background command outcomes", () => {
     ["retained", "52627"],
     ["foreign item", "52627"],
     ["foreign process", "52627"],
-    ["orphan", "52627"],
     ["completion during inventory", "52627"],
     ["revoked during inventory", "52627"],
     ["inventory unavailable", "52627"],
     ["retained", null],
-    ["foreign item", null],
-    ["orphan", null],
-    ["completion during inventory", null],
-    ["revoked during inventory", null],
   ] as const)("projects owner outcome: %s (%s)", async (scenario, startProcessId) => {
     const accepted = createDeferred<void>();
     const abort = new AbortController();
     const params = createTestParams();
     params.abortSignal = abort.signal;
+    const source = new AbortController();
+    const releaseSource = vi.fn();
+    params.hostCapabilities = {
+      ...params.hostCapabilities,
+      retainSourceAuthority: () => ({
+        signal: source.signal,
+        modelPolicyRequired: false,
+        bindModelExecution: () => ({
+          signal: source.signal,
+          assertCurrent: () => source.signal.throwIfAborted(),
+          release: () => {},
+        }),
+        assertCurrent: () => source.signal.throwIfAborted(),
+        release: releaseSource,
+      }),
+    };
     params.onExecutionPhase = ({ phase }) => {
       if (phase === "turn_accepted") {
         accepted.resolve();
@@ -73,15 +85,12 @@ describe("native background command outcomes", () => {
         abort.abort(new Error("Synthetic source revoked during inventory"));
       }
       return {
-        data:
-          scenario === "orphan"
-            ? []
-            : [
-                {
-                  itemId: scenario === "foreign item" ? "another-command" : command.id,
-                  processId: scenario === "foreign process" ? "another-process" : "52627",
-                },
-              ],
+        data: [
+          {
+            itemId: scenario === "foreign item" ? "another-command" : command.id,
+            processId: scenario === "foreign process" ? "another-process" : "52627",
+          },
+        ],
         nextCursor: null,
       };
     });
@@ -119,6 +128,43 @@ describe("native background command outcomes", () => {
           __openclaw: { toolOutput: { outcome: "unknown" } },
         });
         expect(JSON.stringify(tool)).toContain("52627");
+        const unsubscribe = { method: "thread/unsubscribe", params: { threadId: "thread-1" } };
+        for (let index = 0; index < 65; index += 1) {
+          await retainCodexAppServerLiveThread(harness.client, `idle-before-${index}`);
+        }
+        expect(harness.requests).not.toContainEqual(unsubscribe);
+        await harness.notify({
+          ...itemNotification("item/completed", { ...command, processId: "52627" }),
+          params: {
+            threadId: "thread-1",
+            turnId: "foreign-turn",
+            item: { ...command, processId: "52627" },
+          },
+        });
+        await harness.notify(
+          itemNotification("item/completed", { ...command, processId: "foreign-process" }),
+        );
+        for (let index = 0; index < 65; index += 1) {
+          await retainCodexAppServerLiveThread(harness.client, `idle-foreign-${index}`);
+        }
+        expect(harness.requests).not.toContainEqual(unsubscribe);
+        if (startProcessId === null) {
+          source.abort(new Error("Synthetic retained source revoked"));
+        } else {
+          await harness.notify(
+            itemNotification("item/completed", {
+              ...command,
+              processId: "52627",
+              status: "completed",
+              exitCode: 0,
+            }),
+          );
+        }
+        for (let index = 0; index < 65; index += 1) {
+          await retainCodexAppServerLiveThread(harness.client, `idle-after-${index}`);
+        }
+        expect(harness.requests).toContainEqual(unsubscribe);
+        expect(releaseSource).toHaveBeenCalled();
       } else if (scenario === "completion during inventory") {
         expect(tool).toMatchObject({
           isError: true,
@@ -130,6 +176,7 @@ describe("native background command outcomes", () => {
         expect(JSON.stringify(tool)).not.toContain('"outcome":"unknown"');
       }
     } finally {
+      source.abort(new Error("fixture cleanup"));
       abort.abort(new Error("fixture cleanup"));
       harness.close();
       await Promise.allSettled([run]);

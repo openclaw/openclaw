@@ -6,16 +6,11 @@
 .chat-thinking {
   padding: 10px 12px;
   border-radius: var(--radius-md);
-  border: 1px dashed rgba(255, 255, 255, 0.18);
-  background: rgba(255, 255, 255, 0.04);
+  border: 1px dashed color-mix(in srgb, var(--text) 18%, transparent);
+  background: color-mix(in srgb, var(--text) 4%, transparent);
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
   line-height: 1.4;
-}
-
-:root[data-theme-mode="light"] .chat-thinking {
-  border-color: rgba(16, 24, 40, 0.25);
-  background: rgba(16, 24, 40, 0.04);
 }
 
 .chat-message-disclosure {
@@ -200,7 +195,7 @@
   display: flex;
   justify-content: flex-end;
   gap: 4px;
-  margin-bottom: 4px;
+  margin-top: 4px;
 }
 
 .markdown-table__actions button,
@@ -347,10 +342,6 @@
 :is(.markdown-table, .markdown-table-dialog.chat-text) table:has(tr > :nth-child(5)) {
   width: max-content;
   min-width: 100%;
-
-  :where(th, td) {
-    max-width: 24rem;
-  }
 }
 
 :is(.markdown-table, .markdown-table-dialog.chat-text) :where(table, thead, tbody, tr, th, td) {
@@ -362,7 +353,9 @@
   border-right: 0;
   border-bottom-color: color-mix(in srgb, var(--border) 42%, transparent);
   min-width: 0;
-  overflow-wrap: anywhere;
+  /* Preserve short tokens' intrinsic width; long hashes still wrap at the cap. */
+  max-width: 24rem;
+  overflow-wrap: break-word;
   white-space: normal;
   word-break: normal;
   vertical-align: top;
@@ -445,13 +438,8 @@
         min-width: 100%;
       }
 
-      :where(th, td) {
-        max-width: 24rem;
-        overflow-wrap: break-word;
-      }
-
       .markdown-table__actions {
-        margin-bottom: 0;
+        margin-top: 0;
       }
 
       .markdown-table__actions button {
@@ -559,13 +547,44 @@
   inset-inline-start: 0;
   inline-size: var(--space-4);
   block-size: var(--space-4);
-  background: var(--select-chevron) center / var(--space-4) no-repeat;
+  background-image: var(--select-chevron);
+  background-position:
+    3px center,
+    7px center;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
   transform: rotate(-90deg);
   transition: transform var(--duration-normal) var(--ease-out);
 }
 
 :is(.chat-text, .chat-thinking) :where(details[open] > summary)::before {
   transform: rotate(0deg);
+}
+
+@media (forced-colors: active) {
+  :is(.chat-text, .chat-thinking) :where(details > summary)::before {
+    background-image: none;
+    background-position: initial;
+    background-size: auto;
+    border-inline-end: 2px solid ButtonText;
+    border-block-end: 2px solid ButtonText;
+    inline-size: 7px;
+    block-size: 7px;
+    inset-inline-start: 3px;
+    transform: rotate(-45deg);
+  }
+
+  :is(.chat-text, .chat-thinking) :where(details[open] > summary)::before {
+    transform: rotate(45deg);
+  }
+
+  :is(.chat-text, .chat-thinking) :where(details > summary):dir(rtl)::before {
+    transform: rotate(45deg);
+  }
+
+  :is(.chat-text, .chat-thinking) :where(details[open] > summary):dir(rtl)::before {
+    transform: rotate(-45deg);
+  }
 }
 
 :is(.chat-text, .chat-thinking) :where(.task-list-item-checkbox) {
@@ -583,10 +602,30 @@
 }
 
 :is(.chat-text, .chat-thinking) :where(.task-list-item-checkbox:checked) {
-  border-color: color-mix(in srgb, var(--accent) 72%, var(--border));
-  background: color-mix(in srgb, var(--accent) 72%, var(--bg))
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m3 8 3 3 7-7'/%3E%3C/svg%3E")
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+:is(.chat-text, .chat-thinking) :where(.task-list-item-checkbox:checked)::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: currentColor;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m3 8 3 3 7-7'/%3E%3C/svg%3E")
     center / 13px no-repeat;
+}
+
+@media (forced-colors: active) {
+  :is(.chat-text, .chat-thinking) :where(.task-list-item-checkbox) {
+    appearance: auto;
+    background: none;
+    border: initial;
+  }
+
+  :is(.chat-text, .chat-thinking) :where(.task-list-item-checkbox:checked)::after {
+    content: none;
+  }
 }
 
 :is(.chat-text, .chat-thinking) :where(details[open] > summary) {
@@ -671,40 +710,56 @@
   line-break: anywhere;
 }
 
-/* Item references share the titled session chip's surface. The whole chip is
-   atomic so its in-flow icon cannot wrap away from the number. */
+/* Pair each reader tone with its own opaque, theme-derived tint. A translucent
+   accent fill mixed unrelated state colors into user/sender bubbles. Mixing the
+   ink toward strong text protects both light and dark palettes; the surface
+   remains independent of the bubble beneath it. The whole chip stays atomic. */
 .chat-text a.markdown-github-item {
+  --github-item-tone: var(--muted);
+
   display: inline-block;
+  max-inline-size: 100%;
   position: static;
   padding: 0.08em 0.45em 0.08em 0.4em;
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--accent-subtle) 72%, var(--bg-muted));
-  /* Unknown state must not imply an open pull request. */
-  color: var(--muted);
+  background: color-mix(in srgb, var(--github-item-tone) 12%, var(--bg));
+  /* Unknown, unavailable and draft states remain neutral, not disabled. */
+  color: color-mix(in srgb, var(--github-item-tone) 65%, var(--text-strong));
   font-weight: 600;
   line-height: 1.25;
   text-decoration: none;
   vertical-align: baseline;
-  white-space: nowrap;
+  /* Short references remain atomic; qualified repository names can wrap when
+     the chip itself is wider than its mobile or enlarged-text container. */
+  white-space: normal;
+  overflow-wrap: anywhere;
   line-break: auto;
 }
 
 .chat-text a.markdown-github-item[data-link-reader-tone="positive"] {
-  color: var(--ok);
+  --github-item-tone: var(--ok);
 }
 
 .chat-text a.markdown-github-item[data-link-reader-tone="accent"] {
-  color: var(--pr-merged);
+  --github-item-tone: var(--pr-merged);
 }
 
 .chat-text a.markdown-github-item[data-link-reader-tone="negative"] {
-  color: var(--danger);
+  --github-item-tone: var(--danger);
+}
+
+.chat-text a.markdown-github-item[data-link-reader-tone="attention"] {
+  --github-item-tone: var(--warn);
 }
 
 .chat-text a.markdown-github-item:hover,
 .chat-text a.markdown-github-item:focus-visible {
-  background: color-mix(in srgb, var(--accent-subtle) 92%, var(--bg-muted));
+  background: color-mix(in srgb, var(--github-item-tone) 18%, var(--bg));
   text-decoration: underline;
+}
+
+.chat-text a.markdown-github-item:focus-visible {
+  outline-color: var(--text-strong);
 }
 
 .chat-text a.markdown-github-item::before {

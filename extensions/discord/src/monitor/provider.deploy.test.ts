@@ -124,13 +124,4 @@ describe("formatDiscordDeployErrorDetails", () => {
       }),
     ).toBe(" (status=400, code=30032)");
   });
-
-  it("keeps bodies that carry extra fields", () => {
-    const details = formatDiscordDeployErrorDetails({
-      status: 400,
-      discordCode: 50035,
-      rawBody: { message: "Invalid Form Body", code: 50035, errors: { "0": { name: {} } } },
-    });
-    expect(details).toContain("body=");
-  });
 });

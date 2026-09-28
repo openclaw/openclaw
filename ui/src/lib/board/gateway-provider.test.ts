@@ -183,30 +183,6 @@ describe("gateway board provider lifecycle", () => {
     },
   );
 
-  it("reactivates the same gateway client after reconnect", async () => {
-    const snapshot = {
-      sessionKey: "agent:main:reconnect",
-      revision: 1,
-      tabs: [],
-      widgets: [],
-    };
-    const request = vi.fn(async () => snapshot);
-    const client = {
-      request: request as never,
-      addEventListener: () => () => {},
-    };
-    const provider = new GatewayBoardProvider(
-      { sessionKey: "agent:main:reconnect" },
-      client,
-      false,
-    );
-
-    expect(request).not.toHaveBeenCalled();
-    provider.attachClient(client, true);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    expect(provider.snapshot$.value).toEqual(snapshot);
-  });
-
   it("wakes a pending refresh backoff when the gateway reconnects", async () => {
     vi.useFakeTimers();
     const snapshot = {

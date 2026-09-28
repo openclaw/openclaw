@@ -9,6 +9,7 @@ import {
   findMaintainerApproval,
   finishGuard,
   openGuard,
+  securityReviewContracts,
   withApprovalRequest,
 } from "./guard-review.mjs";
 import {
@@ -17,6 +18,7 @@ import {
   GITHUB_RESPONSE_BODY_MAX_BYTES,
   GitHubDiffDataError,
   GitHubRateLimitError,
+  GitHubReadTimeoutError,
   createGitHubApi,
   createIssueMutationHelpers,
   normalizeGuardLoginSet,
@@ -28,8 +30,8 @@ import { loadSecurityReviewPolicy } from "./security-review-policy.mjs";
 
 /** Marker used to identify dependency guard comments. */
 const dependencyChangeMarker = "<!-- openclaw:dependency-guard -->";
-const dependencyGraphGuardMarker = "<!-- openclaw:dependency-graph-guard -->";
-const dependencyApprovalCommand = "/allow-dependencies-change";
+const dependencyGraphGuardMarker = securityReviewContracts.dependency.commentMarker;
+const dependencyApprovalCommand = securityReviewContracts.dependency.approvalCommand;
 export const dependencyChangedLabel = "dependencies-changed";
 export {
   GITHUB_API_REQUEST_TIMEOUT_MS,
@@ -40,6 +42,8 @@ export {
 };
 
 const autoscrubCommitMessage = "chore: remove dependency lockfile change";
+class AutoscrubUnavailableError extends Error {}
+
 const dependencyManifestFields = [
   "dependencies",
   "devDependencies",
@@ -64,7 +68,7 @@ const dependencyManifestFields = [
 
 /**
  * @typedef {{ path: string, fields: string[], previousPath?: string }} DependencyManifestChange
- * @typedef {{ kind: "not-attempted" } |
+ * @typedef {{ kind: "unavailable" } |
  *   { kind: "blocked-by-dependency-manifest-fields", changes: DependencyManifestChange[] } |
  *   { kind: "blocked-by-other-dependency-files", files: string[] } |
  *   { kind: "failed", reason: string }} AutoscrubStatus
@@ -326,10 +330,10 @@ function renderAutoscrubStatusLines(status) {
   if (!status) {
     return [];
   }
-  if (status.kind === "not-attempted") {
+  if (status.kind === "unavailable") {
     return [
       "",
-      "Auto-scrub was not attempted because this workflow can only push deterministic cleanup commits to PR branches that maintainers can modify. Please remove the lockfile changes manually.",
+      "Automatic lockfile cleanup is best effort. These lockfile changes remain in this PR. If they are unintentional, remove them using the commands below. Otherwise, a maintainer can review and approve them with `/allow-dependencies-change`.",
     ];
   }
   if (status.kind === "blocked-by-dependency-manifest-fields") {
@@ -377,6 +381,7 @@ export function githubApi(token, options = {}) {
           result.errors.map((entry) => entry.message ?? "GraphQL error").join("; "),
         );
         error.errors = result.errors;
+        error.data = result.data;
         throw error;
       }
       return result.data;
@@ -391,19 +396,8 @@ function decodeContentFile(payload) {
   return Buffer.from(payload.content, payload.encoding ?? "base64").toString("utf8");
 }
 
-async function readJsonFileAtRef(api, { owner, repo, path, ref }) {
-  if (!ref) {
-    return null;
-  }
-  const encodedPath = path.split("/").map(encodeURIComponent).join("/");
-  const payload = await api
-    .request(`/repos/${owner}/${repo}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}`)
-    .catch((error) => {
-      if (error?.status === 404) {
-        return null;
-      }
-      throw error;
-    });
+async function readJsonFileAtRef(api, options) {
+  const payload = await readContentFileMetadataAtRef(api, options);
   const text = decodeContentFile(payload);
   return text ? JSON.parse(text) : null;
 }
@@ -518,26 +512,54 @@ export async function createAutoscrubCommit(
     return null;
   }
   await assertGuardUnchanged(guard);
-  const data = await writeApi.graphql(
-    `mutation CreateAutoscrubCommit($input: CreateCommitOnBranchInput!) {
+  const data = await writeApi
+    .graphql(
+      `mutation CreateAutoscrubCommit($input: CreateCommitOnBranchInput!) {
       createCommitOnBranch(input: $input) {
         commit {
           oid
         }
       }
     }`,
-    {
-      input: {
-        branch: {
-          repositoryNameWithOwner: `${writeOwner}/${writeRepo}`,
-          branchName: headRef,
+      {
+        input: {
+          branch: {
+            repositoryNameWithOwner: `${writeOwner}/${writeRepo}`,
+            branchName: headRef,
+          },
+          expectedHeadOid: headSha,
+          fileChanges: { additions, deletions },
+          message: { headline: autoscrubCommitMessage },
         },
-        expectedHeadOid: headSha,
-        fileChanges: { additions, deletions },
-        message: { headline: autoscrubCommitMessage },
       },
-    },
-  );
+    )
+    .catch((error) => {
+      // Only a rejected cleanup mutation can fall back. Read failures, rate
+      // limits, stale heads, and uncertain writes keep their existing handling.
+      const forbidden =
+        !error?.data?.createCommitOnBranch &&
+        Array.isArray(error?.errors) &&
+        error.errors.length > 0 &&
+        error.errors.every(
+          (entry) =>
+            entry.type === "FORBIDDEN" &&
+            (!entry.path || (entry.path.length === 1 && entry.path[0] === "createCommitOnBranch")),
+        );
+      if (
+        !(error instanceof GitHubRateLimitError) &&
+        (forbidden ||
+          (error?.status === 403 &&
+            /Resource not accessible by (?:integration|personal access token)/u.test(
+              error.message,
+            )))
+      ) {
+        throw new AutoscrubUnavailableError(
+          "GitHub did not authorize automatic lockfile cleanup.",
+          { cause: error },
+        );
+      }
+      throw error;
+    });
   return { sha: data.createCommitOnBranch.commit.oid, mergeBaseSha };
 }
 
@@ -562,14 +584,7 @@ export async function reviewDependencyChanges(
   prepared,
   mode = process.env.OPENCLAW_DEPENDENCY_GUARD_MODE ?? "enforce",
 ) {
-  const guard = await openGuard(
-    {
-      context: "openclaw/dependency-review",
-      commentMarker: dependencyGraphGuardMarker,
-      approvalCommand: dependencyApprovalCommand,
-    },
-    prepared,
-  );
+  const guard = await openGuard(securityReviewContracts.dependency, prepared);
   if (!guard) {
     return true;
   }
@@ -667,7 +682,7 @@ export async function reviewDependencyChanges(
     }
     await writeSummary("## Dependency Guard\n\nNo dependency-related file changes detected.");
     if (mode === "enforce") {
-      return await finishGuard(guard, { description: "No dependency changes require review." });
+      return await finishGuard(guard, securityReviewContracts.dependency.success.clear);
     }
     return true;
   }
@@ -679,12 +694,9 @@ export async function reviewDependencyChanges(
       try {
         const token = process.env.OPENCLAW_DEPENDENCY_GUARD_AUTOSCRUB_TOKEN;
         if (!token) {
-          await writeSummary(
-            "## Dependency Guard\n\nAutomatic lockfile cleanup is unavailable because no write token could be created. Remove the lockfile changes manually or request maintainer approval. Final dependency review remains required.",
+          throw new AutoscrubUnavailableError(
+            "No write token could be created for automatic lockfile cleanup.",
           );
-          // Optional cleanup cannot grant approval; the final enforcement step
-          // still evaluates these unchanged dependency files.
-          return false;
         }
         const commit = await createAutoscrubCommit(
           { baseApi: api, writeApi: githubApi(token), guard },
@@ -709,16 +721,22 @@ export async function reviewDependencyChanges(
       } catch (error) {
         if (
           error instanceof GitHubRateLimitError ||
+          error instanceof GitHubReadTimeoutError ||
           error instanceof GitHubDiffDataError ||
           error instanceof SupersededReviewError
         ) {
           throw error;
         }
-        autoscrubStatus = {
-          kind: "failed",
-          reason: error instanceof Error ? error.message : String(error),
-        };
-        console.warn(`Autoscrub failed: ${autoscrubStatus.reason}`);
+        if (error instanceof AutoscrubUnavailableError) {
+          autoscrubStatus = { kind: "unavailable" };
+          console.log(error.message);
+        } else {
+          autoscrubStatus = {
+            kind: "failed",
+            reason: error instanceof Error ? error.message : String(error),
+          };
+          console.warn(`Autoscrub failed: ${autoscrubStatus.reason}`);
+        }
       }
     } else {
       await writeSummary(
@@ -726,8 +744,10 @@ export async function reviewDependencyChanges(
       );
       return true;
     }
-  } else if (autoscrubCandidate && !autoscrubTarget && !approval && !removalOnly) {
-    autoscrubStatus = { kind: "not-attempted" };
+  } else if (autoscrubCandidate && !approval && !removalOnly) {
+    // Explain the remaining changes on every evaluation, without persisting
+    // an earlier cleanup outcome across PR or permission changes.
+    autoscrubStatus = { kind: "unavailable" };
   } else if (lockfileChanges.length > 0 && dependencyManifestChanges.length > 0) {
     autoscrubStatus = {
       kind: "blocked-by-dependency-manifest-fields",
@@ -741,12 +761,10 @@ export async function reviewDependencyChanges(
   }
 
   if (mode === "enforce") {
-    const allowed = await finishGuard(guard, {
-      description: removalOnly
-        ? "Dependency removals are informational."
-        : "Dependency review requirements satisfied.",
-      requiresApproval: !removalOnly,
-    });
+    const allowed = await finishGuard(
+      guard,
+      securityReviewContracts.dependency.success[removalOnly ? "removals" : "approved"],
+    );
     if (allowed) {
       const body = removalOnly
         ? renderRemovalOnlyDependencyComment({
@@ -778,6 +796,9 @@ export async function reviewDependencyChanges(
       dependencyFiles,
     }),
   );
+  if (mode === "autoscrub") {
+    await assertGuardUnchanged(guard);
+  }
   await upsertComment(existingGuardComment, body);
   await writeSummary(body);
   if (autoscrubStatus?.kind === "failed") {

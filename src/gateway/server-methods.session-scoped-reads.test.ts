@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
+import { registerAgentWorkspaceAccess } from "../agents/workspace-access.js";
 import * as sessions from "../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -112,7 +113,7 @@ describe("narrow session read owners", () => {
             } else if (row.visible) {
               expect(respond).toHaveBeenCalledExactlyOnceWith(
                 true,
-                { subscribed: true, key: sessionKey },
+                { subscribed: true, key: sessionKey, agentId: "main" },
                 undefined,
               );
             } else {
@@ -226,7 +227,7 @@ describe("narrow session read owners", () => {
           if (change === "current") {
             expect(respond).toHaveBeenCalledExactlyOnceWith(
               true,
-              { subscribed: true, key },
+              { subscribed: true, key, agentId: "main" },
               undefined,
             );
           } else {
@@ -483,20 +484,32 @@ describe("narrow session read owners", () => {
     });
   });
 
-  it.each(methods)("%s does not expose data after authority or row replacement", async (method) => {
+  it.each(methods)("%s retains only current session read facts", async (method) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const reader = roleClient("view", "retained-reader");
       reader.connect.scopes = ["operator.sessions.read"];
       const cfg = rolePolicyConfig();
       const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-      for (const changed of ["authority", "generation", "visibility"] as const) {
+      for (const changed of [
+        "metadata-no-revision",
+        "metadata",
+        "authority",
+        "generation",
+        "visibility",
+      ] as const) {
+        const metadataOnly = changed === "metadata-no-revision" || changed === "metadata";
         const entry = {
           sessionId: "original",
-          lifecycleRevision: "original",
+          lifecycleRevision: changed === "metadata-no-revision" ? undefined : "original",
           updatedAt: 1,
           visibility: "shared" as const,
         };
         await sessions.upsertSessionEntryCore({ agentId: "main", sessionKey: key }, entry);
+        if (changed === "metadata-no-revision") {
+          expect(
+            sessions.loadSessionEntry({ agentId: "main", sessionKey: key })?.lifecycleRevision,
+          ).toBeUndefined();
+        }
         const entered = createDeferredCore();
         const release = createDeferredCore();
         const io = prepareRead(method, async () => {
@@ -535,9 +548,11 @@ describe("narrow session read owners", () => {
               { agentId: "main", sessionKey: key },
               {
                 ...entry,
-                ...(changed === "generation"
-                  ? { lifecycleRevision: "replacement" }
-                  : { visibility: "draft" }),
+                ...(metadataOnly
+                  ? { label: "Renamed during read", updatedAt: 2 }
+                  : changed === "generation"
+                    ? { lifecycleRevision: "replacement" }
+                    : { visibility: "draft" }),
               },
             );
           }
@@ -555,8 +570,87 @@ describe("narrow session read owners", () => {
         } else {
           expect(settled).toEqual([{ status: "fulfilled", value: undefined }]);
           expect(respond).toHaveBeenCalledOnce();
-          expect(respond.mock.calls[0]?.[0]).toBe(false);
+          const unchangedAccess = method === "sessions.branches.list" && metadataOnly;
+          expect(respond.mock.calls[0]?.[0]).toBe(unchangedAccess);
+          expect(respond.mock.calls[0]?.[1]).toEqual(
+            unchangedAccess ? { branches: [] } : undefined,
+          );
+        }
+      }
+    });
+  });
+
+  it("rechecks session visibility before fetching a remote file after stat", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const reader = roleClient("view", "remote-reader");
+      reader.connect.scopes = ["operator.sessions.read"];
+      const cfg = rolePolicyConfig();
+      const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+      for (const revoke of [false, true]) {
+        const entry = {
+          sessionId: "remote-read",
+          lifecycleRevision: "original",
+          updatedAt: 1,
+          visibility: "shared" as const,
+          spawnedWorkspaceDir: state.workspaceDir,
+        };
+        await sessions.upsertSessionEntryCore({ agentId: "main", sessionKey: key }, entry);
+        const entered = createDeferredCore();
+        const release = createDeferredCore();
+        let stats = 0;
+        const readFile = vi.fn(async () => Buffer.from("remote content"));
+        const unregister = registerAgentWorkspaceAccess(state.workspaceDir, {
+          bridge: {
+            readFile,
+            writeFile: async () => {
+              throw new Error("unexpected write");
+            },
+            stat: async () => {
+              if (++stats === 2) {
+                entered.resolve();
+                await release.promise;
+              }
+              return { type: "file", size: 14, mtimeMs: 1 };
+            },
+          },
+        });
+        const respond = vi.fn();
+        const request = handleGatewayRequest({
+          req: {
+            type: "req",
+            id: `remote-${revoke}`,
+            method: "sessions.files.get",
+            params: { sessionKey: key, agentId: "main", path: "note.txt" },
+          },
+          client: reader,
+          context,
+          respond,
+          isWebchatConnect: () => false,
+          extraHandlers: sessionsFilesHandlers,
+        });
+        const settled = Promise.allSettled([request]);
+        try {
+          await Promise.race([entered.promise, request]);
+          expect(stats).toBe(2);
+          expect(readFile).not.toHaveBeenCalled();
+          if (revoke) {
+            await sessions.upsertSessionEntryCore(
+              { agentId: "main", sessionKey: key },
+              { ...entry, visibility: "draft", updatedAt: 2 },
+            );
+          }
+        } finally {
+          release.resolve();
+          await settled;
+          unregister();
+        }
+        expect(readFile).toHaveBeenCalledTimes(revoke ? 0 : 1);
+        expect(respond).toHaveBeenCalledOnce();
+        expect(respond.mock.calls[0]?.[0]).toBe(!revoke);
+        if (revoke) {
           expect(respond.mock.calls[0]?.[1]).toBeUndefined();
+        } else {
+          expect(respond.mock.calls[0]?.[1]).toMatchObject({ file: { content: "remote content" } });
         }
       }
     });

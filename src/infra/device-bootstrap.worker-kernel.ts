@@ -41,18 +41,6 @@ const DEVICE_PAIR_SETUP_COMPLETION_RETENTION_MS = 2 * DEVICE_BOOTSTRAP_TOKEN_TTL
 
 type DeviceBootstrapStateFile = Record<string, DeviceBootstrapTokenRecord>;
 
-function resolvePersistedBootstrapProfile(
-  record: Partial<DeviceBootstrapTokenRecord>,
-): DeviceBootstrapProfile {
-  return normalizeDeviceBootstrapProfile(record.profile);
-}
-
-function resolvePersistedRedeemedProfile(
-  record: Partial<DeviceBootstrapTokenRecord>,
-): DeviceBootstrapProfile {
-  return normalizeDeviceBootstrapProfile(record.redeemedProfile);
-}
-
 function resolvePersistedPendingProfile(
   record: Partial<DeviceBootstrapTokenRecord>,
 ): DeviceBootstrapProfile | null {
@@ -133,8 +121,8 @@ function loadState(nowMs: number): DeviceBootstrapStateFile {
 
 function issueDeviceBootstrapTokenRecord(
   params: DeviceBootstrapOperations["bootstrap.issue"]["input"],
+  state = loadState(params.nowMs),
 ): { token: string; expiresAtMs: number } {
-  const state = loadState(params.nowMs);
   const token = generatePairingToken();
   const issuedAtMs = asDateTimestampMs(params.nowMs);
   const expiresAtMs =
@@ -144,12 +132,11 @@ function issueDeviceBootstrapTokenRecord(
   if (issuedAtMs === undefined || expiresAtMs === undefined) {
     throw new Error("Device bootstrap token expiry could not be resolved.");
   }
-  const profile = params.profile;
   state[token] = {
     token,
     ...(params.setupId ? { setupId: params.setupId } : {}),
     ts: issuedAtMs,
-    profile,
+    profile: params.profile,
     redeemedProfile: normalizeDeviceBootstrapProfile(undefined),
     issuedAtMs,
   };
@@ -183,25 +170,11 @@ function ensureDevicePairSetupBootstrapToken(
       setupId,
     };
   }
-  const issuedAtMs = asDateTimestampMs(params.nowMs);
-  const expiresAtMs =
-    issuedAtMs === undefined
-      ? undefined
-      : resolveExpiresAtMsFromDurationMs(DEVICE_BOOTSTRAP_TOKEN_TTL_MS, { nowMs: issuedAtMs });
-  if (issuedAtMs === undefined || expiresAtMs === undefined) {
-    throw new Error("Device bootstrap token expiry could not be resolved.");
-  }
-  const token = generatePairingToken();
-  state[token] = {
-    token,
+  return {
+    status: "pending",
+    ...issueDeviceBootstrapTokenRecord({ profile, setupId, nowMs: params.nowMs }, state),
     setupId,
-    ts: issuedAtMs,
-    profile,
-    redeemedProfile: normalizeDeviceBootstrapProfile(undefined),
-    issuedAtMs,
   };
-  persistState(state);
-  return { status: "pending", token, expiresAtMs, setupId };
 }
 
 /**
@@ -232,35 +205,6 @@ function consumeDeviceBootstrapTokenWithSetupCompletion(
       return true;
     },
   });
-}
-
-/** Confirm that the pairing client received the credential-bearing handoff response. */
-function confirmDevicePairSetupCompletionDelivery(
-  params: DeviceBootstrapOperations["bootstrap.confirm"]["input"],
-): DeviceBootstrapOperations["bootstrap.confirm"]["output"] {
-  return confirmDevicePairSetupCompletionDeliveryInTransaction({
-    setupId: params.setupId,
-    deviceId: params.deviceId,
-    nowMs: params.nowMs,
-  });
-}
-
-/**
- * Read the terminal outcome for one setup credential, or null while none is
- * recorded. Shares this module's lock with issuance and revocation so a status
- * query never observes a setup mid-settlement.
- */
-function readDevicePairSetupCompletion(
-  params: DeviceBootstrapOperations["bootstrap.readCompletion"]["input"],
-): DeviceBootstrapOperations["bootstrap.readCompletion"]["output"] {
-  return loadDevicePairSetupCompletionRecord(params.setupId, params.nowMs);
-}
-
-/** Remove retained setup outcomes independently of status requests or later pairings. */
-function pruneExpiredDevicePairSetupCompletions(
-  params: DeviceBootstrapOperations["bootstrap.prune"]["input"],
-): DeviceBootstrapOperations["bootstrap.prune"]["output"] {
-  return pruneExpiredDevicePairSetupCompletionRecords(params.nowMs);
 }
 
 /** Remove every outstanding bootstrap token from the pairing state file. */
@@ -353,17 +297,18 @@ function redeemDeviceBootstrapTokenProfile(
     return { recorded: false, fullyRedeemed: false };
   }
   const [tokenKey, record] = found;
-  const issuedProfile = resolvePersistedBootstrapProfile(record);
+  const issuedProfile = normalizeDeviceBootstrapProfile(record.profile);
   requestDevicePairingMutationAdmission({
     kind: "bootstrap.token",
     issuedAtMs: record.issuedAtMs,
   });
   const pendingProfile = resolvePersistedPendingProfile(record);
+  const previousRedeemedProfile = normalizeDeviceBootstrapProfile(record.redeemedProfile);
   // Keep a pending profile until all requested roles/scopes from that handshake are redeemed.
   const redeemedProfile = normalizeDeviceBootstrapProfile({
-    roles: [...resolvePersistedRedeemedProfile(record).roles, params.role],
+    roles: [...previousRedeemedProfile.roles, params.role],
     scopes: [
-      ...resolvePersistedRedeemedProfile(record).scopes,
+      ...previousRedeemedProfile.scopes,
       ...resolveBootstrapProfileScopesForRole(params.role, params.scopes, issuedProfile.purpose),
     ],
     purpose: issuedProfile.purpose,
@@ -420,7 +365,7 @@ function verifyDeviceBootstrapToken(
   if (!deviceId || !publicKey || !role) {
     return { ok: false, reason: "bootstrap_token_invalid" };
   }
-  const allowedProfile = resolvePersistedBootstrapProfile(record);
+  const allowedProfile = normalizeDeviceBootstrapProfile(record.profile);
   const requestedProfile = resolveRequestedBootstrapProfile({
     role,
     scopes: params.scopes,
@@ -451,30 +396,25 @@ function verifyDeviceBootstrapToken(
     typeof record.publicKey === "string"
       ? normalizeBootstrapPublicKey(record.publicKey)
       : undefined;
+  let pendingProfile = requestedProfile;
   if (boundDeviceId || boundPublicKey) {
     if (boundDeviceId !== deviceId || boundPublicKey !== publicKey) {
       return { ok: false, reason: "bootstrap_token_invalid" };
     }
-    const pendingProfile = resolvePersistedPendingProfile(record);
-    if (pendingProfile && !deviceBootstrapProfilesEqual(pendingProfile, requestedProfile)) {
+    const existingPendingProfile = resolvePersistedPendingProfile(record);
+    if (
+      existingPendingProfile &&
+      !deviceBootstrapProfilesEqual(existingPendingProfile, requestedProfile)
+    ) {
       return { ok: false, reason: "bootstrap_token_invalid" };
     }
-    state[tokenKey] = {
-      ...record,
-      profile: allowedProfile,
-      pendingProfile: pendingProfile ?? requestedProfile,
-      deviceId,
-      publicKey,
-      lastUsedAtMs: params.nowMs,
-    };
-    persistState(state);
-    return { ok: true };
+    pendingProfile = existingPendingProfile ?? requestedProfile;
   }
 
   state[tokenKey] = {
     ...record,
     profile: allowedProfile,
-    pendingProfile: requestedProfile,
+    pendingProfile,
     deviceId,
     publicKey,
     lastUsedAtMs: params.nowMs,
@@ -512,7 +452,7 @@ export function getBoundDeviceBootstrapContextFromRecords(
     return null;
   }
   return {
-    profile: resolvePersistedBootstrapProfile(record),
+    profile: normalizeDeviceBootstrapProfile(record.profile),
     ...(record.setupId ? { setupId: record.setupId } : {}),
   };
 }
@@ -534,11 +474,11 @@ export function executeDeviceBootstrapMutation(
           recordWorkerEnvironment,
         );
       case "bootstrap.confirm":
-        return confirmDevicePairSetupCompletionDelivery(command.input);
+        return confirmDevicePairSetupCompletionDeliveryInTransaction(command.input);
       case "bootstrap.readCompletion":
-        return readDevicePairSetupCompletion(command.input);
+        return loadDevicePairSetupCompletionRecord(command.input.setupId, command.input.nowMs);
       case "bootstrap.prune":
-        return pruneExpiredDevicePairSetupCompletions(command.input);
+        return pruneExpiredDevicePairSetupCompletionRecords(command.input.nowMs);
       case "bootstrap.clear":
         return clearDeviceBootstrapTokens(command.input);
       case "bootstrap.revoke":

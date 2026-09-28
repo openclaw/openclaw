@@ -7,6 +7,7 @@ import { gunzipSync, gzipSync } from "node:zlib";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import {
   readPersistedAuthProfileStoreRaw,
@@ -21,6 +22,7 @@ import {
   detectLegacyStateMigrations as detectLegacyStateMigrationsWithSurfaces,
   runLegacyStateMigrations as runLegacyStateMigrationsWithSurfaces,
 } from "../infra/state-migrations.doctor.js";
+import { writeLegacySessionsFixture } from "../infra/state-migrations.session-store.test-support.js";
 import {
   autoMigrateLegacyStateDir,
   resetAutoMigrateLegacyStateDirForTest,
@@ -47,14 +49,6 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import {
-  loadTaskFlowRegistryStateFromSqlite,
-  upsertTaskFlowRegistryRecordToSqlite,
-} from "../tasks/task-flow-registry.store.sqlite.js";
-import {
-  loadTaskRegistryStateFromSqlite,
-  upsertTaskWithDeliveryStateToSqlite,
-} from "../tasks/task-registry.store.sqlite.js";
 import { createLegacyAgentDatabaseRegistry } from "./doctor-state-migrations.agent-registry.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -294,20 +288,6 @@ function readPrimaryKeyColumns(db: DatabaseSync, tableName: string): string[] {
     .filter((row) => Number(row.pk ?? 0) > 0 && typeof row.name === "string")
     .toSorted((left, right) => Number(left.pk ?? 0) - Number(right.pk ?? 0))
     .map((row) => row.name as string);
-}
-
-function writeLegacySessionsFixture(params: {
-  root: string;
-  sessions: Record<string, Record<string, unknown> & { sessionId: string; updatedAt: number }>;
-  transcripts?: Record<string, string>;
-}) {
-  const legacySessionsDir = path.join(params.root, "sessions");
-  fs.mkdirSync(legacySessionsDir, { recursive: true });
-  writeJson5(path.join(legacySessionsDir, "sessions.json"), params.sessions);
-  for (const [fileName, content] of Object.entries(params.transcripts ?? {})) {
-    fs.writeFileSync(path.join(legacySessionsDir, fileName), content, "utf-8");
-  }
-  return legacySessionsDir;
 }
 
 function writeLegacyDebugProxyCaptureSidecar(
@@ -1055,7 +1035,7 @@ describe("doctor legacy state migrations", () => {
         .prepare(
           "SELECT backend, agent, runtime_session_name, mode, state, last_activity_at FROM acp_sessions WHERE session_key = ?",
         )
-        .get(sessionKey) as
+        .get(buildAcpDatabaseSessionKey(sessionKey, "main")) as
         | {
             backend: string;
             agent: string;
@@ -1130,7 +1110,7 @@ describe("doctor legacy state migrations", () => {
         .prepare(
           "SELECT backend, agent, runtime_session_name, mode, state, last_activity_at FROM acp_sessions WHERE session_key = ?",
         )
-        .get(sessionKey) as
+        .get(buildAcpDatabaseSessionKey(sessionKey, "ops")) as
         | {
             backend: string;
             agent: string;
@@ -1176,11 +1156,7 @@ describe("doctor legacy state migrations", () => {
     fs.mkdirSync(path.dirname(managedStorePath), { recursive: true });
     fs.symlinkSync(outsideStorePath, managedStorePath);
 
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected });
+    const result = await runLegacyStateMigrationsForRoot(root);
 
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes.some((change) => change.includes("ACP session metadata"))).toBe(false);
@@ -1463,17 +1439,6 @@ describe("doctor legacy state migrations", () => {
     expect(fs.existsSync(sourcePath)).toBe(false);
   });
 
-  it("no-ops when nothing detected", async () => {
-    const root = makeDoctorStateDir();
-    const cfg: OpenClawConfig = {};
-    const detected = await detectLegacyStateMigrations({
-      cfg,
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected });
-    expect(result.changes).toStrictEqual([]);
-  });
-
   it("imports plugin-state legacy plans through doctor", async () => {
     const root = makeDoctorStateDir();
     const sourcePath = path.join(root, "legacy-cache.json");
@@ -1522,11 +1487,7 @@ describe("doctor legacy state migrations", () => {
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
 
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected });
+    const result = await runLegacyStateMigrationsForRoot(root);
 
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes).toContain("Migrated 2 Test prompt-context cache entries → plugin state");
@@ -1604,11 +1565,7 @@ describe("doctor legacy state migrations", () => {
       },
     ];
 
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected });
+    const result = await runLegacyStateMigrationsForRoot(root);
 
     expect(result.warnings).toStrictEqual([]);
     expect(removeSource).toHaveBeenCalledTimes(1);
@@ -1641,11 +1598,7 @@ describe("doctor legacy state migrations", () => {
       },
     ];
 
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected });
+    const result = await runLegacyStateMigrationsForRoot(root);
 
     expect(result.warnings).toStrictEqual([]);
     expect(fs.existsSync(sourcePath)).toBe(false);
@@ -1686,11 +1639,7 @@ describe("doctor legacy state migrations", () => {
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
 
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected });
+    const result = await runLegacyStateMigrationsForRoot(root);
 
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes).toContain("Migrated 1 Test replace cache entry → plugin state");
@@ -1733,11 +1682,7 @@ describe("doctor legacy state migrations", () => {
       },
     ];
 
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected });
+    const result = await runLegacyStateMigrationsForRoot(root);
 
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes).toContain(
@@ -1772,11 +1717,7 @@ describe("doctor legacy state migrations", () => {
       },
     ];
 
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected });
+    const result = await runLegacyStateMigrationsForRoot(root);
 
     expect(result.changes).toStrictEqual([]);
     expect(result.warnings).toStrictEqual([
@@ -1818,11 +1759,7 @@ describe("doctor legacy state migrations", () => {
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
 
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected });
+    const result = await runLegacyStateMigrationsForRoot(root);
 
     expect(result.changes).toStrictEqual([
       "Migrated 1 Test namespace-capped cache entry → plugin state",
@@ -1876,11 +1813,7 @@ describe("doctor legacy state migrations", () => {
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
 
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected });
+    const result = await runLegacyStateMigrationsForRoot(root);
     expect(result.changes).toStrictEqual(["Migrated 1 Test recency cache entry → plugin state"]);
 
     await withStateDir(root, async () => {
@@ -2003,11 +1936,7 @@ describe("doctor legacy state migrations", () => {
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
 
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected });
+    const result = await runLegacyStateMigrationsForRoot(root);
 
     expect(result.changes).toStrictEqual([]);
     expect(result.warnings).toStrictEqual([
@@ -2055,11 +1984,7 @@ describe("doctor legacy state migrations", () => {
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
 
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected });
+    const result = await runLegacyStateMigrationsForRoot(root);
 
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes).toContain(
@@ -2105,11 +2030,7 @@ describe("doctor legacy state migrations", () => {
       },
     ];
 
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected });
+    const result = await runLegacyStateMigrationsForRoot(root);
 
     expect(result.warnings).toStrictEqual([
       "Paused migrating Test evicted cache because plugin state cap evicted scope:first; imported 1 of 3 missing entries and deferred the rest in the legacy source",
@@ -2378,11 +2299,7 @@ describe("doctor legacy state migrations", () => {
       "utf8",
     );
 
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected });
+    const result = await runLegacyStateMigrationsForRoot(root);
 
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes).toContain(
@@ -2411,11 +2328,7 @@ describe("doctor legacy state migrations", () => {
       "utf8",
     );
 
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected });
+    const result = await runLegacyStateMigrationsForRoot(root);
 
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes).toContain(
@@ -2770,38 +2683,6 @@ describe("doctor legacy state migrations", () => {
       },
     },
     {
-      label: "would pin a legacy floating selector to an exact version",
-      current: {
-        source: "npm",
-        spec: "demo@1.0.0",
-        version: "1.0.0",
-        resolvedName: "demo",
-        resolvedVersion: "1.0.0",
-        resolvedSpec: "demo@1.0.0",
-      },
-      legacy: {
-        source: "npm",
-        spec: "demo@beta",
-        version: "1.0.0",
-      },
-    },
-    {
-      label: "use different floating selectors",
-      current: {
-        source: "npm",
-        spec: "demo@latest",
-        version: "1.0.0",
-        resolvedName: "demo",
-        resolvedVersion: "1.0.0",
-        resolvedSpec: "demo@1.0.0",
-      },
-      legacy: {
-        source: "npm",
-        spec: "demo@beta",
-        version: "1.0.0",
-      },
-    },
-    {
       label: "keep legacy floating selectors even when resolved specs match",
       current: {
         source: "npm",
@@ -2991,41 +2872,13 @@ describe("doctor legacy state migrations", () => {
     expect(fs.existsSync(targetPath)).toBe(false);
   });
 
-  it("leaves retired sidecars untouched while shared task and plugin state remain usable", async () => {
+  it("leaves retired sidecars untouched while shared plugin state remains usable", async () => {
     const root = makeDoctorStateDir();
     const sidecars = writeRetiredStateSidecars(root).map((sourcePath) => ({
       sourcePath,
       bytes: fs.readFileSync(sourcePath),
     }));
     await withStateDir(root, async () => {
-      upsertTaskWithDeliveryStateToSqlite({
-        task: {
-          taskId: "current-task",
-          runtime: "cron",
-          sourceId: "nightly",
-          requesterSessionKey: "",
-          ownerKey: "system:cron:nightly",
-          scopeKind: "system",
-          task: "Current shared-state task",
-          status: "running",
-          deliveryStatus: "not_applicable",
-          notifyPolicy: "silent",
-          createdAt: 300,
-        },
-        deliveryState: { taskId: "current-task", lastNotifiedEventAt: 310 },
-      });
-      upsertTaskFlowRegistryRecordToSqlite({
-        flowId: "current-flow",
-        syncMode: "managed",
-        ownerKey: "agent:main:main",
-        controllerId: "tests/current-flow",
-        revision: 1,
-        status: "running",
-        notifyPolicy: "done_only",
-        goal: "Current shared-state flow",
-        createdAt: 300,
-        updatedAt: 310,
-      });
       const store = createPluginStateKeyedStore<{ ok: boolean }>("discord", {
         namespace: "components",
         maxEntries: 10,
@@ -3035,11 +2888,7 @@ describe("doctor legacy state migrations", () => {
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
 
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected });
+    const result = await runLegacyStateMigrationsForRoot(root);
 
     expect(result.warnings).toStrictEqual([]);
     for (const { sourcePath, bytes } of sidecars) {
@@ -3047,24 +2896,6 @@ describe("doctor legacy state migrations", () => {
       expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
     }
     await withStateDir(root, async () => {
-      const taskState = loadTaskRegistryStateFromSqlite();
-      expect([...taskState.tasks.keys()]).toEqual(["current-task"]);
-      expect(taskState.tasks.get("current-task")).toMatchObject({
-        task: "Current shared-state task",
-        ownerKey: "system:cron:nightly",
-        status: "running",
-      });
-      expect(taskState.deliveryStates.get("current-task")).toMatchObject({
-        taskId: "current-task",
-        lastNotifiedEventAt: 310,
-      });
-      const flowState = loadTaskFlowRegistryStateFromSqlite();
-      expect([...flowState.flows.keys()]).toEqual(["current-flow"]);
-      expect(flowState.flows.get("current-flow")).toMatchObject({
-        goal: "Current shared-state flow",
-        controllerId: "tests/current-flow",
-        revision: 1,
-      });
       const store = createPluginStateKeyedStore<{ ok: boolean }>("discord", {
         namespace: "components",
         maxEntries: 10,

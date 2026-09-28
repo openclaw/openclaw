@@ -6,7 +6,7 @@ import {
   prepareToolSearchDispatcherArguments,
   readToolSearchCallArgs,
 } from "../../agents/tool-search-request.js";
-import type { readSkillCuratorReviewStatus } from "./collection-review-state.js";
+import type { readSkillCuratorReviewStatus } from "./collection-review-state.test-support.js";
 import { readExperienceReviewMessageText } from "./experience-review-message-text.test-support.js";
 import type { observeExperienceReview } from "./experience-review-observation.test-support.js";
 import type { getSkillProposalRunProgress } from "./proposal-run-progress.test-support.js";
@@ -40,9 +40,11 @@ export function assertExperienceReviewDecision(params: {
   expect(outcome?.usage?.outputTokens).toBeGreaterThan(0);
   expect(observation.toolResults.some((result) => result.isError)).toBe(false);
   const workshopCalls = observation.toolCalls.flatMap((call) => {
-    const receipt = observation.toolResults.find(
+    const receipts = observation.toolResults.filter(
       (result) => result.toolName === call.name && result.toolCallId === call.id,
     );
+    expect(receipts).toHaveLength(1);
+    const receipt = receipts[0];
     expect(receipt).toMatchObject({ isError: false });
     if (call.name === "tool_search" || call.name === "tool_describe") {
       return [];

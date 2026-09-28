@@ -1,8 +1,41 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { canonicalSessionValidationSchemaSql } from "./openclaw-agent-canonical-validation-schema.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { agentDatabaseLifecycle as cache } from "./openclaw-agent-db-lifecycle.js";
+import { persistAgentSchemaMetadata } from "./openclaw-agent-db-metadata-write.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { resolveQuarantineStorePath } from "./openclaw-state-db.paths.js";
+
+/** Materialize distinct current databases without runtime handles, leases, or registrations. */
+export function createCurrentOpenClawAgentDatabaseFixtures(
+  templatePath: string,
+  fixtures: ReadonlyArray<{ path: string; agentId: string }>,
+): void {
+  const template = openNodeSqliteDatabase(templatePath);
+  try {
+    runSqliteImmediateTransactionSync(template, () => {
+      template.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+      template.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION}`);
+      persistAgentSchemaMetadata(template, "fixture-template", OPENCLAW_AGENT_SCHEMA_VERSION);
+    });
+  } finally {
+    template.close();
+  }
+  for (const fixture of fixtures) {
+    fs.mkdirSync(path.dirname(fixture.path), { recursive: true });
+    fs.copyFileSync(templatePath, fixture.path, fs.constants.COPYFILE_EXCL);
+    const database = openNodeSqliteDatabase(fixture.path);
+    try {
+      persistAgentSchemaMetadata(database, fixture.agentId, OPENCLAW_AGENT_SCHEMA_VERSION);
+    } finally {
+      database.close();
+    }
+  }
+}
 
 /** Remove only the schema owner's future projection before carving a historical database. */
 export function removeCanonicalValidationFromHistoricalAgentFixture(database: DatabaseSync): void {

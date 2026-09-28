@@ -46,32 +46,19 @@ export function renderDiffBlock(
         )}
       >
         ${lines.map((line) => {
-          if (line.kind === "skip") {
-            // Skip rows may carry a caller-formatted gap label ("N unmodified
-            // lines", session diff panel); tool cards leave text empty.
-            return html`<div class="chat-diff__row chat-diff__row--skip">
-              ${hasLineNumbers ? html`<span class="chat-diff__gutter"></span>` : nothing}
-              <span class="chat-diff__sign"></span>
-              <span class="chat-diff__text">${(renderSkip?.(line) ?? line.text) || "⋯"}</span>
-            </div>`;
-          }
-          const kindClass =
-            line.kind === "add"
-              ? "chat-diff__row--add"
-              : line.kind === "del"
-                ? "chat-diff__row--del"
-                : line.kind === "file"
-                  ? "chat-diff__row--file"
-                  : "";
+          const skip = line.kind === "skip";
+          const kindClass = line.kind === "ctx" ? "" : `chat-diff__row--${line.kind}`;
           const sign = line.kind === "add" ? "+" : line.kind === "del" ? "-" : "";
           return html`<div class="chat-diff__row ${kindClass}">
             ${
               hasLineNumbers
-                ? html`<span class="chat-diff__gutter">${line.lineNo ?? ""}</span>`
+                ? html`<span class="chat-diff__gutter">${skip ? "" : (line.lineNo ?? "")}</span>`
                 : nothing
             }
             <span class="chat-diff__sign">${sign}</span>
-            <span class="chat-diff__text">${renderLine(line)}</span>
+            <span class="chat-diff__text"
+              >${skip ? (renderSkip?.(line) ?? line.text) || "⋯" : renderLine(line)}</span
+            >
           </div>`;
         })}
       </div>

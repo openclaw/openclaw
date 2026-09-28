@@ -31,9 +31,6 @@ import {
 } from "../../../plugins/runtime.js";
 import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
-import { resetTaskFlowRegistryForTests } from "../../../tasks/task-flow-registry.test-support.js";
-import { captureTaskDeliveryWork } from "../../../tasks/task-registry-delivery.test-support.js";
-import { resetTaskRegistryForTests } from "../../../tasks/task-registry.test-support.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -219,8 +216,7 @@ export function installSpawnAuthorityFixture() {
   const env = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
   let stateDir = "";
   let pluginSnapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
-  let deliveries: ReturnType<typeof captureTaskDeliveryWork> | undefined;
-  const settle = () => settleSubagentRegistryPersistenceWork(deliveries);
+  const settle = () => settleSubagentRegistryPersistenceWork();
 
   beforeEach(async () => {
     // Failed cleanup retains the prior owner instead of replacing its live stores.
@@ -248,8 +244,6 @@ export function installSpawnAuthorityFixture() {
     clearConfigCache();
     clearRuntimeConfigSnapshot();
     resetSubagentRegistryForTests({ persist: false });
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
     vi.mocked(loadAgentRuntimePluginRegistryHandle).mockImplementation(
       () => getActivePluginRegistry() ?? createTestRegistry([]),
     );
@@ -259,7 +253,6 @@ export function installSpawnAuthorityFixture() {
       }
       return await new Promise<never>(() => {});
     });
-    deliveries = captureTaskDeliveryWork();
   });
 
   afterEach(async () => {
@@ -273,8 +266,6 @@ export function installSpawnAuthorityFixture() {
     if (getActiveGatewayRootWorkCount() === 0) {
       try {
         resetSubagentRegistryForTests({ persist: false });
-        resetTaskRegistryForTests({ persist: false });
-        resetTaskFlowRegistryForTests({ persist: false });
         schedulerTesting.reset();
         await cleanupSessionStateForTest({ stateDir });
         vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
@@ -292,8 +283,6 @@ export function installSpawnAuthorityFixture() {
         }
         restoreActivePluginRegistrySnapshot(pluginSnapshot);
         env.restore();
-        deliveries?.[Symbol.dispose]();
-        deliveries = undefined;
         stateDir = "";
       } catch (error) {
         failures.push(error);

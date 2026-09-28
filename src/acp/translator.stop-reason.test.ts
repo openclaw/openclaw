@@ -391,7 +391,7 @@ describe("acp translator stop reason mapping", () => {
         return {};
       }
       if (method === "agent.wait") {
-        return { status: "ok" };
+        return { status: "ok", terminalReply: { disposition: "empty" } };
       }
       return {};
     }) as GatewayClient["request"];
@@ -436,7 +436,9 @@ describe("acp translator stop reason mapping", () => {
         if (method === "agent.wait") {
           waitCount += 1;
           agentWaitParams.push(params);
-          return waitCount === 1 ? { status: "timeout" } : { status: "ok" };
+          return waitCount === 1
+            ? { status: "timeout" }
+            : { status: "ok", terminalReply: { disposition: "empty" } };
         }
         return {};
       }) as GatewayClient["request"];
@@ -666,7 +668,7 @@ describe("acp translator stop reason mapping", () => {
           return params?.runId === acceptedRunId && acceptedRunId
             ? acceptedWaitCount++ === 0
               ? { status: "timeout" }
-              : { status: "ok" }
+              : { status: "ok", terminalReply: { disposition: "empty" } }
             : { status: "timeout" };
         }
         return {};
@@ -724,7 +726,7 @@ describe("acp translator stop reason mapping", () => {
         throw new Error("gateway closed (1006): connection lost");
       }
       if (method === "agent.wait") {
-        return { status: "ok" };
+        return { status: "ok", terminalReply: { disposition: "empty" } };
       }
       return {};
     }) as GatewayClient["request"];
@@ -753,7 +755,7 @@ describe("acp translator stop reason mapping", () => {
         return chatSendPromise;
       }
       if (method === "agent.wait") {
-        return Promise.resolve({ status: "ok" });
+        return Promise.resolve({ status: "ok", terminalReply: { disposition: "empty" } });
       }
       return Promise.resolve({});
     }) as GatewayClient["request"];

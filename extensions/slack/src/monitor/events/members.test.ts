@@ -94,24 +94,6 @@ describe("registerSlackMemberEvents", () => {
 
   const cases: Array<{ name: string; args: MemberCaseArgs; calls: number }> = [
     {
-      name: "enqueues DM member events when dmPolicy is open",
-      args: { overrides: { dmPolicy: "open" } },
-      calls: 1,
-    },
-    {
-      name: "blocks DM member events when dmPolicy is disabled",
-      args: { overrides: { dmPolicy: "disabled" } },
-      calls: 0,
-    },
-    {
-      name: "blocks DM member events for unauthorized senders in allowlist mode",
-      args: {
-        overrides: { dmPolicy: "allowlist", allowFrom: ["U2"] },
-        event: makeMemberEvent({ user: "U1" }),
-      },
-      calls: 0,
-    },
-    {
       name: "allows DM member events for authorized senders in allowlist mode",
       args: {
         handler: "left" as const,

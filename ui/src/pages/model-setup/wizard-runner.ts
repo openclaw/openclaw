@@ -449,12 +449,25 @@ export class ModelSetupWizardRunner {
       acceptsFirstResult = undefined;
       if (
         session === this.session &&
+        !session.suspended &&
+        !this.isRetired(session) &&
         !result.done &&
         result.step?.type === "note" &&
         (session.authKind === "oauth" || session.authKind === "device-code")
       ) {
         if (result.step.message) {
           session.notes.push(result.step.message);
+        }
+        if (result.step.externalUrl || result.step.deviceCode) {
+          // The next request can wait for the browser callback without another
+          // step. Keep its recovery actions visible while acknowledging this note.
+          this.setState({
+            phase: "step",
+            authChoice,
+            step: result.step,
+            busy: true,
+            validationError: null,
+          });
         }
         this.openSignInUrl(session, result.step.externalUrl);
         nextAnswer = { stepId: result.step.id };

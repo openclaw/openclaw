@@ -497,6 +497,7 @@ async function executeAgentTurnInternal(
     boundary: "auto-reply.agent-runner",
     operatorAuthority: params.followupRun.operatorAuthority,
     evidence: params.followupRun.channelAdmissionEvidence,
+    gatewayLocalUserIngress: params.followupRun.gatewayLocalUserIngress,
     assertSourceCurrent:
       params.followupRun.run.senderIsOwner === true
         ? captureCommandOwnerAssertion(params.followupRun.run)

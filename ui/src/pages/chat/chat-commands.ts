@@ -1,4 +1,3 @@
-// Control UI Chat page owns slash command metadata loading.
 import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
@@ -496,14 +495,12 @@ export async function dispatchChatSlashCommand(
       host,
       `/${name} ${args}`.trim(),
       host.chatRunId,
-      resolveCurrentUserIdentity(host.hello, host.client?.instanceId) ?? undefined,
+      resolveCurrentUserIdentity(host.hello, host.client?.instanceId, host.selfUser) ?? undefined,
     );
   }
 
-  if (result.modelChanged) {
-    if (targetIsCurrent()) {
-      await host.refreshCurrentSessionTools?.();
-    }
+  if (result.modelChanged && targetIsCurrent()) {
+    await host.refreshCurrentSessionTools?.();
   }
 
   if (result.action === "refresh" && targetIsCurrent()) {

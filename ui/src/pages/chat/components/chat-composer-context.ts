@@ -33,13 +33,6 @@ type ProviderCostStats = {
   cacheWrite?: number;
 };
 
-function readCostValue(
-  cost: Record<string, unknown> | null,
-  key: "input" | "output" | "cacheRead" | "cacheWrite",
-) {
-  return asNonNegativeFiniteNumber(cost?.[key]);
-}
-
 function latestProviderCostStats(messages: unknown[] | undefined): ProviderCostStats | null {
   for (let index = (messages?.length ?? 0) - 1; index >= 0; index -= 1) {
     const message = readCostRecord(messages?.[index]);
@@ -53,14 +46,13 @@ function latestProviderCostStats(messages: unknown[] | undefined): ProviderCostS
     const usageCost = readCostRecord(readCostRecord(message.usage)?.cost);
     const stats: ProviderCostStats = {};
     for (const key of ["input", "output", "cacheRead", "cacheWrite"] as const) {
-      const cost = readCostValue(directCost, key) ?? readCostValue(usageCost, key);
+      const cost =
+        asNonNegativeFiniteNumber(directCost?.[key]) ?? asNonNegativeFiniteNumber(usageCost?.[key]);
       if (cost !== undefined) {
         stats[key] = cost;
       }
     }
-    if (
-      [stats.input, stats.output, stats.cacheRead, stats.cacheWrite].some((value) => value != null)
-    ) {
+    if (Object.keys(stats).length > 0) {
       return stats;
     }
   }
@@ -76,41 +68,6 @@ function latestAssistantProvider(messages: unknown[] | undefined): string | null
     return typeof message.provider === "string" ? message.provider.trim() || null : null;
   }
   return null;
-}
-
-function parseHexRgb(hex: string): [number, number, number] | null {
-  const h = hex.trim().replace(/^#/, "");
-  if (!/^[0-9a-fA-F]{6}$/.test(h)) {
-    return null;
-  }
-  return [
-    Number.parseInt(h.slice(0, 2), 16),
-    Number.parseInt(h.slice(2, 4), 16),
-    Number.parseInt(h.slice(4, 6), 16),
-  ];
-}
-
-let cachedThemeNoticeColors: {
-  warnHex: string;
-  dangerHex: string;
-  warnRgb: [number, number, number];
-  dangerRgb: [number, number, number];
-} | null = null;
-
-function getThemeNoticeColors() {
-  if (cachedThemeNoticeColors) {
-    return cachedThemeNoticeColors;
-  }
-  const rootStyle = getComputedStyle(document.documentElement);
-  const warnHex = rootStyle.getPropertyValue("--warn").trim() || "#f59e0b";
-  const dangerHex = rootStyle.getPropertyValue("--danger").trim() || "#ef4444";
-  cachedThemeNoticeColors = {
-    warnHex,
-    dangerHex,
-    warnRgb: parseHexRgb(warnHex) ?? [245, 158, 11],
-    dangerRgb: parseHexRgb(dangerHex) ?? [239, 68, 68],
-  };
-  return cachedThemeNoticeColors;
 }
 
 function getContextNoticeViewModel(
@@ -172,16 +129,9 @@ function getContextNoticeViewModel(
       approximate,
     };
   }
-  const { warnRgb, dangerRgb } = getThemeNoticeColors();
-  const [wr, wg, wb] = warnRgb;
-  const [dr, dg, db] = dangerRgb;
-  const mix = Math.min(Math.max((ratio - 0.85) / 0.1, 0), 1);
-  const r = Math.round(wr + (dr - wr) * mix);
-  const g = Math.round(wg + (dg - wg) * mix);
-  const b = Math.round(wb + (db - wb) * mix);
-  const color = `rgb(${r}, ${g}, ${b})`;
-  const bgOpacity = 0.08 + 0.08 * mix;
-  const bg = `rgba(${r}, ${g}, ${b}, ${bgOpacity})`;
+  const mix = Math.min(Math.max((ratio - CONTEXT_NOTICE_RATIO) / 0.1, 0), 1);
+  const color = `color-mix(in srgb, var(--warn), var(--danger) ${mix * 100}%)`;
+  const bg = `color-mix(in srgb, ${color} ${8 + 8 * mix}%, transparent)`;
   return {
     pct,
     ...usage,
@@ -374,14 +324,7 @@ export function renderContextNotice(
             <dd>${formatCost(value)}</dd>
           </div>
         `;
-  const hasProviderCosts = providerCosts
-    ? [
-        providerCosts.input,
-        providerCosts.output,
-        providerCosts.cacheRead,
-        providerCosts.cacheWrite,
-      ].some((value) => value !== undefined && value > 0)
-    : false;
+  const hasProviderCosts = providerCosts && Object.values(providerCosts).some((value) => value > 0);
   return html`
     <div
       class="context-usage"

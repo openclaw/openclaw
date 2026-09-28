@@ -6,11 +6,7 @@ export function createSubagentSpawnLifecycleEmitter(params: {
   hookRunner: SubagentLifecycleHookRunner | null;
   childSessionKey: string;
   requesterInternalKey: string;
-  progressOrigin: {
-    channel?: string;
-    accountId?: string;
-    to?: string;
-    threadId?: string | number;
+  progressOrigin: DeliveryContext & {
     channelId?: string;
     messageId?: string | number;
   };

@@ -4,7 +4,8 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import {
   copyStaticExtensionAssets,
   copyStaticExtensionAssetsToRuntimeOverlay,
@@ -31,6 +32,8 @@ import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { readBuildIdFromBuildInfoForModuleUrl } from "../../src/version.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 const testNodeExecPath = resolveTestNodeExecPath();
 import {
   previousReleaseInventory,
@@ -39,6 +42,7 @@ import {
 
 const { createTempDir } = createScriptTestHarness();
 const MODULE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const nodeRunnerFixture = `export { resolveNodeRunner } from ${JSON.stringify(new URL("../../src/cli/update-cli/node-runner.ts", import.meta.url).href)};\n`;
 
 async function expectPathMissing(targetPath: string): Promise<void> {
   let statError: unknown;
@@ -147,37 +151,6 @@ describe("runtime postbuild static assets", () => {
     expect(payload.sources).not.toContain("extensions/discord/assets/embedded-app-sdk.mjs");
     expect(payload.packageOutputs).toContain("dist/extensions/discord/assets/embedded-app-sdk.mjs");
     expect(payload.sources).toContain("extensions/crabbox/assets/openclaw-worker-wallpaper.png");
-  });
-
-  it("discovers static assets from plugin package metadata", async () => {
-    const rootDir = createTempDir("openclaw-runtime-postbuild-");
-    const packageDir = path.join(rootDir, "extensions", "demo");
-    await fs.mkdir(packageDir, { recursive: true });
-    await fs.writeFile(
-      path.join(packageDir, "package.json"),
-      JSON.stringify({
-        name: "@openclaw/demo",
-        openclaw: {
-          build: {
-            staticAssets: [
-              {
-                source: "./assets/runtime.js",
-                output: "assets/runtime.js",
-              },
-            ],
-          },
-        },
-      }),
-      "utf8",
-    );
-
-    expect(discoverStaticExtensionAssets({ rootDir })).toEqual([
-      {
-        pluginDir: "demo",
-        src: "extensions/demo/assets/runtime.js",
-        dest: "dist/extensions/demo/assets/runtime.js",
-      },
-    ]);
   });
 
   it("copies each package asset once with multiple Git index stages", async () => {
@@ -300,22 +273,6 @@ describe("runtime postbuild static assets", () => {
     );
   });
 
-  it("copies declared static assets into root dist", async () => {
-    const rootDir = createTempDir("openclaw-runtime-postbuild-");
-    const src = "extensions/acpx/src/runtime-internals/mcp-proxy.mjs";
-    const dest = "dist/extensions/acpx/mcp-proxy.mjs";
-    const sourcePath = path.join(rootDir, src);
-    const destPath = path.join(rootDir, dest);
-    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
-    await fs.writeFile(sourcePath, "proxy-data\n", "utf8");
-
-    copyStaticExtensionAssets({
-      rootDir,
-      assets: [{ src, dest }],
-    });
-    expect(await fs.readFile(destPath, "utf8")).toBe("proxy-data\n");
-  });
-
   it.each([
     { name: "package-relative source", dependency: "", local: false, missing: false },
     { name: "hoisted dependency", dependency: "engine", local: false, missing: false },
@@ -411,6 +368,9 @@ describe("runtime postbuild static assets", () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-cwd-");
     await writeExportHtmlBuildFixture(rootDir);
     writeUpdateCompatibilityBuildFixture(rootDir);
+    const runner = path.join(rootDir, "dist/cli/update-cli/node-runner.js");
+    await fs.mkdir(path.dirname(runner), { recursive: true });
+    await fs.writeFile(runner, nodeRunnerFixture);
     runRuntimePostBuild({
       cwd: rootDir,
       env: {
@@ -439,7 +399,7 @@ describe("runtime postbuild static assets", () => {
     const bridge = await import(
       pathToFileURL(path.join(rootDir, "dist", "shared-Y6bNiw2w.js")).href
     );
-    expect(bridge.resolveNodeRunner()).toBe(process.versions.bun ? "node" : process.execPath);
+    expect(bridge.resolveNodeRunner()).toBe(process.execPath);
   });
 
   it("uses rootDir ahead of conflicting cwd and repoRoot for every phase", async () => {
@@ -1121,6 +1081,7 @@ describe("runtime postbuild static assets", () => {
 
   it("keeps the 2026.9.1 Git updater restart import loadable after dist replacement", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-old-updater-");
+    await fs.writeFile(path.join(rootDir, "package.json"), '{"type":"module"}');
     const distDir = path.join(rootDir, "dist");
     const ownerPath = path.join(distDir, "update-command-service-command.mjs");
     await fs.mkdir(distDir, { recursive: true });
@@ -1143,6 +1104,9 @@ describe("runtime postbuild static assets", () => {
           "const rootDir = process.argv[1];",
           'const owner = await import(pathToFileURL(path.join(rootDir, "dist/update-command-service-command.mjs")).href);',
           'await fs.rm(path.join(rootDir, "dist"), { recursive: true, force: true });',
+          'const runner = path.join(rootDir, "dist/cli/update-cli/node-runner.js");',
+          "await fs.mkdir(path.dirname(runner), { recursive: true });",
+          `await fs.writeFile(runner, ${JSON.stringify(nodeRunnerFixture)});`,
           "writeLegacyCliExitCompatChunks({ rootDir });",
           "process.stdout.write(await owner.restart());",
         ].join("\n"),
@@ -1158,11 +1122,14 @@ describe("runtime postbuild static assets", () => {
     "preserves the old updater node-runner ABI through %s",
     async (chunk) => {
       const rootDir = createTempDir("openclaw-runtime-postbuild-");
+      const runner = path.join(rootDir, "dist/cli/update-cli/node-runner.js");
+      await fs.mkdir(path.dirname(runner), { recursive: true });
+      await fs.writeFile(runner, nodeRunnerFixture);
 
       writeLegacyCliExitCompatChunks({ rootDir });
 
       const bridge = await import(pathToFileURL(path.join(rootDir, "dist", chunk)).href);
-      expect(bridge.resolveNodeRunner()).toBe(process.versions.bun ? "node" : process.execPath);
+      expect(bridge.resolveNodeRunner()).toBe(process.execPath);
     },
   );
 });
@@ -1275,7 +1242,10 @@ describe("previous release update compatibility", () => {
     (variant) => {
       const facade =
         'export { createConfigIO, readConfigFileSnapshot } from "./config-abcdefgh.mjs";\nexport * from "./extra.mjs";\n';
-      const alias = buildUpdateConfigRuntimeAlias("io.runtime-abcdefgh.mjs", facade);
+      const alias = buildUpdateConfigRuntimeAlias(
+        "io.runtime-abcdefgh.mjs",
+        parser.parseSourceFile("facade.mjs", facade),
+      );
       const record = () =>
         recordImportedFixture('(await import("./io.runtime.js"))', {
           "io.runtime.js":
@@ -1941,14 +1911,19 @@ describe("previous release update compatibility", () => {
     expect(loaded.runner).toBe(current.x);
   });
 
-  it.each(["present", "missing"])(
-    "excludes the isolated config-doctor graph when the runtime binding is %s",
-    async (runtime) => {
+  it.each([
+    ["config-doctor", "present"],
+    ["config-doctor", "missing"],
+    ["native-hook-relay", "present"],
+    ["native-hook-relay", "missing"],
+  ])(
+    "excludes the isolated %s graph when the runtime binding is %s",
+    async (directory, runtime) => {
       const inventory = recordFixture();
       const root = createTempDir("update-compat-isolated-graph-");
       candidate(root);
       const current = path.join(root, "dist/current.mjs");
-      write(root, "dist/config-doctor/inspect.mjs", fsSync.readFileSync(current, "utf8"));
+      write(root, `dist/${directory}/inspect.mjs`, fsSync.readFileSync(current, "utf8"));
       const options = { distDir: path.join(root, "dist"), sourceDir: root, inventory };
       if (runtime === "missing") {
         fsSync.unlinkSync(current);

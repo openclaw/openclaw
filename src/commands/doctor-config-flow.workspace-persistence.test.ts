@@ -25,37 +25,84 @@ describe("Doctor workspace persistence", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
-  it("preserves pre-June session sandbox isolation until the bridge release migrates it", async () => {
-    await withDoctorConfigPreflightHome(async (home) => {
-      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
-        const configPath = await writeOpenClawConfig(home, {
-          agents: {
-            entries: {
-              ops: {
-                sandbox: { mode: "all", perSession: true },
-              },
-            },
-          },
-          session: { typingMode: "thinking" },
-          gatway: { port: 12345 },
-          gateway: { mode: "local" },
-          plugins: { enabled: false },
+  it.each([
+    {
+      retiredPath: "agents.entries.ops.sandbox.perSession",
+      config: { agents: { entries: { ops: { sandbox: { mode: "all", perSession: true } } } } },
+    },
+    { retiredPath: "routing.allowFrom", config: { routing: { allowFrom: ["+15550001111"] } } },
+    {
+      retiredPath: "routing.groupChat",
+      config: { routing: { groupChat: { requireMention: true, historyLimit: 12 } } },
+    },
+    {
+      retiredPath: "channels.telegram.requireMention",
+      config: { channels: { telegram: { requireMention: true } } },
+    },
+    {
+      retiredPath: "channels.feishu.accounts.work.botName",
+      config: { channels: { feishu: { accounts: { work: { botName: "Operations" } } } } },
+    },
+    {
+      retiredPath: "session.threadBindings.ttlHours",
+      config: { session: { threadBindings: { ttlHours: 24 } } },
+    },
+    {
+      retiredPath: "channels.discord.threadBindings.ttlHours",
+      config: { channels: { discord: { threadBindings: { ttlHours: 12 } } } },
+    },
+    {
+      retiredPath: "channels.telegram.accounts.work.threadBindings.ttlHours",
+      config: {
+        channels: { telegram: { accounts: { work: { threadBindings: { ttlHours: 6 } } } } },
+      },
+    },
+    {
+      retiredPath: "channels.line.threadBindings.ttlHours",
+      config: { channels: { line: { threadBindings: { ttlHours: 12 } } } },
+    },
+    {
+      retiredPath: "channels.matrix.accounts.work.threadBindings.ttlHours",
+      config: { channels: { matrix: { accounts: { work: { threadBindings: { ttlHours: 6 } } } } } },
+    },
+    {
+      retiredPath: "channels.webchat",
+      config: { channels: { webchat: { textChunkLimit: 16000 } } },
+    },
+    {
+      retiredPath: "gateway.webchat",
+      config: { gateway: { webchat: { chatHistoryMaxChars: 8000 } } },
+    },
+  ])(
+    "preserves pre-June $retiredPath until the bridge release migrates it",
+    async ({ config, retiredPath }) => {
+      await withDoctorConfigPreflightHome(async (home) => {
+        await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+          const configPath = await writeOpenClawConfig(home, {
+            ...config,
+            session: { typingMode: "thinking", ...config.session },
+            gatway: { port: 12345 },
+            gateway: { mode: "local", ...config.gateway },
+            plugins: { enabled: false },
+          });
+          const original = await fs.readFile(configPath, "utf8");
+          expect((await readConfigFileSnapshot()).valid).toBe(false);
+          await expect
+            .soft(async () => {
+              const ctx = await prepareDoctorContext(configPath);
+              await runInitialConfigWriteHealth(ctx);
+            })
+            .rejects.toThrow(
+              new RegExp(
+                `${retiredPath.replaceAll(".", "\\.")}[\\s\\S]*2026\\.9\\.5[\\s\\S]*openclaw doctor --fix[\\s\\S]*latest`,
+              ),
+            );
+          expect.soft(await fs.readFile(configPath, "utf8")).toBe(original);
+          expect.soft((await readConfigFileSnapshot()).valid).toBe(false);
         });
-        const original = await fs.readFile(configPath, "utf8");
-        expect((await readConfigFileSnapshot()).valid).toBe(false);
-        await expect
-          .soft(async () => {
-            const ctx = await prepareDoctorContext(configPath);
-            await runInitialConfigWriteHealth(ctx);
-          })
-          .rejects.toThrow(
-            /agents\.entries\.ops\.sandbox\.perSession[\s\S]*2026\.9\.5[\s\S]*openclaw doctor --fix[\s\S]*latest/,
-          );
-        expect.soft(await fs.readFile(configPath, "utf8")).toBe(original);
-        expect.soft((await readConfigFileSnapshot()).valid).toBe(false);
       });
-    });
-  });
+    },
+  );
 
   it("persists legacy channel command owners once and reports each rewritten entry", async () => {
     await withDoctorConfigPreflightHome(async (home) => {

@@ -165,17 +165,14 @@ async function resolveDirectInboundMediaPath(params: {
   requestedPath: string;
   strict: boolean;
 }): Promise<ExistingPathsResult> {
-  const inboundPathsResult = params.strict
-    ? await resolveStrictExistingPathsWithinRoot({
-        rootDir: params.inboundMediaDir,
-        requestedPaths: [params.requestedPath],
-        scopeLabel: `inbound media directory (${params.inboundMediaDir})`,
-      })
-    : await resolveExistingPathsWithinRoot({
-        rootDir: params.inboundMediaDir,
-        requestedPaths: [params.requestedPath],
-        scopeLabel: `inbound media directory (${params.inboundMediaDir})`,
-      });
+  const resolvePaths = params.strict
+    ? resolveStrictExistingPathsWithinRoot
+    : resolveExistingPathsWithinRoot;
+  const inboundPathsResult = await resolvePaths({
+    rootDir: params.inboundMediaDir,
+    requestedPaths: [params.requestedPath],
+    scopeLabel: `inbound media directory (${params.inboundMediaDir})`,
+  });
   if (!inboundPathsResult.ok) {
     return inboundPathsResult;
   }
@@ -208,18 +205,15 @@ async function resolveUploadPaths({
     }
 
     if (managedMediaPathResult?.uploadRootPrecedence !== false) {
-      const uploadPathsResult =
+      const resolvePaths =
         strict || managedMediaPathResult?.uploadRootPrecedence === true
-          ? await resolveStrictExistingPathsWithinRoot({
-              rootDir: uploadDir,
-              requestedPaths: [requestedPath],
-              scopeLabel: `uploads directory (${uploadDir})`,
-            })
-          : await resolveExistingPathsWithinRoot({
-              rootDir: uploadDir,
-              requestedPaths: [requestedPath],
-              scopeLabel: `uploads directory (${uploadDir})`,
-            });
+          ? resolveStrictExistingPathsWithinRoot
+          : resolveExistingPathsWithinRoot;
+      const uploadPathsResult = await resolvePaths({
+        rootDir: uploadDir,
+        requestedPaths: [requestedPath],
+        scopeLabel: `uploads directory (${uploadDir})`,
+      });
       if (uploadPathsResult.ok) {
         paths.push(uploadPathsResult.paths[0] ?? requestedPath);
         continue;

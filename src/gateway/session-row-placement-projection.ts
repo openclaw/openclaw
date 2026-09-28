@@ -27,6 +27,7 @@ type PlacementReadBatch = {
   started: boolean;
   settled: boolean;
   readers: number;
+  snapshot?: WorkerSessionPlacementProjection;
   completion: Deferred<WorkerSessionPlacementProjection>;
 };
 
@@ -76,7 +77,8 @@ export function createSessionRowPlacementProjection(
       if (disposed || !reader) {
         throw new Error("Session row projection is no longer active");
       }
-      batch.completion.resolve(await inOwnerContext(() => reader.readProjection([...batch.ids])));
+      batch.snapshot = await inOwnerContext(() => reader.readProjection([...batch.ids]));
+      batch.completion.resolve(batch.snapshot);
     } catch (error) {
       batch.completion.reject(error);
     } finally {
@@ -179,6 +181,7 @@ export function createSessionRowPlacementProjection(
         ? snapshot.environments.get(placement.environmentId)
         : undefined,
       workspaceResultReconciling: snapshot.workspaceResultReconcilingSessionIds.has(id),
+      workspaceRecoveryPending: snapshot.workspaceRecoveryPendingSessionIds.has(id),
     };
   };
   const missing = (ids: readonly string[]) =>
@@ -194,7 +197,16 @@ export function createSessionRowPlacementProjection(
         return;
       }
       registered.add(id);
-      const prepared = exact?.get(id);
+      let prepared = exact?.get(id);
+      if (!prepared) {
+        // Row preparation can yield after its exact placement read has settled.
+        for (const read of reads) {
+          if (read.snapshot && !read.staleAll && read.ids.has(id) && !read.stale.has(id)) {
+            prepared = select(read.snapshot, id);
+            break;
+          }
+        }
+      }
       if (prepared) {
         resident.set(id, prepared);
       } else {

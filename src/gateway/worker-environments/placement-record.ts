@@ -28,11 +28,28 @@ export type WorkerSessionPlacementChangeSnapshot = WorkerSessionPlacementIdentit
 export type WorkerPlacementExecutionMode = "worker-turn" | "remote-exec";
 export type WorkerSessionPlacementDispatchIdentity = WorkerSessionPlacementIdentity & {
   executionMode?: WorkerPlacementExecutionMode;
+  expectedPlacement?: Pick<
+    WorkerSessionPlacementRecord,
+    "state" | "generation" | "environmentId" | "activeOwnerEpoch"
+  >;
+};
+
+export type WorkerPlacementDispatchStoreOperations = {
+  "workerPlacements.startDispatch": {
+    input: { placement: WorkerSessionPlacementDispatchIdentity; nowMs: number };
+    output: WorkerSessionPlacementRecord;
+  };
 };
 
 export type WorkerSessionTurnOwner =
   | { kind: "local"; environmentId?: string; ownerEpoch?: number }
   | { kind: "worker"; environmentId: string; ownerEpoch: number };
+
+export type WorkerTurnClaimInput = WorkerSessionPlacementIdentity & {
+  owner: WorkerSessionTurnOwner;
+  claimId: string;
+  runId: string;
+};
 
 export type WorkerSessionTurnClaim = {
   sessionId: string;
@@ -172,60 +189,36 @@ type TerminalPlacementMetadata = {
   terminalAtMs: number | null;
 };
 
-type LocalPlacementRecord = LocalClaimablePlacementRecordBase &
-  EmptyWorkerPlacementMetadata & {
-    state: "local";
-  };
-type RequestedPlacementRecord = LocalClaimablePlacementRecordBase &
-  EmptyWorkerPlacementMetadata & {
-    state: "requested";
-  };
-type ProvisioningPlacementRecord = UnclaimedPlacementRecordBase &
-  ProvisioningPlacementMetadata & {
-    state: "provisioning";
-  };
-type SyncingPlacementRecord = UnclaimedPlacementRecordBase &
-  SyncingPlacementMetadata & {
-    state: "syncing";
-  };
-type StartingPlacementRecord = UnclaimedPlacementRecordBase &
-  StartingPlacementMetadata & {
-    state: "starting";
-  };
-type ActivePlacementRecord = PlacementRecordBase<PersistedTurnClaim | null> &
-  OwnedWorkerPlacementMetadata & {
-    state: "active";
-  };
-type DrainingPlacementRecord = PlacementRecordBase<PersistedTurnClaim | null> &
-  OwnedWorkerPlacementMetadata & {
-    state: "draining";
-  };
-type ReconcilingPlacementRecord = UnclaimedPlacementRecordBase &
-  OwnedWorkerPlacementMetadata & {
-    state: "reconciling";
-  };
-type ReclaimedPlacementRecord = UnclaimedPlacementRecordBase &
-  Omit<OwnedWorkerPlacementMetadata, "terminalReason" | "terminalAtMs"> &
-  TerminalPlacementMetadata & {
-    state: "reclaimed";
-  };
-type FailedPlacementRecord = LocalClaimablePlacementRecordBase &
-  TerminalPlacementMetadata & {
-    state: "failed";
-    recoveryError: string;
-  };
+type PlacementRecordsByState = {
+  local: LocalClaimablePlacementRecordBase & EmptyWorkerPlacementMetadata;
+  requested: LocalClaimablePlacementRecordBase & EmptyWorkerPlacementMetadata;
+  provisioning: UnclaimedPlacementRecordBase & ProvisioningPlacementMetadata;
+  syncing: UnclaimedPlacementRecordBase & SyncingPlacementMetadata;
+  starting: UnclaimedPlacementRecordBase & StartingPlacementMetadata;
+  active: PlacementRecordBase<PersistedTurnClaim | null> & OwnedWorkerPlacementMetadata;
+  draining: PlacementRecordBase<PersistedTurnClaim | null> & OwnedWorkerPlacementMetadata;
+  reconciling: UnclaimedPlacementRecordBase & OwnedWorkerPlacementMetadata;
+  reclaimed: UnclaimedPlacementRecordBase &
+    Omit<OwnedWorkerPlacementMetadata, "terminalReason" | "terminalAtMs"> &
+    TerminalPlacementMetadata;
+  failed: LocalClaimablePlacementRecordBase & TerminalPlacementMetadata & { recoveryError: string };
+};
 
-export type WorkerSessionPlacementRecord =
-  | LocalPlacementRecord
-  | RequestedPlacementRecord
-  | ProvisioningPlacementRecord
-  | SyncingPlacementRecord
-  | StartingPlacementRecord
-  | ActivePlacementRecord
-  | DrainingPlacementRecord
-  | ReconcilingPlacementRecord
-  | ReclaimedPlacementRecord
-  | FailedPlacementRecord;
+export type WorkerSessionPlacementRecord = {
+  [State in WorkerSessionPlacementState]: PlacementRecordsByState[State] & { state: State };
+}[WorkerSessionPlacementState];
+
+export type WorkerSessionTurnClaimFacts = Pick<
+  WorkerSessionPlacementRecord,
+  | "sessionId"
+  | "agentId"
+  | "sessionKey"
+  | "state"
+  | "executionMode"
+  | "environmentId"
+  | "activeOwnerEpoch"
+  | "turnClaim"
+>;
 
 export function reportPlacementTransition(
   observer: ((placement: WorkerSessionPlacementRecord) => void) | undefined,
@@ -480,7 +473,7 @@ export function assertRecordShape(
 }
 
 export function isCurrentPlacementTurnClaim(
-  record: WorkerSessionPlacementRecord,
+  record: WorkerSessionTurnClaimFacts,
   claim: WorkerSessionTurnClaim,
 ): boolean {
   const persisted = record.turnClaim;

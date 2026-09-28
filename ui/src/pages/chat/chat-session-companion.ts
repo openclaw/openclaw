@@ -7,7 +7,9 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ApplicationConfigCapability } from "../../app/config.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { assertUploadsEnabled } from "../../lib/uploads.ts";
 import { buildChatApiAttachments } from "./attachment-api.ts";
 import {
   releaseChatAttachmentPayloads,
@@ -50,6 +52,8 @@ export type ChatSessionCompanionThread = {
 
 type MutableCompanionThread = ChatSessionCompanionThread & {
   revision: number;
+  draftRevision: number;
+  pendingResets: Set<Deferred>;
   // Bounded response identities retain the canonical turn even after UI pruning.
   responses: Map<ChatSessionCompanionTurn, string>;
 };
@@ -145,14 +149,13 @@ export class ChatSessionCompanionThreads {
       return;
     }
     thread.draft = draft;
-    thread.revision += 1;
+    thread.draftRevision += 1;
     this.notify();
   }
 
   setAttachments(sessionKey: string, attachments: ChatAttachment[], agentId?: string | null): void {
     const thread = this.get(sessionKey, agentId);
     thread.attachments = attachments;
-    thread.revision += 1;
     this.notify();
   }
 
@@ -172,14 +175,20 @@ export class ChatSessionCompanionThreads {
     thread.loading = true;
     this.notify();
     try {
-      while (this.submissionTokens.has(key)) {
-        await this.submissionTokens.get(key)?.promise;
+      while (this.submissionTokens.has(key) || thread.pendingResets.size) {
+        await Promise.all([
+          this.submissionTokens.get(key)?.promise,
+          ...[...thread.pendingResets].map((reset) => reset.promise),
+        ]);
       }
       if (this.hydrationTokens.get(key) !== token) {
         return;
       }
       const revision = thread.revision;
       const result = await load(targetSessionKey);
+      while (thread.pendingResets.size) {
+        await Promise.all([...thread.pendingResets].map((reset) => reset.promise));
+      }
       if (this.hydrationTokens.get(key) !== token || thread.revision !== revision) {
         return;
       }
@@ -221,21 +230,18 @@ export class ChatSessionCompanionThreads {
     ) {
       return;
     }
-    const turn: ChatSessionCompanionTurn =
-      typeof question === "string"
-        ? {
-            question: normalized,
-            status: "pending",
-            ...(thread.attachments?.length ? { attachments: thread.attachments } : {}),
-          }
-        : question;
     if (
       typeof question !== "string" &&
-      (!thread.turns.includes(turn) || turn.status !== "failed")
+      (!thread.turns.includes(question) || question.status !== "failed")
     ) {
       return;
     }
-    Object.assign(turn, { status: "pending" });
+    const attachments = typeof question === "string" ? thread.attachments : question.attachments;
+    const turn: ChatSessionCompanionTurn = {
+      question: normalized,
+      status: "pending",
+      ...(attachments?.length ? { attachments } : {}),
+    };
     if (typeof question === "string") {
       const turns = [...thread.turns, turn];
       for (const retired of turns.slice(0, -MAX_COMPANION_EXCHANGES)) {
@@ -244,6 +250,10 @@ export class ChatSessionCompanionThreads {
       thread.turns = turns.slice(-MAX_COMPANION_EXCHANGES);
       thread.attachments = [];
       thread.draft = "";
+      thread.draftRevision += 1;
+    } else {
+      // A retry is new intent in the same slot, outside any earlier Clear snapshot.
+      thread.turns = thread.turns.map((previous) => (previous === question ? turn : previous));
     }
     thread.revision += 1;
     const token = createDeferredCore();
@@ -305,8 +315,60 @@ export class ChatSessionCompanionThreads {
     if (!targetSessionKey) {
       return;
     }
-    await clear(targetSessionKey);
-    this.retire(targetSessionKey, agentId);
+    const key = companionThreadKey(targetSessionKey, agentId);
+    const thread = this.get(targetSessionKey, agentId);
+    const priorTurns = new Set([...thread.turns, ...thread.responses.keys()]);
+    const draftRevision = thread.draftRevision;
+    const reads = thread.attachmentReads;
+    const priorReads = [...(reads?.project(thread.attachments ?? []) ?? [])];
+    const priorAttachmentIds = new Set([
+      ...(thread.attachments ?? []).map(({ id }) => id),
+      ...priorReads.map(({ attachment }) => attachment.id),
+    ]);
+    const submission = this.submissionTokens.get(key);
+    const hydration = this.hydrationTokens.get(key);
+    const reset = createDeferredCore();
+    thread.pendingResets.add(reset);
+    try {
+      await clear(targetSessionKey);
+      if (this.threads.get(key) !== thread) {
+        return;
+      }
+      const previousAttachments = [
+        ...(thread.attachments ?? []),
+        ...thread.turns.flatMap((turn) => turn.attachments ?? []),
+      ];
+      // Clear owns the content present at the click, not later composer or send intent.
+      thread.turns = thread.turns.filter((turn) => !priorTurns.has(turn));
+      thread.responses = new Map([...thread.responses].filter(([turn]) => !priorTurns.has(turn)));
+      if (thread.draftRevision === draftRevision) {
+        thread.draft = "";
+        thread.draftRevision += 1;
+      }
+      for (const entry of priorReads) {
+        reads?.remove(entry);
+      }
+      thread.attachments = (thread.attachments ?? []).filter(
+        ({ id }) => !priorAttachmentIds.has(id),
+      );
+      if (submission && this.submissionTokens.get(key) === submission) {
+        this.submissionTokens.delete(key);
+        submission.resolve();
+      }
+      if (hydration && this.hydrationTokens.get(key) === hydration) {
+        this.hydrationTokens.delete(key);
+        thread.loading = false;
+      }
+      releaseDisplacedChatAttachmentPayloads(previousAttachments, [
+        thread.attachments ?? [],
+        thread.turns.flatMap((turn) => turn.attachments ?? []),
+      ]);
+      thread.revision += 1;
+      this.notify();
+    } finally {
+      thread.pendingResets.delete(reset);
+      reset.resolve();
+    }
   }
 
   retire(sessionKey?: string, agentId?: string | null): void {
@@ -338,6 +400,8 @@ export class ChatSessionCompanionThreads {
         attachments: [],
         attachmentReads: new ChatAttachmentReadLifecycle(this.notify),
         revision: 0,
+        draftRevision: 0,
+        pendingResets: new Set(),
         responses: new Map(),
       };
       this.threads.set(key, thread);
@@ -352,7 +416,11 @@ export function requestSessionCompanionAnswer(
   question: string,
   agentId?: string | null,
   attachments?: ChatAttachment[],
+  uploadConfig?: ApplicationConfigCapability,
 ): Promise<SessionsCompanionAskResult> {
+  if (attachments?.length) {
+    assertUploadsEnabled(uploadConfig);
+  }
   return client.request<SessionsCompanionAskResult>(
     "sessions.companion.ask",
     {

@@ -285,10 +285,11 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
         ownerCount === 2 ? "Owned by Ada · with Bob" : `Owned by Ada · +${ownerCount - 1} more`,
       );
       for (const state of ["idle", "hover", "active", "selected"]) {
+        // Rendering and fonts are ready; check real pointer state below without another stability wait.
         if (state === "hover") {
-          await userEvent.hover(row);
+          await userEvent.hover(row, { force: true });
         } else if (state === "idle" || state === "active") {
-          await userEvent.unhover(row);
+          await userEvent.unhover(row, { force: true });
         }
         row.classList.toggle("sidebar-recent-session--active", state === "active");
         row.classList.toggle("sidebar-recent-session--selected", state === "selected");

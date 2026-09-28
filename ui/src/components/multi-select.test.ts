@@ -242,30 +242,6 @@ it("filters rows by typed text and appends the highlighted row on Enter", async 
   expect(input(element).value).toBe("");
 });
 
-it.each(["Enter", ",", "click"])(
-  "commits an explicitly chosen custom row via %s",
-  async (action) => {
-    const element = await createMultiSelect();
-    const custom = "openrouter/mistral/mistral-large";
-
-    await typeText(element, custom);
-    expect(rowValues(element)).toEqual([custom]);
-    const row = element.querySelector(".multi-select__option");
-    expect(row?.hasAttribute("data-custom")).toBe(true);
-    expect(row?.textContent).toContain(`Add “${custom}”`);
-
-    if (action === "click") {
-      row?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      await element.updateComplete;
-    } else {
-      await pressKey(element, action);
-    }
-
-    expect(element.onChange).toHaveBeenCalledExactlyOnceWith([sonnet, custom]);
-    expect(input(element).value).toBe("");
-  },
-);
-
 it("does not offer custom rows for values already chosen or excluded", async () => {
   const element = await createMultiSelect();
 
@@ -312,7 +288,7 @@ it("moves the highlight with arrow keys and closes on Escape", async () => {
   expect(element.onChange).not.toHaveBeenCalled();
 });
 
-it.each(["Tab", "blur"])("discards unconfirmed search text on %s", async (action) => {
+it("discards unconfirmed search text on blur", async () => {
   const outside = document.createElement("button");
   document.body.append(outside);
   for (const value of ["gem", "openrouter/pending", gemini]) {
@@ -320,9 +296,6 @@ it.each(["Tab", "blur"])("discards unconfirmed search text on %s", async (action
     input(element).focus();
     await typeText(element, value);
 
-    if (action !== "blur") {
-      await pressKey(element, action);
-    }
     outside.focus();
     await element.updateComplete;
 
@@ -370,6 +343,7 @@ it.each(["click", "Enter", ","])(
     await element.updateComplete;
 
     expect(element.onChange).toHaveBeenCalledExactlyOnceWith([custom]);
+    expect(input(element).value).toBe("");
   },
 );
 

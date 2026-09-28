@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { SKILL_RESOURCE_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/skill-resources.js";
 import { WORKER_SKILL_WORKSHOP_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
+import { readRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import { recordModelFallbackStop } from "../../agents/failover-error.js";
 import {
   loadManifestModelCatalog,
@@ -18,10 +20,7 @@ import {
   buildActiveNodeContextText,
   prepareActiveNodeContext,
 } from "../../infra/active-node-context.js";
-import {
-  getActiveAgentRunDelegatedAuthority,
-  registerAgentRunDelegatedAuthorityClosedHandler,
-} from "../../infra/agent-run-registry.js";
+import { registerAgentRunDelegatedAuthorityClosedHandler } from "../../infra/agent-run-registry.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import { prepareSkillResourceDelivery } from "../../skills/runtime/resources.js";
@@ -44,7 +43,6 @@ import {
 import { prepareWorkerTurnMedia } from "./worker-turn-media.js";
 import {
   assertSupportedTurn,
-  assistantText,
   buildWorkerTurnResult,
   emitProviderReplayRejected,
   fitLaunchDescriptorWithRuntimeIdentity,
@@ -109,16 +107,26 @@ export async function executeWorkerTurn(
   turn.onExecutionPhase?.({ phase: "runner_entered", backend: "cloud-worker" });
   const transcriptTarget = resolveWorkerTurnTranscriptTarget(turn);
   const recorder = turn.userTurnTranscriptRecorder;
-  const assertContextCurrent = () => {
+  const assertTurnInputCurrent = () => {
     params.assertRunCurrent?.();
     turn.abortSignal?.throwIfAborted();
     if (recorder?.isBlocked()) {
       throw new Error("Cloud worker turn input is blocked");
     }
+  };
+  const assertTranscriptCurrent = () => {
+    resolveWorkerTurnTranscriptTarget({ ...transcriptTarget, sessionTarget: transcriptTarget });
+  };
+  const assertSourceCurrent = () => {
+    assertTurnInputCurrent();
+    assertTranscriptCurrent();
+  };
+  const assertContextCurrent = () => {
+    assertTurnInputCurrent();
     if (!params.placements.validateTurnClaim(params.turnClaim)) {
       throw new Error("Worker turn claim changed during context preparation");
     }
-    resolveWorkerTurnTranscriptTarget({ ...transcriptTarget, sessionTarget: transcriptTarget });
+    assertTranscriptCurrent();
   };
   assertContextCurrent();
   if (recorder?.hasRuntimePersistencePending()) {
@@ -167,15 +175,23 @@ export async function executeWorkerTurn(
   let baseLeafId = admission?.entryId ?? manager.getLeafId();
 
   assertContextCurrent();
-  const credential = await params.environments.acquireTurnCredential(params.turnClaim);
-  const tunnel = await waitForTurnOperation({
-    operation: params.environments.startTunnel({
-      environmentId: placement.environmentId,
-      ownerEpoch: placement.activeOwnerEpoch,
-    }),
+  const credential = await waitForTurnOperation({
+    start: () => params.environments.acquireTurnCredential(params.turnClaim),
     ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
     timeoutMs: turn.timeoutMs,
   });
+  const tunnel = await waitForTurnOperation({
+    start: () =>
+      params.environments.startTunnel({
+        environmentId: placement.environmentId,
+        ownerEpoch: placement.activeOwnerEpoch,
+      }),
+    ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
+    timeoutMs: turn.timeoutMs,
+  });
+  if (!tunnel.launchTurn) {
+    throw new Error("Worker tunnel does not support worker turns");
+  }
   const portalAvailable =
     Boolean(environment.nodeDeviceId) &&
     environment.sshEndpoint === null &&
@@ -183,6 +199,7 @@ export async function executeWorkerTurn(
       placement.environmentId,
       placement.activeOwnerEpoch,
     )) === true;
+  const launchToolNames = await tunnel.readLaunchToolNames();
   const reasoning = resolveProviderThinkingLevel({
     provider: modelRef.provider,
     model: modelRef.model,
@@ -208,6 +225,7 @@ export async function executeWorkerTurn(
       modelRef,
       turn,
       portalAvailable,
+      launchToolNames,
     });
   params.placements.authorizeWorkerTurnTools(params.turnClaim, toolAuthority.allowedToolNames);
   const { operationalRunInstance, runtimeIdentity, assertActive, takeFinishingOutcome } =
@@ -217,12 +235,19 @@ export async function executeWorkerTurn(
       placements: params.placements,
       sessionKey: placement.sessionKey,
       sessionTarget: transcriptTarget,
-      assertSourceCurrent: assertContextCurrent,
+      promptCacheContext: {
+        boundaryCount: manager.getBoundaryCount(),
+        promptCacheKey: turn.promptCacheKey,
+      },
+      assertSourceCurrent,
       turn,
       turnClaim: params.turnClaim,
     });
-  preparedComputer?.bind(operationalRunInstance);
-  const authority = getActiveAgentRunDelegatedAuthority(operationalRunInstance);
+  preparedComputer?.bind(operationalRunInstance, {
+    authority: runtimeIdentity.approvalAuthority,
+    assertCurrent: assertActive,
+  });
+  const authority = runtimeIdentity.approvalAuthority;
   const authorityAbort = new AbortController();
   const signal = turn.abortSignal
     ? AbortSignal.any([turn.abortSignal, authorityAbort.signal])
@@ -248,7 +273,6 @@ export async function executeWorkerTurn(
         signal.throwIfAborted();
         const current = params.environments.get(placement.environmentId);
         return (
-          params.placements.validateTurnClaim(params.turnClaim) &&
           current?.state === "attached" &&
           current.ownerEpoch === placement.activeOwnerEpoch &&
           current.attachedSessionIds.length === 1 &&
@@ -282,6 +306,7 @@ export async function executeWorkerTurn(
                 agentId: placement.agentId,
                 sessionKey: placement.sessionKey,
                 operationalRunInstance,
+                approvalAuthority: runtimeIdentity.approvalAuthority,
                 receiptAuthority: () => {
                   assertSkillAuthority();
                   return true;
@@ -365,15 +390,13 @@ export async function executeWorkerTurn(
     }
     // Project the wire handshake; the receipt also carries storage-only provenance.
     const { bundleHash, openclawVersion, protocolFeatures } = bootstrapReceipt;
-    if (!tunnel.launchTurn) {
-      throw new Error("Worker tunnel does not support worker turns");
-    }
     // Presence belongs to the Gateway; workers cannot read its process-local node registry.
-    await prepareActiveNodeContext();
-    assertContextCurrent();
+    const requesterProfileId = readRunOperatorAuthority(turn)?.profileId;
+    await prepareActiveNodeContext(requesterProfileId);
+    assertActive();
     const systemPrompt = [
       turn.extraSystemPrompt,
-      buildActiveNodeContextText(),
+      buildActiveNodeContextText(requesterProfileId),
       ...buildProactiveSubagentOrchestrationSection({
         enabled: turn.thinkLevel === "ultra",
         hasSessionsSpawn: toolAuthority.allowedToolNames.includes("sessions_spawn"),
@@ -545,7 +568,7 @@ export async function executeWorkerTurn(
     if (!terminal || terminal.type !== "message" || terminal.message.role !== "assistant") {
       throw new Error("Cloud worker completed without a terminal assistant transcript message");
     }
-    const text = assistantText(terminal.message);
+    const text = collectTextContentBlocks(terminal.message.content).join("");
     const baseIndex = completed.getBranch().findIndex((entry) => entry.id === baseLeafId);
     const workerMessages = completed
       .getBranch()

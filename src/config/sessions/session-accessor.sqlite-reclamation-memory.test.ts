@@ -35,38 +35,53 @@ const checkpoint = vi.hoisted(() => ({
   authorizations: [] as Promise<void>[],
 }));
 
-vi.mock("./session-accessor.sqlite-worker-request.js", async (importOriginal) => {
+vi.mock("./session-accessor.sqlite-reclamation-worker.js", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("./session-accessor.sqlite-worker-request.js")>();
+    await importOriginal<typeof import("./session-accessor.sqlite-reclamation-worker.js")>();
   return {
     ...actual,
-    runSqliteMutationWorkerRequest: <Result>(
-      params: Parameters<typeof actual.runSqliteMutationWorkerRequest<Result>>[0],
-    ) => {
-      let inWriteAdmission: ReturnType<typeof AsyncLocalStorage.snapshot> | undefined;
-      return actual.runSqliteMutationWorkerRequest<Result>({
-        ...params,
-        withWriteAdmission: (performWrite, diagnostics) =>
-          params.withWriteAdmission((refusal) => {
-            // Bound Worker messages otherwise run outside the active writer context.
-            inWriteAdmission = AsyncLocalStorage.snapshot();
-            return performWrite(refusal);
-          }, diagnostics),
-        onCommitRequest: () => {
-          if (!inWriteAdmission) {
-            throw new Error("Worker requested commit without writer admission");
-          }
-          inWriteAdmission(() => checkpoint.startForeground?.());
-          // Let prepared foreground continuations run before the queued parent
-          // authorizer, while the actual reclamation Worker holds its writer lock.
-          const authorization = setImmediate().then(() => {
-            params.onCommitRequest();
+    withSqliteReclamationWorker: ((options, claim, run, assertRequestCurrent, signal) =>
+      actual.withSqliteReclamationWorker(
+        options,
+        claim,
+        async (worker) => {
+          const originalRun = worker.run.bind(worker);
+          const spy = vi.spyOn(worker, "run").mockImplementation((params) => {
+            if (params.plan.kind !== "entry") {
+              return originalRun(params);
+            }
+            let inWriteAdmission: ReturnType<typeof AsyncLocalStorage.snapshot> | undefined;
+            return originalRun({
+              ...params,
+              withWriteAdmission: (performWrite, diagnostics) =>
+                params.withWriteAdmission((refusal) => {
+                  // Bound Worker messages otherwise run outside the active writer context.
+                  inWriteAdmission = AsyncLocalStorage.snapshot();
+                  return performWrite(refusal);
+                }, diagnostics),
+              onCommitRequest: () => {
+                if (!inWriteAdmission) {
+                  throw new Error("Worker requested commit without writer admission");
+                }
+                inWriteAdmission(() => checkpoint.startForeground?.());
+                // Let foreground continuations run before authorizing the deletion commit.
+                const authorization = setImmediate().then(() => {
+                  params.onCommitRequest();
+                });
+                checkpoint.authorizations.push(authorization);
+                void authorization.catch(() => {});
+              },
+            });
           });
-          checkpoint.authorizations.push(authorization);
-          void authorization.catch(() => {});
+          try {
+            return await run(worker);
+          } finally {
+            spy.mockRestore();
+          }
         },
-      });
-    },
+        assertRequestCurrent,
+        signal,
+      )) satisfies typeof actual.withSqliteReclamationWorker,
   };
 });
 
@@ -161,10 +176,10 @@ describe("reclamation with the public memory runtime", () => {
     });
     expect(manager.status().cache?.entries).toBe(maxEntries + 1);
     let write: Promise<void> | undefined;
-    checkpoint.startForeground = () => {
+    checkpoint.startForeground = vi.fn(() => {
       write = sync({ reason: "reclamation-overlap" });
       void write.catch(() => {});
-    };
+    });
     const deletion = await deleteSessionEntryLifecycle({
       archiveTranscript: true,
       commitGuard: () => {},
@@ -178,6 +193,7 @@ describe("reclamation with the public memory runtime", () => {
     const authorizations = await Promise.allSettled(checkpoint.authorizations);
     expect(outcomes).toEqual([{ status: "fulfilled", value: undefined }]);
     expect(deletion).toMatchObject({ result: { deleted: true } });
+    expect(checkpoint.startForeground).toHaveBeenCalledOnce();
     expect(authorizations).toEqual([{ status: "fulfilled", value: undefined }]);
     expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toBeUndefined();
     expect(manager.status().cache?.entries).toBe(maxEntries);

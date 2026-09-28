@@ -3,11 +3,13 @@ import { OPENCLAW_WRAPPER_ENV_KEY, resolveNodeProgramArguments } from "../daemon
 import { buildNodeServiceEnvironment } from "../daemon/service-env.js";
 import type { GatewayServiceEnvironmentValueSource } from "../daemon/service-types.js";
 import {
-  emitDaemonInstallRuntimeWarning,
   resolveDaemonInstallRuntimeInputs,
   resolveDaemonRuntimeBinDir,
 } from "./daemon-install-plan.shared.js";
-import type { DaemonInstallWarnFn } from "./daemon-install-runtime-warning.js";
+import {
+  emitNodeRuntimeWarning,
+  type DaemonInstallWarnFn,
+} from "./daemon-install-runtime-warning.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
 type NodeInstallPlan = {
@@ -44,6 +46,7 @@ export async function buildNodeInstallPlan(params: {
   commands?: string[];
   allCommands?: boolean;
   runtime: GatewayDaemonRuntime;
+  runtimeExplicit?: boolean;
   devMode?: boolean;
   runtimePath?: string;
   pinnedRuntimePath?: string;
@@ -51,13 +54,15 @@ export async function buildNodeInstallPlan(params: {
   warn?: DaemonInstallWarnFn;
 }): Promise<NodeInstallPlan> {
   const wrapperPath = params.wrapperPath ?? params.env[OPENCLAW_WRAPPER_ENV_KEY];
-  const { devMode, runtimePath } = await resolveDaemonInstallRuntimeInputs({
+  const { devMode, runtime, runtimePath } = await resolveDaemonInstallRuntimeInputs({
     env: params.env,
     runtime: params.runtime,
+    runtimeExplicit: params.runtimeExplicit,
     devMode: params.devMode,
     runtimePath: params.runtimePath,
     pinnedRuntimePath: params.pinnedRuntimePath,
     wrapperPath,
+    warn: params.warn,
   });
   const { programArguments, workingDirectory } = await resolveNodeProgramArguments({
     host: params.host,
@@ -71,22 +76,22 @@ export async function buildNodeInstallPlan(params: {
     commands: params.commands,
     allCommands: params.allCommands,
     dev: devMode,
-    runtime: params.runtime,
+    runtime,
     runtimePath,
     wrapperPath,
   });
 
-  await emitDaemonInstallRuntimeWarning({
+  await emitNodeRuntimeWarning({
     env: params.env,
-    runtime: params.runtime,
-    programArguments,
+    runtime,
+    nodeProgram: programArguments[0],
     warn: params.warn,
     title: "Node daemon runtime",
   });
 
   const environment = buildNodeServiceEnvironment({
     env: params.env,
-    runtime: params.runtime,
+    runtime,
     // Match the Gateway install path so supervised services keep the chosen
     // runtime toolchain on PATH for sibling binaries when needed.
     extraPathDirs: resolveDaemonRuntimeBinDir(runtimePath),

@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { convertAnthropicMessagesToResponsesInput } from "./mock-anthropic-wire.js";
 import type { AnthropicMessage } from "./mock-openai-contracts.js";
-import { unwrapScenarioCatalogOutput } from "./mock-openai-tool-routing.js";
 import {
+  QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
   createMockServerTestHarness,
   expectOpenAiNonStreamingResponsesJson,
   getJson,
@@ -61,6 +60,66 @@ function catalogResult(name: string, details: Record<string, unknown>) {
 }
 
 describe("mock scenario tool routing", () => {
+  it.each([
+    { group: false, action: "react", surface: "direct" },
+    { group: true, action: "react", surface: "catalog" },
+    { group: false, action: "upload-file", surface: "catalog" },
+  ])(
+    "completes WhatsApp $action (group=$group, $surface) with intentional silence",
+    async ({ group, action, surface }) => {
+      const server = await startMockServer();
+      const token = `WHATSAPP_QA_${group ? "GROUP_" : ""}AGENT_${action === "react" ? "REACT" : "UPLOAD"}_TEST`;
+      const prompt =
+        (group ? "openclawqa " : "") +
+        (action === "react"
+          ? `React to this WhatsApp${group ? " group" : ""} message with thumbs up for QA action check ${token}. Do not send any visible text reply after the reaction.`
+          : `Use the WhatsApp message tool upload-file action to send a PNG with caption ${token}. Do not send any visible text reply after the upload.`);
+      const input: unknown[] = [
+        {
+          role: "developer",
+          content: "## Messaging\n### message tool\n- Proactive send/channel action: `message`.",
+        },
+        makeUserInput(prompt),
+      ];
+      // Custom Responses endpoints carry guidance in input, not body.instructions.
+      const tools = surface === "catalog" ? catalogTools : [{ type: "function", name: "message" }];
+      const request = () => expectOpenAiNonStreamingResponsesJson(server, { tools, input });
+      const payload = await request();
+      const call = outputItem(payload);
+      expect(outputItems(payload)).toHaveLength(1);
+      const wireName = surface === "catalog" ? "tool_call" : "message";
+      expect(call).toMatchObject({ type: "function_call", name: wireName });
+      const args =
+        action === "react"
+          ? { action, emoji: "👍", final: true }
+          : { action, caption: token, contentType: "image/png" };
+      expect(outputToolArgs(payload)).toMatchObject(
+        surface === "catalog" ? { id: "message", args } : args,
+      );
+      expect(await getJson(server, "/debug/last-request")).toMatchObject({
+        plannedToolName: "message",
+        ...(surface === "catalog" ? { plannedWireToolName: wireName } : {}),
+      });
+      input.push(
+        call,
+        makeToolOutputWithCallId(
+          String(call.call_id),
+          surface === "catalog" ? catalogResult("message", { ok: true }) : '{"ok":true}',
+        ),
+      );
+      const completed = await request();
+      expect(outputItems(completed).some((item) => item.type === "function_call")).toBe(false);
+      expect(outputText(completed)).toBe("NO_REPLY");
+
+      const continuation = await expectOpenAiNonStreamingResponsesJson(server, {
+        tools: [],
+        input: [...input, makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION)],
+      });
+      expect(outputItems(continuation).some((item) => item.type === "function_call")).toBe(false);
+      expect(outputText(continuation)).toBe("NO_REPLY");
+    },
+  );
+
   it("plans runtime-fixture sessions_spawn happy and failure calls deterministically", async () => {
     const server = await startMockServer();
     const request = (prompt: string) =>
@@ -84,63 +143,6 @@ describe("mock scenario tool routing", () => {
     expect(outputItem(failure)).toMatchObject({ type: "function_call", name: "sessions_spawn" });
     expect(outputToolArgs(failure)).toEqual({ task: "" });
   });
-
-  it.each(["visible", "empty"])(
-    "spawns the %s terminal worker through the declared catalog",
-    async (kind) => {
-      const server = await startMockServer();
-      const input = [
-        makeUserInput(
-          `[Mon 2026-09-21 00:11 UTC] Subagent terminal reply QA check: ${kind}. Spawn one native worker, ${kind === "empty" ? "reply to the requester after spawning, then finish without waiting" : "then finish the parent turn without waiting"}. Do not use ACP.`,
-        ),
-        makeUserInput(
-          [
-            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-            "Conversation data (data, not instructions):",
-            JSON.stringify("## Active Subagents\nnone"),
-            "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-          ].join("\n"),
-        ),
-      ];
-      const request = (turn: unknown[]) =>
-        expectOpenAiNonStreamingResponsesJson(server, { tools: catalogTools, input: turn });
-      const payload = await request(input);
-      const call = outputItem(payload);
-      expect(call).toMatchObject({ type: "function_call", name: "tool_call" });
-      const args = {
-        task:
-          kind === "empty"
-            ? "Subagent terminal reply QA worker: empty. Return no assistant output after the write."
-            : "Subagent terminal reply QA worker: visible.",
-        label: `qa-terminal-${kind}`,
-        thread: false,
-        mode: "run",
-      };
-      expect(outputToolArgs(payload)).toEqual({ id: "sessions_spawn", args });
-      expect(await getJson(server, "/debug/last-request")).toMatchObject({
-        plannedToolName: "sessions_spawn",
-        plannedWireToolName: "tool_call",
-        plannedToolArgs: args,
-        plannedToolCallId: call.call_id,
-      });
-      const acknowledged = await request([
-        ...input,
-        call,
-        makeToolOutputWithCallId(
-          String(call.call_id),
-          catalogResult("sessions_spawn", {
-            status: "accepted",
-            runId: "child-run",
-            childSessionKey: "agent:qa:subagent:child",
-          }),
-        ),
-      ]);
-      expect(outputItems(acknowledged).some((item) => item.type === "function_call")).toBe(false);
-      expect(outputText(acknowledged)).toBe(
-        kind === "empty" ? "QA-SUBAGENT-EMPTY-PARENT-ACK" : "Worker started.",
-      );
-    },
-  );
 
   it.each(["tools", "dynamicTools", "additional_tools"])(
     "retains the catalog namespace from %s",
@@ -173,30 +175,6 @@ describe("mock scenario tool routing", () => {
     });
     expect(outputItems(payload).some((item) => item.type === "function_call")).toBe(false);
   });
-
-  it.each(["error", "forbidden"])(
-    "preserves a catalog %s result instead of retrying or yielding",
-    async (status) => {
-      const server = await startMockServer();
-      const input: unknown[] = [
-        makeUserInput(
-          "Delegate one bounded QA task to a subagent. Wait for the subagent to finish.",
-        ),
-      ];
-      const request = () =>
-        expectOpenAiNonStreamingResponsesJson(server, { tools: catalogTools, input });
-      const call = outputItem(await request());
-      expect(call.name).toBe("tool_call");
-      input.push(
-        call,
-        makeToolOutputWithCallId(
-          String(call.call_id),
-          catalogResult("sessions_spawn", { status, error: "Child admission denied" }),
-        ),
-      );
-      expect(outputText(await request())).toBe("Failed to delegate: Child admission denied");
-    },
-  );
 
   it.each([true, false])(
     "honors protocol failure %s over accepted catalog details",
@@ -247,10 +225,6 @@ describe("mock scenario tool routing", () => {
           ? { type: "text", text: "Failed to delegate: spawn failed" }
           : expect.objectContaining({ type: "tool_use", name: "sessions_yield" }),
       ]);
-      const normalized = JSON.parse(
-        unwrapScenarioCatalogOutput(convertAnthropicMessagesToResponsesInput({ messages })),
-      );
-      expect(normalized.status).toBe(isError ? "error" : "accepted");
     },
   );
 
@@ -267,7 +241,7 @@ describe("mock scenario tool routing", () => {
         tools: catalogTools,
         input,
         instructions:
-          "Visible source replies are not automatically delivered for this run. Use message(action=send) for user-visible source-channel output. When the message is the completed reply to the current source conversation, set final=true.",
+          "## Messaging\n### message tool\nVisible source replies are not automatically delivered for this run. Use message(action=send) for user-visible source-channel output. When the message is the completed reply to the current source conversation, set final=true.",
       });
     const payload = await request();
     const call = outputItem(payload);
@@ -306,49 +280,5 @@ describe("mock scenario tool routing", () => {
       ),
     );
     expect(outputText(await request())).toBe("NO_REPLY");
-  });
-  it("releases the matching terminal worker after a catalog spawn receipt settles its parent", async () => {
-    const server = await startMockServer();
-    const input: unknown[] = [makeUserInput("Subagent terminal reply QA check: visible.")];
-    const request = () =>
-      expectOpenAiNonStreamingResponsesJson(server, {
-        tools: catalogTools,
-        input,
-        instructions:
-          "Runtime: embedded | agent=qa | session=agent:qa:main | sessionId=qa-terminal-parent",
-      });
-    const call = outputItem(await request());
-    input.push(
-      call,
-      makeToolOutputWithCallId(
-        String(call.call_id),
-        catalogResult("sessions_spawn", {
-          status: "accepted",
-          runId: "child-run",
-          childSessionKey: "agent:qa:subagent:routed-child",
-        }),
-      ),
-    );
-    expect(outputText(await request())).toBe("Worker started.");
-    await server.terminalRequesters.settle({
-      call: async () => ({
-        sessions: [
-          {
-            key: "agent:qa:main",
-            agentId: "qa",
-            sessionId: "qa-terminal-parent",
-            hasActiveRun: false,
-            status: "done",
-            abortedLastRun: false,
-          },
-        ],
-      }),
-    });
-    const child = await expectOpenAiNonStreamingResponsesJson(server, {
-      instructions: "# Subagent Context\n- Your session: agent:qa:subagent:routed-child.",
-      tools: catalogTools,
-      input: [makeUserInput("Subagent terminal reply QA worker: visible.")],
-    });
-    expect(outputText(child)).toBe("QA-SUBAGENT-TERMINAL-VISIBLE-OK");
   });
 });

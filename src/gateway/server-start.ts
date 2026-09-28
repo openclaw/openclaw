@@ -1,6 +1,7 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
 import { createGatewayKernel, gatewayKernelLogs } from "./server-kernel.js";
@@ -33,10 +34,7 @@ async function startGatewayServerWithSdkHost(
   opts: GatewayServerOptions,
   sdkResourceHost: LegacyPluginSdkResourceHost,
 ): Promise<GatewayServer> {
-  let releasePostReadyWork: () => void = () => {};
-  const postReadyWorkBarrier = new Promise<void>((resolve) => {
-    releasePostReadyWork = resolve;
-  });
+  const { promise: postReadyWorkBarrier, resolve: releasePostReadyWork } = createDeferredCore();
   const gatewayKernel = await createGatewayKernel(port, opts, {
     deferEarlyRuntime: true,
     sdkResourceHost,
@@ -101,15 +99,17 @@ async function startGatewayServerWithSdkHost(
     releasePostReadyWork();
     return await rethrowGatewayStartupError(err, closeOnStartupFailure);
   }
-  let postReadyWorkTimer: ReturnType<typeof setTimeout> | undefined;
   void startupSettled.then(
     () => {
       if (gatewayKernel.lifecycle.closePreludeStarted) {
         return;
       }
       // Deferred sidecars must finish before the I/O window for background work begins.
-      postReadyWorkTimer = setTimeout(releasePostReadyWork, POST_READY_WORK_START_DELAY_MS);
-      postReadyWorkTimer.unref?.();
+      gatewayKernel.scheduler.schedule({
+        id: "startup:post-ready-work",
+        delayMs: POST_READY_WORK_START_DELAY_MS,
+        run: releasePostReadyWork,
+      });
     },
     // The caller owns deferred startup failure; close releases the background waiters.
     () => {},
@@ -125,7 +125,6 @@ async function startGatewayServerWithSdkHost(
         closePromise = sdkResourceHost
           .run(async () => {
             const prelude = beginClosePrelude(optsLocal);
-            clearTimeout(postReadyWorkTimer);
             releasePostReadyWork();
             await prelude;
             const close = await prepareClose(optsLocal);

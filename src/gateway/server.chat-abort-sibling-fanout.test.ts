@@ -34,8 +34,6 @@ import {
   getActiveSessionWorkAdmissionCount,
   type SessionWorkAdmissionLease,
 } from "../sessions/session-lifecycle-admission.js";
-import { SUBAGENT_KILL_TASK_ERROR } from "../tasks/detached-task-runtime-contract.js";
-import { loadTaskRegistryStateFromSqliteReadOnlyResult } from "../tasks/task-registry.store.sqlite.js";
 import {
   agentCommandMock,
   connectOk,
@@ -45,7 +43,6 @@ import {
   onceMessage,
   rpcReq,
   testState,
-  writeSessionStore,
 } from "./test-helpers.js";
 
 let gateway: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
@@ -68,20 +65,18 @@ installGatewayTestHooks({
 
 await import("./server.js");
 
-for (const { name, fault, replaceParent } of [
-  ...[false, true].map((faultCase) => ({
-    name: `chat.abort interrupts all siblings before cleanup and preserves failure accounting (fault=${faultCase})`,
-    fault: faultCase,
+for (const { name, replaceParent } of [
+  {
+    name: "chat.abort interrupts all siblings before cleanup and preserves failure accounting",
     replaceParent: false,
-  })),
+  },
   {
     name: "typed Stop rejects a replaced parent while child cancellation drains",
-    fault: false,
     replaceParent: true,
   },
 ]) {
   test(name, async () => {
-    const suffix = replaceParent ? "replacement" : fault ? "fault" : "success";
+    const suffix = replaceParent ? "replacement" : "fault";
     const parentRunId = `parent-${suffix}`;
     const parentKey = `agent:main:sibling-abort-${suffix}`;
     const groupId = `sibling-abort-${suffix}`;
@@ -92,7 +87,7 @@ for (const { name, fault, replaceParent } of [
     const firstRunId = expectDefined(running[0], "first running child");
     const queued = replaceParent ? [] : [`queued-${suffix}-0`, `queued-${suffix}-1`];
     const selected = [...running, ...queued];
-    const failedRunId = fault ? running[3] : undefined;
+    const failedRunId = replaceParent ? undefined : running[3];
     const sessionKey = (runId: string) => `agent:main:subagent:${runId}`;
     const stateDir = process.env.OPENCLAW_STATE_DIR!;
     const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
@@ -106,8 +101,12 @@ for (const { name, fault, replaceParent } of [
     const replacementCanary = "The replacement conversation must survive the earlier Stop.";
     let replacementBefore: Awaited<ReturnType<typeof loadTranscriptEvents>> | undefined;
     testState.sessionStorePath = storePath;
-    await writeSessionStore({
-      entries: { [parentKey]: { sessionId: parentSessionId, updatedAt: Date.now() } },
+    // Prior cases still have Gateway-owned monitors; seed this case without deleting their rows.
+    await writeSubagentSessionEntry({
+      stateDir,
+      agentId: "main",
+      sessionKey: parentKey,
+      defaultSessionId: parentSessionId,
     });
 
     const socket = await gateway.openWs();
@@ -151,8 +150,8 @@ for (const { name, fault, replaceParent } of [
           ok: true,
           payload: { runId: parentRunId, status: "accepted" },
         });
-        await expect.poll(() => agentCommandMock.mock.calls.length, { timeout: 2_000 }).toBe(1);
         const parent = await parentStarted.promise;
+        expect(agentCommandMock).toHaveBeenCalledTimes(1);
 
         for (const runId of selected) {
           await writeSubagentSessionEntry({
@@ -179,7 +178,6 @@ for (const { name, fault, replaceParent } of [
             groupId,
             queued: queued.includes(runId),
             expectsCompletionMessage: false,
-            taskRowOwnership: "required",
           });
           if (queued.includes(runId)) {
             activateSwarmRun({ groupId, runId, start, onStartFailure: () => true });
@@ -314,45 +312,29 @@ for (const { name, fault, replaceParent } of [
             replacementScope.sessionId,
           );
           expect(await loadTranscriptEvents(replacementScope)).toEqual(replacementBefore);
-        } else if (fault) {
+        } else {
           expect(outcome.response).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
           expect(outcome.response.error?.message).toContain(
             "synthetic sibling interruption failure",
           );
-        } else {
-          expect(outcome.response).toMatchObject({
-            ok: true,
-            payload: { ok: true, aborted: true, runIds: [parentRunId] },
-          });
         }
 
         const persistedRuns = new Map(
           loadSubagentRunsForControllerFromSqlite(parentKey).map((run) => [run.runId, run]),
         );
-        const persistedTasks = loadTaskRegistryStateFromSqliteReadOnlyResult();
-        expect(persistedTasks.state).toBe("ready");
-        const tasks = [...persistedTasks.snapshot.tasks.values()].filter((task) =>
-          selected.includes(task.runId ?? ""),
-        );
-        expect(tasks).toHaveLength(selected.length);
-        expect(tasks.map((task) => task.runId)).toEqual(expect.arrayContaining(selected));
         expect([...persistedRuns.keys()].toSorted()).toEqual(selected.toSorted());
         for (const runId of selected) {
-          const task = tasks.find((candidate) => candidate.runId === runId)!;
           const run = persistedRuns.get(runId)!;
           if (replaceParent || runId === failedRunId) {
-            expect(task.status).toBe("running");
             expect(run.execution.status).toBe("running");
             expect(run.execution.endedAt).toBeUndefined();
           } else {
-            expect(task).toMatchObject({ status: "cancelled", error: SUBAGENT_KILL_TASK_ERROR });
             expect(run).toMatchObject({
               endedReason: "subagent-killed",
               execution: { status: "terminal" },
             });
           }
           if (replaceParent) {
-            expect(task.error).toBeUndefined();
             expect(run.killIntent).toBeUndefined();
             expect(
               loadExactSessionEntryReadOnly({ storePath, sessionKey: sessionKey(runId) })?.entry

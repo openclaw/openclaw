@@ -15,10 +15,7 @@ import type {
 } from "./deliver-contracts.js";
 import type { OutboundDeliveryResult, OutboundPayloadDeliveryKind } from "./deliver-types.js";
 import { flattenMarkdownDetails } from "./markdown-details.js";
-import {
-  summarizeOutboundPayloadForTransport,
-  type NormalizedOutboundPayload,
-} from "./payloads.js";
+import type { NormalizedOutboundPayload } from "./payloads.js";
 import { stripInternalRuntimeScaffolding } from "./protocol-scaffolding.js";
 import type { OutboundPayloadPlan } from "./reply-payload-parts.js";
 
@@ -53,6 +50,24 @@ export function normalizeEmptyPayloadForDelivery(payload: ReplyPayload): ReplyPa
   return payload;
 }
 
+export function normalizeTransformedPayloadForDelivery(
+  payload: ReplyPayload,
+  handler: ChannelHandler,
+  copyMetadata: (
+    source: ReplyPayload,
+    payload: ReplyPayload,
+  ) => ReplyPayload = copyReplyPayloadMetadata,
+): ReplyPayload | null {
+  const normalizedPayload = handler.normalizePayload ? handler.normalizePayload(payload) : payload;
+  if (!normalizedPayload) {
+    return null;
+  }
+  const normalized = copyMetadata(payload, normalizedPayload);
+  const stripped = copyMetadata(normalized, stripInternalRuntimeScaffoldingFromPayload(normalized));
+  const nonEmpty = normalizeEmptyPayloadForDelivery(stripped);
+  return nonEmpty ? copyMetadata(stripped, nonEmpty) : null;
+}
+
 export function normalizePayloadsForChannelDelivery(
   plan: readonly OutboundPayloadPlan[],
   handler: ChannelHandler,
@@ -85,18 +100,11 @@ export function normalizePayloadsForChannelDelivery(
         }
       }
     }
-    const normalizedPayload = handler.normalizePayload
-      ? handler.normalizePayload(sanitizedPayload)
-      : sanitizedPayload;
-    let normalized = normalizedPayload ? copyMetadata(sanitizedPayload, normalizedPayload) : null;
-    if (normalized) {
-      const stripped = copyMetadata(
-        normalized,
-        stripInternalRuntimeScaffoldingFromPayload(normalized),
-      );
-      const nonEmpty = normalizeEmptyPayloadForDelivery(stripped);
-      normalized = nonEmpty ? copyMetadata(stripped, nonEmpty) : null;
-    }
+    const normalized = normalizeTransformedPayloadForDelivery(
+      sanitizedPayload,
+      handler,
+      copyMetadata,
+    );
     if (normalized) {
       normalizedPayloads.push({ index: entry.sourceIndex, payload: normalized });
     }
@@ -203,9 +211,7 @@ export function stripInternalRuntimeScaffoldingFromPayload(payload: ReplyPayload
     : payload;
 }
 
-export function buildPayloadSummary(payload: ReplyPayload): NormalizedOutboundPayload {
-  return summarizeOutboundPayloadForTransport(payload);
-}
+export { summarizeOutboundPayloadForTransport as buildPayloadSummary } from "./payloads.js";
 
 export function hasDeliveryResultIdentity(result: OutboundDeliveryResult): boolean {
   return resolveReceiptSourceId(result) !== undefined;

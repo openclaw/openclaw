@@ -4,6 +4,7 @@ import { keyed } from "lit/directives/keyed.js";
 import { renderCopyButton } from "../../../components/copy-button.ts";
 import { shortestFileLabels } from "../../../components/file-kind.ts";
 import { icons } from "../../../components/icons.ts";
+import { renderShortcutHint } from "../../../components/kbd.ts";
 import { currentThemeBranding } from "../../../components/neutral-mark.ts";
 import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
 import "../../../components/tooltip.ts";
@@ -13,7 +14,7 @@ import {
   formatKeyboardShortcutCombo,
   isApplePlatform,
   KEYBOARD_SHORTCUT_COMBOS,
-} from "../../../lib/keyboard-shortcut-catalog.ts";
+} from "../../../lib/keyboard-shortcut-contract.ts";
 import { isSessionWorkspaceFileSelected } from "../../../lib/sessions/workspace.ts";
 import type {
   SessionWorkspaceFilter,
@@ -400,6 +401,7 @@ export function renderSessionWorkspaceRail(
                 </openclaw-tooltip>
                 <openclaw-tooltip
                   .content=${`${t("chat.workspaceFiles.collapse")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles)})`}
+                  .contentTemplate=${renderShortcutHint(t("chat.workspaceFiles.collapse"), KEYBOARD_SHORTCUT_COMBOS.workspaceFiles)}
                 >
                   <button
                     type="button"

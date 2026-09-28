@@ -9,6 +9,7 @@ import {
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { asBoolean } from "../../utils/boolean.js";
 
 const PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR =
   "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.";
@@ -49,16 +50,6 @@ export function buildNonSensitiveProbeFailure(
   return { ok: false, error: PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR };
 }
 
-function readBooleanField(value: unknown, key: string): boolean | undefined {
-  const record = asNullableRecord(value);
-  if (!record) {
-    return undefined;
-  }
-  return typeof record[key] === "boolean" ? record[key] : undefined;
-}
-
-const hasAccountValue = (account: unknown): boolean => account !== null && account !== undefined;
-
 function resolveProbeAccountEnabled(params: {
   plugin: ChannelPlugin;
   cfg: OpenClawConfig;
@@ -66,7 +57,7 @@ function resolveProbeAccountEnabled(params: {
   account: unknown;
   diagnostics: string[];
 }): boolean {
-  const fallback = readBooleanField(params.account, "enabled") ?? true;
+  const fallback = asBoolean(asNullableRecord(params.account)?.enabled) ?? true;
   try {
     return resolveChannelAccountEnabled({
       plugin: params.plugin,
@@ -88,7 +79,7 @@ async function resolveProbeAccountConfigured(params: {
   account: unknown;
   diagnostics: string[];
 }): Promise<boolean> {
-  const fallback = readBooleanField(params.account, "configured") ?? true;
+  const fallback = asBoolean(asNullableRecord(params.account)?.configured) ?? true;
   try {
     return await resolveChannelAccountConfigured({
       plugin: params.plugin,
@@ -125,8 +116,9 @@ export async function resolveHealthAccountContext(params: {
     );
   }
 
-  const inspectedEnabled = readBooleanField(inspectedAccount, "enabled");
-  const inspectedConfigured = readBooleanField(inspectedAccount, "configured");
+  const inspected = asNullableRecord(inspectedAccount);
+  const inspectedEnabled = asBoolean(inspected?.enabled);
+  const inspectedConfigured = asBoolean(inspected?.configured);
   let account: unknown;
   if (inspectedEnabled !== false && !hasConfiguredUnavailableCredentialStatus(inspectedAccount)) {
     try {
@@ -138,7 +130,7 @@ export async function resolveHealthAccountContext(params: {
     }
   }
 
-  if (!hasAccountValue(account)) {
+  if (account === null || account === undefined) {
     return {
       probeAccount: undefined,
       inspectedAccount,

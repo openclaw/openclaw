@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-// Zalouser plugin module implements zalo js behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   asDateTimestampMs,
@@ -24,6 +23,7 @@ import {
   snapshotApiCredentials,
   type ZaloCredentialPayload,
 } from "./credential-persistence.js";
+import { buildZaloNameIndex } from "./directory-index.js";
 import { normalizeZaloReactionIcon } from "./reaction.js";
 import { sendZaloTextWithApi } from "./send-api.js";
 import { withZaloSendContext } from "./send-context.js";
@@ -361,7 +361,7 @@ function mapFriend(friend: User): ZcaFriend {
   };
 }
 
-function mapGroup(groupId: string, group: GroupInfo & Record<string, unknown>): ZaloGroup {
+function mapGroup(groupId: string, group: GroupInfo): ZaloGroup {
   const totalMember =
     typeof group.totalMember === "number" && Number.isFinite(group.totalMember)
       ? group.totalMember
@@ -507,9 +507,6 @@ async function fetchGroupsByIds(api: API, ids: string[]): Promise<Map<string, Gr
   const result = new Map<string, GroupInfo>();
   for (let index = 0; index < ids.length; index += GROUP_INFO_CHUNK_SIZE) {
     const chunk = ids.slice(index, index + GROUP_INFO_CHUNK_SIZE);
-    if (chunk.length === 0) {
-      continue;
-    }
     const response = await api.getGroupInfo(chunk);
     const map = response.gridInfoMap ?? {};
     for (const [groupId, info] of Object.entries(map)) {
@@ -767,16 +764,10 @@ export async function listZaloGroups(
         return [];
       }
       const details = await fetchGroupsByIds(api, ids);
-      const rows: ZaloGroup[] = [];
-      for (const id of ids) {
+      return ids.map((id) => {
         const info = details.get(id);
-        if (!info) {
-          rows.push({ groupId: id, name: id });
-          continue;
-        }
-        rows.push(mapGroup(id, info as GroupInfo & Record<string, unknown>));
-      }
-      return rows;
+        return info ? mapGroup(id, info) : { groupId: id, name: id };
+      });
     },
     { credentialPersistence: options?.credentialPersistence ?? "persist" },
   );
@@ -840,17 +831,8 @@ export async function listZaloGroupMembers(
     const profileMap = new Map<string, { displayName?: string; avatar?: string }>();
     if (uniqueIds.length > 0) {
       const profiles = await api.getGroupMembersInfo(uniqueIds);
-      const profileEntries = profiles.profiles as Record<
-        string,
-        {
-          id?: string;
-          displayName?: string;
-          zaloName?: string;
-          avatar?: string;
-        }
-      >;
-      for (const [rawId, profileValue] of Object.entries(profileEntries)) {
-        const id = toNumberId(rawId) || toNumberId((profileValue as { id?: unknown })?.id);
+      for (const [rawId, profileValue] of Object.entries(profiles.profiles)) {
+        const id = toNumberId(rawId) || toNumberId(profileValue?.id);
         if (!id || !profileValue) {
           continue;
         }
@@ -1468,16 +1450,7 @@ export async function resolveZaloGroupsByEntries(params: {
   const groups = await listZaloGroups(params.profile, {
     credentialPersistence: params.credentialPersistence ?? "persist",
   });
-  const byName = new Map<string, ZaloGroup[]>();
-  for (const group of groups) {
-    const key = normalizeOptionalLowercaseString(group.name);
-    if (!key) {
-      continue;
-    }
-    const list = byName.get(key) ?? [];
-    list.push(group);
-    byName.set(key, list);
-  }
+  const byName = buildZaloNameIndex(groups, (group) => group.name);
 
   return params.entries.map((input) => {
     const trimmed = input.trim();
@@ -1501,16 +1474,7 @@ export async function resolveZaloAllowFromEntries(params: {
   const friends = await listZaloFriends(params.profile, {
     credentialPersistence: params.credentialPersistence ?? "persist",
   });
-  const byName = new Map<string, ZcaFriend[]>();
-  for (const friend of friends) {
-    const key = normalizeOptionalLowercaseString(friend.displayName);
-    if (!key) {
-      continue;
-    }
-    const list = byName.get(key) ?? [];
-    list.push(friend);
-    byName.set(key, list);
-  }
+  const byName = buildZaloNameIndex(friends, (friend) => friend.displayName);
 
   return params.entries.map((input) => {
     const trimmed = input.trim();

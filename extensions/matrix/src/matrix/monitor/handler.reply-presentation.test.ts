@@ -1,6 +1,8 @@
 import { shouldAckReaction } from "openclaw/plugin-sdk/channel-feedback";
+import { createTypingCallbacks } from "openclaw/plugin-sdk/channel-outbound";
 // Matrix tests cover the handler's reply presentation wiring.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareMatrixReplyPayload } from "../../outbound.js";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
@@ -12,7 +14,6 @@ import {
   createMatrixHandlerTestHarness,
   createMatrixTextMessageEvent,
 } from "./handler.test-helpers.js";
-import { createTypingCallbacks, type ReplyPayload } from "./runtime-api.js";
 
 const sendMessageMatrixMock = vi.hoisted(() =>
   vi.fn(async (..._args: unknown[]) => ({ messageId: "evt", roomId: "!room" })),

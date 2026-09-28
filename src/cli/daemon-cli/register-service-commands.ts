@@ -95,7 +95,14 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .action(async (cmdOpts, command) => {
       const { runDaemonStatus } = await daemonStatusModuleLoader.load();
       await runDaemonStatus({
-        rpc: resolveGatewayRpcOptionsWithLocalPort(cmdOpts, command),
+        rpc: resolveGatewayRpcOptionsWithLocalPort(
+          {
+            ...cmdOpts,
+            timeout:
+              command.getOptionValueSource("timeout") === "default" ? undefined : cmdOpts.timeout,
+          },
+          command,
+        ),
         probe: Boolean(cmdOpts.probe),
         requireRpc: Boolean(cmdOpts.requireRpc),
         deep: Boolean(cmdOpts.deep),

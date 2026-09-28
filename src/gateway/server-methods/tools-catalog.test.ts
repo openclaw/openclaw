@@ -50,6 +50,7 @@ type CatalogTool = {
   source: "core" | "plugin";
   label?: string;
   description?: string;
+  parameters?: Array<{ name: string; required: boolean; type?: string; description?: string }>;
   pluginId?: string;
   optional?: boolean;
   risk?: unknown;
@@ -121,7 +122,10 @@ describe("tools.catalog handler", () => {
       name: "voice_call",
       label: "voice_call",
       description: "Plugin calling tool",
-      parameters: Type.Object({}),
+      parameters: Type.Object({
+        destination: Type.String({ description: "Call destination." }),
+        note: Type.Optional(Type.String({ description: "Optional call note.", default: "hidden" })),
+      }),
       execute: async () => ({ content: [], details: {} }),
     };
     const matrixRoom = {
@@ -225,6 +229,10 @@ describe("tools.catalog handler", () => {
       label: "voice_call",
       description: "Plugin calling tool",
       fullDescription: "Plugin calling tool",
+      parameters: [
+        { name: "destination", required: true, type: "string", description: "Call destination." },
+        { name: "note", required: false, type: "string", description: "Optional call note." },
+      ],
       source: "plugin",
       pluginId: "voice-call",
       optional: true,
@@ -280,16 +288,13 @@ describe("tools.catalog handler", () => {
         pluginName: "Same",
         source: "fixture",
         names: [],
-        declaredNames: ["b_a", "c_a"],
+        declaredNames: new Set(["b_a", "c_a"]),
         factory,
         optional: true,
       },
     );
     for (const entry of registry.tools) {
       Object.freeze(entry.names);
-      if (entry.declaredNames) {
-        Object.freeze(entry.declaredNames);
-      }
       Object.freeze(entry);
     }
     Object.freeze(tags);
@@ -326,6 +331,7 @@ describe("tools.catalog handler", () => {
       ["b_z", "resolved_z", "tts", "b_a"],
       [],
     ]);
+    expect(Array.from(registry.tools[1]?.declaredNames ?? [])).toEqual(["b_a", "c_a"]);
     expect(factory).not.toHaveBeenCalled();
     for (const tool of tools) {
       expect(tool.execute).not.toHaveBeenCalled();

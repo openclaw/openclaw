@@ -1,5 +1,9 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { vi } from "vitest";
+import type {
+  MeetingParticipationAttempt,
+  MeetingParticipationOptions,
+} from "./participation-types.js";
 import {
   MeetingSessionRuntime,
   type MeetingSessionRuntimeHandles,
@@ -9,14 +13,16 @@ import type {
   MeetingBrowserHealth,
   MeetingBrowserTab,
   MeetingSessionRecord,
+  MeetingTranscriptSnapshot,
 } from "./session-types.js";
 
-type TestTransport = "chrome";
+type TestTransport = "chrome" | "chrome-node";
 type TestMode = "agent";
 type TestRequest = { url: string; agentId: string };
 export type TestSession = MeetingSessionRecord<TestTransport, TestMode> & {
   browser?: {
     launched: boolean;
+    nodeId?: string;
     tab?: MeetingBrowserTab;
     health?: MeetingBrowserHealth;
     hasAudioBridge?: boolean;
@@ -31,15 +37,11 @@ export type TestJoinContext = MeetingSessionRuntimeJoinContext<
 >;
 
 export function createTestRuntime(params: {
-  captureTranscript?: (options?: { finalize?: boolean }) => Promise<
-    | {
-        droppedLines: number;
-        epoch?: string;
-        lines: Array<{ at?: string; speaker?: string; text: string }>;
-      }
-    | undefined
-  >;
+  captureTranscript?: (options?: {
+    finalize?: boolean;
+  }) => Promise<MeetingTranscriptSnapshot | undefined>;
   durableTranscripts?: { stateDir: string };
+  participation?: MeetingParticipationOptions<TestSession>;
   talkBack?: boolean;
   transcribe?: boolean;
   refreshReusableSession?(
@@ -70,6 +72,7 @@ export function createTestRuntime(params: {
     string,
     string
   >({
+    participation: params.participation,
     logger: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() },
     logScope: "[meeting-test]",
     formatError: coerceErrorMessage,
@@ -124,6 +127,7 @@ export function createTestRuntime(params: {
       session.browser
         ? {
             launched: session.browser.launched,
+            nodeId: session.browser.nodeId,
             tab: session.browser.tab,
             health: session.browser.health,
             hasAudioBridge: session.browser.hasAudioBridge === true,
@@ -159,4 +163,51 @@ export function createTestRuntime(params: {
       : {}),
   });
   return { createdSessions, runtime };
+}
+
+export function createParticipationTestRuntime(
+  params: {
+    captureTranscript?: Parameters<typeof createTestRuntime>[0]["captureTranscript"];
+    transcribe?: boolean;
+    durableTranscripts?: { stateDir: string };
+  } = {},
+) {
+  const rows = new Map<string, MeetingParticipationAttempt>();
+  const execute = vi.fn<MeetingParticipationOptions<TestSession>["execute"]>(async () => ({
+    status: "succeeded",
+  }));
+  const store: MeetingParticipationOptions<TestSession>["store"] = {
+    lookup: async (key) => rows.get(key),
+    register: async (key, value) => {
+      rows.set(key, value);
+    },
+    registerIfAbsent: async (key, value) => {
+      if (rows.has(key)) {
+        return false;
+      }
+      rows.set(key, value);
+      return true;
+    },
+    entries: async () => [...rows].map(([key, value]) => ({ key, value, createdAt: 0 })),
+    delete: async (key) => rows.delete(key),
+  };
+  const { runtime } = createTestRuntime({
+    ...params,
+    participation: {
+      store,
+      capabilities: () => ["hand.set"],
+      validateAction: () => undefined,
+      execute,
+    },
+    joinTransport: async ({ session }) => {
+      session.browser = {
+        launched: true,
+        tab: { targetId: "tracked-tab", openedByPlugin: false },
+        health: { inCall: true },
+      };
+      return {};
+    },
+    releaseBrowserTab: async () => true,
+  });
+  return { runtime, store, execute };
 }

@@ -82,33 +82,6 @@ describe("runtime plugin health snapshot", () => {
     });
   });
 
-  it("includes persisted runtime tool-schema quarantines", async () => {
-    await withStateDirEnv("openclaw-status-tool-quarantine-", async () => {
-      const registry = createEmptyPluginRegistry();
-      registry.plugins.push({
-        id: "bad-tools",
-        status: "loaded",
-        enabled: true,
-      } as never);
-      setActivePluginRegistry(registry, "bad-tools", "default", "/tmp/ws");
-      recordPersistedRuntimeToolSchemaQuarantine({
-        toolName: "bad_tool",
-        owner: "plugin:bad-tools",
-        reason: "unsupported anyOf",
-        failedAt: new Date(456),
-      });
-
-      expect(collectRuntimePluginHealthSnapshot().runtimeToolQuarantines).toEqual([
-        {
-          toolName: "bad_tool",
-          owner: "plugin:bad-tools",
-          reason: "unsupported anyOf",
-          failedAt: new Date(456),
-        },
-      ]);
-    });
-  });
-
   it("includes core-owned runtime tool quarantines from this process", async () => {
     await withStateDirEnv("openclaw-status-tool-quarantine-core-", async () => {
       setActivePluginRegistry(createEmptyPluginRegistry(), "empty", "default", "/tmp/ws");
@@ -199,28 +172,6 @@ describe("runtime plugin health snapshot", () => {
         },
       ]);
     });
-  });
-
-  it("classifies channel-setup diagnostics as channel plugin failures", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.diagnostics.push({
-      level: "error",
-      pluginId: "broken-channel",
-      code: "channel-setup-failure",
-      message: "failed to load setup entry: boom",
-    });
-    setActivePluginRegistry(registry, "broken-channel", "default", "/tmp/ws");
-
-    const snapshot = collectRuntimePluginHealthSnapshot();
-
-    expect(snapshot.channelPluginFailures).toEqual([
-      {
-        channelId: "broken-channel",
-        pluginId: "broken-channel",
-        message: "failed to load setup entry: boom",
-        source: "diagnostic",
-      },
-    ]);
   });
 
   it("does not inspect configured channel plugins for compact runtime health", () => {

@@ -24,6 +24,8 @@ import { resetPendingAskUserQuestionsForTest } from "../agents/tools/ask-user-to
 import type { ReplyToolAuthorityOverlay } from "../auto-reply/reply/reply-run-registry.contracts.js";
 import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   activateMcpLoopbackClientGrantCapture,
@@ -81,6 +83,8 @@ type McpResponse = {
 
 beforeEach(({ signal }) => {
   fixtureSignal = signal;
+  // Shared channel stubs otherwise load bundled message adapters in this webchat-only fixture.
+  setActivePluginRegistry(createEmptyPluginRegistry());
   nativeToolProjector = undefined;
   cliBackendsTesting.setDepsForTest({
     resolvePluginSetupCliBackend: () => undefined,

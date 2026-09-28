@@ -5,9 +5,14 @@ import type {
   ResponsesInputItem,
   StreamEvent,
 } from "./mock-openai-contracts.js";
-import { findNamedToolDefinition, hasToolDefinition } from "./mock-openai-directives.js";
+import {
+  findNamedToolDefinition,
+  hasDeclaredTool,
+  hasToolDefinition,
+} from "./mock-openai-directives.js";
 import { extractPlannedToolArgs, extractPlannedToolName } from "./mock-openai-events.js";
 import {
+  extractAllRequestTexts,
   extractToolOutput,
   extractToolOutputCallId,
   extractToolOutputStructuredError,
@@ -101,12 +106,14 @@ export function resolveCurrentToolDeclarationSurface(
       ? item.tools
       : [],
   );
-  return additionalTools.length === 0
-    ? body
-    : {
-        ...body,
-        tools: [...(Array.isArray(body.tools) ? body.tools : []), ...additionalTools],
-      };
+  return {
+    ...body,
+    instructions: extractAllRequestTexts(
+      input.filter((item) => item.role === "system" || item.role === "developer"),
+      body,
+    ),
+    tools: [...(Array.isArray(body.tools) ? body.tools : []), ...additionalTools],
+  };
 }
 
 export function findToolCallByCallId(input: ResponsesInputItem[], callId: string) {
@@ -249,13 +256,18 @@ export function isCodeModeControlToolOutput(
   );
 }
 
-export function canCallScenarioTool(body: Record<string, unknown>, name: string) {
+export function canCallScenarioTool(
+  body: Record<string, unknown>,
+  name: string,
+  requireDeclaredTool = false,
+) {
   // The catalog dispatcher owns target lookup and authorization. Its public
   // contract accepts an exact known name without a redundant search round trip.
   return (
-    hasToolDefinition(body, name) ||
-    hasCodeModeExecSurface(body) ||
-    hasToolDefinition(body, "tool_call")
+    (!requireDeclaredTool || hasDeclaredTool(body, name)) &&
+    (hasToolDefinition(body, name) ||
+      hasCodeModeExecSurface(body) ||
+      hasToolDefinition(body, "tool_call"))
   );
 }
 
@@ -356,7 +368,7 @@ function readProgressCommandOutput(input: ResponsesInputItem[], command: string,
       /(?:^|\n\n)Approval required\. I sent approval DMs to the approvers for this account\.$/u.test(
         text,
       ) ||
-      /(?:^|\n\n)Exec approval is required, but no interactive approval client is currently available\.\n\nApprove it from the Web UI or terminal UI[^\n]* Print the Control UI URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox\.[^\n]* Then retry the command\. You can usually leave execApprovals\.approvers unset when owner config already identifies the approvers\.$/u.test(
+      /(?:^|\n\n)Exec approval is required, but no interactive approval client is currently available\.\n\nApprove it from the Web UI[^\n]* Print the Control UI URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox\.[^\n]* Then retry the command\. You can usually leave execApprovals\.approvers unset when owner config already identifies the approvers\.$/u.test(
         text,
       ) ||
       unknownNotice)
@@ -465,7 +477,11 @@ export function buildScenarioToolCallEvents(
     if (definition?.type === "custom" && typeof args.input === "string") {
       return buildCustomToolCallEventsWithInput(name, args.input, namespace);
     }
-    return buildRawToolCallEventsWithArgs(name, args, namespace);
+    const callArgs =
+      name === "exec" && typeof args.code === "string"
+        ? { title: "Run the QA fixture step", ...args }
+        : args;
+    return buildRawToolCallEventsWithArgs(name, callArgs, namespace);
   }
   const encodedTarget = encodeCodeModeTarget(name, args);
   if (resolveCodeModeExecSurface(body) === "native") {
@@ -486,6 +502,7 @@ export function buildScenarioToolCallEvents(
     );
   }
   return buildRawToolCallEventsWithArgs("exec", {
+    title: "Run the QA fixture step",
     code: [
       `// ${QA_CODE_MODE_TARGET_MARKER}${encodedTarget}`,
       `const targetName = ${JSON.stringify(name)};`,

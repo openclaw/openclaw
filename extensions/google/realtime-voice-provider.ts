@@ -55,6 +55,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { canonicalizeGoogleProviderBase64 } from "./base64.js";
+import { resolveGoogleEnvApiKey } from "./gemini-auth.js";
 import { createGoogleGenAI } from "./google-genai-runtime.js";
 import {
   GOOGLE_REALTIME_DEFAULT_MODEL,
@@ -63,6 +64,8 @@ import {
 import {
   buildGoogleLiveInterruptTurn,
   buildThinkingConfig,
+  emitsCompleteInputTranscripts,
+  endsTurnOnAudioStreamEnd,
   isGemini31LiveModel,
   isResponseDone,
   modelSupportsToolResultContinuation,
@@ -239,13 +242,6 @@ function normalizeProviderConfig(
     thinkingLevel: asThinkingLevel(raw?.thinkingLevel),
     thinkingBudget: asSafeIntegerInRange(raw?.thinkingBudget, { min: -1, max: 24_576 }),
   };
-}
-
-function resolveEnvApiKey(): string | undefined {
-  return (
-    normalizeOptionalString(process.env.GEMINI_API_KEY) ??
-    normalizeOptionalString(process.env.GOOGLE_API_KEY)
-  );
 }
 
 function buildRealtimeInputConfig(
@@ -615,13 +611,10 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       this.pendingAudio.enqueue(audio);
       return;
     }
-    const silent = this.isSilence(audio);
+    // Only silence that may end the audio stream counts; 3.8 needs every silent frame.
+    const silent = endsTurnOnAudioStreamEnd(this.model) && this.isSilence(audio);
     if (silent && this.audioStreamEnded) {
       return;
-    }
-    if (!silent) {
-      this.consecutiveSilenceMs = 0;
-      this.audioStreamEnded = false;
     }
 
     const pcm16k = this.toGoogleInputPcm16k(audio);
@@ -633,6 +626,8 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     });
 
     if (!silent) {
+      this.consecutiveSilenceMs = 0;
+      this.audioStreamEnded = false;
       return;
     }
 
@@ -973,21 +968,20 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
   private appendTranscript(role: RealtimeVoiceRole, transcript: GoogleLiveTranscription): boolean {
     const owner = this.connectionOwner;
-    // Live 3.1 emits complete input utterances without the optional finished flag.
-    const completeInput = role === "user" && isGemini31LiveModel(this.model);
-    const text = transcript.text;
-    if (text) {
+    // Live 3.1 and 3.8 emit complete input utterances without the optional finished flag.
+    const completeInput = role === "user" && emitsCompleteInputTranscripts(this.model);
+    if (transcript.text) {
       const pending = this.pendingTranscripts[role],
-        bytes = Buffer.byteLength(text, "utf8");
+        bytes = Buffer.byteLength(transcript.text, "utf8");
       if (pending.byteCount + bytes > GOOGLE_REALTIME_MAX_PENDING_TRANSCRIPT_BYTES) {
         this.resetPendingTranscripts();
         this.failConnection(new Error(GOOGLE_REALTIME_TRANSCRIPT_OVERFLOW_MESSAGE));
         return false;
       }
-      pending.text += text;
+      pending.text += transcript.text;
       pending.byteCount += bytes;
       if (!completeInput) {
-        this.emitTranscript(role, text, false);
+        this.emitTranscript(role, transcript.text, false);
         if (this.connectionOwner !== owner) {
           return false;
         }
@@ -1275,7 +1269,7 @@ async function createGoogleRealtimeBrowserSession(
     ...(prefixPaddingMs !== undefined ? { prefixPaddingMs } : {}),
     ...(silenceDurationMs !== undefined ? { silenceDurationMs } : {}),
   };
-  const apiKey = config.apiKey || resolveEnvApiKey();
+  const apiKey = config.apiKey || resolveGoogleEnvApiKey();
   if (!apiKey) {
     throw new Error("Google Gemini API key missing");
   }
@@ -1368,10 +1362,10 @@ export function buildGoogleRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
     },
     resolveConfig: ({ cfg, rawConfig }) => normalizeProviderConfig(rawConfig, cfg),
     isConfigured: ({ providerConfig }) =>
-      Boolean(normalizeProviderConfig(providerConfig).apiKey || resolveEnvApiKey()),
+      Boolean(normalizeProviderConfig(providerConfig).apiKey || resolveGoogleEnvApiKey()),
     createBridge: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
-      const apiKey = config.apiKey || resolveEnvApiKey();
+      const apiKey = config.apiKey || resolveGoogleEnvApiKey();
       if (!apiKey) {
         throw new Error("Google Gemini API key missing");
       }

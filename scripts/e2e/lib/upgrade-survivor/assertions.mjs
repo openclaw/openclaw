@@ -16,11 +16,6 @@ import {
   assertExecApprovalPolicySurvived,
   seedLegacyExecApprovalPolicy,
 } from "./exec-approval-fixture.mjs";
-import {
-  seedMSTeamsPollMigration,
-  assertMSTeamsPollMigration,
-  assertMSTeamsPluginFiles,
-} from "./msteams-polls.mjs";
 import * as sessionSourceFixture from "./session-source-fixture.mjs";
 import { assertUpgradeVolumeMigrated, seedUpgradeVolume } from "./sqlite-volume.mjs";
 
@@ -325,10 +320,6 @@ function acceptsIntent(coverage, id) {
   return Array.isArray(coverage.acceptedIntents) && coverage.acceptedIntents.includes(id);
 }
 
-function hasCoverage(coverage) {
-  return Boolean(coverage);
-}
-
 function seedState() {
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");
   const workspace = requireEnv("OPENCLAW_TEST_WORKSPACE_DIR");
@@ -365,9 +356,6 @@ function seedState() {
   seedLegacySessionMetadata(stateDir, scenario === "sqlite-volume");
   sessionSourceFixture.recordLegacySessionSources(stateDir);
   seedLegacyExecApprovalPolicy(stateDir);
-  if (scenario === "msteams-polls") {
-    seedMSTeamsPollMigration(stateDir, requireEnv("OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT"));
-  }
   if (scenario === "meeting-transcripts-sqlite") {
     seedLegacyMeetingTranscripts(stateDir);
   }
@@ -411,7 +399,7 @@ function seedState() {
     );
   }
   if (scenario === "versioned-runtime-deps") {
-    const version = process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION || "2026.4.24";
+    const version = requireEnv("OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION");
     for (const plugin of ["discord", "feishu", "telegram", "whatsapp"]) {
       writeJson(
         path.join(
@@ -493,7 +481,7 @@ function assertConfigSurvived() {
     ],
   ]) {
     // Frozen recipes without coverage receipts predate these provider specimens.
-    if (!hasCoverage(coverage) || !acceptsIntent(coverage, `models-${providerId}`)) {
+    if (!coverage || !acceptsIntent(coverage, `models-${providerId}`)) {
       continue;
     }
     const provider = config.models?.providers?.[providerId];
@@ -506,6 +494,25 @@ function assertConfigSurvived() {
         provider.apiKey.id === keyEnv,
       `${providerId} model provider env credential reference changed`,
     );
+  }
+
+  // Frozen recipes without coverage receipts predate this migration specimen.
+  if (coverage && acceptsIntent(coverage, "tool-search")) {
+    const toolSearch = config.tools?.toolSearch;
+    const baseline = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE === "baseline";
+    assert(
+      toolSearch?.mode === (baseline ? "code" : "tools"),
+      "Tool Search mode was not preserved or migrated",
+    );
+    assert(toolSearch.enabled !== false, "Tool Search was disabled during migration");
+    if (baseline) {
+      assert(toolSearch.codeTimeoutMs === 5000, "Tool Search legacy timeout specimen changed");
+    } else {
+      assert(
+        !Object.hasOwn(toolSearch, "codeTimeoutMs"),
+        "Tool Search legacy timeout was not removed",
+      );
+    }
   }
 
   if (acceptsIntent(coverage, "agents")) {
@@ -527,7 +534,7 @@ function assertConfigSurvived() {
     const pluginAllow = config.plugins?.allow ?? [];
     assert(pluginAllow.includes("discord"), "discord plugin allow entry missing");
     assert(pluginAllow.includes("telegram"), "telegram plugin allow entry missing");
-    if (hasCoverage(coverage) && acceptsIntent(coverage, "configured-plugin-installs")) {
+    if (coverage && acceptsIntent(coverage, "configured-plugin-installs")) {
       assert(pluginAllow.includes("matrix"), "matrix plugin allow entry missing");
     } else {
       assert(pluginAllow.includes("whatsapp"), "whatsapp plugin allow entry missing");
@@ -535,12 +542,12 @@ function assertConfigSurvived() {
     if (scenario === "codex-allowlist-survival") {
       assert(pluginAllow.includes("codex"), "Codex plugin allow entry missing");
     }
-    if (hasCoverage(coverage) && acceptsIntent(coverage, "feishu-channel")) {
+    if (coverage && acceptsIntent(coverage, "feishu-channel")) {
       assert(pluginAllow.includes("feishu"), "feishu plugin allow entry missing");
     }
   }
 
-  if (hasCoverage(coverage) && acceptsIntent(coverage, "acpx-openclaw-tools-bridge")) {
+  if (coverage && acceptsIntent(coverage, "acpx-openclaw-tools-bridge")) {
     const pluginAllow = config.plugins?.allow ?? [];
     assert(pluginAllow.includes("acpx"), "ACPX plugin allow entry missing");
     assert(config.plugins?.entries?.acpx?.enabled === true, "ACPX plugin entry changed");
@@ -550,7 +557,7 @@ function assertConfigSurvived() {
     );
   }
 
-  if (hasCoverage(coverage) && acceptsIntent(coverage, "configured-plugin-installs")) {
+  if (coverage && acceptsIntent(coverage, "configured-plugin-installs")) {
     const pluginAllow = config.plugins?.allow ?? [];
     assert(pluginAllow.includes("discord"), "configured install discord allow entry missing");
     assert(pluginAllow.includes("telegram"), "configured install telegram allow entry missing");
@@ -601,7 +608,7 @@ function assertConfigSurvived() {
     const whatsapp = config.channels?.whatsapp;
     assert(whatsapp?.enabled === true, "whatsapp enabled flag changed");
     const whatsappGroup = whatsapp.groups?.["120363000000000000@g.us"];
-    if (hasCoverage(coverage)) {
+    if (coverage) {
       assert(whatsappGroup?.requireMention === true, "whatsapp group policy changed");
     } else {
       assert(
@@ -620,7 +627,7 @@ function assertConfigSurvived() {
     );
   }
 
-  if (hasCoverage(coverage) && acceptsIntent(coverage, "configured-plugin-installs")) {
+  if (coverage && acceptsIntent(coverage, "configured-plugin-installs")) {
     const matrix = config.channels?.matrix;
     assert(matrix?.enabled === true, "matrix enabled flag changed");
     assert(matrix?.homeserver === "https://matrix.example.invalid", "matrix homeserver changed");
@@ -631,7 +638,7 @@ function assertConfigSurvived() {
     );
   }
 
-  if (hasCoverage(coverage) && acceptsIntent(coverage, "feishu-channel")) {
+  if (coverage && acceptsIntent(coverage, "feishu-channel")) {
     const feishu = config.channels?.feishu;
     assert(feishu?.enabled === true, "feishu enabled flag changed");
     assert(feishu?.connectionMode === "webhook", "feishu connection mode changed");
@@ -643,7 +650,7 @@ function assertConfigSurvived() {
     );
   }
 
-  if (hasCoverage(coverage) && acceptsIntent(coverage, "logging")) {
+  if (coverage && acceptsIntent(coverage, "logging")) {
     assert(
       config.logging?.file === "~/openclaw-upgrade-survivor/gateway.jsonl",
       "logging.file tilde path changed",
@@ -670,13 +677,6 @@ function assertStateSurvived() {
   );
   if (stage !== "baseline") {
     assertSessionMetadataMigrated(stateDir, stage);
-  }
-  if (scenario === "msteams-polls") {
-    assertMSTeamsPollMigration(
-      stateDir,
-      requireEnv("OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT"),
-      stage,
-    );
   }
   if (scenario === "meeting-transcripts-sqlite") {
     assertMeetingTranscriptsMigrated(stateDir, stage);
@@ -720,7 +720,7 @@ function assertStateSurvived() {
     );
   }
   if (scenario === "versioned-runtime-deps") {
-    const version = process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION || "2026.4.24";
+    const version = requireEnv("OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION");
     for (const plugin of ["discord", "feishu", "telegram", "whatsapp"]) {
       const sentinel = path.join(
         legacyRuntimeRoot,
@@ -1384,9 +1384,6 @@ function assertNpmPluginInstall([
   const archive = fs.readFileSync(expectedTarball);
   const integrity = `sha512-${createHash("sha512").update(archive).digest("base64")}`;
   assert(record.integrity === integrity, `${pluginId} plugin registry artifact integrity changed`);
-  if (getScenario() === "msteams-polls" && pluginId === "msteams") {
-    assertMSTeamsPluginFiles(resolveHomePath(record.installPath), expectedTarball);
-  }
 }
 
 function assertCompanionPluginInstalls([expectedVersion, capabilityConsentSupported]) {
@@ -1491,7 +1488,7 @@ function assertRecoveredPluginInstalls(args) {
 function assertConfiguredPluginInstalls() {
   const coverage = getCoverage();
   const stage = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival";
-  if (!hasCoverage(coverage) || !acceptsIntent(coverage, "configured-plugin-installs")) {
+  if (!coverage || !acceptsIntent(coverage, "configured-plugin-installs")) {
     return;
   }
   if (stage === "baseline") {
@@ -1546,10 +1543,7 @@ function assertRecoverableUpdateJson([file, expectedVersion, , baselineVersion])
   assertStrict.equal(result.after?.version, expectedVersion);
   assertStrict.ok(result.steps?.length > 0);
   assertStrict.ok(result.steps.every((step) => step.exitCode === 0));
-  // April warning-only updaters predate the separately reported install swap.
-  for (const name of result.status === "ok"
-    ? ["global update"]
-    : ["global update", "global install swap"]) {
+  for (const name of ["global update", "global install swap"]) {
     assertStrict.ok(result.steps.some((step) => step.name === name));
   }
   const plugins = result.postUpdate?.plugins;
@@ -1558,9 +1552,6 @@ function assertRecoverableUpdateJson([file, expectedVersion, , baselineVersion])
   // These are the reviewed packages in the base and scenario recipes.
   // Any other plugin or failure needs investigation before accepting it.
   const reviewed = new Set(["acpx", "brave", "codex", "discord", "feishu", "matrix", "whatsapp"]);
-  if (getScenario() === "msteams-polls") {
-    reviewed.add("msteams");
-  }
   const denied = new Set();
   assertStrict.ok(Array.isArray(plugins.npm?.outcomes));
   for (const outcome of plugins.npm.outcomes) {
@@ -1690,11 +1681,7 @@ function assertSuccessfulUpdateJson([file, expectedVersion, observationRoot]) {
 function assertSuccessfulUpdateResult(result, expectedVersion) {
   const plugins = result?.postUpdate?.plugins;
   assert(result?.status === "ok", `update did not report ok: ${String(result?.status)}`);
-  if (
-    ["projects-doctor", "projects-startup-migration", "taskflow-restoration"].includes(
-      getScenario(),
-    )
-  ) {
+  if (["projects-doctor", "projects-startup-migration"].includes(getScenario())) {
     assertStrict.equal(
       result.before?.version,
       "2026.9.4",
@@ -1830,16 +1817,6 @@ if (command === "list-scenarios") {
   await import("./missing-load-path.mjs");
 } else if (command === "seed") {
   seedState();
-} else if (command === "seed-msteams-doctor") {
-  assert(
-    getScenario() === "msteams-polls",
-    "Teams Doctor seed requires the msteams-polls scenario",
-  );
-  seedMSTeamsPollMigration(
-    requireEnv("OPENCLAW_STATE_DIR"),
-    requireEnv("OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT"),
-    "doctor",
-  );
 } else if (command === "seed-legacy-operator") {
   legacyOperator.seedLegacyOperatorState();
 } else if (command === "seed-legacy-operator-external-plugin") {

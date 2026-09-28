@@ -53,14 +53,21 @@ enum AppKitTestSupport {
         try #require(CGWarpMouseCursorPosition(position) == .success)
     }
 
-    static func accessibilityElements(in root: AnyObject) async throws -> [AnyObject] {
+    static func accessibilityElements(
+        in root: AnyObject,
+        diagnosticContext: String? = nil) async throws -> [AnyObject]
+    {
+        let before = diagnosticContext.map { _ in self.accessibilityDiagnosticState(in: root) }
         // SwiftUI materializes its virtual accessibility children after a real client request.
         let result = await Task.detached {
             let application = AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier)
             var windows: CFTypeRef?
             return AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &windows)
         }.value
-        try #require(result == .success)
+        let after = diagnosticContext.map { _ in self.accessibilityDiagnosticState(in: root) }
+        try #require(result == .success, diagnosticContext.map {
+            Comment(rawValue: "\($0) before=[\(before ?? "")] after=[\(after ?? "")]")
+        })
         var elements: [AnyObject] = []
         var visited = Set<ObjectIdentifier>()
         func visit(_ element: AnyObject) {
@@ -72,6 +79,15 @@ enum AppKitTestSupport {
         }
         visit(root)
         return elements
+    }
+
+    private static func accessibilityDiagnosticState(in root: AnyObject) -> String {
+        // Observe existing AppKit state without initializing it or retaining a window across the AX request.
+        let application = NSApp.map {
+            "appExists=true isRunning=\($0.isRunning) isActive=\($0.isActive) activationPolicy=\($0.activationPolicy().rawValue)"
+        } ?? "appExists=false"
+        let window = (root as? NSWindow) ?? (root as? NSView)?.window
+        return "\(application) rootWindowAttached=\(window != nil) rootWindowVisible=\(window?.isVisible == true)"
     }
 
     static func accessibilityTitle(of element: AnyObject) -> String? {

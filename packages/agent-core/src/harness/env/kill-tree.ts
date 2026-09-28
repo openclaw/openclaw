@@ -56,7 +56,7 @@ export function killProcessTree(
 
   if (process.platform === "win32") {
     if (opts?.force === true) {
-      signalProcessTreeWindows(pid, "SIGKILL");
+      void signalProcessTreeWindowsAndWait(pid, "SIGKILL");
       return undefined;
     }
     const graceMs = normalizeGraceMs(opts?.graceMs);
@@ -227,9 +227,25 @@ function normalizeGraceMs(value?: number): number {
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
+  } catch (error) {
+    const code =
+      typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+    if (code !== "EPERM") {
+      return false;
+    }
+  }
+  // Negative targets represent process groups, not procfs process entries.
+  if (pid < 0 || process.platform !== "linux") {
     return true;
+  }
+  try {
+    const status = readFileSync(`/proc/${pid}/status`, "utf8");
+    const stateMatch = status.match(/^State:\s+(\S)/m);
+    // A zombie leader can retain live worker threads. Only a fully exited,
+    // single-thread process is dead for escalation purposes.
+    return !(stateMatch?.[1] === "Z" && /^Threads:[ \t]+1[ \t]*$/m.test(status));
   } catch {
-    return false;
+    return true;
   }
 }
 
@@ -542,11 +558,7 @@ function signalProcessTreeUnix(
     if (processTree && !verifiedProcessInstanceAlive(entry)) {
       continue;
     }
-    try {
-      process.kill(entry.pid, signal);
-    } catch {
-      // A process may exit between identity verification and signaling.
-    }
+    signalUnixTarget(entry.pid, signal);
   }
 }
 
@@ -606,10 +618,10 @@ function killProcessTreeWindows(pid: number, graceMs: number): void {
     if (!isProcessAlive(pid)) {
       return;
     }
-    signalProcessTreeWindows(pid, "SIGKILL");
+    void signalProcessTreeWindowsAndWait(pid, "SIGKILL");
   };
 
-  signalProcessTreeWindows(pid, "SIGTERM", (code) => {
+  void signalProcessTreeWindowsAndWait(pid, "SIGTERM", (code) => {
     if (code !== null && code !== 0) {
       forceKill();
     }
@@ -617,14 +629,6 @@ function killProcessTreeWindows(pid: number, graceMs: number): void {
 
   graceTimer = setTimeout(forceKill, graceMs);
   graceTimer.unref();
-}
-
-function signalProcessTreeWindows(
-  pid: number,
-  signal: "SIGTERM" | "SIGKILL",
-  onExit?: (code: number | null) => void,
-): void {
-  void signalProcessTreeWindowsAndWait(pid, signal, onExit);
 }
 
 function signalProcessTreeWindowsAndWait(

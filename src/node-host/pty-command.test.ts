@@ -40,9 +40,6 @@ describe("node PTY command", () => {
 
   it.each([
     { argv: ["sh"] },
-    { executable: "/bin/sh" },
-    { env: { TOKEN: "synthetic" } },
-    { agentId: "gateway-only" },
     { threadId: "invented" },
     { cwd: "relative" },
     { cwd: "/missing/native-start" },

@@ -175,7 +175,7 @@ export function createSessionMcpRuntimeManagerInstall(
     if (store.runtimesBySessionId.get(params.runtimeKey) === runtime) {
       store.connectionMetaByRuntimeKey.set(params.runtimeKey, {
         connectionHash,
-        resolvedAt: store.now(),
+        resolvedAt: store.scheduler.now(),
       });
     }
     return runtime;
@@ -216,7 +216,7 @@ export function createSessionMcpRuntimeManagerInstall(
     // Revocation/rotation takes effect within MCP_CONNECTION_REVALIDATE_MS even for
     // continuously active requesters (markUsed does not extend this clock alone).
     const withinRevalidateWindow =
-      meta !== undefined && store.now() - meta.resolvedAt < MCP_CONNECTION_REVALIDATE_MS;
+      meta !== undefined && store.scheduler.now() - meta.resolvedAt < MCP_CONNECTION_REVALIDATE_MS;
     if (withinRevalidateWindow && existing && matchesRuntime(existing, params, scopedFingerprint)) {
       reconcileReusableRetirement(params, existing);
       existing.markUsed();

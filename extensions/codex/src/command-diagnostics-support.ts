@@ -46,28 +46,9 @@ export function normalizeDiagnosticsReason(note: string): string | undefined {
 
 export function parseDiagnosticsArgs(args: string): ParsedDiagnosticsArgs {
   const [action, token, ...extra] = splitArgs(args);
-  const normalizedAction = action?.toLowerCase();
-  if (
-    (normalizedAction === "confirm" || normalizedAction === "--confirm") &&
-    token &&
-    extra.length === 0
-  ) {
-    return { action: "confirm", token };
-  }
-  if (
-    (normalizedAction === "cancel" || normalizedAction === "--cancel") &&
-    token &&
-    extra.length === 0
-  ) {
-    return { action: "cancel", token };
-  }
-  if (
-    normalizedAction === "confirm" ||
-    normalizedAction === "--confirm" ||
-    normalizedAction === "cancel" ||
-    normalizedAction === "--cancel"
-  ) {
-    return { action: "usage" };
+  const normalizedAction = action?.toLowerCase().replace(/^--/, "");
+  if (normalizedAction === "confirm" || normalizedAction === "cancel") {
+    return token && extra.length === 0 ? { action: normalizedAction, token } : { action: "usage" };
   }
   return { action: "request", note: args };
 }
@@ -156,46 +137,24 @@ export function readCodexDiagnosticsConfirmationScope(ctx: PluginCommandContext)
 export function readCodexDiagnosticsScopeMismatch(
   pending: PendingCodexDiagnosticsConfirmation,
   ctx: PluginCommandContext,
-):
-  | {
-      confirmMessage: string;
-      cancelMessage: string;
-    }
-  | undefined {
+): string | undefined {
   const current = readCodexDiagnosticsConfirmationScope(ctx);
   if (pending.accountId !== current.accountId) {
-    return {
-      confirmMessage: "This Codex diagnostics confirmation belongs to a different account.",
-      cancelMessage: "This Codex diagnostics confirmation belongs to a different account.",
-    };
+    return "This Codex diagnostics confirmation belongs to a different account.";
   }
   if (pending.privateRouted) {
     return undefined;
   }
-  if (pending.channelId !== current.channelId) {
-    return {
-      confirmMessage:
-        "This Codex diagnostics confirmation belongs to a different channel instance.",
-      cancelMessage: "This Codex diagnostics confirmation belongs to a different channel instance.",
-    };
-  }
-  if (pending.messageThreadId !== current.messageThreadId) {
-    return {
-      confirmMessage: "This Codex diagnostics confirmation belongs to a different thread.",
-      cancelMessage: "This Codex diagnostics confirmation belongs to a different thread.",
-    };
-  }
-  if (pending.threadParentId !== current.threadParentId) {
-    return {
-      confirmMessage: "This Codex diagnostics confirmation belongs to a different parent thread.",
-      cancelMessage: "This Codex diagnostics confirmation belongs to a different parent thread.",
-    };
-  }
-  if (pending.sessionKey !== current.sessionKey) {
-    return {
-      confirmMessage: "This Codex diagnostics confirmation belongs to a different session.",
-      cancelMessage: "This Codex diagnostics confirmation belongs to a different session.",
-    };
+  const fields = [
+    ["channelId", "channel instance"],
+    ["messageThreadId", "thread"],
+    ["threadParentId", "parent thread"],
+    ["sessionKey", "session"],
+  ] as const;
+  for (const [field, label] of fields) {
+    if (pending[field] !== current[field]) {
+      return `This Codex diagnostics confirmation belongs to a different ${label}.`;
+    }
   }
   return undefined;
 }
@@ -342,7 +301,11 @@ export function readCodexDiagnosticsTargetsCooldownMessage(
   options: { includeThreadId?: boolean; cooldownScope?: string } = {},
 ): string | undefined {
   for (const target of targets) {
-    const cooldownMs = readCodexDiagnosticsCooldownMs(target.threadId, now);
+    const cooldownMs = readCodexDiagnosticsCooldownMs(
+      lastCodexDiagnosticsUploadByThread,
+      target.threadId,
+      now,
+    );
     if (cooldownMs > 0) {
       if (options.includeThreadId === false) {
         return `Codex diagnostics were already sent for one of these Codex threads recently. Try again in ${Math.ceil(
@@ -355,7 +318,8 @@ export function readCodexDiagnosticsTargetsCooldownMessage(
       )}s.`;
     }
   }
-  const scopeCooldownMs = readCodexDiagnosticsScopeCooldownMs(
+  const scopeCooldownMs = readCodexDiagnosticsCooldownMs(
+    lastCodexDiagnosticsUploadByScope,
     options.cooldownScope ?? readCodexDiagnosticsCooldownScope(ctx),
     now,
   );
@@ -403,17 +367,8 @@ export function readCodexDiagnosticsCooldownScope(ctx: PluginCommandContext): st
 }
 
 export function buildDiagnosticsTags(ctx: PluginCommandContext): Record<string, string> {
-  const tags: Record<string, string> = {
-    source: CODEX_DIAGNOSTICS_SOURCE,
-  };
-  addTag(tags, "channel", ctx.channel);
-  return tags;
-}
-
-function addTag(tags: Record<string, string>, key: string, value: unknown): void {
-  if (typeof value === "string" && value.trim()) {
-    tags[key] = value.trim();
-  }
+  const channel = normalizeOptionalString(ctx.channel);
+  return { source: CODEX_DIAGNOSTICS_SOURCE, ...(channel ? { channel } : {}) };
 }
 
 function formatCodexCopyableValueForDisplay(value: string): string {
@@ -424,26 +379,18 @@ function formatCodexCopyableValueForDisplay(value: string): string {
   return escapeCodexChatText(safe);
 }
 
-function readCodexDiagnosticsCooldownMs(threadId: string, now: number): number {
-  const lastSentAt = lastCodexDiagnosticsUploadByThread.get(threadId);
+function readCodexDiagnosticsCooldownMs(
+  map: Map<string, number>,
+  key: string,
+  now: number,
+): number {
+  const lastSentAt = map.get(key);
   if (!lastSentAt) {
     return 0;
   }
   const remainingMs = Math.max(0, CODEX_DIAGNOSTICS_COOLDOWN_MS - (now - lastSentAt));
   if (remainingMs === 0) {
-    lastCodexDiagnosticsUploadByThread.delete(threadId);
-  }
-  return remainingMs;
-}
-
-function readCodexDiagnosticsScopeCooldownMs(scope: string, now: number): number {
-  const lastSentAt = lastCodexDiagnosticsUploadByScope.get(scope);
-  if (!lastSentAt) {
-    return 0;
-  }
-  const remainingMs = Math.max(0, CODEX_DIAGNOSTICS_COOLDOWN_MS - (now - lastSentAt));
-  if (remainingMs === 0) {
-    lastCodexDiagnosticsUploadByScope.delete(scope);
+    map.delete(key);
   }
   return remainingMs;
 }

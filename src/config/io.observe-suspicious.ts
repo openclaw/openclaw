@@ -50,15 +50,6 @@ export function resolveConfigObserveSuspiciousReasons(params: {
   return reasons;
 }
 
-function isRecoverableConfigReadSuspiciousReason(reason: string): boolean {
-  return (
-    reason === "missing-meta-vs-last-good" ||
-    reason === "gateway-mode-missing-vs-last-good" ||
-    reason === "update-channel-only-root" ||
-    reason.startsWith("size-drop-vs-last-good:")
-  );
-}
-
 export function resolveConfigReadRecoveryContext(params: {
   current: ConfigHealthFingerprint;
   parsed: unknown;
@@ -72,7 +63,7 @@ export function resolveConfigReadRecoveryContext(params: {
     parsed: params.parsed,
     lastKnownGood: params.backupBaseline,
   });
-  if (!suspicious.some(isRecoverableConfigReadSuspiciousReason)) {
+  if (suspicious.length === 0) {
     return null;
   }
   const suspiciousSignature = `${params.current.hash}:${suspicious.join(",")}`;

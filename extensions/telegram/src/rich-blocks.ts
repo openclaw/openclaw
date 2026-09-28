@@ -58,10 +58,6 @@ type StructuralSegment =
   | { kind: "list"; start: number; end: number; source: MarkdownRichListSource }
   | { kind: "table"; start: number; end: number; table: MarkdownTableMeta };
 
-function isTelegramRichLinkHref(href: string): boolean {
-  return TELEGRAM_RICH_LINK_HREF_RE.test(href);
-}
-
 function resolveHeadingSize(style: MarkdownStyle): 1 | 2 | 3 | 4 | 5 | 6 | undefined {
   switch (style) {
     case "heading_1":
@@ -82,13 +78,7 @@ function resolveHeadingSize(style: MarkdownStyle): 1 | 2 | 3 | 4 | 5 | 6 | undef
 }
 
 function isInlineStyle(style: MarkdownStyle): style is InlineStyleKind {
-  return (
-    style === "bold" ||
-    style === "italic" ||
-    style === "strikethrough" ||
-    style === "code" ||
-    style === "spoiler"
-  );
+  return Object.hasOwn(INLINE_STYLE_RANK, style);
 }
 
 type TelegramLinkAction =
@@ -115,7 +105,7 @@ function resolveTelegramLinkAction(
     // In-message fragments are RichTextAnchorLink, not RichTextUrl.
     return { kind: "anchor", name: href.slice(1) };
   }
-  if (!isTelegramRichLinkHref(href)) {
+  if (!TELEGRAM_RICH_LINK_HREF_RE.test(href)) {
     return null;
   }
   return { kind: "url", href };
@@ -319,12 +309,6 @@ function splitParagraphs(ir: MarkdownIR, start: number, end: number): InputRichB
   return paragraphs;
 }
 
-function renderAsciiTableGrid(table: MarkdownTableMeta): string {
-  return renderTelegramMonospaceGrid([table.headers, ...table.rows], {
-    headerSeparator: true,
-  });
-}
-
 function cellToRichText(cell: MarkdownTableCell | undefined): RichText | undefined {
   if (!cell?.text) {
     return undefined;
@@ -340,30 +324,31 @@ function renderTableBlock(table: MarkdownTableMeta): {
   const columnCount = Math.max(table.headers.length, ...table.rows.map((row) => row.length), 0);
   if (columnCount > TELEGRAM_RICH_TEXT_TABLE_COLUMN_LIMIT) {
     return {
-      block: { type: "pre", text: renderAsciiTableGrid(table) },
+      block: {
+        type: "pre",
+        text: renderTelegramMonospaceGrid([table.headers, ...table.rows], {
+          headerSeparator: true,
+        }),
+      },
       degradation: "table-ascii",
     };
   }
-  const headerRow: RichBlockTableCell[] = table.headerCells.map((cell, index) => {
-    const align = table.aligns?.[index];
+  const renderCell = (
+    cell: MarkdownTableCell | undefined,
+    index: number,
+    header = false,
+  ): RichBlockTableCell => {
     const text = cellToRichText(cell);
     return {
-      is_header: true,
-      align: align ?? "left",
+      ...(header ? { is_header: true as const } : {}),
+      align: table.aligns?.[index] ?? "left",
       valign: "middle",
       ...(text !== undefined ? { text } : {}),
     };
-  });
+  };
+  const headerRow = table.headerCells.map((cell, index) => renderCell(cell, index, true));
   const bodyRows: RichBlockTableCell[][] = table.rowCells.map((row) =>
-    Array.from({ length: columnCount }, (_value, index) => {
-      const align = table.aligns?.[index];
-      const text = cellToRichText(row[index]);
-      return {
-        align: align ?? "left",
-        valign: "middle",
-        ...(text !== undefined ? { text } : {}),
-      };
-    }),
+    Array.from({ length: columnCount }, (_value, index) => renderCell(row[index], index)),
   );
   const cells = headerRow.length > 0 ? [headerRow, ...bodyRows] : bodyRows;
   return {
@@ -635,6 +620,11 @@ export function markdownToTelegramRichBlocks(
     headingStyle: "rich",
     blockquotePrefix: "",
     tableMode,
+    // resolveTelegramLinkAction already collapses unsupported hrefs (file:,
+    // data:, ...) to their label; let the parser tokenize them instead of
+    // leaking raw `[label](href)` source when markdown-it's own scheme
+    // denylist rejects it.
+    allowAllLinkSchemes: true,
   });
 
   let degradationReasons = new Set<TelegramRichBlocksDegradationReason>();

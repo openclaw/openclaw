@@ -13,7 +13,10 @@ import {
   isOpenClawAgentDatabasePathCurrent,
   readOpenClawAgentDatabaseIdentity,
 } from "../../state/openclaw-agent-db-identity.js";
-import { classifyOpenClawAgentDatabaseReadError } from "../../state/openclaw-agent-db-read-error.js";
+import {
+  classifyOpenClawAgentDatabaseReadError,
+  isOpenClawAgentDatabaseReadOpenFailure,
+} from "../../state/openclaw-agent-db-read-error.js";
 import {
   retainOpenClawAgentDatabaseReadOnly,
   withOpenClawAgentDatabaseReadOnly,
@@ -30,6 +33,7 @@ import type { ExactSessionEntry, SessionAccessScope } from "./session-accessor.s
 import { readExactSessionEntryCandidatesInDatabase } from "./session-accessor.sqlite-entry-cache.js";
 import {
   readExactSessionEntryRowValidated,
+  readExactSessionEntryRow,
   readSessionEntryRow,
   readQualifiedSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
@@ -186,7 +190,7 @@ class SessionEntryDataReadError extends Error {
   }
 }
 
-/** Only the row operation becomes data; admission, source checks and rollback still throw. */
+/** Unreadable stores and rows become data; authority, source checks and cleanup still throw. */
 export function loadSessionEntryReadOnlyResultInScope(
   scope: SessionEntryReadScope & { databaseAgentId?: string },
   continuation?: CanonicalSessionReaderContinuation,
@@ -210,6 +214,9 @@ export function loadSessionEntryReadOnlyResultInScope(
       // Failed rollback can preserve the original exception while poisoning/closing its handle.
       error.assertSettled();
       return err(error.readError);
+    }
+    if (isOpenClawAgentDatabaseReadOpenFailure(error)) {
+      return err(error);
     }
     throw error;
   }
@@ -351,14 +358,13 @@ export function loadExactSessionEntryCandidates(
           ...(scope.env ? { env: scope.env } : {}),
         }
       : toDatabaseOptions(resolveSqliteScope({ ...scope, sessionKey }));
-  // Alias candidates share a store; fresh handles must not rescan canonical state per key.
   const read = (database: Pick<OpenClawAgentDatabase, "agentId" | "path" | "db">) => {
     const physical = readOpenClawAgentDatabaseIdentity(database);
     if (scope.expectedSource) {
       assertCapturedSessionEntryReadSource(scope.expectedSource, database);
     }
     const entries = sessionKeys.flatMap((key) => {
-      const entry = readExactSessionEntryRowValidated(database, key, scope.projection)?.entry;
+      const entry = readExactSessionEntryRow(database, key, scope.projection, "canonical")?.entry;
       return entry ? [{ sessionKey: key, entry }] : [];
     });
     scope.onReadSource?.(
@@ -370,10 +376,7 @@ export function loadExactSessionEntryCandidates(
   if (!scope.readOnly) {
     return read(openOpenClawAgentDatabase(options));
   }
-  const result = withOpenClawAgentDatabaseReadOnly(
-    (database) => readWithCanonicalSessionAdmission(database, () => read(database)),
-    options,
-  );
+  const result = withOpenClawAgentDatabaseReadOnly(read, options);
   return result.found ? result.value : [];
 }
 
@@ -456,7 +459,11 @@ export function loadExactSessionEntryFromStoreReadOnly(
 }
 
 /** Read requested keys through synchronous store/projection groups. */
-export type ExactSessionEntryBatchScope = Omit<SessionEntryReadScope, "sessionKey"> & {
+export type ExactSessionEntryBatchScope = Omit<
+  SessionEntryReadScope,
+  "sessionKey" | "projection"
+> & {
+  projection?: SessionEntryReadScope["projection"] | "delivery";
   sessionKeys: readonly string[];
   onReadSource?: (source: SessionEntryReadSource) => void;
 };
@@ -468,7 +475,7 @@ function groupExactSessionEntryReadRequests(scopes: readonly ExactSessionEntryBa
     string,
     {
       options: OpenClawAgentDatabaseOptions;
-      projection: SessionEntryReadScope["projection"];
+      projection: ExactSessionEntryBatchScope["projection"];
       requests: Array<{ index: number; sessionKeys: string[] }>;
     }
   >();

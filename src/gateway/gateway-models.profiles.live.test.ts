@@ -1905,7 +1905,7 @@ describe("providerScopedModelRegistryProviders", () => {
         useExplicit: false,
         useSmall: false,
       }),
-    ).toEqual([{ provider: "fireworks", id: "accounts/fireworks/routers/glm-5p2-fast" }]);
+    ).toEqual([{ provider: "fireworks", id: "accounts/fireworks/routers/glm-5p3-fast" }]);
   });
 
   it("loads explicit gateway model refs through dynamic discovery", () => {
@@ -4692,7 +4692,16 @@ function startOpenAIUltraWireCapture(upstreamBaseUrls: readonly string[]): OpenA
       return ((input: RequestInfo | URL, init?: RequestInit) => {
         const url =
           typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-        if (endpoints.has(url) && typeof init?.body === "string") {
+        // Responses bodies are pre-encoded bytes; decode synchronously so ownership
+        // is captured in the dispatching async context.
+        const rawBody = init?.body;
+        const body =
+          typeof rawBody === "string"
+            ? rawBody
+            : ArrayBuffer.isView(rawBody)
+              ? new TextDecoder().decode(rawBody)
+              : undefined;
+        if (init && endpoints.has(url) && body !== undefined) {
           if (observations.length >= OPENAI_ULTRA_WIRE_CAPTURE_LIMIT) {
             overflow = true;
           } else {
@@ -4722,7 +4731,7 @@ function startOpenAIUltraWireCapture(upstreamBaseUrls: readonly string[]): OpenA
               captureAgentRunLifecycleGeneration(runId) === context.lifecycleGeneration &&
               validateAgentRunDelegatedAuthority(authority);
             observations.push({
-              ...readOpenAIUltraWireObservation(init.body),
+              ...readOpenAIUltraWireObservation(body),
               ...(ownsRequest && typeof context.isHeartbeat === "boolean"
                 ? { owner: { diagnostic, isHeartbeat: context.isHeartbeat } }
                 : {}),
@@ -6237,10 +6246,12 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                     modelKey,
                     message: strictReply
                       ? "OpenClaw live tool probe (local, safe): " +
-                        `use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolProbePath}"}. ` +
+                        "Follow the advertised tool interface; if tools are behind Code Mode, invoke them through Code Mode. " +
+                        `read the local file ${JSON.stringify(toolProbePath)} using the available file-reading tool. ` +
                         "Then reply with exactly the two test marker values from that file, separated by one space. No extra text."
                       : "OpenClaw live tool probe (local, safe): " +
-                        `use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolProbePath}"}. ` +
+                        "Follow the advertised tool interface; if tools are behind Code Mode, invoke them through Code Mode. " +
+                        `read the local file ${JSON.stringify(toolProbePath)} using the available file-reading tool. ` +
                         "Then reply with the two test marker values you read (include both).",
                     thinkingLevel,
                     context: `${progressLabel}: tool-read`,
@@ -6333,14 +6344,16 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                     modelKey,
                     message: strictReply
                       ? "OpenClaw live tool probe (local, safe): " +
-                        "use the tool named `exec` (or `Exec`) to run this command: " +
+                        "Follow the advertised tool interface; if tools are behind Code Mode, invoke them through Code Mode. " +
+                        "use the available shell-execution tool to run this command: " +
                         `mkdir -p "${tempDir}" && printf '%s' '${nonceC}' > "${toolWritePath}". ` +
-                        `Then use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolWritePath}"}. ` +
+                        `Then read the local file ${JSON.stringify(toolWritePath)} using the available file-reading tool. ` +
                         "Then reply with exactly the nonce text from that file. No extra text."
                       : "OpenClaw live tool probe (local, safe): " +
-                        "use the tool named `exec` (or `Exec`) to run this command: " +
+                        "Follow the advertised tool interface; if tools are behind Code Mode, invoke them through Code Mode. " +
+                        "use the available shell-execution tool to run this command: " +
                         `mkdir -p "${tempDir}" && printf '%s' '${nonceC}' > "${toolWritePath}". ` +
-                        `Then use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolWritePath}"}. ` +
+                        `Then read the local file ${JSON.stringify(toolWritePath)} using the available file-reading tool. ` +
                         "Finally reply including the nonce text you read back.",
                     thinkingLevel,
                     context: `${progressLabel}: tool-exec`,

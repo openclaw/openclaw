@@ -289,10 +289,6 @@ function createLegacyStateMigrationDetectionResult(params?: {
       sourcePath: "/tmp/state/node.json",
       hasLegacy: false,
     },
-    subagentRegistry: {
-      sourcePath: "/tmp/state/subagents/runs.json",
-      hasLegacy: false,
-    },
     rescuePending: {
       sourcePaths: ["/tmp/state/crestodian/rescue-pending", "/tmp/state/openclaw/rescue-pending"],
       hasLegacy: false,
@@ -542,7 +538,7 @@ vi.mock("../pairing/pairing-store.js", () => ({
 vi.mock("../runtime.js", async () => {
   const actual = await vi.importActual<typeof import("../runtime.js")>("../runtime.js");
   return {
-    ExitError: actual.ExitError,
+    ...actual,
     defaultRuntime: {
       log: () => {},
       error: () => {},
@@ -592,6 +588,8 @@ vi.mock("../infra/state-migrations.plugin-doctor.js", () => ({
 
 vi.mock("../infra/state-migrations.state-dir.js", () => ({
   autoMigrateLegacyStateDir,
+  resolvePendingLegacyStateDirMigrationPaths: vi.fn().mockReturnValue(null),
+  prepareLegacyStateDirMigration: vi.fn(),
 }));
 
 vi.mock("../infra/state-migrations.config-machine-state.js", () => ({
@@ -655,7 +653,7 @@ beforeEach(() => {
   }));
   findLegacyGatewayServices.mockReset().mockResolvedValue([]);
   uninstallLegacyGatewayServices.mockReset().mockResolvedValue([]);
-  findExtraGatewayServices.mockReset().mockResolvedValue([]);
+  findExtraGatewayServices.mockReset().mockResolvedValue({ services: [], errors: [] });
   renderGatewayServiceCleanupHints.mockReset().mockReturnValue(["cleanup"]);
   auditGatewayServiceConfig.mockReset().mockResolvedValue({ ok: true, issues: [] });
   buildGatewayInstallPlan.mockReset().mockResolvedValue({

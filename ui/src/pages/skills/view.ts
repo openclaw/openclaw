@@ -1,9 +1,4 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-// Control UI page renders skills screen content. The list surfaces follow the
-// settings design language (ui/docs/design-system/settings-design.md): section
-// headings outside one group surface, rows with a control cluster, dot+text
-// status instead of pills. The detail/ClawHub dialogs keep their specialized
-// markup.
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
@@ -43,41 +38,15 @@ import type { SkillDetailTab, SkillsProps, SkillsStatusFilter } from "./view-typ
 registerSkillsBrowserEnglish();
 registerSkillLibraryEnglish();
 
-function safeExternalHref(raw?: string): string | null {
-  if (!raw) {
-    return null;
-  }
-  return resolveSafeExternalUrl(raw, window.location.href);
-}
-
-type StatusTabDef = { id: SkillsStatusFilter; labelKey: string };
-
-const STATUS_TABS: StatusTabDef[] = [
+const STATUS_TABS: Array<{ id: SkillsStatusFilter; labelKey: string }> = [
   { id: "all", labelKey: "skillsPage.tabs.all" },
   { id: "ready", labelKey: "skillsPage.tabs.ready" },
   { id: "needs-setup", labelKey: "skillsPage.tabs.needsSetup" },
   { id: "disabled", labelKey: "skillsPage.tabs.disabled" },
 ];
 
-function skillMatchesStatus(skill: SkillStatusEntry, status: SkillsStatusFilter): boolean {
-  switch (status) {
-    case "all":
-      return true;
-    case "ready":
-      return !skill.disabled && isSkillAvailable(skill);
-    case "needs-setup":
-      return !skill.disabled && !isSkillAvailable(skill);
-    case "disabled":
-      return skill.disabled;
-  }
-  throw new Error("Unsupported skills status filter");
-}
-
-function skillStatusClass(skill: SkillStatusEntry): string {
-  if (skill.disabled) {
-    return "muted";
-  }
-  return isSkillAvailable(skill) ? "ok" : "warn";
+function skillStatus(skill: SkillStatusEntry): Exclude<SkillsStatusFilter, "all"> {
+  return skill.disabled ? "disabled" : isSkillAvailable(skill) ? "ready" : "needs-setup";
 }
 
 function verdictStatus(
@@ -113,22 +82,8 @@ function skillControlsLocked(props: SkillsProps): boolean {
   return props.loading || props.state.skillOperation !== null;
 }
 
-function skillUpdateLocked(props: SkillsProps): boolean {
-  return skillControlsLocked(props) || !props.canUpdate;
-}
-
 function skillInstallLocked(props: SkillsProps): boolean {
   return skillControlsLocked(props) || !props.canInstall;
-}
-
-function activeSkillMutation(props: SkillsProps, skillKey: string): boolean {
-  return (
-    props.state.skillOperation?.kind === "skill" && props.state.skillOperation.skillKey === skillKey
-  );
-}
-
-function activeClawHubMutation(props: SkillsProps, ref: string): boolean {
-  return props.state.skillOperation?.kind === "clawhub" && props.state.skillOperation.ref === ref;
 }
 
 export function renderSkills(props: SkillsProps) {
@@ -141,20 +96,14 @@ export function renderSkills(props: SkillsProps) {
     "needs-setup": 0,
     disabled: 0,
   };
-  for (const s of skills) {
-    if (s.disabled) {
-      statusCounts.disabled++;
-    } else if (isSkillAvailable(s)) {
-      statusCounts.ready++;
-    } else {
-      statusCounts["needs-setup"]++;
-    }
+  for (const skill of skills) {
+    statusCounts[skillStatus(skill)]++;
   }
 
   const afterStatus =
     state.skillsStatusFilter === "all"
       ? skills
-      : skills.filter((s) => skillMatchesStatus(s, state.skillsStatusFilter));
+      : skills.filter((skill) => skillStatus(skill) === state.skillsStatusFilter);
 
   const filter = normalizeLowercaseStringOrEmpty(state.skillsFilter);
   const filtered = filter
@@ -209,8 +158,6 @@ export function renderSkills(props: SkillsProps) {
   `;
 }
 
-/** Collapsible skill group: settings-section look, but a <details>/<summary>
- * shell so each group keeps the pre-migration expand/collapse interaction. */
 function renderSkillGroup(group: SkillGroup, props: SkillsProps) {
   return html`
     <details class="settings-section skills-group" open>
@@ -244,7 +191,7 @@ function renderSkillsToolbar(
         value: tab.id,
         label: html`${t(tab.labelKey)} <span class="settings-count">${statusCounts[tab.id]}</span>`,
       })),
-      onChange: (value) => props.onStatusFilterChange(value),
+      onChange: props.onStatusFilterChange,
     })}
     <label class="plugins-field skills-toolbar__search">
       <span>${t("common.search")}</span>
@@ -381,7 +328,8 @@ function renderClawHubDetailDialog(props: SkillsProps) {
                           }}
                         >
                           ${
-                            activeClawHubMutation(props, state.clawhubDetailRef ?? "")
+                            state.skillOperation?.kind === "clawhub" &&
+                            state.skillOperation.ref === (state.clawhubDetailRef ?? "")
                               ? t("skillsPage.installing")
                               : props.showInventory === false
                                 ? t("skillLibrary.import")
@@ -430,9 +378,11 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
 
 function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
   const { state } = props;
-  const updateLocked = skillUpdateLocked(props);
+  const updateLocked = skillControlsLocked(props) || !props.canUpdate;
   const installLocked = skillInstallLocked(props);
-  const active = activeSkillMutation(props, skill.skillKey);
+  const active =
+    state.skillOperation?.kind === "skill" && state.skillOperation.skillKey === skill.skillKey;
+  const homepageHref = resolveSafeExternalUrl(skill.homepage ?? "", window.location.href);
   const editValue = state.skillEdits[skill.skillKey] ?? "";
   const message = state.skillMessages[skill.skillKey] ?? null;
   const missingBins = new Set([...skill.missing.bins, ...skill.missing.anyBins]);
@@ -456,7 +406,9 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
       <div class="exec-approval-card skill-reader-dialog">
         <div class="exec-approval-header">
           <div class="exec-approval-title" style="display: flex; align-items: center; gap: 8px;">
-            <span class="statusDot ${skillStatusClass(skill)}"></span>
+            <span
+              class="statusDot ${skill.disabled ? "muted" : isSkillAvailable(skill) ? "ok" : "warn"}"
+            ></span>
             ${skill.emoji ? html`<span style="font-size: 18px;">${skill.emoji}</span>` : nothing}
             <span>${skill.name}</span>
           </div>
@@ -550,11 +502,9 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
                 ? html`<button
                     class="btn"
                     ?disabled=${installLocked}
-                    @click=${() =>
-                      installOption &&
-                      props.onInstall(skill.skillKey, skill.name, installOption.id)}
+                    @click=${() => props.onInstall(skill.skillKey, skill.name, installOption.id)}
                   >
-                    ${active ? t("skillsPage.installing") : installOption?.label}
+                    ${active ? t("skillsPage.installing") : installOption.label}
                   </button>`
                 : nothing
             }
@@ -590,17 +540,16 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
                           props.onEdit(skill.skillKey, (e.target as HTMLInputElement).value)}
                       />
                     </label>
-                    ${(() => {
-                      const href = safeExternalHref(skill.homepage);
-                      return href
+                    ${
+                      homepageHref
                         ? html`<div class="muted" style="font-size: 13px;">
                             ${t("skillsPage.getKey")}
-                            <a href="${href}" target="_blank" rel="noopener noreferrer"
+                            <a href="${homepageHref}" target="_blank" rel="noopener noreferrer"
                               >${skill.homepage}</a
                             >
                           </div>`
-                        : nothing;
-                    })()}
+                        : nothing
+                    }
                     <button
                       class="btn primary"
                       ?disabled=${updateLocked || !editValue.trim()}
@@ -620,16 +569,15 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
               <span style="font-weight: 600;">${t("skillsPage.source")}</span> ${skill.source}
             </div>
             <div style="font-family: var(--mono); word-break: break-all;">${skill.filePath}</div>
-            ${(() => {
-              const safeHref = safeExternalHref(skill.homepage);
-              return safeHref
+            ${
+              homepageHref
                 ? html`<div>
-                    <a href="${safeHref}" target="_blank" rel="noopener noreferrer"
+                    <a href="${homepageHref}" target="_blank" rel="noopener noreferrer"
                       >${skill.homepage}</a
                     >
                   </div>`
-                : nothing;
-            })()}
+                : nothing
+            }
           </div>
         </div>
       </div>
@@ -652,7 +600,7 @@ function renderInstalledClawHubOverview(
       <div>${formatUiExternalText(link.reason)}</div>
     </div>`;
   }
-  const auditHref = safeExternalHref(verdict?.securityAuditUrl ?? undefined);
+  const auditHref = resolveSafeExternalUrl(verdict?.securityAuditUrl ?? "", window.location.href);
   const reasonText = verdict?.reasons?.length
     ? formatUiExternalText(verdict.reasons.join(", "))
     : null;

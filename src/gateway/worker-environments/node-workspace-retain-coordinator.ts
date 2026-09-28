@@ -164,8 +164,12 @@ export function createNodeWorkspaceRetainCoordinator(
     // Environment-owned cloud nodes prepare under their enrollment/mode owner.
     // Persistent hosts keep the current build when installed; maintenance never installs it.
     const bundleRetention = options.bundleRetention;
+    const bundleRetentionSupported =
+      node.workerHost.bundleRetention === NODE_WORKER_BUNDLE_RETENTION_VERSION;
     let currentBuild =
-      bundleRetention && !bundleRetention.isEnvironmentOwnedNode(node.nodeId)
+      bundleRetentionSupported &&
+      bundleRetention &&
+      !bundleRetention.isEnvironmentOwnedNode(node.nodeId)
         ? await bundleRetention.currentBuild()
         : undefined;
     if (bundleRetention?.isEnvironmentOwnedNode(node.nodeId)) {
@@ -180,14 +184,17 @@ export function createNodeWorkspaceRetainCoordinator(
     if (!isCurrent()) {
       return;
     }
+    // Installation can finish before provisioning publishes its receipt. Do not acknowledge
+    // the node's pending-install protection with an incomplete bundle reachability snapshot.
+    const bundleRetentionReady = !nodeEnvironments(options, node.nodeId).some(
+      (environment) => environment.state === "provisioning",
+    );
     const retainedBundleHashes = [
       ...new Set([
         ...snapshotBundleHashesForNode(options, node.nodeId),
         ...(currentBuild ? [currentBuild.bundleHash] : []),
       ]),
     ].toSorted();
-    const bundleRetentionSupported =
-      node.workerHost.bundleRetention === NODE_WORKER_BUNDLE_RETENTION_VERSION;
     const bundleStatusSupported =
       node.workerHost.bundleStatus === NODE_WORKER_BUNDLE_STATUS_VERSION;
     const baseInput: NodeWorkerWorkspaceRetainInput = {
@@ -221,7 +228,7 @@ export function createNodeWorkspaceRetainCoordinator(
       Buffer.byteLength(JSON.stringify(statusInput), "utf8") <=
         NODE_WORKER_RETAIN_REQUEST_MAX_BYTES;
     const input =
-      bundleRetentionSupported && bundleHashesFit
+      bundleRetentionSupported && bundleRetentionReady && bundleHashesFit
         ? statusInput && statusInputFits
           ? statusInput
           : retentionInput

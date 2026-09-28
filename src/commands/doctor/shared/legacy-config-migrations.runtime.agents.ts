@@ -2,8 +2,8 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
-  isCanonicalToolProviderPolicyKey,
   normalizeToolProviderPolicyKey,
+  resolveProviderToolPolicy,
 } from "../../../agents/provider-tool-policy.js";
 import { DEFAULT_SANDBOX_BROWSER_NETWORK } from "../../../agents/sandbox/browser-network.js";
 import { isKnownCoreToolId } from "../../../agents/tool-catalog.js";
@@ -745,7 +745,7 @@ function byProviderToolProfilesNeedConfiguredSectionMigration(
   inheritedByProvider?: Record<string, unknown> | null,
 ): boolean {
   const byProvider = getRecord(tools.byProvider);
-  const ownProviderNeedsMigration = Boolean(
+  return Boolean(
     byProvider &&
     Object.entries(byProvider).some(([providerKey, policy]) => {
       const inheritedProviderPolicy = resolveInheritedProviderPolicy(
@@ -771,26 +771,6 @@ function byProviderToolProfilesNeedConfiguredSectionMigration(
         }).length > 0
       );
     }),
-  );
-  if (ownProviderNeedsMigration) {
-    return true;
-  }
-  const localConfiguredGrants = collectConfiguredToolSectionGrants(tools);
-  if (localConfiguredGrants.length === 0) {
-    return false;
-  }
-  const handledProviders = new Set(
-    Object.keys(byProvider ?? {}).map((providerKey) => normalizeToolProviderPolicyKey(providerKey)),
-  );
-  return listInheritedProviderPoliciesWithProfiles(inheritedByProvider).some(
-    (inheritedProvider) =>
-      !handledProviders.has(inheritedProvider.normalizedKey) &&
-      collectProfileConfiguredSectionRepairGrants({
-        value: {},
-        inheritedProfile: inheritedProvider.profile,
-        inheritedAlsoAllow: readOwnToolPolicyGrantList(inheritedProvider.policy, "alsoAllow"),
-        configuredGrants: localConfiguredGrants,
-      }).length > 0,
   );
 }
 
@@ -860,12 +840,10 @@ function addByProviderProfileConfiguredSectionGrants(
     return;
   }
   const byProvider = getRecord(tools.byProvider);
-  const handledProviders = new Set<string>();
   for (const [providerKey, providerPolicy] of Object.entries(byProvider ?? {})) {
     if (isBlockedObjectKey(providerKey)) {
       continue;
     }
-    addHandledProviderPolicyKey(handledProviders, providerKey);
     const inheritedProviderPolicy = resolveInheritedProviderPolicy(
       inheritedByProvider,
       providerKey,
@@ -890,120 +868,23 @@ function addByProviderProfileConfiguredSectionGrants(
       ownsProviderProfile || Boolean(inheritedProviderProfile),
     );
   }
-  const localConfiguredGrants = collectConfiguredToolSectionGrants(tools);
-  if (localConfiguredGrants.length === 0) {
-    return;
-  }
-  for (const inheritedProvider of listInheritedProviderPoliciesWithProfiles(inheritedByProvider)) {
-    if (handledProviders.has(inheritedProvider.normalizedKey)) {
-      continue;
-    }
-    const providerPolicy: Record<string, unknown> = {};
-    const changeCount = changes.length;
-    addProfileConfiguredSectionGrants(
-      providerPolicy,
-      `${pathLabel}.byProvider.${inheritedProvider.key}`,
-      changes,
-      inheritedProvider.profile,
-      readOwnToolPolicyGrantList(inheritedProvider.policy, "alsoAllow"),
-      localConfiguredGrants,
-    );
-    if (changes.length > changeCount) {
-      if (!getRecord(tools.byProvider)) {
-        tools.byProvider = {};
-      }
-      getRecord(tools.byProvider)![inheritedProvider.key] = providerPolicy;
-      addHandledProviderPolicyKey(handledProviders, inheritedProvider.normalizedKey);
-    }
-  }
-}
-
-function addHandledProviderPolicyKey(handledProviders: Set<string>, providerKey: string): void {
-  handledProviders.add(normalizeToolProviderPolicyKey(providerKey));
-}
-
-function buildInheritedProviderPolicyLookup(
-  inheritedByProvider: Record<string, unknown> | null | undefined,
-): Map<
-  string,
-  {
-    key: string;
-    policy: Record<string, unknown>;
-    canonical: boolean;
-  }
-> {
-  const lookup = new Map<
-    string,
-    {
-      key: string;
-      policy: Record<string, unknown>;
-      canonical: boolean;
-    }
-  >();
-  for (const [key, value] of Object.entries(inheritedByProvider ?? {})) {
-    if (isBlockedObjectKey(key)) {
-      continue;
-    }
-    const policy = getRecord(value);
-    if (!policy) {
-      continue;
-    }
-    const normalized = normalizeToolProviderPolicyKey(key);
-    if (!normalized) {
-      continue;
-    }
-    const canonical = isCanonicalToolProviderPolicyKey(key);
-    const existing = lookup.get(normalized);
-    if (!existing || (canonical && !existing.canonical)) {
-      lookup.set(normalized, { key, policy, canonical });
-    }
-  }
-  return lookup;
 }
 
 function resolveInheritedProviderPolicy(
   inheritedByProvider: Record<string, unknown> | null | undefined,
   providerKey: string,
 ): Record<string, unknown> | null {
-  const lookup = buildInheritedProviderPolicyLookup(inheritedByProvider);
   const normalized = normalizeToolProviderPolicyKey(providerKey);
   const slashIndex = normalized.indexOf("/");
-  const candidates = slashIndex > 0 ? [normalized, normalized.slice(0, slashIndex)] : [normalized];
-  for (const candidate of candidates) {
-    const match = lookup.get(candidate);
-    if (match) {
-      return match.policy;
-    }
-  }
-  return null;
-}
-
-function listInheritedProviderPoliciesWithProfiles(
-  inheritedByProvider: Record<string, unknown> | null | undefined,
-): Array<{
-  key: string;
-  normalizedKey: string;
-  policy: Record<string, unknown>;
-  profile: string;
-}> {
-  const entries: Array<{
-    key: string;
-    normalizedKey: string;
-    policy: Record<string, unknown>;
-    profile: string;
-  }> = [];
-  for (const [normalizedKey, match] of buildInheritedProviderPolicyLookup(inheritedByProvider)) {
-    if (typeof match.policy.profile !== "string") {
-      continue;
-    }
-    entries.push({
-      key: match.key,
-      normalizedKey,
-      policy: match.policy,
-      profile: match.policy.profile,
-    });
-  }
-  return entries;
+  const byProvider = Object.fromEntries(
+    Object.entries(inheritedByProvider ?? {}).filter(([key]) => !isBlockedObjectKey(key)),
+  );
+  return getRecord(
+    resolveProviderToolPolicy({ byProvider, modelProvider: normalized }) ??
+      (slashIndex > 0
+        ? resolveProviderToolPolicy({ byProvider, modelProvider: normalized.slice(0, slashIndex) })
+        : undefined),
+  );
 }
 
 function bindingMatchHasLegacyDmPeerKind(binding: unknown): boolean {

@@ -336,21 +336,16 @@ export async function healthCommand(
     for (const line of channelLines) {
       runtime.log(styleHealthChannelLine(line, rich));
     }
-    const eventLoopLine = formatEventLoopHealthLine(summary);
-    if (eventLoopLine) {
-      runtime.log(styleHealthChannelLine(eventLoopLine, rich));
-    }
-    const contextEngineLine = formatContextEngineHealthLine(summary);
-    if (contextEngineLine) {
-      runtime.log(styleHealthChannelLine(contextEngineLine, rich));
-    }
-    const deliveryQueueLine = formatDeliveryQueueHealthLine(summary);
-    if (deliveryQueueLine) {
-      runtime.log(styleHealthChannelLine(deliveryQueueLine, rich));
-    }
-    const configReloadLine = formatConfigReloadHealthLine(summary);
-    if (configReloadLine) {
-      runtime.log(styleHealthChannelLine(configReloadLine, rich));
+    for (const formatLine of [
+      formatEventLoopHealthLine,
+      formatContextEngineHealthLine,
+      formatDeliveryQueueHealthLine,
+      formatConfigReloadHealthLine,
+    ]) {
+      const line = formatLine(summary);
+      if (line) {
+        runtime.log(styleHealthChannelLine(line, rich));
+      }
     }
     for (const plugin of displayPlugins) {
       const channelSummary = summary.channels?.[plugin.id];
@@ -415,13 +410,11 @@ export async function healthCommand(
       );
       runtime.log(info(`Agents: ${agentLabels.join(", ")}`));
     }
-    const heartbeatParts = displayAgents
-      .map((agent) => {
-        const everyMs = agent.heartbeat?.everyMs;
-        const label = everyMs ? formatExactDuration(everyMs, "unknown", true) : "disabled";
-        return `${label} (${agent.agentId})`;
-      })
-      .filter(Boolean);
+    const heartbeatParts = displayAgents.map((agent) => {
+      const everyMs = agent.heartbeat?.everyMs;
+      const label = everyMs ? formatExactDuration(everyMs, "unknown", true) : "disabled";
+      return `${label} (${agent.agentId})`;
+    });
     if (heartbeatParts.length > 0) {
       runtime.log(info(`Heartbeat interval: ${heartbeatParts.join(", ")}`));
     }

@@ -82,7 +82,7 @@ describe("worker environment owner revocation", () => {
         .run("b".repeat(64), ENVIRONMENT_ID);
       await support.reopenWorkerEnvironmentStore();
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-      let placement = placements.startDispatch({
+      let placement = await placements.startDispatch({
         sessionId: SESSION_ID,
         sessionKey: "agent:main:stale-result-owner",
         agentId: "main",
@@ -119,7 +119,7 @@ describe("worker environment owner revocation", () => {
         expectedGeneration: placement.generation,
         patch: { activeOwnerEpoch: attached.ownerEpoch },
       });
-      const claim = placements.claimTurn({
+      const claim = await placements.claimTurn({
         sessionId: SESSION_ID,
         sessionKey: placement.sessionKey,
         agentId: placement.agentId,

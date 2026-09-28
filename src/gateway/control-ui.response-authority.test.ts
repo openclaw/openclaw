@@ -8,9 +8,9 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as avatarFile from "../agents/identity-avatar-file.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import * as boundaryFileRead from "../infra/boundary-file-read.js";
 import * as devInstallBranch from "../infra/dev-install-branch.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -177,15 +177,14 @@ describe("Control UI response authority", () => {
           return "private-branch";
         });
       } else {
-        const read = boundaryFileRead.readFileDescriptorBounded;
-        vi.spyOn(boundaryFileRead, "readFileDescriptorBounded").mockImplementation(
-          async (...args) => {
-            const body = await read(...args);
-            entered.resolve();
-            await release.promise;
-            return body;
-          },
-        );
+        const prepare = avatarFile.prepareLocalAgentAvatarFile;
+        vi.spyOn(avatarFile, "prepareLocalAgentAvatarFile").mockImplementation(async (params) => {
+          const prepared = await prepare(params);
+          expect(prepared).toMatchObject({ ok: true, file: { body: REAL_PNG } });
+          entered.resolve();
+          await release.promise;
+          return prepared;
+        });
       }
       let auth: ResolvedGatewayAuth = {
         mode: "token",
@@ -213,8 +212,9 @@ describe("Control UI response authority", () => {
         getRuntimeConfig: () => config,
       });
       const settled = pending.catch(() => undefined);
-      await entered.promise;
       try {
+        await Promise.race([entered.promise, pending]);
+        expect(res.writableEnded).toBe(false);
         if (kind === "bootstrap") {
           expect(res.getHeader("Set-Cookie")).toEqual(
             expect.arrayContaining([expect.stringContaining("Path=/secure-hook")]),
@@ -225,8 +225,8 @@ describe("Control UI response authority", () => {
         }
       } finally {
         release.resolve();
+        await settled;
       }
-      await settled;
 
       expect(res.statusCode).toBe(401);
       expect(String(end.mock.calls[0]?.[0])).not.toContain("private-branch");

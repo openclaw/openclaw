@@ -3,6 +3,11 @@ name: OpenClaw Repo E2E (Reusable)
 on:
   workflow_call:
     inputs:
+      runner_group:
+        description: Optional dedicated release runner group; empty retains the current labels
+        required: false
+        default: ""
+        type: string
       ref:
         required: true
         type: string
@@ -47,7 +52,7 @@ env:
 jobs:
   build:
     name: Build repo E2E (${{ inputs.build_profile }})
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
     timeout-minutes: 90
     outputs:
       artifact_id: ${{ steps.upload.outputs.artifact-id }}
@@ -78,7 +83,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           cache-mode: restore
-          node-version: "24.19.0"
+          node-version: "24.21.0"
           install-bun: "true"
           build-all-cache-scope: full
       - name: Build dist for repo E2E
@@ -110,7 +115,7 @@ jobs:
   test:
     name: Repo E2E (${{ matrix.name }})
     needs: build
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
@@ -124,7 +129,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           cache-mode: restore
-          node-version: "24.19.0"
+          node-version: "24.21.0"
           install-bun: "true"
       - name: Download repo E2E build
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8

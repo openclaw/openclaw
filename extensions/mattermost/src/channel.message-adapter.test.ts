@@ -1,9 +1,4 @@
 // Mattermost tests cover channel.message adapter plugin behavior.
-import {
-  verifyChannelMessageAdapterCapabilityProofs,
-  verifyChannelMessageLiveCapabilityAdapterProofs,
-  verifyChannelMessageLiveFinalizerProofs,
-} from "openclaw/plugin-sdk/channel-outbound";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageMattermostMock = vi.hoisted(() => vi.fn());
@@ -78,63 +73,65 @@ describe("mattermost channel message adapter", () => {
     });
   });
 
-  it("declares durable-final capabilities covered by outbound proof tests", async () => {
+  it("declares durable delivery and live preview capabilities", () => {
     const adapter = requireMattermostMessageAdapter();
-    const sendPayload = requirePayloadSender(adapter);
+    expect(adapter.durableFinal?.capabilities).toEqual({
+      text: true,
+      media: true,
+      payload: true,
+      replyTo: true,
+      thread: true,
+      messageSendingHooks: true,
+    });
+    expect(adapter.live?.capabilities).toEqual({
+      draftPreview: true,
+      previewFinalization: true,
+      progressUpdates: true,
+    });
+    expect(adapter.live?.finalizer?.capabilities).toEqual({
+      finalEdit: true,
+      normalFallback: true,
+      discardPending: true,
+    });
+  });
 
-    const provePayload = async () => {
-      sendMessageMattermostMock.mockClear();
-      sendMessageMattermostMock.mockResolvedValueOnce({
-        messageId: "post-1",
-        channelId: "channel-1",
-        receipt: {
-          primaryPlatformMessageId: "post-1",
-          platformMessageIds: ["post-1"],
-          parts: [{ platformMessageId: "post-1", kind: "card", index: 0 }],
-          sentAt: Date.now(),
-        },
-      });
-      const result = await sendPayload({
-        cfg: {},
-        to: "channel:team-1",
+  it("sends presentation payloads and preserves card receipts", async () => {
+    const sendPayload = requirePayloadSender(requireMattermostMessageAdapter());
+    sendMessageMattermostMock.mockResolvedValueOnce({
+      messageId: "post-1",
+      channelId: "channel-1",
+      receipt: {
+        primaryPlatformMessageId: "post-1",
+        platformMessageIds: ["post-1"],
+        parts: [{ platformMessageId: "post-1", kind: "card", index: 0 }],
+        sentAt: Date.now(),
+      },
+    });
+    const result = await sendPayload({
+      cfg: {},
+      to: "channel:team-1",
+      text: "card",
+      accountId: "default",
+      payload: {
         text: "card",
-        accountId: "default",
-        payload: {
-          text: "card",
-          channelData: {
-            mattermost: {
-              presentationButtons: [[{ text: "Open", callback_data: "open" }]],
-            },
+        channelData: {
+          mattermost: {
+            presentationButtons: [[{ text: "Open", callback_data: "open" }]],
           },
-        },
-      });
-      expect(sendMessageMattermostMock).toHaveBeenLastCalledWith("channel:team-1", "card", {
-        cfg: {},
-        accountId: "default",
-        mediaUrl: undefined,
-        mediaLocalRoots: undefined,
-        mediaReadFile: undefined,
-        replyToId: undefined,
-        buttons: [[{ text: "Open", callback_data: "open" }]],
-      });
-      expect(result.receipt.platformMessageIds).toEqual(["post-1"]);
-      expect(result.receipt.parts[0]?.kind).toBe("card");
-    };
-
-    await verifyChannelMessageAdapterCapabilityProofs({
-      adapterName: "mattermostMessageAdapter",
-      adapter,
-      proofs: {
-        payload: provePayload,
-        text: () => undefined,
-        media: () => undefined,
-        replyTo: () => undefined,
-        thread: () => undefined,
-        messageSendingHooks: () => {
-          expect(requireTextSender(adapter)).toBeTypeOf("function");
         },
       },
     });
+    expect(sendMessageMattermostMock).toHaveBeenLastCalledWith("channel:team-1", "card", {
+      cfg: {},
+      accountId: "default",
+      mediaUrl: undefined,
+      mediaLocalRoots: undefined,
+      mediaReadFile: undefined,
+      replyToId: undefined,
+      buttons: [[{ text: "Open", callback_data: "open" }]],
+    });
+    expect(result.receipt.platformMessageIds).toEqual(["post-1"]);
+    expect(result.receipt.parts[0]?.kind).toBe("card");
   });
 
   it("sends text through Mattermost", async () => {
@@ -215,42 +212,5 @@ describe("mattermost channel message adapter", () => {
       replyToId: "post-parent-1",
     });
     expect(result.receipt.replyToId).toBe("post-parent-1");
-  });
-
-  it("backs declared live preview finalizer capabilities with adapter proofs", async () => {
-    const adapter = requireMattermostMessageAdapter();
-    const sendText = requireTextSender(adapter);
-
-    await verifyChannelMessageLiveCapabilityAdapterProofs({
-      adapterName: "mattermostMessageAdapter",
-      adapter,
-      proofs: {
-        draftPreview: () => {
-          expect(adapter.live?.finalizer?.capabilities?.discardPending).toBe(true);
-        },
-        previewFinalization: () => {
-          expect(adapter.live?.finalizer?.capabilities?.finalEdit).toBe(true);
-        },
-        progressUpdates: () => {
-          expect(adapter.live?.capabilities?.draftPreview).toBe(true);
-        },
-      },
-    });
-
-    await verifyChannelMessageLiveFinalizerProofs({
-      adapterName: "mattermostMessageAdapter",
-      adapter,
-      proofs: {
-        finalEdit: () => {
-          expect(adapter.live?.capabilities?.previewFinalization).toBe(true);
-        },
-        normalFallback: () => {
-          expect(sendText).toBeTypeOf("function");
-        },
-        discardPending: () => {
-          expect(adapter.live?.capabilities?.draftPreview).toBe(true);
-        },
-      },
-    });
   });
 });

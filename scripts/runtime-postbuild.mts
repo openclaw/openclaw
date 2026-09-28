@@ -16,6 +16,7 @@ import { verifyBuiltPluginControlPlaneModules } from "./check-built-plugin-contr
 import { copyBundledPluginMetadata } from "./copy-bundled-plugin-metadata.mts";
 import { copyHookMetadata, listHookMetadataOutputs } from "./copy-hook-metadata.ts";
 import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
@@ -49,14 +50,8 @@ type RuntimePostBuildParams = {
 type RuntimeFsParams = Pick<RuntimePostBuildParams, "rootDir" | "fs">;
 type RuntimeAliasCandidate = { candidate: string; source: string };
 
-const LEGACY_UPDATE_NODE_RUNNER_COMPAT_CHUNK = [
-  'import path from "node:path";',
-  "export function resolveNodeRunner() {",
-  "  const base = path.basename(process.execPath).trim().toLowerCase();",
-  '  return base === "node" || base === "node.exe" ? process.execPath : "node";',
-  "}",
-  "",
-].join("\n");
+const LEGACY_UPDATE_NODE_RUNNER_COMPAT_CHUNK =
+  'export { resolveNodeRunner } from "./cli/update-cli/node-runner.js";\n';
 
 const ROOT = resolveRepoRoot(import.meta.url);
 const UPDATE_COMPATIBILITY_INVENTORY = path.join(ROOT, "scripts/lib/update-compat-inventory.json");
@@ -386,6 +381,7 @@ export function writeStableRootRuntimeAliases(params: RuntimeFsParams = {}) {
   );
 
   const ownership = readRuntimeDependencyOwnership(rootDir, fsImpl);
+  using parser = createNativeTypeScriptParser({ cwd: rootDir });
   for (const [aliasFileName, candidates] of candidatesByAlias) {
     const aliasPath = path.join(distDir, aliasFileName);
     const candidate = resolveStableRootRuntimeAliasCandidate(
@@ -404,7 +400,10 @@ export function writeStableRootRuntimeAliases(params: RuntimeFsParams = {}) {
       aliasFileName === "io.runtime.js"
         ? buildUpdateConfigRuntimeAlias(
             candidate,
-            fsImpl.readFileSync(path.join(distDir, candidate), "utf8"),
+            parser.parseSourceFile(
+              path.join(distDir, candidate),
+              fsImpl.readFileSync(path.join(distDir, candidate), "utf8"),
+            ),
           )
         : buildRuntimeAliasSource(candidate, distDir, fsImpl);
     const owner = ownership?.chunks[candidate];

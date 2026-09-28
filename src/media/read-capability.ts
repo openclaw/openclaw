@@ -62,10 +62,7 @@ function isAgentScopedMediaReadAllowedByToolPolicy(
     senderUsername: params.requesterSenderUsername,
     senderE164: params.requesterSenderE164,
   });
-  if (!isToolAllowedByPolicies("read", [groupPolicy, senderPolicy])) {
-    return false;
-  }
-  return true;
+  return isToolAllowedByPolicies("read", [groupPolicy, senderPolicy]);
 }
 
 /** Creates a host reader bound to the agent workspace and configured local-file safety checks. */

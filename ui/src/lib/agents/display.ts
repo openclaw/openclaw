@@ -1,4 +1,3 @@
-// Control UI view renders agents utils screen content.
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import { formatByteSize } from "@openclaw/normalization-core";
@@ -219,7 +218,6 @@ export function buildAgentContext(
     ? "custom"
     : (resolveAgentTextAvatar(agent, agentIdentity) ?? "—");
   const skillFilter = resolveAgentSkillsFilter(configForm, agent.id);
-  const skillCount = skillFilter?.length ?? null;
   return {
     workspace,
     model: modelLabel,
@@ -227,7 +225,7 @@ export function buildAgentContext(
     identityName,
     identityAvatar,
     skillsLabel: skillFilter
-      ? t("agents.overview.selectedSkills", { count: String(skillCount) })
+      ? t("agents.overview.selectedSkills", { count: String(skillFilter.length) })
       : t("agents.overview.allSkills"),
     isDefault: Boolean(defaultId && agent.id === defaultId),
   };
@@ -240,7 +238,7 @@ export function resolveModelLabel(model?: unknown): string {
   if (typeof model === "string") {
     return normalizeOptionalString(model) || "-";
   }
-  if (typeof model === "object" && model) {
+  if (typeof model === "object") {
     const record = model as { primary?: string; fallbacks?: string[] };
     const primary = normalizeOptionalString(record.primary);
     if (primary) {
@@ -287,13 +285,12 @@ export function resolveEffectiveModelFallbacks(
   entryModel?: unknown,
   defaultModel?: unknown,
 ): string[] | null {
-  const entryFallbacks = resolveModelFallbacks(entryModel);
-  if (entryFallbacks !== null) {
-    return entryFallbacks;
-  }
   // An agent-owned primary is strict; only an inherited primary can use
   // the global fallback chain, matching the Gateway's model routing.
-  return resolveModelPrimary(entryModel) ? [] : resolveModelFallbacks(defaultModel);
+  return (
+    resolveModelFallbacks(entryModel) ??
+    (resolveModelPrimary(entryModel) ? [] : resolveModelFallbacks(defaultModel))
+  );
 }
 
 type ConfiguredModelOption = {

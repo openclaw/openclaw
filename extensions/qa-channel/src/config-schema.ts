@@ -1,4 +1,3 @@
-// Qa Channel helper module supports config schema behavior.
 import {
   buildChannelConfigSchema,
   buildGroupEntrySchema,
@@ -46,5 +45,8 @@ const QaChannelConfigSchema = buildMultiAccountChannelSchema(
   QaChannelAccountConfigSchema.extend({ historyLimit: z.number().int().min(0).optional() }),
   { accountSchema: QaChannelAccountConfigSchema.partial() },
 );
+
+export type QaChannelAccountConfig = z.input<typeof QaChannelAccountConfigSchema>;
+export type QaChannelConfig = z.input<typeof QaChannelConfigSchema>;
 
 export const qaChannelPluginConfigSchema = buildChannelConfigSchema(QaChannelConfigSchema);

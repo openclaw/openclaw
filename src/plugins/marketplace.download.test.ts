@@ -1,10 +1,10 @@
 import { constants } from "node:fs";
 // Covers streamed marketplace archive downloads through the installer boundary.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { configureFsSafeNative, getFsSafeNativeConfig } from "../infra/fs-safe-defaults.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   createMarketplaceInstallInput,
@@ -48,7 +48,7 @@ beforeAll(async () => {
 });
 
 async function listMarketplaceDownloadTempDirs(): Promise<string[]> {
-  const entries = await fs.readdir(os.tmpdir(), { withFileTypes: true });
+  const entries = await fs.readdir(resolvePreferredOpenClawTmpDir(), { withFileTypes: true });
   return entries
     .filter(
       (entry) => entry.isDirectory() && entry.name.startsWith("openclaw-marketplace-download-"),

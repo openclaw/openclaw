@@ -38,15 +38,8 @@ function resolveAvailableChannel(params: {
   if (!normalized) {
     return undefined;
   }
-  // Pass `allowBootstrap: true` so the in-agent message tool path can resolve
-  // outbound channels in processes where external channel adapters have not
-  // been eagerly loaded (e.g. `openclaw agent --local`). Already-loaded and
-  // bundled plugins still resolve through side-effect-free fast paths first.
-  // Without the bootstrap fallback, official external channels can surface as
-  // the recurring "Channel is unavailable" error on `--local`-routed
-  // dispatches that the CLI send-path could deliver to.
-  // Adjacent to #77254 (cron-announce / final-reply paths); this closes the
-  // remaining in-agent caller in the same family.
+  // Local agent processes may have only setup metadata for external channels;
+  // explicit activation lets their message tools use the same send path as the CLI.
   const plugin = resolveOutboundChannelPlugin({
     channel: normalized,
     cfg: params.cfg,
@@ -58,22 +51,15 @@ function resolveAvailableChannel(params: {
 
 /** Checks whether a channel has a non-disabled config entry. */
 export function isConfiguredChannel(cfg: OpenClawConfig, channelId: string): boolean {
-  const channels = cfg.channels;
-  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
-    return false;
-  }
-  const entry = (channels as Record<string, unknown>)[channelId];
-  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-    return false;
-  }
-  return (entry as { enabled?: unknown }).enabled !== false;
+  const entry = asOptionalRecord(asOptionalRecord(cfg.channels)?.[channelId]);
+  return entry !== undefined && entry.enabled !== false;
 }
 
 function listConfiguredOfficialExternalRepairHints(
   cfg: OpenClawConfig,
 ): OfficialExternalPluginRepairHint[] {
-  const channels = cfg.channels;
-  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
+  const channels = asOptionalRecord(cfg.channels);
+  if (!channels) {
     return [];
   }
   return resolveMissingOfficialExternalChannelPluginRepairHints({
@@ -95,21 +81,6 @@ function formatMissingOfficialExternalChannelsMessage(
   const labels = hints.map((hint) => hint.label).join(", ");
   const installCommands = hints.map((hint) => hint.installCommand).join("; ");
   return `Configured official external channels ${labels} are missing their plugins. Run: openclaw doctor --fix, or install individually: ${installCommands}.`;
-}
-
-function formatNoConfiguredChannelsMessage(): string {
-  return [
-    "Channel is required (no configured channels detected).",
-    "Run openclaw channels add to configure one, or pass --channel <channel> after enabling a channel.",
-    "Use openclaw channels list --all to see available channel ids.",
-  ].join(" ");
-}
-
-function formatMultipleConfiguredChannelsMessage(configured: readonly string[]): string {
-  return [
-    `Channel is required when multiple channels are configured: ${configured.join(", ")}.`,
-    "Pass --channel <channel> to choose one.",
-  ].join(" ");
 }
 
 const CHANNEL_SELECTION_ERROR_DEDUPE_LIMIT = 1024;
@@ -229,46 +200,15 @@ export async function resolveMessageChannelSelection(params: {
   source: MessageChannelSelectionSource;
 }> {
   const normalized = normalizeMessageChannel(params.channel);
-  if (normalized) {
-    const availableExplicit = resolveAvailableChannel({
-      cfg: params.cfg,
-      value: params.channel,
-      agentId: params.agentId,
-    });
-    if (!availableExplicit) {
-      const fallback = resolveAvailableChannel({
+  const explicit = normalized
+    ? resolveAvailableChannel({
         cfg: params.cfg,
-        value: params.fallbackChannel,
+        value: params.channel,
         agentId: params.agentId,
-      });
-      if (fallback) {
-        return {
-          channel: fallback.channel,
-          plugin: fallback.plugin,
-          configured: [],
-          source: "tool-context-fallback",
-        };
-      }
-      if (!isDeliverableMessageChannel(normalized) && !getRuntimeVisibleChannelPlugin(normalized)) {
-        throw new Error(formatUnknownChannelMessage({ channel: normalized }));
-      }
-      const repairHint = isConfiguredChannel(params.cfg, normalized)
-        ? resolveMissingOfficialExternalChannelPluginRepairHint({
-            config: params.cfg,
-            channelId: normalized,
-          })
-        : null;
-      if (repairHint?.channelId === normalized) {
-        throw new Error(`Channel is unavailable: ${normalized}. ${repairHint.repairHint}`);
-      }
-      throw new Error(`Channel is unavailable: ${normalized}`);
-    }
-    return {
-      channel: availableExplicit.channel,
-      plugin: availableExplicit.plugin,
-      configured: [],
-      source: "explicit",
-    };
+      })
+    : undefined;
+  if (explicit) {
+    return { ...explicit, configured: [], source: "explicit" };
   }
 
   const fallback = resolveAvailableChannel({
@@ -278,11 +218,26 @@ export async function resolveMessageChannelSelection(params: {
   });
   if (fallback) {
     return {
-      channel: fallback.channel,
-      plugin: fallback.plugin,
+      ...fallback,
       configured: [],
       source: "tool-context-fallback",
     };
+  }
+
+  if (normalized) {
+    if (!isDeliverableMessageChannel(normalized) && !getRuntimeVisibleChannelPlugin(normalized)) {
+      throw new Error(formatUnknownChannelMessage({ channel: normalized }));
+    }
+    const repairHint = isConfiguredChannel(params.cfg, normalized)
+      ? resolveMissingOfficialExternalChannelPluginRepairHint({
+          config: params.cfg,
+          channelId: normalized,
+        })
+      : null;
+    if (repairHint?.channelId === normalized) {
+      throw new Error(`Channel is unavailable: ${normalized}. ${repairHint.repairHint}`);
+    }
+    throw new Error(`Channel is unavailable: ${normalized}`);
   }
 
   const configuredPlugins = await listConfiguredMessageChannelPlugins(
@@ -306,7 +261,13 @@ export async function resolveMessageChannelSelection(params: {
         `Channel is required (no available channels detected). ${formatMissingOfficialExternalChannelsMessage(repairHints)}`,
       );
     }
-    throw new Error(formatNoConfiguredChannelsMessage());
+    throw new Error(
+      "Channel is required (no configured channels detected). " +
+        "Run openclaw channels add to configure one, or pass --channel <channel> after enabling a channel. " +
+        "Use openclaw channels list --all to see available channel ids.",
+    );
   }
-  throw new Error(formatMultipleConfiguredChannelsMessage(configured));
+  throw new Error(
+    `Channel is required when multiple channels are configured: ${configured.join(", ")}. Pass --channel <channel> to choose one.`,
+  );
 }

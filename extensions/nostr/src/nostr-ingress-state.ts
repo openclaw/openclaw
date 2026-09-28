@@ -1,8 +1,6 @@
 // Nostr plugin module owns durable ingress identity and legacy-state migration.
 import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
-import { isRecord as isNostrIngressRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-
-export { isNostrIngressRecord };
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const NOSTR_INGRESS_PAYLOAD_VERSION = 1;
 
@@ -31,7 +29,7 @@ function requiredString(value: unknown, field: string): string {
 }
 
 export function inspectNostrIngressEvent(event: unknown): { eventId: string; laneKey: string } {
-  if (!isNostrIngressRecord(event)) {
+  if (!isRecord(event)) {
     throw new NostrIngressPermanentError("invalid-event", "Nostr event must be an object.");
   }
   return {

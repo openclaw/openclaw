@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import {
   SKILL_LIBRARY_MAX_BUNDLE_BYTES,
   SKILL_LIBRARY_MAX_FILE_BYTES,
@@ -11,7 +12,6 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { withExtractedArchiveRoot } from "../../infra/install-flow.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import { withTempWorkspace } from "../../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import {
   openOpenClawStateDatabase,
@@ -212,6 +212,7 @@ export async function uploadSkillLibrary(
     { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-library-import-" },
     async ({ dir }) => {
       const archivePath = path.join(dir, "skill.zip");
+      authority.assertFileMutationAllowed?.();
       await fs.writeFile(archivePath, bytes, { mode: 0o600, flag: "wx" });
       const result = await withExtractedArchiveRoot({
         archivePath,

@@ -10,7 +10,7 @@ import type {
   ModelAuthAvailabilityEvaluation,
   ModelAuthAvailabilityRef,
 } from "./model-auth-availability.js";
-import { compareModelCatalogEntries } from "./model-catalog-order.js";
+import { compareModelCatalogEntries, orderModelCatalogForPicker } from "./model-catalog-order.js";
 import type {
   ModelCatalogRoutePolicy,
   ModelCatalogRouteProjection,
@@ -81,6 +81,7 @@ type LogicalModelCatalogParams = {
   routePolicy: ModelCatalogRoutePolicy;
   routeVariants?: readonly ModelCatalogEntry[];
   retainedModel?: ModelRef;
+  selectedModel?: ModelRef;
   metadataSnapshot?: PluginMetadataSnapshot;
 };
 
@@ -194,7 +195,10 @@ export async function prepareLogicalVisibleModelCatalog(
         }
         return [row];
       });
-      return sortModelCatalogEntries(dedupeByKey(projected, publicationKeyOf));
+      return orderModelCatalogForPicker(
+        dedupeByKey(projected, publicationKeyOf),
+        params.selectedModel ?? params.retainedModel,
+      );
     };
     if (params.view === "all") {
       return projectEntries(params.catalog);

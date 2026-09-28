@@ -292,6 +292,17 @@ require_prepared_review() {
   esac
 }
 
+read_prepared_ci_failure() (
+  local PREP_REVIEW_MODE=ready review_path=.local/review.json
+  [ ! -s .local/prep-context.env ] || source .local/prep-context.env || return 1
+  case "$PREP_REVIEW_MODE" in
+    ready) ;;
+    correction) review_path=.local/correction-review.json ;;
+    *) return 1 ;;
+  esac
+  jq -c '.tests.preExistingCi // empty' "$review_path"
+)
+
 # A correction's review authority must survive every awaited admission read.
 # Normal READY preparation keeps its existing contract; the nonempty snapshot
 # also detects loss of correction mode during an operation.
@@ -301,18 +312,44 @@ correction_review_snapshot() (
   source .local/prep-context.env || return 1
   [ "$PREP_REVIEW_MODE" = correction ] || return 0
   require_prepared_review "$pr" >/dev/null || return 1
-  local publication_receipt=()
-  if [ -e .local/prep.env ] || [ -L .local/prep.env ]; then
-    [ -f .local/prep.env ] && [ ! -L .local/prep.env ] || return 1
-    publication_receipt+=(.local/prep.env)
-  fi
-  pr_git hash-object --no-filters -- \
+  local receipt oid
+  for receipt in \
     .local/prep-context.env .local/pr-meta.json .local/pr-meta.env \
     .local/review.json \
     .local/correction-review.json \
     .local/correction-incoming-review.json \
-    ${publication_receipt[@]+"${publication_receipt[@]}"}
+    .local/prep.env .local/prepare-push-result.env .local/prepare-sync-result.env; do
+    oid=absent
+    if [ -e "$receipt" ] || [ -L "$receipt" ]; then
+      [ -f "$receipt" ] && [ ! -L "$receipt" ] || return 1
+      oid=$(pr_git hash-object --no-filters -- "$receipt") || return 1
+    else
+      case "$receipt" in
+        .local/prep.env|.local/prepare-push-result.env|.local/prepare-sync-result.env) ;;
+        *) return 1 ;;
+      esac
+    fi
+    printf '%s %s\n' "$receipt" "$oid"
+  done
 )
+
+correction_review_snapshot_with_publication() {
+  # Derive the successor from retained authority, not a fresh post-push snapshot
+  # that could accidentally admit unrelated review or receipt changes.
+  local snapshot="$1" result_path="$2" result_oid="$3" path oid found=false
+  case "$result_path" in
+    .local/prepare-push-result.env|.local/prepare-sync-result.env) ;;
+    *) echo "Correction publication requires a named preparation receipt." >&2; return 1 ;;
+  esac
+  while read -r path oid; do
+    if [ "$path" = "$result_path" ]; then
+      oid="$result_oid"
+      found=true
+    fi
+    printf '%s %s\n' "$path" "$oid"
+  done <<< "$snapshot"
+  [ "$found" = true ]
+}
 
 verify_correction_review_snapshot() {
   local pr="$1" expected="$2" current

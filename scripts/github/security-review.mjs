@@ -7,10 +7,12 @@ import {
   assertGuardUnchanged,
   findMaintainerApproval,
   readGuardReview,
+  securityReviewContracts,
 } from "./guard-review.mjs";
 import {
   GitHubDiffDataError,
   GitHubRateLimitError,
+  GitHubReadTimeoutError,
   GitHubStatusPublicationError,
   publishGuardStatus,
   withSecurityReviewRecovery,
@@ -137,7 +139,7 @@ async function main() {
   if (!review) {
     return;
   }
-  review.context = "openclaw/ci-gate";
+  review.context = securityReviewContracts.combined.context;
   review.guards = [];
   await publishGuardStatus(review, "pending", "CI and security review have not completed");
   try {
@@ -159,6 +161,7 @@ async function main() {
           if (
             error instanceof GitHubRateLimitError ||
             ((error instanceof GitHubStatusPublicationError ||
+              error instanceof GitHubReadTimeoutError ||
               error instanceof GitHubDiffDataError ||
               error instanceof SupersededReviewError) &&
               errors.length === 0)
@@ -194,16 +197,12 @@ async function main() {
     const ci = await ciState(review);
     if (ci === "pending") {
       await assertGuardUnchanged(review);
-      await publishGuardStatus(review, "pending", "Waiting for CI; review updates automatically");
+      await publishGuardStatus(review, "pending", securityReviewContracts.combined.waiting);
       console.log("Waiting for CI. CI completion will automatically reevaluate security review.");
       return;
     }
     if (ci === "failure") {
-      await publishGuardStatus(
-        review,
-        "failure",
-        "CI must complete successfully; review updates automatically",
-      );
+      await publishGuardStatus(review, "failure", securityReviewContracts.combined.failure);
       console.log("The current CI gate did not pass. Review the CI workflow failures.");
       return;
     }
@@ -226,11 +225,7 @@ async function main() {
       }
     }
     await assertGuardUnchanged(review);
-    await publishGuardStatus(
-      review,
-      "success",
-      "CI and applicable security review requirements passed",
-    );
+    await publishGuardStatus(review, "success", securityReviewContracts.combined.success);
   } catch (error) {
     if (error instanceof GitHubDiffDataError) {
       diffRecoveryReview = review;
@@ -238,6 +233,7 @@ async function main() {
     if (
       error instanceof GitHubRateLimitError ||
       error instanceof GitHubStatusPublicationError ||
+      error instanceof GitHubReadTimeoutError ||
       error instanceof SupersededReviewError
     ) {
       throw error;

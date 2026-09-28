@@ -288,10 +288,7 @@ export function buildChatItems(
       continue;
     }
 
-    const projected = projectChatSystemNotice(item, normalized);
-    if (projected) {
-      items.push(projected);
-    }
+    items.push(...projectChatSystemNotice(item, normalized));
   }
   const currentRunId =
     props.runId ??

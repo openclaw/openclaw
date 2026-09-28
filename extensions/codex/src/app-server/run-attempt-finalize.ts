@@ -56,7 +56,7 @@ export async function finalizeCodexAttempt(
   const { prompt, state: resourceState, trajectoryRecorder, markTrajectoryEndRecorded } = resources;
   const { context, systemPromptReport } = prompt;
   const { runtime, attemptTools, activeTranscriptTarget, hookContext } = context;
-  const { hookContextWindowFields, hookRunner } = context;
+  const { hookRunner } = context;
   const { connection, preparedAuthBinding } = runtime;
   const { effectiveRuntimeProviderId, effectiveRuntimeModelId } = runtime;
   const {
@@ -93,7 +93,7 @@ export async function finalizeCodexAttempt(
   };
   const { state, completion } = turnRuntime;
   const { emitLifecycleTerminal, buildLifecycleTerminalMeta } = lifecycle;
-  const { codexModelCallDiagnostics } = requestRuntime;
+  const { codexModelCallDiagnostics, buildLlmOutputEvent } = requestRuntime;
   const {
     activeTurnId,
     activeProjector,
@@ -498,22 +498,7 @@ export async function finalizeCodexAttempt(
     }
     runAgentHarnessLlmOutputHook({
       event: {
-        runId: params.runId,
-        sessionId: params.sessionId,
-        provider: usesSupervisionConnection
-          ? (resourceState.thread.modelProvider ?? effectiveRuntimeProviderId)
-          : params.provider,
-        model: usesSupervisionConnection
-          ? (resourceState.thread.model ?? effectiveRuntimeModelId)
-          : params.modelId,
-        ...hookContextWindowFields,
-        resolvedRef: usesSupervisionConnection
-          ? `${resourceState.thread.modelProvider ?? effectiveRuntimeProviderId}/${resourceState.thread.model ?? effectiveRuntimeModelId}`
-          : (params.runtimePlan?.observability.resolvedRef ??
-            `${params.provider}/${params.modelId}`),
-        ...(!usesSupervisionConnection && params.runtimePlan?.observability.harnessId
-          ? { harnessId: params.runtimePlan.observability.harnessId }
-          : {}),
+        ...buildLlmOutputEvent(),
         assistantTexts: result.assistantTexts,
         ...(result.lastAssistant ? { lastAssistant: result.lastAssistant } : {}),
         ...(result.attemptUsage ? { usage: result.attemptUsage } : {}),

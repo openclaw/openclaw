@@ -8,6 +8,7 @@ import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { MessagePort, parentPort, threadId, workerData } from "node:worker_threads";
 import zlib from "node:zlib";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -15,6 +16,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "../../infra/worker-idle-gc.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withFreshOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -27,6 +29,7 @@ import type {
   SqliteArchiveSessionRequest,
   SqliteArchiveSessionResponse,
   SessionTranscriptMaintenanceSizingInput,
+  TranscriptArchivePageResult,
   TranscriptArchivePublishPlan,
   TranscriptArchivePublishResult,
   TranscriptArchivePublishWorkerMessage,
@@ -57,39 +60,33 @@ type TranscriptArchiveDatabase = Pick<
   "session_transcript_archives" | "transcript_events"
 >;
 
-function isSqliteTranscriptArchiveWorkerData(value: unknown): boolean {
-  return (
-    Boolean(value) &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    (value as { type?: unknown }).type === "sqlite-transcript-archive-v2"
-  );
-}
-
 function parsePublishWorkerPlans(value: unknown): TranscriptArchivePublishPlan[] | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return undefined;
   }
-  const plans = (value as { plans?: unknown }).plans;
+  const plans = value.plans;
   if (!Array.isArray(plans)) {
     return undefined;
   }
   const parsed: TranscriptArchivePublishPlan[] = [];
-  for (const planValue of plans) {
-    if (!planValue || typeof planValue !== "object" || Array.isArray(planValue)) {
+  for (const plan of plans) {
+    if (!isRecord(plan)) {
       return undefined;
     }
-    const plan = planValue as Record<string, unknown>;
     if (
       typeof plan.agentId !== "string" ||
       typeof plan.archiveDirectory !== "string" ||
       typeof plan.databasePath !== "string" ||
       typeof plan.generation !== "string" ||
-      typeof plan.sessionId !== "string"
+      typeof plan.sessionId !== "string" ||
+      (plan.databaseIdentity !== undefined && typeof plan.databaseIdentity !== "string")
     ) {
       return undefined;
     }
     parsed.push({
+      ...(typeof plan.databaseIdentity === "string"
+        ? { databaseIdentity: plan.databaseIdentity }
+        : {}),
       agentId: plan.agentId,
       archiveDirectory: plan.archiveDirectory,
       databasePath: plan.databasePath,
@@ -100,11 +97,10 @@ function parsePublishWorkerPlans(value: unknown): TranscriptArchivePublishPlan[]
   return parsed;
 }
 
-function parseSessionStateDeleteSnapshot(value: unknown): SessionStateDeleteSnapshot | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+function parseSessionStateDeleteSnapshot(snapshot: unknown): SessionStateDeleteSnapshot | null {
+  if (!isRecord(snapshot)) {
     return null;
   }
-  const snapshot = value as Record<string, unknown>;
   if (
     typeof snapshot.acpParentStreamEventCount !== "number" ||
     (snapshot.generation !== null && typeof snapshot.generation !== "string") ||
@@ -128,19 +124,18 @@ function parseSessionStateDeleteSnapshot(value: unknown): SessionStateDeleteSnap
 }
 
 function parseWorkerPlans(value: unknown): TranscriptArchiveWorkerPlan[] | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return undefined;
   }
-  const plans = (value as { plans?: unknown }).plans;
+  const plans = value.plans;
   if (!Array.isArray(plans)) {
     return undefined;
   }
   const parsed: TranscriptArchiveWorkerPlan[] = [];
-  for (const planValue of plans) {
-    if (!planValue || typeof planValue !== "object" || Array.isArray(planValue)) {
+  for (const plan of plans) {
+    if (!isRecord(plan)) {
       return undefined;
     }
-    const plan = planValue as Record<string, unknown>;
     const snapshot = parseSessionStateDeleteSnapshot(plan.snapshot);
     if (
       typeof plan.agentId !== "string" ||
@@ -332,8 +327,7 @@ export async function materializeTranscriptArchiveInWorker(
                 `SQLite session state changed before archive materialization for ${plan.sessionId}`,
               );
             }
-            const rowCount = stageTranscriptArchiveContent(database.db, plan.sessionId, stagedPath);
-            return { rowCount, snapshot };
+            return stageTranscriptArchiveContent(database.db, plan.sessionId, stagedPath);
           },
           { databaseLabel: database.path, operationLabel: "session.archive.materialize" },
         ),
@@ -345,13 +339,13 @@ export async function materializeTranscriptArchiveInWorker(
       );
     }
     const generation = plan.snapshot.generation;
-    if (opened.value.rowCount > 0 && !generation) {
+    if (opened.value > 0 && !generation) {
       throw new Error(
         `Cannot archive SQLite transcript without a generation for ${plan.sessionId}`,
       );
     }
     const archive =
-      opened.value.rowCount > 0 && generation
+      opened.value > 0 && generation
         ? await encodeStagedTranscriptArchive({
             archiveDirectory: plan.archiveDirectory,
             generation,
@@ -373,6 +367,12 @@ export function publishTranscriptArchiveInWorker(
   try {
     const opened = withFreshOpenClawAgentDatabaseReadOnly(
       (database) => {
+        if (
+          plan.databaseIdentity !== undefined &&
+          readOpenClawAgentDatabaseIdentity(database).identity !== plan.databaseIdentity
+        ) {
+          throw new Error("SQLite archive publication database was replaced");
+        }
         const db = getNodeSqliteKysely<TranscriptArchiveDatabase>(database.db);
         return executeSqliteQuerySync(
           database.db,
@@ -482,6 +482,14 @@ async function runArchiveSession(
         settled: true,
         results: plans.map((plan) => publishTranscriptArchiveInWorker(plan, env)),
       };
+    } else if (request.operation === "read-page") {
+      const { readTranscriptArchivePageInWorker } =
+        await import("./session-accessor.sqlite-archive-read.js");
+      const results: Array<TranscriptArchivePageResult | undefined> = [];
+      for (const plan of request.plans) {
+        results.push(await readTranscriptArchivePageInWorker(plan, env));
+      }
+      response = { type: "page-read", operationId, settled: true, results };
     } else if (request.operation === "read-final") {
       const { readTranscriptArchiveFinalInWorker } =
         await import("./session-accessor.sqlite-archive-read.js");
@@ -509,11 +517,11 @@ async function runArchiveSession(
   port.close();
 }
 
-if (isSqliteTranscriptArchiveWorkerData(workerData)) {
+if (isRecord(workerData) && workerData.type === "sqlite-transcript-archive-v2") {
   if (!parentPort) {
     throw new Error("SQLite transcript archive worker requires a parent port");
   }
-  const operation = (workerData as { operation?: unknown }).operation;
+  const operation = workerData.operation;
   if (operation === "canonical-validation-pool") {
     const { serveWorkerTasks } = await import("../../infra/worker-task-server.js");
     const { runReclamationWorkerPort } =

@@ -23,20 +23,24 @@ and structured transforms. Use `wait` only when `exec` returns a resumable
 `exec` starts a code-mode cell and returns one result. Input code is model
 generated and must be treated as hostile.
 
-Input:
+Model-facing input:
 
 ```typescript
 type CodeModeExecInput = {
-  code?: string;
-  command?: string;
+  title: string;
+  code: string;
   restartSafe?: boolean;
 };
 ```
 
 Rules:
 
-- One of `code` or `command` must be non-empty.
-- `code` is the documented model-facing field.
+- Every new cell requires a nonblank `title` of at most 120 characters. Use a
+  short purpose, usually 3–7 words, such as "Inspect the dependency graph".
+  Describe intended work without claiming success or including secrets. The
+  Control UI displays this title on the execution row. Nested tools retain their
+  own summaries; `wait` needs no title and resumes activity under the original cell.
+- `code` is the required model-facing JavaScript field and must be non-empty.
 - `command` is accepted as an exec-compatible alias for hook policies and
   trusted rewrites (the normal OpenClaw shell exec tool also uses a `command`
   field). Blank caller aliases are treated as absent; a hook or trusted policy
@@ -232,8 +236,8 @@ enforcement remains unchanged. The finalized projection is carried through
 bridge calls and continuation resume; consumers do not reconstruct it from the
 catalog.
 
-The catalog omits code-mode control tools (`exec`, `wait`, `tool_search_code`,
-`tool_search`, `tool_describe`, `tool_call`) and direct-only tools. Controls
+The catalog omits code-mode control tools (`exec`, `wait`, `tool_search`,
+`tool_describe`, `tool_call`) and direct-only tools. Controls
 must not recurse through the catalog; direct-only tools remain model-visible
 because their structured results cannot cross the JSON guest bridge.
 
@@ -252,8 +256,8 @@ is active.
 
 When Code Mode engages through forced `true` or `"auto"` activation:
 
-- OpenClaw does not expose `tool_search_code`, `tool_search`, `tool_describe`,
-  or `tool_call` as model-visible tools.
+- OpenClaw does not expose `tool_search`, `tool_describe`, or `tool_call` as
+  model-visible tools.
 - The same cataloging idea moves inside the guest runtime.
 - The guest runtime receives bare async globals plus callable search/describe
   handles for native tools, plus on-demand MCP search handles.
@@ -262,7 +266,7 @@ When Code Mode engages through forced `true` or `"auto"` activation:
 - Nested calls dispatch through the same OpenClaw executor path that Tool
   Search uses.
 
-See [Tool Search](/tools/tool-search) for the OpenClaw compact catalog bridge
+See [Tool Search](/tools/tool-search) for the OpenClaw structured catalog surface
 that code mode supersedes for active runs.
 
 ## Tool names and collisions

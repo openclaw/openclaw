@@ -31,8 +31,17 @@ import {
 } from "../secrets/runtime.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import type { GatewayCronState } from "./server-cron.js";
 import type { GatewayPluginReloadResult } from "./server-reload-contracts.js";
+import {
+  createConfigWriteNotification,
+  createTestConfigRevisionProjector,
+  createValidConfigSnapshot,
+} from "./server-reload-handlers.config.test-support.js";
 import type { startManagedGatewayConfigReloader as StartManagedGatewayConfigReloader } from "./server-reload-managed.js";
 import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
 import { createTestRuntimeSecretsActivator } from "./server-startup-config.test-support.js";
@@ -51,7 +60,7 @@ type ConfigWriteListener = (event: ConfigWriteNotification) => void;
 type ConfigWriteListenerRef = { current: ConfigWriteListener | null };
 type ManagedReloaderTestParams = Pick<
   ManagedReloaderParams,
-  "initialConfig" | "readSnapshot" | "subscribeToWrites"
+  "initialConfig" | "readSnapshot" | "subscribeToWrites" | "scheduler"
 > &
   Partial<ManagedReloaderParams>;
 
@@ -169,10 +178,7 @@ function startManagedGatewayConfigReloader(
     commitRuntimePolicy: vi.fn(),
     acceptTerminalConfig: vi.fn(),
     ...params,
-    configRevisionProjector: params.configRevisionProjector ?? {
-      projectRawHash: (hash) => hash,
-      projectResolvedHash: (hash) => hash,
-    },
+    configRevisionProjector: params.configRevisionProjector ?? createTestConfigRevisionProjector(),
     initialSnapshotRawHash: params.initialSnapshotRawHash ?? null,
     initialAuthoredConfig: params.initialAuthoredConfig ?? {},
     initialSnapshotValid: params.initialSnapshotValid ?? true,
@@ -182,43 +188,6 @@ function startManagedGatewayConfigReloader(
     requestRecoveryRestart:
       params.requestRecoveryRestart ?? requestGatewayRestartWithSignalAdmission,
   });
-}
-
-function createValidConfigSnapshot(config: OpenClawConfig, hash: string) {
-  return {
-    path: "/tmp/openclaw.json",
-    exists: true,
-    raw: "{}",
-    parsed: {},
-    sourceConfig: config,
-    resolved: config,
-    valid: true,
-    runtimeConfig: config,
-    config,
-    issues: [],
-    warnings: [],
-    legacyIssues: [],
-    hash,
-  };
-}
-
-function createConfigWriteNotification(
-  config: OpenClawConfig,
-  persistedHash: string,
-  revision: number,
-  fingerprint: string,
-  sourceFingerprint: string,
-): ConfigWriteNotification {
-  return {
-    configPath: "/tmp/openclaw.json",
-    sourceConfig: config,
-    runtimeConfig: config,
-    persistedHash,
-    revision,
-    fingerprint,
-    sourceFingerprint,
-    writtenAtMs: Date.now(),
-  };
 }
 
 function captureConfigWriteListener(ref: ConfigWriteListenerRef) {
@@ -234,8 +203,9 @@ function captureConfigWriteListener(ref: ConfigWriteListenerRef) {
 
 describe("managed gateway reload context", () => {
   it("starts replacement channels with the current Gateway owner after a writer settles", async () => {
-    // Real timers retain the writer's async context; advancing fake timers
-    // outside it would hide the context leak this regression checks.
+    // Scheduler jobs retain the writer context even when the fake clock wakes elsewhere.
+    const time = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(time.clock);
     const initialConfig: OpenClawConfig = {
       channels: { telegram: { accounts: { default: { name: "Before" } } } },
     };
@@ -273,6 +243,7 @@ describe("managed gateway reload context", () => {
       reloader = currentGateway.run(() =>
         startupWork.run(() =>
           startManagedGatewayConfigReloader(startReloader, {
+            scheduler,
             initialConfig,
             readSnapshot: async () => createValidConfigSnapshot(nextConfig, "profile-change"),
             subscribeToWrites: captureConfigWriteListener(writeListenerRef),
@@ -305,6 +276,8 @@ describe("managed gateway reload context", () => {
         }),
       );
       await writerWork.drain();
+      expect(startChannel).not.toHaveBeenCalled();
+      await time.advanceBy(0);
 
       const status = await application.result;
       expect(startChannel).toHaveBeenCalled();
@@ -317,6 +290,7 @@ describe("managed gateway reload context", () => {
     } finally {
       try {
         await reloader?.stop();
+        await scheduler.stop();
       } finally {
         await Promise.all([previousGateway.close(), currentGateway.close()]);
       }

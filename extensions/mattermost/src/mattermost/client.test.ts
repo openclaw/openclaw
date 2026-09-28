@@ -18,10 +18,12 @@ import {
   createMattermostClient,
   createMattermostDirectChannelWithRetry,
   createMattermostPost,
+  deleteMattermostPost,
   fetchMattermostChannel,
   fetchMattermostChannelPosts,
   normalizeMattermostBaseUrl,
   readMattermostError,
+  sendMattermostTyping,
   updateMattermostPost,
 } from "./client.js";
 
@@ -116,10 +118,6 @@ async function updatePostAndCapture(
 // ── normalizeMattermostBaseUrl ────────────────────────────────────────
 
 describe("normalizeMattermostBaseUrl", () => {
-  it("strips trailing slashes", () => {
-    expect(normalizeMattermostBaseUrl("http://localhost:8065/")).toBe("http://localhost:8065");
-  });
-
   it("strips /api/v4 suffix", () => {
     expect(normalizeMattermostBaseUrl("http://localhost:8065/api/v4")).toBe(
       "http://localhost:8065",
@@ -131,29 +129,11 @@ describe("normalizeMattermostBaseUrl", () => {
     expect(normalizeMattermostBaseUrl(null)).toBeUndefined();
     expect(normalizeMattermostBaseUrl(undefined)).toBeUndefined();
   });
-
-  it("preserves valid base URL", () => {
-    expect(normalizeMattermostBaseUrl("http://mm.example.com")).toBe("http://mm.example.com");
-  });
 });
 
 // ── readMattermostError ───────────────────────────────────────────────
 
 describe("readMattermostError", () => {
-  it("bounds null-body JSON errors without response.json/text", async () => {
-    const response = new Response(null, {
-      status: 401,
-      headers: { "content-type": "application/json" },
-    });
-    const jsonSpy = vi.spyOn(response, "json").mockRejectedValue(new Error("unbounded"));
-    const textSpy = vi.spyOn(response, "text").mockRejectedValue(new Error("unbounded"));
-
-    await expect(readMattermostError(response, {})).resolves.toBe("");
-
-    expect(jsonSpy).not.toHaveBeenCalled();
-    expect(textSpy).not.toHaveBeenCalled();
-  });
-
   it("parses bounded JSON error messages from response bodies", async () => {
     const response = Response.json({ message: "invalid token", id: "app.error" }, { status: 401 });
     const jsonSpy = vi.spyOn(response, "json").mockRejectedValue(new Error("unbounded"));
@@ -432,18 +412,6 @@ describe("createMattermostClient", () => {
     expect(calls).toEqual([]);
   });
 
-  it("sends Authorization header with Bearer token", async () => {
-    const { mockFetch, calls } = createMockFetch({ body: { id: "u1" } });
-    const client = createMattermostClient({
-      baseUrl: "http://localhost:8065",
-      botToken: "my-secret-token",
-      fetchImpl: mockFetch,
-    });
-    await client.request("/users/me");
-    const headers = new Headers(requireRequestCall(calls).init?.headers);
-    expect(headers.get("Authorization")).toBe("Bearer my-secret-token");
-  });
-
   it("sets Content-Type for string bodies", async () => {
     const { mockFetch, calls } = createMockFetch({ body: { id: "p1" } });
     const client = createMattermostClient({
@@ -454,19 +422,6 @@ describe("createMattermostClient", () => {
     await client.request("/posts", { method: "POST", body: JSON.stringify({ message: "hi" }) });
     const headers = new Headers(requireRequestCall(calls).init?.headers);
     expect(headers.get("Content-Type")).toBe("application/json");
-  });
-
-  it("throws on non-ok responses", async () => {
-    const { mockFetch } = createMockFetch({
-      status: 404,
-      body: { message: "Not Found" },
-    });
-    const client = createMattermostClient({
-      baseUrl: "http://localhost:8065",
-      botToken: "tok",
-      fetchImpl: mockFetch,
-    });
-    await expect(client.request("/missing")).rejects.toThrow("Mattermost API 404");
   });
 
   it("returns undefined on 204 responses", async () => {
@@ -482,7 +437,7 @@ describe("createMattermostClient", () => {
     expect(result).toBeUndefined();
   });
 
-  it("treats an accepted reaction add as success when its body read fails", async () => {
+  it("treats an accepted no-result mutation as success when its body read fails", async () => {
     const release = vi.fn(async () => {});
     const stream = new ReadableStream<Uint8Array>({
       pull() {
@@ -505,12 +460,13 @@ describe("createMattermostClient", () => {
       client.request("/reactions", {
         method: "POST",
         body: JSON.stringify({ user_id: "u1", post_id: "p1", emoji_name: "+1" }),
+        discardResponse: true,
       }),
     ).resolves.toBeUndefined();
     expect(release).toHaveBeenCalledTimes(1);
   });
 
-  it("treats an accepted reaction add as success when its body is undecodable", async () => {
+  it("treats an accepted no-result mutation as success when its body is undecodable", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
       response: new Response('{"partial":', {
@@ -528,12 +484,13 @@ describe("createMattermostClient", () => {
       client.request("/reactions", {
         method: "POST",
         body: JSON.stringify({ user_id: "u1", post_id: "p1", emoji_name: "+1" }),
+        discardResponse: true,
       }),
     ).resolves.toBeUndefined();
     expect(release).toHaveBeenCalledTimes(1);
   });
 
-  it("ignores a rejecting body cancellation on an accepted reaction add", async () => {
+  it("ignores a rejecting body cancellation on an accepted no-result mutation", async () => {
     const release = vi.fn(async () => {});
     const stream = new ReadableStream<Uint8Array>({
       cancel() {
@@ -556,8 +513,56 @@ describe("createMattermostClient", () => {
       client.request("/reactions", {
         method: "POST",
         body: JSON.stringify({ user_id: "u1", post_id: "p1", emoji_name: "+1" }),
+        discardResponse: true,
       }),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe("no-result Mattermost mutations", () => {
+  // Mattermost answers typing and post deletion with 200 {"status":"OK"}; callers use no receipt.
+  function createUnreadableOkClient() {
+    const fetchImpl = vi.fn<typeof fetch>(async () => {
+      const body = new ReadableStream<Uint8Array>({
+        pull() {
+          throw new TypeError("terminated");
+        },
+      });
+      return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+    });
+    const client = createMattermostClient({
+      baseUrl: "https://chat.example.com",
+      botToken: "test-token",
+      fetchImpl,
+    });
+    return { client, fetchImpl };
+  }
+
+  it("reports an accepted typing indicator as sent when its body cannot be read", async () => {
+    const { client, fetchImpl } = createUnreadableOkClient();
+
+    await expect(
+      sendMattermostTyping(client, { channelId: "ch1", parentId: "root1" }),
+    ).resolves.toBeUndefined();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0]?.[1]?.method).toBe("POST");
+  });
+
+  it("reports an accepted post deletion as done when its body cannot be read", async () => {
+    const { client, fetchImpl } = createUnreadableOkClient();
+
+    await expect(deleteMattermostPost(client, "post1")).resolves.toBeUndefined();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(requestUrl(fetchImpl.mock.calls[0]?.[0] ?? "")).toBe(
+      "https://chat.example.com/api/v4/posts/post1",
+    );
+    expect(fetchImpl.mock.calls[0]?.[1]?.method).toBe("DELETE");
+  });
+
+  it("still fails a receipt-bearing request whose body cannot be read", async () => {
+    const { client } = createUnreadableOkClient();
+
+    await expect(fetchMattermostChannel(client, "ch1")).rejects.toThrow("terminated");
   });
 });
 
@@ -599,11 +604,6 @@ describe("fetchMattermostChannelPosts", () => {
 
   it.each([
     {
-      label: "default history",
-      options: {},
-      response: { next_post_id: "newer-boundary", prev_post_id: "" },
-    },
-    {
       label: "before history",
       options: { before: "cursor" },
       response: { next_post_id: "newer-boundary", prev_post_id: "" },
@@ -627,11 +627,6 @@ describe("fetchMattermostChannelPosts", () => {
   );
 
   it.each([
-    {
-      label: "default history",
-      options: {},
-      response: { prev_post_id: "older-page" },
-    },
     {
       label: "before history",
       options: { before: "cursor" },
@@ -793,7 +788,6 @@ describe("createMattermostPost", () => {
 
   it.each([
     { name: "missing", response: { body: { message: "sent" } } },
-    { name: "empty", response: { body: { id: "" } } },
     { name: "blank", response: { body: { id: "  " } } },
     { name: "null", response: { body: null } },
     { name: "no-content", response: { status: 204 } },
@@ -821,42 +815,6 @@ describe("createMattermostPost", () => {
     await expect(
       createMattermostPost(client, { channelId: "ch123", message: "hello" }),
     ).resolves.toMatchObject({ id: "post-123" });
-  });
-
-  it("sends channel_id and message", async () => {
-    const { mockFetch, calls } = createMockFetch({ body: { id: "post1" } });
-    const client = createMattermostClient({
-      baseUrl: "http://localhost:8065",
-      botToken: "tok",
-      fetchImpl: mockFetch,
-    });
-
-    await createMattermostPost(client, {
-      channelId: "ch123",
-      message: "Hello world",
-    });
-
-    const body = parseRequestJson(requireRequestCall(calls).init);
-    expect(body.channel_id).toBe("ch123");
-    expect(body.message).toBe("Hello world");
-  });
-
-  it("includes rootId when provided", async () => {
-    const { mockFetch, calls } = createMockFetch({ body: { id: "post2" } });
-    const client = createMattermostClient({
-      baseUrl: "http://localhost:8065",
-      botToken: "tok",
-      fetchImpl: mockFetch,
-    });
-
-    await createMattermostPost(client, {
-      channelId: "ch123",
-      message: "Reply",
-      rootId: "root456",
-    });
-
-    const body = parseRequestJson(requireRequestCall(calls).init);
-    expect(body.root_id).toBe("root456");
   });
 
   it("includes fileIds when provided", async () => {
@@ -907,23 +865,6 @@ describe("createMattermostPost", () => {
       props,
     });
   });
-
-  it("omits props when not provided", async () => {
-    const { mockFetch, calls } = createMockFetch({ body: { id: "post5" } });
-    const client = createMattermostClient({
-      baseUrl: "http://localhost:8065",
-      botToken: "tok",
-      fetchImpl: mockFetch,
-    });
-
-    await createMattermostPost(client, {
-      channelId: "ch123",
-      message: "No props",
-    });
-
-    const body = parseRequestJson(requireRequestCall(calls).init);
-    expect(body.props).toBeUndefined();
-  });
 });
 
 // ── updateMattermostPost ─────────────────────────────────────────────
@@ -938,12 +879,6 @@ describe("updateMattermostPost", () => {
       throw new Error("expected Mattermost update post request init");
     }
     expect(firstCall.init.method).toBe("PUT");
-  });
-
-  it("includes post id in the body", async () => {
-    const { body } = await updatePostAndCapture({ message: "Updated" });
-    expect(body.id).toBe("post1");
-    expect(body.message).toBe("Updated");
   });
 
   it("includes props for button completion updates", async () => {

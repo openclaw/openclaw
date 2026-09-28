@@ -7,7 +7,7 @@ import type {
   ZoomMeetingsSession,
 } from "./transports/types.js";
 
-const probes = MeetingPlatformAdapter.createRuntimeProbes<
+export const zoomMeetingsProbes = MeetingPlatformAdapter.createRuntimeProbes<
   ZoomMeetingsConfig,
   ZoomMeetingsMode,
   ZoomMeetingsTransport,
@@ -22,6 +22,3 @@ const probes = MeetingPlatformAdapter.createRuntimeProbes<
   shouldWaitForListening: (session) => Boolean(session.chrome?.browserTab?.targetId),
   talkBackMode: MeetingPlatformAdapter.isTalkBackMode,
 });
-
-export const testZoomMeetingListening = probes.testListening;
-export const testZoomMeetingSpeech = probes.testSpeech;

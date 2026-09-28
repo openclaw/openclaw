@@ -50,7 +50,22 @@ it.each(["discovery", "watch"] as const)(
     if (operation === "discovery") {
       await access.loadSkills(request);
     } else {
-      await access.watchSkills(request, vi.fn(), signal);
+      const changed = vi.fn();
+      const events = ["unavailable", "change", "available", "change", "unavailable"];
+      vi.mocked(runNodeWorkspaceWorker).mockImplementationOnce(
+        async (_options, _command, _request, _signal, onLine) => {
+          expect(onLine).toBeTypeOf("function");
+          for (const event of events) {
+            onLine!(JSON.stringify(event));
+          }
+          expect(() => onLine!(JSON.stringify("ready"))).toThrow(
+            "Invalid Skill change notification",
+          );
+          return "";
+        },
+      );
+      await access.watchSkills(request, changed, signal);
+      expect(changed.mock.calls.map(([event]) => event)).toEqual(events);
     }
     const params = vi.mocked(runNodeWorkspaceWorker).mock.lastCall?.[2];
     expect(params).toMatchObject({ operation, watch: operation === "watch" });

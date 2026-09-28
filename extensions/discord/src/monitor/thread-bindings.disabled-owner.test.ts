@@ -81,7 +81,7 @@ it.each([
         getSessionBindingService().resolveByConversationAsync(conversation),
       ).resolves.toBeNull();
     } finally {
-      manager.stop();
+      await manager.stop();
     }
   },
 );
@@ -91,8 +91,8 @@ it("keeps only the current disabled owner available and refuses work after retir
   const conversation = { channel: "discord", accountId: "work", conversationId: "user:123" };
   const predecessor = createNoopThreadBindingManager("work");
   const current = createNoopThreadBindingManager("work");
-  predecessor.stop();
-  predecessor.stop();
+  await predecessor.stop();
+  await predecessor.stop();
   expect(service.getCapabilities(conversation)).toEqual({
     adapterAvailable: true,
     bindSupported: false,
@@ -104,8 +104,8 @@ it("keeps only the current disabled owner available and refuses work after retir
     status: "available",
     binding: null,
   });
-  current.stop();
-  current.stop();
+  await current.stop();
+  await current.stop();
   const unavailable = await service.inspectByConversationAsync(conversation);
   expect(Object.fromEntries(Object.entries(unavailable))).toEqual({
     status: "unavailable",

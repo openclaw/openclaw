@@ -12,7 +12,7 @@ import {
   markCronJobActive,
 } from "../../cron/active-jobs.js";
 import { prepareCronPromptRunAdmission } from "../../cron/isolated-agent/run-admission.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
 import {
   mintMessageActionTurnCapability,
   readMessageActionInvocationConfig,

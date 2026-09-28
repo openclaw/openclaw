@@ -7,6 +7,7 @@ import {
   type WorkerResult,
   type WorkerScenario,
 } from "../../scripts/bench-agent-concurrency.ts";
+import { createGatewayActiveWorkSnapshot } from "../../src/infra/gateway-active-work.js";
 import {
   resetGatewayWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
@@ -22,15 +23,11 @@ function workerResult(scenario: WorkerScenario, size: number, timingsMs = [1, 2,
           reservationsReleased: size,
           blockedWaits: size,
           settledRuns: size,
-          settledTasks: size,
           outstandingWaits: 0,
           durableSubagentRows: scenario === "spawnPipelineDurable" ? size : 0,
-          durableTaskRows: scenario === "spawnPipelineDurable" ? size : 0,
           durableStateFile: scenario === "spawnPipelineDurable",
           postTeardownRegistryRows: 0,
-          postTeardownTaskRows: 0,
           postTeardownDurableSubagentRows: 0,
-          postTeardownDurableTaskRows: 0,
           postTeardownActiveRootWork: 0,
         }
       : scenario === "admission"
@@ -120,6 +117,7 @@ describe("agent concurrency benchmark", () => {
     const deferred = createDeferred();
     const rootWork = runWithGatewayIndependentRootWorkAdmission(() => deferred.promise);
     try {
+      expect(createGatewayActiveWorkSnapshot().counts.rootRequests).toBe(1);
       const drain = workerTesting.drainSpawnSampleActiveWork();
       await expect(
         Promise.race([
@@ -131,7 +129,7 @@ describe("agent concurrency benchmark", () => {
       ).resolves.toBe("pending");
 
       deferred.resolve();
-      await expect(drain).resolves.toBeUndefined();
+      await expect(drain).resolves.toBe(0);
     } finally {
       deferred.resolve();
       await rootWork;

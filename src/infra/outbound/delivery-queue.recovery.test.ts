@@ -988,100 +988,85 @@ describe("delivery-queue recovery", () => {
     await expectPendingEntry({ id, recoveryState: "unknown_after_send", retryCount: 0 });
     expect(readOutboundQueueStatus(tmpDir(), id)).toBe("pending");
   });
-  it("keeps a best-effort recovery failure retryable when no payload was sent", async () => {
-    await enqueueDemoRecoveryDelivery(["first"], { bestEffort: true });
-    const deliver = vi.fn(async (params: PayloadOutcomeSink) => {
-      reportPayloadFailure(params, new Error("network down"));
-      return [];
-    });
-    const { result } = await runRecovery({ deliver });
-    expect(result).toMatchObject({ recovered: 0, failed: 1 });
-    await expectPendingEntry({
-      recoveryState: undefined,
-      retryCount: 1,
-      lastError: "network down",
-    });
+  const preConnectFailure = Object.assign(new Error("getaddrinfo EAI_AGAIN"), {
+    code: "EAI_AGAIN",
+    syscall: "getaddrinfo",
   });
-  it.each(
-    [
-      {
-        name: "classifies a pre-connect best-effort recovery failure",
-        error: Object.assign(new Error("getaddrinfo EAI_AGAIN"), {
-          code: "EAI_AGAIN",
-          syscall: "getaddrinfo",
-        }),
-      },
-      {
-        name: "classifies a provider-not-dispatched best-effort recovery failure",
-        error: new PlatformMessageNotDispatchedError(
-          "upload timed out before completion dispatch",
-          {
-            cause: new Error("request timed out"),
-          },
-        ),
-      },
-    ].flatMap((failure) => [
-      { ...failure, precedingReason: undefined },
-      { ...failure, precedingReason: "adapter_returned_no_send" as const },
-      { ...failure, precedingReason: "adapter_returned_no_identity" as const },
-    ]),
-  )("$name (preceding outcome: $precedingReason)", async ({ error, precedingReason }) => {
-    const id = await enqueueDemoRecoveryDelivery(
-      precedingReason ? ["first", "second"] : ["first"],
-      {
-        bestEffort: true,
-      },
-    );
-    const deliver = vi.fn(async (params: Parameters<DeliverFn>[0]) => {
-      await markDeliveryPlatformSendAttemptStarted(id, tmpDir());
-      await params.onPlatformSendStart?.({});
+  const notDispatched = new PlatformMessageNotDispatchedError("upload timed out before dispatch", {
+    cause: new Error("request timed out"),
+  });
+  const permanentRejection = new PlatformMessageNotDispatchedError("chat not found", {
+    cause: new Error("provider rejected before dispatch"),
+    retryable: false,
+  });
+  const ambiguousRead = Object.assign(new Error("read ECONNRESET"), {
+    code: "ECONNRESET",
+    syscall: "read",
+  });
+  it.each([
+    ...[preConnectFailure, notDispatched].flatMap((error) =>
+      ([undefined, "adapter_returned_no_send", "adapter_returned_no_identity"] as const).map(
+        (reason) =>
+          [
+            error.message,
+            [error],
+            reason,
+            reason === "adapter_returned_no_identity" ? "unknown_after_send" : undefined,
+          ] as const,
+      ),
+    ),
+    ["unmarked failure", [new Error("network down")], undefined, "unmarked"],
+    ["transient-first batch", [notDispatched, permanentRejection], undefined, undefined],
+    ["permanent-first batch", [permanentRejection, notDispatched], undefined, undefined],
+    ["all-permanent batch", [permanentRejection, permanentRejection], undefined, "terminal"],
+    ["ambiguous read", [notDispatched, ambiguousRead], undefined, "send_attempt_started"],
+  ] as const)(
+    "classifies best-effort recovery: %s (%s, %s)",
+    async (_, errors, precedingReason, state) => {
+      const texts = errors.map((error) => error.message);
       if (precedingReason) {
-        params.onPayloadDeliveryOutcome?.({
-          index: 0,
-          status: "suppressed",
-          reason: precedingReason,
-        });
+        texts.unshift("suppressed");
       }
-      reportPayloadFailure(params, error, { index: precedingReason ? 1 : 0 });
-      return [];
-    });
-    const { result } = await runRecovery({ deliver });
-    expect(result).toMatchObject({ recovered: 0, failed: 1 });
-    const ambiguous = precedingReason === "adapter_returned_no_identity";
-    const entry = await expectPendingEntry({
-      retryCount: 1,
-      recoveryState: ambiguous ? "unknown_after_send" : undefined,
-    });
-    expect(entry?.platformSendStartedAt).toEqual(ambiguous ? expect.any(Number) : undefined);
-  });
-  it("preserves send evidence when a marked recovery batch has an ambiguous failure", async () => {
-    const id = await enqueueDemoRecoveryDelivery(["first", "second"], { bestEffort: true });
-    const deliver = vi.fn(async (params: PayloadOutcomeSink) => {
-      await markDeliveryPlatformSendAttemptStarted(id, tmpDir());
-      reportPayloadFailure(
-        params,
-        new PlatformMessageNotDispatchedError("upload timed out before completion dispatch", {
-          cause: new Error("request timed out"),
-        }),
-      );
-      reportPayloadFailure(
-        params,
-        Object.assign(new Error("read ECONNRESET"), {
-          code: "ECONNRESET",
-          syscall: "read",
-        }),
-        { index: 1 },
-      );
-      return [];
-    });
-    const { result } = await runRecovery({ deliver });
-    expect(result).toMatchObject({ recovered: 0, failed: 1 });
-    const entry = await expectPendingEntry({
-      retryCount: 1,
-      recoveryState: "send_attempt_started",
-    });
-    expect(typeof entry?.platformSendStartedAt).toBe("number");
-  });
+      const id = await enqueueDemoRecoveryDelivery(texts, { bestEffort: true });
+      const deliver = vi.fn(async (params: Parameters<DeliverFn>[0]) => {
+        if (state !== "unmarked") {
+          await markDeliveryPlatformSendAttemptStarted(id, tmpDir());
+          if (state !== "send_attempt_started") {
+            await params.onPlatformSendStart?.({});
+          }
+        }
+        if (precedingReason) {
+          params.onPayloadDeliveryOutcome?.({
+            index: 0,
+            status: "suppressed",
+            reason: precedingReason,
+          });
+        }
+        errors.forEach((error, index) =>
+          reportPayloadFailure(params, error, { index: index + (precedingReason ? 1 : 0) }),
+        );
+        return [];
+      });
+      const { result } = await runRecovery({ deliver });
+      expect(result).toMatchObject({ recovered: 0, failed: 1 });
+      if (state === "terminal") {
+        await expectFailedQueue(id);
+        return;
+      }
+      const recoveryState = state === "unmarked" ? undefined : state;
+      const entry = await expectPendingEntry({
+        id,
+        retryCount: 1,
+        recoveryState,
+        settlement: undefined,
+      });
+      if (state === "unmarked") {
+        expect(entry?.lastError).toBe("network down");
+      }
+      expect(entry?.platformSendStartedAt).toEqual(recoveryState ? expect.any(Number) : undefined);
+      expect(readOutboundQueueStatus(tmpDir(), id)).toBe("pending");
+    },
+  );
   it.each([false, true])(
     "does not ack a partially sent best-effort recovery batch (identified: %s)",
     async (identified) => {

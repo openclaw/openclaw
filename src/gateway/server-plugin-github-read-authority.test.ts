@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -10,7 +10,9 @@ import {
 } from "../plugin-sdk/plugin-test-contracts.js";
 import type { OpenClawPluginDefinition } from "../plugins/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createControlUiHandlers } from "./server-methods/control-ui.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./server-methods/types.js";
@@ -25,10 +27,15 @@ const { default: github } = await loadBundledPluginFacade<{
   default: OpenClawPluginDefinition;
 }>({ pluginId: "github", artifactBasename: "index.ts" });
 
-afterEach(() => {
+let state: Awaited<ReturnType<typeof createOpenClawTestState>> | undefined;
+beforeEach(async () => {
+  state = await createOpenClawTestState({ scenario: "minimal" });
+});
+afterEach(async () => {
   resetTestPluginRegistry();
   clearRuntimeConfigSnapshot();
   vi.unstubAllGlobals();
+  await state?.cleanup();
 });
 
 function fixture(method: "preview" | "detail") {
@@ -75,7 +82,7 @@ function fixture(method: "preview" | "detail") {
   context.getGatewayMethodRegistry = () => methods;
   const client = createOperatorWsClient({ scopes: ["operator.read"] });
   client.authenticatedUserProfile = {
-    profileId: "github-reader",
+    profileId: ensureProfileForEmail("github-reader@example.test").id,
     displayName: "GitHub reader",
     avatarRevision: "1",
     hasAvatar: false,

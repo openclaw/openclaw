@@ -286,7 +286,7 @@ describe("chat pane approval requester identity", () => {
     };
     const state = pane.initialize(context);
     state.sessionKey = host.key;
-    pane.paneTitle = "Unrelated pane title";
+    pane.presentationTitle = "Unrelated pane title";
     const now = Date.now();
     state.chatSessionApprovalQueue = projectSessionApprovalReplay(
       {
@@ -380,8 +380,7 @@ function createGlobalFeaturePane(
   methods: string[],
 ) {
   const client = createGatewayBrowserClientFixture({
-    request: (method, params) =>
-      method === "tasks.list" ? Promise.resolve({ tasks: [] }) : request(method, params),
+    request: (method, params) => request(method, params),
   });
   const sessions = createSessionCapabilityFixture({
     state: { modelOverrides: {}, result: null, loading: false, error: null },

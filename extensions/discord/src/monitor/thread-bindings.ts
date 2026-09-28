@@ -8,7 +8,7 @@ export {
   formatThreadBindingDurationLabel,
   resolveThreadBindingIntroText,
   resolveThreadBindingThreadName,
-} from "./thread-bindings.messages.js";
+} from "openclaw/plugin-sdk/conversation-runtime";
 export {
   resolveThreadBindingPersona,
   resolveThreadBindingPersonaFromRecord,
@@ -33,8 +33,11 @@ export {
   listThreadBindingsForAccount,
   reconcileAcpThreadBindingsOnStartup,
   setThreadBindingIdleTimeoutBySessionKey,
+  setThreadBindingIdleTimeoutBySessionKeyAsync,
   setThreadBindingMaxAgeBySessionKey,
+  setThreadBindingMaxAgeBySessionKeyAsync,
   unbindThreadBindingsBySessionKey,
+  unbindThreadBindingsBySessionKeyAsync,
 } from "./thread-bindings.lifecycle.js";
 
 export type { AcpThreadBindingReconciliationResult } from "./thread-bindings.lifecycle.js";

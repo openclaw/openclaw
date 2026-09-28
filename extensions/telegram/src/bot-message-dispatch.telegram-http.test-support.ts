@@ -47,6 +47,7 @@ export function createTelegramDispatchHttpFixture() {
   let inboundSequence = 0;
   const sockets = new Set<Socket>();
   const calls: RecordedBotApiCall[] = [];
+  const endpoints: string[] = [];
   const visibleMessages = new Map<number, string>();
   const visibleMarkup = new Map<number, unknown>();
   const acceptedCalls: RecordedBotApiCall[] = [];
@@ -59,7 +60,10 @@ export function createTelegramDispatchHttpFixture() {
   const pendingDispatches = new Set<Promise<unknown>>();
   const bindingAdapters = new Map<string, SessionBindingAdapter>();
   const pendingRequests = new Set<Promise<unknown>>();
-  type Rejection = { error_code: number; description: string } | "no-message-id" | undefined;
+  type Rejection =
+    | { error_code: number; description: string; parameters?: { retry_after?: number } }
+    | "no-message-id"
+    | undefined;
   let respondToCall: ((call: RecordedBotApiCall) => Rejection | Promise<Rejection>) | undefined;
   let rejectNextQuote = false;
   let holdNextCall:
@@ -93,6 +97,7 @@ export function createTelegramDispatchHttpFixture() {
         }
         const method = request.url?.split("/").at(-1) ?? "";
         const call = { method, fields };
+        endpoints.push(request.url ?? "");
         calls.push(call);
         response.once("finish", () => {
           for (const waiter of botApiCallWaiters) {
@@ -108,10 +113,7 @@ export function createTelegramDispatchHttpFixture() {
         response.setHeader("content-type", "application/json");
         // Idle keep-alive expiry must not race later fixture requests under load.
         response.setHeader("connection", "close");
-        const rejection = await Promise.race([
-          Promise.resolve(respondToCall?.({ method, fields })),
-          stopped,
-        ]);
+        const rejection = await Promise.race([Promise.resolve(respondToCall?.(call)), stopped]);
         if (rejection) {
           if (rejection === "no-message-id") {
             response.end(JSON.stringify({ ok: true, result: true }));
@@ -139,7 +141,7 @@ export function createTelegramDispatchHttpFixture() {
           );
           return;
         }
-        acceptedCalls.push({ method, fields });
+        acceptedCalls.push(call);
         const chatId = Number(fields.chat_id ?? CHAT_ID);
         const chat =
           chatId < 0
@@ -261,6 +263,7 @@ export function createTelegramDispatchHttpFixture() {
       toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
     });
     calls.length = 0;
+    endpoints.length = 0;
     visibleMessages.clear();
     visibleMarkup.clear();
     acceptedCalls.length = 0;
@@ -416,6 +419,7 @@ export function createTelegramDispatchHttpFixture() {
       telegramDeps?: TelegramBotDeps;
       telegramCfg?: Parameters<typeof dispatchTelegramMessage>[0]["telegramCfg"];
       cfg?: OpenClawConfig;
+      onDispatch?: (cfg: OpenClawConfig) => void;
       context?: TelegramMessageContext;
       textLimit?: number;
       allowErrors?: boolean;
@@ -477,6 +481,7 @@ export function createTelegramDispatchHttpFixture() {
             : telegramCfg,
         },
       };
+      scenario?.onDispatch?.(cfg);
       const errors: string[] = [];
       const context = scenario?.context ?? createContext();
       context.sendTyping = () => {
@@ -578,6 +583,7 @@ export function createTelegramDispatchHttpFixture() {
       holdNextCall = value;
     },
     calls,
+    endpoints,
     visibleMessages,
     visibleMarkup,
     acceptedCalls,

@@ -2,6 +2,7 @@
 import { createDeferredCore } from "../shared/deferred.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { computeBackoffMs } from "./delivery-recovery.shared.js";
+import type { GatewayScheduler, GatewayScheduledJob } from "./gateway-scheduler.js";
 import {
   drainPendingSessionDelivery,
   type DeliverSessionDeliveryFn,
@@ -15,6 +16,7 @@ import {
 import type { QueuedSessionDelivery } from "./session-delivery-queue.records.js";
 
 type SessionDeliveryRuntime = {
+  scheduler: GatewayScheduler;
   queueContext: OpenClawStateWorkerContext;
   deliver: DeliverSessionDeliveryFn;
   drain?: typeof drainPendingSessionDelivery;
@@ -32,69 +34,58 @@ let runtime:
     })
   | undefined;
 let runtimeGeneration = 0;
-const scheduledEntries = new Map<string, { timer: ReturnType<typeof setTimeout>; dueAt: number }>();
-let pendingScanTimer: ReturnType<typeof setTimeout> | undefined;
+const scheduledEntries = new Map<string, GatewayScheduledJob>();
+let pendingScan: GatewayScheduledJob | undefined;
 
 function clearScheduledEntries(): void {
   for (const scheduled of scheduledEntries.values()) {
-    clearTimeout(scheduled.timer);
+    scheduled.cancel();
   }
   scheduledEntries.clear();
-  if (pendingScanTimer) {
-    clearTimeout(pendingScanTimer);
-    pendingScanTimer = undefined;
-  }
+  pendingScan?.cancel();
+  pendingScan = undefined;
 }
 
 function armPendingScan(generation: number): void {
-  if (!runtime || generation !== runtimeGeneration || pendingScanTimer) {
+  if (!runtime || generation !== runtimeGeneration || pendingScan) {
     return;
   }
-  pendingScanTimer = setTimeout(() => {
-    pendingScanTimer = undefined;
-    void schedulePendingSessionDeliveries();
-  }, RUNTIME_RELOAD_RETRY_MS);
-  pendingScanTimer.unref?.();
+  pendingScan = runtime.scheduler.schedule({
+    id: "session-delivery:scan",
+    delayMs: RUNTIME_RELOAD_RETRY_MS,
+    run: () => {
+      pendingScan = undefined;
+      return schedulePendingSessionDeliveries();
+    },
+  });
 }
 
-function resolveRetryDelayMs(entry: QueuedSessionDelivery): number {
-  const claimDelayMs = Math.max(0, (entry.availableAt ?? 0) - Date.now());
-  const deadlineDelayMs =
-    entry.kind === "agentTurn" && entry.owner?.kind === "subagent_completion"
-      ? Math.max(0, entry.owner.deadlineAt - Date.now())
-      : Number.POSITIVE_INFINITY;
-  if (entry.retryCount <= 0) {
-    return Math.min(claimDelayMs, deadlineDelayMs);
-  }
+function resolveRetryDelayMs(entry: QueuedSessionDelivery, now: number): number {
+  const claimDelayMs = Math.max(0, (entry.availableAt ?? 0) - now);
   if (entry.kind === "agentTurn" && entry.owner?.kind === "subagent_completion") {
-    return Math.min(deadlineDelayMs, claimDelayMs);
+    return Math.min(claimDelayMs, Math.max(0, entry.owner.deadlineAt - now));
+  }
+  if (entry.retryCount <= 0) {
+    return claimDelayMs;
   }
   const attemptedAt = entry.lastAttemptAt ?? entry.enqueuedAt;
-  return Math.min(
-    deadlineDelayMs,
-    Math.max(claimDelayMs, attemptedAt + computeBackoffMs(entry.retryCount) - Date.now()),
-  );
+  return Math.max(claimDelayMs, attemptedAt + computeBackoffMs(entry.retryCount) - now);
 }
 
 function armSessionDeliveryId(id: string, delayMs: number, generation: number): void {
   if (!runtime || generation !== runtimeGeneration) {
     return;
   }
-  // Native timers measure elapsed time, so preemption deadlines must ignore wall-clock jumps.
-  const dueAt = performance.now() + delayMs;
-  const existing = scheduledEntries.get(id);
-  if (existing && existing.dueAt <= dueAt) {
-    return;
-  }
-  if (existing) {
-    clearTimeout(existing.timer);
-  }
-  const timer = setTimeout(() => {
-    scheduledEntries.delete(id);
-    void runScheduledSessionDelivery(id, generation);
-  }, delayMs);
-  timer.unref?.();
-  scheduledEntries.set(id, { timer, dueAt });
+  const job = runtime.scheduler.schedule({
+    id: `session-delivery:${id}`,
+    delayMs,
+    mode: "earliest",
+    run: () => {
+      scheduledEntries.delete(id);
+      return runScheduledSessionDelivery(id, generation);
+    },
+  });
+  scheduledEntries.set(id, job);
 }
 
 function armSessionDelivery(
@@ -104,10 +95,14 @@ function armSessionDelivery(
 ): void {
   // The active drain owns rearming after its authoritative reload. Coalesce
   // duplicate schedules so they cannot poll the same due row in a timer loop.
-  if (runtime?.runningEntries.has(entry.id)) {
+  if (!runtime || runtime.runningEntries.has(entry.id)) {
     return;
   }
-  armSessionDeliveryId(entry.id, Math.max(minimumDelayMs, resolveRetryDelayMs(entry)), generation);
+  armSessionDeliveryId(
+    entry.id,
+    Math.max(minimumDelayMs, resolveRetryDelayMs(entry, runtime.scheduler.now())),
+    generation,
+  );
 }
 
 async function runScheduledSessionDelivery(id: string, generation: number): Promise<void> {
@@ -125,6 +120,7 @@ async function runScheduledSessionDelivery(id: string, generation: number): Prom
     pending = await (activeRuntime.drain ?? drainPendingSessionDelivery)({
       id,
       queueContext: activeRuntime.queueContext,
+      now: () => activeRuntime.scheduler.now(),
       logLabel: "session delivery",
       log: activeRuntime.log,
       deliver: activeRuntime.deliver,

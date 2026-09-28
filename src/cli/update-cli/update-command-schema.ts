@@ -26,6 +26,7 @@ import {
   checkTargetDatabaseSchemasForContexts,
   formatSchemaRefusalLines,
   hasSchemaRefusal,
+  isCandidateAdmissionContextCovered,
 } from "./schema-preflight.js";
 import {
   resolveGitInstallDir,
@@ -39,11 +40,11 @@ import {
 } from "./update-command-dry-run.js";
 import type { RefuseUpdate } from "./update-command-result.js";
 import type { prepareUpdateCommand } from "./update-command-run.js";
-import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
-import {
-  resolvePackageRuntimePreflight,
-  type ManagedServiceRootRedirect,
-} from "./update-command-service-plan.js";
+import type {
+  ManagedServiceRootRedirect,
+  PreManagedServiceStop,
+} from "./update-command-service-context-types.js";
+import { resolvePackageRuntimePreflight } from "./update-command-service-plan.js";
 import type { resolveUpdateCommandTarget } from "./update-command-target.js";
 
 /** Render prepared preview facts without initializing runtime state. */
@@ -128,6 +129,7 @@ export async function preflightUpdateCommandSchemas(params: {
   packageAlreadyCurrent?: boolean;
   managedServiceNodeRunner?: string;
   expectedForeground?: true;
+  candidateAdmissionChecks?: readonly string[];
   opts: Pick<UpdateCommandOptions, "dryRun" | "json" | "run">;
   refuseUpdate: RefuseUpdate;
 }): Promise<
@@ -154,6 +156,10 @@ export async function preflightUpdateCommandSchemas(params: {
     refuseUpdate,
   } = params;
   const run = opts.run;
+  const candidateAdmissionChecks =
+    updateInstallKind === "package" && !opts.dryRun
+      ? (params.candidateAdmissionChecks ?? run?.candidateAdmissionChecks)
+      : undefined;
   if (run) {
     recordUpdateRunPhase(run.runId, "validating", undefined, { env: run.env });
   }
@@ -179,6 +185,7 @@ export async function preflightUpdateCommandSchemas(params: {
         managedServiceRootRedirect,
         managedServiceRoot: params.managedServiceRoot,
         legacyConfigPlan: params.legacyConfigPlan,
+        candidateAdmissionChecks,
         expectedForeground:
           params.expectedForeground || run?.completionOwner === "gateway-restart" || undefined,
       });
@@ -217,9 +224,12 @@ export async function preflightUpdateCommandSchemas(params: {
           failureFacts: failure.failureFacts,
         });
       }
+      const installedContexts = candidateAdmissionChecks?.includes("database-schema")
+        ? admission.contexts.filter((context) => !isCandidateAdmissionContextCovered(context.env))
+        : admission.contexts;
       packageSchemaPreflight = await checkTargetDatabaseSchemasForContexts(
         target.schemaVersions,
-        admission.contexts,
+        installedContexts,
       );
       if (opts.dryRun && updateInstallKind === "package") {
         const runtime = await resolvePackageRuntimePreflight({

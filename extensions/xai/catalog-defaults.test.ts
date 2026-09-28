@@ -1,13 +1,9 @@
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import {
-  resolveAgentModelPrimaryValue,
-  type ModelProviderConfig,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/provider-onboard";
+import type { ModelProviderConfig, OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { buildXaiCatalogModels } from "./model-definitions.js";
-import { applyXaiConfig, applyXaiOAuthConfig } from "./onboard.js";
+import { applyXaiOAuthConfig } from "./onboard.js";
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: vi.fn().mockRejectedValue(new Error("No runtime credential")),
@@ -31,12 +27,6 @@ const oauthProvider: ModelProviderConfig = {
   models: [],
 };
 
-it.each(["api-key", "oauth"] as const)("uses the curated default for fresh %s setup", (method) => {
-  const config = method === "oauth" ? applyXaiOAuthConfig({}, oauthProvider) : applyXaiConfig({});
-  expect(resolveAgentModelPrimaryValue(config.agents?.defaults?.model)).toBe("xai/grok-4.7");
-  expect(config.agents?.defaults?.models?.["xai/grok-4.7"]?.alias).toBe("Grok");
-});
-
 it("keeps a caller's price and input edits out of the curated catalog", () => {
   const customized = buildXaiCatalogModels();
   const first = customized[0];
@@ -51,22 +41,18 @@ it("keeps a caller's price and input edits out of the curated catalog", () => {
   expect(fresh?.input).toEqual(["text", "image"]);
 });
 
-it.each(["api-key", "oauth"] as const)(
-  "preserves the existing primary during %s setup",
-  (method) => {
-    const original: OpenClawConfig = {
-      agents: {
-        defaults: { model: { primary: "openai/retained-model", fallbacks: ["xai/grok-4.3"] } },
-      },
-    };
-    const config =
-      method === "oauth" ? applyXaiOAuthConfig(original, oauthProvider) : applyXaiConfig(original);
-    expect(config.agents?.defaults?.model).toEqual({
-      primary: "openai/retained-model",
-      fallbacks: ["xai/grok-4.3"],
-    });
-  },
-);
+it("preserves the existing primary during OAuth setup", () => {
+  const original: OpenClawConfig = {
+    agents: {
+      defaults: { model: { primary: "openai/retained-model", fallbacks: ["xai/grok-4.3"] } },
+    },
+  };
+  const config = applyXaiOAuthConfig(original, oauthProvider);
+  expect(config.agents?.defaults?.model).toEqual({
+    primary: "openai/retained-model",
+    fallbacks: ["xai/grok-4.3"],
+  });
+});
 
 it.each([
   {

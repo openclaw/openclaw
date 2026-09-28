@@ -3,12 +3,16 @@ import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewaySessionStoreTarget } from "../../gateway/session-utils-store.types.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { isCronRunSessionKey, parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   buildRunUserTurnIdempotencyKey,
   createUserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveActiveEmbeddedRunSessionId } from "../embedded-agent-runner/active-run-projections.js";
 import {
   type EmbeddedAgentQueueMessageOptions,
@@ -17,7 +21,11 @@ import {
   queueEmbeddedAgentMessageWithOutcomeAsync,
 } from "../embedded-agent-runner/runs.js";
 import { jsonResult } from "./common.js";
-import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
+import {
+  callInProcessGatewayToolWithCreation,
+  hasInProcessGatewayToolContext,
+  type AgentToolGatewayRequestCaller,
+} from "./in-process-gateway.js";
 
 function isRunScopedAgentSessionKey(sessionKey: string): boolean {
   const parsed = parseAgentSessionKey(normalizeOptionalString(sessionKey));
@@ -73,6 +81,7 @@ export async function startSessionsSendAgentRun(params: {
   allowActiveRunQueueDelivery?: boolean;
   allowActiveRunQueueFallback?: boolean;
   expectedSessionId?: string;
+  sourceOrigin?: DeliveryContext;
   mode?: "steer" | "followup";
 }): Promise<
   | {
@@ -110,8 +119,11 @@ export async function startSessionsSendAgentRun(params: {
         steeringMode: "all",
         debounceMs: 0,
         deliveryTimeoutMs: params.deliveryTimeoutMs,
-        waitForTranscriptCommit: true,
-        ...(params.mode === "steer" ? {} : { sourceReplyDeliveryMode }),
+        // Explicit steering acknowledges admission, not consumption. Waiting for
+        // a busy run to commit would withdraw accepted guidance at the reply deadline.
+        ...(params.mode === "steer"
+          ? { waitForTranscriptCommit: false }
+          : { waitForTranscriptCommit: true, sourceReplyDeliveryMode }),
         // Carry the same input facts as a new run; transcript ownership stays
         // with the receiving runtime and its exact session incarnation.
         userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
@@ -161,15 +173,28 @@ export async function startSessionsSendAgentRun(params: {
         );
       }
     }
+    // Preserve a self-send's source conversation without parsing its session key
+    // or consulting a route that another inbound turn can replace. A Cron parent
+    // fallback is a distinct session and keeps its own delivery context.
+    const sourceOrigin = fallbackSessionKey ? undefined : params.sourceOrigin;
+    const sendParams = sourceOrigin
+      ? {
+          ...params.sendParams,
+          channel: sourceOrigin.channel ?? params.sendParams.channel,
+          accountId: sourceOrigin.accountId,
+          to: sourceOrigin.to,
+          threadId: stringifyRouteThreadId(sourceOrigin.threadId),
+        }
+      : params.sendParams;
     const response = await params.callGateway<{ runId: string; admissionPending?: boolean }>({
       method: "agent",
       params: fallbackSessionKey
         ? {
-            ...params.sendParams,
+            ...sendParams,
             sessionKey: fallbackSessionKey,
             idempotencyKey: crypto.randomUUID(),
           }
-        : params.sendParams,
+        : sendParams,
       timeoutMs: 10_000,
     });
     const responseRunId =
@@ -204,5 +229,44 @@ export async function startSessionsSendAgentRun(params: {
         sessionKey: params.sessionKey,
       }),
     };
+  }
+}
+
+export async function createConfiguredAgentMainSession(params: {
+  cfg: OpenClawConfig;
+  callGateway: AgentToolGatewayRequestCaller;
+  agentId?: string;
+  sessionKey: string;
+  requesterSessionKey?: string;
+  useTrustedInProcessCreation: boolean;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const targetAgentId =
+    params.agentId ?? resolveSessionAgentId({ config: params.cfg, sessionKey: params.sessionKey });
+  try {
+    const createParams = {
+      key: params.sessionKey,
+      agentId: targetAgentId,
+    };
+    if (
+      params.useTrustedInProcessCreation &&
+      params.requesterSessionKey &&
+      hasInProcessGatewayToolContext()
+    ) {
+      // sessions.create serializes keyed creation and adopts an existing row,
+      // so concurrent first sends can safely race after the missing resolution.
+      await callInProcessGatewayToolWithCreation("sessions.create", createParams, {
+        via: "internal",
+        actor: { type: "agent", id: params.requesterSessionKey },
+      });
+    } else {
+      await params.callGateway({
+        method: "sessions.create",
+        params: createParams,
+        timeoutMs: 10_000,
+      });
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: formatErrorMessage(err) };
   }
 }

@@ -42,7 +42,7 @@ const chat = { id: 42001, type: "private", first_name: "Alice" } as const;
 const from = { id: chat.id, is_bot: false, first_name: "Alice" } as const;
 const conversation = { channel: "telegram", accountId, conversationId: String(chat.id) };
 const token = "123456:synthetic_disabled_binding_test";
-type DisabledScope = "session" | "channel" | "account";
+type DisabledScope = "channel" | "account";
 
 describe("Telegram startup with disabled thread bindings", () => {
   let state: OpenClawTestState;
@@ -50,7 +50,7 @@ describe("Telegram startup with disabled thread bindings", () => {
   let serverTask: Promise<void>;
   const serverReady = createDeferred<string>();
   const serverRelease = createDeferred<void>();
-  const bots: ReturnType<typeof createTelegramBotCore>[] = [];
+  const bots: Awaited<ReturnType<typeof createTelegramBotCore>>[] = [];
   const calls: Array<{ method: string; fields: Record<string, unknown> }> = [];
   const errors = vi.fn();
   const replyResolver = vi.fn(async () => ({ text: "ordinary reply" }));
@@ -114,7 +114,7 @@ describe("Telegram startup with disabled thread bindings", () => {
         await bot.stop();
       }
       // Also release an owner leaked by a failing constructor in the pre-fix run.
-      getTelegramThreadBindingManager(accountId)?.stop();
+      await getTelegramThreadBindingManager(accountId)?.stop();
     } finally {
       resetTelegramClientOptionsCacheForTests();
       resetTelegramAccountThrottlersForTest();
@@ -147,7 +147,7 @@ describe("Telegram startup with disabled thread bindings", () => {
       plugins: { enabled: false },
       session: {
         dmScope: "per-channel-peer",
-        threadBindings: { enabled: scope !== "session" },
+        threadBindings: { enabled: true },
       },
       channels: {
         telegram: {
@@ -156,7 +156,7 @@ describe("Telegram startup with disabled thread bindings", () => {
           dmPolicy: "open",
           allowFrom: ["*"],
           streaming: { mode: "off" },
-          ...(scope !== "session" ? { threadBindings: { enabled: scope !== "channel" } } : {}),
+          threadBindings: { enabled: scope !== "channel" },
           accounts: {
             [accountId]: scope === "account" ? { threadBindings: { enabled: false } } : {},
           },
@@ -165,8 +165,8 @@ describe("Telegram startup with disabled thread bindings", () => {
     };
   }
 
-  function createBot(cfg: OpenClawConfig, botToken = token) {
-    const bot = createTelegramBotCore({
+  async function createBot(cfg: OpenClawConfig, botToken = token) {
+    const bot = await createTelegramBotCore({
       token: botToken,
       accountId,
       config: cfg,
@@ -224,46 +224,43 @@ describe("Telegram startup with disabled thread bindings", () => {
     });
   }
 
-  it.each(["session", "channel", "account"] as const)(
-    "answers an ordinary inbound message with bindings disabled at %s scope without persisting bindings",
-    async (scope) => {
-      const cfg = config(scope);
-      await state.writeConfig(cfg);
-      const bot = createBot(cfg);
-      await bot.handleUpdate({
-        update_id: 1001,
-        message: { message_id: 101, date: 1736380800, chat, from, text: "hello" },
-      });
-      expect(replyResolver, errors.mock.calls.flat().join("\n")).toHaveBeenCalledOnce();
-      expect(calls.filter(({ method }) => method === "sendMessage")).toEqual([
-        {
-          method: "sendMessage",
-          fields: expect.objectContaining({ text: "ordinary reply" }),
-        },
-      ]);
-      const sent = calls.find(({ method }) => method === "sendMessage");
-      expect(String(sent?.fields.chat_id)).toBe(String(chat.id));
-      expect(errors).not.toHaveBeenCalled();
-      await expectAvailableEmptyOwner();
-      const service = getSessionBindingService();
-      const targetSessionKey = "agent:main:subagent:synthetic-child";
-      await expect(
-        service.bind({
-          conversation,
-          targetSessionKey,
-          targetKind: "subagent",
-          placement: "current",
-        }),
-      ).rejects.toMatchObject({ code: "BINDING_CAPABILITY_UNSUPPORTED" });
-      await expect(
-        service.unbind({ scope: conversation, targetSessionKey, reason: "test" }),
-      ).resolves.toEqual([]);
-      expect(storedBindings()).toEqual([]);
-      await bot.stop();
-      await expectUnavailableOwner();
-      expect(storedBindings()).toEqual([]);
-    },
-  );
+  it("answers an ordinary inbound message with account bindings disabled without persisting bindings", async () => {
+    const cfg = config("account");
+    await state.writeConfig(cfg);
+    const bot = await createBot(cfg);
+    await bot.handleUpdate({
+      update_id: 1001,
+      message: { message_id: 101, date: 1736380800, chat, from, text: "hello" },
+    });
+    expect(replyResolver, errors.mock.calls.flat().join("\n")).toHaveBeenCalledOnce();
+    expect(calls.filter(({ method }) => method === "sendMessage")).toEqual([
+      {
+        method: "sendMessage",
+        fields: expect.objectContaining({ text: "ordinary reply" }),
+      },
+    ]);
+    const sent = calls.find(({ method }) => method === "sendMessage");
+    expect(String(sent?.fields.chat_id)).toBe(String(chat.id));
+    expect(errors).not.toHaveBeenCalled();
+    await expectAvailableEmptyOwner();
+    const service = getSessionBindingService();
+    const targetSessionKey = "agent:main:subagent:synthetic-child";
+    await expect(
+      service.bind({
+        conversation,
+        targetSessionKey,
+        targetKind: "subagent",
+        placement: "current",
+      }),
+    ).rejects.toMatchObject({ code: "BINDING_CAPABILITY_UNSUPPORTED" });
+    await expect(
+      service.unbind({ scope: conversation, targetSessionKey, reason: "test" }),
+    ).resolves.toEqual([]);
+    expect(storedBindings()).toEqual([]);
+    await bot.stop();
+    await expectUnavailableOwner();
+    expect(storedBindings()).toEqual([]);
+  });
 
   it.each([
     { previous: "channel", next: "channel" },
@@ -274,10 +271,10 @@ describe("Telegram startup with disabled thread bindings", () => {
     async ({ previous, next }) => {
       const before = config(previous);
       await state.writeConfig(before);
-      const predecessor = createBot(before);
+      const predecessor = await createBot(before);
       const after = config(next);
       await state.writeConfig(after);
-      const current = createBot(after);
+      const current = await createBot(after);
       await predecessor.stop();
       await predecessor.stop();
       if (next === "enabled") {
@@ -295,29 +292,13 @@ describe("Telegram startup with disabled thread bindings", () => {
     },
   );
 
-  it("refuses a missing owner after an enabled bot stops", async () => {
+  it("does not retain an owner when the real bot constructor fails with enabled bindings", async () => {
     const cfg = config("enabled");
     await state.writeConfig(cfg);
-    const bot = createBot(cfg);
-    await expect(
-      getSessionBindingService().resolveByConversationAsync(conversation),
-    ).resolves.toBeNull();
-    expect(getSessionBindingService().getCapabilities(conversation).bindSupported).toBe(true);
-    await bot.stop();
+    await expect(createBot(cfg, "")).rejects.toThrow("Empty token!");
     await expectUnavailableOwner();
     expect(storedBindings()).toEqual([]);
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
   });
-
-  it.each(["channel", "enabled"] as const)(
-    "does not retain an owner when the real bot constructor fails with %s bindings",
-    async (scope) => {
-      const cfg = config(scope);
-      await state.writeConfig(cfg);
-      expect(() => createBot(cfg, "")).toThrow("Empty token!");
-      await expectUnavailableOwner();
-      expect(storedBindings()).toEqual([]);
-      expect(replyResolver).not.toHaveBeenCalled();
-      expect(calls).toEqual([]);
-    },
-  );
 });

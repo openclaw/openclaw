@@ -74,6 +74,8 @@ const toolingPaths = [
   "scripts/lib/upgrade-survivor-policy.mjs",
   "scripts/lib/upgrade-survivor-scenarios.json",
   "scripts/lib/frozen-target-compat.sh",
+  "scripts/lib/trusted-native-typescript.mjs",
+  "scripts/lib/native-typescript.mts",
   "scripts/resolve-frozen-codex-live-suite.mjs",
   "scripts/resolve-fs-safe-native-contract.mjs",
   "scripts/e2e/lib/upgrade-survivor/config-recipe.mts",
@@ -108,6 +110,15 @@ const toolingPaths = [
   "scripts/full-release-validation-state.mjs",
   "scripts/full-release-validation-policy.mjs",
   "scripts/release-ci-summary.mjs",
+  "scripts/lib/full-release-candidate-reuse.mjs",
+  "scripts/lib/full-release-child-request.mjs",
+  "scripts/lib/full-release-child-reuse.mjs",
+  "scripts/lib/full-release-evidence.mjs",
+  "scripts/lib/npm-shrinkwrap-dependencies.mjs",
+  "scripts/lib/release-publish-inputs.mjs",
+  "scripts/npm-preflight-tooling-identity.mjs",
+  "scripts/npm-prepared-bundle.mjs",
+  "scripts/plugin-sdk-api-release-evidence.mjs",
   "scripts/lib/plain-gh.mjs",
   "scripts/lib/release-context.mjs",
   "scripts/lib/release-changelog.mjs",
@@ -1348,7 +1359,7 @@ globalThis.Date = class extends OriginalDate {
       : undefined,
     scratchCleanedByOwner,
     firstHopJobs: options.registry
-      ? ["normal_ci", "prepare_npm_package", "docker_runtime_assets_preflight"].filter((id) => {
+      ? ["normal_ci", "prepare_npm_package"].filter((id) => {
           const job = expectDefined(workflow.jobs[id], "first-hop job");
           check([job.needs].flat()).toContain("resolve_target");
           return evaluate(expectDefined(job.if, "first-hop condition"), {
@@ -1418,7 +1429,6 @@ describe("FRV required registry admission", () => {
     ["npm-empty-history", "normal", "2026.9.9", "latest", []],
     ["npm-error", "normal", "2026.9.9", "latest", []],
     ["prepared-trust", "prepared", "2026.9.9", "latest", []],
-    ["npm-error", "alpha", "2026.9.9-alpha.1", "alpha", []],
   ] as const)(
     "keeps selected fanout closed for %s through %s",
     { timeout: 30_000 },
@@ -1431,7 +1441,7 @@ describe("FRV required registry admission", () => {
           registry,
           rerunGroup: "all",
           version,
-          targetContextRef: version.includes("-alpha.") ? `v${version}` : "release/2026.9.9",
+          targetContextRef: "release/2026.9.9",
           selection: { ...selection, route, npmDistTag },
         });
         check(result.targetSha).not.toBe(result.toolingSha);
@@ -1576,16 +1586,6 @@ describe("FRV observation worker boundary", () => {
       true,
     ],
     [
-      "alpha plugin",
-      "2026.9.9-alpha.1",
-      "2026.9.9-alpha.1",
-      "alpha",
-      "alpha",
-      "@openclaw/demo-plugin",
-      "npm-absent",
-      false,
-    ],
-    [
       "extended plugin",
       "2026.8.33",
       "2026.8.33",
@@ -1631,11 +1631,7 @@ describe("FRV observation worker boundary", () => {
           absentNpmPackage,
           includeCorePackage: absentNpmPackage === "@openclaw/gateway-client",
           targetContextRef:
-            route === "extended-stable"
-              ? `extended-stable/${version}`
-              : route === "alpha"
-                ? `v${version}`
-                : "release/2026.9.9",
+            route === "extended-stable" ? `extended-stable/${version}` : "release/2026.9.9",
           rerunGroup: "all",
           selection: { ...selection, route, npmDistTag },
         });
@@ -2021,55 +2017,19 @@ describe("FRV publication source admission", () => {
   );
 
   publicationIt.concurrent(
-    "admits alpha inventory through actual divergent Tideclaw tooling",
+    "rejects alpha inventory through divergent Tideclaw tooling",
     async ({ command: processFixture, expect: check }) =>
       processFixture.lifetime.run(async () => {
-        const toolingFullRef = "refs/heads/tideclaw/alpha/2026-09-13-1200Z";
         const result = await fixture(processFixture, check, {
-          toolingFullRef,
+          toolingFullRef: "refs/heads/tideclaw/alpha/2026-09-13-1200Z",
           version: "2026.9.9-alpha.1",
           targetContextRef: "v2026.9.9-alpha.1",
           selection: { ...selection, route: "alpha", npmDistTag: "alpha" },
         });
-        check(result.status, result.stderr).toBe(0);
-        check(result.targetSha).not.toBe(result.toolingSha);
-        check(result.fact).toMatchObject({
-          status: "source-admitted",
-          candidateSha: result.targetSha,
-          tooling: { ref: toolingFullRef, sha: result.toolingSha },
-          projection: { version: "2026.9.9-alpha.1" },
-        });
-        const publisher = parse(
-          readFileSync(join(repo, ".github/workflows/openclaw-release-publish.yml"), "utf8"),
-        ) as Workflow;
-        check(
-          evaluate(expectDefined(publisher.jobs.publish_docker?.if, "Docker predicate"), {
-            inputs: {
-              tag: "v2026.9.9-alpha.1",
-              publish_openclaw_npm: true,
-              publish_docker_only: false,
-            },
-            needs: {
-              publish: { result: "success" },
-              verify_core_npm_registry: { result: "success" },
-            },
-          }),
-        ).toBe(false);
-        check(
-          evaluate(expectDefined(publisher.jobs.publish_vcr?.if, "VCR predicate"), {
-            needs: { publish_docker: { result: "skipped" } },
-          }),
-        ).toBe(false);
-        check(result.fact?.projection?.platforms).toEqual([]);
-        check(result.requests).toEqual([
-          [
-            "api",
-            "repos/openclaw/openclaw/git/ref/heads/tideclaw/alpha/2026-09-13-1200Z",
-            "--method",
-            "GET",
-          ],
-          ["api", "repos/openclaw/openclaw/actions/artifacts/456"],
-        ]);
+        check(result.status, result.stderr).toBe(1);
+        check(result.stderr).toContain("Alpha releases are retired;");
+        check(result.fact).toBeUndefined();
+        check(result.registryCalls).toEqual([]);
       }),
     30_000,
   );
@@ -2081,12 +2041,7 @@ describe("FRV publication source admission", () => {
         const result = await fixture(processFixture, check, { fault: "readme" });
         check(result.status, result.stderr).toBe(1);
         check(result.stderr).toContain("README.md must exist");
-        for (const id of [
-          "normal_ci",
-          "prepare_npm_package",
-          "prepare_docker_release",
-          "docker_runtime_assets_preflight",
-        ]) {
+        for (const id of ["normal_ci", "prepare_npm_package", "prepare_docker_release"]) {
           const job = expectDefined(workflow.jobs[id], `${id} job`);
           check([job.needs].flat()).toContain("resolve_target");
           check(
@@ -2098,8 +2053,7 @@ describe("FRV publication source admission", () => {
                   result: result.status === 0 ? "success" : "failure",
                   outputs: {
                     candidate_required: "true",
-                    target_version:
-                      id === "docker_runtime_assets_preflight" ? "2026.9.9-alpha.1" : "2026.9.9",
+                    target_version: "2026.9.9",
                   },
                 },
                 plugin_compatibility_readiness: { result: "success" },
@@ -2196,7 +2150,6 @@ describe("FRV publication source admission", () => {
   );
 
   publicationIt.concurrent.for([
-    ["2026.9.9-alpha.1", "alpha", "alpha", "v2026.9.9-alpha.1", false],
     ["2026.9.9-beta.1", "normal", "beta", "release/2026.9.9", false],
     ["2026.9.9", "normal", "latest", "release/2026.9.9", true],
     ["2026.9.9", "normal", "beta", "v2026.9.9", true],
@@ -2235,11 +2188,7 @@ describe("FRV publication source admission", () => {
         if (!enabled) {
           check(result.status, result.stderr).toBe(1);
           check(result.stderr).toContain("Windows assets require a stable publication");
-          if (route === "alpha") {
-            check(result.effects).not.toContain("Provision trusted admission parser");
-          } else {
-            check(result.effects).toContain("Admit publication source");
-          }
+          check(result.effects).toContain("Admit publication source");
           check(result.fact).toBeUndefined();
           return;
         }
@@ -2307,7 +2256,7 @@ describe("FRV publication source admission", () => {
     30_000,
   );
 
-  publicationIt.concurrent.for(["normal", "alpha"])(
+  publicationIt.concurrent.for(["normal"])(
     "rejects %s core plus selected plugins before provisioning",
     { timeout: 30_000 },
     async (route, { command: processFixture, expect: check }) =>
@@ -2316,7 +2265,7 @@ describe("FRV publication source admission", () => {
           selection: {
             ...selection,
             route,
-            npmDistTag: route === "alpha" ? "alpha" : "latest",
+            npmDistTag: "latest",
             pluginPublishScope: "selected",
             plugins: ["@openclaw/demo-plugin"],
           },
@@ -2331,7 +2280,6 @@ describe("FRV publication source admission", () => {
   publicationIt.concurrent.for([
     ["2026.9.9-beta.1", "normal", "beta", "release/2026.9.9"],
     ["2026.9.9", "prepared", "latest", "release/2026.9.9"],
-    ["2026.9.9-alpha.1", "alpha", "alpha", "v2026.9.9-alpha.1"],
     ["2026.8.33", "extended-stable", "extended-stable", "extended-stable/2026.8.33"],
   ])(
     "admits %s through the existing %s source policy",
@@ -2367,13 +2315,16 @@ describe("FRV publication source admission", () => {
   );
 
   publicationIt.concurrent.for([
-    ["2026.9.9-beta.1", "latest", "release/2026.9.9"],
-    ["2026.9.9-alpha.1", "beta", "v2026.9.9-alpha.1"],
-    ["2026.8.33", "beta", "extended-stable/2026.8.33"],
+    ["2026.9.9-beta.1", "latest", "release/2026.9.9", "publication selection does not match"],
+    ["2026.9.9-alpha.1", "beta", "v2026.9.9-alpha.1", "Alpha releases are retired;"],
+    ["2026.8.33", "beta", "extended-stable/2026.8.33", "publication selection does not match"],
   ])(
     "rejects incompatible committed %s publication to %s",
     { timeout: 30_000 },
-    async ([version, npmDistTag, targetContextRef], { command: processFixture, expect: check }) =>
+    async (
+      [version, npmDistTag, targetContextRef, expectedError],
+      { command: processFixture, expect: check },
+    ) =>
       processFixture.lifetime.run(async () => {
         const result = await fixture(processFixture, check, {
           version,
@@ -2381,7 +2332,7 @@ describe("FRV publication source admission", () => {
           selection: { ...selection, npmDistTag },
         });
         check(result.status, result.stderr).toBe(1);
-        check(result.stderr).toContain("publication selection does not match");
+        check(result.stderr).toContain(expectedError);
         check(result.fact).toBeUndefined();
       }),
   );
@@ -2416,7 +2367,6 @@ describe("FRV publication source admission", () => {
     { version: "2026.9.9", pin: "2026.8.1", core: true, selected: false },
     { version: "2026.9.9", pin: "2026.9.09", core: true, selected: false },
     { version: "2026.9.9", pin: "2026.9.9", core: false, selected: false },
-    { version: "2026.9.9-alpha.1", pin: "2026.9.9", core: true, selected: false },
     { version: "2026.9.9-beta.1", pin: "2026.9.9", core: true, selected: false },
     { version: "2026.8.33", pin: "2026.8.33", core: true, selected: false },
   ])(
@@ -2424,28 +2374,24 @@ describe("FRV publication source admission", () => {
     { timeout: 30_000 },
     async ({ version, pin, core, selected }, { command: processFixture, expect: check }) =>
       processFixture.lifetime.run(async () => {
-        const npmDistTag = version.includes("-alpha.")
-          ? "alpha"
-          : version.includes("-beta.")
-            ? "beta"
-            : version === "2026.8.33"
-              ? "extended-stable"
-              : "latest";
+        const npmDistTag = version.includes("-beta.")
+          ? "beta"
+          : version === "2026.8.33"
+            ? "extended-stable"
+            : "latest";
         const result = await fixture(processFixture, check, {
           version,
           targetContextRef:
-            npmDistTag === "alpha"
-              ? `v${version}`
-              : npmDistTag === "extended-stable"
-                ? `extended-stable/${version}`
-                : `release/${version.replace(/-beta\.[0-9]+$/u, "")}`,
+            npmDistTag === "extended-stable"
+              ? `extended-stable/${version}`
+              : `release/${version.replace(/-beta\.[0-9]+$/u, "")}`,
           androidPin: pin,
           fault: "dirty-android-pin",
           selection: {
             ...selection,
             npmDistTag,
             publishOpenclawNpm: core,
-            route: ["alpha", "extended-stable"].includes(npmDistTag) ? npmDistTag : "normal",
+            route: npmDistTag === "extended-stable" ? npmDistTag : "normal",
           },
         });
         check(result.status, result.stderr).toBe(0);
@@ -2460,7 +2406,7 @@ describe("FRV publication source admission", () => {
         }
         if (npmDistTag !== "extended-stable") {
           for (const id of ["docker", "vcr"]) {
-            if (core && npmDistTag !== "alpha") {
+            if (core) {
               check(platforms).toContainEqual(expect.objectContaining({ id }));
             } else {
               check(platforms).not.toContainEqual(expect.objectContaining({ id }));
@@ -2483,12 +2429,7 @@ describe("FRV publication source admission", () => {
   );
 
   publicationIt("keeps every expensive first-hop consumer behind successful resolution", () => {
-    for (const id of [
-      "normal_ci",
-      "prepare_npm_package",
-      "prepare_docker_release",
-      "docker_runtime_assets_preflight",
-    ]) {
+    for (const id of ["normal_ci", "prepare_npm_package", "prepare_docker_release"]) {
       const job = expectDefined(workflow.jobs[id], `${id} job`);
       expect([job.needs].flat()).toContain("resolve_target");
       for (const result of ["success", "failure"]) {
@@ -2501,8 +2442,7 @@ describe("FRV publication source admission", () => {
                 result,
                 outputs: {
                   candidate_required: "true",
-                  target_version:
-                    id === "docker_runtime_assets_preflight" ? "2026.9.9-alpha.1" : "2026.9.9",
+                  target_version: "2026.9.9",
                 },
               },
               plugin_compatibility_readiness: { result: "success" },

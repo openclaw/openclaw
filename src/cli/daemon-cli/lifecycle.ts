@@ -1,6 +1,7 @@
 // Gateway service lifecycle runners, including unmanaged-process fallbacks and restart health checks.
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveGatewayServiceProbeHosts } from "../../daemon/gateway-service-probe-hosts.js";
+import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import {
   assertGatewayServiceUpdateCurrent,
   assertGatewayServiceFallbackAllowed,
@@ -18,6 +19,7 @@ import {
 } from "../../infra/gateway-lock.js";
 import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
 import {
+  findVerifiedGatewayListenerPidsOnPortSync,
   formatGatewayPidList,
   signalVerifiedGatewayPidSync,
 } from "../../infra/gateway-processes.js";
@@ -30,6 +32,7 @@ import {
 import { probePortUsage } from "../../infra/ports-probe.js";
 import { resolveGatewayRestartDrainTimeoutMs } from "../../infra/restart-budget.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import {
@@ -52,7 +55,7 @@ import {
   runSafeGatewayRestart,
   resolveGatewayRestartIntentOptions,
 } from "./lifecycle-safe-restart.js";
-import { resolveVerifiedGatewayListenerPids, signalGatewayRestart } from "./lifecycle-unmanaged.js";
+import { signalGatewayRestart } from "./lifecycle-unmanaged.js";
 import { createDaemonActionContext, createNullWriter } from "./response.js";
 import {
   DEFAULT_RESTART_HEALTH_ATTEMPTS,
@@ -125,7 +128,11 @@ async function stopGatewayWithoutServiceManager(
   if (managed) {
     return managed;
   }
-  const listenerPids = resolveVerifiedGatewayListenerPids(port);
+  const env = mergeGatewayServiceEnv(
+    serviceContext?.env ?? process.env,
+    serviceContext?.command ?? null,
+  );
+  const listenerPids = findVerifiedGatewayListenerPidsOnPortSync(port, { env });
   // Listener discovery needs lsof, which minimal containers omit. The gateway
   // lock already names the verified owner of this port, so signal it instead of
   // reporting the gateway as not running while it keeps serving.
@@ -143,7 +150,7 @@ async function stopGatewayWithoutServiceManager(
     return null;
   }
   for (const pid of pids) {
-    signalVerifiedGatewayPidSync(pid, "SIGTERM");
+    signalVerifiedGatewayPidSync(pid, "SIGTERM", { env, port });
     appendGatewayLifecycleAudit({
       action: "stop",
       source: "cli",
@@ -322,7 +329,12 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
     stopWhenNotLoaded: process.platform === "darwin" && Boolean(opts.disable),
     onNotLoaded: async ({ stdout }) => {
       if (process.platform === "linux") {
-        const runtime = await service.readRuntime(process.env).catch(() => null);
+        const runtime = await service.readRuntime(process.env).catch((error: unknown) => {
+          if (hasCommandProcessCleanupError(error)) {
+            throw error;
+          }
+          return null;
+        });
         if (runtime?.status === "running") {
           // systemd can run a disabled unit with Restart=always. Stop it through
           // systemctl so a process-level SIGTERM cannot trigger a respawn.
@@ -339,7 +351,14 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
       // for discovery the way restart already does; otherwise a valid port
       // override makes the running gateway look like it is already stopped.
       const lock = await readActiveGatewayLockIdentity().catch(() => undefined);
-      const ctx = lock ? null : await resolveGatewayLifecycleContext(service).catch(() => null);
+      const ctx = lock
+        ? null
+        : await resolveGatewayLifecycleContext(service).catch((error: unknown) => {
+            if (hasCommandProcessCleanupError(error)) {
+              throw error;
+            }
+            return null;
+          });
       const port = lock?.port ?? ctx?.port ?? (await resolveGatewayConfigPorts()).fallback;
       return await stopGatewayWithoutServiceManager(port, lock?.pid, ctx ?? undefined);
     },
@@ -376,6 +395,9 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     service,
     preserveDefinition,
   ).catch(async (error: unknown) => {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
     if (preserveDefinition) {
       throw error;
     }

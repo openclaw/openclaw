@@ -98,6 +98,10 @@ Plist location (per-user): `~/Library/LaunchAgents/ai.openclaw.gateway.plist`
 The macOS app owns LaunchAgent install/update for the default profile in
 Local mode. The CLI can also install it directly: `openclaw gateway install`
 (named profiles are selected via the `OPENCLAW_PROFILE` env var).
+Enabling the Gateway from the app preserves a saved runtime pin.
+If the pin is invalid, enabling fails with the CLI error; reinstall explicitly with
+`--runtime` or `--runtime-path` to replace the saved pin.
+Disabling it uninstalls the LaunchAgent, which removes the pin.
 
 Behavior:
 
@@ -211,6 +215,11 @@ version number. A missing or incompatible worker payload produces a visible
 worker error; rebuild or reinstall the app. Changing CLI channels or updating
 a global CLI does not repair this private payload. Unbundled Swift development
 builds can use the checkout's freshness-aware source runner instead.
+
+If a Gateway update advances the shared state database schema beyond the private
+worker's supported version, update and relaunch OpenClaw.app too. Restarting the
+external Gateway does not replace the app-owned worker. A schema-version error
+from that older reader does not mean the upgraded Gateway's database is corrupt.
 
 For an app-owned local Gateway, the macOS app checks the external CLI against
 its install policy. Onboarding runs managed setup when that CLI is missing or

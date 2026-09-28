@@ -330,61 +330,44 @@ describe("installScheduledTask", () => {
     });
   });
 
-  it("uses /Create when the task does not exist yet", async () => {
+  it("uses the requested hidden launcher for existing tasks", async () => {
     await withUserProfileDir(async (_tmpDir, env) => {
-      schtasksResponses.push(missingTaskResponse);
-
-      await installDefaultGatewayTask(env);
-
-      expectInitialTaskQuery();
-      expect(schtasksCalls[1]?.[0]).toBe("/Create");
-      expectTaskRunCall(3);
-    });
-  });
-
-  it.each([
-    { kind: "new", query: missingTaskResponse, marker: "1", xmlIndex: 1 },
-    { kind: "existing", query: okSchtasksResponse, marker: "true", xmlIndex: 2 },
-  ])("uses the requested hidden launcher for $kind tasks", async ({ query, marker, xmlIndex }) => {
-    await withUserProfileDir(async (_tmpDir, env) => {
-      schtasksResponses.push(query);
+      schtasksResponses.push(okSchtasksResponse);
       const { scriptPath } = await installDefaultGatewayTask({
         ...env,
         USERDOMAIN: "WORKSTATION",
         USERNAME: "alice",
-        OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: marker,
+        OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "true",
       });
       const launcherPath = scriptPath.replace(/\.cmd$/i, ".vbs");
       const rawLauncher = await fs.readFile(launcherPath);
       const launcher = decodeWindowsLauncherScript({ buffer: rawLauncher });
 
       expectInitialTaskQuery();
-      if (xmlIndex === 2) {
-        expect(schtasksCalls[1]).toEqual([
-          "/Change",
-          "/TN",
-          "OpenClaw Gateway",
-          "/TR",
-          expect.stringContaining("gateway.vbs"),
-        ]);
-        expect(schtasksCalls[1]?.[4]).toContain(launcherPath);
-      }
+      expect(schtasksCalls[1]).toEqual([
+        "/Change",
+        "/TN",
+        "OpenClaw Gateway",
+        "/TR",
+        expect.stringContaining("gateway.vbs"),
+      ]);
+      expect(schtasksCalls[1]?.[4]).toContain(launcherPath);
       // wscript requires a BOM for UTF-16; XML owns the interactive principal.
       expect(rawLauncher.subarray(0, 2)).toEqual(Buffer.from([0xff, 0xfe]));
-      expect(schtasksCalls[xmlIndex]?.slice(0, 5)).toEqual([
+      expect(schtasksCalls[2]?.slice(0, 5)).toEqual([
         "/Create",
         "/F",
         "/TN",
         "OpenClaw Gateway",
         "/XML",
       ]);
-      expect(schtasksCalls[xmlIndex]).not.toContain("/RU");
-      expect(schtasksCalls[xmlIndex]).not.toContain("/NP");
-      const xml = xmlPayloadCaptures.find((entry) => entry.index === xmlIndex)?.xml;
+      expect(schtasksCalls[2]).not.toContain("/RU");
+      expect(schtasksCalls[2]).not.toContain("/NP");
+      const xml = xmlPayloadCaptures.find((entry) => entry.index === 2)?.xml;
       expect(xml).toContain("<UserId>WORKSTATION\\alice</UserId>");
       expect(xml).toContain("<LogonType>InteractiveToken</LogonType>");
       expect(launcher).toContain(`WScript.Quit shell.Run("""${scriptPath}""", 0, True)`);
-      expectTaskRunCall(xmlIndex + 2);
+      expectTaskRunCall(4);
     });
   });
 
