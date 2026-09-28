@@ -162,12 +162,13 @@ export async function retireStandaloneGitWrapper(params: {
   return {};
 }
 
-async function runReadOnlyGitCommand(params: {
+type GitInspectionParams = {
   runCommand: GlobalCommandRunner;
   root: string;
   timeoutMs: number;
-  args: string[];
-}) {
+};
+
+async function runReadOnlyGitCommand(params: GitInspectionParams & { args: string[] }) {
   return params
     .runCommand(["git", "-C", params.root, ...params.args], {
       cwd: params.root,
@@ -181,11 +182,9 @@ type RemoteRevisionResolution =
   | { status: "missing" }
   | { status: "unreadable"; reason: string; failureCode?: "target-git-cache-stale" };
 
-async function listGitRemotes(params: {
-  runCommand: GlobalCommandRunner;
-  root: string;
-  timeoutMs: number;
-}): Promise<{ remotes?: string[]; metadataUnreadable?: string }> {
+async function listGitRemotes(
+  params: GitInspectionParams,
+): Promise<{ remotes?: string[]; metadataUnreadable?: string }> {
   const result = await runReadOnlyGitCommand({ ...params, args: ["remote"] });
   if (result?.code !== 0) {
     return { metadataUnreadable: "could not inspect configured Git remotes" };
@@ -198,12 +197,9 @@ async function listGitRemotes(params: {
   };
 }
 
-async function resolveCurrentRemoteBranchRevision(params: {
-  runCommand: GlobalCommandRunner;
-  root: string;
-  timeoutMs: number;
-  candidate: string;
-}): Promise<RemoteRevisionResolution> {
+async function resolveCurrentRemoteBranchRevision(
+  params: GitInspectionParams & { candidate: string },
+): Promise<RemoteRevisionResolution> {
   const tracking = await runReadOnlyGitCommand({
     ...params,
     args: ["rev-parse", "--abbrev-ref", "--symbolic-full-name", params.candidate],
@@ -284,20 +280,12 @@ function readRemoteTagRevisions(stdout: string): Map<string, string> | null {
     }
     (match[2] ? peeled : direct).set(tag, sha);
   }
-  return new Map(
-    [...new Set([...direct.keys(), ...peeled.keys()])].map((tag) => [
-      tag,
-      peeled.get(tag) ?? direct.get(tag)!,
-    ]),
-  );
+  return new Map([...direct, ...peeled]);
 }
 
-async function resolveCurrentRemoteTagRevision(params: {
-  runCommand: GlobalCommandRunner;
-  root: string;
-  timeoutMs: number;
-  channel: Exclude<UpdateChannel, "dev" | "extended-stable">;
-}): Promise<{ revision?: string; metadataUnreadable?: string }> {
+async function resolveCurrentRemoteTagRevision(
+  params: GitInspectionParams & { channel: Exclude<UpdateChannel, "dev" | "extended-stable"> },
+): Promise<{ revision?: string; metadataUnreadable?: string }> {
   const remoteList = await listGitRemotes(params);
   if (remoteList.metadataUnreadable) {
     return { metadataUnreadable: remoteList.metadataUnreadable };
