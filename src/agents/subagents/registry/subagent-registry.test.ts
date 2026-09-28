@@ -2897,7 +2897,7 @@ describe("subagent registry seam flow", () => {
       swarmRequesterSessionKey: "agent:main:main",
     });
 
-    getLifecycleHandler()({
+    await settleLifecycle({
       runId,
       stream: "lifecycle",
       data: { phase: "end", startedAt: 111, endedAt: 222, yielded: true },
@@ -2937,7 +2937,7 @@ describe("subagent registry seam flow", () => {
       { invalidAttempts: 0, structured: { answer: 42 } },
     );
 
-    getLifecycleHandler()({
+    await settleLifecycle({
       runId,
       stream: "lifecycle",
       data: { phase: "end", startedAt: 111, endedAt: 222, yielded: true },
@@ -2971,15 +2971,20 @@ describe("subagent registry seam flow", () => {
         },
       });
 
-      await mod.registerSubagentRun({
-        runId,
-        childSessionKey: "agent:main:subagent:wait-collector-yield",
-        task: "collect through the wait observation",
-        expectsCompletionMessage: false,
-        collect: true,
-        outputSchema: { type: "object" },
-        swarmRequesterSessionKey: "agent:main:main",
-      });
+      const settleRootWork = observeRootWork();
+      try {
+        await mod.registerSubagentRun({
+          runId,
+          childSessionKey: "agent:main:subagent:wait-collector-yield",
+          task: "collect through the wait observation",
+          expectsCompletionMessage: false,
+          collect: true,
+          outputSchema: { type: "object" },
+          swarmRequesterSessionKey: "agent:main:main",
+        });
+      } finally {
+        await settleRootWork();
+      }
 
       await waitForFast(() => {
         expect(findRequesterRun(runId)).toMatchObject({
@@ -5075,16 +5080,13 @@ describe("subagent registry seam flow", () => {
   });
 
   it("keeps killed delete-mode runs as reconciliation tombstones", async () => {
-    const registrationCompletion = mod.registerSubagentRun({
+    await mod.registerSubagentRun({
       runId: "run-killed-delete",
       childSessionKey: "agent:main:subagent:killed-delete",
       task: "kill and delete",
       cleanup: "delete",
       workspaceDir: "/tmp/killed-delete-workspace",
     });
-    if (registrationCompletion) {
-      await registrationCompletion;
-    }
 
     const updated = await mod.markSubagentRunTerminated({
       runId: "run-killed-delete",
@@ -5111,14 +5113,11 @@ describe("subagent registry seam flow", () => {
   });
 
   it("suppresses task delivery immediately when requester teardown kills a run", async () => {
-    const registrationCompletion = mod.registerSubagentRun({
+    await mod.registerSubagentRun({
       runId: "run-requester-teardown",
       childSessionKey: "agent:main:subagent:requester-teardown",
       task: "stop without reinjecting",
     });
-    if (registrationCompletion) {
-      await registrationCompletion;
-    }
 
     expect(
       await mod.markSubagentRunTerminated({
@@ -5157,6 +5156,7 @@ describe("subagent registry seam flow", () => {
         stream: "lifecycle",
         data: { phase: "end", startedAt: 100, endedAt: 200 },
       });
+      await settleRootWork(true);
       await waitForFast(() => {
         const run = findRequesterRun("run-killed-hook-race");
         expect(run?.endedReason).toBe("subagent-complete");
