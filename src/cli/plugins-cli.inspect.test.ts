@@ -361,6 +361,48 @@ describe("plugins cli inspect", () => {
     expect(readRenderedStatus(pluginsCliRuntimeLogs.join("\n"), format)).toBe("loaded");
   });
 
+  it.each([
+    { args: ["inspect", "scope-probe", "--runtime"], format: "detail" },
+    { args: ["inspect", "--all", "--runtime"], format: "table" },
+  ] as const)(
+    "labels --runtime output as a CLI-process load for $format output",
+    async ({ args }) => {
+      const plugin = createPluginRecord({ id: "scope-probe", name: "Scoped", imported: true });
+      const report = { plugins: [plugin], diagnostics: [] };
+      const inspect = createInspectReport({ plugin });
+      buildPluginSnapshotReportMock.mockReturnValue(report);
+      withPluginDiagnosticsReportForInspectionMock.mockImplementation(
+        async (_params, formatReport) =>
+          formatReport({ ...createEmptyPluginRegistry(), workspaceScope: "omitted", ...report }),
+      );
+      buildPluginInspectReportMock.mockReturnValue(inspect);
+      buildAllPluginInspectReportsMock.mockReturnValue([inspect]);
+
+      await runPluginsCommand(["plugins", ...args]);
+
+      // `--runtime` never asks the running Gateway, so the output must not be
+      // readable as a statement about the daemon's loaded state.
+      expect(stripVTControlCharacters(pluginsCliRuntimeLogs.join("\n"))).toContain(
+        "Inspection scope: cli-process",
+      );
+    },
+  );
+
+  it("omits the scope marker when --runtime is not requested", async () => {
+    const plugin = createPluginRecord({ id: "scope-probe", name: "Scoped", imported: true });
+    const report = { plugins: [plugin], diagnostics: [] };
+    const inspect = createInspectReport({ plugin });
+    buildPluginSnapshotReportMock.mockReturnValue(report);
+    buildPluginInspectReportMock.mockReturnValue(inspect);
+    buildAllPluginInspectReportsMock.mockReturnValue([inspect]);
+
+    await runPluginsCommand(["plugins", "inspect", "scope-probe"]);
+
+    expect(stripVTControlCharacters(pluginsCliRuntimeLogs.join("\n"))).not.toContain(
+      "Inspection scope:",
+    );
+  });
+
   it.each([false, true].flatMap((all) => [false, true].map((json) => ({ all, json }))))(
     "renders live metadata before retirement and prints after cleanup: all=$all, json=$json",
     async ({ all, json }) => {
