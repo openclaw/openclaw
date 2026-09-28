@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { runLinuxMemoryCommand } from "../../scripts/lib/managed-memory.mts";
 import { hasLinuxMemoryContainment } from "../../scripts/lib/process-memory.mts";
+import { createDeferred } from "../helpers/promise.js";
 
 const mocks = vi.hoisted(() => ({
   control: vi.fn(),
@@ -50,8 +51,8 @@ it.for([
 ])(
   "owns $kind cancellation until cgroup cleanup settles (uncertain=$uncertain)",
   async (params) => {
-    const enteredCleanup = Promise.withResolvers<void>();
-    const cleanup = Promise.withResolvers<number>();
+    const enteredCleanup = createDeferred<void>();
+    const cleanup = createDeferred<number>();
     const memory = await import("../../scripts/lib/managed-memory.mts");
     vi.spyOn(memory, "runLinuxMemoryCommand").mockImplementation(async () => {
       enteredCleanup.resolve();
