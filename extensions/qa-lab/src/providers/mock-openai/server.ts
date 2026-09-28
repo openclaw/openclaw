@@ -716,7 +716,7 @@ async function buildResponsesPayload(
     QA_EMPTY_RESPONSE_SIDE_EFFECT_PROMPT_RE.exec(sideEffectPrompt)?.[1]?.toLowerCase();
   const canCallSessionsSpawn = canCallScenarioTool(toolDeclarationBody, "sessions_spawn");
   const canCallSessionsYield = canCallScenarioTool(toolDeclarationBody, "sessions_yield");
-  const canCallMessage = canCallScenarioTool(toolDeclarationBody, "message");
+  const canCallMessage = canCallScenarioTool(toolDeclarationBody, "message", true);
   const { slackProgressDirectives, slackProgressInput } = readSlackProgressTurn(input);
   const slackRequester = buildSlackOwnedRequesterEvents(toolDeclarationBody, input, currentPrompt);
   if (slackRequester) {

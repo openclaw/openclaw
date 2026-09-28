@@ -226,6 +226,49 @@ async function runForkEvidence(evidence: EvidenceCase) {
 }
 
 describe("subagent forked-context evidence", () => {
+  it.each([
+    { name: "catalog dispatcher alone", tools: ["tool_call"], delivery: undefined },
+    { name: "similarly named tool", tools: ["tool_call", "message_preview"], delivery: undefined },
+    { name: "direct message", tools: ["tool_call", "message"], delivery: "message" },
+    {
+      name: "named catalog message",
+      tools: ["tool_call"],
+      instructions: "Use message for channel delivery through the tool catalog.",
+      delivery: "tool_call",
+    },
+  ])("finishes fork completion with $name", async ({ tools, instructions, delivery }) => {
+    const server = await startQaMockOpenAiServer({ host: "127.0.0.1", port: 0 });
+    try {
+      const response = await fetch(`${server.baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          stream: false,
+          instructions,
+          tools: tools.map((name) => ({ type: "function", name })),
+          input: [userInput(prompt), settledInput(childResult)],
+        }),
+      });
+      expect(response.status).toBe(200);
+      const output = (await response.json()).output;
+      if (delivery) {
+        expect(output).toHaveLength(1);
+        expect(output[0]).toMatchObject({ type: "function_call", name: delivery });
+        const args = { action: "send", message: childResult, final: true };
+        expect(JSON.parse(output[0].arguments)).toEqual(
+          delivery === "tool_call" ? { id: "message", args } : args,
+        );
+      } else {
+        expect(output).toMatchObject([
+          { type: "message", content: [{ type: "output_text", text: childResult }] },
+        ]);
+        expect(output).toHaveLength(1);
+      }
+    } finally {
+      await server.stop();
+    }
+  });
+
   it("does not dispatch a new spawn or completion from projected historical requests", async () => {
     const server = await startQaMockOpenAiServer({ host: "127.0.0.1", port: 0 });
     try {
