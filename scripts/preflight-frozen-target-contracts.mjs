@@ -15,6 +15,8 @@ const toolingClosure = [
   "scripts/lib/docker-e2e-plan.mts",
   "scripts/lib/docker-e2e-scenarios.mts",
   "scripts/lib/official-external-channel-catalog.json",
+  "scripts/lib/official-external-provider-catalog.json",
+  "scripts/lib/record-shared.mjs",
   "scripts/lib/update-compat-inventory.json",
   "scripts/lib/update-first-hop-lanes.mjs",
   "scripts/lib/upgrade-survivor-policy.mjs",
@@ -1175,11 +1177,6 @@ async function preflightFrozenTargetContracts(input, workflow = false, verifiedT
     }
     for (const path of supportFiles[consumer] ?? []) {
       required(sources.tooling, `scripts/e2e/lib/${path}`);
-    }
-    if (
-      ["npm-onboard-channel-agent", "codex-on-demand", "update-corrupt-plugin"].includes(consumer)
-    ) {
-      required(sources.tooling, "scripts/lib/record-shared.mjs");
     }
     if (consumer === "update-corrupt-plugin") {
       required(sources.tooling, "scripts/lib/update-compat-contract.mjs");

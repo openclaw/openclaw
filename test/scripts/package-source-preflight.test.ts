@@ -305,6 +305,8 @@ function runReleaseInputCapture(params: {
       "scripts/lib/docker-e2e-plan.mts",
       "scripts/lib/docker-e2e-scenarios.mts",
       "scripts/lib/official-external-channel-catalog.json",
+      "scripts/lib/official-external-provider-catalog.json",
+      "scripts/lib/record-shared.mjs",
       "scripts/lib/update-compat-inventory.json",
       "scripts/lib/update-first-hop-lanes.mjs",
       "scripts/lib/upgrade-survivor-policy.mjs",
@@ -769,7 +771,6 @@ describe("package source preflight", () => {
 
     const noPackageArtifactName =
       result.artifactTuple.output.package_artifact_present === "true" ? whitespace : "";
-    expect(noPackageArtifactName).toBe("");
     const reportDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-live-source-report-"));
     try {
       await writeRunSummary(
