@@ -339,6 +339,7 @@ on a different release.
   </Accordion>
   <Accordion title="Custom provider">
     Works with OpenAI-compatible, OpenAI Responses-compatible, and Anthropic-compatible endpoints.
+    The API base URL must use `http://` or `https://`; other URL schemes are rejected before verification.
 
     Interactive onboarding supports the same API key storage choices as other provider API key flows:
     - **Paste API key now** (plaintext)
