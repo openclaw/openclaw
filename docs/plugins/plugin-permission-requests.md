@@ -234,9 +234,10 @@ list for one exact tool:
 
 For native OpenClaw tools, use the tool registration's plugin ID and a tool key
 of `encodeURIComponent(rawToolName)`. Only the exact matching list applies:
-tool, then plugin, then default. Slack user IDs must
-include the bot's authenticated workspace ID as shown above; reviewers from a
-different workspace do not receive approval DMs. An explicit empty list denies
+tool, then plugin, then default. Slack reviewers accept raw `U…`/`W…` user IDs
+within the selected Slack account, or workspace-qualified IDs as shown above.
+Decisions are bound to the bot's authenticated workspace; qualified reviewers
+from a different workspace do not receive approval DMs. An explicit empty list denies
 Slack decisions at that level. If the default `approvers` field is omitted,
 requests with a known selected owner and no matching override retain the existing
 Slack account `allowFrom` or `defaultTo` authorization. A missing selected owner

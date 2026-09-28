@@ -95,45 +95,48 @@ describe("Slack plugin approval reviewer account policy", () => {
     expect(await targets("ops", bound)).toEqual([{ to: "team:T11111111:user:U11111111" }]);
   });
 
-  it("routes a policy-only plugin approval to its selected reviewer", async () => {
-    installationStates.push(registerSlackInstallationState("default", "workspace", "T11111111"));
-    const cfg = {
-      channels: { slack: { botToken: "xoxb-default", appToken: "xapp-default" } },
-      approvals: {
-        plugin: {
-          slack: {
-            plugins: {
-              diffs: {
-                tools: { view: { approvers: ["team:T11111111:user:U11111111"] } },
+  it.each(["team:T11111111:user:U11111111", "U11111111"])(
+    "routes selected reviewer %s within the bot workspace",
+    async (reviewer) => {
+      installationStates.push(registerSlackInstallationState("default", "workspace", "T11111111"));
+      const cfg = {
+        channels: { slack: { botToken: "xoxb-default", appToken: "xapp-default" } },
+        approvals: {
+          plugin: {
+            slack: {
+              plugins: {
+                diffs: {
+                  tools: { view: { approvers: [reviewer] } },
+                },
               },
             },
           },
         },
-      },
-    } as OpenClawConfig;
-    const request = buildPluginRequest({
-      turnSourceChannel: "slack",
-      turnSourceTo: "team:T11111111:channel:C11111111",
-      policySubject: { pluginKey: "diffs", tool: "view" },
-    });
+      } as OpenClawConfig;
+      const request = buildPluginRequest({
+        turnSourceChannel: "slack",
+        turnSourceTo: "team:T11111111:channel:C11111111",
+        policySubject: { pluginKey: "diffs", tool: "view" },
+      });
 
-    expect(
-      slackApprovalCapability.nativeRuntime?.availability.shouldHandle({
-        cfg,
-        accountId: "default",
-        approvalKind: "plugin",
-        request,
-      }),
-    ).toBe(true);
-    expect(
-      await slackApprovalCapability.native?.resolveApproverDmTargets?.({
-        cfg,
-        accountId: "default",
-        approvalKind: "plugin",
-        request,
-      }),
-    ).toEqual([{ to: "team:T11111111:user:U11111111" }]);
-  });
+      expect(
+        slackApprovalCapability.nativeRuntime?.availability.shouldHandle({
+          cfg,
+          accountId: "default",
+          approvalKind: "plugin",
+          request,
+        }),
+      ).toBe(true);
+      expect(
+        await slackApprovalCapability.native?.resolveApproverDmTargets?.({
+          cfg,
+          accountId: "default",
+          approvalKind: "plugin",
+          request,
+        }),
+      ).toEqual([{ to: "team:T11111111:user:U11111111" }]);
+    },
+  );
 
   it("does not count another workspace's Slack account as an unbound route candidate", async () => {
     installationStates.push(registerSlackInstallationState("default", "workspace", "T11111111"));

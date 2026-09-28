@@ -125,14 +125,14 @@ describe("isSlackPluginApprovalAuthorizedSender", () => {
   const toolReviewer = "team:T11111111:user:U33333333";
   const legacyReviewer = "team:T11111111:user:U44444444";
 
-  it("binds Enterprise Grid reviewers to the request workspace", () => {
+  it("binds raw Enterprise Grid reviewers to the request workspace", () => {
     const installation = registerSlackInstallationState("default", "enterprise");
     try {
       const otherWorkspaceReviewer = "team:T22222222:user:U22222222";
       const cfg: OpenClawConfig = {
         channels: { slack: { botToken: "xoxb-enterprise", appToken: "xapp-enterprise" } },
         approvals: {
-          plugin: { slack: { approvers: [defaultReviewer, otherWorkspaceReviewer] } },
+          plugin: { slack: { approvers: ["U11111111", otherWorkspaceReviewer] } },
         },
       };
       const base = pluginRequest({ pluginKey: "diffs", tool: "diffs" });
@@ -146,11 +146,18 @@ describe("isSlackPluginApprovalAuthorizedSender", () => {
         },
       };
       expect(getSlackApprovalApproversForTeam({ cfg, request, teamId: "T11111111" })).toEqual([
-        defaultReviewer,
+        "U11111111",
       ]);
       expect(
         isSlackPluginApprovalAuthorizedSender({ cfg, senderId: defaultReviewer, request }),
       ).toBe(true);
+      expect(
+        isSlackPluginApprovalAuthorizedSender({
+          cfg,
+          senderId: "team:T22222222:user:U11111111",
+          request,
+        }),
+      ).toBe(false);
       expect(
         isSlackPluginApprovalAuthorizedSender({
           cfg,
@@ -201,42 +208,47 @@ describe("isSlackPluginApprovalAuthorizedSender", () => {
     }
   });
 
-  it("applies exact tool, plugin, then Agent reviewer lists within the bot workspace", () => {
-    installations.push(registerSlackInstallationState("default", "workspace", "T11111111"));
-    const cfg: OpenClawConfig = {
-      approvals: {
-        plugin: {
-          slack: {
-            approvers: [defaultReviewer],
-            plugins: {
-              calendar: {
-                approvers: [pluginReviewer],
-                tools: {
-                  "create%20event": { approvers: [toolReviewer] },
+  it.each(["qualified", "raw"])(
+    "applies tool, plugin, then Agent reviewer lists with %s IDs",
+    (format) => {
+      const selector = (qualifiedId: string) =>
+        format === "raw" ? qualifiedId.split(":").at(-1)! : qualifiedId;
+      installations.push(registerSlackInstallationState("default", "workspace", "T11111111"));
+      const cfg: OpenClawConfig = {
+        approvals: {
+          plugin: {
+            slack: {
+              approvers: [selector(defaultReviewer)],
+              plugins: {
+                calendar: {
+                  approvers: [selector(pluginReviewer)],
+                  tools: {
+                    "create%20event": { approvers: [selector(toolReviewer)] },
+                  },
                 },
               },
             },
           },
         },
-      },
-      channels: { slack: { allowFrom: [legacyReviewer] } },
-    };
-    const tool = pluginRequest({ pluginKey: "calendar", tool: "create event" });
-    const siblingTool = pluginRequest({ pluginKey: "calendar", tool: "delete event" });
-    const otherPlugin = pluginRequest({ pluginKey: "other" });
-    const authorized = (senderId: string, request: PluginApprovalRequest) =>
-      isSlackPluginApprovalAuthorizedSender({ cfg, senderId, request });
+        channels: { slack: { allowFrom: [legacyReviewer] } },
+      };
+      const tool = pluginRequest({ pluginKey: "calendar", tool: "create event" });
+      const siblingTool = pluginRequest({ pluginKey: "calendar", tool: "delete event" });
+      const otherPlugin = pluginRequest({ pluginKey: "other" });
+      const authorized = (senderId: string, request: PluginApprovalRequest) =>
+        isSlackPluginApprovalAuthorizedSender({ cfg, senderId, request });
 
-    expect(authorized(toolReviewer, tool)).toBe(true);
-    expect(authorized(pluginReviewer, tool)).toBe(false);
-    expect(authorized("team:T22222222:user:U33333333", tool)).toBe(false);
-    expect(authorized("U33333333", tool)).toBe(false);
-    expect(authorized(pluginReviewer, siblingTool)).toBe(true);
-    expect(authorized(defaultReviewer, siblingTool)).toBe(false);
-    expect(authorized(defaultReviewer, otherPlugin)).toBe(true);
-    expect(authorized(legacyReviewer, otherPlugin)).toBe(false);
-    expect(authorized(pluginReviewer, pluginRequest({ pluginKey: "calendar" }))).toBe(false);
-  });
+      expect(authorized(toolReviewer, tool)).toBe(true);
+      expect(authorized(pluginReviewer, tool)).toBe(false);
+      expect(authorized("team:T22222222:user:U33333333", tool)).toBe(false);
+      expect(authorized("U33333333", tool)).toBe(false);
+      expect(authorized(pluginReviewer, siblingTool)).toBe(true);
+      expect(authorized(defaultReviewer, siblingTool)).toBe(false);
+      expect(authorized(defaultReviewer, otherPlugin)).toBe(true);
+      expect(authorized(legacyReviewer, otherPlugin)).toBe(false);
+      expect(authorized(pluginReviewer, pluginRequest({ pluginKey: "calendar" }))).toBe(false);
+    },
+  );
 
   it("distinguishes an omitted default from an explicit empty default", () => {
     installations.push(registerSlackInstallationState("default", "workspace", "T11111111"));

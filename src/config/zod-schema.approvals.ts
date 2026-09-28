@@ -24,8 +24,8 @@ const ExecApprovalForwardingSchema = z
   .strict()
   .optional();
 
-// Bind every selected Slack reviewer to the workspace used by the bot account.
-const SlackPluginApproverSchema = z.string().regex(/^team:T[A-Z0-9]+:user:[UW][A-Z0-9]+$/i);
+// Raw IDs are scoped by the authenticated Slack account at the decision boundary.
+const SlackPluginApproverSchema = z.string().regex(/^(?:team:T[A-Z0-9]+:user:)?[UW][A-Z0-9]+$/i);
 
 const PluginSlackApproversSchema = z
   .object({
