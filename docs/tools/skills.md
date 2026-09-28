@@ -55,9 +55,21 @@ snapshot refresh and sandbox synchronization. Sandboxed runs read the
 materialized copies, not the original host paths.
 
 Managed worktree sessions keep their recorded canonical workspace as the skill
-source. A selected nested workspace stays nested: discovery does not walk up to
-its parent repository. Installing OpenClaw from a repository does not make that
+source. The configured agent workspace remains the primary skill source even when
+the session executes in a worktree; only selecting that worktree as the agent's
+workspace gives its skills primary precedence. A selected nested workspace stays
+nested: discovery does not walk up to its parent repository. Installing OpenClaw
+from a repository does not make that
 repository's `.agents/skills/` a global bundled skill source.
+
+Each discovery pass reports one summary per winning/losing discovery root and
+source kind, with the skill count and up to three example names. Workspace or
+project skills overriding bundled skills, and managed-worktree skills overriding
+project checkout skills, are warnings; other collisions are informational.
+Worktree provenance uses the configured `worktreeRoot` (the state directory's
+`worktrees/` by default), without probing Git. Identical content stays silent.
+Unchanged root-pair summaries are not repeated on refresh; changes to content,
+declared metadata, or collision membership update the summary. Precedence is unchanged.
 
 Skill roots support grouped layouts. OpenClaw discovers a skill whenever
 `SKILL.md` appears anywhere under a configured root (up to 6 levels deep):
@@ -766,9 +778,10 @@ the total number of operating-system file watches.
     keep the same snapshot version and do not notify chat metadata consumers.
     Idle worktree watcher cleanup does not invalidate other workspaces.
     Copies with identical `SKILL.md` content and declared metadata do not produce
-    precedence collision warnings. Different content warns once per ordered
-    winner/loser content pair during a Gateway process, across workspaces and
-    rebuilds. Editing either copy can produce a new warning; precedence stays the same.
+    precedence collision logs. Different content is summarized per ordered
+    winner/loser discovery root and source kind. During a Gateway process,
+    refreshes with the same aggregate digest stay silent; editing either copy or
+    changing the colliding skill names updates the summary. Precedence stays the same.
 
     Use `allowSymlinkTargets`
     for intentional symlinked layouts where a skill

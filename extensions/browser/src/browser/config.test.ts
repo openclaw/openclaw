@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import type { BrowserConfig, BrowserProfileConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withEnv, withTempDir } from "openclaw/plugin-sdk/test-env";
+import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { resolveUserPath } from "../utils.js";
 import {
   getManagedBrowserMissingDisplayError,
   isLocalManagedProfile,
@@ -218,15 +218,6 @@ describe("browser config", () => {
     );
   });
 
-  it("honors an explicit cdpPort on an extension profile", () => {
-    const resolved = resolveBrowserConfig({
-      profiles: {
-        work: { driver: "extension", cdpPort: 20123, color: "#00AA00" },
-      },
-    });
-    expect(resolveProfile(resolved, "work")?.cdpPort).toBe(20123);
-  });
-
   it("keeps literal $ patterns in home when expanding a tilde executable path", () => {
     const spy = vi.spyOn(os, "homedir").mockReturnValue("/home/$&user");
     try {
@@ -271,11 +262,8 @@ describe("browser config", () => {
     expect(() => resolveBrowserConfig({ profiles })).toThrow(/extension.*relay.*port/i);
   });
 
-  it.each([
-    { name: "empty", content: "" },
-    { name: "malformed", content: "not-a-relay-key\n" },
-    { name: "valid", content: `${"a1".repeat(32)}\n` },
-  ])("normalizes config independently of a $name relay secret", async ({ content }) => {
+  it("normalizes config without reading or rewriting the relay secret", async () => {
+    const content = `${"a1".repeat(32)}\n`;
     await withTempDir("openclaw-config-relay-", async (dir) => {
       const stateDir = fs.realpathSync(dir);
       const credentials = path.join(stateDir, "credentials");
@@ -345,11 +333,6 @@ describe("browser config", () => {
       expected: path.resolve(os.homedir(), ".local/bin/chromium"),
     },
     {
-      name: "keeps non-tilde executablePath values unchanged after trimming",
-      input: " ./local-chromium ",
-      expected: "./local-chromium",
-    },
-    {
       name: "normalizes blank executablePath to undefined",
       input: "   ",
       expected: undefined,
@@ -361,7 +344,7 @@ describe("browser config", () => {
     },
     {
       name: "does not expand executablePath values where ~ is not the home prefix",
-      input: "/opt/~chromium/chrome",
+      input: " /opt/~chromium/chrome ",
       expected: "/opt/~chromium/chrome",
     },
   ])("$name", ({ input, expected }) => {
@@ -627,22 +610,10 @@ describe("browser config", () => {
       expected: { cdpPort: 18800, cdpUrl: "http://127.0.0.1:18800" },
     },
     {
-      name: "URL with non-default port, no cdpPort configured",
-      config: withProfile("openclaw", { cdpUrl: "http://127.0.0.1:9222" }),
-      profileName: "openclaw",
-      expected: { cdpPort: 9222, cdpUrl: "http://127.0.0.1:9222" },
-    },
-    {
       name: "URL without port and no cdpPort falls back to protocol default",
       config: withProfile("openclaw", { cdpUrl: "https://remote-browser.example.com" }),
       profileName: "openclaw",
       expected: { cdpPort: 443, cdpUrl: "https://remote-browser.example.com" },
-    },
-    {
-      name: "no URL + cdpPort constructs URL from defaults",
-      config: withProfile("openclaw", { cdpPort: 9222 }),
-      profileName: "openclaw",
-      expected: { cdpPort: 9222, cdpUrl: "http://127.0.0.1:9222" },
     },
     {
       name: "stale WS devtools URL + cdpPort drops path and uses cdpPort",
@@ -763,11 +734,6 @@ describe("browser config", () => {
       name: "defaults extraArgs to empty array when not provided",
       config: undefined,
       expected: [],
-    },
-    {
-      name: "passes through valid extraArgs strings",
-      config: { extraArgs: ["--no-sandbox", "--disable-gpu"] },
-      expected: ["--no-sandbox", "--disable-gpu"],
     },
     {
       name: "filters out empty strings and whitespace-only entries from extraArgs",

@@ -3,8 +3,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { emitModelTransportDebug, resolveModelSseDebugMode } from "./model-transport-debug.js";
 import { stringifyRedactedEvent } from "./openai-responses-debug.js";
 import type { OpenAIResponsesStreamEvent } from "./openai-responses-stream-internal.js";
-import { createModelStreamCooperativeScheduler, log } from "./openai-transport-shared.js";
-import { transportAbortError } from "./transport-stream-shared.js";
+import { log } from "./openai-transport-shared.js";
+import { iterateModelStream } from "./transport-stream-shared.js";
 
 const STRING_DELTA_EVENTS = new Set([
   "response.function_call_arguments.delta",
@@ -19,11 +19,7 @@ export async function* adaptResponsesStream(
   stream: AsyncIterable<unknown>,
   signal?: AbortSignal,
 ): AsyncGenerator<OpenAIResponsesStreamEvent> {
-  const scheduler = createModelStreamCooperativeScheduler(signal);
-  for await (const event of stream) {
-    if (signal?.aborted) {
-      throw transportAbortError(signal);
-    }
+  for await (const event of iterateModelStream(stream, signal)) {
     if (!isRecord(event) || typeof event.type !== "string") {
       throw new Error("Responses stream delivered a malformed event without a string type");
     }
@@ -46,7 +42,6 @@ export async function* adaptResponsesStream(
       throw new Error(`Responses stream delivered malformed ${event.type} response`);
     }
     yield event as OpenAIResponsesStreamEvent;
-    await scheduler.afterEvent();
   }
 }
 

@@ -76,31 +76,40 @@ describe("runCommandWithTimeout", () => {
           : mode === "default-signal"
             ? "setInterval(()=>{},1000); process.stdout.write('ready');"
             : `const timer=setInterval(()=>{},1000); process.on('SIGINT',()=>{${mode === "cooperative" ? "clearInterval(timer);process.stdout.write('interrupted');process.exitCode=17;" : ""}}); process.stdout.write('ready');`;
-      const running = runCommandWithTimeout([process.execPath, "-e", program], {
-        signal: controller.signal,
-        killProcessTree: true,
-        killSignal: "SIGINT",
-        killGraceMs: 100,
-        timeoutMs: 5000,
-        onOutputChunk: () => {
-          ready();
-        },
-      });
-      await started;
-      if (mode !== "normal") {
-        controller.abort();
-      }
-      const result = await running;
-      expect(result.cleanup).toBe(mode === "default-signal" ? "cooperative" : mode);
-      expect(result.killIssuedByAbort).toBe(mode === "normal" ? undefined : true);
-      if (mode === "default-signal") {
-        expect(result).toMatchObject({ code: null, signal: "SIGINT", termination: "signal" });
-      }
-      if (mode === "normal" || mode === "cooperative") {
-        expect(result.code).toBe(17);
-      }
-      if (mode === "cooperative") {
-        expect(result.stdout).toContain("interrupted");
+      // Keep process I/O and polling real, but don't let host scheduling consume the grace period.
+      const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      try {
+        const running = runCommandWithTimeout([process.execPath, "-e", program], {
+          signal: controller.signal,
+          killProcessTree: true,
+          killSignal: "SIGINT",
+          killGraceMs: 100,
+          timeoutMs: 5000,
+          onOutputChunk: () => {
+            ready();
+          },
+        });
+        await started;
+        if (mode !== "normal") {
+          controller.abort();
+        }
+        if (mode === "forced") {
+          now.mockReturnValue(1_100);
+        }
+        const result = await running;
+        expect(result.cleanup).toBe(mode === "default-signal" ? "cooperative" : mode);
+        expect(result.killIssuedByAbort).toBe(mode === "normal" ? undefined : true);
+        if (mode === "default-signal") {
+          expect(result).toMatchObject({ code: null, signal: "SIGINT", termination: "signal" });
+        }
+        if (mode === "normal" || mode === "cooperative") {
+          expect(result.code).toBe(17);
+        }
+        if (mode === "cooperative") {
+          expect(result.stdout).toContain("interrupted");
+        }
+      } finally {
+        now.mockRestore();
       }
     },
   );
@@ -749,6 +758,9 @@ describe("runCommandBuffered", () => {
             // clock so missing post-termination release still reaches test cleanup.
             const closed = once(parent, "close", { signal: AbortSignal.timeout(1_000) });
             await vi.advanceTimersByTimeAsync(timeoutMs - 101);
+            await vi.advanceTimersToNextTimerAsync();
+            await vi.advanceTimersByTimeAsync(100);
+            await vi.advanceTimersToNextTimerAsync();
             await vi.advanceTimersByTimeAsync(100);
             // Output release runs in the next timers phase so buffered pipe I/O
             // gets a poll turn on both Node and Bun.
@@ -763,6 +775,9 @@ describe("runCommandBuffered", () => {
           if (exitCode === 0) {
             expect(existsSync(termPath)).toBe(false);
             await vi.advanceTimersByTimeAsync(50);
+            await vi.advanceTimersToNextTimerAsync();
+            await vi.advanceTimersByTimeAsync(100);
+            await vi.advanceTimersToNextTimerAsync();
           }
           for (let attempt = 0; attempt < 40 && !existsSync(termPath); attempt += 1) {
             await new Promise<void>((resolve) => {

@@ -163,6 +163,17 @@ describe("internal runtime context codec", () => {
     expect(stripInternalRuntimeContext(input)).toBe("Visible reply");
   });
 
+  it("strips a whitespace-wrapped runtime event preface", () => {
+    const input = [
+      "OpenClaw\n runtime event.",
+      OPENCLAW_RUNTIME_CONTEXT_NOTICE,
+      "",
+      "Visible reply",
+    ].join("\n");
+
+    expect(stripInternalRuntimeContext(input)).toBe("Visible reply");
+  });
+
   it("preserves a long nonmatching paragraph containing a runtime notice", () => {
     const input = "Ordinary visible text.\n".repeat(2_000) + OPENCLAW_RUNTIME_CONTEXT_NOTICE;
     expect(stripInternalRuntimeContext(input)).toBe(input);

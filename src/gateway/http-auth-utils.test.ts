@@ -338,7 +338,7 @@ describe("HTTP gateway owner profiles", () => {
 
         await admitResponse(aliasStreaming, email);
         // The child keeps its source after the parent releases it and its response disconnects.
-        const captured = captureGatewayOperatorRunAuthority({
+        const captured = await captureGatewayOperatorRunAuthority({
           client: {
             connect: {
               minProtocol: 1,

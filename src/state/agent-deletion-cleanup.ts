@@ -22,8 +22,8 @@ type AgentDeletionDatabaseCleanupScope = {
   statePath: string;
   assertCurrent: () => void;
   assertJournal: (statePath: string, entries: readonly AgentDeletionCleanupRow[]) => string;
-  registerClose: (close: () => void) => void;
-  retryClose: () => void;
+  registerClose: (close: () => Promise<void>) => void;
+  retryClose: () => Promise<void>;
   withCommit: (commit: () => void) => void;
 };
 
@@ -49,12 +49,12 @@ export function createAgentDeletionDatabaseCleanup(owner: {
     run: () => Promise<T>,
   ): Promise<T> => {
     let active = true;
-    const closers = new Set<() => void>();
-    const closeHandles = () => {
+    const closers = new Set<() => Promise<void>>();
+    const closeHandles = async () => {
       const errors: unknown[] = [];
       for (const close of [...closers].toReversed()) {
         try {
-          close();
+          await close();
           closers.delete(close);
         } catch (error) {
           errors.push(error);
@@ -83,11 +83,11 @@ export function createAgentDeletionDatabaseCleanup(owner: {
         assertActive();
         closers.add(close);
       },
-      retryClose: () => {
+      retryClose: async () => {
         if (active) {
           throw new Error("Agent database belongs to an active deletion cleanup.");
         }
-        const errors = closeHandles();
+        const errors = await closeHandles();
         if (errors.length > 0) {
           throw new AggregateError(errors, "Agent deletion database close retry failed.");
         }
@@ -110,7 +110,8 @@ export function createAgentDeletionDatabaseCleanup(owner: {
             previous.agentId === scope.agentId &&
             previous.path === scope.path
           ) {
-            previous.retryClose();
+            await previous.retryClose();
+            scope.assertCurrent();
           }
         }
         owner.assertAdmission();
@@ -120,10 +121,9 @@ export function createAgentDeletionDatabaseCleanup(owner: {
       } catch (error) {
         outcome = err(error);
       } finally {
-        closeErrors.push(...closeHandles());
-        // Retained async callbacks keep this same object and must fail after settlement.
-        // A failed native close remains tagged and leased for the existing close retry.
+        // Retire callback authority before awaiting disposal; failed closes keep their tags.
         active = false;
+        closeErrors.push(...(await closeHandles()));
       }
       if (!outcome.ok) {
         throw closeErrors.length > 0
@@ -138,6 +138,7 @@ export function createAgentDeletionDatabaseCleanup(owner: {
           ? closeErrors[0]
           : new AggregateError(closeErrors, "Agent deletion database cleanup failed.");
       }
+      owner.assertCurrent();
       return outcome.value;
     });
   };

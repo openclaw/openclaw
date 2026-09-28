@@ -56,13 +56,6 @@ const MANAGED_PROXY_UNDICI_OPTIONS = Object.freeze({
   allowH2: false,
 }) satisfies ProxylineUndiciOptions;
 
-/** Resets process-wide proxy lifecycle state between tests that share a worker. */
-export function resetProxyLifecycleForTests(): void {
-  baseProxyEnvSnapshot = null;
-  proxylineHandle?.stop();
-  proxylineHandle = null;
-}
-
 function captureProxyEnv(): ProxyEnvSnapshot {
   return {
     http_proxy: process.env["http_proxy"],

@@ -203,12 +203,13 @@ export class PositionRailGutterController implements ReactiveController {
     this.viewport = viewport;
     this.innerElement = inner;
     this.region = region;
+    const column = inner.querySelector<HTMLElement>(":scope > .chat-virtual-sizer") ?? inner;
     let innerWidth: number | undefined;
     let regionHeight: number | undefined;
     this.resizeObserver = new ResizeObserver((entries) => {
       let changed = false;
       for (const entry of entries) {
-        if (entry.target === inner) {
+        if (entry.target === column) {
           const width = entry.borderBoxSize?.[0]?.inlineSize ?? entry.contentRect.width;
           changed ||= width !== innerWidth;
           innerWidth = width;
@@ -218,12 +219,13 @@ export class PositionRailGutterController implements ReactiveController {
           regionHeight = height;
         }
       }
-      // Streaming changes the inner height, but only column width affects the gutter.
       if (changed) {
         this.scheduleSync();
       }
     });
-    this.resizeObserver.observe(inner, { box: "border-box" });
+    // The virtual column has no flow height. Observing the owned range instead
+    // feeds row measurements back into shallower ResizeObserver delivery.
+    this.resizeObserver.observe(column, { box: "border-box" });
     this.resizeObserver.observe(region, { box: "border-box" });
     this.scheduleSync();
   }
@@ -260,6 +262,12 @@ export class PositionRailGutterController implements ReactiveController {
     }
     const left = viewport.getBoundingClientRect().left + viewport.clientLeft;
     const gutter = inner.getBoundingClientRect().left - left;
+    // Publish the resolved, unscaled column width: a saved percentage cannot be
+    // reused inside a descendant table without changing its containing block.
+    const columnWidth = inner.clientWidth;
+    if (columnWidth > 0) {
+      viewport.style.setProperty("--chat-transcript-column-width", `${columnWidth}px`);
+    }
     // The conversation region stays fixed when its composer resizes the scrollport.
     const region = viewport.closest<HTMLElement>(".chat-main__conversation") ?? viewport;
     viewport.style.setProperty("--chat-position-rail-viewport-height", `${region.clientHeight}px`);

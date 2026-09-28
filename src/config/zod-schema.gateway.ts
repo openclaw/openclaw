@@ -73,6 +73,7 @@ const GatewayOperatorRoleDefinitionSchema = z.strictObject({
 });
 const GatewayOperatorRoleNameSchema = z.string().trim().min(1).max(128);
 const GATEWAY_HTTP_LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+const GatewayHttpImagesSchema = z.strictObject(ResponsesEndpointUrlFetchShape).optional();
 
 function validateGatewayPublicOrigin(value: string): boolean {
   if (!validateHttpOrigin(value)) {
@@ -166,6 +167,8 @@ export const GatewayConfigSchema = z
           .optional(),
         /** Show the Discord community invitation in this Gateway's Control UI (default true). */
         communityInvite: z.boolean().optional(),
+        /** Seed fresh drafts from configured model/reasoning instead of remembered choices. */
+        newSessionModelDefaults: z.enum(["last-used", "configured"]).optional(),
         /** Optional service credential used only for Control UI GitHub previews and discovery. */
         github: z
           .strictObject({ token: SecretInputSchema.optional().register(sensitive) })
@@ -188,7 +191,6 @@ export const GatewayConfigSchema = z
         allowExternalEmbedUrls: z.boolean().optional(),
         /** Fetch public-site favicons through the Gateway for Control UI links (default true). */
         automaticallyFetchFavicons: z.boolean().optional(),
-        /** Optional max-width for grouped Control UI chat messages (default: min(900px, 68%)). */
         /** Allowed browser origins for Control UI/WebChat websocket connections. */
         allowedOrigins: z.array(z.string()).optional(),
         /**
@@ -196,6 +198,12 @@ export const GatewayConfigSchema = z
          * Supported long-term for deployments that intentionally rely on this policy.
          */
         dangerouslyAllowHostHeaderOriginFallback: z.boolean().optional(),
+      })
+      .optional(),
+    uploads: z
+      .strictObject({
+        /** Allow client file/image uploads to the Gateway (default true). Hot-applies. */
+        enabled: z.boolean().optional(),
       })
       .optional(),
     cliAgents: z
@@ -411,11 +419,7 @@ export const GatewayConfigSchema = z
             chatCompletions: z
               .strictObject({
                 enabled: z.boolean().optional(),
-                images: z
-                  .strictObject({
-                    ...ResponsesEndpointUrlFetchShape,
-                  })
-                  .optional(),
+                images: GatewayHttpImagesSchema,
               })
               .optional(),
             responses: z
@@ -435,11 +439,7 @@ export const GatewayConfigSchema = z
                       .optional(),
                   })
                   .optional(),
-                images: z
-                  .strictObject({
-                    ...ResponsesEndpointUrlFetchShape,
-                  })
-                  .optional(),
+                images: GatewayHttpImagesSchema,
               })
               .optional(),
           })

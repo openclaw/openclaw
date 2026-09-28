@@ -7,6 +7,7 @@ import type {
   PluginInstallRequest,
   PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
+import type { PluginToolPreview } from "./tool-preview.ts";
 
 registerPluginManagementEnglish();
 
@@ -15,7 +16,7 @@ export type PluginMutationAction = "install" | "enable" | "disable" | "uninstall
 export type PluginsPageDetail = {
   catalog?: PluginDiscoveryDetailResult;
   catalogLoading?: boolean;
-  tools?: Array<{ name: string; description?: string }>;
+  tools?: PluginToolPreview[];
   pluginId: string;
   inspection: PluginsInspectResult | null;
   error: string | null;

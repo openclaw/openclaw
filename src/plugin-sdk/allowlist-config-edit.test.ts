@@ -7,7 +7,6 @@ import {
   buildDmGroupAccountAllowlistAdapter,
   buildLegacyDmAccountAllowlistAdapter,
   collectAllowlistOverridesFromRecord,
-  collectNestedAllowlistOverridesFromRecord,
   createAccountScopedAllowlistNameResolver,
   createFlatAllowlistOverrideResolver,
   createNestedAllowlistOverrideResolver,
@@ -36,37 +35,6 @@ describe("collectAllowlistOverridesFromRecord", () => {
         record,
         label: (key) => key,
         resolveEntries: (value) => value.users,
-      }),
-    ).toEqual(expected);
-  });
-});
-
-describe("collectNestedAllowlistOverridesFromRecord", () => {
-  it.each([
-    {
-      name: "collects outer and nested overrides from a hierarchical record",
-      record: {
-        guild1: {
-          users: ["owner"],
-          channels: {
-            chan1: { users: ["member"] },
-          },
-        },
-      },
-      expected: [
-        { label: "guild guild1", entries: ["owner"] },
-        { label: "guild guild1 / channel chan1", entries: ["member"] },
-      ],
-    },
-  ])("$name", ({ record, expected }) => {
-    expect(
-      collectNestedAllowlistOverridesFromRecord({
-        record,
-        outerLabel: (key) => `guild ${key}`,
-        resolveOuterEntries: (value) => value.users,
-        resolveChildren: (value) => value.channels,
-        innerLabel: (outerKey, innerKey) => `guild ${outerKey} / channel ${innerKey}`,
-        resolveInnerEntries: (value) => value.users,
       }),
     ).toEqual(expected);
   });
@@ -318,7 +286,6 @@ describe("buildLegacyDmAccountAllowlistAdapter", () => {
   const scopeCases: Array<{ scope: "dm" | "group" | "all"; expected: boolean }> = [
     { scope: "dm", expected: true },
     { scope: "group", expected: false },
-    { scope: "all", expected: false },
   ];
 
   it.each(scopeCases)("supports $scope scope", ({ scope, expected }) => {

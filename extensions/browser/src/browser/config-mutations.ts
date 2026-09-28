@@ -1,14 +1,8 @@
-/**
- * Browser config mutation helpers.
- *
- * Persists browser-control credentials and profile config changes through the
- * canonical config writer while preserving port allocation rules.
- */
 import { isDeepStrictEqual } from "node:util";
-import { mutateConfigFile } from "../config/config.js";
-import type { BrowserProfileConfig } from "../config/config.js";
+import type { BrowserProfileConfig } from "openclaw/plugin-sdk/config-contracts";
+import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
+import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import { deriveDefaultBrowserCdpPortRange } from "../config/port-defaults.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { assertCdpEndpointAllowed } from "./cdp.helpers.js";
 import {
   getOwnBrowserProfile,
@@ -22,15 +16,10 @@ import {
 } from "./errors.js";
 import { allocateCdpPort, getUsedPorts } from "./profiles.js";
 
-type BrowserControlCredential =
-  | {
-      kind: "token";
-      value: string;
-    }
-  | {
-      kind: "password";
-      value: string;
-    };
+type BrowserControlCredential = {
+  kind: "token" | "password";
+  value: string;
+};
 
 const cdpPortRange = (resolved: {
   controlPort: number;
@@ -41,10 +30,8 @@ const cdpPortRange = (resolved: {
   const end = resolved.cdpPortRangeEnd;
   if (
     typeof start === "number" &&
-    Number.isFinite(start) &&
     Number.isInteger(start) &&
     typeof end === "number" &&
-    Number.isFinite(end) &&
     Number.isInteger(end) &&
     start > 0 &&
     end >= start &&
@@ -74,11 +61,10 @@ export async function persistBrowserControlCredential(
   });
 }
 
-/** Create and persist a browser profile config with allocated color and CDP port. */
+/** Create and persist a browser profile config with an allocated CDP port. */
 export async function createBrowserProfileConfig(params: {
   name: string;
   resolved: ResolvedBrowserConfig;
-  color?: string;
   parsedCdpUrl?: string;
   userDataDir?: string;
   driver?: "openclaw" | "existing-session";

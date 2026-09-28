@@ -21,20 +21,13 @@ import {
   resolveProviderUsageDisplayName,
   type ProviderUsageSnapshot,
 } from "openclaw/plugin-sdk/provider-usage";
+import { isSIWCAuthFlow } from "./token-sharing.js";
 
 const OPENAI_COSTS_URL = "https://api.openai.com/v1/organization/costs";
 const OPENAI_COMPLETIONS_USAGE_URL = "https://api.openai.com/v1/organization/usage/completions";
 const OPENAI_ADMIN_TOKEN_PREFIX = "openclaw:openai-admin:v1:";
 const OPENAI_USAGE_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
 const OPENAI_USAGE_HISTORY_DAYS = 30;
-
-function encodeAdminToken(token: string): string {
-  return encodeProviderUsageAdminToken(OPENAI_ADMIN_TOKEN_PREFIX, token);
-}
-
-function decodeAdminToken(raw: string): string | undefined {
-  return decodeProviderUsageAdminToken(OPENAI_ADMIN_TOKEN_PREFIX, raw);
-}
 
 function utcDay(epochSeconds: number): string {
   return new Date(epochSeconds * 1000).toISOString().slice(0, 10);
@@ -226,9 +219,13 @@ export async function resolveOpenAIUsageAuth(
 ): Promise<ProviderResolvedUsageAuth> {
   const explicitAdminKey = cleanProviderUsageCredential(ctx.env.OPENAI_ADMIN_KEY);
   if (explicitAdminKey) {
-    return { token: encodeAdminToken(explicitAdminKey) };
+    return { token: encodeProviderUsageAdminToken(OPENAI_ADMIN_TOKEN_PREFIX, explicitAdminKey) };
   }
   const oauth = await ctx.resolveOAuthToken();
+  if (oauth && isSIWCAuthFlow(oauth.authFlow)) {
+    // ChatPass has no supported usage endpoint. Never send its scoped bearer to WHAM.
+    return { handled: true };
+  }
   if (oauth) {
     return oauth;
   }
@@ -240,7 +237,7 @@ export async function resolveOpenAIUsageAuth(
 export async function fetchOpenAIUsage(
   ctx: ProviderFetchUsageSnapshotContext,
 ): Promise<ProviderUsageSnapshot> {
-  const adminKey = decodeAdminToken(ctx.token);
+  const adminKey = decodeProviderUsageAdminToken(OPENAI_ADMIN_TOKEN_PREFIX, ctx.token);
   if (!adminKey) {
     const snapshot = await fetchCodexUsage(ctx.token, ctx.accountId, ctx.timeoutMs, ctx.fetchFn);
     if (snapshot.error) {

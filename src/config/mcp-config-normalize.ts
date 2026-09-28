@@ -43,29 +43,18 @@ export function canonicalizeConfiguredMcpServer(
   if (isKnownCliMcpTypeAlias(next.type)) {
     delete next.type;
   }
-  if (typeof next.cwd !== "string" && typeof next.workingDirectory === "string") {
-    next.cwd = next.workingDirectory;
+  for (const [legacy, canonical, type] of [
+    ["workingDirectory", "cwd", "string"],
+    ["supports_parallel_tool_calls", "supportsParallelToolCalls", "boolean"],
+    ["ssl_verify", "sslVerify", "boolean"],
+    ["client_cert", "clientCert", "string"],
+    ["client_key", "clientKey", "string"],
+  ] as const) {
+    if (typeof next[legacy] === type && typeof next[canonical] !== type) {
+      next[canonical] = next[legacy];
+    }
+    delete next[legacy];
   }
-  delete next.workingDirectory;
-  if (
-    typeof next.supports_parallel_tool_calls === "boolean" &&
-    typeof next.supportsParallelToolCalls !== "boolean"
-  ) {
-    next.supportsParallelToolCalls = next.supports_parallel_tool_calls;
-  }
-  delete next.supports_parallel_tool_calls;
-  if (typeof next.ssl_verify === "boolean" && typeof next.sslVerify !== "boolean") {
-    next.sslVerify = next.ssl_verify;
-  }
-  delete next.ssl_verify;
-  if (typeof next.client_cert === "string" && typeof next.clientCert !== "string") {
-    next.clientCert = next.client_cert;
-  }
-  delete next.client_cert;
-  if (typeof next.client_key === "string" && typeof next.clientKey !== "string") {
-    next.clientKey = next.client_key;
-  }
-  delete next.client_key;
   const codex = isRecord(next.codex) ? { ...next.codex } : undefined;
   if (codex) {
     if (

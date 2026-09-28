@@ -3,7 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChromeMcpOperationOptions } from "../chrome-mcp.js";
-import { browserAct } from "../client-actions-core.js";
+import { browserAct } from "../client-actions.js";
 import type { BrowserActRequest } from "../client-actions.types.js";
 import type { BrowserDispatchRequest, BrowserDispatchResponse } from "./dispatcher.js";
 import {
@@ -73,8 +73,9 @@ vi.mock("../local-dispatch.runtime.js", () => ({
   dispatchBrowserControlRequest: transportMocks.dispatch,
 }));
 
-vi.mock("../../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/config.js")>();
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>();
   const syntheticConfig = {
     browser: {
       defaultProfile: "chrome-live",

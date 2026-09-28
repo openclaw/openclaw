@@ -101,12 +101,12 @@ describe("worker session placement activation", () => {
     return attachEnvironment(environmentId, identity.sessionId);
   }
 
-  function advanceToStarting(
+  async function advanceToStarting(
     identity: WorkerSessionPlacementIdentity = SESSION,
     executionMode: WorkerPlacementExecutionMode = "worker-turn",
     environmentId = `environment-${identity.sessionId}`,
   ) {
-    let placement = store.startDispatch({ ...identity, executionMode });
+    let placement = await store.startDispatch({ ...identity, executionMode });
     placement = store.transition({
       sessionId: identity.sessionId,
       from: "requested",
@@ -133,7 +133,7 @@ describe("worker session placement activation", () => {
     });
   }
 
-  function activate(placement: ReturnType<typeof advanceToStarting>, ownerEpoch: number) {
+  function activate(placement: Awaited<ReturnType<typeof advanceToStarting>>, ownerEpoch: number) {
     const active = store.transition({
       sessionId: placement.sessionId,
       from: "starting",
@@ -152,14 +152,14 @@ describe("worker session placement activation", () => {
     executionMode: WorkerPlacementExecutionMode = "worker-turn",
   ) {
     const environment = await createAttachedEnvironment(identity);
-    return activate(advanceToStarting(identity, executionMode), environment.ownerEpoch);
+    return activate(await advanceToStarting(identity, executionMode), environment.ownerEpoch);
   }
 
   it.each(["environment", "epoch", "state", "session", "multiple sessions", "closing", "revoked"])(
     "rolls back activation when the attached environment %s does not match",
     async (mismatch) => {
       const environment = await createAttachedEnvironment();
-      const starting = advanceToStarting(
+      const starting = await advanceToStarting(
         SESSION,
         "worker-turn",
         mismatch === "environment" ? "missing-environment" : environment.environmentId,
@@ -217,7 +217,7 @@ describe("worker session placement activation", () => {
 
   it("does not record a failed pre-active dispatch as successful demand", async () => {
     const environment = await createAttachedEnvironment();
-    const starting = advanceToStarting();
+    const starting = await advanceToStarting();
     nowMs = 5_000;
     const failed = store.fail({
       sessionId: SESSION.sessionId,
@@ -236,7 +236,7 @@ describe("worker session placement activation", () => {
     "retains %s activation time through claims, adoption, failure and retirement",
     async (executionMode) => {
       const environment = await createAttachedEnvironment();
-      const starting = advanceToStarting(SESSION, executionMode);
+      const starting = await advanceToStarting(SESSION, executionMode);
       expect(environments.get(environment.environmentId)?.lastActivatedAtMs).toBeNull();
       nowMs = 5_000;
       const active = activate(starting, environment.ownerEpoch);
@@ -246,7 +246,7 @@ describe("worker session placement activation", () => {
         environmentId: active.environmentId,
         ownerEpoch: active.activeOwnerEpoch,
       };
-      const claim = store.claimTurn({
+      const claim = await store.claimTurn({
         ...SESSION,
         owner:
           executionMode === "worker-turn"
@@ -255,7 +255,7 @@ describe("worker session placement activation", () => {
         claimId: "activation-claim",
         runId: "activation-run",
       });
-      store.releaseTurn(claim);
+      await store.releaseTurn(claim);
       expect(environments.get(environment.environmentId)?.lastActivatedAtMs).toBe(5_000);
 
       await closeOpenClawStateDatabaseAsync();
@@ -323,7 +323,7 @@ describe("worker session placement activation", () => {
       });
       nowMs = activationTime;
       const attached = await attachEnvironment(active.environmentId, SESSION.sessionId, "idle");
-      active = activate(advanceToStarting(), attached.ownerEpoch);
+      active = activate(await advanceToStarting(), attached.ownerEpoch);
       expect(environments.get(active.environmentId)?.lastActivatedAtMs).toBe(
         Math.max(5_000, activationTime),
       );

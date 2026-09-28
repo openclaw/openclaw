@@ -15,6 +15,11 @@ import {
   type MockInstance,
 } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import {
+  emptySqliteCounts,
+  observeParentSqlite,
+  sqliteMethods,
+} from "../../../test/helpers/sqlite-parent-observer.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { buildCurrentRunRestartRecoveryClaim } from "../../agents/agent-command-restart-recovery.js";
 import { buildEmbeddedRunPayloads } from "../../agents/embedded-agent-runner/run/payloads.js";
@@ -37,31 +42,42 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import {
+  resolveSqliteScope,
+  toDatabaseOptions,
+} from "../../config/sessions/session-accessor.sqlite-scope.js";
+import * as entryReads from "../../config/sessions/session-entry-read-runtime.js";
 import type { TypingMode } from "../../config/types.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import {
   buildHandledBeforeAgentReplyPayloads,
   runBeforeAgentReplyForTurn,
 } from "../../plugins/before-agent-reply.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  resolveOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { TemplateContext } from "../templating.js";
 import { createReplyAgentRestartRecoveryController } from "./agent-runner-execute.js";
 import { registerReasoningFallbackTests } from "./agent-runner.reasoning-fallback.test-support.js";
+import { registerReplyAdmissionCases } from "./agent-runner.runreplyagent.admission.cases.js";
 import { registerImmediateFailurePolicyCases } from "./agent-runner.runreplyagent.failure-policy.cases.js";
 import { registerRequiredReplyCompletionCases } from "./agent-runner.runreplyagent.required-reply.cases.js";
+import { registerSteeringReceiptCases } from "./agent-runner.runreplyagent.steering-receipts.cases.js";
 import { registerWaitingStatusCases } from "./agent-runner.runreplyagent.waiting-status.cases.js";
 import { resolveActiveExplicitSteerSessionKey } from "./explicit-steer-routing.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
   clearSessionQueues,
   enqueueFollowupRun,
-  parkSteerCandidate,
   refreshQueuedFollowupSession,
   scheduleFollowupDrain,
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
-import { getExistingFollowupQueue } from "./queue/state.js";
+import { REPLY_ADMISSION_TICKET, reserveReplyAdmissionTicket } from "./reply-admission-ticket.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   resolveReplyOperationAgentTurn,
@@ -805,362 +821,11 @@ describe("runReplyAgent active steering", () => {
     }
   });
 
-  it("queues a waiting steer when its predecessor outlives terminal delivery", async () => {
-    const actualQueue = await vi.importActual<typeof import("./queue.js")>("./queue.js");
-    vi.mocked(parkSteerCandidate).mockImplementation(actualQueue.parkSteerCandidate);
-    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
-      status: "running",
-      restartRecoveryDeliveryRunId: "active-recovery",
-      restartRecoveryDeliverySourceRunId: "active-source",
-    });
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
-    active.setPhase("running");
-    const firstEntered = createDeferred();
-    const firstAcceptance = createDeferred<boolean>();
-    const secondParked = createDeferred();
-    state.queueEmbeddedAgentMessageMock.mockReturnValue(true);
-    state.queueEmbeddedAgentMessageMock.mockImplementationOnce(() => {
-      firstEntered.resolve();
-      return firstAcceptance.promise;
-    });
-    const common = {
-      isActive: true,
-      shouldSteer: true,
-      shouldFollowup: true,
-      resolvedQueueMode: "steer",
-      sessionEntry,
-      sessionStore,
-      storePath,
-    };
-    const first = createMinimalRun({
-      ...common,
-      sessionCtx: { MessageSid: "first-parked-input" },
-    });
-    first.followupRun.messageId = "first-parked-input";
-    const secondState: ReplyOperationRunState = {};
-    const second = createMinimalRun({
-      ...common,
-      bindActiveAuthority: false,
-      attachSteerBackend: false,
-      sessionCtx: { MessageSid: "second-parked-input" },
-      opts: {
-        [REPLY_OPERATION_RUN_STATE]: secondState,
-        turnAdoptionLifecycle: {
-          onDeferred: () => secondParked.resolve(),
-          onAdopted: async () => {},
-        },
-      },
-    });
-    second.followupRun.messageId = "second-parked-input";
-    second.followupRun.prompt = "answer the second input";
-    const firstRun = first.run();
-    let secondRun: Promise<unknown> | undefined;
-    try {
-      await withTestTimeout(firstEntered.promise, 5_000, "first steer never reached its backend");
-      secondRun = second.run();
-      await withTestTimeout(secondParked.promise, 5_000, "second steer was not parked");
-      await replaceSessionEntry(
-        { storePath, sessionKey: "main" },
-        {
-          ...sessionEntry,
-          restartRecoveryDeliveryReceiptState: "delivered-terminal",
-          restartRecoveryDeliveryToolCallId: "terminal-message-call",
-        },
-      );
-
-      firstAcceptance.resolve(true);
-      await Promise.all([firstRun, secondRun]);
-
-      expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledOnce();
-      expect(secondState.admission).toEqual({ status: "accepted", mode: "followup" });
-      expect(getExistingFollowupQueue("main")?.items).toEqual([
-        expect.objectContaining({
-          messageId: "second-parked-input",
-          prompt: "answer the second input",
-        }),
-      ]);
-    } finally {
-      firstAcceptance.resolve(true);
-      await Promise.allSettled([firstRun, ...(secondRun ? [secondRun] : [])]);
-      clearSessionQueues(["main"]);
-      active.complete();
-    }
-  });
-
-  for (const receiptState of ["terminal-pending", "delivered-terminal"] as const) {
-    it(`queues instead of steering while the active turn holds a ${receiptState} source-reply receipt`, async () => {
-      const sessionEntry = makeSessionEntry({
-        status: "running",
-        restartRecoveryDeliveryRunId: "recovery-run-1",
-        restartRecoveryDeliverySourceRunId: "source-turn-1",
-        restartRecoveryDeliveryReceiptState: receiptState,
-        restartRecoveryDeliveryToolCallId: "message-call-1",
-      });
-      const sessionStore = { main: sessionEntry };
-      const active = createReplyOperation({
-        sessionKey: "main",
-        sessionId: "session",
-        resetTriggered: false,
-      });
-      active.setPhase("running");
-      // The active turn's backend would accept the steer; the failure mode is
-      // that the steered message-tool final then gets fail-closed and lost.
-      state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
-      const runState: ReplyOperationRunState = {};
-      const { run } = createMinimalRun({
-        opts: { [REPLY_OPERATION_RUN_STATE]: runState },
-        isActive: true,
-        shouldSteer: true,
-        shouldFollowup: true,
-        resolvedQueueMode: "steer",
-        sessionEntry,
-        sessionStore,
-        sessionKey: "main",
-        sessionCtx: {
-          Provider: "telegram",
-          OriginatingChannel: "telegram",
-          OriginatingTo: "123",
-          MessageSid: "steer-terminal-receipt",
-        },
-        runOverrides: { agentId: "main", messageProvider: "telegram" },
-      });
-
-      await expect(run()).resolves.toBeUndefined();
-
-      // A terminal source-reply receipt fail-closes any second terminal send
-      // on the same source turn. Steering the new inbound into that turn would
-      // reuse the same delivery claim and silently lose its reply (#128971).
-      expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
-      expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-      expect(runState.admission).toEqual({ status: "accepted", mode: "followup" });
-      expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
-      active.complete();
-    });
-  }
-
-  it("queues instead of steering while the active turn holds a terminal-source tombstone", async () => {
-    // The claim was cleaned after the terminal send; the source turn stays
-    // tombstoned so a steered send resolves to already-delivered (#128971).
-    const sessionEntry = makeSessionEntry({
-      status: "running",
-      restartRecoveryTerminalRunIds: ["source-turn-1"],
-    });
-    const sessionStore = { main: sessionEntry };
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
-    // The owning registry records the active source turn when the run admits
-    // its delivery claim; this tombstone belongs to that exact source.
-    replyRunRegistry.bindSourceTurnId(active, "source-turn-1");
-    active.setPhase("running");
-    state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
-    const runState: ReplyOperationRunState = {};
-    const { run } = createMinimalRun({
-      opts: { [REPLY_OPERATION_RUN_STATE]: runState },
-      isActive: true,
-      shouldSteer: true,
-      shouldFollowup: true,
-      resolvedQueueMode: "steer",
-      sessionEntry,
-      sessionStore,
-      sessionKey: "main",
-      sessionCtx: {
-        Provider: "telegram",
-        OriginatingChannel: "telegram",
-        OriginatingTo: "123",
-        MessageSid: "steer-terminal-tombstone",
-      },
-      runOverrides: { agentId: "main", messageProvider: "telegram" },
-    });
-
-    await expect(run()).resolves.toBeUndefined();
-
-    expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
-    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(runState.admission).toEqual({ status: "accepted", mode: "followup" });
-    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
-    active.complete();
-  });
-
-  it("steers while the retained terminal-source tombstone belongs to an unrelated prior source turn", async () => {
-    // Terminal run ids are accumulated session history. A tombstone left by a
-    // finished earlier source must not fence a safe steer into the active run:
-    // only the active source turn's own tombstone fail-closes delivery.
-    const sessionEntry = makeSessionEntry({
-      status: "running",
-      restartRecoveryTerminalRunIds: ["source-turn-1"],
-    });
-    const sessionStore = { main: sessionEntry };
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
-    // The active run owns a different source turn ("source-turn-2"); the
-    // retained tombstone belongs to an unrelated earlier turn.
-    replyRunRegistry.bindSourceTurnId(active, "source-turn-2");
-    active.setPhase("running");
-    state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
-    const runState: ReplyOperationRunState = {};
-    const { run } = createMinimalRun({
-      opts: { [REPLY_OPERATION_RUN_STATE]: runState },
-      isActive: true,
-      shouldSteer: true,
-      shouldFollowup: true,
-      resolvedQueueMode: "steer",
-      sessionEntry,
-      sessionStore,
-      sessionKey: "main",
-      sessionCtx: {
-        Provider: "telegram",
-        OriginatingChannel: "telegram",
-        OriginatingTo: "123",
-        MessageSid: "steer-unrelated-tombstone",
-      },
-      runOverrides: { agentId: "main", messageProvider: "telegram" },
-    });
-
-    await expect(run()).resolves.toBeUndefined();
-
-    expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledOnce();
-    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
-    active.complete();
-  });
-
-  it("queues instead of steering while the active turn holds an unresolved terminal tool-call id", async () => {
-    // beginTerminalSourceReplyDelivery fail-closes any send while a terminal
-    // tool-call id is armed, even without a receipt state (delivery-ambiguous).
-    const sessionEntry = makeSessionEntry({
-      status: "running",
-      restartRecoveryDeliveryRunId: "recovery-run-1",
-      restartRecoveryDeliverySourceRunId: "source-turn-1",
-      restartRecoveryDeliveryToolCallId: "message-call-2",
-    });
-    const sessionStore = { main: sessionEntry };
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
-    active.setPhase("running");
-    state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
-    const runState: ReplyOperationRunState = {};
-    const { run } = createMinimalRun({
-      opts: { [REPLY_OPERATION_RUN_STATE]: runState },
-      isActive: true,
-      shouldSteer: true,
-      shouldFollowup: true,
-      resolvedQueueMode: "steer",
-      sessionEntry,
-      sessionStore,
-      sessionKey: "main",
-      sessionCtx: {
-        Provider: "telegram",
-        OriginatingChannel: "telegram",
-        OriginatingTo: "123",
-        MessageSid: "steer-terminal-toolcall",
-      },
-      runOverrides: { agentId: "main", messageProvider: "telegram" },
-    });
-
-    await expect(run()).resolves.toBeUndefined();
-
-    expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
-    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(runState.admission).toEqual({ status: "accepted", mode: "followup" });
-    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
-    active.complete();
-  });
-
-  it("queues instead of steering while the active turn holds a stale delivery claim", async () => {
-    // A non-running session entry keeps its claim fields but the owner is no
-    // longer "running", so beginTerminalSourceReplyDelivery resolves to stale.
-    const sessionEntry = makeSessionEntry({
-      status: "done",
-      restartRecoveryDeliveryRunId: "recovery-run-1",
-      restartRecoveryDeliverySourceRunId: "source-turn-1",
-    });
-    const sessionStore = { main: sessionEntry };
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
-    active.setPhase("running");
-    state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
-    const runState: ReplyOperationRunState = {};
-    const { run } = createMinimalRun({
-      opts: { [REPLY_OPERATION_RUN_STATE]: runState },
-      isActive: true,
-      shouldSteer: true,
-      shouldFollowup: true,
-      resolvedQueueMode: "steer",
-      sessionEntry,
-      sessionStore,
-      sessionKey: "main",
-      sessionCtx: {
-        Provider: "telegram",
-        OriginatingChannel: "telegram",
-        OriginatingTo: "123",
-        MessageSid: "steer-terminal-stale",
-      },
-      runOverrides: { agentId: "main", messageProvider: "telegram" },
-    });
-
-    await expect(run()).resolves.toBeUndefined();
-
-    expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
-    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(runState.admission).toEqual({ status: "accepted", mode: "followup" });
-    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
-    active.complete();
-  });
-
-  it("does not replay an accepted steer after terminal delivery", async () => {
-    // Accepted input is already owned by its injection target. A later receipt cannot authorize replay.
-    const sessionEntry = makeSessionEntry({
-      status: "running",
-      restartRecoveryDeliveryRunId: "recovery-run-1",
-      restartRecoveryDeliverySourceRunId: "source-turn-1",
-      restartRecoveryDeliveryReceiptState: "terminal-pending",
-      restartRecoveryDeliveryToolCallId: "message-call-1",
-    });
-    const sessionStore = { main: sessionEntry };
-    const runState: ReplyOperationRunState = {};
-    const { run } = createMinimalRun({
-      opts: {
-        messageInjectionDisposition: "accepted",
-        [REPLY_OPERATION_RUN_STATE]: runState,
-      },
-      isActive: true,
-      shouldSteer: true,
-      shouldFollowup: true,
-      resolvedQueueMode: "steer",
-      sessionEntry,
-      sessionStore,
-      sessionKey: "main",
-      sessionCtx: {
-        Provider: "telegram",
-        OriginatingChannel: "telegram",
-        OriginatingTo: "123",
-        MessageSid: "steer-accepted-terminal",
-      },
-      runOverrides: { agentId: "main", messageProvider: "telegram" },
-    });
-
-    await expect(run()).resolves.toBeUndefined();
-
-    expect(runState.admission).toEqual({ status: "accepted", mode: "steer" });
-    expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
-    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+  registerSteeringReceiptCases({
+    createMinimalRun,
+    makeSessionEntry,
+    makeSessionFixture,
+    state,
   });
 
   it("offers a route-only mismatch to the pending-input owner", async () => {
@@ -1966,52 +1631,10 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(resolveReplyOperationAgentTurn(runState)).toBe("failed");
   });
 
-  it("runs visible turns with the session id returned by admission", async () => {
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "pre-compact-session",
-      resetTriggered: false,
-    });
-    active.setPhase("preflight_compacting");
-    const sessionStore = {
-      main: {
-        sessionId: "pre-compact-session",
-        sessionFile: "main",
-        updatedAt: Date.now(),
-      },
-    };
-    const { run } = createMinimalRun({
-      runOverrides: { sessionId: "stale-session" },
-      sessionStore,
-    });
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "final" }],
-      meta: {
-        agentMeta: {
-          provider: "anthropic",
-          model: "claude",
-          usage: { input: 1, output: 1 },
-        },
-      },
-    });
-
-    const pending = run();
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    active.updateSessionId("post-compact-session");
-    sessionStore.main = {
-      sessionId: "post-compact-session",
-      sessionFile: "main",
-      updatedAt: Date.now(),
-    };
-    active.complete();
-    await pending;
-
-    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
-    const [call] = mockCallArgs(state.runEmbeddedAgentMock, "run embedded agent");
-    expect((call as AgentRunParams).sessionId).toBe("post-compact-session");
-    expect((call as AgentRunParams).sessionFile).toBe("main");
+  registerReplyAdmissionCases({
+    createMinimalRun,
+    makeSessionFixture,
+    runEmbeddedAgentMock: state.runEmbeddedAgentMock,
   });
 
   it("drops runs when reply-lane admission sees an already-aborted caller", async () => {
@@ -2101,6 +1724,26 @@ describe("runReplyAgent heartbeat followup guard", () => {
 
     expect(state.beforeAgentReplyRunMock).not.toHaveBeenCalled();
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("releases reply admission and typing when the recovery read fails", async () => {
+    const failure = new Error("synthetic recovery read failure");
+    vi.spyOn(entryReads, "readSessionEntryInWorker").mockRejectedValueOnce(failure);
+    const ticket = reserveReplyAdmissionTicket(["main"]);
+    if (!ticket) {
+      throw new Error("expected a reply admission ticket");
+    }
+    const release = vi.spyOn(ticket, "release");
+    const { run, typing } = createMinimalRun({
+      opts: { [REPLY_ADMISSION_TICKET]: ticket },
+      storePath: "/tmp/synthetic-recovery-read.sqlite",
+    });
+
+    await expect(run()).rejects.toBe(failure);
+
+    expect(release).toHaveBeenCalledOnce();
+    expect(typing.cleanup).toHaveBeenCalledOnce();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
@@ -3131,7 +2774,29 @@ describe("runReplyAgent pending final delivery capture", () => {
       text: "execute once",
     });
 
-    await expect(duplicate.run()).resolves.toBeUndefined();
+    // Retire the completed turn's automatic maintenance before observing cold redelivery.
+    const database = toDatabaseOptions(resolveSqliteScope({ storePath, sessionKey: "main" }));
+    await closeOpenClawAgentDatabaseByPathAsync(
+      resolveOpenClawAgentSqlitePath(database),
+      database.agentId,
+    );
+    const observer = observeParentSqlite();
+    try {
+      const calibration = openNodeSqliteDatabase(":memory:");
+      calibration.exec("CREATE TABLE calibration (value INTEGER)");
+      calibration.prepare("INSERT INTO calibration VALUES (?)").run(7);
+      const query = calibration.prepare("SELECT value FROM calibration");
+      expect(query.get()).toEqual({ value: 7 });
+      expect(query.all()).toEqual([{ value: 7 }]);
+      expect([...query.iterate()]).toEqual([{ value: 7 }]);
+      calibration.close();
+      sqliteMethods.forEach((method) => expect(observer.counts[method], method).toBeGreaterThan(0));
+      observer.reset();
+      await expect(duplicate.run()).resolves.toBeUndefined();
+      expect(observer.counts).toEqual(emptySqliteCounts());
+    } finally {
+      observer.restore();
+    }
 
     expect(onAdopted).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();

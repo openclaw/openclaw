@@ -105,6 +105,7 @@ type AgentHarnessAttemptParamsBase = Omit<
   | "contextEngineLogicalTurnLease"
   | "onContextEngineTurnCandidate"
   | "trajectoryRecorder"
+  | "inputAttachmentMedia"
 >;
 /**
  * @deprecated Use AgentHarnessAttemptParamsV2. The optional capability keeps
@@ -280,14 +281,26 @@ export type AgentHarnessSideQuestionResult = {
   /** Aggregate billed usage for the side question, including native tool-loop calls. */
   usage?: import("../usage.js").NormalizedUsage;
 };
-export type AgentHarnessCompactParams =
+type LegacyAgentHarnessCompactParams =
   import("../embedded-agent-runner/compact.types.js").CompactEmbeddedAgentSessionParams;
+/** Select version 2 for required host authority; the default preserves registered legacy callbacks. */
+export type AgentHarnessCompactParams<Version extends 1 | 2 = 1> = Version extends 2
+  ? LegacyAgentHarnessCompactParams & {
+      hostCapabilities: Readonly<
+        Pick<AgentHarnessHostCapabilities, "kind" | "version" | "assertActive"> &
+          Required<Pick<AgentHarnessHostCapabilities, "retainSourceAuthority">>
+      >;
+    }
+  : LegacyAgentHarnessCompactParams;
+/** Current compaction implementation contract; registered legacy callbacks remain source-compatible. */
+export type AgentHarnessCompactParamsV2 = AgentHarnessCompactParams<2>;
 export type AgentHarnessCompactResult =
   import("../embedded-agent-runner/types.js").EmbeddedAgentCompactResult;
 export type AgentHarnessNativeCompactionRequest = "after_context_engine" | "required_preflight";
-export type AgentHarnessNativeCompactionParams = AgentHarnessCompactParams & {
-  nativeCompactionRequest: AgentHarnessNativeCompactionRequest;
-};
+export type AgentHarnessNativeCompactionParams<Version extends 1 | 2 = 1> =
+  AgentHarnessCompactParams<Version> & {
+    nativeCompactionRequest: AgentHarnessNativeCompactionRequest;
+  };
 export type AgentHarnessNativeCompaction = (
   params: AgentHarnessNativeCompactionParams,
 ) => Promise<AgentHarnessCompactResult | undefined>;
@@ -436,6 +449,8 @@ type AgentHarnessRunCapability<
   /**
    * Runs one fresh prompt-only completion with a literal zero-tool model surface.
    * The harness must fail closed when it cannot enforce that native boundary.
+   * Agents API is the documented exception: its restricted sessions may retain
+   * service-owned helpers. Callers requiring zero tools must use another runtime.
    */
   runIsolatedCompletionV2?(
     params: AgentHarnessIsolatedCompletionParamsV2,
@@ -598,22 +613,14 @@ type AgentHarnessModelCatalogCapability = {
   ): { accountType: string; authMode?: string } | undefined;
 };
 
-type AgentHarnessTaskHistoryCapability = {
-  /** Reads native task history without creating an OpenClaw child session. */
-  taskHistory?: {
-    taskKinds: readonly string[];
-    read(params: {
-      task: Readonly<import("../../tasks/task-registry.types.js").TaskRecord>;
-      cfg: OpenClawConfig;
-      cursor?: string;
-      limit: number;
-      /** Revalidate the task, requester access, and registered owner after awaited work. */
-      assertCurrent: () => void;
-    }): Promise<
-      import("../../../packages/gateway-protocol/src/schema/tasks.js").TasksHistoryResult
-    >;
-  };
-};
+type AgentHarnessSharedCapabilities = AgentHarnessCompactionCapability &
+  AgentHarnessRuntimeArtifactCapability &
+  AgentHarnessAuthBindingCapability &
+  AgentHarnessProviderUsageCapability &
+  AgentHarnessModelCatalogCapability &
+  AgentHarnessMcpCatalogCapability &
+  AgentHarnessSessionForkCapability &
+  AgentHarnessSessionLifecycleCapability;
 
 /**
  * @deprecated Implement AgentHarnessV2. This registration contract remains
@@ -622,29 +629,13 @@ type AgentHarnessTaskHistoryCapability = {
 export type AgentHarness = AgentHarnessRunCapability &
   AgentHarnessSideQuestionCapability &
   AgentHarnessClassificationCapability &
-  AgentHarnessCompactionCapability &
-  AgentHarnessRuntimeArtifactCapability &
-  AgentHarnessAuthBindingCapability &
-  AgentHarnessProviderUsageCapability &
-  AgentHarnessModelCatalogCapability &
-  AgentHarnessMcpCatalogCapability &
-  AgentHarnessSessionForkCapability &
-  AgentHarnessTaskHistoryCapability &
-  AgentHarnessSessionLifecycleCapability;
+  AgentHarnessSharedCapabilities;
 
 /** Current harness contract for hosts that always supply versioned capabilities. */
 export type AgentHarnessV2 = AgentHarnessRunCapability<AgentHarnessAttemptParamsV2> &
   AgentHarnessSideQuestionCapability<AgentHarnessSideQuestionParamsV2> &
   AgentHarnessClassificationCapability<AgentHarnessAttemptParamsV2> &
-  AgentHarnessCompactionCapability &
-  AgentHarnessRuntimeArtifactCapability &
-  AgentHarnessAuthBindingCapability &
-  AgentHarnessProviderUsageCapability &
-  AgentHarnessModelCatalogCapability &
-  AgentHarnessMcpCatalogCapability &
-  AgentHarnessSessionForkCapability &
-  AgentHarnessTaskHistoryCapability &
-  AgentHarnessSessionLifecycleCapability;
+  AgentHarnessSharedCapabilities;
 
 export type RegisteredAgentHarness = {
   harness: AgentHarness;

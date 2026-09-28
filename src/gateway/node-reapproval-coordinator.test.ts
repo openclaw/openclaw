@@ -11,6 +11,10 @@ import {
 import { requestDevicePairing } from "../infra/device-pairing.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
 
 const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-node-reapproval-" });
@@ -64,12 +68,17 @@ describe("node reapproval coordinator", () => {
       },
       baseDir,
     );
-    const coordinator = createNodeReapprovalCoordinator({
-      maxAttempts: 2,
-      windowMs: 60_000,
-      lockoutMs: 60_000,
-      exemptLoopback: true,
-    });
+    const clock = createGatewaySchedulerClock(1_000);
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const coordinator = createNodeReapprovalCoordinator(
+      {
+        maxAttempts: 2,
+        windowMs: 60_000,
+        lockoutMs: 60_000,
+        exemptLoopback: true,
+      },
+      { scheduler },
+    );
 
     const matchingConnect = await beginNodePairingConnect("node-1", baseDir);
     await expect(
@@ -142,13 +151,31 @@ describe("node reapproval coordinator", () => {
       created: false,
     });
 
+    await clock.advanceBy(60_000);
+    await expect(
+      coordinator.request({
+        input: {
+          nodeId: "node-1",
+          platform: "darwin",
+          caps: ["camera", "location"],
+        },
+        baseDir,
+      }),
+    ).resolves.toMatchObject({
+      request: { caps: ["camera", "location"] },
+      created: true,
+    });
+
     coordinator.dispose();
+    expect(scheduler.nextWakeAtMs).toBeNull();
   });
 
   test("stops accepting work after disposal", async () => {
     const baseDir = await tempDirs.make("dispose");
     await setupPairedNode(baseDir);
-    const coordinator = createNodeReapprovalCoordinator();
+    const coordinator = createNodeReapprovalCoordinator(undefined, {
+      scheduler: createTestGatewayScheduler(),
+    });
     coordinator.dispose();
 
     await expect(
@@ -176,11 +203,14 @@ describe("node reapproval coordinator", () => {
       },
       baseDir,
     );
-    const coordinator = createNodeReapprovalCoordinator({
-      maxAttempts: 1,
-      windowMs: 60_000,
-      lockoutMs: 60_000,
-    });
+    const coordinator = createNodeReapprovalCoordinator(
+      {
+        maxAttempts: 1,
+        windowMs: 60_000,
+        lockoutMs: 60_000,
+      },
+      { scheduler: createTestGatewayScheduler() },
+    );
 
     await expect(
       coordinator.request({
@@ -217,11 +247,14 @@ describe("node reapproval coordinator", () => {
   test("coalesces concurrent reconnect work before pairing storage", async () => {
     const baseDir = await tempDirs.make("concurrent");
     await setupPairedNode(baseDir);
-    const coordinator = createNodeReapprovalCoordinator({
-      maxAttempts: 1,
-      windowMs: 60_000,
-      lockoutMs: 60_000,
-    });
+    const coordinator = createNodeReapprovalCoordinator(
+      {
+        maxAttempts: 1,
+        windowMs: 60_000,
+        lockoutMs: 60_000,
+      },
+      { scheduler: createTestGatewayScheduler() },
+    );
     const input = {
       nodeId: "node-1",
       platform: "darwin",
@@ -246,11 +279,14 @@ describe("node reapproval coordinator", () => {
   test("queues one distinct concurrent declaration", async () => {
     const baseDir = await tempDirs.make("distinct");
     await setupPairedNode(baseDir);
-    const coordinator = createNodeReapprovalCoordinator({
-      maxAttempts: 2,
-      windowMs: 60_000,
-      lockoutMs: 60_000,
-    });
+    const coordinator = createNodeReapprovalCoordinator(
+      {
+        maxAttempts: 2,
+        windowMs: 60_000,
+        lockoutMs: 60_000,
+      },
+      { scheduler: createTestGatewayScheduler() },
+    );
 
     const first = coordinator.request({
       input: {
@@ -285,11 +321,14 @@ describe("node reapproval coordinator", () => {
   test("keeps only the latest request waiting behind active work", async () => {
     const baseDir = await tempDirs.make("latest");
     await setupPairedNode(baseDir);
-    const coordinator = createNodeReapprovalCoordinator({
-      maxAttempts: 2,
-      windowMs: 60_000,
-      lockoutMs: 60_000,
-    });
+    const coordinator = createNodeReapprovalCoordinator(
+      {
+        maxAttempts: 2,
+        windowMs: 60_000,
+        lockoutMs: 60_000,
+      },
+      { scheduler: createTestGatewayScheduler() },
+    );
 
     const active = coordinator.request({
       input: {
@@ -333,11 +372,14 @@ describe("node reapproval coordinator", () => {
   test("cancels queued work when the latest declaration matches active work", async () => {
     const baseDir = await tempDirs.make("active-latest");
     await setupPairedNode(baseDir);
-    const coordinator = createNodeReapprovalCoordinator({
-      maxAttempts: 2,
-      windowMs: 60_000,
-      lockoutMs: 60_000,
-    });
+    const coordinator = createNodeReapprovalCoordinator(
+      {
+        maxAttempts: 2,
+        windowMs: 60_000,
+        lockoutMs: 60_000,
+      },
+      { scheduler: createTestGatewayScheduler() },
+    );
     const activeInput = {
       nodeId: "node-1",
       platform: "darwin",
@@ -387,7 +429,9 @@ describe("node reapproval coordinator", () => {
     expect(first.cleanupClaim).toBeDefined();
     expect(staleCleanup.cleanupClaim).toBeDefined();
     expect(latest.cleanupClaim).toBeDefined();
-    const coordinator = createNodeReapprovalCoordinator();
+    const coordinator = createNodeReapprovalCoordinator(undefined, {
+      scheduler: createTestGatewayScheduler(),
+    });
     const input = {
       nodeId: "node-1",
       platform: "darwin",
@@ -434,7 +478,9 @@ describe("node reapproval coordinator", () => {
     );
     const snapshot = await beginNodePairingConnect("node-1", baseDir);
     expect(snapshot.cleanupClaim).toBeDefined();
-    const coordinator = createNodeReapprovalCoordinator();
+    const coordinator = createNodeReapprovalCoordinator(undefined, {
+      scheduler: createTestGatewayScheduler(),
+    });
 
     const reused = coordinator.request({
       input: {

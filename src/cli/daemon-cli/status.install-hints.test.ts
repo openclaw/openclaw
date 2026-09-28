@@ -58,24 +58,28 @@ const deniedInvocations = [
     environment: () => ({ OPENCLAW_NIX_MODE: "1" }),
     reason: /Nix mode detected/,
     recovery: /service install is disabled/,
+    surfaces,
   },
   {
     name: "global external supervision",
     environment: () => ({ OPENCLAW_SUPERVISOR_MODE: " EXTERNAL " }),
     reason: /managed by an external supervisor/,
     recovery: /Use that supervisor to/,
+    surfaces: surfaces.slice(0, 1),
   },
   {
     name: "relocated invoking HOME",
     environment: (accountHome: string) => ({ HOME: path.join(accountHome, "relocated") }),
     reason: /non-default state dir or config path/,
     recovery: /HOME set to the OS account home/,
+    surfaces: surfaces.slice(0, 1),
   },
 ] satisfies Array<{
   name: string;
   environment: InvocationEnvironment;
   reason: RegExp;
   recovery: RegExp;
+  surfaces: readonly (typeof surfaces)[number][];
 }>;
 
 async function withStatusFixture(
@@ -219,28 +223,27 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe.each(deniedInvocations)(
-  "status recovery under $name",
-  ({ environment, reason, recovery }) => {
-    it.each(surfaces)(
-      "retains $name facts without unusable native advice",
-      async ({ kind, fact }) => {
-        await withStatusFixture(environment, async (accountHome, print) => {
-          const status = await createStatus(kind, accountHome);
-          print(status, { json: false });
+it.each(
+  deniedInvocations.flatMap(({ surfaces: invocationSurfaces, ...invocation }) =>
+    invocationSurfaces.map((surface) => ({ ...invocation, surface })),
+  ),
+)(
+  "retains $surface.name facts without unusable native advice under $name",
+  async ({ environment, reason, recovery, surface: { kind, fact } }) => {
+    await withStatusFixture(environment, async (accountHome, print) => {
+      const status = await createStatus(kind, accountHome);
+      print(status, { json: false });
 
-          const output = humanOutput();
-          expectProblemAndLogs(output, fact);
-          expect(output).toMatch(reason);
-          expect(output).toMatch(recovery);
-          expect(output).not.toMatch(/\bgateway\s+install\b/);
-          expect(output).not.toMatch(/\bdoctor\s+--repair\b/);
-          expect(output).not.toMatch(/\bdoctor\s+--fix\b/);
-          expect(output).not.toContain("launchctl bootout");
-          expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
-        });
-      },
-    );
+      const output = humanOutput();
+      expectProblemAndLogs(output, fact);
+      expect(output).toMatch(reason);
+      expect(output).toMatch(recovery);
+      expect(output).not.toMatch(/\bgateway\s+install\b/);
+      expect(output).not.toMatch(/\bdoctor\s+--repair\b/);
+      expect(output).not.toMatch(/\bdoctor\s+--fix\b/);
+      expect(output).not.toContain("launchctl bootout");
+      expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    });
   },
 );
 

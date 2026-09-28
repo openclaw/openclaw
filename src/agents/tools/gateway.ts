@@ -127,18 +127,16 @@ function resolveLocalGatewayUrlKeys(cfg: OpenClawConfig): Set<string> {
 }
 
 function resolveConfiguredRemoteGatewayKey(cfg: OpenClawConfig): string | undefined {
-  let remoteKey: string | undefined;
   const remoteUrl = normalizeOptionalString(cfg.gateway?.remote?.url) ?? "";
   if (remoteUrl) {
     try {
-      const remote = canonicalizeToolGatewayWsUrl(remoteUrl);
-      remoteKey = remote.key;
+      return canonicalizeToolGatewayWsUrl(remoteUrl).key;
     } catch {
       // Misconfigured remote URL should not make ordinary tool calls fail; only explicit
       // gatewayUrl overrides need strict validation.
     }
   }
-  return remoteKey;
+  return undefined;
 }
 
 function resolveDefaultGatewayTarget(params: {
@@ -373,8 +371,7 @@ async function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
       }
       return identity;
     }
-    const identity = await loadOrCreateDeviceIdentityAsync();
-    return identity;
+    return await loadOrCreateDeviceIdentityAsync();
   } catch (error) {
     if (isNodeApprovalReplay) {
       throw new Error(
@@ -452,7 +449,9 @@ async function resolveAgentRuntimeIdentityForGatewayTool(params: {
   try {
     const sessionSpawnContext = getGatewaySessionSpawnContext();
     const parentExecutionIdentityToken = getGatewaySessionSpawnParentExecutionIdentityToken();
-    const activeAuthority = getActiveAgentRunDelegatedAuthority(identity.operationalRunInstance);
+    const activeAuthority =
+      identity.approvalAuthority ??
+      getActiveAgentRunDelegatedAuthority(identity.operationalRunInstance);
     const executionLineage = readAgentRuntimeExecutionLineage(sessionSpawnContext);
     if (executionLineage && !activeAuthority) {
       throw new Error("execution lineage handoff requires active parent authority");
@@ -482,7 +481,7 @@ async function resolveAgentRuntimeIdentityForGatewayTool(params: {
       const approvalAuthority =
         activeAuthority && approvalSignals?.length
           ? claimAgentRunApprovalAuthority(activeAuthority, approvalSignals)
-          : undefined;
+          : activeAuthority;
       const prepared: AgentRuntimeIdentityTokenParams = {
         ...identity,
         operationalRunInstance: identity.operationalRunInstance,

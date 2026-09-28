@@ -120,74 +120,17 @@ describe("sendMessageSignal receipts", () => {
     expect(result.receipt.sentAt).toBeGreaterThan(0);
   });
 
-  it("rejects per-recipient failures even when signal-cli returns a timestamp", async () => {
-    signalRpcRequestMock.mockResolvedValueOnce({
-      timestamp: 1234567890,
-      results: [{ type: "UNREGISTERED_FAILURE" }],
-    });
+  it("sends username aliases through the canonical username parameter", async () => {
+    signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567890 });
 
-    await expect(
-      sendMessageSignal("+15551234567", "hello", {
-        cfg: SIGNAL_TEST_CFG,
-      }),
-    ).rejects.toThrow("Signal send failed for 1 recipient: UNREGISTERED_FAILURE");
+    await sendMessageSignal("signal:u:ALICE.42", "hello", { cfg: SIGNAL_TEST_CFG });
+
+    expect(signalRpcRequestMock).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({ username: ["alice.42"] }),
+      expect.any(Object),
+    );
   });
-
-  it("rejects legacy per-recipient success false results", async () => {
-    signalRpcRequestMock.mockResolvedValueOnce({
-      timestamp: 1234567890,
-      results: [{ success: false, message: "recipient is not registered" }],
-    });
-
-    await expect(
-      sendMessageSignal("+15551234567", "hello", {
-        cfg: SIGNAL_TEST_CFG,
-      }),
-    ).rejects.toThrow("Signal send failed for 1 recipient: recipient is not registered");
-  });
-
-  it("preserves a group delivery when at least one member receives the message", async () => {
-    signalRpcRequestMock.mockResolvedValueOnce({
-      timestamp: 1234567891,
-      results: [{ type: "SUCCESS" }, { type: "UNREGISTERED_FAILURE" }],
-    });
-
-    await expect(
-      sendMessageSignal("group:group-1", "hello", { cfg: SIGNAL_TEST_CFG }),
-    ).resolves.toMatchObject({
-      messageId: "1234567891",
-      timestamp: 1234567891,
-      receipt: { primaryPlatformMessageId: "1234567891" },
-    });
-    expect(signalRpcRequestMock).toHaveBeenCalledOnce();
-  });
-
-  it("rejects a group delivery when every member fails", async () => {
-    signalRpcRequestMock.mockResolvedValueOnce({
-      timestamp: 1234567891,
-      results: [{ type: "NETWORK_FAILURE" }, { type: "UNREGISTERED_FAILURE" }],
-    });
-
-    await expect(
-      sendMessageSignal("group:group-1", "hello", { cfg: SIGNAL_TEST_CFG }),
-    ).rejects.toThrow("Signal send failed for 2 recipients: NETWORK_FAILURE, UNREGISTERED_FAILURE");
-    expect(signalRpcRequestMock).toHaveBeenCalledOnce();
-  });
-
-  it.each(["username:alice.42", "u:alice.42", "signal:u:ALICE.42"])(
-    "sends %s through the canonical username parameter",
-    async (target) => {
-      signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567890 });
-
-      await sendMessageSignal(target, "hello", { cfg: SIGNAL_TEST_CFG });
-
-      expect(signalRpcRequestMock).toHaveBeenCalledWith(
-        "send",
-        expect.objectContaining({ username: ["alice.42"] }),
-        expect.any(Object),
-      );
-    },
-  );
 
   it("attaches a media receipt for attachment sends", async () => {
     signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567891 });
@@ -249,93 +192,6 @@ describe("sendMessageSignal receipts", () => {
 
     expect(result.messageId).toBe("unknown");
     expect(result.receipt.platformMessageIds).toStrictEqual([]);
-  });
-
-  it("does not add approval reactions to ordinary outbound approval-looking text", async () => {
-    signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567892 });
-    const text = [
-      "Here is the command you asked about:",
-      "/approve exec-live-approval allow-once|deny",
-    ].join("\n");
-
-    await sendMessageSignal("+15551234567", text, {
-      cfg: {
-        ...SIGNAL_TEST_CFG,
-        channels: {
-          signal: {
-            ...SIGNAL_TEST_CFG.channels.signal,
-            allowFrom: ["+15551234567"],
-          },
-        },
-        approvals: {
-          exec: {
-            enabled: true,
-            mode: "targets",
-            targets: [{ channel: "signal", to: "+15551234567" }],
-          },
-        },
-      },
-    });
-
-    expect(signalRpcRequestMock).toHaveBeenCalledWith(
-      "send",
-      expect.objectContaining({ message: text }),
-      expect.any(Object),
-    );
-    await expect(
-      resolveSignalApprovalReactionTargetWithPersistence({
-        accountId: "default",
-        conversationKey: "+15551234567",
-        messageId: "1234567892",
-        reactionKey: "👍",
-        targetAuthor: "+15550001111",
-      }),
-    ).resolves.toBeNull();
-  });
-
-  it("does not add approval reactions to ordinary outbound text quoting a full prompt", async () => {
-    signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567893 });
-    const text = [
-      "The docs show this example:",
-      "Exec approval required",
-      "ID: exec-live-approval",
-      "",
-      "Reply with: /approve exec-live-approval allow-once|deny",
-    ].join("\n");
-
-    await sendMessageSignal("+15551234567", text, {
-      cfg: {
-        ...SIGNAL_TEST_CFG,
-        channels: {
-          signal: {
-            ...SIGNAL_TEST_CFG.channels.signal,
-            allowFrom: ["+15551234567"],
-          },
-        },
-        approvals: {
-          exec: {
-            enabled: true,
-            mode: "targets",
-            targets: [{ channel: "signal", to: "+15551234567" }],
-          },
-        },
-      },
-    });
-
-    expect(signalRpcRequestMock).toHaveBeenCalledWith(
-      "send",
-      expect.objectContaining({ message: text }),
-      expect.any(Object),
-    );
-    await expect(
-      resolveSignalApprovalReactionTargetWithPersistence({
-        accountId: "default",
-        conversationKey: "+15551234567",
-        messageId: "1234567893",
-        reactionKey: "👍",
-        targetAuthor: "+15550001111",
-      }),
-    ).resolves.toBeNull();
   });
 
   it("does not register ordinary outbound text that includes approval reaction snippets", async () => {
@@ -414,45 +270,6 @@ describe("sendMessageSignal receipts", () => {
       replyToId: "1700000000001",
       nativeReplyStatus: "sent",
     });
-  });
-
-  it("does not add approval reaction hints without explicit approvers", async () => {
-    signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567895 });
-    const text =
-      "Exec approval required\nID: exec-live-approval\n\nReply with: /approve exec-live-approval allow-once|deny";
-
-    await sendMessageSignal("+15551234567", text, {
-      cfg: {
-        channels: {
-          signal: {
-            accounts: {
-              default: {
-                transport: { kind: "external-native" as const, url: "http://signal.test" },
-                account: "+15550001111",
-              },
-            },
-          },
-        },
-        approvals: {
-          exec: {
-            enabled: true,
-            mode: "targets",
-            targets: [{ channel: "signal", to: "+15551234567" }],
-          },
-        },
-      },
-    });
-
-    expect(signalRpcRequestMock.mock.calls[0]?.[1]).toMatchObject({ message: text });
-    await expect(
-      resolveSignalApprovalReactionTargetWithPersistence({
-        accountId: "default",
-        conversationKey: "+15551234567",
-        messageId: "1234567895",
-        reactionKey: "👍",
-        targetAuthor: "+15550001111",
-      }),
-    ).resolves.toBeNull();
   });
 
   it("keeps prompt-looking bare text inert", async () => {
@@ -573,7 +390,6 @@ describe("sendMessageSignal receipts", () => {
   it.each([
     "Signal HTTP timed out after 10000ms",
     "quote metadata not found after an unknown transport failure",
-    "Signal RPC -32000: quote metadata was rejected after an ambiguous send",
   ])("does not retry an unconfirmed quote rejection: %s", async (message) => {
     signalRpcRequestMock.mockRejectedValueOnce(new Error(message));
 

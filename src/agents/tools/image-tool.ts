@@ -1,7 +1,11 @@
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
 import { findCapabilityProviderById } from "../../../packages/media-generation-core/src/capability-model-ref.js";
 import { normalizeMediaProviderId } from "../../../packages/media-understanding-common/src/provider-id.js";
+import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { captureAmbientGatewayOperatorAuthority } from "../../gateway/operator-invocation-authority.js";
 import {
   resolveAutoMediaKeyProviders,
   resolveDefaultMediaModel,
@@ -25,8 +29,10 @@ import { runWithAsyncWorkResources } from "../../shared/async-work-resources.js"
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
+import { createSandboxBridgeReadFile } from "../sandbox-media-paths.js";
 import { optionalFiniteNumberSchema, optionalPositiveIntegerSchema } from "../schema/typebox.js";
-import { readFiniteNumberParam, readPositiveIntegerParam } from "./common.js";
+import type { ToolFsPolicy } from "../tool-fs-policy.js";
+import { readFiniteNumberParam, readPositiveIntegerParam, type AnyAgentTool } from "./common.js";
 import {
   coerceImageAssistantText,
   coerceImageModelConfig,
@@ -39,7 +45,6 @@ import {
 import {
   prepareImageCompressionPolicy,
   resolveImageModelConfigForOverride,
-  resolveImageToolMaxTokens,
   runImagePrompt,
 } from "./image-tool.model-execution.js";
 import {
@@ -49,11 +54,11 @@ import {
 } from "./image-tool.result.js";
 import {
   buildTextToolResult,
+  normalizeMediaReferenceList,
   REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
   resolveMediaToolSandboxConfig,
   resolveMediaToolInboundRoots,
   resolveMediaToolReferenceAccess,
-  resolveRemoteMediaSsrfPolicy,
   resolvePromptAndModelOverride,
   type MediaToolSandbox,
 } from "./media-tool-shared.js";
@@ -63,26 +68,14 @@ import {
   resolveDefaultModelRef,
   resolveOpenAiImageMediaCandidate,
 } from "./model-config.helpers.js";
-import {
-  createSandboxBridgeReadFile,
-  type AnyAgentTool,
-  type ToolFsPolicy,
-} from "./tool-runtime.helpers.js";
 
 const DEFAULT_PROMPT = "Describe the image.";
 const DEFAULT_MAX_IMAGES = 20;
 
-type ImageToolLoadWebMediaOptions = {
-  maxBytes?: number;
-  sandboxValidated?: boolean;
-  readFile?: (filePath: string) => Promise<Buffer>;
-  imageCompression?: ImageCompressionPolicy;
-  localRoots?: readonly string[] | "any";
-  inboundRoots?: readonly string[];
-  ssrfPolicy?: ReturnType<typeof resolveRemoteMediaSsrfPolicy>;
-  readIdleTimeoutMs?: number;
-  requestInit?: RequestInit;
-};
+type ImageToolLoadWebMediaOptions = Exclude<
+  Parameters<typeof import("../../media/web-media.js").loadWebMedia>[1],
+  number | undefined
+>;
 
 type ImageWebMediaRuntime = {
   loadWebMedia: (
@@ -114,7 +107,7 @@ function resolveRegisteredMediaUnderstandingProvider(params: {
   });
 }
 
-const imageToolProviderDeps = {
+const defaultImageToolProviderDeps = {
   buildProviderRegistry,
   getMediaUnderstandingProvider,
   describeImageWithModel,
@@ -127,18 +120,12 @@ const imageToolProviderDeps = {
   loadImageWebMediaRuntime,
 };
 
+const imageToolProviderDeps = { ...defaultImageToolProviderDeps };
+
 function resolveImageCompressionPolicy(
   params: Parameters<typeof prepareImageCompressionPolicy>[0],
 ) {
   return prepareImageCompressionPolicy(params, imageToolProviderDeps);
-}
-
-function hasExplicitDefaultPrimaryModel(cfg?: OpenClawConfig): boolean {
-  const model = cfg?.agents?.defaults?.model;
-  if (typeof model === "string") {
-    return model.trim().length > 0;
-  }
-  return typeof model?.primary === "string" && model.primary.trim().length > 0;
 }
 
 function modelRefProvider(candidate: string | null | undefined): string | undefined {
@@ -181,41 +168,13 @@ const testing = {
   decodeDataUrl,
   coerceImageAssistantText,
   hasImageReasoningOnlyResponse,
-  resolveImageToolMaxTokens,
   resolveImageCompressionPolicy,
-  setProviderDepsForTest(overrides?: {
-    buildProviderRegistry?: typeof buildProviderRegistry;
-    getMediaUnderstandingProvider?: typeof getMediaUnderstandingProvider;
-    describeImageWithModel?: typeof describeImageWithModel;
-    describeImagesWithModel?: typeof describeImagesWithModel;
-    resolveAutoMediaKeyProviders?: typeof resolveAutoMediaKeyProviders;
-    resolveDefaultMediaModel?: typeof resolveDefaultMediaModel;
-    resolveModelAsync?: ResolveModelAsync;
-    resolveRegisteredMediaUnderstandingProvider?: typeof resolveRegisteredMediaUnderstandingProvider;
-    resolveImageCompressionPolicy?: typeof resolveImageCompressionPolicy;
-    loadImageWebMediaRuntime?: typeof loadImageWebMediaRuntime;
-  }) {
-    imageToolProviderDeps.buildProviderRegistry =
-      overrides?.buildProviderRegistry ?? buildProviderRegistry;
-    imageToolProviderDeps.getMediaUnderstandingProvider =
-      overrides?.getMediaUnderstandingProvider ?? getMediaUnderstandingProvider;
-    imageToolProviderDeps.describeImageWithModel =
-      overrides?.describeImageWithModel ?? describeImageWithModel;
-    imageToolProviderDeps.describeImagesWithModel =
-      overrides?.describeImagesWithModel ?? describeImagesWithModel;
-    imageToolProviderDeps.resolveAutoMediaKeyProviders =
-      overrides?.resolveAutoMediaKeyProviders ?? resolveAutoMediaKeyProviders;
-    imageToolProviderDeps.resolveDefaultMediaModel =
-      overrides?.resolveDefaultMediaModel ?? resolveDefaultMediaModel;
-    imageToolProviderDeps.resolveModelAsync =
-      overrides?.resolveModelAsync ?? resolveModelAsyncDefault;
-    imageToolProviderDeps.resolveRegisteredMediaUnderstandingProvider =
-      overrides?.resolveRegisteredMediaUnderstandingProvider ??
-      resolveRegisteredMediaUnderstandingProvider;
-    imageToolProviderDeps.resolveImageCompressionPolicy =
-      overrides?.resolveImageCompressionPolicy ?? resolveImageCompressionPolicy;
-    imageToolProviderDeps.loadImageWebMediaRuntime =
-      overrides?.loadImageWebMediaRuntime ?? loadImageWebMediaRuntime;
+  setProviderDepsForTest(overrides?: Partial<typeof defaultImageToolProviderDeps>) {
+    Object.assign(
+      imageToolProviderDeps,
+      defaultImageToolProviderDeps,
+      Object.fromEntries(Object.entries(overrides ?? {}).filter(([, value]) => value != null)),
+    );
   },
 } as const;
 
@@ -349,7 +308,9 @@ function resolveImageModelConfigForTool(params: {
         ...rawAutoCandidates,
       ]),
   );
-  const defaultPrimaryIsImplicit = !hasExplicitDefaultPrimaryModel(params.cfg);
+  const defaultPrimaryIsImplicit = !resolveAgentModelPrimaryValue(
+    params.cfg?.agents?.defaults?.model,
+  );
   const primaryAliasCandidates = defaultPrimaryIsImplicit
     ? autoCandidates.filter((candidate) =>
         isExecutionAliasCandidateForProvider(candidate, primary.provider),
@@ -380,17 +341,10 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
 }
 
 function pickMaxBytes(cfg?: OpenClawConfig, maxBytesMb?: number): number | undefined {
-  if (typeof maxBytesMb === "number" && Number.isFinite(maxBytesMb) && maxBytesMb > 0) {
-    return Math.floor(maxBytesMb * 1024 * 1024);
-  }
-  const configured = cfg?.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * 1024 * 1024);
-  }
-  return undefined;
+  const limit =
+    asPositiveFiniteNumber(maxBytesMb) ?? asPositiveFiniteNumber(cfg?.agents?.defaults?.mediaMaxMb);
+  return limit === undefined ? undefined : Math.floor(limit * 1024 * 1024);
 }
-
-type ImageSandboxConfig = MediaToolSandbox;
 
 export function createImageTool(options?: {
   config?: OpenClawConfig;
@@ -399,7 +353,7 @@ export function createImageTool(options?: {
   authProfileStore?: AuthProfileStore;
   workspaceDir?: string;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
-  sandbox?: ImageSandboxConfig;
+  sandbox?: MediaToolSandbox;
   cwd?: string;
   fsPolicy?: ToolFsPolicy;
   agentChannel?: string | null;
@@ -443,7 +397,7 @@ export function createImageTool(options?: {
   if (!modelHasVision && !resolvedImageModelConfig && !options?.deferAutoModelResolution) {
     return null;
   }
-  const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(options?.config);
+  const remoteMediaSsrfPolicy = options?.config?.tools?.web?.fetch?.ssrfPolicy;
 
   const description = modelHasVision
     ? "Load image(s) into private model context for inspection: path accepts one local image path or permitted URL; paths accepts up to maxImages entries (20 by default). Does not display, attach, or send files to the user. Prompt images are already visible."
@@ -470,9 +424,11 @@ export function createImageTool(options?: {
     }),
     execute: async (_toolCallId, args, suppliedSignal) =>
       runWithAsyncWorkResources(async (onAcquired) => {
-        const { captureAmbientGatewayOperatorAuthority } =
-          await import("../../gateway/operator-invocation-authority.js");
-        const capturedOperator = captureAmbientGatewayOperatorAuthority({
+        const record: Record<string, unknown> = args && typeof args === "object" ? { ...args } : {};
+        if (Array.isArray(record.paths)) {
+          record.paths = [...record.paths];
+        }
+        const capturedOperator = await captureAmbientGatewayOperatorAuthority({
           missingBindingError: () =>
             new Error("Image analysis requires its current Gateway binding."),
           retainInherited: true,
@@ -492,35 +448,14 @@ export function createImageTool(options?: {
           signal?.throwIfAborted();
         };
         assertCurrent();
-        const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
-
-        // MARK: - Normalize path + paths input and dedupe while preserving order
-        const pathCandidates: string[] = [];
-        if (typeof record.path === "string") {
-          pathCandidates.push(record.path);
-        }
-        if (Array.isArray(record.paths)) {
-          pathCandidates.push(...record.paths.filter((v): v is string => typeof v === "string"));
-        }
-
-        const seenImages = new Set<string>();
-        const pathInputs: string[] = [];
-        for (const candidate of pathCandidates) {
-          const trimmedCandidate = candidate.trim();
-          const normalizedForDedupe = trimmedCandidate.startsWith("@")
-            ? trimmedCandidate.slice(1).trim()
-            : trimmedCandidate;
-          if (!normalizedForDedupe || seenImages.has(normalizedForDedupe)) {
-            continue;
-          }
-          seenImages.add(normalizedForDedupe);
-          pathInputs.push(trimmedCandidate);
-        }
+        const pathInputs = normalizeMediaReferenceList([
+          ...(typeof record.path === "string" ? [record.path] : []),
+          ...filterStringEntries(record.paths),
+        ]);
         if (pathInputs.length === 0) {
           throw new Error("path required");
         }
 
-        // MARK: - Enforce max images cap
         const maxImages = readPositiveIntegerParam(record, "maxImages") ?? DEFAULT_MAX_IMAGES;
         if (pathInputs.length > maxImages) {
           return {
@@ -593,7 +528,6 @@ export function createImageTool(options?: {
           options?.fsPolicy?.workspaceOnly,
         );
 
-        // MARK: - Load and resolve each image
         const loadedImages: LoadedImageForTool[] = [];
 
         for (const pathRawInput of pathInputs) {
@@ -608,11 +542,7 @@ export function createImageTool(options?: {
 
           const normalizedRef = normalizeMediaReferenceSource(imageRaw);
 
-          // The tool accepts file paths, file/data URLs, or http(s) URLs. In some
-          // agent/model contexts, images can be referenced as pseudo-URIs like
-          // `image:0` (e.g. "first image in the prompt"). We don't have access to a
-          // shared image registry here, so fail gracefully instead of attempting to
-          // `fs.readFile("image:0")` and producing a noisy ENOENT.
+          // Pseudo-URIs such as image:0 have no registry here; reject them before filesystem access.
           const refInfo = classifyMediaReferenceSource(normalizedRef);
           const { isDataUrl, isHttpUrl } = refInfo;
           if (refInfo.hasUnsupportedScheme) {

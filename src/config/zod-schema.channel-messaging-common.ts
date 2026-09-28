@@ -65,79 +65,35 @@ const ChannelAccountPolicyDefaults = {
   groupPolicy: GroupPolicySchema.optional().default("allowlist"),
 };
 
-type CommonChannelAccountShapeOptions<
-  TCapabilities extends ZodTypeAny = typeof CommonCapabilitiesSchema,
-  TAllowFrom extends z.ZodType<Array<string | number> | undefined> = typeof CommonIdListSchema,
-  TDefaultTo extends z.ZodType<string | number | undefined> = typeof CommonDefaultToSchema,
-  TGroupAllowFrom extends z.ZodType<Array<string | number> | undefined> = typeof CommonIdListSchema,
-  TMentionPatterns extends ZodTypeAny = typeof CommonMentionPatternsSchema,
-  TStreaming extends ZodTypeAny = typeof CommonStreamingSchema,
-  TMediaMaxMb extends ZodTypeAny = typeof CommonMediaMaxMbSchema,
-  TReplyToMode extends ZodTypeAny = typeof CommonReplyToModeSchema,
-> = {
-  omit?: readonly CommonChannelAccountField[];
-  capabilities?: TCapabilities;
-  allowFrom?: TAllowFrom;
-  defaultTo?: TDefaultTo;
-  groupAllowFrom?: TGroupAllowFrom;
-  mentionPatterns?: TMentionPatterns;
-  streaming?: TStreaming;
-  mediaMaxMb?: TMediaMaxMb;
-  replyToMode?: TReplyToMode;
-};
-
-function createCommonChannelAccountShape<
-  TCapabilities extends ZodTypeAny = typeof CommonCapabilitiesSchema,
-  TAllowFrom extends z.ZodType<Array<string | number> | undefined> = typeof CommonIdListSchema,
-  TDefaultTo extends z.ZodType<string | number | undefined> = typeof CommonDefaultToSchema,
-  TGroupAllowFrom extends z.ZodType<Array<string | number> | undefined> = typeof CommonIdListSchema,
-  TMentionPatterns extends ZodTypeAny = typeof CommonMentionPatternsSchema,
-  TStreaming extends ZodTypeAny = typeof CommonStreamingSchema,
-  TMediaMaxMb extends ZodTypeAny = typeof CommonMediaMaxMbSchema,
-  TReplyToMode extends ZodTypeAny = typeof CommonReplyToModeSchema,
->(
-  options: CommonChannelAccountShapeOptions<
-    TCapabilities,
-    TAllowFrom,
-    TDefaultTo,
-    TGroupAllowFrom,
-    TMentionPatterns,
-    TStreaming,
-    TMediaMaxMb,
-    TReplyToMode
-  >,
-) {
-  return {
+/** Canonical optional account contract shared by bundled messaging channels. */
+export const CommonChannelAccountSchema = z
+  .object({
     name: z.string().optional(),
-    capabilities: (options.capabilities ?? CommonCapabilitiesSchema) as TCapabilities,
+    capabilities: CommonCapabilitiesSchema,
     markdown: MarkdownConfigSchema,
     configWrites: z.boolean().optional(),
     enabled: z.boolean().optional(),
     dmPolicy: DmPolicySchema.optional(),
-    allowFrom: (options.allowFrom ?? CommonIdListSchema) as TAllowFrom,
-    defaultTo: (options.defaultTo ?? CommonDefaultToSchema) as TDefaultTo,
-    groupAllowFrom: (options.groupAllowFrom ?? CommonIdListSchema) as TGroupAllowFrom,
+    allowFrom: CommonIdListSchema,
+    defaultTo: CommonDefaultToSchema,
+    groupAllowFrom: CommonIdListSchema,
     groupPolicy: GroupPolicySchema.optional(),
-    mentionPatterns: (options.mentionPatterns ?? CommonMentionPatternsSchema) as TMentionPatterns,
+    mentionPatterns: CommonMentionPatternsSchema,
     contextVisibility: ContextVisibilityModeSchema.optional(),
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
-    streaming: (options.streaming ?? CommonStreamingSchema) as TStreaming,
+    streaming: CommonStreamingSchema,
     heartbeatVisibility: ChannelHeartbeatVisibilitySchema,
     healthMonitor: ChannelHealthMonitorSchema,
     responsePrefix: z.string().optional(),
-    mediaMaxMb: (options.mediaMaxMb ?? CommonMediaMaxMbSchema) as TMediaMaxMb,
-    replyToMode: (options.replyToMode ?? CommonReplyToModeSchema) as TReplyToMode,
-  };
-}
+    mediaMaxMb: CommonMediaMaxMbSchema,
+    replyToMode: CommonReplyToModeSchema,
+  })
+  .strict();
 
-/** Canonical optional account contract shared by bundled messaging channels. */
-export const CommonChannelAccountSchema = z.object(createCommonChannelAccountShape({})).strict();
-
-type CommonChannelAccountShape = ReturnType<typeof createCommonChannelAccountShape>;
-type CommonChannelAccountField = keyof CommonChannelAccountShape;
+type CommonChannelAccountField = keyof typeof CommonChannelAccountSchema.shape;
 
 /** Build optional account leaves and separate root-only policy defaults. */
 export function buildChannelAccountSchemaParts<
@@ -151,30 +107,29 @@ export function buildChannelAccountSchemaParts<
   TReplyToMode extends ZodTypeAny = typeof CommonReplyToModeSchema,
   const TOmit extends readonly CommonChannelAccountField[] = [],
 >(
-  options: Omit<
-    CommonChannelAccountShapeOptions<
-      TCapabilities,
-      TAllowFrom,
-      TDefaultTo,
-      TGroupAllowFrom,
-      TMentionPatterns,
-      TStreaming,
-      TMediaMaxMb,
-      TReplyToMode
-    >,
-    "omit"
-  > & { omit?: TOmit } = {} as CommonChannelAccountShapeOptions<
-    TCapabilities,
-    TAllowFrom,
-    TDefaultTo,
-    TGroupAllowFrom,
-    TMentionPatterns,
-    TStreaming,
-    TMediaMaxMb,
-    TReplyToMode
-  > & { omit?: TOmit },
+  options: {
+    capabilities?: TCapabilities;
+    allowFrom?: TAllowFrom;
+    defaultTo?: TDefaultTo;
+    groupAllowFrom?: TGroupAllowFrom;
+    mentionPatterns?: TMentionPatterns;
+    streaming?: TStreaming;
+    mediaMaxMb?: TMediaMaxMb;
+    replyToMode?: TReplyToMode;
+    omit?: TOmit;
+  } = {},
 ) {
-  const shape = createCommonChannelAccountShape(options);
+  const shape = {
+    ...CommonChannelAccountSchema.shape,
+    capabilities: (options.capabilities ?? CommonCapabilitiesSchema) as TCapabilities,
+    allowFrom: (options.allowFrom ?? CommonIdListSchema) as TAllowFrom,
+    defaultTo: (options.defaultTo ?? CommonDefaultToSchema) as TDefaultTo,
+    groupAllowFrom: (options.groupAllowFrom ?? CommonIdListSchema) as TGroupAllowFrom,
+    mentionPatterns: (options.mentionPatterns ?? CommonMentionPatternsSchema) as TMentionPatterns,
+    streaming: (options.streaming ?? CommonStreamingSchema) as TStreaming,
+    mediaMaxMb: (options.mediaMaxMb ?? CommonMediaMaxMbSchema) as TMediaMaxMb,
+    replyToMode: (options.replyToMode ?? CommonReplyToModeSchema) as TReplyToMode,
+  };
   const omitted = new Set<CommonChannelAccountField>(options.omit ?? []);
   const accountShape = Object.fromEntries(
     Object.entries(shape).filter(([key]) => !omitted.has(key as CommonChannelAccountField)),

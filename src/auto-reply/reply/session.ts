@@ -156,11 +156,7 @@ import {
   stopSessionResetSubagents,
 } from "./session-reset-cleanup.js";
 import { resolveAuthorizedSessionResetCommand } from "./session-reset-command.js";
-import {
-  stripThreadFromSessionRoute,
-  stripThreadIdFromDeliveryContext,
-  stripThreadIdFromOrigin,
-} from "./session-route-reset.js";
+import { stripThreadFromSessionRoute, stripThreadId } from "./session-route-reset.js";
 
 const log = createSubsystemLogger("session-init");
 
@@ -857,6 +853,15 @@ async function initSessionStateAttemptLocked(
       // overrides these need no fallback-provenance filtering (#92562).
       // Explicit /new and /reset rotate CLI conversation bindings elsewhere.
       preservedState = resolveReplySessionRolloverState(entry, sessionKey);
+      // Implicit rollover keeps the worker workspace; explicit resets keep their detachment policy.
+      if (!resetTriggered) {
+        if (entry.worktree) {
+          preservedState.worktree = entry.worktree;
+        }
+        if (entry.repositoryWorkspaceId) {
+          preservedState.repositoryWorkspaceId = entry.repositoryWorkspaceId;
+        }
+      }
     }
   }
 
@@ -915,10 +920,8 @@ async function initSessionStateAttemptLocked(
   const delivery = isSystemEvent
     ? normalizeSessionDeliveryState({
         route: isThread ? baseDeliveryRoute : stripThreadFromSessionRoute(baseDeliveryRoute),
-        context: isThread
-          ? baseDeliveryContext
-          : stripThreadIdFromDeliveryContext(baseDeliveryContext),
-        origin: isThread ? baseDeliveryOrigin : stripThreadIdFromOrigin(baseDeliveryOrigin),
+        context: isThread ? baseDeliveryContext : stripThreadId(baseDeliveryContext),
+        origin: isThread ? baseDeliveryOrigin : stripThreadId(baseDeliveryOrigin),
       })
     : normalizeSessionDeliveryState({
         context: {
@@ -982,8 +985,8 @@ async function initSessionStateAttemptLocked(
       ...sessionEntry,
       delivery: normalizeSessionDeliveryState({
         route: stripThreadFromSessionRoute(sessionDeliveryRoute(sessionEntry)),
-        context: stripThreadIdFromDeliveryContext(deliveryContextFromSession(sessionEntry)),
-        origin: stripThreadIdFromOrigin(sessionDeliveryOrigin(sessionEntry)),
+        context: stripThreadId(deliveryContextFromSession(sessionEntry)),
+        origin: stripThreadId(sessionDeliveryOrigin(sessionEntry)),
       }),
     };
   }

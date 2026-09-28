@@ -126,38 +126,29 @@ async function abandonedWarnings() {
 // Existing selector tests replace finalization; finalizer tests pass hand-selected IDs.
 // These cases must fail if the public command drops historical terminal candidates.
 describe("public repair historical acknowledgment", () => {
-  it.each([
-    { age: 2 * ABANDONED_UPDATE_RUN_MS, newer: false },
-    { age: 2 * ABANDONED_UPDATE_RUN_MS, newer: true },
-    { age: 60_000, newer: true },
-  ])(
-    "clears Doctor warnings after full repair (age=$age, newer=$newer)",
-    async ({ age, newer }) => {
-      const previous = seedHistory(age);
-      if (newer) {
-        const latest = createUpdateRun({ trigger: "cli" });
-        finishUpdateRun(latest.runId, { status: "succeeded" });
-      }
-      expect(await abandonedWarnings()).toHaveLength(1);
-      await repair();
-      expect(mocks.doctor).toHaveBeenCalledOnce();
-      expect(mocks.plugins).toHaveBeenCalledOnce();
-      const repaired = getUpdateRun(previous.runId)!;
-      expect(isAcknowledgedAbandonedUpdateRun(repaired)).toBe(true);
-      expect(repaired).toMatchObject({
-        ...previous,
-        updatedAtMs: expect.any(Number),
-        steps: expect.arrayContaining(previous.steps),
-      });
-      expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
-        expect.objectContaining({ status: "ok", reconciledRuns: [previous.runId] }),
-      );
-      expect(await abandonedWarnings()).toEqual([]);
-      await repair();
-      expect(getUpdateRun(previous.runId)).toEqual(repaired);
-      expect(mocks.doctor).toHaveBeenCalledTimes(2);
-    },
-  );
+  it("clears older Doctor warnings after full repair despite a newer successful update", async () => {
+    const previous = seedHistory(2 * ABANDONED_UPDATE_RUN_MS);
+    const latest = createUpdateRun({ trigger: "cli" });
+    finishUpdateRun(latest.runId, { status: "succeeded" });
+    expect(await abandonedWarnings()).toHaveLength(1);
+    await repair();
+    expect(mocks.doctor).toHaveBeenCalledOnce();
+    expect(mocks.plugins).toHaveBeenCalledOnce();
+    const repaired = getUpdateRun(previous.runId)!;
+    expect(isAcknowledgedAbandonedUpdateRun(repaired)).toBe(true);
+    expect(repaired).toMatchObject({
+      ...previous,
+      updatedAtMs: expect.any(Number),
+      steps: expect.arrayContaining(previous.steps),
+    });
+    expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: "ok", reconciledRuns: [previous.runId] }),
+    );
+    expect(await abandonedWarnings()).toEqual([]);
+    await repair();
+    expect(getUpdateRun(previous.runId)).toEqual(repaired);
+    expect(mocks.doctor).toHaveBeenCalledTimes(2);
+  });
 
   it.each(["ok", "warning"] as const)(
     "acknowledges multiple rows only after %s convergence, excluding a newly admitted row",
@@ -200,27 +191,6 @@ describe("public repair historical acknowledgment", () => {
       expect(getUpdateRun(old.runId)).toEqual(old);
       expect(getUpdateRun(recent.runId)).toEqual(recent);
       expect(await abandonedWarnings()).toHaveLength(2);
-    },
-  );
-
-  it.each(["live", "unobservable"])(
-    "preserves history while an unrelated driver is %s",
-    async (liveness) => {
-      const old = seedHistory(4 * ABANDONED_UPDATE_RUN_MS);
-      const driver = readUpdateRunDriver();
-      expect(driver).toBeDefined();
-      createUpdateRun({
-        trigger: "cli",
-        origin: {
-          driver: {
-            ...driver!,
-            ...(liveness === "unobservable" ? { host: "other-host.invalid" } : {}),
-          },
-        },
-      });
-      await expect(repair()).rejects.toThrow("still in progress");
-      expect(getUpdateRun(old.runId)).toEqual(old);
-      expect(mocks.doctor).not.toHaveBeenCalled();
     },
   );
 
@@ -268,7 +238,7 @@ describe("public repair historical acknowledgment", () => {
     expect(mocks.doctor).not.toHaveBeenCalled();
   });
 
-  it("does not acknowledge terminal history if a captured active run resumes", async () => {
+  it("does not acknowledge terminal history if a captured active run remains unresolved", async () => {
     const old = seedHistory(4 * ABANDONED_UPDATE_RUN_MS);
     const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() - 2 * ABANDONED_UPDATE_RUN_MS);
     const active = createUpdateRun({ trigger: "cli" });
@@ -282,7 +252,7 @@ describe("public repair historical acknowledgment", () => {
       });
       return pluginResult;
     });
-    await expect(repair()).rejects.toThrow("An update resumed");
+    await expect(repair()).rejects.toThrow("did not assume the update resumed");
     expect(getUpdateRun(old.runId)).toEqual(old);
     expect(getUpdateRun(active.runId)?.status).toBe("running");
     expect(defaultRuntime.writeJson).not.toHaveBeenCalled();

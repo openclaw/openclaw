@@ -64,14 +64,17 @@ const WORKFLOWS: {
     file: ".github/workflows/sandbox-common-smoke.yml",
     prGroup: "Sandbox Common Smoke-123",
     convertToDraft: true,
-    manual: { mode: "absent" },
-    push: { group: "Sandbox Common Smoke-refs/heads/main", cancel: true },
+    manual: {
+      mode: "same-ref queues",
+      group: "Sandbox Common Smoke-workflow_dispatch-refs/heads/main",
+    },
+    push: { group: "Sandbox Common Smoke-push-refs/heads/main", cancel: true },
   },
   {
     file: ".github/workflows/plugin-init-scaffold-validation.yml",
     prGroup: "Plugin Init Scaffold Validation-123",
     manual: { mode: "same-ref queues", group: "Plugin Init Scaffold Validation-refs/heads/main" },
-    push: { group: "Plugin Init Scaffold Validation-refs/heads/main", cancel: false },
+    push: { group: "Plugin Init Scaffold Validation-push-refs/heads/main", cancel: false },
   },
 ];
 
@@ -79,7 +82,7 @@ type Job = {
   if?: string | boolean;
   concurrency?: Concurrency;
   outputs?: Record<string, string>;
-  steps: { id?: string; name?: string; if?: string; with?: { script?: string } }[];
+  steps: { id?: string; name?: string; if?: string; uses?: string; with?: { script?: string } }[];
 };
 type Concurrency = { group: string; "cancel-in-progress": string | boolean };
 type Workflow = {
@@ -89,6 +92,7 @@ type Workflow = {
     pull_request_target?: { types: string[] };
     issues?: { types: string[] };
     workflow_dispatch?: unknown;
+    schedule?: unknown;
     push?: { branches: string[] };
   };
   concurrency?: Concurrency;
@@ -96,7 +100,14 @@ type Workflow = {
 };
 type Github = {
   workflow: string;
-  event_name: "pull_request" | "pull_request_target" | "issues" | "workflow_dispatch" | "push";
+  repository: string;
+  event_name:
+    | "pull_request"
+    | "pull_request_target"
+    | "issues"
+    | "workflow_dispatch"
+    | "push"
+    | "schedule";
   run_id: number;
   sha: string;
   ref: string;
@@ -126,6 +137,7 @@ function pr(
 ): Github {
   return {
     workflow: workflow.name,
+    repository: "openclaw/openclaw",
     event_name: "pull_request",
     run_id: runId,
     sha: "e".repeat(40),
@@ -136,13 +148,14 @@ function pr(
 
 function refEvent(
   workflow: Workflow,
-  eventName: "workflow_dispatch" | "push",
+  eventName: "workflow_dispatch" | "push" | "schedule",
   runId: number,
   sha = "a",
   ref = "refs/heads/main",
 ): Github {
   return {
     workflow: workflow.name,
+    repository: "openclaw/openclaw",
     event_name: eventName,
     run_id: runId,
     sha: sha.repeat(40),
@@ -162,7 +175,7 @@ function subscribes(workflow: Workflow, github: Github): boolean {
   if (github.event_name === "push") {
     return workflow.on.push?.branches.includes(github.ref.replace(/^refs\/heads\//u, "")) ?? false;
   }
-  return Object.hasOwn(workflow.on, "workflow_dispatch");
+  return Object.hasOwn(workflow.on, github.event_name);
 }
 
 function workflowConcurrency(workflow: Workflow): Concurrency {
@@ -174,14 +187,14 @@ function workflowConcurrency(workflow: Workflow): Concurrency {
 
 // Like ci-workflow-guards, this uses VM evaluation, not a general Actions parser.
 // Supported here: typed primitive ==/!=/!/&&/||, parentheses, property lookup,
-// format, JSON/string helpers, always(), and embedded interpolation. Missing
+// format, JSON/string helpers, always()/cancelled(), and embedded interpolation. Missing
 // properties are empty strings; hyphenated property names are single lookups.
 // Expression fixtures avoid coercion/case-folding and escaped strings, where JS
 // differs. Admission separately normalizes concurrency group names to lowercase.
 function expression(source: string, context: Record<string, unknown>): unknown {
   return runInNewContext(
     source.replace(
-      /\b(?:github|needs|steps)(?:\.[A-Za-z_][\w-]*)+/gu,
+      /\b(?:github|needs|steps|vars)(?:\.[A-Za-z_][\w-]*)+/gu,
       (reference) => `lookup(${JSON.stringify(reference)})`,
     ),
     {
@@ -198,6 +211,7 @@ function expression(source: string, context: Record<string, unknown>): unknown {
       format: (template: string, ...values: unknown[]) =>
         template.replace(/\{(\d+)\}/gu, (_match, index: string) => String(values[Number(index)])),
       always: () => true,
+      cancelled: () => context.cancelled === true,
       fromJSON: JSON.parse,
       contains: (values: string[], value: string) =>
         values.some((item) => item.toLowerCase() === value.toLowerCase()),
@@ -230,14 +244,14 @@ function evaluate(
   );
 }
 
-async function eligibleJobs(workflow: Workflow, github: Github) {
+async function eligibleJobs(workflow: Workflow, github: Github, vars: Record<string, string> = {}) {
   const jobs: Record<string, boolean> = {};
   const needs: Record<string, { outputs: Record<string, unknown>; result: string }> = {};
   let diffCalls = 0;
   let checkouts = 0;
   const scope = workflow.jobs.scope;
   if (scope) {
-    const context = { github, needs };
+    const context = { github, needs, vars };
     jobs.scope = Boolean(evaluate(scope.if ?? true, context, true));
     const outputs: Record<string, string> = {};
     if (jobs.scope) {
@@ -245,8 +259,12 @@ async function eligibleJobs(workflow: Workflow, github: Github) {
         if (!evaluate(step.if ?? true, context, true)) {
           continue;
         }
-        if (step.name === "Checkout") {
+        if (step.uses?.startsWith("actions/checkout@")) {
           checkouts++;
+        }
+        if (step.uses === "./.github/actions/detect-scheduled-changes") {
+          // Admission ordering uses changed inputs; the cost suite owns proof-reuse decisions.
+          outputs.changed = "true";
         }
         if (!step.with?.script) {
           continue;
@@ -283,7 +301,7 @@ async function eligibleJobs(workflow: Workflow, github: Github) {
     if (id === "scope") {
       continue;
     }
-    jobs[id] = Boolean(evaluate(job.if ?? true, { github, needs }, true));
+    jobs[id] = Boolean(evaluate(job.if ?? true, { github, needs, vars }, true));
     needs[id] = { outputs: {}, result: jobs[id] ? "success" : "skipped" };
   }
   return { jobs, diffCalls, checkouts };
@@ -303,14 +321,16 @@ type Run = {
 // Cancellation is held until explicit release.
 // This models no webhook attribution, runner timing, fairness, or automatic retry.
 class Admission {
+  constructor(private readonly vars: Record<string, string> = {}) {}
+
   groups = new Map<string, { running?: Run; pending?: Run }>();
 
-  async admit(workflow: Workflow, github: Github, control?: { group: string; cancel: false }) {
+  async admit(workflow: Workflow, github: Github) {
     expect(subscribes(workflow, github), `${workflow.name}: ${github.event_name}`).toBe(true);
     let policy = workflow.concurrency;
     let eligibility: Run["eligibility"];
     if (!policy) {
-      eligibility = await eligibleJobs(workflow, github);
+      eligibility = await eligibleJobs(workflow, github, this.vars);
       const admitted = Object.entries(workflow.jobs).filter(([id]) => eligibility?.jobs[id]);
       if (admitted.length === 0) {
         // A rejected job never acquires a concurrency slot or a runner.
@@ -329,8 +349,8 @@ class Admission {
     if (!policy) {
       throw new Error("Expected concurrency on the workflow or its admitted job");
     }
-    const group = control?.group ?? String(evaluate(policy.group, { github }));
-    const cancel = control?.cancel ?? Boolean(evaluate(policy["cancel-in-progress"], { github }));
+    const group = String(evaluate(policy.group, { github }));
+    const cancel = Boolean(evaluate(policy["cancel-in-progress"], { github }));
     const run: Run = {
       workflow,
       github,
@@ -357,7 +377,7 @@ class Admission {
   }
 
   private async start(run: Run) {
-    run.eligibility ??= await eligibleJobs(run.workflow, run.github);
+    run.eligibility ??= await eligibleJobs(run.workflow, run.github, this.vars);
     const useful = Object.entries(run.eligibility.jobs).some(
       ([id, eligible]) => id !== "scope" && eligible,
     );
@@ -377,36 +397,25 @@ class Admission {
       await this.start(slots.running);
     }
   }
-
-  userCancel(run: Run) {
-    const slots = this.groups.get(run.group.toLowerCase())!;
-    if (slots.pending === run) {
-      slots.pending = undefined;
-      run.state = "cancelled";
-    } else {
-      expect(slots.running).toBe(run);
-      run.cancelRequested = true;
-    }
-  }
 }
 
 function expectDraftSkipped(run: Run) {
   expect(run.state).toBe("skipped");
   expect(run.eligibility).toBeDefined();
   for (const [id, eligible] of Object.entries(run.eligibility!.jobs)) {
-    expect(eligible, id).toBe(id === "scope");
+    if (id !== "scope") {
+      expect(eligible, id).toBe(false);
+    }
   }
   expect(run.eligibility!.diffCalls).toBe(0);
   expect(run.eligibility!.checkouts).toBe(0);
 }
 
-const DELAYED = ["opened", "reopened", "synchronize"].flatMap((passive) =>
-  ["ready_for_review", "synchronize"].map((useful) => ({
-    passive,
-    useful,
-    head: useful === "synchronize" ? "b" : "a",
-  })),
-);
+const DELAYED = [
+  { passive: "opened", useful: "ready_for_review", head: "a" },
+  { passive: "reopened", useful: "ready_for_review", head: "a" },
+  { passive: "synchronize", useful: "synchronize", head: "b" },
+];
 
 describe.each(WORKFLOWS)("ancillary admission: $file", (policy) => {
   const { file, prGroup, manual, push, convertToDraft } = policy;
@@ -422,7 +431,11 @@ describe.each(WORKFLOWS)("ancillary admission: $file", (policy) => {
       expect(ready.cancelRequested).toBe(false);
       expectDraftSkipped(delayed);
       expect(delayed.group).not.toBe(ready.group);
-      expect(Object.values(ready.eligibility!.jobs).every(Boolean)).toBe(true);
+      for (const [id, eligible] of Object.entries(ready.eligibility!.jobs)) {
+        if (id !== "scope") {
+          expect(eligible, id).toBe(true);
+        }
+      }
     },
   );
 
@@ -444,25 +457,6 @@ describe.each(WORKFLOWS)("ancillary admission: $file", (policy) => {
       expect(ready.cancelRequested).toBe(false);
     },
   );
-
-  it("demonstrates old-group pending replacement even with active cancellation disabled", async () => {
-    const queue = new Admission();
-    const control = {
-      group: String(
-        evaluate(workflowConcurrency(workflow).group, { github: pr(workflow, 100, "synchronize") }),
-      ),
-      cancel: false,
-    } as const;
-    const running = await queue.admit(workflow, pr(workflow, 100, "synchronize"), control);
-    const pending = await queue.admit(workflow, pr(workflow, 101, "ready_for_review"), control);
-    const delayed = await queue.admit(workflow, pr(workflow, 102, "opened", true), control);
-    expect(running.cancelRequested).toBe(false);
-    expect(pending.state).toBe("cancelled");
-    expect(delayed.state).toBe("pending");
-    expect(delayed.eligibility).toBeUndefined();
-    await queue.release(running);
-    expectDraftSkipped(delayed);
-  });
 
   it("keeps the exact useful PR group and supersedes old heads, including pending work", async () => {
     const queue = new Admission();
@@ -513,7 +507,7 @@ describe.each(WORKFLOWS)("ancillary admission: $file", (policy) => {
         workflow,
         refEvent(workflow, "workflow_dispatch", 204, "a", "refs/heads/release"),
       );
-      expect(otherRef.group).toBe("Plugin Init Scaffold Validation-refs/heads/release");
+      expect(otherRef.group).toBe(manual.group.replace("refs/heads/main", "refs/heads/release"));
       expect(otherRef.state).toBe("running");
     } else {
       expect(sameSha.group === first.group).toBe(cancels);
@@ -537,41 +531,62 @@ describe.each(WORKFLOWS)("ancillary admission: $file", (policy) => {
     it.each(sequences)(
       "retains ref-group policy for %s → %s → newer first event, isolated from PRs",
       async (firstEvent, otherEvent) => {
-        const queue = new Admission();
+        const queue = new Admission({ OPENCLAW_CI_ON_PUSH: "true" });
         const ready = await queue.admit(workflow, pr(workflow, 100, "ready_for_review"));
         const active = await queue.admit(workflow, refEvent(workflow, firstEvent, 201));
         const pending = await queue.admit(workflow, refEvent(workflow, otherEvent, 202, "b"));
         const latest = await queue.admit(workflow, refEvent(workflow, firstEvent, 203, "c"));
+        const firstGroup =
+          firstEvent === "push" ? push.group : manual.mode !== "absent" && manual.group;
+        const otherGroup =
+          otherEvent === "push" ? push.group : manual.mode !== "absent" && manual.group;
+        const separateEvents = firstGroup !== otherGroup;
         expect([active.group, pending.group, latest.group]).toEqual([
-          push.group,
-          push.group,
-          push.group,
+          firstGroup,
+          otherGroup,
+          firstGroup,
         ]);
         expect(ready.group).not.toBe(active.group);
         expect(ready.cancelRequested).toBe(false);
-        expect(active.cancelRequested).toBe(push.cancel);
-        expect(pending.state).toBe("cancelled");
+        const cancel = firstEvent === "push" && push.cancel;
+        expect(active.cancelRequested).toBe(cancel);
+        expect(pending.state).toBe(separateEvents ? "running" : "cancelled");
+        expect(pending.cancelRequested).toBe(false);
         expect(latest.state).toBe("pending");
         await queue.release(active);
-        expect(active.state).toBe(push.cancel ? "cancelled" : "completed");
+        expect(active.state).toBe(cancel ? "cancelled" : "completed");
         expect(latest.state).toBe("running");
       },
     );
   }
 
-  it("keeps passive runs unique and never resurrects user-cancelled work", async () => {
+  if (push) {
+    it("keeps active and pending hourly/manual work when a default main push skips", async () => {
+      const queue = new Admission();
+      const hourly = await queue.admit(workflow, refEvent(workflow, "schedule", 201));
+      const pending = await queue.admit(workflow, refEvent(workflow, "schedule", 202, "b"));
+      const manualRun = await queue.admit(workflow, refEvent(workflow, "workflow_dispatch", 203));
+      const skipped = await queue.admit(workflow, refEvent(workflow, "push", 204, "c"));
+      expect(skipped.state).toBe("skipped");
+      expect([hourly.state, pending.state, manualRun.state]).toEqual([
+        "running",
+        "pending",
+        "running",
+      ]);
+      expect(hourly.cancelRequested).toBe(false);
+      expect(manualRun.cancelRequested).toBe(false);
+      await queue.release(hourly);
+      expect(pending.state).toBe("running");
+    });
+  }
+
+  it("keeps passive runs unique", async () => {
     const queue = new Admission();
-    const active = await queue.admit(workflow, pr(workflow, 100, "ready_for_review"));
-    const pending = await queue.admit(workflow, pr(workflow, 101, "synchronize", false, "b"));
-    queue.userCancel(pending);
-    queue.userCancel(active);
-    await queue.release(active);
     const draft1 = await queue.admit(workflow, pr(workflow, 102, "opened", true));
     const draft2 = await queue.admit(workflow, pr(workflow, 103, "opened", true));
     expect(draft1.group).not.toBe(draft2.group);
     expectDraftSkipped(draft1);
     expectDraftSkipped(draft2);
-    expect([active.state, pending.state]).toEqual(["cancelled", "cancelled"]);
     expect([...queue.groups.values()].every((slot) => !slot.running && !slot.pending)).toBe(true);
   });
 
@@ -588,6 +603,20 @@ describe.each(WORKFLOWS)("ancillary admission: $file", (policy) => {
       expectDraftSkipped(converted);
     });
   }
+});
+
+it("honors cancellation after a schedule-only scope job is skipped", () => {
+  const workflow = parse(
+    readFileSync(".github/workflows/plugin-init-scaffold-validation.yml", "utf8"),
+  ) as Workflow;
+  const guard = workflow.jobs["validate-provider-scaffold"]!.if!;
+  const context = {
+    github: pr(workflow, 100, "ready_for_review"),
+    needs: { scope: { result: "skipped", outputs: {} } },
+    vars: {},
+  };
+  expect(evaluate(guard, { ...context, cancelled: false }, true)).toBe(true);
+  expect(evaluate(guard, { ...context, cancelled: true }, true)).toBe(false);
 });
 
 describe("Labeler admission", () => {

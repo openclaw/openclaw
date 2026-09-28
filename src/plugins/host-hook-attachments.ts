@@ -25,10 +25,6 @@ import type {
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 const DEFAULT_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
-/** Filesystem adapter used by attachment MIME probes and tests. */
-const attachmentProbeFs = {
-  open: (...args: Parameters<typeof fsPromises.open>) => fsPromises.open(...args),
-};
 const MAX_ATTACHMENT_FILES = 10;
 
 type SendMessage = typeof import("../infra/outbound/message.js").sendMessage;
@@ -36,12 +32,6 @@ type SendMessage = typeof import("../infra/outbound/message.js").sendMessage;
 const loadSendMessage = createLazyRuntimeModule(() =>
   import("../infra/outbound/message.js").then((module) => module.sendMessage),
 );
-
-type AttachmentDeliveryChannelPlugin = {
-  outbound?: {
-    deliveryMode?: string;
-  };
-};
 
 const loadGetChannelPlugin = createLazyRuntimeModule(() =>
   import("../channels/plugins/index.js").then((module) => module.getChannelPlugin),
@@ -54,15 +44,6 @@ type ResolvedAttachmentDelivery = {
   forceDocumentMime?: string;
   threadId?: string | number;
 };
-
-function captionFormatToParseMode(
-  captionFormat: PluginSessionAttachmentCaptionFormat | undefined,
-): "HTML" | undefined {
-  if (captionFormat === "html") {
-    return "HTML";
-  }
-  return undefined;
-}
 
 function escapeHtmlText(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -81,7 +62,7 @@ async function readMimeSniffBuffer(
 ): Promise<Buffer | { error: string }> {
   let handle: Awaited<ReturnType<typeof fsPromises.open>> | undefined;
   try {
-    handle = await attachmentProbeFs.open(filePath, "r");
+    handle = await fsPromises.open(filePath, "r");
     const length = Math.min(Math.max(0, size), FILE_TYPE_SNIFF_MAX_BYTES);
     const buffer = Buffer.alloc(length);
     const { bytesRead } = await handle.read(buffer, 0, length, 0);
@@ -101,7 +82,7 @@ function resolveAttachmentDelivery(params: {
   captionFormat?: PluginSessionAttachmentCaptionFormat;
   channelHints?: PluginAttachmentChannelHints;
 }): ResolvedAttachmentDelivery {
-  const fallbackParseMode = captionFormatToParseMode(params.captionFormat);
+  const fallbackParseMode = params.captionFormat === "html" ? "HTML" : undefined;
   const channel = params.channel.trim().toLowerCase();
   const hints = params.channelHints;
   // These nested fields shipped before attachment hints became transport-neutral.
@@ -149,11 +130,11 @@ async function validateAttachmentFiles(
     if (!filePath) {
       return { error: "attachment file path is required" };
     }
-    const resolvedPath = resolveAttachmentFilePath({
-      filePath,
-      config: options?.config,
-      sessionKey: options?.sessionKey,
-    });
+    const workspaceDir =
+      options?.sessionKey && options.config
+        ? resolveAgentWorkspaceDir(options.config, resolveAgentIdFromSessionKey(options.sessionKey))
+        : undefined;
+    const resolvedPath = resolvePathFromInput(filePath, resolveWorkspaceRoot(workspaceDir));
     const info = await lstat(resolvedPath).catch(() => undefined);
     if (info?.isSymbolicLink()) {
       return { error: `attachment file symlinks are not allowed: ${resolvedPath}` };
@@ -195,33 +176,6 @@ async function validateAttachmentFiles(
   return paths;
 }
 
-function resolveAttachmentFilePath(params: {
-  filePath: string;
-  config?: OpenClawConfig;
-  sessionKey?: string;
-}): string {
-  const workspaceDir =
-    params.sessionKey && params.config
-      ? resolveAgentWorkspaceDir(params.config, resolveAgentIdFromSessionKey(params.sessionKey))
-      : undefined;
-  return resolvePathFromInput(params.filePath, resolveWorkspaceRoot(workspaceDir));
-}
-
-/** Resolves the thread id used when delivering a plugin session attachment. */
-function resolveSessionAttachmentThreadId(params: {
-  deliveryThreadId?: unknown;
-  explicitThreadId?: unknown;
-  fallbackThreadId?: unknown;
-  hintThreadId?: unknown;
-}): string | number | undefined {
-  return (
-    normalizeOptionalThreadId(params.hintThreadId) ??
-    normalizeOptionalThreadId(params.explicitThreadId) ??
-    normalizeOptionalThreadId(params.fallbackThreadId) ??
-    normalizeOptionalThreadId(params.deliveryThreadId)
-  );
-}
-
 /** Sends a bundled-plugin session attachment through the session's active delivery route. */
 export async function sendPluginSessionAttachment(
   params: PluginSessionAttachmentParams & { config?: OpenClawConfig; origin?: PluginOrigin },
@@ -248,9 +202,7 @@ export async function sendPluginSessionAttachment(
   try {
     const deliveryPlugin =
       normalizedChannel && isDeliverableMessageChannel(normalizedChannel)
-        ? ((await loadGetChannelPlugin())(normalizedChannel) as
-            | AttachmentDeliveryChannelPlugin
-            | undefined)
+        ? (await loadGetChannelPlugin())(normalizedChannel)
         : undefined;
     if (deliveryPlugin?.outbound?.deliveryMode === "gateway") {
       return {
@@ -280,12 +232,11 @@ export async function sendPluginSessionAttachment(
   if (!Array.isArray(validated)) {
     return { ok: false, error: validated.error };
   }
-  const resolvedThreadId = resolveSessionAttachmentThreadId({
-    deliveryThreadId: deliveryContext.threadId,
-    explicitThreadId: params.threadId,
-    fallbackThreadId: threadId,
-    hintThreadId: resolvedDelivery.threadId,
-  });
+  const resolvedThreadId =
+    normalizeOptionalThreadId(resolvedDelivery.threadId) ??
+    normalizeOptionalThreadId(params.threadId) ??
+    normalizeOptionalThreadId(threadId) ??
+    normalizeOptionalThreadId(deliveryContext.threadId);
   let result: Awaited<ReturnType<SendMessage>>;
   try {
     const sendMessage = await loadSendMessage();

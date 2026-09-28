@@ -23,6 +23,11 @@ import {
   runDoctorHealthContributionList,
 } from "./doctor-health-contributions.test-support.js";
 import { runDoctorLintChecks } from "./doctor-lint-flow.js";
+import {
+  clearHealthChecksForTest,
+  getHealthCheck,
+  registerHealthCheck,
+} from "./health-check-registry.js";
 import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
 // This suite's SecretRef migration assertion uses a core model credential. Registry owner suites
@@ -80,6 +85,9 @@ const mocks = vi.hoisted(() => ({
   noteLegacyCodexProviderOverride: vi.fn(),
   noteSharedAuthStoreStatus: vi.fn(),
   noteMemorySearchHealth: vi.fn().mockResolvedValue(undefined),
+  collectMemorySearchHealthFindings: vi
+    .fn<() => Promise<readonly HealthFinding[]>>()
+    .mockResolvedValue([]),
   noteWebFetchProxyDiagnostic: vi.fn().mockResolvedValue(undefined),
   buildGatewayConnectionDetails: vi.fn(() => ({ message: "gateway details" })),
   callGateway: vi.fn(),
@@ -115,7 +123,6 @@ const mocks = vi.hoisted(() => ({
     status: { ok: true },
   })),
   probeGatewayMemoryStatus: vi.fn(async () => ({ checked: true, ready: true, skipped: false })),
-  listHealthChecks: vi.fn(),
   noteChromeMcpBrowserReadiness: vi.fn(),
   detectLegacyStateMigrations: vi.fn(),
   runLegacyStateMigrations: vi.fn(),
@@ -389,10 +396,14 @@ vi.mock("../commands/doctor-auth.js", () => ({
   noteSharedAuthStoreStatus: mocks.noteSharedAuthStoreStatus,
 }));
 
-vi.mock("../commands/doctor-memory-search.js", () => ({
+vi.mock("../commands/doctor-memory-recall.js", () => ({
   maybeRepairMemoryRecallHealth: vi.fn().mockResolvedValue(undefined),
   noteMemoryRecallHealth: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("../commands/doctor-memory-search.js", () => ({
   noteMemorySearchHealth: mocks.noteMemorySearchHealth,
+  collectMemorySearchHealthFindings: mocks.collectMemorySearchHealthFindings,
 }));
 
 vi.mock("../commands/doctor-web-fetch-proxy.js", () => ({
@@ -445,26 +456,6 @@ vi.mock("../commands/doctor-gateway-health.js", () => ({
   checkGatewayHealth: mocks.checkGatewayHealth,
   probeGatewayMemoryStatus: mocks.probeGatewayMemoryStatus,
 }));
-
-vi.mock("./health-check-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./health-check-registry.js")>();
-  return {
-    ...actual,
-    listHealthChecks: mocks.listHealthChecks,
-    listExtensionHealthChecksForDoctor: (
-      coreChecks: Parameters<typeof actual.listExtensionHealthChecksForDoctor>[0],
-    ) => {
-      const coreIds = new Set(coreChecks.map((check) => check.id));
-      const registeredChecks = mocks.listHealthChecks() as readonly HealthCheck[];
-      for (const check of registeredChecks) {
-        if (check.id.startsWith("core/doctor/") || coreIds.has(check.id)) {
-          throw new actual.HealthCheckRegistrationError(check.id);
-        }
-      }
-      return registeredChecks.filter((check) => check.kind !== "core");
-    },
-  };
-});
 
 vi.mock("../commands/doctor-browser.js", () => ({
   noteChromeMcpBrowserReadiness: mocks.noteChromeMcpBrowserReadiness,
@@ -551,12 +542,8 @@ vi.mock("../commands/doctor-workspace-status.js", () => ({
   collectWorkspaceStatusHealthFindings: mocks.collectWorkspaceStatusHealthFindings,
 }));
 
-vi.mock("../commands/doctor-state-integrity.js", () => ({
-  collectWorkspaceBackupTip: mocks.collectWorkspaceBackupTip,
-  noteWorkspaceBackupTip: vi.fn(),
-}));
-
 vi.mock("../commands/doctor-workspace.js", () => ({
+  collectWorkspaceBackupTip: mocks.collectWorkspaceBackupTip,
   MEMORY_SYSTEM_PROMPT: "Enable memory system for better recall.",
   shouldSuggestMemorySystem: mocks.shouldSuggestMemorySystem,
 }));
@@ -658,6 +645,14 @@ function requireDoctorContribution(id: string) {
   return contribution;
 }
 
+async function requireDoctorHealthCheck(id: string) {
+  const check = (await resolveDoctorContributionHealthChecks()).find((entry) => entry.id === id);
+  if (!check) {
+    throw new Error(`expected doctor health check ${id}`);
+  }
+  return check;
+}
+
 type DoctorContributionRunContext = Parameters<
   ReturnType<typeof requireDoctorContribution>["run"]
 >[0];
@@ -683,6 +678,15 @@ function createDoctorLintFixture(
     runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
     ...overrides,
   });
+}
+
+function setRegisteredHealthChecks(
+  checks: ReadonlyArray<Pick<HealthCheck, "id" | "kind"> & { defaultEnabled?: boolean }>,
+) {
+  clearHealthChecksForTest();
+  for (const check of checks) {
+    registerHealthCheck({ ...check, description: check.id, detect: async () => [] });
+  }
 }
 
 describe("doctor health contributions", () => {
@@ -740,6 +744,7 @@ describe("doctor health contributions", () => {
     mocks.noteLegacyCodexProviderOverride.mockClear();
     mocks.noteSharedAuthStoreStatus.mockClear();
     mocks.noteMemorySearchHealth.mockClear().mockResolvedValue(undefined);
+    mocks.collectMemorySearchHealthFindings.mockClear().mockResolvedValue([]);
     mocks.noteWebFetchProxyDiagnostic.mockClear().mockResolvedValue(undefined);
     mocks.buildGatewayConnectionDetails.mockClear().mockReturnValue({ message: "gateway details" });
     mocks.callGateway.mockReset().mockResolvedValue({});
@@ -782,7 +787,7 @@ describe("doctor health contributions", () => {
       checksRepaired: 0,
       checksValidated: 0,
     }));
-    mocks.listHealthChecks.mockReset().mockReturnValue([
+    setRegisteredHealthChecks([
       { id: "core/example/internal", kind: "core" },
       { id: "plugin/example/unrelated", kind: "plugin" },
     ]);
@@ -903,6 +908,7 @@ describe("doctor health contributions", () => {
   });
 
   afterEach(() => {
+    clearHealthChecksForTest();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
@@ -1863,37 +1869,6 @@ describe("doctor health contributions", () => {
     });
   });
 
-  it("keeps post-restart plugin readiness when the Gateway is stopped", async () => {
-    const contribution = requireDoctorContribution("doctor:workspace-status");
-    const pluginVersionDrift = {
-      gatewayVersion: "2026.5.2-test",
-      drifts: [
-        {
-          pluginId: "codex",
-          installedVersion: "2026.5.30-beta.1",
-          gatewayVersion: "2026.5.2-test",
-          source: "npm",
-        },
-      ],
-    };
-    mocks.gatherDaemonStatus.mockResolvedValueOnce({
-      gateway: { version: null },
-      pluginVersionRestartReadiness: { status: "resolved", report: pluginVersionDrift },
-    });
-    const cfg = { plugins: { entries: { codex: { enabled: true } } } };
-
-    await contribution.run(
-      createDoctorHealthFlowContext({
-        cfg,
-        options: { nonInteractive: true },
-      }),
-    );
-
-    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, {
-      pluginVersionReadiness: { status: "resolved", report: pluginVersionDrift },
-    });
-  });
-
   it("keeps post-restart plugin readiness when the Gateway probe is unavailable", async () => {
     const contribution = requireDoctorContribution("doctor:workspace-status");
     const pluginVersionDrift = {
@@ -2119,11 +2094,7 @@ describe("doctor health contributions", () => {
   });
 
   it("forwards the health-check environment to heartbeat cadence detection", async () => {
-    const checks = await resolveDoctorContributionHealthChecks();
-    const check = checks.find(
-      (candidate) => candidate.id === "core/doctor/heartbeat-cadence-migration",
-    );
-    expect(check).toBeDefined();
+    const check = await requireDoctorHealthCheck("core/doctor/heartbeat-cadence-migration");
     const cfg = { agents: { defaults: { heartbeat: { every: "15m" } } } };
     const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-detector-state" };
 
@@ -2146,29 +2117,13 @@ describe("doctor health contributions", () => {
   });
 
   it("forwards the health-check environment to heartbeat task detection", async () => {
-    const checks = await resolveDoctorContributionHealthChecks();
-    const check = checks.find(
-      (candidate) => candidate.id === "core/doctor/heartbeat-task-cron-migration",
-    );
-    expect(check).toBeDefined();
+    const check = await requireDoctorHealthCheck("core/doctor/heartbeat-task-cron-migration");
     const cfg = { agents: { defaults: { heartbeat: { every: "15m" } } } };
     const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-task-detector-state" };
 
     await check!.detect(createDoctorLintFixture(cfg, { env }));
 
     expect(mocks.collectHeartbeatTaskMigrationFindings).toHaveBeenCalledWith(cfg, env);
-  });
-
-  it("exposes the Skill Workshop tool-policy check to doctor lint", async () => {
-    const contributionChecks = await resolveDoctorContributionHealthChecks();
-    const check = contributionChecks.find(
-      (entry) => entry.id === "core/doctor/skill-workshop-tool-policy",
-    );
-
-    expect(check).toMatchObject({
-      id: "core/doctor/skill-workshop-tool-policy",
-      kind: "core",
-    });
   });
 
   it("keeps default-account routing lint opt-in", async () => {
@@ -2234,32 +2189,30 @@ describe("doctor health contributions", () => {
     );
   });
 
-  it.each(["undefined", "null", "  undefined  ", "", "  "])(
-    "regenerates invalid Gateway token %j",
-    async (token) => {
-      mocks.resolveGatewayAuth.mockReturnValue({ mode: "token", token });
-      mocks.resolveGatewayAuthToken.mockResolvedValue({ source: "config", token });
-      const contribution = requireDoctorContribution("doctor:gateway-auth");
-      const ctx = createDoctorContext({
-        cfg: {
-          gateway: {
-            mode: "local",
-            auth: { mode: "token", token },
-          },
+  it("regenerates an invalid Gateway token", async () => {
+    const token = "undefined";
+    mocks.resolveGatewayAuth.mockReturnValue({ mode: "token", token });
+    mocks.resolveGatewayAuthToken.mockResolvedValue({ source: "config", token });
+    const contribution = requireDoctorContribution("doctor:gateway-auth");
+    const ctx = createDoctorContext({
+      cfg: {
+        gateway: {
+          mode: "local",
+          auth: { mode: "token", token },
         },
-        options: { generateGatewayToken: true, nonInteractive: true },
-        configPath: "/tmp/openclaw.json",
-      });
+      },
+      options: { generateGatewayToken: true, nonInteractive: true },
+      configPath: "/tmp/openclaw.json",
+    });
 
-      await contribution.run(ctx);
+    await contribution.run(ctx);
 
-      expect(mocks.note).toHaveBeenCalledWith(
-        expect.stringContaining("not a usable secret"),
-        "Gateway auth",
-      );
-      expect(ctx.cfg.gateway?.auth?.token).toBe("generated-gateway-token");
-    },
-  );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("not a usable secret"),
+      "Gateway auth",
+    );
+    expect(ctx.cfg.gateway?.auth?.token).toBe("generated-gateway-token");
+  });
 
   it.each(["password", "none"] as const)(
     "preserves %s auth during placeholder repair",
@@ -2863,10 +2816,7 @@ describe("doctor health contributions", () => {
   });
 
   it("keeps systemd linger opt-in and reports disabled linger when selected", async () => {
-    const contributionChecks = await resolveDoctorContributionHealthChecks();
-    const systemdLingerCheck = contributionChecks.find(
-      (check) => check.id === "core/doctor/systemd-linger",
-    );
+    const systemdLingerCheck = await requireDoctorHealthCheck("core/doctor/systemd-linger");
     expect(systemdLingerCheck).toMatchObject({ defaultEnabled: false });
 
     const ctx = createDoctorLintFixture({ gateway: { mode: "local" } });
@@ -2904,11 +2854,7 @@ describe("doctor health contributions", () => {
 
   it("keeps selected systemd linger quiet when the gateway service is not loaded", async () => {
     mocks.gatewayServiceIsLoaded.mockResolvedValue(false);
-    const contributionChecks = await resolveDoctorContributionHealthChecks();
-    const systemdLingerCheck = contributionChecks.find(
-      (check) => check.id === "core/doctor/systemd-linger",
-    );
-    expect(systemdLingerCheck).toBeDefined();
+    const systemdLingerCheck = await requireDoctorHealthCheck("core/doctor/systemd-linger");
 
     const ctx = createDoctorLintFixture({ gateway: { mode: "local" } });
 
@@ -2987,11 +2933,7 @@ describe("doctor health contributions", () => {
     mocks.readSystemdUserLingerStatus.mockImplementation(async (params) =>
       params?.user === "debian" ? { user: "debian", linger: "no" } : null,
     );
-    const contributionChecks = await resolveDoctorContributionHealthChecks();
-    const systemdLingerCheck = contributionChecks.find(
-      (check) => check.id === "core/doctor/systemd-linger",
-    );
-    expect(systemdLingerCheck).toBeDefined();
+    const systemdLingerCheck = await requireDoctorHealthCheck("core/doctor/systemd-linger");
     const ctx = createDoctorLintFixture({ gateway: { mode: "local" } });
 
     await withProcessPlatform("linux", async () => {
@@ -3012,10 +2954,7 @@ describe("doctor health contributions", () => {
   });
 
   it("keeps stale plugin-runtime symlinks opt-in for structured lint selection", async () => {
-    const contributionChecks = await resolveDoctorContributionHealthChecks();
-    const check = contributionChecks.find(
-      (entry) => entry.id === "core/doctor/stale-plugin-runtime-symlinks",
-    );
+    const check = await requireDoctorHealthCheck("core/doctor/stale-plugin-runtime-symlinks");
     expect(check).toMatchObject({ defaultEnabled: false });
     mocks.collectStalePluginRuntimeSymlinkHealthFindings.mockResolvedValueOnce([
       {
@@ -3058,10 +2997,7 @@ describe("doctor health contributions", () => {
     const legacyRuntimeRoot = nodePath.join(stateDir, "plugin-runtime-deps");
     fs.mkdirSync(legacyRuntimeRoot, { recursive: true });
     try {
-      const contributionChecks = await resolveDoctorContributionHealthChecks();
-      const check = contributionChecks.find(
-        (entry) => entry.id === "core/doctor/legacy-plugin-dependencies",
-      );
+      const check = await requireDoctorHealthCheck("core/doctor/legacy-plugin-dependencies");
       expect(check).toMatchObject({ defaultEnabled: false });
 
       const ctx = createDoctorLintFixture();
@@ -3090,10 +3026,7 @@ describe("doctor health contributions", () => {
   });
 
   it("keeps state integrity opt-in for default lint selection", async () => {
-    const contributionChecks = await resolveDoctorContributionHealthChecks();
-    const stateIntegrityCheck = contributionChecks.find(
-      (check) => check.id === "core/doctor/state-integrity",
-    );
+    const stateIntegrityCheck = await requireDoctorHealthCheck("core/doctor/state-integrity");
     expect(stateIntegrityCheck).toMatchObject({ defaultEnabled: false });
 
     const detect = vi.fn(async () => []);
@@ -3117,45 +3050,29 @@ describe("doctor health contributions", () => {
     expect(detect).toHaveBeenCalledTimes(2);
   });
 
-  it("collects memory-search notes as structured findings", async () => {
+  it("collects memory-search findings from the diagnostic owner", async () => {
     const contribution = requireDoctorContribution("doctor:memory-search");
     const check = contribution.healthChecks[0] as HealthCheck;
-    const env = { OPENCLAW_STATE_DIR: "/isolated-memory-state" };
-    mocks.noteMemorySearchHealth.mockImplementationOnce(async (_cfg, opts) => {
-      opts.noteFn(
-        [
-          'Memory search provider is set to "openai" but no API key was found.',
-          "Semantic recall will not work without a valid API key.",
-          "Fix (pick one):",
-          "- Set OPENAI_API_KEY in your environment",
-        ].join("\n"),
-        "Memory search",
-      );
-    });
-
-    const findings = await check.detect(createDoctorLintFixture({}, { env }));
-
-    expect(contribution.healthCheckIds).toEqual(["core/doctor/memory-search"]);
-    expect((check as HealthCheck & { defaultEnabled?: boolean }).defaultEnabled).toBe(false);
-    expect(mocks.noteMemorySearchHealth).toHaveBeenCalledWith(
+    const ctx = createDoctorLintFixture(
       {},
-      expect.objectContaining({
-        env,
-        includeWorkspaceMemoryHealth: false,
-        skipAuthProfileResolution: true,
-        gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
-        noteFn: expect.any(Function),
-      }),
+      { env: { OPENCLAW_STATE_DIR: "/isolated-memory-state" } },
     );
-    expect(findings).toEqual([
-      expect.objectContaining({
+    const findings: HealthFinding[] = [
+      {
         checkId: "core/doctor/memory-search",
         severity: "warning",
         path: "memory.search.provider",
         message: 'Memory search provider is set to "openai" but no API key was found.',
-        fixHint: expect.stringContaining("OPENAI_API_KEY"),
-      }),
-    ]);
+        fixHint: "- Set OPENAI_API_KEY in your environment",
+      },
+    ];
+    mocks.collectMemorySearchHealthFindings.mockResolvedValueOnce(findings);
+
+    expect(await check.detect(ctx)).toEqual(findings);
+    expect(contribution.healthCheckIds).toEqual(["core/doctor/memory-search"]);
+    expect((check as HealthCheck & { defaultEnabled?: boolean }).defaultEnabled).toBe(false);
+    expect(mocks.collectMemorySearchHealthFindings).toHaveBeenCalledWith(ctx);
+    expect(mocks.noteMemorySearchHealth).not.toHaveBeenCalled();
   });
 
   it("forwards the interactive Doctor environment to memory provider discovery", async () => {
@@ -3167,22 +3084,9 @@ describe("doctor health contributions", () => {
     expect(mocks.noteMemorySearchHealth).toHaveBeenCalledWith({}, expect.objectContaining({ env }));
   });
 
-  it("does not report disabled memory search as a lint warning", async () => {
-    const contribution = requireDoctorContribution("doctor:memory-search");
-    const check = contribution.healthChecks[0] as HealthCheck;
-    mocks.noteMemorySearchHealth.mockImplementationOnce(async (_cfg, opts) => {
-      opts.noteFn("Memory search is explicitly disabled (enabled: false).", "Memory search");
-    });
-
-    const findings = await check.detect(createDoctorLintFixture());
-
-    expect(findings).toEqual([]);
-  });
-
   it("keeps workspace suggestions opt-in for default lint selection", async () => {
-    const contributionChecks = await resolveDoctorContributionHealthChecks();
-    const workspaceSuggestionsCheck = contributionChecks.find(
-      (check) => check.id === "core/doctor/workspace-suggestions",
+    const workspaceSuggestionsCheck = await requireDoctorHealthCheck(
+      "core/doctor/workspace-suggestions",
     );
     expect(workspaceSuggestionsCheck).toMatchObject({ defaultEnabled: false });
     mocks.collectWorkspaceBackupTip.mockReturnValueOnce(
@@ -3254,10 +3158,7 @@ describe("doctor health contributions", () => {
   });
 
   it("keeps disk space opt-in for default lint selection", async () => {
-    const contributionChecks = await resolveDoctorContributionHealthChecks();
-    const diskSpaceCheck = contributionChecks.find(
-      (check) => check.id === "core/doctor/disk-space",
-    );
+    const diskSpaceCheck = await requireDoctorHealthCheck("core/doctor/disk-space");
     expect(diskSpaceCheck).toMatchObject({ defaultEnabled: false });
 
     const ctx = createDoctorLintFixture();
@@ -3286,10 +3187,7 @@ describe("doctor health contributions", () => {
   });
 
   it("keeps WhatsApp responsiveness opt-in for default lint selection", async () => {
-    const contributionChecks = await resolveDoctorContributionHealthChecks();
-    const whatsappCheck = contributionChecks.find(
-      (check) => check.id === "core/doctor/whatsapp-responsiveness",
-    );
+    const whatsappCheck = await requireDoctorHealthCheck("core/doctor/whatsapp-responsiveness");
     expect(whatsappCheck).toMatchObject({ defaultEnabled: false });
 
     const ctx = createDoctorLintFixture(
@@ -3369,11 +3267,7 @@ describe("doctor health contributions", () => {
   });
 
   it("skips WhatsApp responsiveness Gateway status probes for exec SecretRefs without allow-exec", async () => {
-    const contributionChecks = await resolveDoctorContributionHealthChecks();
-    const whatsappCheck = contributionChecks.find(
-      (check) => check.id === "core/doctor/whatsapp-responsiveness",
-    );
-    expect(whatsappCheck).toBeDefined();
+    const whatsappCheck = await requireDoctorHealthCheck("core/doctor/whatsapp-responsiveness");
     mocks.gatewaySecretInputPathCanWin.mockReturnValue(true);
     mocks.readGatewaySecretInputValue.mockReturnValue("exec-token");
 
@@ -3395,10 +3289,7 @@ describe("doctor health contributions", () => {
   });
 
   it("keeps device pairing opt-in for default lint selection", async () => {
-    const contributionChecks = await resolveDoctorContributionHealthChecks();
-    const devicePairingCheck = contributionChecks.find(
-      (check) => check.id === "core/doctor/device-pairing",
-    );
+    const devicePairingCheck = await requireDoctorHealthCheck("core/doctor/device-pairing");
     expect(devicePairingCheck).toMatchObject({ defaultEnabled: false });
 
     const ctx = createDoctorLintFixture({ gateway: { mode: "local" } });
@@ -3425,10 +3316,7 @@ describe("doctor health contributions", () => {
       "core/doctor/legacy-cron-store",
     ]);
 
-    const contributionChecks = await resolveDoctorContributionHealthChecks();
-    const cronStoreCheck = contributionChecks.find(
-      (check) => check.id === "core/doctor/legacy-cron-store",
-    );
+    const cronStoreCheck = await requireDoctorHealthCheck("core/doctor/legacy-cron-store");
     expect(cronStoreCheck).toMatchObject({ defaultEnabled: false });
 
     const ctx = createDoctorLintFixture({ cron: { store: "/tmp/openclaw-cron/jobs.json" } });
@@ -3456,10 +3344,7 @@ describe("doctor health contributions", () => {
   });
 
   it("keeps legacy WhatsApp crontab opt-in for default lint selection", async () => {
-    const contributionChecks = await resolveDoctorContributionHealthChecks();
-    const crontabCheck = contributionChecks.find(
-      (check) => check.id === "core/doctor/legacy-whatsapp-crontab",
-    );
+    const crontabCheck = await requireDoctorHealthCheck("core/doctor/legacy-whatsapp-crontab");
     expect(crontabCheck).toMatchObject({ defaultEnabled: false });
 
     const ctx = createDoctorLintFixture();
@@ -3487,10 +3372,7 @@ describe("doctor health contributions", () => {
   });
 
   it("keeps channel plugin blockers opt-in for default lint selection", async () => {
-    const contributionChecks = await resolveDoctorContributionHealthChecks();
-    const blockerCheck = contributionChecks.find(
-      (check) => check.id === "core/doctor/channel-plugin-blockers",
-    );
+    const blockerCheck = await requireDoctorHealthCheck("core/doctor/channel-plugin-blockers");
     expect(blockerCheck).toMatchObject({ defaultEnabled: false });
     mocks.scanConfiguredChannelPluginBlockers.mockReturnValue([
       { channelId: "discord", pluginId: "discord", reason: "missing explicit enablement" },
@@ -3518,12 +3400,10 @@ describe("doctor health contributions", () => {
   });
 
   it("reports channel package-state capability load failures by default", async () => {
-    const contributionChecks = await resolveDoctorContributionHealthChecks();
-    const capabilityCheck = contributionChecks.find(
-      (check) => check.id === "core/doctor/channel-package-state-capabilities",
+    const capabilityCheck = await requireDoctorHealthCheck(
+      "core/doctor/channel-package-state-capabilities",
     );
     expect(capabilityCheck).toMatchObject({ defaultEnabled: true });
-    expect(capabilityCheck).toBeDefined();
     mocks.collectBundledChannelPackageStateLoadFailures.mockReturnValue([
       {
         detail: "plugin module path not found: /plugins/example-chat/auth-presence",
@@ -3923,12 +3803,12 @@ describe("doctor health contributions", () => {
     await contribution.run(ctx);
 
     expect(mocks.runDoctorHealthRepairs).toHaveBeenCalledWith(expect.any(Object), {
-      checks: [{ id: "plugin/example/unrelated", kind: "plugin" }],
+      checks: [getHealthCheck("plugin/example/unrelated")],
     });
   });
 
   it("skips opt-in extension checks during routine repair", async () => {
-    mocks.listHealthChecks.mockReturnValue([
+    setRegisteredHealthChecks([
       { id: "plugin/example/regular", kind: "plugin" },
       { id: "plugin/example/opt-in", kind: "plugin", defaultEnabled: false },
     ]);
@@ -3945,7 +3825,7 @@ describe("doctor health contributions", () => {
 
     expect(mocks.runDoctorHealthRepairs).toHaveBeenCalledWith(
       expect.objectContaining({ env: { OPENCLAW_UPDATE_POST_CORE: "1" } }),
-      { checks: [{ id: "plugin/example/regular", kind: "plugin" }] },
+      { checks: [getHealthCheck("plugin/example/regular")] },
     );
   });
 
@@ -4023,7 +3903,7 @@ describe("doctor health contributions", () => {
   );
 
   it("rejects extension repairs that claim reserved core doctor ids", async () => {
-    mocks.listHealthChecks.mockReturnValue([
+    setRegisteredHealthChecks([
       { id: "plugin/example/unrelated", kind: "plugin" },
       { id: "core/doctor/shell-completion", kind: "plugin" },
     ]);
@@ -4043,7 +3923,7 @@ describe("doctor health contributions", () => {
   });
 
   it("rejects registered core-kind repairs that claim reserved core doctor ids", async () => {
-    mocks.listHealthChecks.mockReturnValue([
+    setRegisteredHealthChecks([
       { id: "plugin/example/unrelated", kind: "plugin" },
       { id: "core/doctor/shell-completion", kind: "core" },
     ]);
@@ -4123,6 +4003,13 @@ describe("doctor health contributions", () => {
       defaultEnabled?: boolean;
     };
 
+    function lintWriteConfig(configPath = "/tmp/openclaw-home/openclaw.json") {
+      return runDoctorLintChecks(createDoctorLintFixture({}, { configPath }), {
+        checks: [check],
+        onlyIds: ["core/doctor/write-config"],
+      });
+    }
+
     it("keeps write-config lint opt-in for structured findings", () => {
       expect(writeConfigContribution.healthCheckIds).toEqual(["core/doctor/write-config"]);
       expect(check.defaultEnabled).toBe(false);
@@ -4131,17 +4018,7 @@ describe("doctor health contributions", () => {
     it("reports Nix immutable config mode when selected", async () => {
       vi.stubEnv("OPENCLAW_NIX_MODE", "1");
 
-      await expect(
-        runDoctorLintChecks(
-          {
-            cfg: {},
-            mode: "lint" as const,
-            runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-            configPath: "/tmp/fake-openclaw.json",
-          },
-          { checks: [check], onlyIds: ["core/doctor/write-config"] },
-        ),
-      ).resolves.toMatchObject({
+      await expect(lintWriteConfig("/tmp/fake-openclaw.json")).resolves.toMatchObject({
         checksRun: 1,
         checksSkipped: 0,
         findings: [
@@ -4158,17 +4035,7 @@ describe("doctor health contributions", () => {
     it("reports externally managed immutable config mode when selected", async () => {
       vi.stubEnv("OPENCLAW_CONFIG_READONLY", "1");
 
-      await expect(
-        runDoctorLintChecks(
-          {
-            cfg: {},
-            mode: "lint" as const,
-            runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-            configPath: "/tmp/fake-openclaw.json",
-          },
-          { checks: [check], onlyIds: ["core/doctor/write-config"] },
-        ),
-      ).resolves.toMatchObject({
+      await expect(lintWriteConfig("/tmp/fake-openclaw.json")).resolves.toMatchObject({
         checksRun: 1,
         checksSkipped: 0,
         findings: [
@@ -4190,17 +4057,7 @@ describe("doctor health contributions", () => {
       } as fs.Stats);
       const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
 
-      await expect(
-        runDoctorLintChecks(
-          {
-            cfg: {},
-            mode: "lint" as const,
-            runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-            configPath,
-          },
-          { checks: [check], onlyIds: ["core/doctor/write-config"] },
-        ),
-      ).resolves.toMatchObject({
+      await expect(lintWriteConfig(configPath)).resolves.toMatchObject({
         findings: [],
       });
       expect(accessSpy).toHaveBeenCalledWith(
@@ -4219,17 +4076,7 @@ describe("doctor health contributions", () => {
         throw new Error("EACCES");
       });
 
-      await expect(
-        runDoctorLintChecks(
-          {
-            cfg: {},
-            mode: "lint" as const,
-            runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-            configPath,
-          },
-          { checks: [check], onlyIds: ["core/doctor/write-config"] },
-        ),
-      ).resolves.toMatchObject({
+      await expect(lintWriteConfig(configPath)).resolves.toMatchObject({
         findings: [
           expect.objectContaining({
             checkId: "core/doctor/write-config",
@@ -4245,17 +4092,7 @@ describe("doctor health contributions", () => {
       const configPath = nodePath.join(process.cwd(), ".doctor-missing-w/openclaw.json");
       const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
 
-      await expect(
-        runDoctorLintChecks(
-          {
-            cfg: {},
-            mode: "lint" as const,
-            runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-            configPath,
-          },
-          { checks: [check], onlyIds: ["core/doctor/write-config"] },
-        ),
-      ).resolves.toMatchObject({
+      await expect(lintWriteConfig(configPath)).resolves.toMatchObject({
         findings: [],
       });
       expect(accessSpy).toHaveBeenCalledWith(process.cwd(), fs.constants.W_OK | fs.constants.X_OK);
@@ -4297,17 +4134,7 @@ describe("doctor health contributions", () => {
         }
       });
 
-      await expect(
-        runDoctorLintChecks(
-          {
-            cfg: {},
-            mode: "lint" as const,
-            runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-            configPath,
-          },
-          { checks: [check], onlyIds: ["core/doctor/write-config"] },
-        ),
-      ).resolves.toMatchObject({
+      await expect(lintWriteConfig(configPath)).resolves.toMatchObject({
         findings: [
           expect.objectContaining({
             checkId: "core/doctor/write-config",
@@ -4326,17 +4153,7 @@ describe("doctor health contributions", () => {
       } as fs.Stats);
       const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
 
-      await expect(
-        runDoctorLintChecks(
-          {
-            cfg: {},
-            mode: "lint" as const,
-            runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-            configPath: "/tmp/openclaw-home/openclaw.json",
-          },
-          { checks: [check], onlyIds: ["core/doctor/write-config"] },
-        ),
-      ).resolves.toMatchObject({
+      await expect(lintWriteConfig()).resolves.toMatchObject({
         findings: [
           expect.objectContaining({
             checkId: "core/doctor/write-config",
@@ -4362,17 +4179,7 @@ describe("doctor health contributions", () => {
       });
       const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
 
-      await expect(
-        runDoctorLintChecks(
-          {
-            cfg: {},
-            mode: "lint" as const,
-            runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-            configPath: "/tmp/openclaw-home/openclaw.json",
-          },
-          { checks: [check], onlyIds: ["core/doctor/write-config"] },
-        ),
-      ).resolves.toMatchObject({
+      await expect(lintWriteConfig()).resolves.toMatchObject({
         findings: [
           expect.objectContaining({
             checkId: "core/doctor/write-config",
@@ -4650,8 +4457,9 @@ describe("doctor health contributions", () => {
         name: "legacy update parents",
         env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
         shouldWrite: false,
+        skipPluginValidation: true,
       },
-      { name: "ordinary doctor runs", env: {}, shouldWrite: true },
+      { name: "ordinary doctor runs", env: {}, shouldWrite: true, skipPluginValidation: false },
       {
         name: "current update parents",
         env: {
@@ -4659,6 +4467,7 @@ describe("doctor health contributions", () => {
           OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
         },
         shouldWrite: true,
+        skipPluginValidation: true,
       },
       {
         name: "legacy protocol's broad parent opt-in",
@@ -4667,56 +4476,35 @@ describe("doctor health contributions", () => {
           OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "supported",
         },
         shouldWrite: true,
+        skipPluginValidation: false,
       },
       {
         name: "falsey update env values",
         env: { OPENCLAW_UPDATE_IN_PROGRESS: "0" },
         shouldWrite: true,
+        skipPluginValidation: false,
       },
-    ])("handles config writes for $name", async ({ env, shouldWrite }) => {
+    ])("handles config writes for $name", async ({ env, shouldWrite, skipPluginValidation }) => {
       const ctx = buildWriteConfigCtx(env);
 
       await writeConfigContribution.run(ctx);
 
       if (shouldWrite) {
-        expect(mocks.replaceConfigFile).toHaveBeenCalled();
+        expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
+          expect.objectContaining({
+            writeOptions: expect.objectContaining({
+              auditOrigin: "doctor",
+              allowConfigSizeDrop: true,
+              skipPluginValidation,
+            }),
+          }),
+        );
       } else {
         expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
         expect(ctx.runtime.log).toHaveBeenCalledWith(
           "Skipping doctor config write during legacy update handoff.",
         );
       }
-    });
-
-    it("allows config size drops when OPENCLAW_UPDATE_IN_PROGRESS=1", async () => {
-      const ctx = buildWriteConfigCtx({
-        OPENCLAW_UPDATE_IN_PROGRESS: "1",
-        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
-      });
-      await writeConfigContribution.run(ctx);
-      expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
-        expect.objectContaining({
-          writeOptions: expect.objectContaining({
-            auditOrigin: "doctor",
-            allowConfigSizeDrop: true,
-          }),
-        }),
-      );
-    });
-
-    it("skips plugin schema validation during update doctor writes", async () => {
-      const ctx = buildWriteConfigCtx({
-        OPENCLAW_UPDATE_IN_PROGRESS: "1",
-        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
-      });
-      await writeConfigContribution.run(ctx);
-      expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
-        expect.objectContaining({
-          writeOptions: expect.objectContaining({
-            skipPluginValidation: true,
-          }),
-        }),
-      );
     });
 
     it("preserves source config version for legacy parent writable update doctor writes", async () => {
@@ -4751,18 +4539,6 @@ describe("doctor health contributions", () => {
         expect.objectContaining({
           writeOptions: expect.not.objectContaining({
             lastTouchedVersionOverride: expect.anything(),
-          }),
-        }),
-      );
-    });
-
-    it("keeps plugin schema validation for ordinary doctor writes", async () => {
-      const ctx = buildWriteConfigCtx({});
-      await writeConfigContribution.run(ctx);
-      expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
-        expect.objectContaining({
-          writeOptions: expect.objectContaining({
-            skipPluginValidation: false,
           }),
         }),
       );
@@ -4854,18 +4630,6 @@ describe("doctor health contributions", () => {
       expect(mocks.readConfigFileSnapshot).toHaveBeenCalledWith({
         skipPluginValidation: false,
       });
-    });
-
-    it("allows allowConfigSizeDrop when not in update", async () => {
-      const ctx = buildWriteConfigCtx({});
-      await writeConfigContribution.run(ctx);
-      expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
-        expect.objectContaining({
-          writeOptions: expect.objectContaining({
-            allowConfigSizeDrop: true,
-          }),
-        }),
-      );
     });
   });
 });

@@ -145,6 +145,186 @@ describe("PluginsPage lifecycle confirmation", () => {
     },
   );
 
+  it("retains a failed uninstall, resumes inspection, and allows retry", async () => {
+    const plugin = createPlugin({ id: "calendar", name: "Calendar", removable: true });
+    const removing = deferred<never>();
+    let inspectionReads = 0;
+    let uninstallAttempts = 0;
+    const { client, request } = createClient(async (method) => {
+      if (method === "plugins.inspect") {
+        inspectionReads += 1;
+        return createInspectResult({
+          plugin,
+          overview: { readme: inspectionReads === 1 ? "# Existing plugin" : "# Still installed" },
+        });
+      }
+      if (method === "plugins.uninstall") {
+        uninstallAttempts += 1;
+        return uninstallAttempts === 1
+          ? removing.promise
+          : { ok: true, pluginId: plugin.id, removed: ["install record"] };
+      }
+      if (method === "plugins.list") {
+        return createResult(uninstallAttempts < 2 ? plugin : []);
+      }
+      throw new Error(`Unexpected method ${method}`);
+    });
+    const harness = createGateway(client);
+    const { page } = await mountPage(
+      createContext(harness.gateway),
+      createPluginsRouteData(
+        harness.gateway,
+        createResult(plugin),
+        createPluginsRouteLocation("/settings/plugins/calendar"),
+      ),
+    );
+    await waitForFast(() => expect(page.textContent).toContain("Existing plugin"));
+    const uninstall = page.uninstall(plugin.id, "plugin:calendar");
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith("plugins.uninstall", { pluginId: plugin.id }),
+    );
+    expect(inspectionReads).toBe(1);
+    removing.reject(
+      new GatewayRequestError({ code: "UNAVAILABLE", message: "Plugin removal was refused." }),
+    );
+    await uninstall;
+    await waitForFast(() => expect(page.textContent).toContain("Still installed"));
+    expect(page.querySelector('.plugins-row-message[role="alert"]')?.textContent).toContain(
+      "Plugin removal was refused.",
+    );
+    expect(page.busy["plugin:calendar"]).toBeUndefined();
+    expect(
+      page.querySelector<HTMLButtonElement>('[aria-label="Uninstall Calendar"]')?.disabled,
+    ).toBe(false);
+    await page.uninstall(plugin.id, "plugin:calendar");
+    expect(uninstallAttempts).toBe(2);
+    expect(page.result?.plugins).toEqual([]);
+    expect(page.messages["plugin:calendar"]).toBeUndefined();
+  });
+
+  it.each(["removed", "available", "navigated", "failed"] as const)(
+    "reconciles a local discovery uninstall with %s selection",
+    async (outcome) => {
+      const plugin = createPlugin({
+        id: "calendar",
+        name: "Calendar",
+        origin: outcome === "available" ? "official" : "global",
+        removable: true,
+      });
+      const other = createPlugin({ id: "other", name: "Other" });
+      const catalog = createDiscoveryDetail(plugin);
+      catalog.plugin.id = "local_Y2FsZW5kYXI";
+      catalog.plugin.local.pluginId = plugin.id;
+      catalog.plugin.local.action = "manage";
+      catalog.detail.origin = "local";
+      const otherCatalog = createDiscoveryDetail(other);
+      otherCatalog.plugin.id = "local_b3RoZXI";
+      otherCatalog.plugin.local.pluginId = other.id;
+      otherCatalog.detail.origin = "local";
+      const available = {
+        ...plugin,
+        installed: false,
+        enabled: false,
+        state: "not-installed" as const,
+      };
+      const removing = deferred<unknown>();
+      let removed = false;
+      let missingCatalogReads = 0;
+      const { client } = createClient(async (method, params) => {
+        if (method === "plugins.catalog.get") {
+          if ((params as { id: string }).id === otherCatalog.plugin.id) {
+            return otherCatalog;
+          }
+          if (!removed) {
+            return catalog;
+          }
+          if (outcome !== "available") {
+            missingCatalogReads += 1;
+            throw new GatewayRequestError({
+              code: "INVALID_REQUEST",
+              message: "Local plugin not found",
+            });
+          }
+          return {
+            ...catalog,
+            plugin: {
+              ...catalog.plugin,
+              local: {
+                ...catalog.plugin.local,
+                installed: false,
+                enabled: false,
+                state: "not-installed",
+                action: "install",
+                install: { source: "official", pluginId: plugin.id },
+              },
+            },
+          };
+        }
+        if (method === "plugins.inspect") {
+          return createInspectResult({
+            plugin: (params as { pluginId: string }).pluginId === other.id ? other : plugin,
+          });
+        }
+        if (method === "plugins.uninstall") {
+          return removing.promise;
+        }
+        if (method === "plugins.list") {
+          return createResult(outcome === "available" ? [available, other] : [other]);
+        }
+        throw new Error(`Unexpected method ${method}`);
+      });
+      const harness = createGateway(client);
+      const context = createContext(harness.gateway);
+      const route = (id: string) =>
+        createPluginsRouteData(
+          harness.gateway,
+          createResult([plugin, other]),
+          createPluginsRouteLocation(`/plugins/${id}`),
+        );
+      const { page } = await mountPage(context, route(catalog.plugin.id));
+      await waitForFast(() => expect(page.detail?.inspection?.plugin.id).toBe(plugin.id));
+      const uninstall = page.uninstall(plugin.id, "plugin:calendar");
+      await waitForFast(() => expect(page.busy["plugin:calendar"]).toBe("uninstall"));
+      if (outcome === "navigated") {
+        page.routeData = route(otherCatalog.plugin.id);
+        await waitForFast(() => expect(page.detail?.inspection?.plugin.id).toBe(other.id));
+      }
+      removed = true;
+      if (outcome === "failed") {
+        removing.reject(
+          new GatewayRequestError({
+            code: "UNAVAILABLE",
+            message: "Plugin files were removed, but runtime activation failed.",
+          }),
+        );
+      } else {
+        removing.resolve({ ok: true, pluginId: plugin.id, removed: ["install record"] });
+      }
+      await uninstall;
+      await page.updateComplete;
+      expect(missingCatalogReads).toBe(0);
+      if (outcome === "removed" || outcome === "failed") {
+        await waitForFast(() =>
+          expect(context.replace).toHaveBeenCalledWith("plugins", { pathname: "/plugins" }),
+        );
+        if (outcome === "failed") {
+          expect(page.querySelector('.plugins-row-message[role="alert"]')?.textContent).toContain(
+            "Plugin files were removed, but runtime activation failed.",
+          );
+        }
+      } else {
+        expect(context.replace).not.toHaveBeenCalled();
+        if (outcome === "available") {
+          await waitForFast(() =>
+            expect(page.querySelector("openclaw-plugin-install-action")).not.toBeNull(),
+          );
+        } else {
+          expect(page.detail?.pluginId).toBe(other.id);
+        }
+      }
+    },
+  );
+
   it("does not uninstall on a replacement Gateway after confirmation started", async () => {
     const removable = createPlugin({
       id: "community-thing",
@@ -197,6 +377,60 @@ describe("PluginsPage lifecycle confirmation", () => {
     expect(replacementRequest).not.toHaveBeenCalledWith("plugins.uninstall", {
       pluginId: "community-thing",
     });
+  });
+
+  it("retains the replacement Gateway detail when an old uninstall completes", async () => {
+    const plugin = createPlugin({ id: "calendar", name: "Calendar", removable: true });
+    const removing = deferred<unknown>();
+    const { client: initialClient, request: initialRequest } = createClient(async (method) => {
+      if (method === "plugins.inspect") {
+        return createInspectResult({ plugin, overview: { readme: "# Initial Gateway" } });
+      }
+      if (method === "plugins.uninstall") {
+        return removing.promise;
+      }
+      throw new Error(`Unexpected initial method ${method}`);
+    });
+    const { client: replacementClient, request: replacementRequest } = createClient(
+      async (method) => {
+        if (method === "plugins.list") {
+          return createResult(plugin);
+        }
+        if (method === "plugins.inspect") {
+          return createInspectResult({ plugin, overview: { readme: "# Replacement Gateway" } });
+        }
+        throw new Error(`Unexpected replacement method ${method}`);
+      },
+    );
+    const harness = createGateway(initialClient);
+    const context = createContext(harness.gateway);
+    const { page } = await mountPage(
+      context,
+      createPluginsRouteData(
+        harness.gateway,
+        createResult(plugin),
+        createPluginsRouteLocation("/settings/plugins/calendar"),
+      ),
+    );
+    await waitForFast(() => expect(page.textContent).toContain("Initial Gateway"));
+    const uninstall = page.uninstall(plugin.id, "plugin:calendar");
+    await waitForFast(() =>
+      expect(initialRequest).toHaveBeenCalledWith("plugins.uninstall", { pluginId: plugin.id }),
+    );
+    harness.emit(replacementClient, true);
+    await waitForFast(() => expect(page.textContent).toContain("Replacement Gateway"));
+    const replacementDetail = page.detail;
+    const replacementReads = replacementRequest.mock.calls.length;
+    removing.resolve({ ok: true, pluginId: plugin.id, removed: ["install record"] });
+    await uninstall;
+    await page.updateComplete;
+
+    expect(page.detail).toBe(replacementDetail);
+    expect(page.textContent).toContain("Replacement Gateway");
+    expect(page.querySelector('[aria-label="Uninstall Calendar"]')).not.toBeNull();
+    expect(context.replace).not.toHaveBeenCalled();
+    expect(initialRequest.mock.calls.some(([method]) => method === "plugins.list")).toBe(false);
+    expect(replacementRequest).toHaveBeenCalledTimes(replacementReads);
   });
 
   it("does not install after its confirmed Gateway source changes while config writes drain", async () => {

@@ -81,6 +81,7 @@ export type SessionListOptions = {
   excludeSystem?: boolean;
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
+  includeOwnerSessionCounts?: boolean;
   archivedFilter?: SessionArchivedFilter;
   append?: boolean;
 };
@@ -286,6 +287,13 @@ export type SessionCapability = {
   ) => Promise<SessionOwner | null>;
   retireModelOverride: (key: string) => void;
   think: (key: string, agentId?: string | null) => string | undefined;
+  /** Pending settings may render before roster membership or physical identity exists. */
+  settingsPreview: (
+    key: string,
+    agentId?: string,
+  ) =>
+    | Pick<GatewaySessionRow, "thinkingLevel" | "fastMode" | "effectiveFastMode" | "contextWindow">
+    | undefined;
   /** Local previews update the primary snapshot; explicit targets also update held incarnations. */
   patchRowLocal: (
     key: string,

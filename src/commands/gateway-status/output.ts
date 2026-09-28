@@ -1,4 +1,4 @@
-/** Text and JSON rendering for the gateway status command. */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { writeRuntimeJson } from "../../runtime.js";
@@ -13,7 +13,6 @@ import {
 } from "./helpers.js";
 import type { GatewayStatusProbedTarget } from "./probe-run.js";
 
-/** Warning emitted when gateway status finds degraded or surprising probe state. */
 type GatewayStatusWarning = {
   code: string;
   message: string;
@@ -28,14 +27,15 @@ function gatewaySelfIdentityKey(entry: GatewayStatusProbedTarget): string | null
   if (!entry.self) {
     return null;
   }
-  const host = typeof entry.self.host === "string" ? entry.self.host.trim().toLowerCase() : "";
-  const ip = typeof entry.self.ip === "string" ? entry.self.ip.trim().toLowerCase() : "";
-  const discriminator =
-    typeof entry.self.instanceId === "string" && entry.self.instanceId.trim()
-      ? `instance:${entry.self.instanceId.trim().toLowerCase()}`
-      : typeof entry.self.deviceId === "string" && entry.self.deviceId.trim()
-        ? `device:${entry.self.deviceId.trim().toLowerCase()}`
-        : "";
+  const host = normalizeLowercaseStringOrEmpty(entry.self.host);
+  const ip = normalizeLowercaseStringOrEmpty(entry.self.ip);
+  const instanceId = normalizeLowercaseStringOrEmpty(entry.self.instanceId);
+  const deviceId = normalizeLowercaseStringOrEmpty(entry.self.deviceId);
+  const discriminator = instanceId
+    ? `instance:${instanceId}`
+    : deviceId
+      ? `device:${deviceId}`
+      : "";
   if ((!host && !ip) || !discriminator) {
     return null;
   }
@@ -46,7 +46,7 @@ function hasMultipleReachableGatewayIdentities(reachable: GatewayStatusProbedTar
   if (reachable.length <= 1) {
     return false;
   }
-  const identityKeys = reachable.map((entry) => gatewaySelfIdentityKey(entry));
+  const identityKeys = reachable.map(gatewaySelfIdentityKey);
   if (identityKeys.some((key) => key === null)) {
     return true;
   }
@@ -65,7 +65,6 @@ export function pickPrimaryProbedTarget(probed: GatewayStatusProbedTarget[]) {
   );
 }
 
-/** Builds operator-facing warnings from probe, discovery, and SSH tunnel results. */
 export function buildGatewayStatusWarnings(params: {
   probed: GatewayStatusProbedTarget[];
   sshTarget: string | null;
@@ -173,7 +172,7 @@ export function writeGatewayStatusJson(params: {
     discovery: {
       timeoutMs: params.discoveryTimeoutMs,
       count: params.discovery.length,
-      beacons: params.discovery.map((beacon) => serializeGatewayDiscoveryBeacon(beacon)),
+      beacons: params.discovery.map(serializeGatewayDiscoveryBeacon),
     },
     targets: params.probed.map((entry) => ({
       id: entry.target.id,
@@ -244,9 +243,7 @@ export function writeGatewayStatusText(params: {
   params.runtime.log(colorize(params.rich, theme.heading, "Discovery (this machine)"));
   const discoveryDomains = params.wideAreaDomain ? `local. + ${params.wideAreaDomain}` : "local.";
   params.runtime.log(
-    params.discovery.length > 0
-      ? `Found ${params.discovery.length} gateway(s) via Bonjour (${discoveryDomains})`
-      : `Found 0 gateways via Bonjour (${discoveryDomains})`,
+    `Found ${params.discovery.length} ${params.discovery.length > 0 ? "gateway(s)" : "gateways"} via Bonjour (${discoveryDomains})`,
   );
   if (params.discovery.length === 0) {
     params.runtime.log(

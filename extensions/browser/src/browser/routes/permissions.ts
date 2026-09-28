@@ -1,12 +1,6 @@
-/**
- * Browser permission routes.
- *
- * Grants required and optional browser permissions for an origin, preferring
- * Playwright context APIs when available and falling back to raw CDP.
- */
+import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { formatErrorMessage } from "../../infra/errors.js";
-import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { resolveCdpControlPolicy } from "../cdp-reachability-policy.js";
 import { withCdpSocket } from "../cdp.helpers.js";
 import { getChromeWebSocketEndpoint, type ChromeWebSocketEndpoint } from "../chrome.js";
@@ -19,10 +13,10 @@ import {
 } from "../pw-tools-core.interactions.navigation.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { isProfileRestartRequiredError } from "../server-context.lifecycle.js";
+import { resolveProfileContext } from "./agent.shared.js";
 import { readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
 import {
-  getProfileContext,
   jsonBrowserError,
   jsonError,
   readHttpOrigin,
@@ -154,7 +148,6 @@ function toPlaywrightPermission(permission: string): string | undefined {
   }
 }
 
-/** Register permission grant endpoints on the browser control server. */
 export function registerBrowserPermissionRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,
@@ -178,9 +171,9 @@ export function registerBrowserPermissionRoutes(
       return jsonError(res, 400, formatErrorMessage(err));
     }
 
-    const profileCtx = getProfileContext(req, ctx);
-    if ("error" in profileCtx) {
-      return jsonError(res, profileCtx.status, profileCtx.error);
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) {
+      return;
     }
     const requestAssertCurrent = req.assertCurrent;
     const assertCurrent = requestAssertCurrent

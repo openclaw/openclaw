@@ -34,21 +34,38 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
+async function prepareCompactionParams() {
+  const workspaceDir = await realpath(tempDirs.make("openclaw-compaction-auth-"));
+  resetCompactHooksHarnessMocks(workspaceDir);
+  const sessionTarget = {
+    agentId: "main",
+    sessionId: "compaction-auth",
+    sessionKey: "agent:main:compaction-auth",
+    storePath: join(workspaceDir, "sessions.sqlite"),
+  };
+  await upsertSessionEntryCore(sessionTarget, {
+    sessionId: sessionTarget.sessionId,
+    updatedAt: 1,
+  });
+  return { ...sessionTarget, sessionTarget, sessionFile: sessionTarget.sessionKey, workspaceDir };
+}
+
+async function runOwnedCompaction(run: () => ReturnType<typeof compactEmbeddedAgentSessionDirect>) {
+  const parent = new AsyncWorkScope();
+  try {
+    return await parent.run(run);
+  } finally {
+    await AsyncWorkScope.runWhenAllIdle(
+      () => [parent],
+      () => parent.drain(),
+    );
+  }
+}
+
 it.each(["lookup", "hook", "allowed"] as const)(
   "honors direct compaction cancellation across provider auth (%s)",
   async (stage) => {
-    const workspaceDir = await realpath(tempDirs.make("openclaw-compaction-auth-cancel-"));
-    resetCompactHooksHarnessMocks(workspaceDir);
-    const sessionTarget = {
-      agentId: "main",
-      sessionId: "compaction-auth-cancel",
-      sessionKey: "agent:main:compaction-auth-cancel",
-      storePath: join(workspaceDir, "sessions.sqlite"),
-    };
-    await upsertSessionEntryCore(sessionTarget, {
-      sessionId: sessionTarget.sessionId,
-      updatedAt: 1,
-    });
+    const baseParams = await prepareCompactionParams();
     const controller = new AbortController();
     const cancel = () => controller.abort(new Error("compaction source revoked"));
     getApiKeyForModelMock.mockImplementation(async (params) => {
@@ -77,28 +94,16 @@ it.each(["lookup", "hook", "allowed"] as const)(
       }
       return { apiKey: "prepared-fixture-key" };
     });
-    const parent = new AsyncWorkScope();
-    let result: Awaited<ReturnType<typeof compactEmbeddedAgentSessionDirect>>;
-    try {
-      result = await parent.run(() =>
-        compactEmbeddedAgentSessionDirect({
-          ...sessionTarget,
-          sessionTarget,
-          sessionFile: sessionTarget.sessionKey,
-          workspaceDir,
-          provider: "openai",
-          model: "gpt-primary",
-          trigger: "budget",
-          abortSignal: controller.signal,
-          config: { agents: { defaults: { compaction: { model: "openai/gpt-primary" } } } },
-        }),
-      );
-    } finally {
-      await AsyncWorkScope.runWhenAllIdle(
-        () => [parent],
-        () => parent.drain(),
-      );
-    }
+    const result = await runOwnedCompaction(() =>
+      compactEmbeddedAgentSessionDirect({
+        ...baseParams,
+        provider: "openai",
+        model: "gpt-primary",
+        trigger: "budget",
+        abortSignal: controller.signal,
+        config: { agents: { defaults: { compaction: { model: "openai/gpt-primary" } } } },
+      }),
+    );
     expect(getApiKeyForModelMock).toHaveBeenCalled();
     expect(prepareAuth).toHaveBeenCalledTimes(stage === "lookup" ? 0 : 1);
     expect(result.ok).toBe(stage === "allowed");
@@ -119,18 +124,7 @@ it.each(["lookup", "hook", "allowed"] as const)(
 it.each(["direct", "queued"] as const)(
   "returns a compaction failure when %s auth preparation is cooldowned",
   async (mode) => {
-    const workspaceDir = await realpath(tempDirs.make("openclaw-compaction-auth-"));
-    resetCompactHooksHarnessMocks(workspaceDir);
-    const sessionTarget = {
-      agentId: "main",
-      sessionId: "compaction-auth",
-      sessionKey: "agent:main:compaction-auth",
-      storePath: join(workspaceDir, "sessions.sqlite"),
-    };
-    await upsertSessionEntryCore(sessionTarget, {
-      sessionId: sessionTarget.sessionId,
-      updatedAt: 1,
-    });
+    const baseParams = await prepareCompactionParams();
     const authStore = {
       version: 1,
       profiles: {
@@ -142,10 +136,7 @@ it.each(["direct", "queued"] as const)(
     const originalAuthStore = structuredClone(authStore);
     vi.mocked(ensureAuthProfileStoreWithoutExternalProfiles).mockReturnValue(authStore);
     const params = {
-      ...sessionTarget,
-      sessionTarget,
-      sessionFile: sessionTarget.sessionKey,
-      workspaceDir,
+      ...baseParams,
       provider: "openai",
       model: "gpt-primary",
       trigger: "budget" as const,
@@ -162,20 +153,11 @@ it.each(["direct", "queued"] as const)(
       enqueue: async <T>(task: () => Promise<T> | T) => await task(),
     };
 
-    const parent = new AsyncWorkScope();
-    let result: Awaited<ReturnType<typeof compactEmbeddedAgentSession>>;
-    try {
-      result = await parent.run(() =>
-        mode === "direct"
-          ? compactEmbeddedAgentSessionDirect(params)
-          : compactEmbeddedAgentSession(params),
-      );
-    } finally {
-      await AsyncWorkScope.runWhenAllIdle(
-        () => [parent],
-        () => parent.drain(),
-      );
-    }
+    const result = await runOwnedCompaction(() =>
+      mode === "direct"
+        ? compactEmbeddedAgentSessionDirect(params)
+        : compactEmbeddedAgentSession(params),
+    );
 
     expect(result).toMatchObject({
       ok: false,

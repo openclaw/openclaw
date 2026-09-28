@@ -1,5 +1,5 @@
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import type { Frame, Page } from "playwright-core";
-import { toErrorObject } from "../infra/errors.js";
 import { BROWSER_ACTION_NAVIGATION_GRACE_MS } from "./act-policy.js";
 import {
   assertBrowserNavigationResultAllowed,
@@ -8,7 +8,6 @@ import {
 } from "./navigation-guard.js";
 import {
   assertPageNavigationCompletedSafely,
-  ensurePageState,
   getPageForTargetId,
   isBrowserObservedDialogBlockedError,
   isPolicyDenyNavigationError,
@@ -96,7 +95,6 @@ export function resolveBoundedDelayMs(
 
 export async function getRestoredPageForTarget(opts: InteractionTargetOptions) {
   const page = await getPageForTargetId(opts);
-  ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
   return page;
 }
@@ -177,24 +175,7 @@ export async function runCancellablePageInteraction<T>(
 // fragment — do not cause a network request and must not trigger SSRF checks.
 function didCrossDocumentUrlChange(page: { url(): string }, previousUrl: string): boolean {
   const currentUrl = page.url();
-  if (currentUrl === previousUrl) {
-    return false;
-  }
-  try {
-    const prev = new URL(previousUrl);
-    const curr = new URL(currentUrl);
-    if (
-      prev.origin === curr.origin &&
-      prev.pathname === curr.pathname &&
-      prev.search === curr.search
-    ) {
-      // Only the fragment changed — same-document navigation, no fetch.
-      return false;
-    }
-  } catch {
-    // Non-parseable URL; fall through to string comparison.
-  }
-  return true;
+  return currentUrl !== previousUrl && !isHashOnlyNavigation(currentUrl, previousUrl);
 }
 
 // Returns true when a framenavigated event represents only a hash-only
@@ -259,6 +240,25 @@ function snapshotNetworkFrameUrl(frame: Frame): string | null {
   }
 }
 
+function createInteractionFrameListener(
+  page: NavigationObservablePage,
+  previousUrl: string,
+  subframes: string[],
+  onMainFrameNavigation: () => void,
+): (frame: Frame) => void {
+  return (frame) => {
+    if (!isMainFrameNavigation(page, frame)) {
+      const frameUrl = snapshotNetworkFrameUrl(frame);
+      if (frameUrl) {
+        subframes.push(frameUrl);
+      }
+    } else if (!isHashOnlyNavigation(page.url(), previousUrl)) {
+      // The event itself proves navigation, including same-URL reloads.
+      onMainFrameNavigation();
+    }
+  };
+}
+
 async function assertObservedDelayedNavigations(
   opts: {
     cdpUrl: string;
@@ -303,23 +303,10 @@ function observeDelayedInteractionNavigation(
 
   return new Promise<ObservedDelayedNavigations>((resolve) => {
     const subframes: string[] = [];
-    const onFrameNavigated = (frame: Frame) => {
-      if (!isMainFrameNavigation(page, frame)) {
-        const frameUrl = snapshotNetworkFrameUrl(frame);
-        if (frameUrl) {
-          subframes.push(frameUrl);
-        }
-        return;
-      }
-      // Use isHashOnlyNavigation rather than !didCrossDocumentUrlChange: the
-      // event firing is itself the navigation signal, so a same-URL reload must
-      // not be treated as "no navigation" the way URL polling would.
-      if (isHashOnlyNavigation(page.url(), previousUrl)) {
-        return;
-      }
+    const onFrameNavigated = createInteractionFrameListener(page, previousUrl, subframes, () => {
       cleanup();
       resolve({ mainFrameNavigated: true, subframes });
-    };
+    });
     const timeout = setTimeout(() => {
       cleanup();
       resolve({
@@ -352,7 +339,7 @@ function scheduleDelayedInteractionNavigationGuard(
   if (!hasInteractionNavigationPolicy(navigationPolicy)) {
     return Promise.resolve();
   }
-  const page = opts.page as unknown as NavigationObservablePage;
+  const page: NavigationObservablePage = opts.page;
   if (didCrossDocumentUrlChange(page, opts.previousUrl)) {
     return assertPageNavigationCompletedSafely({
       cdpUrl: opts.cdpUrl,
@@ -378,29 +365,21 @@ function scheduleDelayedInteractionNavigationGuard(
       resolve();
     };
     const subframes: string[] = [];
-    const onFrameNavigated = (frame: Frame) => {
-      if (!isMainFrameNavigation(page, frame)) {
-        const frameUrl = snapshotNetworkFrameUrl(frame);
-        if (frameUrl) {
-          subframes.push(frameUrl);
-        }
-        return;
-      }
-      // Use isHashOnlyNavigation rather than !didCrossDocumentUrlChange: the
-      // event firing is itself the navigation signal, so a same-URL reload must
-      // not be treated as "no navigation" the way URL polling would.
-      if (isHashOnlyNavigation(page.url(), opts.previousUrl)) {
-        return;
-      }
-      cleanup();
-      void assertObservedDelayedNavigations({
-        cdpUrl: opts.cdpUrl,
-        page: opts.page,
-        ...navigationPolicy,
-        targetId: opts.targetId,
-        observed: { mainFrameNavigated: true, subframes },
-      }).then(() => settle(), settle);
-    };
+    const onFrameNavigated = createInteractionFrameListener(
+      page,
+      opts.previousUrl,
+      subframes,
+      () => {
+        cleanup();
+        void assertObservedDelayedNavigations({
+          cdpUrl: opts.cdpUrl,
+          page: opts.page,
+          ...navigationPolicy,
+          targetId: opts.targetId,
+          observed: { mainFrameNavigated: true, subframes },
+        }).then(() => settle(), settle);
+      },
+    );
     const timeout = setTimeout(() => {
       cleanup();
       void assertObservedDelayedNavigations({
@@ -444,24 +423,17 @@ async function assertInteractionNavigationCompletedSafely<T>(
   // action so navigations triggered mid-click or mid-evaluate are not missed.
   // Using a fixed pre-action timer would expire before the action finishes for
   // slow interactions, silently bypassing the SSRF guard.
-  const navPage = opts.page as unknown as NavigationObservablePage;
+  const navPage: NavigationObservablePage = opts.page;
   let navigatedDuringAction = false;
   const subframeNavigationsDuringAction: string[] = [];
-  const onFrameNavigated = (frame: Frame) => {
-    if (!isMainFrameNavigation(navPage, frame)) {
-      const frameUrl = snapshotNetworkFrameUrl(frame);
-      if (frameUrl) {
-        subframeNavigationsDuringAction.push(frameUrl);
-      }
-      return;
-    }
-    // Use isHashOnlyNavigation rather than didCrossDocumentUrlChange: the event
-    // firing is the navigation signal, so a same-URL reload must not be skipped
-    // the way it would be by URL-equality polling.
-    if (!isHashOnlyNavigation(opts.page.url(), opts.previousUrl)) {
+  const onFrameNavigated = createInteractionFrameListener(
+    navPage,
+    opts.previousUrl,
+    subframeNavigationsDuringAction,
+    () => {
       navigatedDuringAction = true;
-    }
-  };
+    },
+  );
   if (typeof navPage.on === "function") {
     navPage.on("framenavigated", onFrameNavigated);
   }
@@ -687,19 +659,15 @@ export function createAbortPromiseWithListener(
   if (!signal) {
     return { cleanup: () => {} };
   }
+  const abortError = () => {
+    onAbort?.(signal.reason);
+    return toErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection");
+  };
   let abortListener: (() => void) | undefined;
   const abortPromise: Promise<never> = signal.aborted
-    ? (() => {
-        onAbort?.(signal.reason);
-        return Promise.reject(
-          toErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"),
-        );
-      })()
+    ? Promise.reject(abortError())
     : new Promise((_, reject) => {
-        abortListener = () => {
-          onAbort?.(signal.reason);
-          reject(toErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"));
-        };
+        abortListener = () => reject(abortError());
         signal.addEventListener("abort", abortListener, { once: true });
       });
   // Avoid unhandled rejections on early returns.

@@ -12,6 +12,7 @@ export async function resolveOpenAIChatGptSubscriptionAuth(
 ): Promise<Extract<OpenAIQuicksilverAuth, { type: "oauth" }> | undefined> {
   const token = await resolveProviderAuthProfileApiKey({
     provider: "openai",
+    capability: "realtime-voice",
     cfg: params.cfg,
     agentDir: params.agentDir,
     profileTypes: ["oauth"],

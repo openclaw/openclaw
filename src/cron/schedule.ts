@@ -93,7 +93,7 @@ function resolveCronWallTimeMs(instantMs: number, timezone: string): number {
 function resolveFirstCronOccurrenceMs(instantMs: number, timezone: string): number | undefined {
   const wallTime = new Date(resolveCronWallTimeMs(instantMs, timezone)).toISOString().slice(0, -1);
   const resolved = parseOffsetlessIsoDateTimeInTimeZone(wallTime, timezone);
-  return resolved === null ? undefined : Date.parse(resolved);
+  return resolved.ok ? Date.parse(resolved.iso) : undefined;
 }
 
 function matchesCronOccurrence(cron: Cron, instant: Date): boolean {

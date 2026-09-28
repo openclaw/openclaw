@@ -1,81 +1,64 @@
 // Browser tests cover durable session tab cleanup through the real plugin-state store.
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
-  createPluginStateSyncKeyedStoreForTests,
+  createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
+import { getBrowserStateRuntime } from "../browser-runtime-state.js";
+import { createBrowserToolSessionTabs } from "../browser-tool-session-tabs.js";
 import type { CloseTrackedCdpTargetResult } from "./cdp.helpers.js";
 import { BROWSER_TAB_UNREACHABLE_RETIRE_MS } from "./constants.js";
 import {
-  cdpMocks,
   clearProcessLocalTabState,
   installSessionTabRegistrySqliteHarness,
 } from "./session-tab-registry.sqlite.test-harness.js";
 import {
   type CloseTab,
+  type CloseOptions,
   type DurableRecord,
   type DurableTab,
   durableOwnership as ownership,
 } from "./session-tab-registry.sqlite.test-helpers.js";
 import { browserSessionTabStorageKey } from "./session-tab-store.js";
 
-function setBrowserProfileConfig(): void {
-  const config = {
-    browser: {
-      defaultProfile: "remote",
-      profiles: {
-        remote: {
-          driver: "existing-session",
-          cdpUrl: "http://127.0.0.1:9222",
-          color: "#123456",
-        },
-      },
-    },
-  } satisfies OpenClawConfig;
-  setRuntimeConfigSnapshot(config, config);
-}
-
 describe("durable session tab registry", () => {
   const { openStore, installRuntime, freshRegistry } = installSessionTabRegistrySqliteHarness();
 
-  it("closes a durable tab after the SQLite database and module are reopened", async () => {
-    setBrowserProfileConfig();
-    const first = await freshRegistry("first");
-    first.trackSessionBrowserTab({
-      sessionKey: "Agent:Main:Main",
-      targetId: "interaction-target",
-      profile: "Remote",
-      ownership: ownership("NATIVE-1"),
-      now: 1_000,
+  it("persists tool tab activity without host data SQL", async () => {
+    const registry = await freshRegistry("worker-tool-activity");
+    const tabs = createBrowserToolSessionTabs({
+      sessionKey: "agent:main:main",
+      requestedProfile: "remote",
+      defaultProfile: "remote",
+      registry,
     });
-    expect(openStore().entries()).toHaveLength(1);
-
-    resetPluginStateStoreForTests();
-    installRuntime();
-    clearProcessLocalTabState();
-    const restarted = await freshRegistry("restarted");
-
-    await expect(
-      restarted.closeTrackedBrowserTabsForSessions({ sessionKeys: ["agent:main:main"] }),
-    ).resolves.toBe(1);
-    expect(cdpMocks.closeTrackedCdpTarget).toHaveBeenCalledWith({
-      profileName: "remote",
-      cdpUrl: "http://127.0.0.1:9222",
-      nativeTargetId: "NATIVE-1",
-      timeoutMs: expect.any(Number),
-      ssrfPolicy: expect.any(Object),
-      expectedProfileFingerprint: "test-profile-fingerprint",
-      expectedBrowserInstanceFingerprint: "test-browser-instance-fingerprint",
-      shouldClose: expect.any(Function),
-    });
-    expect(openStore().entries()).toEqual([]);
+    const observation = observeHostDataSql();
+    try {
+      await tabs.trackOpened(
+        {
+          targetId: "NATIVE-WORKER",
+          resolvedProfile: "remote",
+          ownership: ownership("NATIVE-WORKER"),
+        },
+        async () => {},
+      );
+      await tabs.touch("NATIVE-WORKER");
+    } finally {
+      observation.restore();
+    }
+    expect(openStore().entries()).toEqual([
+      expect.objectContaining({
+        value: expect.objectContaining({ nativeTargetId: "NATIVE-WORKER" }),
+      }),
+    ]);
+    expect(observation.queries).toEqual([]);
   });
 
   it("keeps browser-bridge tabs volatile and closable by a duplicate bundle", async () => {
     const first = await freshRegistry("bridge-first");
-    first.trackSessionBrowserTab({
+    await first.trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "bridge-tab",
       route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9999" },
@@ -99,16 +82,39 @@ describe("durable session tab registry", () => {
     });
   });
 
+  it("does not publish volatile ownership after its hydrated runtime is replaced", async () => {
+    const registry = await freshRegistry("volatile-runtime-replacement");
+    const tracking = registry.trackSessionBrowserTab({
+      sessionKey: "agent:main:main",
+      targetId: "stale-volatile",
+      profile: "remote",
+    });
+    const replacement = Promise.resolve().then(() => installRuntime());
+    try {
+      await expect(tracking).rejects.toThrow("Browser session tab store owner changed");
+    } finally {
+      await Promise.allSettled([tracking, replacement]);
+    }
+    const closeTab = vi.fn<CloseTab>(async () => {});
+    expect(
+      await registry.closeTrackedBrowserTabsForSessions({
+        sessionKeys: ["agent:main:main"],
+        closeTab,
+      }),
+    ).toBe(0);
+    expect(closeTab).not.toHaveBeenCalled();
+  });
+
   it("keeps browser-bridge aliases isolated from host-browser durable records", async () => {
     const registry = await freshRegistry("bridge-alias-isolation");
-    registry.trackSessionBrowserTab({
+    await registry.trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "shared-target",
       profile: "remote",
       ownership: ownership("NATIVE-HOST"),
       now: 1_000,
     });
-    registry.trackSessionBrowserTab({
+    await registry.trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "shared-target",
       route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9999" },
@@ -117,14 +123,14 @@ describe("durable session tab registry", () => {
       now: 2_000,
     });
 
-    registry.touchSessionBrowserTab({
+    await registry.touchSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "shared-target",
       route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9999" },
       profile: "remote",
       now: 3_000,
     });
-    registry.untrackSessionBrowserTab({
+    await registry.untrackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "shared-target",
       route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9999" },
@@ -140,7 +146,7 @@ describe("durable session tab registry", () => {
 
   it("prefers an exact durable target over a volatile alias while untracking", async () => {
     const registry = await freshRegistry("durable-exact-over-volatile-alias");
-    registry.trackSessionBrowserTab({
+    await registry.trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "DURABLE-NATIVE",
       profile: "remote",
@@ -149,9 +155,9 @@ describe("durable session tab registry", () => {
     });
 
     clearProcessLocalTabState();
-    installRuntime();
+    await installRuntime();
     const restarted = await freshRegistry("durable-exact-over-volatile-alias-restarted");
-    restarted.trackSessionBrowserTab({
+    await restarted.trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "VOLATILE-RAW",
       profile: "remote",
@@ -160,7 +166,7 @@ describe("durable session tab registry", () => {
       now: 2_000,
     });
 
-    restarted.untrackSessionBrowserTab({
+    await restarted.untrackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "DURABLE-NATIVE",
       profile: "remote",
@@ -183,7 +189,7 @@ describe("durable session tab registry", () => {
 
   it("prefers an exact volatile target over a durable alias while untracking", async () => {
     const registry = await freshRegistry("volatile-exact-over-durable-alias");
-    registry.trackSessionBrowserTab({
+    await registry.trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "DURABLE-OPAQUE",
       profile: "remote",
@@ -191,7 +197,7 @@ describe("durable session tab registry", () => {
       aliases: ["VOLATILE-RAW"],
       now: 1_000,
     });
-    registry.trackSessionBrowserTab({
+    await registry.trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "VOLATILE-RAW",
       profile: "remote",
@@ -199,7 +205,7 @@ describe("durable session tab registry", () => {
       now: 2_000,
     });
 
-    registry.untrackSessionBrowserTab({
+    await registry.untrackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "VOLATILE-RAW",
       profile: "remote",
@@ -215,13 +221,13 @@ describe("durable session tab registry", () => {
     ).resolves.toBe(1);
     expect(closeDurableTab).toHaveBeenCalledWith(
       expect.objectContaining({ nativeTargetId: "DURABLE-NATIVE" }),
-      expect.objectContaining({ shouldClose: expect.any(Function) }),
+      expect.objectContaining({ closeIfCurrent: expect.any(Function) }),
     );
   });
 
   it("keeps durable ownership when volatile exact profile aliases are ambiguous", async () => {
     const registry = await freshRegistry("cross-kind-exact-ambiguity");
-    registry.trackSessionBrowserTab({
+    await registry.trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "SHARED-NATIVE",
       profile: "requested-profile",
@@ -229,7 +235,7 @@ describe("durable session tab registry", () => {
       now: 1_000,
     });
     for (const profile of ["resolved-a", "resolved-b"]) {
-      registry.trackSessionBrowserTab({
+      await registry.trackSessionBrowserTab({
         sessionKey: "agent:main:main",
         targetId: "SHARED-NATIVE",
         profile,
@@ -239,7 +245,7 @@ describe("durable session tab registry", () => {
       });
     }
 
-    registry.untrackSessionBrowserTab({
+    await registry.untrackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "SHARED-NATIVE",
       profile: "requested-profile",
@@ -261,7 +267,7 @@ describe("durable session tab registry", () => {
 
   it("keys durable records by ownership and resolves same-process aliases", async () => {
     const registry = await freshRegistry("aliases");
-    registry.trackSessionBrowserTab({
+    await registry.trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "opaque-1",
       profile: "remote",
@@ -269,7 +275,7 @@ describe("durable session tab registry", () => {
       aliases: ["opaque-1", "t1", "docs"],
       now: 1_000,
     });
-    registry.trackSessionBrowserTab({
+    await registry.trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "opaque-2",
       profile: "remote",
@@ -284,14 +290,14 @@ describe("durable session tab registry", () => {
       trackedAt: 1_000,
       lastUsedAt: 2_000,
     });
-    registry.touchSessionBrowserTab({
+    await registry.touchSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "t2",
       profile: "remote",
       now: 3_000,
     });
     expect(openStore().entries()[0]?.value).toMatchObject({ lastUsedAt: 3_000 });
-    registry.untrackSessionBrowserTab({
+    await registry.untrackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "opaque-2",
       profile: "remote",
@@ -301,7 +307,7 @@ describe("durable session tab registry", () => {
 
   it("resolves durable activity through the originally requested profile", async () => {
     const registry = await freshRegistry("resolved-profile-alias");
-    registry.trackSessionBrowserTab({
+    await registry.trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "opaque-resolved",
       profile: "resolved-profile",
@@ -315,10 +321,10 @@ describe("durable session tab registry", () => {
     });
 
     clearProcessLocalTabState();
-    installRuntime();
+    await installRuntime();
     const restarted = await freshRegistry("resolved-profile-alias-restarted");
 
-    restarted.touchSessionBrowserTab({
+    await restarted.touchSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "NATIVE-RESOLVED",
       profile: "requested-profile",
@@ -326,7 +332,7 @@ describe("durable session tab registry", () => {
     });
     expect(openStore().entries()[0]?.value).toMatchObject({ lastUsedAt: 9_000 });
 
-    restarted.untrackSessionBrowserTab({
+    await restarted.untrackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "NATIVE-RESOLVED",
       profile: "requested-profile",
@@ -340,7 +346,7 @@ describe("durable session tab registry", () => {
       ["resolved-a", "browser-a"],
       ["resolved-b", "browser-b"],
     ] as const) {
-      registry.trackSessionBrowserTab({
+      await registry.trackSessionBrowserTab({
         sessionKey: "agent:main:main",
         targetId: "NATIVE-SHARED",
         profile,
@@ -351,10 +357,10 @@ describe("durable session tab registry", () => {
     }
 
     clearProcessLocalTabState();
-    installRuntime();
+    await installRuntime();
     const restarted = await freshRegistry("resolved-profile-collision-restarted");
 
-    restarted.touchSessionBrowserTab({
+    await restarted.touchSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "NATIVE-SHARED",
       profile: "requested-profile",
@@ -371,12 +377,12 @@ describe("durable session tab registry", () => {
       ]),
     );
 
-    restarted.untrackSessionBrowserTab({
+    await restarted.untrackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "NATIVE-SHARED",
       profile: "resolved-b",
     });
-    restarted.touchSessionBrowserTab({
+    await restarted.touchSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "NATIVE-SHARED",
       profile: "requested-profile",
@@ -391,14 +397,14 @@ describe("durable session tab registry", () => {
 
   it("keeps identical native ids isolated across browser instances", async () => {
     const first = await freshRegistry("browser-instance-collision-first");
-    first.trackSessionBrowserTab({
+    await first.trackSessionBrowserTab({
       sessionKey: "agent:main:collision",
       targetId: "NATIVE-SHARED",
       profile: "remote",
       ownership: ownership("NATIVE-SHARED", "profile-a", "browser-a"),
       now: 1_000,
     });
-    first.trackSessionBrowserTab({
+    await first.trackSessionBrowserTab({
       sessionKey: "agent:main:collision",
       targetId: "NATIVE-SHARED",
       profile: "remote",
@@ -409,7 +415,7 @@ describe("durable session tab registry", () => {
 
     clearProcessLocalTabState();
     const restarted = await freshRegistry("browser-instance-collision-restarted");
-    restarted.touchSessionBrowserTab({
+    await restarted.touchSessionBrowserTab({
       sessionKey: "agent:main:collision",
       targetId: "NATIVE-SHARED",
       profile: "remote",
@@ -430,16 +436,22 @@ describe("durable session tab registry", () => {
 
   it("fails closed at capacity without evicting an existing ownership record", async () => {
     const registry = await freshRegistry("capacity");
+    const store = openStore();
     for (let index = 0; index < 5_000; index += 1) {
-      registry.trackSessionBrowserTab({
+      const record = {
+        version: 1,
         sessionKey: "agent:main:main",
-        targetId: `tab-${index}`,
+        nativeTargetId: `NATIVE-${index}`,
         profile: "remote",
-        ownership: ownership(`NATIVE-${index}`),
-        now: index + 1,
-      });
+        profileFingerprint: "test-profile-fingerprint",
+        browserInstanceFingerprint: "test-browser-instance-fingerprint",
+        interactionTargetKind: "opaque",
+        trackedAt: index + 1,
+        lastUsedAt: index + 1,
+      } satisfies DurableRecord;
+      store.register(browserSessionTabStorageKey(record), record);
     }
-    expect(() =>
+    await expect(
       registry.trackSessionBrowserTab({
         sessionKey: "agent:main:main",
         targetId: "tab-5000",
@@ -447,7 +459,7 @@ describe("durable session tab registry", () => {
         ownership: ownership("NATIVE-5000"),
         now: 5_001,
       }),
-    ).toThrow(/5000-row limit/);
+    ).rejects.toThrow(/5000-row limit/);
 
     const records = openStore()
       .entries()
@@ -461,7 +473,7 @@ describe("durable session tab registry", () => {
   it("keeps transient close failures and retires terminal outcomes", async () => {
     const registry = await freshRegistry("outcomes");
     for (const target of ["closed", "missing", "mismatch", "unavailable"]) {
-      registry.trackSessionBrowserTab({
+      await registry.trackSessionBrowserTab({
         sessionKey: `agent:main:${target}`,
         targetId: target,
         profile: "remote",
@@ -498,7 +510,7 @@ describe("durable session tab registry", () => {
   it("retires a durable tab whose browser stays unreachable past the retire age", async () => {
     const registry = await freshRegistry("unreachable");
     const tracked = 1_000;
-    registry.trackSessionBrowserTab({
+    await registry.trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "gone",
       profile: "remote",
@@ -524,7 +536,7 @@ describe("durable session tab registry", () => {
     const registry = await freshRegistry("unreachable-touch-race");
     const tracked = 1_000;
     const sweepNow = tracked + BROWSER_TAB_UNREACHABLE_RETIRE_MS;
-    registry.trackSessionBrowserTab({
+    await registry.trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "gone",
       profile: "remote",
@@ -536,13 +548,15 @@ describe("durable session tab registry", () => {
       now: sweepNow,
       idleMs: 1,
       closeDurableTab: async (_tab, options) => {
-        registry.touchSessionBrowserTab({
+        await registry.touchSessionBrowserTab({
           sessionKey: "agent:main:main",
           targetId: "gone",
           profile: "remote",
           now: sweepNow,
         });
-        expect(options.shouldClose()).toBe(false);
+        const dispatch = vi.fn(async () => ({ status: "closed" as const }));
+        await expect(options.closeIfCurrent(dispatch)).resolves.toEqual({ status: "cancelled" });
+        expect(dispatch).not.toHaveBeenCalled();
         return { status: "unavailable", reason: "browser-identity-lookup-failed" };
       },
     });
@@ -554,7 +568,7 @@ describe("durable session tab registry", () => {
 
   it("keeps a touched durable tab out of an idle sweep but lifecycle cleanup still closes it", async () => {
     const registry = await freshRegistry("touch");
-    registry.trackSessionBrowserTab({
+    await registry.trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "opaque",
       profile: "remote",
@@ -562,7 +576,7 @@ describe("durable session tab registry", () => {
       aliases: ["opaque", "docs"],
       now: 1_000,
     });
-    registry.touchSessionBrowserTab({
+    await registry.touchSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "docs",
       profile: "remote",
@@ -588,7 +602,7 @@ describe("durable session tab registry", () => {
 
   it("cancels an in-flight sweep when the tab becomes active before close", async () => {
     const registry = await freshRegistry("sweep-touch-race");
-    registry.trackSessionBrowserTab({
+    await registry.trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "opaque",
       profile: "remote",
@@ -604,15 +618,11 @@ describe("durable session tab registry", () => {
     const closeGate = new Promise<void>((resolve) => {
       releaseClose = resolve;
     });
-    const closeDurableTab = vi.fn(
-      async (_tab: DurableTab, options: { shouldClose: () => boolean }) => {
-        markStarted?.();
-        await closeGate;
-        return options.shouldClose()
-          ? ({ status: "closed" } as const)
-          : ({ status: "cancelled" } as const);
-      },
-    );
+    const closeDurableTab = vi.fn(async (_tab: DurableTab, options: CloseOptions) => {
+      markStarted?.();
+      await closeGate;
+      return await options.closeIfCurrent(async () => ({ status: "closed" }));
+    });
 
     const sweep = registry.sweepTrackedBrowserTabs({
       now: 10_000,
@@ -620,7 +630,7 @@ describe("durable session tab registry", () => {
       closeDurableTab,
     });
     await started;
-    registry.touchSessionBrowserTab({
+    await registry.touchSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "docs",
       profile: "remote",
@@ -636,25 +646,108 @@ describe("durable session tab registry", () => {
     expect(openStore().entries()[0]?.value).not.toHaveProperty("cleanupAttemptToken");
   });
 
+  it("holds only the selected tab through fresh cleanup read and close dispatch", async () => {
+    const registry = await freshRegistry("guarded-close-admission");
+    const selected = { sessionKey: "agent:main:main", targetId: "selected", profile: "remote" };
+    const other = { ...selected, targetId: "other" };
+    for (const tab of [selected, other]) {
+      await registry.trackSessionBrowserTab({
+        ...tab,
+        ownership: ownership(tab.targetId),
+        now: 1_000,
+      });
+    }
+    const key = browserSessionTabStorageKey({
+      ...ownership("selected"),
+      sessionKey: selected.sessionKey,
+    });
+    const readCompleted = createDeferred<void>();
+    const releaseRead = createDeferred<void>();
+    const dispatched = createDeferred<void>();
+    const finishClose = createDeferred<void>();
+    const runtime = getBrowserStateRuntime();
+    const bind = runtime.sessionTabs.withCurrent;
+    if (!bind) {
+      throw new Error("Expected the real worker comparison store");
+    }
+    let holdRead = false;
+    const observer = vi
+      .spyOn(runtime.sessionTabs, "withCurrent")
+      .mockImplementation((authority) => {
+        const store = bind(authority);
+        return {
+          ...store,
+          lookup: async (requestedKey) => {
+            const value = await store.lookup(requestedKey);
+            if (holdRead && requestedKey === key) {
+              holdRead = false;
+              readCompleted.resolve();
+              await releaseRead.promise;
+            }
+            return value;
+          },
+        };
+      });
+    const cleanup = registry.closeTrackedBrowserTabsForSessions({
+      sessionKeys: [selected.sessionKey],
+      closeDurableTab: async (tab, options) => {
+        if (tab.nativeTargetId !== "selected") {
+          return { status: "unavailable", reason: "target-lookup-failed" };
+        }
+        holdRead = true;
+        return await options.closeIfCurrent(async () => {
+          dispatched.resolve();
+          await finishClose.promise;
+          return { status: "closed" };
+        });
+      },
+    });
+    let touched = false;
+    let touch: Promise<void> | undefined;
+    try {
+      await readCompleted.promise;
+      touch = registry.touchSessionBrowserTab({ ...selected, now: 2_000 }).then(() => {
+        touched = true;
+      });
+      await registry.touchSessionBrowserTab({ ...other, now: 3_000 });
+      expect(touched).toBe(false);
+      releaseRead.resolve();
+      await dispatched.promise;
+      // The network response is still held; activity must now be able to settle.
+      await touch;
+      expect(touched).toBe(true);
+      finishClose.resolve();
+      await expect(cleanup).resolves.toBe(1);
+    } finally {
+      releaseRead.resolve();
+      finishClose.resolve();
+      await Promise.allSettled([cleanup, ...(touch ? [touch] : [])]);
+      observer.mockRestore();
+    }
+  });
+
   it("does not delete a replacement row after an obsolete close completes", async () => {
     const registry = await freshRegistry("replacement-race");
-    registry.trackSessionBrowserTab({
+    await registry.trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "opaque",
       profile: "remote",
       ownership: ownership("NATIVE-REPLACED"),
       now: 1_000,
     });
-    const closeDurableTab = vi.fn(async () => {
-      registry.trackSessionBrowserTab({
-        sessionKey: "agent:main:main",
-        targetId: "opaque",
-        profile: "remote",
-        ownership: ownership("NATIVE-REPLACED"),
-        now: 2_000,
-      });
-      return { status: "closed" } as const;
-    });
+    const closeDurableTab = vi.fn(
+      async (_tab: DurableTab, options: CloseOptions) =>
+        await options.closeIfCurrent(async () => {
+          await registry.trackSessionBrowserTab({
+            sessionKey: "agent:main:main",
+            targetId: "opaque",
+            profile: "remote",
+            ownership: ownership("NATIVE-REPLACED"),
+            now: 2_000,
+          });
+          return { status: "closed" };
+        }),
+    );
 
     await expect(
       registry.closeTrackedBrowserTabsForSessions({
@@ -671,55 +764,53 @@ describe("durable session tab registry", () => {
   });
 
   it("throws when durable registration cannot write SQLite", async () => {
-    installRuntime((options) => {
-      const store = createPluginStateSyncKeyedStoreForTests("browser", options);
-      return new Proxy(store, {
-        get(target, property) {
-          if (property === "update") {
-            return () => {
-              throw new Error("sqlite unavailable");
-            };
-          }
-          const value = Reflect.get(target, property);
-          return typeof value === "function" ? value.bind(target) : value;
-        },
-      });
+    await installRuntime((options) => {
+      const store = createPluginStateKeyedStoreForTests("browser", options);
+      return {
+        ...store,
+        withCurrent: (authority) => ({
+          ...store.withCurrent(authority),
+          compareAndApply: async () => {
+            throw new Error("sqlite unavailable");
+          },
+        }),
+      };
     });
     const registry = await freshRegistry("write-failure");
 
-    expect(() =>
+    await expect(
       registry.trackSessionBrowserTab({
         sessionKey: "agent:main:main",
         targetId: "tab-a",
         profile: "remote",
         ownership: ownership("NATIVE-A"),
       }),
-    ).toThrow("sqlite unavailable");
+    ).rejects.toThrow("sqlite unavailable");
   });
 
   it("converges after close succeeds but the first durable delete fails", async () => {
-    const realStore = openStore();
     let failDelete = true;
-    installRuntime(
-      () =>
-        new Proxy(realStore, {
-          get(target, property) {
-            if (property === "deleteIf") {
-              return (...args: Parameters<NonNullable<typeof target.deleteIf>>) => {
-                if (failDelete) {
-                  failDelete = false;
-                  throw new Error("delete unavailable");
-                }
-                return target.deleteIf?.(...args);
-              };
-            }
-            const value = Reflect.get(target, property);
-            return typeof value === "function" ? value.bind(target) : value;
-          },
-        }),
-    );
+    await installRuntime((options) => {
+      const store = createPluginStateKeyedStoreForTests("browser", options);
+      return {
+        ...store,
+        withCurrent: (authority) => {
+          const action = store.withCurrent(authority);
+          return {
+            ...action,
+            compareAndApply: async (key, comparison, intent) => {
+              if (intent.action === "delete" && failDelete) {
+                failDelete = false;
+                throw new Error("delete unavailable");
+              }
+              return await action.compareAndApply(key, comparison, intent);
+            },
+          };
+        },
+      };
+    });
     const first = await freshRegistry("delete-failure");
-    first.trackSessionBrowserTab({
+    await first.trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "tab-a",
       profile: "remote",
@@ -732,7 +823,7 @@ describe("durable session tab registry", () => {
     expect(openStore().entries()).toHaveLength(1);
 
     resetPluginStateStoreForTests();
-    installRuntime();
+    await installRuntime();
     const restarted = await freshRegistry("delete-failure-restart");
     await restarted.closeTrackedBrowserTabsForSessions({
       sessionKeys: ["agent:main:main"],
@@ -767,20 +858,21 @@ describe("durable session tab registry", () => {
     });
     const warnings: string[] = [];
     const registry = await freshRegistry("invalid");
+    const closeDurableTab = vi.fn(async () => ({ status: "closed" as const }));
 
     await registry.closeTrackedBrowserTabsForSessions({
       sessionKeys: ["agent:main:other"],
-      closeDurableTab: cdpMocks.closeTrackedCdpTarget,
+      closeDurableTab,
       onWarn: (message) => warnings.push(message),
     });
     expect(openStore().entries()).toEqual([]);
-    expect(cdpMocks.closeTrackedCdpTarget).not.toHaveBeenCalled();
+    expect(closeDurableTab).not.toHaveBeenCalled();
     expect(warnings).toHaveLength(4);
   });
 
   it("keeps non-durable tabs out of SQLite but shared across duplicate bundles", async () => {
     const first = await freshRegistry("volatile-first");
-    first.trackSessionBrowserTab({
+    await first.trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "volatile",
       profile: "remote",
@@ -815,13 +907,13 @@ describe("durable session tab registry", () => {
     clearProcessLocalTabState();
     const restarted = await freshRegistry("cold-alias");
 
-    restarted.touchSessionBrowserTab({
+    await restarted.touchSessionBrowserTab({
       sessionKey: record.sessionKey,
       targetId: "docs-cold",
       profile: record.profile,
       now: 9_000,
     });
-    restarted.untrackSessionBrowserTab({
+    await restarted.untrackSessionBrowserTab({
       sessionKey: record.sessionKey,
       targetId: "docs-cold",
       profile: record.profile,
@@ -830,7 +922,7 @@ describe("durable session tab registry", () => {
       lastUsedAt: 1_000,
     });
 
-    restarted.touchSessionBrowserTab({
+    await restarted.touchSessionBrowserTab({
       sessionKey: record.sessionKey,
       targetId: record.nativeTargetId,
       profile: record.profile,
@@ -861,7 +953,7 @@ describe("durable session tab registry", () => {
 
   it("defers a pending cold sweep when activity shares its timestamp", async () => {
     const first = await freshRegistry("cold-pending-first");
-    first.trackSessionBrowserTab({
+    await first.trackSessionBrowserTab({
       sessionKey: "agent:main:cold-pending",
       targetId: "NATIVE-COLD-PENDING",
       profile: "remote",
@@ -878,7 +970,7 @@ describe("durable session tab registry", () => {
       }),
     ).resolves.toBe(0);
 
-    restarted.touchSessionBrowserTab({
+    await restarted.touchSessionBrowserTab({
       sessionKey: "agent:main:cold-pending",
       targetId: "NATIVE-COLD-PENDING",
       profile: "remote",
@@ -897,7 +989,7 @@ describe("durable session tab registry", () => {
 
   it("defers cold opaque handles from sweeps but still performs lifecycle cleanup", async () => {
     const first = await freshRegistry("opaque-first");
-    first.trackSessionBrowserTab({
+    await first.trackSessionBrowserTab({
       sessionKey: "agent:main:opaque",
       targetId: "mcp-session-handle",
       profile: "remote",

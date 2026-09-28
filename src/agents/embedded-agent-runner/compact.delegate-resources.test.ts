@@ -56,28 +56,29 @@ import { recordSessionModelUsage } from "../sessions/session-model-usage.js";
 import { compactEmbeddedAgentSession } from "./compact.queued.js";
 import { attachCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 
-type Mode =
-  | "success"
-  | "abort-before-commit"
-  | "abort-after-commit"
-  | "automatic-after-commit"
-  | "timeout-after-commit"
-  | "session-hook-tail"
-  | "provider-tail"
-  | "cleanup-tail"
-  | "preparation-failure"
-  | "mcp-caller-abort"
-  | "mcp-parent-abort"
-  | "mcp-ready"
-  | "lsp-caller-abort"
-  | "lsp-parent-abort"
-  | "lsp-ready"
-  | "before_compaction"
-  | "after_compaction"
-  | "raw"
-  | "reload"
-  | "reload-abort-before-commit"
-  | "reload-queued";
+const modes = [
+  "abort-before-commit",
+  "abort-after-commit",
+  "automatic-after-commit",
+  "timeout-after-commit",
+  "session-hook-tail",
+  "provider-tail",
+  "cleanup-tail",
+  "preparation-failure",
+  "mcp-caller-abort",
+  "mcp-parent-abort",
+  "mcp-ready",
+  "lsp-caller-abort",
+  "lsp-parent-abort",
+  "lsp-ready",
+  "before_compaction",
+  "after_compaction",
+  "raw",
+  "reload",
+  "reload-abort-before-commit",
+  "reload-queued",
+] as const;
+type Mode = (typeof modes)[number];
 type Connection = { file: string; database: DatabaseSync; disposals: number };
 type Fixture = {
   mode: Mode;
@@ -440,29 +441,7 @@ vi.mock("./skill-runtime.js", async (importOriginal) => {
 });
 
 describe("delegate compaction resource retirement", () => {
-  it.each<Mode>([
-    "success",
-    "abort-before-commit",
-    "abort-after-commit",
-    "automatic-after-commit",
-    "timeout-after-commit",
-    "session-hook-tail",
-    "provider-tail",
-    "cleanup-tail",
-    "preparation-failure",
-    "mcp-caller-abort",
-    "mcp-parent-abort",
-    "mcp-ready",
-    "lsp-caller-abort",
-    "lsp-parent-abort",
-    "lsp-ready",
-    "before_compaction",
-    "after_compaction",
-    "raw",
-    "reload",
-    "reload-abort-before-commit",
-    "reload-queued",
-  ])(
+  it.each(modes)(
     "keeps actual work owned through %s",
     async (mode) => {
       const lspCancelled = mode === "lsp-caller-abort" || mode === "lsp-parent-abort";
@@ -712,15 +691,20 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
                 }
                 const compact = () =>
                   mode === "reload-queued"
-                    ? compactEmbeddedAgentSession({
-                        ...target,
-                        sessionTarget: target,
-                        sessionFile: target.sessionKey,
-                        ...runtimeContext,
-                        trigger: "manual",
-                        abortSignal: controller.signal,
-                        enqueue: async (task) => await task(),
-                      })
+                    ? compactEmbeddedAgentSession(
+                        {
+                          ...target,
+                          sessionTarget: target,
+                          sessionFile: target.sessionKey,
+                          ...runtimeContext,
+                          trigger: "manual",
+                          abortSignal: controller.signal,
+                          enqueue: async (task) => await task(),
+                        },
+                        {
+                          sourceAuthority: { assertActive: () => {}, operatorAuthority: undefined },
+                        },
+                      )
                     : delegateCompactionToRuntime({
                         sessionId: target.sessionId,
                         sessionKey: target.sessionKey,
@@ -729,11 +713,7 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
                         abortSignal: controller.signal,
                       });
                 operation = parent.track(() => (captured ? captured.run(compact) : compact()));
-                const held =
-                  mode !== "success" &&
-                  mode !== "raw" &&
-                  mode !== "reload" &&
-                  mode !== "reload-queued";
+                const held = mode !== "raw" && mode !== "reload" && mode !== "reload-queued";
                 if (held) {
                   await Promise.race([
                     current.entered.promise,

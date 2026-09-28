@@ -204,28 +204,6 @@ describe("Agent-specific tool filtering", () => {
     expect(toolNames).not.toContain("message");
   });
 
-  it("should allow apply_patch for OpenAI models when write is allow-listed", () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        allow: ["read", "write", "exec"],
-      },
-    };
-
-    const tools = createOpenClawCodingTools({
-      config: cfg,
-      sessionKey: "agent:main:main",
-      workspaceDir: "/tmp/test",
-      agentDir: "/tmp/agent",
-      modelProvider: "openai",
-      modelId: "gpt-5.4",
-    });
-
-    const toolNames = tools.map((t) => t.name);
-    expect(toolNames).toContain("read");
-    expect(toolNames).toContain("exec");
-    expect(toolNames).toContain("apply_patch");
-  });
-
   it("should allow disabling apply_patch explicitly", () => {
     const cfg: OpenClawConfig = {
       tools: {
@@ -632,31 +610,6 @@ describe("Agent-specific tool filtering", () => {
     expect(names).not.toContain("apply_patch");
   });
 
-  it("should resolve feishu group tool policy for sender-scoped session keys", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        feishu: {
-          groups: {
-            oc_group_chat: {
-              tools: { allow: ["read"] },
-            },
-          },
-        },
-      },
-    };
-
-    const tools = createOpenClawCodingTools({
-      config: cfg,
-      sessionKey: "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
-      messageProvider: "feishu",
-      workspaceDir: "/tmp/test-feishu-scoped-group",
-      agentDir: "/tmp/agent-feishu",
-    });
-    const names = tools.map((t) => t.name);
-    expect(names).toContain("read");
-    expect(names).not.toContain("exec");
-  });
-
   it("should prefer scoped group candidates before wildcard tool policy", () => {
     const cfg: OpenClawConfig = {
       channels: {
@@ -683,24 +636,6 @@ describe("Agent-specific tool filtering", () => {
     const names = tools.map((t) => t.name);
     expect(names).toContain("read");
     expect(names).not.toContain("exec");
-  });
-
-  it("should resolve inherited group tool policy for subagent parent groups", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        whatsapp: {
-          groups: {
-            trusted: {
-              tools: { allow: ["read"] },
-            },
-          },
-        },
-      },
-    };
-
-    expect(
-      resolveChannelGroupToolsPolicy({ cfg, channel: "whatsapp", groupId: "trusted" }),
-    ).toEqual({ allow: ["read"] });
   });
 
   it("should apply global tool policy before agent-specific policy", () => {

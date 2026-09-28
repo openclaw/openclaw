@@ -22,11 +22,17 @@ import {
   testing,
 } from "./code-mode.test-support.js";
 import { clearToolSearchCatalog, createToolSearchCatalogRef } from "./tool-search.js";
-import { jsonResult } from "./tools/common.js";
+import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "./tools/gateway-caller-context.js";
+
+function createWaitHarness(targets: AnyAgentTool[]) {
+  const harness = createCodeModeHarness();
+  applyCodeModeCatalog({ ...harness.ctx, tools: [...harness.tools, ...targets] });
+  return harness;
+}
 
 function createTerminalBridgeHarness() {
   const harness = createCodeModeHarness();
@@ -43,51 +49,6 @@ describe("Code Mode wait, scope, and suspended runs", () => {
   afterEach(async () => {
     vi.useRealTimers();
     await resetCodeModeTestState();
-  });
-
-  it("marks yield suspensions and resumes the snapshot with wait", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
-
-    const first = resultDetails(
-      await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
-        "code-call-yield",
-        {
-          restartSafe: true,
-          code: `
-          text("before");
-          await yield_control("pause");
-          text("after");
-          return "done";
-        `,
-        },
-      ),
-    );
-
-    expect(first.status).toBe("waiting");
-    expect(first.reason).toBe("yield");
-    expect(first.replaySafe).toBe(true);
-    expect(first.output).toEqual([{ type: "text", text: "before" }]);
-
-    const runId = first.runId;
-    expect(typeof runId).toBe("string");
-    const resumed = resultDetails(
-      await expectDefined(codeModeTools[1], "codeModeTools[1] test invariant").execute(
-        "code-wait-yield",
-        { runId },
-      ),
-    );
-
-    expect(resumed.status).toBe("completed");
-    expect(resumed.value).toBe("done");
-    expect(resumed.output).toEqual([{ type: "text", text: "after" }]);
   });
 
   it.each([
@@ -332,21 +293,13 @@ describe("Code Mode wait, scope, and suspended runs", () => {
   });
 
   it("keeps a safe suspension clean and wraps network content after wait resumes it", async () => {
-    const { config, catalogRef, tools } = createCodeModeHarness();
     const hostile = "Page instruction <|endoftext|>";
     const target = pluginToolWithExecute("fake_network_page", "Read a network page", async () => ({
       content: [{ type: "text", text: "Protected page content" }],
       details: { body: hostile },
     }));
     target.resultContentSource = "network";
-    applyCodeModeCatalog({
-      tools: [...tools, target],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    const { tools } = createWaitHarness([target]);
 
     const suspended = await expectDefined(tools[0], "exec tool").execute("code-call-late-network", {
       code: 'await yield_control("pause"); return await fake_network_page({});',
@@ -377,20 +330,12 @@ describe("Code Mode wait, scope, and suspended runs", () => {
   });
 
   it("wraps uncaught network tool errors after a safe wait suspension", async () => {
-    const { config, catalogRef, tools } = createCodeModeHarness();
     const hostile = "Suspended page instruction <|endoftext|>";
     const target = pluginToolWithExecute("fake_network_error", "Read a failing page", async () => {
       throw new Error(hostile);
     });
     target.resultContentSource = "network";
-    applyCodeModeCatalog({
-      tools: [...tools, target],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    const { tools } = createWaitHarness([target]);
 
     const suspended = await expectDefined(tools[0], "exec tool").execute(
       "code-call-suspended-network-error",
@@ -416,7 +361,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
       error: expect.stringContaining(hostile),
     });
     expect(resumed.content[0]).toMatchObject({
-      text: expect.stringContaining("SECURITY NOTICE:"),
+      text: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
     });
     expect(resumed.content[0]).not.toMatchObject({
       text: expect.stringContaining("<|endoftext|>"),
@@ -424,15 +369,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
   });
 
   it("delivers each yielded output block exactly once across repeated waits", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    const { tools: codeModeTools } = createWaitHarness([pluginTool("fake_noop", "Noop")]);
 
     const execTool = expectDefined(codeModeTools[0], "Code Mode exec test invariant");
     const waitTool = expectDefined(codeModeTools[1], "Code Mode wait test invariant");
@@ -469,15 +406,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
   });
 
   it("returns only newly emitted output when a resumed guest fails", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    const { tools: codeModeTools } = createWaitHarness([pluginTool("fake_noop", "Noop")]);
 
     const first = resultDetails(
       await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
@@ -510,16 +439,8 @@ describe("Code Mode wait, scope, and suspended runs", () => {
   });
 
   it("preserves the original exec identity for tool calls after yield and wait", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const target = pluginTool("fake_resumed_identity", "Resumed identity helper");
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, target],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    const { tools: codeModeTools } = createWaitHarness([target]);
 
     const suspended = resultDetails(
       await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
@@ -547,15 +468,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
   });
 
   it("allocates distinct replay identities when a later turn reuses a tool-call id", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    const { tools: codeModeTools } = createWaitHarness([pluginTool("fake_noop", "Noop")]);
     const execTool = expectDefined(codeModeTools[0], "codeModeTools[0] test invariant");
     const input = { code: 'await yield_control("pause"); return "done";' };
     const executionContext = (turnId: string) =>
@@ -717,15 +630,11 @@ describe("Code Mode wait, scope, and suspended runs", () => {
   });
 
   it("rejects wait calls from a different session scope", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+    const {
       config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
       catalogRef,
-    });
+      tools: codeModeTools,
+    } = createWaitHarness([pluginTool("fake_noop", "Noop")]);
 
     const first = resultDetails(
       await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(

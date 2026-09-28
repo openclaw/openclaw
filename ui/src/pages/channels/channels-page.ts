@@ -305,14 +305,6 @@ class ChannelsPage extends OpenClawLightDomElement {
     return this.nostrProfileAccountId ?? accounts[0]?.accountId ?? "default";
   }
 
-  private resolveGatewayHttpCredentials(gateway: ApplicationContext["gateway"]): string[] {
-    return resolveControlUiAuthCandidates({
-      hello: gateway.snapshot.hello,
-      settings: { token: gateway.connection.token },
-      password: gateway.connection.password,
-    });
-  }
-
   private clearNostrForm() {
     this.nostrProfileFormState = null;
     this.nostrProfileAccountId = null;
@@ -346,7 +338,11 @@ class ChannelsPage extends OpenClawLightDomElement {
       channels,
       formAccountId: this.nostrProfileAccountId,
       accountId: this.resolveNostrAccountId(),
-      authCandidates: this.resolveGatewayHttpCredentials(gateway),
+      authCandidates: resolveControlUiAuthCandidates({
+        hello: gateway.snapshot.hello,
+        settings: { token: gateway.connection.token },
+        password: gateway.connection.password,
+      }),
     };
   }
 
@@ -371,10 +367,6 @@ class ChannelsPage extends OpenClawLightDomElement {
     this.nostrProfileFormState = createNostrProfileFormState(profile ?? undefined);
   }
 
-  private cancelNostrProfile() {
-    this.invalidateNostrForm();
-  }
-
   private changeNostrProfileField(field: keyof NostrProfile, value: string) {
     const form = this.nostrProfileFormState;
     if (!form) {
@@ -395,7 +387,7 @@ class ChannelsPage extends OpenClawLightDomElement {
     this.nostrProfileFormState = { ...form, showAdvanced: !form.showAdvanced };
   }
 
-  private async saveNostrProfile() {
+  private async updateNostrProfile(action: "save" | "import") {
     const form = this.nostrProfileFormState;
     if (!form || form.saving || form.importing) {
       return;
@@ -404,120 +396,68 @@ class ChannelsPage extends OpenClawLightDomElement {
     if (!operation) {
       return;
     }
-    const pendingForm = {
-      ...form,
-      saving: true,
-      error: null,
-      success: null,
-      fieldErrors: {},
-    };
-    this.nostrProfileFormState = pendingForm;
-
-    try {
-      const { data, response, errorMessage } = await putNostrProfile({
-        accountId: operation.accountId,
-        authCandidates: operation.authCandidates,
-        isCurrent: () => this.currentNostrForm(operation) !== null,
-        values: form.values,
-      });
-      const currentForm = this.currentNostrForm(operation);
-      if (!currentForm) {
-        return;
-      }
-      if (!response.ok || data?.ok === false || !data) {
-        this.nostrProfileFormState = {
-          ...currentForm,
-          saving: false,
-          error: errorMessage,
-          success: null,
-          fieldErrors: parseValidationErrors(data?.details),
-        };
-        return;
-      }
-
-      if (!data.persisted) {
-        this.nostrProfileFormState = {
-          ...currentForm,
-          saving: false,
-          error: t("channels.nostr.notices.publishFailed"),
-          success: null,
-        };
-        return;
-      }
-
-      this.nostrProfileFormState = {
-        ...currentForm,
-        saving: false,
-        error: null,
-        success: t("channels.nostr.notices.published"),
-        fieldErrors: {},
-        original: { ...form.values },
-      };
-      await operation.channels.refresh(true);
-    } catch (err) {
-      const currentForm = this.currentNostrForm(operation);
-      if (!currentForm) {
-        return;
-      }
-      this.nostrProfileFormState = {
-        ...currentForm,
-        saving: false,
-        error: formatNostrProfileOperationError(err, t("channels.nostr.notices.updateFailed")),
-        success: null,
-      };
-    }
-  }
-
-  private async importNostrProfile() {
-    const form = this.nostrProfileFormState;
-    if (!form || form.importing || form.saving) {
-      return;
-    }
-    const operation = this.beginNostrOperation();
-    if (!operation) {
-      return;
-    }
+    const busyField = action === "save" ? "saving" : "importing";
     this.nostrProfileFormState = {
       ...form,
-      importing: true,
+      [busyField]: true,
       error: null,
       success: null,
+      ...(action === "save" ? { fieldErrors: {} } : {}),
     };
 
     try {
-      const { data, response, errorMessage } = await importNostrProfile({
+      const request = {
         accountId: operation.accountId,
         authCandidates: operation.authCandidates,
         isCurrent: () => this.currentNostrForm(operation) !== null,
-      });
+      };
+      const result =
+        action === "save"
+          ? { action, ...(await putNostrProfile({ ...request, values: form.values })) }
+          : { action, ...(await importNostrProfile(request)) };
       const currentForm = this.currentNostrForm(operation);
       if (!currentForm) {
         return;
       }
-      if (!response.ok || data?.ok === false || !data) {
+      const settledForm = { ...currentForm, [busyField]: false, error: null, success: null };
+      if (!result.response.ok || result.data?.ok === false || !result.data) {
         this.nostrProfileFormState = {
-          ...currentForm,
-          importing: false,
-          error: errorMessage,
-          success: null,
+          ...settledForm,
+          error: result.errorMessage,
+          ...(result.action === "save"
+            ? { fieldErrors: parseValidationErrors(result.data?.details) }
+            : {}),
         };
         return;
       }
 
-      const merged = data.merged ?? data.imported ?? null;
-      const values = merged ? { ...currentForm.values, ...merged } : currentForm.values;
-      this.nostrProfileFormState = {
-        ...currentForm,
-        importing: false,
-        values,
-        error: null,
-        success: data.saved
-          ? t("channels.nostr.notices.importedFromRelays")
-          : t("channels.nostr.notices.imported"),
-        showAdvanced: Boolean(values.banner || values.website || values.nip05 || values.lud16),
-      };
-
-      if (data.saved) {
+      if (result.action === "save") {
+        if (!result.data.persisted) {
+          this.nostrProfileFormState = {
+            ...settledForm,
+            error: t("channels.nostr.notices.publishFailed"),
+          };
+          return;
+        }
+        this.nostrProfileFormState = {
+          ...settledForm,
+          success: t("channels.nostr.notices.published"),
+          fieldErrors: {},
+          original: { ...form.values },
+        };
+      } else {
+        const merged = result.data.merged ?? result.data.imported ?? null;
+        const values = merged ? { ...currentForm.values, ...merged } : currentForm.values;
+        this.nostrProfileFormState = {
+          ...settledForm,
+          values,
+          success: result.data.saved
+            ? t("channels.nostr.notices.importedFromRelays")
+            : t("channels.nostr.notices.imported"),
+          showAdvanced: Boolean(values.banner || values.website || values.nip05 || values.lud16),
+        };
+      }
+      if (result.action === "save" || result.data.saved) {
         await operation.channels.refresh(true);
       }
     } catch (err) {
@@ -527,8 +467,15 @@ class ChannelsPage extends OpenClawLightDomElement {
       }
       this.nostrProfileFormState = {
         ...currentForm,
-        importing: false,
-        error: formatNostrProfileOperationError(err, t("channels.nostr.notices.importFailed")),
+        [busyField]: false,
+        error: formatNostrProfileOperationError(
+          err,
+          t(
+            action === "save"
+              ? "channels.nostr.notices.updateFailed"
+              : "channels.nostr.notices.importFailed",
+          ),
+        ),
         success: null,
       };
     }
@@ -699,10 +646,10 @@ class ChannelsPage extends OpenClawLightDomElement {
           onConfigSave: () => void this.saveChannelConfig(),
           onConfigReload: () => void this.reloadChannelConfig(),
           onNostrProfileEdit: (accountId, profile) => this.editNostrProfile(accountId, profile),
-          onNostrProfileCancel: () => this.cancelNostrProfile(),
+          onNostrProfileCancel: () => this.invalidateNostrForm(),
           onNostrProfileFieldChange: (field, value) => this.changeNostrProfileField(field, value),
-          onNostrProfileSave: () => void this.saveNostrProfile(),
-          onNostrProfileImport: () => void this.importNostrProfile(),
+          onNostrProfileSave: () => void this.updateNostrProfile("save"),
+          onNostrProfileImport: () => void this.updateNostrProfile("import"),
           onNostrProfileToggleAdvanced: () => this.toggleNostrProfileAdvanced(),
         }),
       )}

@@ -1,12 +1,10 @@
-/**
- * Browser config resolution.
- *
- * Normalizes raw browser config into resolved runtime defaults, profile
- * records, SSRF policy, timeouts, headless mode, and managed Chrome settings.
- */
 import os from "node:os";
 import path from "node:path";
 import { parseBrowserHttpUrl, redactCdpUrl } from "openclaw/plugin-sdk/browser-cdp";
+import type {
+  ResolvedBrowserConfig as ResolvedBrowserConfigContract,
+  ResolvedBrowserTabCleanupConfig,
+} from "openclaw/plugin-sdk/browser-config";
 import type {
   BrowserConfig,
   BrowserProfileConfig,
@@ -41,6 +39,11 @@ import {
   DEFAULT_OPENCLAW_BROWSER_ENABLED,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
+import { resolveBrowserEngine } from "./engines/registry.js";
+import type { BrowserEngineId } from "./engines/types.js";
+import type { ManagedBrowserHeadlessSource, ResolvedBrowserProfile } from "./profile.types.js";
+export type { ResolvedBrowserProfile } from "./profile.types.js";
+export type { ResolvedBrowserTabCleanupConfig } from "openclaw/plugin-sdk/browser-config";
 
 export {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
@@ -64,31 +67,9 @@ type BrowserSsrFPolicyCompat = NonNullable<BrowserConfig["ssrfPolicy"]> & {
 };
 
 /** Browser config after defaults, derived ports, and profile defaults are applied. */
-export type ResolvedBrowserConfig = {
-  enabled: boolean;
-  evaluateEnabled: boolean;
-  controlPort: number;
-  cdpPortRangeStart: number;
-  cdpPortRangeEnd: number;
-  cdpProtocol: "http" | "https";
-  cdpHost: string;
-  cdpIsLoopback: boolean;
-  remoteCdpTimeoutMs: number;
-  remoteCdpHandshakeTimeoutMs: number;
-  localLaunchTimeoutMs: number;
-  localCdpReadyTimeoutMs: number;
-  actionTimeoutMs: number;
-  color: string;
-  executablePath?: string;
-  headless: boolean;
+export type ResolvedBrowserConfig = Omit<ResolvedBrowserConfigContract, "profiles"> & {
   headlessSource?: "config" | "default";
-  noSandbox: boolean;
-  attachOnly: boolean;
-  defaultProfile: string;
   profiles: Record<string, BrowserProfileConfig>;
-  tabCleanup: ResolvedBrowserTabCleanupConfig;
-  ssrfPolicy?: SsrFPolicy;
-  extraArgs: string[];
   /** Default loopback port for extension-driver relay servers. */
   extensionRelayDefaultPort: number;
   /** Assigned loopback relay port per extension-driver profile (no explicit cdpPort). */
@@ -101,34 +82,6 @@ export type ResolvedBrowserConfig = {
   extensionRelayInternalTokens: Record<string, string>;
   /** Host-local HMAC key last adopted by the relay lifecycle, not raw config resolution. */
   extensionRelayToken?: string;
-};
-
-/** Normalized tab-cleanup settings for session-owned browser tabs. */
-export type ResolvedBrowserTabCleanupConfig = {
-  enabled: boolean;
-  idleMinutes: number;
-  maxTabsPerSession: number;
-  sweepMinutes: number;
-};
-
-/** Runtime browser profile settings resolved from global and profile config. */
-export type ResolvedBrowserProfile = {
-  name: string;
-  /** Omitted only by legacy callers; defaults to Chromium. */
-  engine?: "chromium" | "lightpanda";
-  cdpPort: number;
-  cdpUrl: string;
-  cdpHost: string;
-  cdpIsLoopback: boolean;
-  userDataDir?: string;
-  mcpCommand?: string;
-  mcpArgs?: string[];
-  color: string;
-  driver: "openclaw" | "existing-session" | "extension";
-  executablePath?: string;
-  headless: boolean;
-  headlessSource?: "profile" | "config" | "default";
-  attachOnly: boolean;
 };
 
 /** Read a named browser profile without falling through to inherited object keys. */
@@ -151,15 +104,6 @@ const EXTENSION_RELAY_PORT_OFFSET = 8;
 const EXTENSION_RELAY_CDP_USER = "openclaw-internal";
 /** Environment variable that overrides managed Chrome headless mode. */
 const BROWSER_HEADLESS_ENV_KEY = "OPENCLAW_BROWSER_HEADLESS";
-
-/** Source that determined managed Chrome headless mode. */
-export type ManagedBrowserHeadlessSource =
-  | "request"
-  | "env"
-  | "profile"
-  | "config"
-  | "linux-display-fallback"
-  | "default";
 
 type ManagedBrowserHeadlessMode = {
   headless: boolean;
@@ -226,7 +170,7 @@ function hasLinuxDisplay(env: NodeJS.ProcessEnv): boolean {
 
 export function isLocalManagedProfile(profile: ResolvedBrowserProfile): boolean {
   return (
-    profile.engine !== "lightpanda" &&
+    resolveBrowserEngine(profile.engine).descriptor.launchMode !== "attach-only" &&
     profile.driver === "openclaw" &&
     profile.cdpIsLoopback &&
     !profile.attachOnly
@@ -245,8 +189,6 @@ function resolveBrowserTabCleanupConfig(
   };
 }
 
-const normalizeStringList = normalizeOptionalTrimmedStringList;
-
 function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | undefined {
   const rawPolicy = cfg?.ssrfPolicy as BrowserSsrFPolicyCompat | undefined;
   const allowPrivateNetwork = rawPolicy?.allowPrivateNetwork;
@@ -255,7 +197,7 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
     allowPrivateNetwork !== undefined || dangerouslyAllowPrivateNetwork !== undefined;
   const resolved = mergeSsrFPolicies({
     ...rawPolicy,
-    allowedHostnames: normalizeStringList(rawPolicy?.allowedHostnames),
+    allowedHostnames: normalizeOptionalTrimmedStringList(rawPolicy?.allowedHostnames),
   });
   if (resolved && hasExplicitPrivateSetting) {
     delete resolved.allowPrivateNetwork;
@@ -310,8 +252,8 @@ function resolveExtensionRelayPorts(
   return ports;
 }
 
-function assertDedicatedLightpandaEndpoints(profiles: Record<string, BrowserProfileConfig>): void {
-  const endpoints = new Map<string, { name: string; engine?: string }>();
+function assertDedicatedEngineEndpoints(profiles: Record<string, BrowserProfileConfig>): void {
+  const endpoints = new Map<string, { name: string; engine?: BrowserEngineId }>();
   for (const [name, profile] of Object.entries(profiles)) {
     const endpoint = profile.cdpUrl ? URL.parse(profile.cdpUrl) : null;
     if (!endpoint) {
@@ -319,9 +261,13 @@ function assertDedicatedLightpandaEndpoints(profiles: Record<string, BrowserProf
     }
     const key = endpoint.toString().replace(/\/$/, "");
     const previous = endpoints.get(key);
-    if (previous && (previous.engine === "lightpanda" || profile.engine === "lightpanda")) {
+    const adapter = resolveBrowserEngine(profile.engine);
+    const dedicated = adapter.requiresDedicatedEndpoint
+      ? adapter
+      : previous && resolveBrowserEngine(previous.engine);
+    if (previous && dedicated?.requiresDedicatedEndpoint) {
       throw new Error(
-        `Lightpanda requires a dedicated CDP endpoint; profiles "${previous.name}" and "${name}" share one.`,
+        `${dedicated.descriptor.label} requires a dedicated CDP endpoint; profiles "${previous.name}" and "${name}" share one.`,
       );
     }
     endpoints.set(key, { name, engine: profile.engine });
@@ -337,11 +283,6 @@ export function resolveBrowserConfig(
   const evaluateEnabled = cfg?.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED;
   const gatewayPort = resolveGatewayPort(rootConfig);
   const controlPort = deriveDefaultBrowserControlPort(gatewayPort ?? DEFAULT_BROWSER_CONTROL_PORT);
-  const remoteCdpTimeoutMs = DEFAULT_BROWSER_REMOTE_CDP_TIMEOUT_MS;
-  const remoteCdpHandshakeTimeoutMs = DEFAULT_BROWSER_REMOTE_CDP_HANDSHAKE_TIMEOUT_MS;
-  const localLaunchTimeoutMs = DEFAULT_BROWSER_LOCAL_LAUNCH_TIMEOUT_MS;
-  const localCdpReadyTimeoutMs = DEFAULT_BROWSER_LOCAL_CDP_READY_TIMEOUT_MS;
-  const actionTimeoutMs = DEFAULT_BROWSER_ACTION_TIMEOUT_MS;
 
   const derivedCdpRange = deriveDefaultBrowserCdpPortRange(controlPort);
   const cdpPortRangeStart = derivedCdpRange.start;
@@ -404,7 +345,7 @@ export function resolveBrowserConfig(
       )
     : [];
 
-  assertDedicatedLightpandaEndpoints(profiles);
+  assertDedicatedEngineEndpoints(profiles);
 
   return {
     enabled,
@@ -415,11 +356,11 @@ export function resolveBrowserConfig(
     cdpProtocol,
     cdpHost: cdpInfo.parsed.hostname,
     cdpIsLoopback: isLoopbackHost(cdpInfo.parsed.hostname),
-    remoteCdpTimeoutMs,
-    remoteCdpHandshakeTimeoutMs,
-    localLaunchTimeoutMs,
-    localCdpReadyTimeoutMs,
-    actionTimeoutMs,
+    remoteCdpTimeoutMs: DEFAULT_BROWSER_REMOTE_CDP_TIMEOUT_MS,
+    remoteCdpHandshakeTimeoutMs: DEFAULT_BROWSER_REMOTE_CDP_HANDSHAKE_TIMEOUT_MS,
+    localLaunchTimeoutMs: DEFAULT_BROWSER_LOCAL_LAUNCH_TIMEOUT_MS,
+    localCdpReadyTimeoutMs: DEFAULT_BROWSER_LOCAL_CDP_READY_TIMEOUT_MS,
+    actionTimeoutMs: DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
     color: DEFAULT_OPENCLAW_BROWSER_COLOR,
     executablePath,
     headless,
@@ -462,59 +403,17 @@ export function resolveProfile(
     return null;
   }
 
-  const engine = profile.engine ?? "chromium";
-  if (engine !== "chromium" && engine !== "lightpanda") {
-    throw new Error(`browser.profiles.${profileName}.engine must be chromium or lightpanda.`);
-  }
-  if (engine === "lightpanda") {
-    // Also validate here: callers can resolve programmatic config without
-    // passing through the persisted-config schema first.
-    const endpoint = profile.cdpUrl ? URL.parse(profile.cdpUrl) : null;
-    if (!endpoint || !["ws:", "wss:"].includes(endpoint.protocol)) {
-      throw new Error(
-        `browser.profiles.${profileName}.cdpUrl must be an explicit ws:// or wss:// Lightpanda endpoint.`,
-      );
-    }
-    if (profile.attachOnly !== true) {
-      throw new Error(`browser.profiles.${profileName} requires attachOnly: true for Lightpanda.`);
-    }
-    if (profile.driver !== undefined && profile.driver !== "openclaw") {
-      throw new Error(
-        `browser.profiles.${profileName} requires the default CDP driver for Lightpanda.`,
-      );
-    }
-    for (const key of [
-      "cdpPort",
-      "userDataDir",
-      "mcpCommand",
-      "mcpArgs",
-      "headless",
-      "executablePath",
-    ] as const) {
-      if (profile[key] !== undefined) {
-        throw new Error(`browser.profiles.${profileName}.${key} is not supported by Lightpanda.`);
-      }
-    }
-    return {
-      name: profileName,
-      engine,
-      cdpUrl: endpoint.toString(),
-      cdpHost: endpoint.hostname,
-      cdpPort: Number(endpoint.port || (endpoint.protocol === "wss:" ? 443 : 80)),
-      cdpIsLoopback: isLoopbackHost(endpoint.hostname),
-      color: DEFAULT_OPENCLAW_BROWSER_COLOR,
-      driver: "openclaw",
-      headless: true,
-      headlessSource: "default",
-      attachOnly: true,
-    };
+  const adapter = resolveBrowserEngine(profile.engine);
+  const engine = adapter.descriptor.id;
+  if (adapter.resolveExternalProfile) {
+    return adapter.resolveExternalProfile(profileName, profile);
   }
 
   const rawProfileUrl = profile.cdpUrl?.trim() ?? "";
   let cdpHost = resolved.cdpHost;
   let cdpPort = profile.cdpPort ?? 0;
   let cdpUrl;
-  const driver =
+  const driver: ResolvedBrowserProfile["driver"] =
     profile.driver === "existing-session" || profile.driver === "extension"
       ? profile.driver
       : "openclaw";
@@ -522,6 +421,13 @@ export function resolveProfile(
   const headlessSource =
     typeof profile.headless === "boolean" ? "profile" : resolved.headlessSource;
   const executablePath = normalizeExecutablePath(profile.executablePath) ?? resolved.executablePath;
+  const common = {
+    name: profileName,
+    engine,
+    color: DEFAULT_OPENCLAW_BROWSER_COLOR,
+    driver,
+    executablePath,
+  };
 
   if (driver === "extension") {
     // Each extension profile needs its own loopback relay port. Explicit
@@ -539,15 +445,11 @@ export function resolveProfile(
       ? `http://${EXTENSION_RELAY_CDP_USER}:${encodeURIComponent(token)}@127.0.0.1:${relayPort}`
       : `http://127.0.0.1:${relayPort}`;
     return {
-      name: profileName,
-      engine,
+      ...common,
       cdpPort: relayPort,
       cdpUrl: relayCdpUrl,
       cdpHost: "127.0.0.1",
       cdpIsLoopback: true,
-      color: DEFAULT_OPENCLAW_BROWSER_COLOR,
-      driver,
-      executablePath,
       headless: false,
       headlessSource: "default",
       attachOnly: true,
@@ -555,14 +457,13 @@ export function resolveProfile(
   }
 
   if (driver === "existing-session") {
-    const mcpArgs = normalizeStringList(profile.mcpArgs) ?? undefined;
+    const mcpArgs = normalizeOptionalTrimmedStringList(profile.mcpArgs) ?? undefined;
     const existingSessionCdp = normalizeExistingSessionCdpUrl(
       normalizeChromeMcpOptions({ ...profile, mcpArgs }).browserUrl,
       profileName,
     );
     return {
-      name: profileName,
-      engine,
+      ...common,
       cdpPort: 0,
       cdpUrl: existingSessionCdp?.cdpUrl ?? "",
       cdpHost: existingSessionCdp?.cdpHost ?? "",
@@ -570,9 +471,6 @@ export function resolveProfile(
       userDataDir: resolveUserPath(profile.userDataDir?.trim() || "") || undefined,
       mcpCommand: normalizeOptionalString(profile.mcpCommand),
       mcpArgs,
-      color: DEFAULT_OPENCLAW_BROWSER_COLOR,
-      driver,
-      executablePath,
       headless,
       headlessSource,
       attachOnly: true,
@@ -613,15 +511,11 @@ export function resolveProfile(
   }
 
   return {
-    name: profileName,
-    engine,
+    ...common,
     cdpPort,
     cdpUrl,
     cdpHost,
     cdpIsLoopback: isLoopbackHost(cdpHost),
-    color: DEFAULT_OPENCLAW_BROWSER_COLOR,
-    driver,
-    executablePath,
     headless,
     headlessSource,
     attachOnly: profile.attachOnly ?? resolved.attachOnly,

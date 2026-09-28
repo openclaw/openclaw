@@ -2,6 +2,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resolveSessionTranscriptFile } from "../../config/sessions/transcript-file-resolve.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -242,24 +243,15 @@ describe("command selection with configured model facts", () => {
     },
   );
 
-  it.each([false, true])(
-    "constrains stored automatic selection only for a restricted caller (%s)",
-    async (restricted) => {
-      const fixture = createRestrictedFixture();
-      const selected = await fixture.select({
-        opts: {
-          message: "Continue",
-          ...(restricted ? { operatorAuthority: fixture.operatorAuthority } : {}),
-        },
-      });
+  it("constrains stored automatic selection for a restricted caller", async () => {
+    const fixture = createRestrictedFixture();
+    const selected = await fixture.select({
+      opts: { message: "Continue", operatorAuthority: fixture.operatorAuthority },
+    });
 
-      expect(selected).toMatchObject({
-        provider: "custom",
-        model: restricted ? "manual" : "child",
-      });
-      expect(sessionPersistence.persistAgentSession).not.toHaveBeenCalled();
-    },
-  );
+    expect(selected).toMatchObject({ provider: "custom", model: "manual" });
+    expect(sessionPersistence.persistAgentSession).not.toHaveBeenCalled();
+  });
 
   it("allows an explicit permitted alias without weakening the agent's manual policy", async () => {
     const fixture = createRestrictedFixture();
@@ -438,27 +430,25 @@ describe("command selection with configured model facts", () => {
     },
   );
 
-  it.each([false, true])(
-    "keeps wildcard replacement in catalog order (reversed=%s)",
-    async (reverse) => {
-      const fixture = createFixture();
-      fixture.defaults.modelPolicy = { allow: ["remote/*"] };
-      fixture.store[sessionKey] = { sessionId: "configured-child", updatedAt: 1 };
-      const choices = [catalogEntry("remote", "z-first"), catalogEntry("remote", "a-second")];
-      const catalog = reverse ? choices.toReversed() : choices;
-      fixture.inventory.mockReturnValue(catalog);
-      const before = structuredClone({ cfg: fixture.cfg, store: fixture.store });
+  it("keeps wildcard replacement in catalog order rather than alphabetical order", async () => {
+    const fixture = createFixture();
+    fixture.defaults.modelPolicy = { allow: ["remote/*"] };
+    fixture.store[sessionKey] = { sessionId: "configured-child", updatedAt: 1 };
+    fixture.inventory.mockReturnValue([
+      catalogEntry("remote", "z-first"),
+      catalogEntry("remote", "a-second"),
+    ]);
+    const before = structuredClone({ cfg: fixture.cfg, store: fixture.store });
 
-      const selected = await fixture.select();
+    const selected = await fixture.select();
 
-      expect(selected).toMatchObject({
-        provider: "remote",
-        model: reverse ? "a-second" : "z-first",
-        requestedRouteResolution: "resolved",
-      });
-      expect({ cfg: fixture.cfg, store: fixture.store }).toEqual(before);
-    },
-  );
+    expect(selected).toMatchObject({
+      provider: "remote",
+      model: "z-first",
+      requestedRouteResolution: "resolved",
+    });
+    expect({ cfg: fixture.cfg, store: fixture.store }).toEqual(before);
+  });
 
   it("retains unqualified policy inference from the manifest catalog", async () => {
     const fixture = createFixture();
@@ -550,5 +540,106 @@ describe("command selection with configured model facts", () => {
       }),
     );
     expect({ cfg: fixture.cfg, store: fixture.store }).toEqual(before);
+  });
+});
+
+describe("command selection with real transcript routing", () => {
+  it.each([
+    [sessionKey, true, false, "store"],
+    [sessionKey, true, true, "suppressed"],
+    [sessionKey, false, true, "fallback"],
+    [undefined, true, true, "fallback"],
+    ["", true, true, "fallback"],
+  ] as const)(
+    "routes key=%j, store=%s, suppressed=%s through the real resolver",
+    async (key, withStore, suppressVisibleSessionEffects, route) => {
+      const fixture = createFixture();
+      fixture.defaults.modelPolicy = { allow: ["custom/*"] };
+      fixture.inventory.mockReturnValue([catalogEntry("custom", "base")]);
+      const sessionId = "routing-session";
+      const storedEntry: SessionEntry = { sessionId: "stored-session", updatedAt: 2 };
+      const store = {
+        [sessionKey]: storedEntry,
+        [sessionId]: { sessionId: "not-a-keyed-session", updatedAt: 3 },
+        "": { sessionId: "not-an-empty-key-session", updatedAt: 4 },
+      };
+      const storePath = path.join(fixture.cfg.agents!.entries!.main!.workspace!, "sessions.json");
+      const resolver = vi.fn(resolveSessionTranscriptFile);
+      vi.mocked(runtimeLoaders.loadTranscriptResolveRuntime).mockResolvedValue({
+        resolveSessionTranscriptFile: resolver,
+      });
+
+      const selected = await fixture.select({
+        opts: { message: "Resolve transcript routing", threadId: 42 },
+        sessionId,
+        sessionKey: key,
+        sessionEntry: undefined,
+        sessionStore: withStore ? store : undefined,
+        storePath,
+        suppressVisibleSessionEffects,
+      });
+
+      expect(selected.sessionFile).toBe(key === undefined ? sessionId : key);
+      expect(selected.sessionEntry).toBe(route === "store" ? storedEntry : undefined);
+      expect(selected.sessionEntryForAttempt).toBeUndefined();
+      expect(resolver).toHaveBeenCalledTimes(1);
+      const forwarded = expectDefined(resolver.mock.calls[0], "transcript resolution call")[0];
+      expect(forwarded).toMatchObject({
+        sessionId,
+        sessionKey: key === undefined ? sessionId : key,
+        agentId: "main",
+        threadId: 42,
+      });
+      expect(forwarded.sessionEntry).toBeUndefined();
+      expect(forwarded.sessionStore).toBe(route === "store" ? store : undefined);
+      expect(forwarded.storePath).toBe(route === "suppressed" ? undefined : storePath);
+      expect(sessionPersistence.persistAgentSession).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps the explicit entry ahead of the store and preserves the attempt entry", async () => {
+    const fixture = createFixture();
+    fixture.defaults.modelPolicy = { allow: ["custom/*"] };
+    fixture.inventory.mockReturnValue([catalogEntry("custom", "base")]);
+    const explicitEntry: SessionEntry = { sessionId: "explicit-session", updatedAt: 1 };
+    const storedEntry = fixture.entry();
+    const resolver = vi.fn(resolveSessionTranscriptFile);
+    vi.mocked(runtimeLoaders.loadTranscriptResolveRuntime).mockResolvedValue({
+      resolveSessionTranscriptFile: resolver,
+    });
+
+    const selected = await fixture.select({ sessionEntry: explicitEntry });
+
+    expect(selected.sessionFile).toBe(sessionKey);
+    expect(selected.sessionEntry).toBe(explicitEntry);
+    expect(selected.sessionEntryForAttempt).toBe(explicitEntry);
+    expect(fixture.entry()).toBe(storedEntry);
+    expect(resolver).toHaveBeenCalledTimes(1);
+    expect(sessionPersistence.persistAgentSession).not.toHaveBeenCalled();
+  });
+
+  it("rechecks operator authority after loading transcript routing", async () => {
+    const fixture = createFixture();
+    const lifetime = new AbortController();
+    const denied = new Error("operator authority ended during transcript loading");
+    const operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "transcript-operator",
+      scopes: ["operator.write"],
+      assertCurrent: () => {},
+      signal: lifetime.signal,
+    });
+    const resolver = vi.fn(resolveSessionTranscriptFile);
+    vi.mocked(runtimeLoaders.loadTranscriptResolveRuntime).mockImplementation(async () => {
+      lifetime.abort(denied);
+      return { resolveSessionTranscriptFile: resolver };
+    });
+
+    await expect(
+      fixture.select({ opts: { message: "Resolve transcript routing", operatorAuthority } }),
+    ).rejects.toBe(denied);
+
+    expect(runtimeLoaders.loadTranscriptResolveRuntime).toHaveBeenCalledTimes(1);
+    expect(resolver).not.toHaveBeenCalled();
+    expect(sessionPersistence.persistAgentSession).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,7 @@
 // ClawHub skills tests cover install/update/detail/status flows, security
 // verdicts, local skill cards, and workspace skill status reports.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { closeSkillsWatchers } from "../../skills/runtime/refresh.js";
 import { callGatewayHandler } from "./skills.test-helpers.js";
 
 const loadConfigMock = vi.fn(() => ({}));
@@ -94,6 +95,11 @@ async function expectEmptySecurityVerdictsWithoutFetch(): Promise<void> {
 }
 
 describe("skills gateway handlers (clawhub)", () => {
+  afterEach(async () => {
+    // skills.status opens real watchers; close them so they cannot outlive this file.
+    await closeSkillsWatchers(true);
+  });
+
   beforeEach(() => {
     loadConfigMock.mockReset();
     listAgentIdsMock.mockReset();
@@ -519,32 +525,6 @@ describe("skills gateway handlers (clawhub)", () => {
     });
   });
 
-  it("forwards ClawHub skill install risk acknowledgements", async () => {
-    installSkillFromClawHubMock.mockResolvedValue({
-      ok: true,
-      slug: "calendar",
-      version: "1.2.3",
-      targetDir: "/tmp/workspace/skills/calendar",
-    });
-
-    const { ok, error } = await callSkillsHandler("skills.install", {
-      source: "clawhub",
-      slug: "calendar",
-      version: "1.2.3",
-    });
-
-    expect(installSkillFromClawHubMock).toHaveBeenCalledWith({
-      workspaceDir: "/tmp/workspace",
-      slug: "calendar",
-      version: "1.2.3",
-      force: false,
-      logger: expect.objectContaining({ warn: expect.any(Function) }),
-      config: {},
-    });
-    expect(ok).toBe(true);
-    expect(error).toBeUndefined();
-  });
-
   it("routes explicit agent ClawHub installs through that agent workspace", async () => {
     listAgentIdsMock.mockReturnValue(["main", "research"]);
     resolveAgentWorkspaceDirMock.mockImplementation((_cfg, agentId) =>
@@ -654,33 +634,6 @@ describe("skills gateway handlers (clawhub)", () => {
     expect(result?.config?.results?.[0]?.warning).toBe(
       "Latest skill version needs review before use.",
     );
-  });
-
-  it("forwards ClawHub skill update risk acknowledgements", async () => {
-    updateSkillsFromClawHubMock.mockResolvedValue([
-      {
-        ok: true,
-        slug: "calendar",
-        previousVersion: "1.2.2",
-        version: "1.2.3",
-        changed: true,
-        targetDir: "/tmp/workspace/skills/calendar",
-      },
-    ]);
-
-    const { ok, error } = await callSkillsHandler("skills.update", {
-      source: "clawhub",
-      slug: "calendar",
-    });
-
-    expect(updateSkillsFromClawHubMock).toHaveBeenCalledWith({
-      workspaceDir: "/tmp/workspace",
-      slug: "calendar",
-      logger: expect.objectContaining({ warn: expect.any(Function) }),
-      config: {},
-    });
-    expect(ok).toBe(true);
-    expect(error).toBeUndefined();
   });
 
   it("forwards ClawHub skill update force overrides", async () => {

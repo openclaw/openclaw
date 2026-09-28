@@ -1,10 +1,9 @@
-// Log tail helpers read recent log lines with optional parsing and redaction.
 import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import { isMissingPathError } from "../infra/errno.js";
-import { readFileWindowFully } from "../infra/file-read.js";
 import { clamp } from "../utils.js";
 import { isRollingLogFilePath, isSameRollingLogFileFamily } from "./log-file-path.js";
 import "./logger.js";
@@ -12,7 +11,6 @@ import { getResolvedLoggerFileTarget } from "./logger-settings-internal.js";
 import { parseLogLine, type ParsedLogLine } from "./parse-log-line.js";
 import { redactSensitiveLines, resolveRedactOptions } from "./redact.js";
 
-// Tail reader for the active log file, with cursor reset and line redaction.
 const DEFAULT_LIMIT = 500;
 const DEFAULT_MAX_BYTES = 250_000;
 const MAX_LIMIT = 5000;

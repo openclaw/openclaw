@@ -263,7 +263,9 @@ async function assertSteeredRecoveryOrder(
     await expect(thread.getByText(text, { exact: true })).toHaveCount(1, { timeout: 10_000 });
   }
   await expect(page.locator(".chat-working-indicator")).toHaveCount(1, { timeout: 10_000 });
-  await expect(page.locator(".chat-working-indicator__preamble")).toHaveText(texts.latest);
+  await expect(thread.locator(".chat-text").filter({ hasText: texts.latest })).toHaveText(
+    texts.latest,
+  );
 
   const order = await thread.evaluate((element, expected) => {
     const visibleText = Array.from(element.querySelectorAll<HTMLElement>(".chat-bubble"));

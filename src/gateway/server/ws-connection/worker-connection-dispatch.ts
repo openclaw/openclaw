@@ -9,6 +9,7 @@ import {
   WORKER_COMPUTER_PROTOCOL_FEATURE,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
   WORKER_PORTAL_PROTOCOL_FEATURE,
+  WORKER_PRESENCE_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_METHODS,
   WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
   WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
@@ -16,6 +17,7 @@ import {
   validateWorkerHeartbeatParams,
   validateWorkerLiveEventParams,
   validateWorkerPortalParams,
+  validateWorkerPresenceParams,
   validateWorkerSessionsSendParams,
   validateWorkerSessionsSpawnParams,
   validateWorkerTranscriptCommitParams,
@@ -80,6 +82,7 @@ const SESSION_TOOL_REQUESTS = [
     validateWorkerSessionsSendParams,
   ],
   ["worker.portal", "portal", WORKER_PORTAL_PROTOCOL_FEATURE, validateWorkerPortalParams],
+  ["worker.presence", "presence", WORKER_PRESENCE_PROTOCOL_FEATURE, validateWorkerPresenceParams],
   [
     "worker.skill-workshop",
     "skill_workshop",
@@ -175,7 +178,7 @@ export async function dispatchWorkerRequest(params: {
       rejectWorkerRequest({ ...params, reason: "method-not-allowed" });
       return;
     }
-    const outcome = service.startInference(params.identity, params.request.params, {
+    const outcome = await service.startInference(params.identity, params.request.params, {
       connectionId: params.connectionId,
       send: (frame) => params.send(frame),
     });
@@ -201,7 +204,7 @@ export async function dispatchWorkerRequest(params: {
       rejectWorkerRequest({ ...params, reason: "method-not-allowed" });
       return;
     }
-    const outcome = service.cancelInference(params.identity, params.request.params);
+    const outcome = await service.cancelInference(params.identity, params.request.params);
     respondOutcome(outcome, (failure: WorkerServiceFailure<"cancelInference">) =>
       workerInferenceError(failure.reason),
     );

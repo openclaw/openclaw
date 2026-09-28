@@ -4,6 +4,7 @@ import { property, state } from "lit/decorators.js";
 import type { ThemeMascot } from "../../../packages/gateway-protocol/src/theme.ts";
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { canReloadControlUiDocument } from "../app/document-reload-guard.ts";
+import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { retryStaleChunkReloadWhenReachable } from "../app/stale-chunk-reload.ts";
 import { t } from "../i18n/index.ts";
@@ -354,7 +355,14 @@ function renderLoginGate(props: LoginGateProps, refreshAction: RefreshAction) {
       : renderFormBody({ props, feedback });
 
   return html`
-    <div class="login-gate">
+    <div
+      class="login-gate"
+      @mousedown=${(event: MouseEvent) => {
+        if (event.target === event.currentTarget) {
+          beginNativeWindowDrag(event);
+        }
+      }}
+    >
       <openclaw-toast-host></openclaw-toast-host>
       <div class="login-gate__card" data-mode=${feedback?.placement ?? "form"}>
         <header class="login-gate__brand">
@@ -370,9 +378,11 @@ function renderLoginGate(props: LoginGateProps, refreshAction: RefreshAction) {
         ${body}
         ${
           props.onOpenGatewaySettings
-            ? html`<button class="btn" @click=${props.onOpenGatewaySettings}>
-                ${t("login.gatewaySettings")}
-              </button>`
+            ? html`<footer class="login-gate__recovery">
+                <button type="button" class="btn btn--ghost" @click=${props.onOpenGatewaySettings}>
+                  ${t("login.gatewaySettings")}
+                </button>
+              </footer>`
             : nothing
         }
       </div>

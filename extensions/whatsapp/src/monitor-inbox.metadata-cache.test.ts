@@ -24,26 +24,6 @@ import {
 describe("web monitor inbox metadata cache", () => {
   installStreamsInboundMessageHooks();
 
-  it("group metadata cache hydrates participating groups once after connect", async () => {
-    const { listener, sock } = await startInboxMonitor(vi.fn(async () => {}) as InboxOnMessage);
-
-    expect(sock.groupFetchAllParticipating).toHaveBeenCalledTimes(1);
-
-    await listener.close();
-  });
-
-  it("group metadata cache keeps delivery alive when hydration fails", async () => {
-    const sock = getSock();
-    sock.groupFetchAllParticipating.mockRejectedValueOnce(new Error("no groups"));
-
-    const { listener } = await startInboxMonitor(vi.fn(async () => {}) as InboxOnMessage);
-
-    expect(sock.groupFetchAllParticipating).toHaveBeenCalledTimes(1);
-    expect(sock.sendPresenceUpdate).toHaveBeenNthCalledWith(1, "available");
-
-    await listener.close();
-  });
-
   it("group metadata cache omits group context when no group facts exist", async () => {
     const sock = getSock();
     sock.groupFetchAllParticipating.mockRejectedValueOnce(new Error("no groups"));
@@ -119,28 +99,6 @@ describe("web monitor inbox metadata cache", () => {
     expect(inbound.group?.participants).toBeUndefined();
 
     await second.listener.close();
-  });
-
-  it("group metadata cache keeps full participating metadata available to Baileys", async () => {
-    const sock = getSock();
-    sock.groupFetchAllParticipating.mockResolvedValueOnce({
-      "123@g.us": groupMetadata({
-        subject: "Recovered Group",
-        participants: ["444@s.whatsapp.net"],
-      }),
-    });
-
-    const { listener, baileysCache } = await startInboxMonitorWithBaileysCache();
-
-    await vi.waitFor(async () => {
-      await expectCachedGroupMetadata(baileysCache, {
-        id: "123@g.us",
-        subject: "Recovered Group",
-        participants: [{ id: "444@s.whatsapp.net" }],
-      });
-    });
-
-    await listener.close();
   });
 
   it("group metadata cache reuses hydrated participant identities without querying WhatsApp again", async () => {

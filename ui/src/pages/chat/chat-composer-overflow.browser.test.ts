@@ -456,7 +456,11 @@ describe("composer overflow presentation", () => {
         const resized = vi.fn();
         const stop = subscribeTranscriptScroll(
           container.querySelector<HTMLElement>(".chat-thread")!,
-          resized,
+          (observation) => {
+            if (observation.type === "resize") {
+              resized(observation);
+            }
+          },
         );
         const height = textarea.clientHeight;
         try {
@@ -657,6 +661,35 @@ describe("composer overflow presentation", () => {
       expect(commands.getBoundingClientRect().top).toBe(commandBox.top);
       await page.getByRole("button", { name: "Hide goal details", exact: true }).click();
       expect(getComputedStyle(commands).display).toBe("none");
+    },
+  );
+
+  it.each([1440, 1600])(
+    "lets native textarea sizing grow and cap multiline drafts at %ipx",
+    async (width) => {
+      await page.viewport(width, 900);
+      render(renderChatComposer(createComposerProps()), container);
+      const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+      expect(getComputedStyle(textarea).fieldSizing).toBe("content");
+
+      textarea.value = "one line";
+      textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      await afterLayout();
+      const singleLineHeight = textarea.getBoundingClientRect().height;
+
+      textarea.value = "line 1\nline 2\nline 3";
+      textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      await afterLayout();
+      expect(textarea.getBoundingClientRect().height).toBeGreaterThan(singleLineHeight);
+
+      textarea.value = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`).join("\n");
+      textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      await afterLayout();
+      const capped = textarea.getBoundingClientRect();
+      expect(capped.height).toBeCloseTo(Number.parseFloat(getComputedStyle(textarea).maxHeight), 0);
+      expect(textarea.scrollHeight).toBeGreaterThan(textarea.clientHeight);
+      expect(textarea.scrollWidth).toBeLessThanOrEqual(textarea.clientWidth + 1);
+      expect(container.getBoundingClientRect().width).toBe(760);
     },
   );
 

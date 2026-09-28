@@ -4,16 +4,13 @@
  */
 import {
   INLINE_IMAGE_DATA_URL_PREFIX,
-  sanitizeInlineImageDataUrl as sanitizeSharedInlineImageDataUrl,
+  sanitizeInlineImageDataUrl,
 } from "openclaw/plugin-sdk/inline-image-data-url-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const IMAGE_OMITTED_TEXT = "omitted image payload: invalid inline image data";
 
-/** Validates and normalizes an inline image data URL for Codex history payloads. */
-export function sanitizeInlineImageDataUrl(imageUrl: string): string | undefined {
-  return sanitizeSharedInlineImageDataUrl(imageUrl);
-}
+export { sanitizeInlineImageDataUrl };
 
 /** Builds the replacement text inserted when an inline image payload is invalid. */
 export function invalidInlineImageText(label: string): string {

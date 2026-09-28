@@ -1,12 +1,9 @@
 import { removeSessionFixtureDirectory } from "./session-fixture-directory.test-support.js";
 import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
 
-export async function releaseSessionTestDirectories(
-  roots: Iterable<string>,
-  options?: Parameters<typeof releaseGatewaySessionStoreFixture>[1],
-) {
+export async function releaseSessionTestDirectories(roots: Iterable<string>) {
   for (const root of roots) {
-    await releaseGatewaySessionStoreFixture(root, options);
+    await releaseGatewaySessionStoreFixture(root);
   }
 }
 

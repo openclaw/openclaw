@@ -24,18 +24,27 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 // Only the default root pack reaches pnpm; git and tar fixtures keep the real binaries.
 const pnpmPack = vi.hoisted(() => ({
-  calls: [] as Array<{ args: string[]; env: NodeJS.ProcessEnv }>,
+  calls: [] as Array<{ args: string[]; cwd?: string; env: NodeJS.ProcessEnv }>,
   impl: undefined as ((directory: string, destination: string) => unknown) | undefined,
+  observer: undefined as ((args: string[]) => void) | undefined,
 }));
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
-  const execFileSyncMock = (file: string, args: string[], options: { env?: NodeJS.ProcessEnv }) => {
+  const execFileSyncMock = (
+    file: string,
+    args: string[],
+    options: { cwd?: string; env?: NodeJS.ProcessEnv },
+  ) => {
     if (file !== "pnpm") {
       return (actual.execFileSync as (...params: unknown[]) => unknown)(file, args, options);
     }
-    pnpmPack.calls.push({ args, env: options.env ?? {} });
+    pnpmPack.calls.push({ args, cwd: options.cwd, env: options.env ?? {} });
+    pnpmPack.observer?.(args);
     const value = (flag: string) => args[args.indexOf(flag) + 1] ?? "";
-    return pnpmPack.impl?.(value("--dir"), value("--pack-destination"));
+    if (args.includes("pack")) {
+      return pnpmPack.impl?.(options.cwd ?? "", value("--pack-destination"));
+    }
+    return undefined;
   };
   return { ...actual, execFileSync: execFileSyncMock };
 });
@@ -120,6 +129,7 @@ function packageSourceFixture(
     npmDistTag: "beta",
     producer: packageProducer(),
     runPack,
+    runRootPack: runPack,
   };
 }
 
@@ -396,40 +406,36 @@ type QualificationFixture = Awaited<
 >;
 
 describe("prepared npm bundle", () => {
-  it.each(["failure", "cancelled"])(
-    "reuses successful preparation and source jobs after parent %s",
-    async (conclusion) => {
-      const fixture = await bundleFixture(".github/workflows/openclaw-npm-release.yml");
-      Object.assign(fixture.run, { status: "completed", conclusion });
-      const downloaded = await downloadPreparedNpmBundle({
-        ...fixture,
-        repository,
-        sourceSha,
-        toolingSha,
-        outputDir: join(tempDirs.make("npm-retry-"), "prepared"),
-        token: "test-token",
-        npmDistTag: "beta",
-        releaseTag: fixture.manifest.releaseTag,
-      });
-      expect(readFileSync(downloaded.tarballPath)).toEqual(
-        fixture.files.get(fixture.manifest.tarballName),
-      );
-      const descriptor = {
-        schema: NPM_SOURCE_CHECK_SCHEMA,
-        source: { sha: sourceSha },
-        producer: { ...fixture.descriptor.producer, jobName: "Check npm release source" },
-      };
-      fixture.job.name = descriptor.producer.jobName;
-      const source = { descriptor, repository, sourceSha, toolingSha, runGh: fixture.runGh };
-      expect(verifyNpmSourceCheck(source).job.id).toBe(fixture.job.id);
-      fixture.job.run_attempt += 1;
-      expect(() => verifyNpmSourceCheck(source)).toThrow("unique exact completed producer job");
-    },
-  );
+  it("reuses successful preparation and source jobs after parent failure", async () => {
+    const fixture = await bundleFixture(".github/workflows/openclaw-npm-release.yml");
+    Object.assign(fixture.run, { status: "completed", conclusion: "failure" });
+    const downloaded = await downloadPreparedNpmBundle({
+      ...fixture,
+      repository,
+      sourceSha,
+      toolingSha,
+      outputDir: join(tempDirs.make("npm-retry-"), "prepared"),
+      token: "test-token",
+      npmDistTag: "beta",
+      releaseTag: fixture.manifest.releaseTag,
+    });
+    expect(readFileSync(downloaded.tarballPath)).toEqual(
+      fixture.files.get(fixture.manifest.tarballName),
+    );
+    const descriptor = {
+      schema: NPM_SOURCE_CHECK_SCHEMA,
+      source: { sha: sourceSha },
+      producer: { ...fixture.descriptor.producer, jobName: "Check npm release source" },
+    };
+    fixture.job.name = descriptor.producer.jobName;
+    const source = { descriptor, repository, sourceSha, toolingSha, runGh: fixture.runGh };
+    expect(verifyNpmSourceCheck(source).job.id).toBe(fixture.job.id);
+    fixture.job.run_attempt += 1;
+    expect(() => verifyNpmSourceCheck(source)).toThrow("unique exact completed producer job");
+  });
 
   it.each([
     ["completed", "failure"],
-    ["completed", "cancelled"],
     ["in_progress", null],
   ])("requires a successful parent for publication (%s/%s)", async (status, conclusion) => {
     const fixture = await bundleFixture(".github/workflows/openclaw-npm-release.yml");
@@ -584,23 +590,106 @@ describe("prepared npm bundle", () => {
   );
 
   it("packs bundled dependencies under the hoisted linker with prepack scripts enabled", () => {
-    const { runPack, ...fixture } = packageSourceFixture("2026.9.6");
+    const { runPack, runRootPack: _runRootPack, ...fixture } = packageSourceFixture("2026.9.6");
     pnpmPack.impl = runPack;
     try {
-      expect(prepareNpmPackageBundle(fixture).packageVersion).toBe("2026.9.6");
+      expect(
+        prepareNpmPackageBundle({
+          ...fixture,
+          sanitizeRootDeclarations: vi.fn(),
+          refreshRootDistInventory: vi.fn(),
+        }).packageVersion,
+      ).toBe("2026.9.6");
     } finally {
       pnpmPack.impl = undefined;
     }
-    expect(pnpmPack.calls).toHaveLength(1);
-    expect(pnpmPack.calls[0]?.args).toEqual([
-      "--dir",
-      fixture.sourceDir,
-      "pack",
-      "--config.node-linker=hoisted",
-      "--pack-destination",
-      fixture.outputDir,
+    expect(pnpmPack.calls.map((call) => call.args)).toEqual([
+      ["run", "prepack"],
+      [
+        "pack",
+        "--config.ignore-scripts=true",
+        "--config.node-linker=hoisted",
+        "--pack-destination",
+        fixture.outputDir,
+      ],
+      ["run", "--if-present", "postpack"],
     ]);
-    expect(pnpmPack.calls[0]?.env.OPENCLAW_PREPACK_PREPARED).toBe("1");
+    expect(pnpmPack.calls.map((call) => call.cwd)).toEqual([
+      fixture.sourceDir,
+      fixture.sourceDir,
+      fixture.sourceDir,
+    ]);
+    expect(pnpmPack.calls.every((call) => call.env.OPENCLAW_PREPACK_PREPARED === "1")).toBe(true);
+  });
+
+  it("sanitizes declarations after the frozen root prepack rebuild", () => {
+    const { runRootPack: _runRootPack, runPack, ...fixture } = packageSourceFixture("2026.8.33");
+    const distRoot = join(fixture.sourceDir, "dist");
+    mkdirSync(distRoot);
+    const steps: string[] = [];
+    const sanitizeRootDeclarations = vi.fn((root: string) => {
+      expect(root).toBe(distRoot);
+      steps.push("sanitize");
+    });
+    const refreshRootDistInventory = vi.fn((root: string) => {
+      expect(root).toBe(fixture.sourceDir);
+      steps.push("inventory");
+    });
+    pnpmPack.impl = runPack;
+    pnpmPack.observer = (args) => {
+      steps.push(args.includes("pack") ? "pack" : String(args.at(-1)));
+    };
+    try {
+      prepareNpmPackageBundle({
+        ...fixture,
+        sanitizeRootDeclarations,
+        refreshRootDistInventory,
+      });
+    } finally {
+      pnpmPack.impl = undefined;
+      pnpmPack.observer = undefined;
+    }
+
+    expect(sanitizeRootDeclarations).toHaveBeenCalledOnce();
+    expect(refreshRootDistInventory).toHaveBeenCalledOnce();
+    expect(steps).toEqual(["prepack", "sanitize", "inventory", "pack", "postpack"]);
+  });
+
+  it("does not load the declaration parser from the frozen candidate", () => {
+    const { runRootPack: _runRootPack, runPack, ...fixture } = packageSourceFixture("2026.8.33");
+    const marker = join(fixture.sourceDir, "candidate-typescript-loaded");
+    const distRoot = join(fixture.sourceDir, "dist");
+    const candidateCompilerDir = join(fixture.sourceDir, "node_modules/typescript");
+    mkdirSync(candidateCompilerDir, { recursive: true });
+    mkdirSync(distRoot);
+    writeFileSync(
+      join(candidateCompilerDir, "package.json"),
+      JSON.stringify({
+        name: "typescript",
+        type: "module",
+        exports: { "./unstable/*": "./forbidden.mjs" },
+      }),
+    );
+    writeFileSync(
+      join(candidateCompilerDir, "forbidden.mjs"),
+      [
+        `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(marker)}, "loaded");`,
+        `throw new Error("loaded frozen candidate compiler");`,
+      ].join("\n"),
+    );
+    writeFileSync(join(distRoot, "chunk.d.ts"), "export { __exportAll as helper };\n");
+    pnpmPack.impl = runPack;
+    try {
+      prepareNpmPackageBundle({
+        ...fixture,
+        refreshRootDistInventory: vi.fn(),
+      });
+    } finally {
+      pnpmPack.impl = undefined;
+    }
+
+    expect(existsSync(marker)).toBe(false);
+    expect(readFileSync(join(distRoot, "chunk.d.ts"), "utf8")).toBe("export { };\n");
   });
 
   it.each([true, false])(
@@ -797,89 +886,85 @@ describe("prepared npm bundle", () => {
     expect(verifyPreparedNpmBundleFiles({ descriptor: reordered, files })).toEqual(manifest);
   });
 
-  it.each([undefined, "v2026.8.1"])(
-    "qualifies exact package bytes with large SDK and npm lock evidence (release tag=%s)",
-    async (releaseTag) => {
-      const fixture = await bundleFixture();
-      const directory = tempDirs.make("npm-bundle-");
-      const inputDir = join(directory, "prepared");
-      const outputDir = join(directory, "qualified");
-      const downloaded = await downloadPreparedNpmBundle({
-        ...fixture,
-        repository,
-        sourceSha,
-        toolingSha,
-        outputDir: inputDir,
-        token: "test-token",
-        npmDistTag: "beta",
-        releaseTag,
-      });
-      expect(readFileSync(downloaded.tarballPath)).toEqual(
-        fixture.files.get(fixture.manifest.tarballName),
+  it("qualifies exact package bytes with large SDK and npm lock evidence", async () => {
+    const fixture = await bundleFixture();
+    const directory = tempDirs.make("npm-bundle-");
+    const inputDir = join(directory, "prepared");
+    const outputDir = join(directory, "qualified");
+    const downloaded = await downloadPreparedNpmBundle({
+      ...fixture,
+      repository,
+      sourceSha,
+      toolingSha,
+      outputDir: inputDir,
+      token: "test-token",
+      npmDistTag: "beta",
+    });
+    expect(readFileSync(downloaded.tarballPath)).toEqual(
+      fixture.files.get(fixture.manifest.tarballName),
+    );
+    const npmLocks = `${JSON.stringify({ packages: [{ lock: { packages: { "": { description: "x".repeat(3 * 1024 * 1024) } } } }] })}\n`;
+    const dependencyReports = {
+      ...Object.fromEntries(
+        [
+          "dependency-vulnerability-gate",
+          "transitive-manifest-risk-report",
+          "dependency-ownership-surface-report",
+          "dependency-changes-report",
+        ].flatMap((name) => [
+          [`${name}.json`, {}],
+          [`${name}.md`, "# Report\n"],
+        ]),
+      ),
+      "dependency-evidence-summary.md": "# Dependency evidence\n",
+      "npm-package-locks.json": npmLocks,
+      "npm-package-locks.md": "# npm package-lock mirrors\n",
+    };
+    const proof = await qualificationFixture(
+      fixture.descriptor,
+      {
+        baseline: "published",
+        // Extended-stable comparisons can exceed 16 MiB across declaration history.
+        diff: { exports: [{ before: "export type Previous = unknown;\n".repeat(575_000) }] },
+      },
+      dependencyReports,
+    );
+    const manifest = await qualifyNpmPackageBundle({
+      descriptor: fixture.descriptor,
+      inputDir,
+      outputDir,
+      producer: {
+        ...fixture.descriptor.producer,
+        jobId: "50",
+        jobName: "Qualify prepared npm package",
+      },
+      ...proof,
+    });
+    expect(manifest.version).toBe(3);
+    expect(manifest.preparedBundle).toEqual(fixture.descriptor);
+    for (const [name, value] of Object.entries(dependencyReports)) {
+      expect(readFileSync(join(outputDir, "dependency-evidence", name), "utf8")).toBe(
+        typeof value === "string" ? value : `${JSON.stringify(value)}\n`,
       );
-      const npmLocks = `${JSON.stringify({ packages: [{ lock: { packages: { "": { description: "x".repeat(3 * 1024 * 1024) } } } }] })}\n`;
-      const dependencyReports = {
-        ...Object.fromEntries(
-          [
-            "dependency-vulnerability-gate",
-            "transitive-manifest-risk-report",
-            "dependency-ownership-surface-report",
-            "dependency-changes-report",
-          ].flatMap((name) => [
-            [`${name}.json`, {}],
-            [`${name}.md`, "# Report\n"],
-          ]),
-        ),
-        "dependency-evidence-summary.md": "# Dependency evidence\n",
-        "npm-package-locks.json": npmLocks,
-        "npm-package-locks.md": "# npm package-lock mirrors\n",
-      };
-      const proof = await qualificationFixture(
-        fixture.descriptor,
-        {
-          baseline: "published",
-          // Extended-stable comparisons can exceed 16 MiB across declaration history.
-          diff: { exports: [{ before: "export type Previous = unknown;\n".repeat(575_000) }] },
-        },
-        dependencyReports,
-      );
-      const manifest = await qualifyNpmPackageBundle({
-        descriptor: fixture.descriptor,
-        inputDir,
-        outputDir,
-        producer: {
-          ...fixture.descriptor.producer,
-          jobId: "50",
-          jobName: "Qualify prepared npm package",
-        },
-        ...proof,
-      });
-      expect(manifest.version).toBe(3);
-      expect(manifest.preparedBundle).toEqual(fixture.descriptor);
-      for (const [name, value] of Object.entries(dependencyReports)) {
-        expect(readFileSync(join(outputDir, "dependency-evidence", name), "utf8")).toBe(
-          typeof value === "string" ? value : `${JSON.stringify(value)}\n`,
-        );
-      }
-      for (const entry of [
-        fixture.descriptor.package.fileName,
-        ...fixture.descriptor.corePackages.map((pkg) => pkg.tarballName),
-      ]) {
-        expect(readFileSync(join(outputDir, entry))).toEqual(fixture.files.get(entry));
-      }
-      expect(
-        describeNpmBundle({
-          directory: outputDir,
-          artifact: fixture.descriptor.artifact,
-          qualified: true,
-        }),
-      ).toMatchObject({
-        schema: "openclaw.qualified-npm-preflight/v1",
-        source: { sha: sourceSha },
-        preparedBundle: fixture.descriptor,
-      });
-    },
-  );
+    }
+    for (const entry of [
+      fixture.descriptor.package.fileName,
+      ...fixture.descriptor.corePackages.map((pkg) => pkg.tarballName),
+    ]) {
+      expect(readFileSync(join(outputDir, entry))).toEqual(fixture.files.get(entry));
+    }
+    expect(
+      describeNpmBundle({
+        directory: outputDir,
+        artifact: fixture.descriptor.artifact,
+        qualified: true,
+      }),
+    ).toMatchObject({
+      schema: "openclaw.qualified-npm-preflight/v1",
+      source: { sha: sourceSha },
+      preparedBundle: fixture.descriptor,
+    });
+  });
 
   it("rejects a valid bundle for another publication tag before extracting artifacts", async () => {
     const fixture = await bundleFixture();
@@ -960,24 +1045,6 @@ describe("prepared npm bundle", () => {
     expect(() =>
       validatePreparedNpmBundleDescriptor({ descriptor, repository, sourceSha, toolingSha }),
     ).toThrow("trusted preflight owner");
-  });
-
-  it("requires source proof from its exact completed source-check job", async () => {
-    const fixture = await bundleFixture();
-    const descriptor = {
-      schema: NPM_SOURCE_CHECK_SCHEMA,
-      source: { sha: sourceSha },
-      producer: { ...fixture.descriptor.producer, jobName: "Check npm release source" },
-    };
-    fixture.job.name = descriptor.producer.jobName;
-    expect(
-      verifyNpmSourceCheck({ descriptor, repository, sourceSha, toolingSha, runGh: fixture.runGh })
-        .job.id,
-    ).toBe(45);
-    fixture.job.run_attempt = 1;
-    expect(() =>
-      verifyNpmSourceCheck({ descriptor, repository, sourceSha, toolingSha, runGh: fixture.runGh }),
-    ).toThrow("unique exact completed producer job");
   });
 
   it.each([

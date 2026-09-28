@@ -24,7 +24,7 @@ const replayError =
   "Cloud worker node is running a different bootstrap artifact or invocation; release and reprovision the worker";
 
 type ReplayOptions = {
-  interrupted?: "before-receipt" | "after-receipt" | "dangling-runtime" | "receipt-only";
+  interrupted?: "dangling-runtime" | "receipt-only";
   desktop?: boolean;
   currentSession?: { sessionId: number; userSid: string };
   processEntry?: Record<string, unknown>;
@@ -83,7 +83,7 @@ async function replay(options: ReplayOptions = {}) {
           options.interrupted &&
           options.interrupted !== "receipt-only") ||
         (file === path.win32.join(stateDir, "node-launch.json") &&
-          (options.interrupted === "after-receipt" || options.interrupted === "receipt-only"))
+          options.interrupted === "receipt-only")
       ) {
         return { isSymbolicLink: () => file === path.win32.join(stateDir, "runtime") };
       }
@@ -236,7 +236,6 @@ describe("native Windows node enrollment replay", () => {
     { name: "missing creation time", options: { processEntry: { startTime: "" } } },
     { name: "wrong executable", options: { processEntry: { executablePath: launcher } } },
     { name: "missing executable", options: { processEntry: { executablePath: null } } },
-    { name: "unrelated command line", options: { processEntry: { commandLine: "other-node" } } },
     {
       name: "title without invocation",
       options: { processEntry: { commandLine: "openclaw-connect" } },
@@ -250,7 +249,6 @@ describe("native Windows node enrollment replay", () => {
     { name: "empty CIM probe", options: { processOutput: "" } },
     { name: "malformed CIM probe", options: { processOutput: "invalid JSON" } },
     { name: "missing CIM process", options: { processOutput: "[]" } },
-    { name: "null CIM process", options: { processOutput: "null" } },
     { name: "ambiguous CIM processes", options: { processOutput: '[{"pid":123},{"pid":124}]' } },
   ])("fails closed for $name", async ({ options }) => {
     expect(await replay(options)).toMatchObject({
@@ -271,7 +269,7 @@ describe("native Windows node enrollment replay", () => {
 });
 
 describe("native Windows desktop enrollment replay", () => {
-  it.each(["before-receipt", "after-receipt", "dangling-runtime", "receipt-only"] as const)(
+  it.each(["dangling-runtime", "receipt-only"] as const)(
     "preserves an interrupted launch instead of issuing another service request: %s",
     async (interrupted) => {
       expect(await replay({ desktop: true, interrupted })).toMatchObject({

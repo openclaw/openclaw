@@ -198,6 +198,7 @@ async function runWithModelFallbackInternal<T>(
   const attempts: FallbackAttempt[] = [];
   const profileIdsByCandidate = new Map<ModelFallbackCandidate, string[]>();
   let lastError: unknown;
+  let selectionChanged = false;
   let latestClassifiedResult: ModelFallbackClassifiedResult<T> | undefined;
   let exhaustionResult: ModelFallbackExhaustionResult<T> | undefined;
   const cooldownProbeUsedProviders = new Set<string>();
@@ -513,6 +514,7 @@ async function runWithModelFallbackInternal<T>(
           requestedProvider: params.provider,
           requestedModel: params.model,
           stage: isPrimary ? "initial" : "fallback",
+          selectionChanged,
           fallbackReason: isPrimary ? undefined : attempts.at(-1)?.reason,
         },
       },
@@ -625,6 +627,7 @@ async function runWithModelFallbackInternal<T>(
 
     // Jump to later live selections; stale targets remain classified failures.
     if (err instanceof LiveSessionModelSwitchError) {
+      selectionChanged = true;
       // The outer owner must apply runtime changes before selecting another model.
       if (
         hasDifferentLiveSessionRuntimeSelection({

@@ -29,7 +29,7 @@ type SystemRunPrepareEnv =
       ok: false;
       message: string;
     };
-function buildEnvOverrideRejectionMessage(params: {
+export function buildEnvOverrideRejectionMessage(params: {
   rejectedOverrideBlockedKeys: string[];
   rejectedOverrideInvalidKeys: string[];
 }): string {

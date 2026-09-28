@@ -1,4 +1,3 @@
-// QA Lab WhatsApp live-operation module boundaries.
 export {
   WHATSAPP_QA_TRANSIENT_DRIVER_ATTEMPTS,
   isTransientWhatsAppQaDriverError,
@@ -6,7 +5,6 @@ export {
   restartWhatsAppQaDriverSession,
   waitForDistinctWhatsAppSutMessages,
   waitForNoWhatsAppReply,
-  waitForWhatsAppScenarioSutMessage,
 } from "./whatsapp-live.driver.js";
 export {
   callWhatsAppGatewayMessageAction,

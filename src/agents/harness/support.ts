@@ -270,31 +270,34 @@ export function resolveAutoAgentHarnessId(
     preparedModelProvider?: boolean;
   } & AgentRuntimePolicyScope,
 ): string | undefined {
-  const registeredHarnesses = listRegisteredAgentHarnesses();
-  if (registeredHarnesses.length === 0) {
-    return undefined;
-  }
-  const candidates = registeredHarnesses.map(({ harness }) => ({
-    harness,
-    support: resolveAgentHarnessAutoSelectionHint({ harness, provider: params.provider }),
-  }));
-  if (candidates.every((entry) => entry.support !== undefined)) {
-    return undefined;
-  }
-  const supportContext = buildAgentHarnessSupportContext({
-    ...params,
-    requestedRuntime: "auto",
-  });
-  return candidates
-    .map(({ harness, support }) => ({
-      harness,
-      support: support ?? harness.supports(supportContext),
-    }))
-    .filter(isSupportedHarness)
-    .toSorted(compareHarnessSupport)[0]?.harness.id;
+  return resolveAutoAgentHarnessSelection(
+    listRegisteredAgentHarnesses().map(({ harness }) => harness),
+    params.provider,
+    () => buildAgentHarnessSupportContext({ ...params, requestedRuntime: "auto" }),
+  ).selected?.id;
 }
 
-export function compareHarnessSupport(
+export function resolveAutoAgentHarnessSelection(
+  harnesses: readonly AgentHarness[],
+  provider: string,
+  createSupportContext: () => AgentHarnessSupportContext,
+) {
+  const hintedCandidates = harnesses.map((harness) => ({
+    harness,
+    support: resolveAgentHarnessAutoSelectionHint({ harness, provider }),
+  }));
+  let supportContext: AgentHarnessSupportContext | undefined;
+  const candidates = hintedCandidates.map(({ harness, support }) => ({
+    harness,
+    support: support ?? harness.supports((supportContext ??= createSupportContext())),
+  }));
+  const selected = candidates
+    .filter(isSupportedHarness)
+    .toSorted(compareHarnessSupport)[0]?.harness;
+  return { candidates, selected };
+}
+
+function compareHarnessSupport(
   left: { harness: AgentHarness; support: AgentHarnessSupport & { supported: true } },
   right: { harness: AgentHarness; support: AgentHarnessSupport & { supported: true } },
 ): number {

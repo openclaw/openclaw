@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import {
   readDeferredPluginMigrations,
+  readDeferredPluginMigrationsAsync,
   type DeferredPluginMigration,
 } from "../infra/deferred-plugin-migrations.js";
 import { loadDotEnvAsync } from "../infra/dotenv.js";
@@ -17,7 +18,8 @@ import { assertConfigWriteAllowedInCurrentMode } from "./config-write-guard.js";
 import { resolveWriteEnvSnapshotForPath } from "./env-preserve.js";
 import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "./gateway-env-selection.js";
 import { createConfigIO } from "./io.factory.js";
-import { createManagedRuntimeEnvBase, replaceEnvSnapshot } from "./io.read-helpers.js";
+import { replaceEnvSnapshot } from "./io.read-helpers.js";
+import { createManagedRuntimeEnvBase } from "./io.runtime-env.js";
 import { finalizeCommittedConfigWrite } from "./io.runtime-write-finalization.js";
 import type {
   BestEffortConfigSnapshot,
@@ -111,11 +113,7 @@ export function loadConfig(options?: {
   return options?.pin === false ? loadFresh() : loadPinnedRuntimeConfig(loadFresh);
 }
 
-export function getRuntimeConfig(options?: {
-  skipPluginValidation?: boolean;
-  pin?: boolean;
-  skipShellEnvFallback?: boolean;
-}): OpenClawConfig {
+export function getRuntimeConfig(options?: Parameters<typeof loadConfig>[0]): OpenClawConfig {
   return loadConfig(options);
 }
 
@@ -260,10 +258,34 @@ export function readCurrentConfigForPolicyCheck(params: {
   configPath: string;
   env: NodeJS.ProcessEnv;
 }): OpenClawConfig {
-  return createCurrentConfigReader({
+  return readCurrentConfigForPolicyCheckWithMigrations({
     ...params,
     deferredPluginMigrations: readDeferredPluginMigrations({ env: params.env }),
-  }).loadConfig({ skipSuspiciousRecovery: true });
+  });
+}
+
+/** Reread current disk policy without querying migration state; the caller owns row freshness. */
+export function readCurrentConfigForPolicyCheckWithMigrations(params: {
+  configPath: string;
+  env: NodeJS.ProcessEnv;
+  deferredPluginMigrations: readonly DeferredPluginMigration[];
+}): OpenClawConfig {
+  return createCurrentConfigReader(params).loadConfig({ skipSuspiciousRecovery: true });
+}
+
+/** Await fresh migration facts for this read; retained synchronous guards use their own boundary. */
+export async function readCurrentConfigForPolicyCheckAsync(params: {
+  configPath: string;
+  env: NodeJS.ProcessEnv;
+}): Promise<OpenClawConfig> {
+  const configPath = params.configPath;
+  const env = cloneEnvWithPlatformSemantics(params.env);
+  const deferredPluginMigrations = await readDeferredPluginMigrationsAsync({ env });
+  return await createCurrentConfigReader({
+    configPath,
+    env,
+    deferredPluginMigrations,
+  }).loadConfigAsync({ skipSuspiciousRecovery: true });
 }
 
 export async function readBestEffortConfig(options?: {
@@ -297,21 +319,16 @@ export async function readSourceConfigBestEffort(): Promise<OpenClawConfig> {
 export async function readConfigFileSnapshot(
   options: ConfigSnapshotReadOptions = {},
 ): Promise<ConfigFileSnapshot> {
-  const pluginValidation =
-    options.pluginValidation ?? (options.skipPluginValidation ? "skip" : undefined);
   return await createConfigIO({
-    ...(options.deferredPluginMigrations
-      ? { deferredPluginMigrations: options.deferredPluginMigrations }
-      : {}),
-    ...(options.measure ? { measure: options.measure } : {}),
-    ...(options.observe === false ? { observe: false } : {}),
-    ...(options.isolateEnv ? { env: cloneEnvWithPlatformSemantics(process.env) } : {}),
-    ...(options.lowerPrecedenceEnv ? { lowerPrecedenceEnv: options.lowerPrecedenceEnv } : {}),
-    ...(pluginValidation ? { pluginValidation } : {}),
-    ...(options.suppressFutureVersionWarning ? { suppressFutureVersionWarning: true } : {}),
-    ...(options.preservedLegacyRootKeys
-      ? { preservedLegacyRootKeys: options.preservedLegacyRootKeys }
-      : {}),
+    deferredPluginMigrations: options.deferredPluginMigrations,
+    measure: options.measure,
+    observe: options.observe === false ? false : undefined,
+    env: options.isolateEnv ? cloneEnvWithPlatformSemantics(process.env) : undefined,
+    lowerPrecedenceEnv: options.lowerPrecedenceEnv,
+    pluginValidation:
+      options.pluginValidation ?? (options.skipPluginValidation ? "skip" : undefined),
+    suppressFutureVersionWarning: options.suppressFutureVersionWarning || undefined,
+    preservedLegacyRootKeys: options.preservedLegacyRootKeys,
   }).readConfigFileSnapshot({
     recoverSuspicious: options.recoverSuspicious === true,
     allowSuspiciousRecovery: options.allowSuspiciousRecovery,
@@ -334,14 +351,12 @@ export async function readConfigFileSnapshotWithPluginMetadata(
   >,
 ): Promise<ReadConfigFileSnapshotWithPluginMetadataResult> {
   return await createConfigIO({
-    ...(options?.deferredPluginMigrations
-      ? { deferredPluginMigrations: options.deferredPluginMigrations }
-      : {}),
-    ...(options?.measure ? { measure: options.measure } : {}),
-    ...(options?.observe === false ? { observe: false } : {}),
-    ...(options?.isolateEnv ? { env: cloneEnvWithPlatformSemantics(process.env) } : {}),
-    ...(options?.lowerPrecedenceEnv ? { lowerPrecedenceEnv: options.lowerPrecedenceEnv } : {}),
-    ...(options?.skipPluginValidation ? { pluginValidation: "skip" as const } : {}),
+    deferredPluginMigrations: options?.deferredPluginMigrations,
+    measure: options?.measure,
+    observe: options?.observe === false ? false : undefined,
+    env: options?.isolateEnv ? cloneEnvWithPlatformSemantics(process.env) : undefined,
+    lowerPrecedenceEnv: options?.lowerPrecedenceEnv,
+    pluginValidation: options?.skipPluginValidation ? "skip" : undefined,
   }).readConfigFileSnapshotWithPluginMetadata({
     prepareValidation: options?.prepareValidation,
     allowCurrentPluginMetadata: options?.allowCurrentPluginMetadata,

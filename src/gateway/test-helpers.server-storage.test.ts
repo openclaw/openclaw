@@ -19,6 +19,7 @@ import {
 import {
   captureOpenClawStateDatabaseReadAdmission,
   registerOpenClawStateDatabaseAsyncResource,
+  retainOpenClawStateDatabaseForIndependentRead,
 } from "../state/openclaw-state-db-cache.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
@@ -146,10 +147,19 @@ test("joins external-store workers before deleting their Gateway lease coordinat
   const otherState = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: otherStateDir } });
   externalStatePath = otherState.path;
   const identity = captureOpenClawStateDatabaseReadAdmission(sharedStatePath).identity;
+  const sharedState = openOpenClawStateDatabase({ env });
+  let retained = retainOpenClawStateDatabaseForIndependentRead(sharedState.path);
+  if (!retained) {
+    throw new Error("Expected the fixture shared-state owner to be open");
+  }
   const closedOwners: Array<string | undefined> = [];
   const unregister = registerOpenClawStateDatabaseAsyncResource({
     close: async (closedIdentity) => {
       closedOwners.push(closedIdentity?.key);
+      if (closedIdentity?.key === identity.key) {
+        retained?.release();
+        retained = undefined;
+      }
     },
   });
   setTestEnvValue("OPENCLAW_STATE_DIR", otherStateDir);
@@ -159,6 +169,7 @@ test("joins external-store workers before deleting their Gateway lease coordinat
       expect(fs.existsSync(sharedStatePath)).toBe(false);
       expect(closedOwners[0]).toBe(identity.key);
     } finally {
+      retained?.release();
       unregister();
     }
   });

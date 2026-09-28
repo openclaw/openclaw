@@ -1,11 +1,6 @@
 // Twitch tests share isolated durable-ingress state and raw chat envelopes.
-import fs from "node:fs/promises";
-import path from "node:path";
-import {
-  closeOpenClawStateDatabaseForTest,
-  createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, vi } from "vitest";
 import { createTwitchIngress } from "./twitch-ingress.js";
 import type { TwitchChatMessage } from "./types.js";
@@ -35,28 +30,17 @@ export function createTwitchIngressTestMessage(
 export async function withTwitchIngressTestQueue<T>(
   fn: (queue: TwitchIngressTestQueue) => Promise<T>,
 ): Promise<T> {
-  const createdDir = await fs.mkdtemp(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-twitch-ingress-"),
+  return await withOpenClawTestState(
+    { layout: "state-only", prefix: "openclaw-twitch-ingress-" },
+    ({ stateDir }) =>
+      fn(
+        createChannelIngressQueueForTests<TwitchIngressTestPayload>({
+          channelId: "twitch",
+          accountId: "default",
+          stateDir,
+        }),
+      ),
   );
-  const stateDir = await fs.realpath(createdDir);
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  process.env.OPENCLAW_STATE_DIR = stateDir;
-  const queue = createChannelIngressQueueForTests<TwitchIngressTestPayload>({
-    channelId: "twitch",
-    accountId: "default",
-    stateDir,
-  });
-  try {
-    return await fn(queue);
-  } finally {
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
-  }
 }
 
 export async function waitForTwitchIngressVerdict(

@@ -25,6 +25,7 @@ import { importFreshModule } from "../../src/plugin-sdk/test-helpers/import-fres
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import buildConfigs from "../../tsdown.config.ts";
 import { copyFsSafePackageFixture } from "./fs-safe-package.test-support.js";
+import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const configs = Array.isArray(buildConfigs) ? buildConfigs : [buildConfigs];
@@ -45,6 +46,12 @@ function hasWorkerEntry(config: TsdownConfig, name: string, source: string): boo
 
 const isWorkerDeployConfig = (config: TsdownConfig) =>
   hasWorkerEntry(config, "worker/worker", "src/worker/worker-deploy-entry.ts");
+const isWorkerFileToolPlanningConfig = (config: TsdownConfig) =>
+  hasWorkerEntry(
+    config,
+    "worker/file-tool-planning.worker",
+    "src/worker/worker-deploy-file-tool-planning.ts",
+  );
 const isWorkerImageProcessorConfig = (config: TsdownConfig) =>
   hasWorkerEntry(
     config,
@@ -75,6 +82,7 @@ const isWorkerServiceChildGroupAnchorConfig = (config: TsdownConfig) =>
   );
 const workerBuildTargets = [
   ["worker", isWorkerDeployConfig],
+  ["file-tool-planning", isWorkerFileToolPlanningConfig],
   ["image-processor", isWorkerImageProcessorConfig],
   ["sqlite-store", isWorkerSqliteStoreConfig],
   ["receiver", isWorkerRsyncReceiverConfig],
@@ -250,6 +258,7 @@ describe("tsdown config", () => {
     async (verbose) => {
       vi.stubEnv("OPENCLAW_BUILD_VERBOSE", verbose ? "1" : "0");
       const entryName = "extensions/memory-lancedb/lancedb-store";
+      const runtimeEntryName = "extensions/memory-lancedb/lancedb-runtime";
       const defaultConfig = configs.find((config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP);
       expect(defaultConfig?.entry).not.toHaveProperty(entryName);
       vi.stubEnv(DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV, "memory-lancedb");
@@ -261,7 +270,11 @@ describe("tsdown config", () => {
         (config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP,
       );
       const source = (selected?.entry as Record<string, string> | undefined)?.[entryName];
+      const runtimeSource = (selected?.entry as Record<string, string> | undefined)?.[
+        runtimeEntryName
+      ];
       expect(source).toBeDefined();
+      expect(runtimeSource).toBeDefined();
       const root = fs.realpathSync(createTempDir("openclaw-tsdown-memory-"));
       const manifest = JSON.parse(
         fs.readFileSync("extensions/memory-lancedb/package.json", "utf8"),
@@ -285,7 +298,7 @@ describe("tsdown config", () => {
       const { bundles } = await build({
         ...selected,
         config: false,
-        entry: { [entryName]: source! },
+        entry: { [entryName]: source!, [runtimeEntryName]: runtimeSource! },
         outDir: path.join(root, "dist"),
         dts: false,
         logLevel: "silent",
@@ -296,7 +309,7 @@ describe("tsdown config", () => {
           import { registerHooks } from "node:module";
           import path from "node:path";
           import { pathToFileURL } from "node:url";
-          const [root, entry, bindingsJson] = process.argv.slice(1);
+          const [root, entry, runtimeEntry, bindingsJson] = process.argv.slice(1);
           const bindings = new Set(JSON.parse(bindingsJson));
           const loadedBindings = new Set();
           registerHooks({ resolve(specifier, context, nextResolve) {
@@ -317,7 +330,16 @@ describe("tsdown config", () => {
             db.close();
             db = new MemoryDB(dbPath, 2);
             assert.equal((await db.search("alpha", [1, 0], 1, 0))[0].entry.id, stored.id);
-            assert.equal(await db.count("alpha"), 1);
+            const { loadLanceDbModule } = await import(pathToFileURL(runtimeEntry).href);
+            const connection = await (await loadLanceDbModule()).connect(dbPath);
+            const table = await connection.openTable("memories");
+            try {
+              assert.equal(await table.countRows("agentId = 'alpha'"), 1);
+              assert.equal(await table.countRows("agentId = 'beta'"), 0);
+            } finally {
+              table.close();
+              connection.close();
+            }
             assert(loadedBindings.size > 0, "Expected a declared native binding");
           } finally {
             db.close();
@@ -334,6 +356,7 @@ describe("tsdown config", () => {
                 script,
                 root,
                 path.join(root, "dist", `${entryName}.js`),
+                path.join(root, "dist", `${runtimeEntryName}.js`),
                 JSON.stringify(Object.keys(manifest.optionalDependencies)),
               ],
               { cwd: root, timeout: 30_000 },
@@ -994,13 +1017,29 @@ console.log("relocated Bash parser works without native grammar package");
           )
           .join("\n"),
       );
+      if (declarations) {
+        materializeNativeCompiler(root);
+        fs.writeFileSync(
+          path.join(root, "tsconfig.json"),
+          JSON.stringify({
+            compilerOptions: {
+              module: "NodeNext",
+              target: "ES2023",
+              types: [],
+              // The fixture checks bundling of authored declarations, not their type surface.
+              skipLibCheck: true,
+            },
+            files: ["entry.d.ts"],
+          }),
+        );
+      }
       const { bundles } = await build({
         ...selected,
         config: false,
         cwd: root,
         entry: [entry],
         outDir: path.join(root, "dist"),
-        tsconfig: false,
+        tsconfig: declarations ? path.join(root, "tsconfig.json") : false,
         dts: declarations ? { emitDtsOnly: true } : false,
         logLevel: "silent",
       });
@@ -1024,6 +1063,37 @@ console.log("relocated Bash parser works without native grammar package");
       expect(source).not.toMatch(/^import(?!\s+type\b).*from ["']tsdown["'];?$/mu);
     },
   );
+
+  it("gives every standalone declaration caller one canonical package config", () => {
+    for (const packageName of [
+      "gateway-client",
+      "gateway-protocol",
+      "sdk",
+      "retry",
+      "normalization-core",
+      "net-policy",
+      "media-understanding-common",
+      "media-generation-core",
+      "media-core",
+      "acp-core",
+    ]) {
+      const manifest = JSON.parse(
+        fs.readFileSync(`packages/${packageName}/package.json`, "utf8"),
+      ) as { scripts: { build: string }; exports: Record<string, { import: string }> };
+      expect(manifest.scripts.build).toContain(`build-workspace-package.mts ${packageName}`);
+      const selected = configs.filter((config) => config.outDir === `packages/${packageName}/dist`);
+      expect(selected, packageName).toHaveLength(1);
+      const sources = Object.values(selected[0]!.entry ?? {});
+      for (const entry of Object.values(manifest.exports)) {
+        expect(sources).toContain(
+          entry.import.replace("./dist/", `packages/${packageName}/src/`).replace(/\.mjs$/u, ".ts"),
+        );
+      }
+      if (packageName === "acp-core") {
+        expect(sources).toContain("packages/acp-core/src/error-format.ts");
+      }
+    }
+  });
 
   it("isolates runtime output from bounded declaration-only graphs", () => {
     const packageConfigs = configs.filter((entry) => entry.name === TSDOWN_PACKAGE_CONFIG_GROUP);
@@ -1157,6 +1227,7 @@ console.log("relocated Bash parser works without native grammar package");
 
   it("builds self-contained worker deploy executables with every dependency bundled", () => {
     const workerConfig = configs.find(isWorkerDeployConfig);
+    const fileToolPlanningConfig = configs.find(isWorkerFileToolPlanningConfig);
     const imageProcessorConfig = configs.find(isWorkerImageProcessorConfig);
     const sqliteStoreConfig = configs.find(isWorkerSqliteStoreConfig);
     const receiverConfig = configs.find(isWorkerRsyncReceiverConfig);
@@ -1165,6 +1236,9 @@ console.log("relocated Bash parser works without native grammar package");
     const anchorConfig = configs.find(isWorkerServiceChildGroupAnchorConfig);
     expect(workerConfig?.entry).toEqual({
       "worker/worker": "src/worker/worker-deploy-entry.ts",
+    });
+    expect(fileToolPlanningConfig?.entry).toEqual({
+      "worker/file-tool-planning.worker": "src/worker/worker-deploy-file-tool-planning.ts",
     });
     expect(imageProcessorConfig?.entry).toEqual({
       "worker/image-processor.worker": "src/worker/worker-deploy-image-processor.ts",
@@ -1234,6 +1308,7 @@ console.log("relocated Bash parser works without native grammar package");
     } as Parameters<OutExtensions>[0];
     for (const config of [
       workerConfig,
+      fileToolPlanningConfig,
       imageProcessorConfig,
       sqliteStoreConfig,
       receiverConfig,

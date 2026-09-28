@@ -280,7 +280,7 @@ describe("OpenAI provider policy artifact", () => {
         },
       ],
     } as const;
-    expect(resolveModelRoutes({ provider: "openai", modelId: "gpt-5.5" })).toEqual(expected);
+    expect(resolveModelRoutes({ provider: "openai", modelId: "gpt-6-astra" })).toEqual(expected);
     for (const observed of [
       { api: "openai-responses", baseUrl: "https://api.openai.com/v1" },
       { api: "openai-completions", baseUrl: "https://api.openai.com/v1" },
@@ -292,7 +292,7 @@ describe("OpenAI provider policy artifact", () => {
       expect(
         resolveModelRoutes({
           provider: "openai",
-          modelId: "gpt-5.5",
+          modelId: "gpt-6-astra",
           observedRoutes: [observed],
         }),
       ).toEqual(expected);

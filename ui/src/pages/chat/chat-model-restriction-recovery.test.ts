@@ -12,12 +12,8 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
-import {
-  getPendingChatPickerPatch,
-  retireChatModelSelectionOwnership,
-  switchChatModel,
-} from "./chat-session.ts";
-import { patchChatSessionSettings } from "./chat-settings-patches.ts";
+import { retireChatModelSelectionOwnership, switchChatModel } from "./chat-session.ts";
+import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-settings-patches.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
 
 afterEach(() => {

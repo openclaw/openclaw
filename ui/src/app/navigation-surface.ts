@@ -13,6 +13,12 @@ const NAV_DRAWER_FOCUSABLE_SELECTOR =
 type AppSidebarElement = HTMLElement & { dismissTransientMenus(): boolean };
 type SidebarAttentionElement = HTMLElement & { dismissPanel(): boolean };
 
+export function navDrawerFocusableElements(drawer: HTMLElement): HTMLElement[] {
+  return [...drawer.querySelectorAll<HTMLElement>(NAV_DRAWER_FOCUSABLE_SELECTOR)].filter(
+    (candidate) => candidate.checkVisibility(),
+  );
+}
+
 export function dismissNavigationTransientSurfaces(host: HTMLElement): boolean {
   // Unupgraded elements cannot own transient UI; navigation must not wait for their imports.
   const dismissedPanel = [
@@ -43,9 +49,7 @@ function trapNavDrawerFocus(host: HTMLElement, event: KeyboardEvent): void {
   ) {
     return;
   }
-  const focusable = [...drawer.querySelectorAll<HTMLElement>(NAV_DRAWER_FOCUSABLE_SELECTOR)].filter(
-    (candidate) => candidate.checkVisibility(),
-  );
+  const focusable = navDrawerFocusableElements(drawer);
   const target = event.shiftKey ? focusable.at(-1) : focusable[0];
   const boundary = event.shiftKey ? focusable[0] : focusable.at(-1);
   if (

@@ -39,25 +39,25 @@ internal sealed interface LinkPreviewResult {
 /** Returns the first safe web link outside inline and block code. */
 internal fun extractFirstBareUrl(markdown: String): String? = findFirstLink(parseChatMarkdown(markdown).firstChild)
 
-private fun findFirstLink(start: Node?): String? {
-  var node = start
-  while (node != null) {
+private fun findFirstLink(start: Node?): String? =
+  markdownSiblings(start).firstNotNullOfOrNull { node ->
     when (node) {
       is Link -> {
-        val destination = node.destination?.trim().orEmpty()
-        if (isSafeMarkdownLinkDestination(destination)) return destination
+        node.destination
+          ?.trim()
+          .orEmpty()
+          .takeIf(::isSafeMarkdownLinkDestination)
       }
 
-      is Code, is FencedCodeBlock, is IndentedCodeBlock -> {}
+      is Code, is FencedCodeBlock, is IndentedCodeBlock -> {
+        null
+      }
 
       else -> {
-        findFirstLink(node.firstChild)?.let { return it }
+        findFirstLink(node.firstChild)
       }
     }
-    node = node.next
   }
-  return null
-}
 
 /** Parses the OpenGraph subset used by the compact chat preview card. */
 internal fun parseOpenGraph(

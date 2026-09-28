@@ -22,8 +22,6 @@ export function createCronViewJob(id: string, overrides: Partial<CronJob> = {}):
 
 function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
   return {
-    basePath: "",
-    agentId: "main",
     loading: false,
     hasLoaded: true,
     listError: null,
@@ -58,7 +56,6 @@ function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
     channelLabels: {},
     runs: [],
     runsState: "ready",
-    runsTotal: 0,
     runsHasMore: false,
     runsLoadingMore: false,
     runsStatuses: [],
@@ -70,6 +67,7 @@ function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
     thinkingSuggestions: [],
     timezoneSuggestions: [],
     deliveryToSuggestions: [],
+    failureAlertToSuggestions: [],
     accountSuggestions: [],
     onListTabChange: () => undefined,
     onDetailTabChange: () => undefined,

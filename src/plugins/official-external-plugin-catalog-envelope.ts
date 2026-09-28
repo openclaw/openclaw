@@ -7,6 +7,7 @@ import {
   isOfficialExternalPluginCatalogFeed,
   type OfficialExternalPluginCatalogFeed,
 } from "./official-external-plugin-catalog.js";
+import type { OfficialExternalPluginCatalogFeedSigningKey } from "./official-external-plugin-catalog.types.js";
 
 const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE =
   "openclaw.official-external-plugin-catalog-feed.v1";
@@ -20,10 +21,6 @@ type LegacyOfficialExternalPluginCatalogEnvelopeSignature = {
   keyId?: string;
   algorithm?: string;
   signature?: string;
-};
-type OfficialExternalPluginCatalogTrustedSigningKey = {
-  keyId: string;
-  publicKey: string;
 };
 
 type OfficialExternalPluginCatalogEnvelopeVerificationResult =
@@ -46,17 +43,10 @@ type OfficialExternalPluginCatalogEnvelopeVerificationResult =
       message: string;
       authenticatedPayload?: unknown;
     };
-function createOfficialExternalPluginCatalogEnvelopeSigningInput(params: {
-  payloadType: string;
-  payloadBytes: Buffer;
-}): Buffer {
-  return dssePreAuthenticationEncoding(params.payloadType, params.payloadBytes);
-}
-
 export function verifyOfficialExternalPluginCatalogSignedEnvelope(
   raw: unknown,
   params: {
-    trustedKeys: readonly OfficialExternalPluginCatalogTrustedSigningKey[];
+    trustedKeys: readonly OfficialExternalPluginCatalogFeedSigningKey[];
     threshold?: number;
     allowLegacyBetaEnvelope?: boolean;
   },
@@ -86,10 +76,7 @@ export function verifyOfficialExternalPluginCatalogSignedEnvelope(
       message: "hosted catalog signed envelope payload is invalid",
     };
   }
-  const signingInput = createOfficialExternalPluginCatalogEnvelopeSigningInput({
-    payloadType: envelope.payloadType,
-    payloadBytes,
-  });
+  const signingInput = dssePreAuthenticationEncoding(envelope.payloadType, payloadBytes);
   const threshold = Math.max(1, Math.trunc(params.threshold ?? 1));
   const trustedSignatureKeyIds: string[] = [];
   const trustedSignaturePublicKeys = new Set<string>();
@@ -220,9 +207,6 @@ function parseOfficialExternalPluginCatalogSignedEnvelope(
         ? legacySignatures
         : [];
   if (parsedSignatures.length === 0) {
-    return null;
-  }
-  if (parsedSignatures.length > OFFICIAL_EXTERNAL_PLUGIN_CATALOG_MAX_SIGNATURES) {
     return null;
   }
   const keyIds = new Set<string>();

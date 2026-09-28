@@ -15,7 +15,7 @@ import {
   type SecretFileReadResult,
 } from "openclaw/plugin-sdk/secret-file-runtime";
 import { fileExists as fileExistsFromSecurity } from "openclaw/plugin-sdk/security-runtime";
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 
 describe("plugin SDK fs-safe compatibility exports", () => {
@@ -63,6 +63,21 @@ describe("plugin SDK fs-safe compatibility exports", () => {
   });
 
   it("keeps root-bounded file-access helpers on file-access-runtime", async () => {
+    expectTypeOf(removePathWithinRoot).parameters.toEqualTypeOf<
+      [
+        params: {
+          rootDir: string;
+          relativePath: string;
+          recursive?: boolean;
+          force?: boolean;
+        },
+      ]
+    >();
+    expectTypeOf<keyof Parameters<typeof removePathWithinRoot>[0]>().toEqualTypeOf<
+      "rootDir" | "relativePath" | "recursive" | "force"
+    >();
+    expectTypeOf(removePathWithinRoot).returns.toEqualTypeOf<Promise<void>>();
+
     await withTestDir({ prefix: "openclaw-sdk-file-access-compat-" }, async (root) => {
       await writeFileWithinRoot({
         rootDir: root,

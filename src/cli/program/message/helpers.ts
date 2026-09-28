@@ -31,6 +31,7 @@ import {
   awaitWithinDeadline,
 } from "../../../utils/absolute-deadline.js";
 import { runCommandWithRuntime } from "../../cli-utils.js";
+import { measureCliCommandStartup } from "../../command-startup-timing.js";
 import { requestExitAfterOneShotOutput } from "../../one-shot-exit.js";
 
 /** Shared helpers used by every message subcommand registration. */
@@ -174,6 +175,16 @@ export function createMessageCliHelpers(messageChannelOptions: string): MessageC
               throw new Error("--poll-anonymous and --poll-public are mutually exclusive.");
             }
             const preloadPlan = resolveMessagePluginPreloadPlan(action, opts);
+            await measureCliCommandStartup("config-ready", async () => {
+              const { ensureConfigReady } = await import("../config-guard.js");
+              await ensureConfigReady({
+                runtime: defaultRuntime,
+                commandPath: ["message", action],
+                suppressDoctorStdout: opts.json === true,
+                validateConfigOnly: !preloadPlan.preload,
+                measure: (stage, run) => measureCliCommandStartup(stage, run),
+              });
+            });
             if (preloadPlan.preload) {
               const config = getRuntimeConfig();
               const pluginIds = preloadPlan.channelId

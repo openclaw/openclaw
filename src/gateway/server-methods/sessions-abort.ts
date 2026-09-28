@@ -41,6 +41,7 @@ import {
   resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
   tryResolveSessionCompatibilityOwnerAgentId,
 } from "../session-request-agent.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
 import {
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,
@@ -78,21 +79,23 @@ export function resolveAbortSessionKey(params: {
   if (params.activeRunSessionKey) {
     return params.activeRunSessionKey;
   }
-  const candidates = [params.canonicalKey, params.requestedKey, ...(params.aliasKeys ?? [])];
+  const candidates = new Set([
+    params.canonicalKey,
+    params.requestedKey,
+    ...(params.aliasKeys ?? []),
+  ]);
   for (const active of params.context.chatAbortControllers.values()) {
     if (active.controlUiVisible === false) {
       continue;
     }
-    for (const candidate of candidates) {
-      if (active.sessionKey === candidate) {
-        const owner = resolveChatRunOwnerAgentId({
-          agentId: active.agentId,
-          sessionKey: active.sessionKey,
-          defaultAgentId: params.defaultAgentId,
-        });
-        if (!params.agentId || owner === normalizeAgentId(params.agentId)) {
-          return candidate;
-        }
+    if (candidates.has(active.sessionKey)) {
+      const owner = resolveChatRunOwnerAgentId({
+        agentId: active.agentId,
+        sessionKey: active.sessionKey,
+        defaultAgentId: params.defaultAgentId,
+      });
+      if (!params.agentId || owner === normalizeAgentId(params.agentId)) {
+        return active.sessionKey;
       }
     }
   }
@@ -107,10 +110,11 @@ function resolveSessionKeyAgentId(
   if (!key) {
     return undefined;
   }
-  if (!parseAgentSessionKey(key) && key.toLowerCase().startsWith("agent:")) {
+  const parsed = parseAgentSessionKey(key);
+  if (!parsed && key.toLowerCase().startsWith("agent:")) {
     return undefined;
   }
-  return parseAgentSessionKey(key)?.agentId ?? tryResolveSessionCompatibilityOwnerAgentId(cfg, key);
+  return parsed?.agentId ?? tryResolveSessionCompatibilityOwnerAgentId(cfg, key);
 }
 
 function sessionKeyBelongsToAgent(
@@ -224,10 +228,10 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
       scopedRequestedKey ??
       scopedActiveRunSessionKey ??
       (requestedRunId
-        ? resolveSessionKeyForRun(
-            requestedRunId,
-            requestedRunAgentId ? { agentId: requestedRunAgentId } : undefined,
-          )
+        ? resolveSessionKeyForRun(requestedRunId, {
+            agentId: requestedRunAgentId,
+            projection: getSessionRowProjection(context),
+          })
         : undefined) ??
       workerRunTarget?.sessionKey ??
       embeddedRunSessionKey;

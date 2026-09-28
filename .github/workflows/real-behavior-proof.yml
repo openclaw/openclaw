@@ -13,14 +13,14 @@ jobs:
   real-behavior-proof:
     name: PR context and evidence
     if: >-
-      ${{
+      ${{ (
         github.event.pull_request.user.type != 'Bot' &&
         !endsWith(github.event.pull_request.user.login, '[bot]') &&
         !startsWith(github.event.pull_request.user.login, 'app/') &&
         !contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association) &&
         (github.event.action != 'edited' ||
           github.event.changes.body || github.event.changes.base)
-      }}
+      ) }}
     concurrency:
       group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
       cancel-in-progress: true
@@ -56,7 +56,7 @@ jobs:
       - name: Setup supported Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "24.19.0"
+          node-version: "24.21.0"
           package-manager-cache: false
 
       - name: Check PR context and evidence

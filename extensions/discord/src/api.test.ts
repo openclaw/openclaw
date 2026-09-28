@@ -71,14 +71,9 @@ describe("fetchDiscord", () => {
       ),
     );
 
-    let error: unknown;
-    try {
-      await fetchDiscord("/users/@me/guilds", "test", fetcher, {
-        retry: { attempts: 1 },
-      });
-    } catch (err) {
-      error = err;
-    }
+    const error = await fetchDiscord("/users/@me/guilds", "test", fetcher, {
+      retry: { attempts: 1 },
+    }).catch((err: unknown) => err);
 
     const message = String(error);
     expect(message).toContain("Discord API /users/@me/guilds failed (429)");
@@ -105,14 +100,9 @@ describe("fetchDiscord", () => {
     const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
     const fetcher = withFetchPreconnect(async () => tracked.response);
 
-    let error: unknown;
-    try {
-      await fetchDiscord("/users/@me/guilds", "test", fetcher, {
-        retry: { attempts: 1 },
-      });
-    } catch (err) {
-      error = err;
-    }
+    const error = await fetchDiscord("/users/@me/guilds", "test", fetcher, {
+      retry: { attempts: 1 },
+    }).catch((err: unknown) => err);
 
     expect(error).toBeInstanceOf(DiscordApiError);
     expect(String(error)).toContain("Discord API /users/@me/guilds failed (503)");
@@ -131,14 +121,9 @@ describe("fetchDiscord", () => {
         ),
     );
 
-    let error: unknown;
-    try {
-      await fetchDiscord("/users/@me/guilds", "test", fetcher, {
-        retry: { attempts: 1 },
-      });
-    } catch (err) {
-      error = err;
-    }
+    const error = await fetchDiscord("/users/@me/guilds", "test", fetcher, {
+      retry: { attempts: 1 },
+    }).catch((err: unknown) => err);
 
     expect(error).toBeInstanceOf(DiscordApiError);
     expect((error as DiscordApiError).retryAfter).toBe(60);
@@ -159,14 +144,9 @@ describe("fetchDiscord", () => {
         }),
     );
 
-    let error: unknown;
-    try {
-      await fetchDiscord("/oauth2/applications/@me", "test", fetcher, {
-        retry: { attempts: 1 },
-      });
-    } catch (err) {
-      error = err;
-    }
+    const error = await fetchDiscord("/oauth2/applications/@me", "test", fetcher, {
+      retry: { attempts: 1 },
+    }).catch((err: unknown) => err);
 
     expect(error).toBeInstanceOf(DiscordApiError);
     expect((error as DiscordApiError).retryAfter).toBe(7);
@@ -191,14 +171,9 @@ describe("fetchDiscord", () => {
         }),
     );
 
-    let error: unknown;
-    try {
-      await fetchDiscord("/oauth2/applications/@me", "test", fetcher, {
-        retry: { attempts: 1 },
-      });
-    } catch (err) {
-      error = err;
-    }
+    const error = await fetchDiscord("/oauth2/applications/@me", "test", fetcher, {
+      retry: { attempts: 1 },
+    }).catch((err: unknown) => err);
 
     expect(error).toBeInstanceOf(DiscordApiError);
     expect((error as DiscordApiError).retryAfter).toBe(60);
@@ -217,14 +192,9 @@ describe("fetchDiscord", () => {
         ),
     );
 
-    let error: unknown;
-    try {
-      await fetchDiscord("/users/@me/guilds", "test", fetcher, {
-        retry: { attempts: 1 },
-      });
-    } catch (err) {
-      error = err;
-    }
+    const error = await fetchDiscord("/users/@me/guilds", "test", fetcher, {
+      retry: { attempts: 1 },
+    }).catch((err: unknown) => err);
 
     expect(error).toBeInstanceOf(DiscordApiError);
     expect((error as DiscordApiError).retryAfter).toBe(7);
@@ -304,14 +274,9 @@ describe("fetchDiscord", () => {
   it("throws DiscordApiError on malformed JSON success response body", async () => {
     const fetcher = withFetchPreconnect(async () => new Response("NOT JSON {{{", { status: 200 }));
 
-    let error: unknown;
-    try {
-      await fetchDiscord("/users/@me/guilds", "test", fetcher, {
-        retry: { attempts: 1 },
-      });
-    } catch (err) {
-      error = err;
-    }
+    const error = await fetchDiscord("/users/@me/guilds", "test", fetcher, {
+      retry: { attempts: 1 },
+    }).catch((err: unknown) => err);
 
     expect(error).toBeInstanceOf(DiscordApiError);
     expect(String(error)).toContain("Discord API /users/@me/guilds returned malformed JSON");
@@ -338,9 +303,6 @@ describe("fetchDiscord", () => {
         }),
       ).rejects.toThrow("Discord API /users/@me/guilds returned malformed JSON");
       expect(response?.bodyUsed).toBe(true);
-      console.log(
-        `[discord requestDiscord loopback proof] malformed UTF-8: rejected=true body_used=${response?.bodyUsed}`,
-      );
     } finally {
       await closeServer(server);
     }
@@ -374,9 +336,6 @@ describe("fetchDiscord", () => {
       expect(requestUrl).toBe("/api/v10/channels/channel-42");
       expect(authorization).toBe("Bot test-token");
       expect(contentLength).toBeNull();
-      console.log(
-        `[discord requestDiscord loopback proof] normal path: returned=${JSON.stringify(result)} content_length=${contentLength ?? "none"}`,
-      );
     } finally {
       await closeServer(server);
     }
@@ -411,9 +370,6 @@ describe("fetchDiscord", () => {
       expect(message).not.toContain(token);
       expect(message).not.toContain(uniqueSecret);
       expect(message).not.toContain("<html");
-      console.log(
-        `[discord credential redaction proof] format=html status=502 authorization_received=${authorization === `Bot ${token}`} token_present=${message.includes(token)} unique_fragment_present=${message.includes(uniqueSecret)} detail=${message}`,
-      );
     } finally {
       await closeServer(server);
     }
@@ -454,9 +410,6 @@ describe("fetchDiscord", () => {
       expect(message).toContain("retry after 0.0s");
       expect(message).not.toContain(token);
       expect(message).not.toContain(uniqueSecret);
-      console.log(
-        `[discord credential redaction proof] format=json status=429 authorization_received=${authorization === `Bot ${token}`} token_present=${message.includes(token)} unique_fragment_present=${message.includes(uniqueSecret)} retry_after=${(error as DiscordApiError).retryAfter} detail=${message}`,
-      );
     } finally {
       await closeServer(server);
     }
@@ -510,9 +463,6 @@ describe("fetchDiscord", () => {
       expect(String(error)).toContain(`limit: ${DISCORD_SUCCESS_RESPONSE_LIMIT_BYTES} bytes`);
       expect(requestUrl).toBe("/api/v10/channels/123/messages");
       expect(contentLength).toBeNull();
-      console.log(
-        `[discord requestDiscord loopback proof] oversized path: cap=${DISCORD_SUCCESS_RESPONSE_LIMIT_BYTES} streamed>=${streamedBytes} content_length=${contentLength ?? "none"} rejected=${String(error)}`,
-      );
     } finally {
       await closeServer(server);
     }

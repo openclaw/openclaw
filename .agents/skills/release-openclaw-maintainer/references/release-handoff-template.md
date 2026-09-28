@@ -22,6 +22,7 @@ operator steering. Do not preserve superseded scope.
 - tag: `v<version>`
 - validation workflow ref: `<release-ci ref | canonical branch>`
 - publication tooling ref: `<release-publish/tooling-sha12-epoch | track-specific ref>`
+- tooling tag: `<tag verified via gh api git/ref/tags | created by hand after ruleset warning>`
 - publication selection: `<normal/prepared route, npm dist-tag, package roster>`
 - publication inventory: `<exact surfaces>`
 - already-published plugin skips: `<none or package@version with metadata-only delta>`
@@ -39,8 +40,13 @@ operator steering. Do not preserve superseded scope.
 - candidate acceptance: `<green untagged-SHA evidence | pending>`
 - Plugin NPM Release: `<run id / URL or none>`
 - publish parent: `<run id / URL or none>`
+- publish parent dispatch count + failure classes: `<n dispatches; per run: stale child / approval / completion verify / ...>`
+- children approved (ids): `<npm child run ids approved via pending_deployments; ClawHub never manual>`
+- beta sync run: `<openclaw-npm-dist-tags sync_beta_to_stable run id or pending>`
 - Docker release/repair: `<run ids / tag / aliases or none>`
 - GitHub Release: `<public URL / non-Latest readback or none>`
+- GitHub release flipped at: `<UTC timestamp | by parent | by hand>`
+- macOS preflight/publish run ids: `<preflight run/attempt, publish run/attempt, appcast PR or none>`
 - immutable successful children: `<run ids / artifacts or none>`
 - registry/provenance readback: `<artifact or command result>`
 
@@ -74,13 +80,13 @@ reference for commands rather than redispatching the release parent.
 ## Phase
 
 - conceptual phase: `<beta-publish | postpublish-confidence | stable-publish>`
-- current input mapping: `<beta + no soak | published package + soak/focused groups | stable>`
+- current input mapping: `<beta + no soak (cannot qualify stable) | published package + soak/focused groups | explicit stable/full>`
 - completed: `<phases that stay complete>`
 - current: `<one phase>`
 - next action: `<one concrete action>`
 - roles: `<one operator | one transition watcher | zero or one current-failure investigator>`
-- retry budget: `<per-child failed-job reruns used: n/2 | then one diagnosis/fix/narrow retry, then reassess>`
-- wall-clock budget: `<stable on npm by cut time + 6h | elapsed h:mm | if exceeded: blocking lane and decision taken>`
+- retry budget: `<declared automatic wave used: n/1 | diagnosis/fix/narrow retry, then reassess>`
+- wall-clock objectives: `<seal by cut time + 20m, publish by + 1h | actual elapsed h:mm | blockers and next action>`
 
 ## Failure policy
 
@@ -88,8 +94,9 @@ reference for commands rather than redispatching the release parent.
   path, publish bytes, or another required gate proven by diagnosis): fix the
   release branch, freeze a new Code SHA, and invalidate downstream product
   evidence; any other failure keeps the Code SHA
-- flaky lane (fails twice on a test the candidate did not touch, no product
-  cause in the delta): record it, fix `main` in parallel, never re-cut
+- selected test failure or diagnosed flaky lane: block publication, record actual
+  results, and investigate the owner; rerun after the failure is resolved.
+  An untouched test or passing replay alone establishes neither a flake nor a fix
 - regular changelog-only failure before tagging: change the selected release entry and only
   its permitted record/index paths, freeze a new Release SHA, and reuse green
   Code SHA evidence after `split-changelog-release-v1` delta proof

@@ -37,6 +37,7 @@ type SessionMessageSubscriptionEntry = {
   approvalRequest: Promise<SessionMessageSubscriptionResponse> | null;
   plainFallback: Promise<SessionMessageSubscriptionResponse> | null;
   canonicalSettled: boolean;
+  refreshRequired: boolean;
   handles: Set<GatewaySessionMessageSubscription>;
   pendingOwners: number;
   release: Promise<void> | null;
@@ -140,6 +141,18 @@ export class GatewaySessionMessageSubscriptionCoordinator {
 
     entry.pendingOwners += 1;
     try {
+      if (entry.refreshRequired) {
+        entry.refreshRequired = false;
+        entry.plainFallback = null;
+        entry.approvalRequest = null;
+        const retainedApprovals = [...entry.handles].some((handle) => handle.includeApprovals);
+        // Refresh retained capabilities before applying a new owner's request;
+        // plain fallback must not downgrade an existing approval observer.
+        entry.ready = this.#requestSubscribe(entry, retainedApprovals).catch((error: unknown) => {
+          entry.refreshRequired = true;
+          throw error;
+        });
+      }
       const result = await this.#acquireCapability(entry, options.includeApprovals === true);
       if (this.#retired) {
         throw new Error("Session message subscription completed on a replaced Gateway connection");
@@ -206,9 +219,18 @@ export class GatewaySessionMessageSubscriptionCoordinator {
         sessionSubscriptionParams(entry.key, entry.agentId),
         { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
       )
-      .then(() => {
-        this.#finishRelease(subscription, owner, true);
-      });
+      .then(
+        () => {
+          this.#finishRelease(subscription, owner, true);
+        },
+        (error: unknown) => {
+          if (error instanceof GatewayProtocolRequestTimeoutError && error.requestSent) {
+            // The unsubscribe may have committed despite its missing acknowledgment.
+            entry.refreshRequired = true;
+          }
+          throw error;
+        },
+      );
     const tracked = request.finally(() => {
       if (entry.release === tracked) {
         entry.release = null;
@@ -245,6 +267,7 @@ export class GatewaySessionMessageSubscriptionCoordinator {
       approvalRequest: null,
       plainFallback: null,
       canonicalSettled: false,
+      refreshRequired: false,
       handles: new Set(),
       pendingOwners: 0,
       release: null,

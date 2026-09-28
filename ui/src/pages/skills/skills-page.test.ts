@@ -99,6 +99,24 @@ function mountSkills(
 afterEach(() => document.body.replaceChildren());
 
 describe("Skills discovery lifecycle", () => {
+  it("shows a settings heading with its four actions in one row below it", async () => {
+    const { page } = mountSkills(
+      async (method) => (method === "skills.library.list" ? personalLibrary : { skills: [] }),
+      "settings",
+    );
+    await waitForFast(() =>
+      expect(
+        page.querySelectorAll<HTMLButtonElement>(".plugins-toolbar button").length,
+      ).toBeGreaterThanOrEqual(4),
+    );
+
+    expect(page.querySelector(".content-header h1")?.textContent).toBe("Skills");
+    const actions = page.querySelector(".plugins-toolbar");
+    expect(
+      Array.from(actions?.querySelectorAll("button") ?? [], (button) => button.textContent?.trim()),
+    ).toEqual(["Search skills", "Workshop", "Create skill", "Import skill"]);
+  });
+
   it("opens Plugins and Skill workshop from the shared tabs", async () => {
     const { page, context } = mountSkills(async (method) =>
       method === "skills.library.list" ? personalLibrary : { results: [] },

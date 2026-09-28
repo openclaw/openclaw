@@ -4,6 +4,8 @@ import { stripAnsi } from "../../../../packages/terminal-core/src/ansi.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
+import { resolveOpenClawReleaseCohortVersion } from "../../../infra/npm-registry-spec.js";
+import { isPackageVersionDowngrade } from "../../../infra/package-update-utils.js";
 import type { PluginCapabilityConsentHandler } from "../../../plugins/capability-consent.js";
 import {
   normalizePluginsConfig,
@@ -34,9 +36,14 @@ import {
   detectPluginVersionDrift,
   resolveOfficialPluginCohortNpmSpecs,
 } from "../../../plugins/plugin-version-drift.js";
-import { updateNpmInstalledPlugins, type PluginUpdateOutcome } from "../../../plugins/update.js";
+import {
+  isClawHubTrustSkippedOutcome,
+  updateNpmInstalledPlugins,
+  type PluginUpdateOutcome,
+} from "../../../plugins/update.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveCompatibilityHostVersion } from "../../../version.js";
+import { VERSION_BOUND_RUNTIME_PLUGIN_IDS } from "./configured-runtime-plugin-installs.js";
 import {
   collectDownloadableInstallCandidates,
   collectUpdateDeferredPluginIds,
@@ -49,7 +56,6 @@ import {
 } from "./missing-configured-plugin-install.ids.js";
 import {
   installCandidate,
-  isActionableClawHubSkippedOutcome,
   isClawHubReviewNotice,
 } from "./missing-configured-plugin-install.install.js";
 import {
@@ -98,13 +104,11 @@ type RepairMissingPluginInstallsResult = {
   records: Record<string, PluginInstallRecord>;
 };
 
-/** Repair missing installs inferred from the current OpenClaw config. */
-export async function repairMissingConfiguredPluginInstalls(params: {
+type PluginInstallRepairOptions = {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
   workTimeoutMs?: number | null;
-  repairVersionDrift?: boolean;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   onWarning?: (warning: PluginInstallRepairWarning) => void;
   beforePersistentEffect?: () => void | Promise<void>;
@@ -116,7 +120,12 @@ export async function repairMissingConfiguredPluginInstalls(params: {
    * snapshot. The merged result is persisted before this function returns.
    */
   baselineRecords?: Record<string, PluginInstallRecord>;
-}): Promise<RepairMissingPluginInstallsResult> {
+};
+
+/** Repair missing installs inferred from the current OpenClaw config. */
+export async function repairMissingConfiguredPluginInstalls(
+  params: PluginInstallRepairOptions & { repairVersionDrift?: boolean },
+): Promise<RepairMissingPluginInstallsResult> {
   return repairMissingPluginInstalls(
     copyPluginInstallTransactionRequest(params, {
       cfg: params.cfg,
@@ -136,19 +145,13 @@ export async function repairMissingConfiguredPluginInstalls(params: {
 }
 
 /** Repair missing installs for an explicit plugin/channel id set. */
-export async function repairMissingPluginInstallsForIds(params: {
-  cfg: OpenClawConfig;
-  pluginIds: Iterable<string>;
-  channelIds?: Iterable<string>;
-  blockedPluginIds?: Iterable<string>;
-  env?: NodeJS.ProcessEnv;
-  timeoutMs?: number;
-  workTimeoutMs?: number | null;
-  baselineRecords?: Record<string, PluginInstallRecord>;
-  onCapabilityConsent?: PluginCapabilityConsentHandler;
-  onWarning?: (warning: PluginInstallRepairWarning) => void;
-  beforePersistentEffect?: () => void | Promise<void>;
-}): Promise<RepairMissingPluginInstallsResult> {
+export async function repairMissingPluginInstallsForIds(
+  params: PluginInstallRepairOptions & {
+    pluginIds: Iterable<string>;
+    channelIds?: Iterable<string>;
+    blockedPluginIds?: Iterable<string>;
+  },
+): Promise<RepairMissingPluginInstallsResult> {
   return repairMissingPluginInstalls(
     copyPluginInstallTransactionRequest(params, {
       cfg: params.cfg,
@@ -176,20 +179,14 @@ export async function repairMissingPluginInstallsForIds(params: {
   );
 }
 
-async function repairMissingPluginInstalls(params: {
-  cfg: OpenClawConfig;
-  pluginIds: ReadonlySet<string>;
-  channelIds: ReadonlySet<string>;
-  blockedPluginIds?: ReadonlySet<string>;
-  repairVersionDrift?: boolean;
-  env?: NodeJS.ProcessEnv;
-  timeoutMs?: number;
-  workTimeoutMs?: number | null;
-  baselineRecords?: Record<string, PluginInstallRecord>;
-  onCapabilityConsent?: PluginCapabilityConsentHandler;
-  onWarning?: (warning: PluginInstallRepairWarning) => void;
-  beforePersistentEffect?: () => void | Promise<void>;
-}): Promise<RepairMissingPluginInstallsResult> {
+async function repairMissingPluginInstalls(
+  params: PluginInstallRepairOptions & {
+    pluginIds: ReadonlySet<string>;
+    channelIds: ReadonlySet<string>;
+    blockedPluginIds?: ReadonlySet<string>;
+    repairVersionDrift?: boolean;
+  },
+): Promise<RepairMissingPluginInstallsResult> {
   // Baseline, awaited review, package publication, and the index write share one generation.
   return await withPluginLifecycleLease({ env: params.env }, (lease) =>
     withPluginInstallTransactions(
@@ -288,6 +285,21 @@ async function repairMissingPluginInstallsWithLease(
     installRecords: records,
     config: params.cfg,
   });
+  // A missing payload cannot supply currentVersion to the updater's downgrade guard.
+  const newerRecordedPluginIds = new Set(
+    updateChannel === "stable" || updateChannel === "beta"
+      ? Object.keys(cohortSpecs).filter((pluginId) => {
+          const version = records[pluginId]?.resolvedVersion ?? records[pluginId]?.version;
+          return (
+            version &&
+            isPackageVersionDowngrade(
+              resolveOpenClawReleaseCohortVersion(version),
+              resolveOpenClawReleaseCohortVersion(coreVersion),
+            )
+          );
+        })
+      : [],
+  );
   const driftedPluginIds = new Set(
     params.repairVersionDrift && !shouldDeferConfiguredPluginInstallRepair(env)
       ? detectPluginVersionDrift({
@@ -475,7 +487,24 @@ async function repairMissingPluginInstallsWithLease(
         timeoutMs: params.timeoutMs,
         workTimeoutMs: params.workTimeoutMs,
         npmInstallSpecOverrides: Object.fromEntries(
-          Object.entries(cohortSpecs).filter(([pluginId]) => driftedPluginIds.has(pluginId)),
+          Object.entries(cohortSpecs).filter(
+            ([pluginId]) => driftedPluginIds.has(pluginId) && !newerRecordedPluginIds.has(pluginId),
+          ),
+        ),
+        versionBoundPluginIds: new Set(
+          missingRecordedPlugins
+            .filter(
+              ([pluginId, record]) =>
+                (updateChannel === "stable" || updateChannel === "extended-stable") &&
+                params.pluginIds.has(pluginId) &&
+                VERSION_BOUND_RUNTIME_PLUGIN_IDS.has(pluginId) &&
+                record.source === "npm" &&
+                Boolean(cohortSpecs[pluginId]) &&
+                !newerRecordedPluginIds.has(pluginId) &&
+                (installedPluginIdsWithStaleVersionBoundRuntimePackages.has(pluginId) ||
+                  isPayloadMissing(env, record.installPath)),
+            )
+            .map(([pluginId]) => pluginId),
         ),
         retainOnUnavailable: true,
         skipDisabledPlugins: true,
@@ -523,7 +552,7 @@ async function repairMissingPluginInstallsWithLease(
         );
       } else if (
         outcome.status === "error" ||
-        isActionableClawHubSkippedOutcome(outcome) ||
+        isClawHubTrustSkippedOutcome(outcome) ||
         (outcome.status === "skipped" &&
           installedPluginMissingRequiredDependencies.has(outcome.pluginId))
       ) {

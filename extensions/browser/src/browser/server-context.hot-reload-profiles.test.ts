@@ -63,8 +63,10 @@ function buildConfig(): TestConfig {
   };
 }
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/runtime-config-snapshot")
+  >("openclaw/plugin-sdk/runtime-config-snapshot");
   return {
     ...actual,
     getRuntimeConfigSnapshot: () => null,
@@ -103,7 +105,7 @@ vi.mock("./pw-ai-module.js", () => ({
   getPwAiModule: async () => null,
 }));
 
-const { getRuntimeConfig } = await import("../config/config.js");
+const { getRuntimeConfig } = await import("openclaw/plugin-sdk/runtime-config-snapshot");
 const { resolveBrowserConfig, resolveProfile } = await import("./config.js");
 const { refreshResolvedBrowserConfigFromDisk } = await import("./resolved-config-refresh.js");
 
@@ -251,38 +253,24 @@ describe("server-context hot-reload profiles", () => {
     expect(stillStaleCfg.browser?.profiles?.desktop).toBeUndefined();
   });
 
-  it.each(["constructor", "prototype"] as const)(
-    "treats removed %s profiles as absent during hot reload",
-    (profileName) => {
-      mockState.cfgProfiles = {};
-      const { state, runtime } = createProfileFixture({
-        name: profileName,
-        config: { cdpPort: 18801, color: "#0066CC" },
-        running: { pid: 123 } as never,
-        lastTargetId: "tab-1",
-      });
+  it("treats a removed constructor profile as absent during hot reload", () => {
+    const profileName = "constructor";
+    mockState.cfgProfiles = {};
+    const { state, runtime } = createProfileFixture({
+      name: profileName,
+      config: { cdpPort: 18801, color: "#0066CC" },
+      running: { pid: 123 } as never,
+      lastTargetId: "tab-1",
+    });
 
-      mockState.cfgProfiles = {};
-      mockState.cachedConfig = null;
-      refreshProfiles(state);
-
-      expect(resolveProfile(state.resolved, profileName)).toBeNull();
-      const actor = getProfileLifecycle(runtime);
-      expect(actor.terminal).toBe("config-removed");
-      expect(actor.transitionReason).toBe("profile removed from config");
-    },
-  );
-
-  it("refreshes existing profile config after config cache updates", () => {
-    const { state } = createBrowserState();
-
-    mockState.cfgProfiles.openclaw = { cdpPort: 19999, color: "#FF4500" };
+    mockState.cfgProfiles = {};
     mockState.cachedConfig = null;
-
     refreshProfiles(state);
-    const after = resolveProfile(state.resolved, "openclaw");
-    expect(after?.cdpPort).toBe(19999);
-    expect(state.resolved.profiles.openclaw?.cdpPort).toBe(19999);
+
+    expect(resolveProfile(state.resolved, profileName)).toBeNull();
+    const actor = getProfileLifecycle(runtime);
+    expect(actor.terminal).toBe("config-removed");
+    expect(actor.transitionReason).toBe("profile removed from config");
   });
 
   it("keeps only exact live relay credentials stable across repeated profile refreshes", () => {

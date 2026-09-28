@@ -99,11 +99,7 @@ type ApplyDirectiveResult =
       contextTokens: number;
       directiveAck?: ReplyPayload;
       perMessageQueueMode?: InlineDirectives["queueMode"];
-      perMessageQueueOptions?: {
-        debounceMs?: number;
-        cap?: number;
-        dropPolicy?: InlineDirectives["dropPolicy"];
-      };
+      perMessageQueueOptions?: Pick<InlineDirectives, "debounceMs" | "cap" | "dropPolicy">;
     };
 
 const directiveRejection = (
@@ -132,7 +128,6 @@ export async function applyInlineDirectiveOverrides(params: {
   allowTextCommands: boolean;
   command: CommandContext;
   directives: InlineDirectives;
-  messageProviderKey: string;
   elevatedEnabled: boolean;
   elevatedAllowed: boolean;
   elevatedFailures: Array<{ gate: string; key: string }>;
@@ -166,7 +161,6 @@ export async function applyInlineDirectiveOverrides(params: {
     isGroup,
     allowTextCommands,
     command,
-    messageProviderKey,
     elevatedEnabled,
     elevatedAllowed,
     elevatedFailures,
@@ -190,7 +184,6 @@ export async function applyInlineDirectiveOverrides(params: {
     operatorAuthority: modelState.operatorAuthority,
     allowedModelKeys: modelState.allowedModelKeys,
     allowedModelCatalog: modelState.allowedModelCatalog,
-    policyAliasIndex: modelState.policyAliasIndex,
     resetModelOverride: modelState.resetModelOverride,
   };
   const createDirectiveHandlingBase = () => ({
@@ -204,7 +197,6 @@ export async function applyInlineDirectiveOverrides(params: {
     elevatedEnabled,
     elevatedAllowed,
     elevatedFailures,
-    messageProviderKey,
     defaultProvider,
     defaultModel,
     aliasIndex,
@@ -277,12 +269,8 @@ export async function applyInlineDirectiveOverrides(params: {
     );
   }
 
-  if (
-    directives.hasModelDirective &&
-    effectiveModelDirective &&
-    isModelSelectionLocked(sessionEntry)
-  ) {
-    const lockedModelResolution = resolveModelSelectionFromDirective({
+  const resolveEffectiveModelSelection = () =>
+    resolveModelSelectionFromDirective({
       directives: {
         ...directives,
         rawModelDirective: effectiveModelDirective,
@@ -295,11 +283,15 @@ export async function applyInlineDirectiveOverrides(params: {
       modelPolicy: modelState.modelPolicy,
       operatorAuthority: modelState.operatorAuthority,
       allowedModelKeys: modelState.allowedModelKeys,
-      allowedModelCatalog: modelState.allowedModelCatalog,
-      provider,
       agentId,
       requesterProfileId,
     });
+  if (
+    directives.hasModelDirective &&
+    effectiveModelDirective &&
+    isModelSelectionLocked(sessionEntry)
+  ) {
+    const lockedModelResolution = resolveEffectiveModelSelection();
     if (lockedModelResolution.modelSelection) {
       typing.cleanup();
       return directiveRejection("model-selection-locked", MODEL_SELECTION_LOCKED_MESSAGE);
@@ -395,24 +387,7 @@ export async function applyInlineDirectiveOverrides(params: {
     // Only the exact model-only case uses the focused service; mixed directives
     // fall through so their settings remain one broad atomic session transaction.
     if (hasOnlyModelDirective(directives) && effectiveModelDirective) {
-      const modelResolution = resolveModelSelectionFromDirective({
-        directives: {
-          ...directives,
-          rawModelDirective: effectiveModelDirective,
-        },
-        cfg,
-        agentDir,
-        defaultProvider,
-        defaultModel,
-        aliasIndex,
-        modelPolicy: modelState.modelPolicy,
-        operatorAuthority: modelState.operatorAuthority,
-        allowedModelKeys: modelState.allowedModelKeys,
-        allowedModelCatalog: modelState.allowedModelCatalog,
-        provider,
-        agentId,
-        requesterProfileId,
-      });
+      const modelResolution = resolveEffectiveModelSelection();
       if (modelResolution.errorText) {
         typing.cleanup();
         return directiveRejection("model-selection-rejected", modelResolution.errorText);

@@ -9,8 +9,12 @@ import {
   markDiagnosticEmbeddedRunStarted,
 } from "../../logging/diagnostic-run-activity.js";
 import { markDiagnosticModelStartedForTest } from "../../logging/diagnostic-run-activity.test-support.js";
-import { logSessionStateChange, startDiagnosticHeartbeat } from "../../logging/diagnostic.js";
+import {
+  logSessionStateChange,
+  startGatewayDiagnosticHeartbeat,
+} from "../../logging/diagnostic.js";
 import { resetDiagnosticStateForTest } from "../../logging/diagnostic.test-support.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { executePreparedCliRun } from "./execute.js";
 import { wrapPreparedCliRunWithTestAdmission } from "./execute.test-support.js";
@@ -28,7 +32,11 @@ it.each(["embedded_run", "model_call"] as const)(
     });
     vi.setSystemTime(Date.parse("2026-08-04T00:00:00Z"));
     const recoverStuckSession = vi.fn();
-    startDiagnosticHeartbeat({ diagnostics: { enabled: true } }, { recoverStuckSession });
+    startGatewayDiagnosticHeartbeat(
+      createTestGatewayScheduler("fake-timers"),
+      { diagnostics: { enabled: true } },
+      { recoverStuckSession },
+    );
     const context = buildPreparedCliRunContext({
       runId: "background-run",
       sessionId: "background-session",

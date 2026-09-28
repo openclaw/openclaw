@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Observation
 import Synchronization
 import Testing
 @testable import OpenClaw
@@ -411,37 +412,48 @@ struct GatewayProcessManagerTests {
     @Test func `coalesced drain returns each request installation result`() async throws {
         let firstPort = 19107
         let secondPort = 19108
+        let installStarted = AsyncTestGate()
+        let finishInstall = AsyncTestGate()
+        let secondQueued = AsyncTestGate()
+        defer { finishInstall.open() }
         try await self.withLaunchAgentEnvironment(
             statusPayloads: [
                 #"{"ok":true,"service":{"loaded":false}}"#,
                 self.loadedGatewayStatus(port: secondPort),
             ],
-            commandDelayNanoseconds: 100_000_000)
-        {
-            let manager = self.manager
-            let first = Task { @MainActor in
-                await manager._testEnableLaunchAgentIfNeededInstalled(
-                    bundlePath: "/Applications/OpenClaw.app",
-                    port: firstPort)
-            }
-            await self.waitForCondition(attempts: 1000) {
-                GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
-                    .contains(where: { $0.first == "install" })
-            }
-            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
-                .contains(where: { $0.first == "install" }))
+            commandHook: { arguments in
+                if arguments.first == "install" {
+                    installStarted.open()
+                    await finishInstall.wait()
+                }
+            }, {
+                let manager = self.manager
+                let first = Task { @MainActor in
+                    await manager._testEnableLaunchAgentIfNeededInstalled(
+                        bundlePath: "/Applications/OpenClaw.app",
+                        port: firstPort)
+                }
+                await installStarted.wait()
+                withObservationTracking {
+                    _ = manager._testPendingLaunchAgentPort()
+                } onChange: {
+                    secondQueued.open()
+                }
 
-            let second = Task { @MainActor in
-                await manager._testEnableLaunchAgentIfNeededInstalled(
-                    bundlePath: "/Applications/OpenClaw.app",
-                    port: secondPort)
-            }
+                let second = Task { @MainActor in
+                    await manager._testEnableLaunchAgentIfNeededInstalled(
+                        bundlePath: "/Applications/OpenClaw.app",
+                        port: secondPort)
+                }
+                await secondQueued.wait()
+                #expect(manager._testPendingLaunchAgentPort() == secondPort)
+                finishInstall.open()
 
-            #expect(await first.value)
-            #expect(await second.value == false)
-            let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
-            #expect(calls.filter { $0.first == "install" }.count == 1)
-        }
+                #expect(await first.value)
+                #expect(await second.value == false)
+                let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                #expect(calls.filter { $0.first == "install" }.count == 1)
+            })
     }
 
     @Test func `stop discards queued enables and disables after the active request`() async throws {

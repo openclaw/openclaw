@@ -115,13 +115,13 @@ function lifecycleHandler<T>(
       if (!application) {
         throw new Error("Plugin lifecycle did not return a runtime application receipt.");
       }
-      const { warnings: runtimeWarnings, ...runtime } = application;
+      const { warnings: runtimeWarnings, restartRequired = false, ...runtime } = application;
       const combinedWarnings = [...new Set([...(warnings ?? []), ...(runtimeWarnings ?? [])])];
       respond(
         true,
         {
           ok: true,
-          restartRequired: false,
+          restartRequired,
           runtime,
           ...(plugin ? { plugin } : {}),
           ...(pluginId ? { pluginId } : {}),

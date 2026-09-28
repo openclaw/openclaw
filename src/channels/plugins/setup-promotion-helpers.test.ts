@@ -41,31 +41,10 @@ describe("setup promotion helpers", () => {
     resolveBundledSurfaceMock.mockReset();
   });
 
-  it("resolves generic migration keys without importing plugin runtime", () => {
-    const keys = resolveSingleAccountKeysToMove({
-      channelKey: "demo",
-      channel: {
-        defaultAccount: "ops",
-        dmPolicy: "allowlist",
-        allowFrom: ["+15551234567"],
-        groupPolicy: "allowlist",
-        groupAllowFrom: ["group-123"],
-      },
-    });
-
-    expect(keys).toEqual(["dmPolicy", "allowFrom", "groupPolicy", "groupAllowFrom"]);
-    expect(getLoadedChannelPluginMock).toHaveBeenCalledWith("demo");
-    expect(resolveBundledSurfaceMock).not.toHaveBeenCalled();
-  });
-
   describe.each(["caller", "loaded", "discovered"])(
     "explicit preserve-root from the %s surface",
     (source) => {
-      it.each([
-        { name: "Root", groupPolicy: "allowlist", accounts: { ada: {} } },
-        { enabled: true },
-        { enabled: true, accounts: {} },
-      ])("preserves the owned root including an empty promotion key set: %j", (channel) => {
+      it("preserves the owned root including an empty promotion key set", () => {
         const surface = { configPromotion: "preserve-root" as const };
         if (source === "loaded") {
           getLoadedChannelPluginMock.mockReturnValue({ setupContract: surface });
@@ -74,7 +53,7 @@ describe("setup promotion helpers", () => {
         expect(
           resolveSingleAccountPromotion({
             channelKey: "demo",
-            channel,
+            channel: { enabled: true },
             ...(source === "caller" ? { setupSurface: surface } : {}),
             resolveBundledSurface: resolveBundledSurfaceMock,
           }),

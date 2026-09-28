@@ -198,19 +198,17 @@ export function toCatalogSession(
   };
 }
 
-export function normalizeLimit(value: unknown, key: string): number {
+export function normalizeLimit(
+  value: unknown,
+  key: string,
+  fallback = DEFAULT_PAGE_LIMIT,
+  max = CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT,
+): number {
   if (value === undefined) {
-    return DEFAULT_PAGE_LIMIT;
+    return fallback;
   }
-  if (
-    typeof value !== "number" ||
-    !Number.isInteger(value) ||
-    value < 1 ||
-    value > CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT
-  ) {
-    throw new CatalogParamsError(
-      `${key} must be an integer from 1 to ${CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT}`,
-    );
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > max) {
+    throw new CatalogParamsError(`${key} must be an integer from 1 to ${max}`);
   }
   return value;
 }
@@ -485,7 +483,10 @@ export function filterCatalogPageByTitle(
   };
 }
 
-export function unwrapNodeInvokePayload(value: unknown): unknown {
+export function unwrapNodeInvokePayload(
+  value: unknown,
+  malformedMessage = "Codex node returned malformed session catalog JSON",
+): unknown {
   if (!isRecord(value)) {
     return value;
   }
@@ -493,7 +494,7 @@ export function unwrapNodeInvokePayload(value: unknown): unknown {
     try {
       return JSON.parse(value.payloadJSON) as unknown;
     } catch (error) {
-      throw new Error("Codex node returned malformed session catalog JSON", { cause: error });
+      throw new Error(malformedMessage, { cause: error });
     }
   }
   return "payload" in value ? value.payload : value;

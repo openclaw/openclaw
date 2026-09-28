@@ -14,8 +14,13 @@ import { retryTransientDirectCronDelivery } from "../cron/isolated-agent/deliver
 import { createCronExecutionId } from "../cron/run-id.js";
 import type { CronEvent, CronService } from "../cron/service.js";
 import { resolveCronDeliverySessionKey } from "../cron/session-target.js";
-import type { CronFailureNotificationDelivery, CronJob } from "../cron/types.js";
+import type {
+  CronFailureNotificationDelivery,
+  CronJob,
+  CronWebhookDeliveryOutcome,
+} from "../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
+import { isProvenDeliveryNotSentError } from "../infra/delivery-recovery.shared.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatZonedTimestamp } from "../infra/format-time/format-datetime.js";
 import { withTimeout } from "../infra/fs-safe.js";
@@ -195,7 +200,8 @@ async function postCronWebhookStrict(params: {
   ssrfPolicy?: SsrFPolicy;
   signal?: AbortSignal;
   deadlineAtMs?: number;
-  onDeliveryAccepted?: () => void;
+  onDeliveryState?: (outcome: CronWebhookDeliveryOutcome) => void;
+  onResponse?: (status: number) => void;
 }): Promise<void> {
   const remainingMs =
     params.deadlineAtMs === undefined ? CRON_WEBHOOK_TIMEOUT_MS : params.deadlineAtMs - Date.now();
@@ -211,6 +217,8 @@ async function postCronWebhookStrict(params: {
     url: params.webhookUrl,
     timeoutMs: requestTimeoutMs,
     policy: params.ssrfPolicy,
+    beforeRequest: () => params.onDeliveryState?.({ status: "unknown" }),
+    onResponse: params.onResponse,
     ...(params.signal ? { signal: params.signal } : {}),
     init: {
       method: "POST",
@@ -221,10 +229,12 @@ async function postCronWebhookStrict(params: {
   let accepted = false;
   try {
     if (!result.response.ok) {
-      throw new Error(`Webhook request failed with HTTP ${result.response.status}`);
+      const error = new Error(`Webhook request failed with HTTP ${result.response.status}`);
+      params.onDeliveryState?.({ status: "not-delivered", error: error.message });
+      throw error;
     }
     accepted = true;
-    params.onDeliveryAccepted?.();
+    params.onDeliveryState?.({ status: "delivered" });
   } finally {
     const cleanup = async () => {
       // Keep response cleanup before guard release inside the request deadline; a non-settling
@@ -257,33 +267,22 @@ async function postCronWebhook(params: {
   webhookToken?: string;
   payload: unknown;
   ssrfPolicy?: SsrFPolicy;
-  logContext: Record<string, unknown>;
-  blockedLog: string;
-  failedLog: string;
+  jobId: string;
   logger: CronLogger;
 }): Promise<void> {
   try {
     await postCronWebhookStrict(params);
   } catch (err) {
-    if (err instanceof SsrFBlockedError) {
-      params.logger.warn(
-        {
-          ...params.logContext,
-          reason: formatErrorMessage(err),
-          webhookUrl: redactWebhookUrl(params.webhookUrl),
-        },
-        params.blockedLog,
-      );
-    } else {
-      params.logger.warn(
-        {
-          ...params.logContext,
-          err: formatErrorMessage(err),
-          webhookUrl: redactWebhookUrl(params.webhookUrl),
-        },
-        params.failedLog,
-      );
-    }
+    const blocked = err instanceof SsrFBlockedError;
+    params.logger.warn(
+      {
+        jobId: params.jobId,
+        source: "completionDestination",
+        [blocked ? "reason" : "err"]: formatErrorMessage(err),
+        webhookUrl: redactWebhookUrl(params.webhookUrl),
+      },
+      blocked ? "cron: webhook delivery blocked by SSRF guard" : "cron: webhook delivery failed",
+    );
   }
 }
 
@@ -295,31 +294,59 @@ export async function sendGatewayCronWebhook(params: {
   deadlineAtMs?: number;
   webhookToken?: unknown;
   ssrfPolicy?: SsrFPolicy;
-  onDeliveryAccepted?: () => void;
-}): Promise<void> {
-  const deliveryPlan = resolveCronDeliveryPlan(params.job);
-  const webhookUrl = normalizeHttpWebhookUrl(deliveryPlan.to);
-  if (!webhookUrl) {
-    throw new Error("cron webhook delivery.to must be a valid http(s) URL");
+  onDeliveryState?: (outcome: CronWebhookDeliveryOutcome) => void;
+}): Promise<CronWebhookDeliveryOutcome> {
+  let outcome: CronWebhookDeliveryOutcome = { status: "not-delivered" };
+  const publish = (next: CronWebhookDeliveryOutcome) => {
+    outcome = next;
+    params.onDeliveryState?.(next);
+  };
+  try {
+    const deliveryPlan = resolveCronDeliveryPlan(params.job);
+    const webhookUrl = normalizeHttpWebhookUrl(deliveryPlan.to);
+    if (!webhookUrl) {
+      throw new Error("cron webhook delivery.to must be a valid http(s) URL");
+    }
+    const event = redactCommandCronEventForExternalDelivery(params.event, params.job);
+    await retryTransientDirectCronDelivery({
+      jobId: params.job.id,
+      label: "webhook",
+      ...(params.abortSignal ? { signal: params.abortSignal } : {}),
+      ...(params.deadlineAtMs !== undefined ? { deadlineAtMs: params.deadlineAtMs } : {}),
+      run: async () => {
+        let receivedResponse = false;
+        try {
+          await postCronWebhookStrict({
+            webhookUrl,
+            webhookToken: normalizeOptionalString(params.webhookToken),
+            ssrfPolicy: params.ssrfPolicy,
+            payload: buildCronFinishedWebhookPayload(event),
+            signal: params.abortSignal,
+            deadlineAtMs: params.deadlineAtMs,
+            onDeliveryState: publish,
+            onResponse: () => {
+              receivedResponse = true;
+            },
+          });
+        } catch (error) {
+          // A connect error after a redirect does not disprove the earlier POST.
+          if (!receivedResponse && isProvenDeliveryNotSentError(error)) {
+            publish({ status: "not-delivered", error: formatErrorMessage(error) });
+          }
+          throw error;
+        }
+      },
+      shouldRetryError: (error) =>
+        outcome.status === "not-delivered" && !(error instanceof SsrFBlockedError),
+    });
+    return outcome;
+  } catch (error) {
+    // Keep an HTTP acknowledgement/rejection even if cleanup fails afterward.
+    if (outcome.status !== "delivered" && !outcome.error) {
+      publish({ ...outcome, error: formatErrorMessage(error) });
+    }
+    return outcome;
   }
-  const event = redactCommandCronEventForExternalDelivery(params.event, params.job);
-  await retryTransientDirectCronDelivery({
-    jobId: params.job.id,
-    label: "webhook",
-    ...(params.abortSignal ? { signal: params.abortSignal } : {}),
-    ...(params.deadlineAtMs !== undefined ? { deadlineAtMs: params.deadlineAtMs } : {}),
-    run: () =>
-      postCronWebhookStrict({
-        webhookUrl,
-        webhookToken: normalizeOptionalString(params.webhookToken),
-        ssrfPolicy: params.ssrfPolicy,
-        payload: buildCronFinishedWebhookPayload(event),
-        ...(params.abortSignal ? { signal: params.abortSignal } : {}),
-        ...(params.deadlineAtMs !== undefined ? { deadlineAtMs: params.deadlineAtMs } : {}),
-        ...(params.onDeliveryAccepted ? { onDeliveryAccepted: params.onDeliveryAccepted } : {}),
-      }),
-    shouldRetryError: (error) => !(error instanceof SsrFBlockedError),
-  });
 }
 
 /** Detached sends outlive cron ticks; own roots block mid-delivery suspension snapshots. */
@@ -375,7 +402,11 @@ async function sendGatewayCronFailureAlertUnderAdmission(
         webhookUrl,
         webhookToken: normalizeOptionalString(params.webhookToken),
         ssrfPolicy: params.ssrfPolicy,
-        onDeliveryAccepted: () => onDeliveryAttempt(true),
+        onDeliveryState: (outcome) => {
+          if (outcome.status === "delivered") {
+            onDeliveryAttempt(true);
+          }
+        },
         payload: {
           jobId: params.job.id,
           jobName: params.job.name,
@@ -502,9 +533,7 @@ export function dispatchGatewayCronFinishedNotifications(params: {
           webhookToken,
           ssrfPolicy: params.ssrfPolicy,
           payload,
-          logContext: { jobId: params.evt.jobId, source: "completionDestination" },
-          blockedLog: "cron: webhook delivery blocked by SSRF guard",
-          failedLog: "cron: webhook delivery failed",
+          jobId: params.evt.jobId,
           logger: params.logger,
         }),
     });

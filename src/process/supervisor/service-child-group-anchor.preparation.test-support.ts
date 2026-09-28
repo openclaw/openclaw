@@ -55,15 +55,20 @@ export function createHeldAnchorPreparation(
     preload,
     `
       import childProcess from "node:child_process";
-      import { registerHooks, syncBuiltinESMExports } from "node:module";
+      import { registerFixtureSourceTransform, syncFixtureBuiltinExports } from ${JSON.stringify(
+        new URL("../../../test/scripts/fixtures/ci-fixture-runtime.cjs", import.meta.url).href,
+      )};
       import { Socket } from "node:net";
-      const probe = new Socket({ fd: 6, readable: true, writable: true });
+      const probe = process.versions.bun
+        ? new Socket({ readable: true, writable: true })
+        : new Socket({ fd: 6, readable: true, writable: true });
       probe.on("error", () => {});
       const emit = fact => probe.write(JSON.stringify(fact) + "\\n");
-      emit({ type: "loader-entry", url: process.argv[1] });
       let release;
       const released = new Promise(resolve => { release = resolve; });
       probe.on("data", () => release());
+      if (process.versions.bun) probe.connect({ fd: 6 });
+      emit({ type: "loader-entry", url: process.argv[1] });
       globalThis[Symbol.for("openclaw.anchor-preparation-test")] = {
         emit,
         released,
@@ -77,33 +82,27 @@ export function createHeldAnchorPreparation(
         }
         return child;
       };
-      syncBuiltinESMExports();
+      syncFixtureBuiltinExports(["node:child_process"]);
       process.on("message", message => {
         if (message.type === "start" && message.generation === "held-lineage-preparation-replacement") {
           emit({ type: "duplicate-start" });
         }
       });
-      registerHooks({ load(url, context, nextLoad) {
-        let loaded;
-        try { loaded = nextLoad(url, context); } catch (error) {
-          emit({ type: "loader-error", url, error: error.message });
-          throw error;
-        }
-        if (url.includes("node-worker-lineage-completion")) {
-          emit({ type: "loader-match", url, format: loaded.format });
-        }
-        if (!/\\/node-worker-lineage-completion(?:-[A-Za-z0-9_-]+)?\\.[cm]?[jt]s$/.test(new URL(url).pathname)) {
-          return loaded;
-        }
-        const original = typeof loaded.source === "string"
-          ? loaded.source : Buffer.from(loaded.source).toString("utf8");
-        const gate = 'globalThis[Symbol.for("openclaw.anchor-preparation-test")]';
-        return {
-          ...loaded,
-          source: gate + '.emit({type:"lineage-loading"});\\nawait ' + gate + '.released;\\n'
-            + original + '\\n' + gate + '.emit({type:"lineage-loaded"});\\n',
-        };
-      }});
+      registerFixtureSourceTransform({
+        name: "held-lineage-preparation",
+        filter: /[/\\\\]node-worker-lineage-completion(?:-[A-Za-z0-9_-]+)?\\.[cm]?[jt]s$/,
+        transform(url, readSource) {
+          let original;
+          try { original = readSource(); } catch (error) {
+            emit({ type: "loader-error", url, error: error.message });
+            throw error;
+          }
+          emit({ type: "loader-match", url });
+          const gate = 'globalThis[Symbol.for("openclaw.anchor-preparation-test")]';
+          return gate + '.emit({type:"lineage-loading"});\\nawait ' + gate + '.released;\\n'
+            + original + '\\n' + gate + '.emit({type:"lineage-loaded"});\\n';
+        },
+      });
     `,
   );
   const anchorArgv = resolveRuntimeWorkerArgv(

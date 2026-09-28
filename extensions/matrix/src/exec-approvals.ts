@@ -175,10 +175,6 @@ export function isMatrixAnyApprovalClientEnabled(params: {
     isMatrixApprovalClientEnabled({
       ...params,
       approvalKind: "plugin",
-    }) ||
-    isMatrixApprovalClientEnabled({
-      ...params,
-      approvalKind: "system-agent",
     })
   );
 }

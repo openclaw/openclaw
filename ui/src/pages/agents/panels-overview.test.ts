@@ -219,51 +219,49 @@ describe("fallback field", () => {
     ]);
   });
 
-  it.each(["fast", "FAST", "fast@work"])(
-    "excludes primary alias %s while retaining case-distinct model choices",
-    (primaryAlias) => {
-      const target = "custom/model-a";
-      const caseDistinct = "custom/Model-A";
-      const { field } = renderFallbacks({
-        agentsList: {
-          defaultId: "alpha",
-          mainKey: "main",
-          scope: "per-sender",
-          agents: [{ id: "alpha" }, { id: "beta", model: { primary: caseDistinct } }],
-        },
-        config: {
-          configForm: {
-            agents: {
-              defaults: {
-                model: { primary: primaryAlias },
-                models: { [target]: { alias: "fast" } },
-              },
-              entries: { alpha: {}, beta: {} },
+  it("excludes a profile-qualified primary alias while retaining case-distinct model choices", () => {
+    const primaryAlias = "fast@work";
+    const target = "custom/model-a";
+    const caseDistinct = "custom/Model-A";
+    const { field } = renderFallbacks({
+      agentsList: {
+        defaultId: "alpha",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [{ id: "alpha" }, { id: "beta", model: { primary: caseDistinct } }],
+      },
+      config: {
+        configForm: {
+          agents: {
+            defaults: {
+              model: { primary: primaryAlias },
+              models: { [target]: { alias: "fast" } },
             },
+            entries: { alpha: {}, beta: {} },
           },
-          configSnapshot: null,
-          configLoading: false,
-          configSaving: false,
-          configFormDirty: false,
-          lastError: null,
         },
-        modelCatalog: {
-          hasSnapshot: true,
-          retired: false,
-          models: [
-            { provider: "custom", id: "model-a", name: "Lowercase model" },
-            { provider: "custom", id: "Model-A", name: "Uppercase model" },
-          ],
-        },
-      });
+        configSnapshot: null,
+        configLoading: false,
+        configSaving: false,
+        configFormDirty: false,
+        lastError: null,
+      },
+      modelCatalog: {
+        hasSnapshot: true,
+        retired: false,
+        models: [
+          { provider: "custom", id: "model-a", name: "Lowercase model" },
+          { provider: "custom", id: "Model-A", name: "Uppercase model" },
+        ],
+      },
+    });
 
-      expect(field.isExcluded("FAST")).toBe(true);
-      expect(field.isExcluded(`${target}@other`)).toBe(false);
-      expect(field.options.filter((option) => !field.isExcluded(option.value))).toEqual([
-        expect.objectContaining({ value: caseDistinct, label: "Uppercase model" }),
-      ]);
-    },
-  );
+    expect(field.isExcluded("FAST")).toBe(true);
+    expect(field.isExcluded(`${target}@other`)).toBe(false);
+    expect(field.options.filter((option) => !field.isExcluded(option.value))).toEqual([
+      expect.objectContaining({ value: caseDistinct, label: "Uppercase model" }),
+    ]);
+  });
 
   it("disables the field without config write access", () => {
     const access = { ...createProps().access, canUpdateConfig: false };

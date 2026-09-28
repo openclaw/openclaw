@@ -38,6 +38,36 @@ function repoRelativePath(repoRoot: string, filePath: string) {
   return path.relative(repoRoot, filePath).split(path.sep).join("/");
 }
 
+function uxMatrixEntry(params: {
+  id: string;
+  title: string;
+  artifact: { kind: string; path: string; source: string };
+  result: QaEvidenceSummaryJson["entries"][number]["result"];
+}): QaEvidenceSummaryJson["entries"][number] {
+  return {
+    test: {
+      kind: "ux-matrix-cell",
+      id: params.id,
+      title: params.title,
+      source: { path: "external/qa/ux-matrix-producer.mjs" },
+    },
+    coverage: [],
+    execution: {
+      runner: "ux-matrix-dashboard",
+      environment: { ref: "gallery-test", os: "darwin", nodeVersion: "v24.0.0" },
+      provider: {
+        id: "ux-matrix",
+        live: false,
+        model: { name: null, ref: null },
+        fixture: "mocked-control-ui-and-isolated-cli",
+      },
+      packageSource: { kind: "source-checkout", sha: "abc123" },
+      artifacts: [params.artifact],
+    },
+    result: params.result,
+  };
+}
+
 describe("evidence gallery", () => {
   it("builds a generic gallery model for non-UX QA Lab evidence", async () => {
     const repoRoot = await createTempRepo();
@@ -448,77 +478,26 @@ describe("evidence gallery", () => {
       generatedAt: "2026-06-17T12:00:00.000Z",
       evidenceMode: "full",
       entries: [
-        {
-          test: {
-            kind: "ux-matrix-cell",
-            id: "ux-matrix.web-ui.first-run",
-            title: `UX Matrix: web-ui / first-run at ${repoRoot}`,
-            source: { path: "external/qa/ux-matrix-producer.mjs" },
-          },
-          coverage: [],
-          execution: {
-            runner: "ux-matrix-dashboard",
-            environment: {
-              ref: "gallery-test",
-              os: "darwin",
-              nodeVersion: "v24.0.0",
-            },
-            provider: {
-              id: "ux-matrix",
-              live: false,
-              model: { name: null, ref: null },
-              fixture: "mocked-control-ui-and-isolated-cli",
-            },
-            packageSource: { kind: "source-checkout", sha: "abc123" },
-            artifacts: [
-              {
-                kind: "screenshot",
-                path: path.join(
-                  runDir,
-                  "surfaces",
-                  "web-ui",
-                  "stages",
-                  "first-run",
-                  "screenshot.png",
-                ),
-                source: "ux-matrix:web-ui:first-run",
-              },
-            ],
+        uxMatrixEntry({
+          id: "ux-matrix.web-ui.first-run",
+          title: `UX Matrix: web-ui / first-run at ${repoRoot}`,
+          artifact: {
+            kind: "screenshot",
+            path: path.join(runDir, "surfaces", "web-ui", "stages", "first-run", "screenshot.png"),
+            source: "ux-matrix:web-ui:first-run",
           },
           result: { status: "pass", timing: { wallMs: 1 } },
-        },
-        {
-          test: {
-            kind: "ux-matrix-cell",
-            id: "qa-lab.wrapper-cli-error",
-            title: "UX Matrix: cli / error-state",
-            source: { path: "external/qa/ux-matrix-producer.mjs" },
-          },
-          coverage: [],
-          execution: {
-            runner: "ux-matrix-dashboard",
-            environment: {
-              ref: "gallery-test",
-              os: "darwin",
-              nodeVersion: "v24.0.0",
-            },
-            provider: {
-              id: "ux-matrix",
-              live: false,
-              model: { name: null, ref: null },
-              fixture: "mocked-control-ui-and-isolated-cli",
-            },
-            packageSource: { kind: "source-checkout", sha: "abc123" },
-            artifacts: [
-              {
-                kind: "log",
-                path: repoRelativePath(
-                  repoRoot,
-                  path.join(runDir, "surfaces", "cli", "stages", "error-state", "logs.txt"),
-                ),
-                source: "ux-matrix:cli:error-state",
-              },
-            ],
+        }),
+        uxMatrixEntry({
+          id: "qa-lab.wrapper-cli-error",
+          title: "UX Matrix: cli / error-state",
+          artifact: {
+            kind: "log",
+            path: repoRelativePath(
+              repoRoot,
+              path.join(runDir, "surfaces", "cli", "stages", "error-state", "logs.txt"),
+            ),
+            source: "ux-matrix:cli:error-state",
           },
           result: {
             status: "blocked",
@@ -528,7 +507,7 @@ describe("evidence gallery", () => {
             },
             timing: { wallMs: 2 },
           },
-        },
+        }),
       ],
     });
 

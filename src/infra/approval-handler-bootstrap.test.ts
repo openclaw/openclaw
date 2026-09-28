@@ -32,6 +32,17 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     await Promise.resolve();
   };
 
+  const createLogger = () => ({
+    error: vi.fn(),
+    warn: vi.fn(),
+    info: vi.fn(),
+    debug: vi.fn(),
+    child: vi.fn(),
+    isEnabled: vi.fn().mockReturnValue(true),
+    isVerboseEnabled: vi.fn().mockReturnValue(false),
+    verbose: vi.fn(),
+  });
+
   const createApprovalPlugin = () =>
     ({
       id: "slack",
@@ -63,31 +74,6 @@ describe("startChannelApprovalHandlerBootstrap", () => {
       capability: "approval.native",
       context: { app },
     });
-
-  it("starts and stops the shared approval handler from runtime context registration", async () => {
-    const channelRuntime = createRuntimeChannel();
-    const start = vi.fn().mockResolvedValue(undefined);
-    const stop = vi.fn().mockResolvedValue(undefined);
-    createChannelApprovalHandlerFromCapability.mockResolvedValue({
-      start,
-      stop,
-    });
-
-    const cleanup = await startTestBootstrap({ channelRuntime });
-
-    const lease = registerApprovalContext(channelRuntime);
-    await flushTransitions();
-
-    expect(createChannelApprovalHandlerFromCapability).toHaveBeenCalled();
-    expect(start).toHaveBeenCalledTimes(1);
-
-    lease.dispose();
-    await flushTransitions();
-
-    expect(stop).toHaveBeenCalledTimes(1);
-
-    await cleanup();
-  });
 
   it("starts immediately when the runtime context was already registered", async () => {
     const channelRuntime = createRuntimeChannel();
@@ -194,16 +180,7 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     const channelRuntime = createRuntimeChannel();
     const start = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce(undefined);
     const stop = vi.fn().mockResolvedValue(undefined);
-    const logger = {
-      error: vi.fn(),
-      warn: vi.fn(),
-      info: vi.fn(),
-      debug: vi.fn(),
-      child: vi.fn(),
-      isEnabled: vi.fn().mockReturnValue(true),
-      isVerboseEnabled: vi.fn().mockReturnValue(false),
-      verbose: vi.fn(),
-    };
+    const logger = createLogger();
     createChannelApprovalHandlerFromCapability
       .mockResolvedValueOnce({ start, stop })
       .mockResolvedValueOnce({ start, stop });
@@ -233,16 +210,7 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     const readinessError = new Error("gateway event loop readiness timeout");
     const start = vi.fn().mockRejectedValueOnce(readinessError).mockResolvedValueOnce(undefined);
     const stop = vi.fn().mockResolvedValue(undefined);
-    const logger = {
-      error: vi.fn(),
-      warn: vi.fn(),
-      info: vi.fn(),
-      debug: vi.fn(),
-      child: vi.fn(),
-      isEnabled: vi.fn().mockReturnValue(true),
-      isVerboseEnabled: vi.fn().mockReturnValue(false),
-      verbose: vi.fn(),
-    };
+    const logger = createLogger();
     createChannelApprovalHandlerFromCapability
       .mockResolvedValueOnce({ start, stop })
       .mockResolvedValueOnce({ start, stop });
@@ -279,16 +247,7 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     });
     const start = vi.fn().mockRejectedValue(terminalError);
     const stop = vi.fn().mockResolvedValue(undefined);
-    const logger = {
-      error: vi.fn(),
-      warn: vi.fn(),
-      info: vi.fn(),
-      debug: vi.fn(),
-      child: vi.fn(),
-      isEnabled: vi.fn().mockReturnValue(true),
-      isVerboseEnabled: vi.fn().mockReturnValue(false),
-      verbose: vi.fn(),
-    };
+    const logger = createLogger();
     createChannelApprovalHandlerFromCapability.mockResolvedValue({ start, stop });
 
     const cleanup = await startTestBootstrap({ channelRuntime, logger });

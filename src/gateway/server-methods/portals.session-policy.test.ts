@@ -1,5 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { ensureCanonicalUserProfileForEmail } from "../../state/user-profile-writes.js";
+import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createCoreGatewayMethodDescriptors } from "../methods/core-method-policy.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
 import { createGatewayPortalService } from "../portals/portal-service.js";
@@ -19,64 +22,57 @@ import {
 import * as support from "../worker-environments/service.test-support.js";
 import { portalHandlers } from "./portals.js";
 
-vi.mock("../../state/user-channel-identity-operations.js", () => ({
-  prepareUserProfileRoleAuthority: async (profileId: string) => ({
-    profileId,
-    role: null,
-    aliases: [profileId],
-    isCurrent: () => true,
-  }),
-}));
-
 describe("session Portal RPC policy admission", () => {
   it.each(["operator.write", "operator.sessions.write"])(
     "rejects a locked canonical session through the actual router under %s",
-    async (scope) => {
-      const sessionKey = "agent:main:preview";
-      const projection = createSessionRowProjectionFixture({
-        cfg: {},
-        store: {
-          [sessionKey]: {
-            sessionId: "conversation",
-            lifecycleRevision: "incarnation",
-            updatedAt: 1,
-            modelSelectionLocked: true,
-            visibility: "shared",
-            createdActor: { type: "human", source: "profile", id: "writer" },
+    async (scope) =>
+      withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const writer = await ensureCanonicalUserProfileForEmail("portal-writer@example.test");
+        const sessionKey = "agent:main:preview";
+        const projection = createSessionRowProjectionFixture({
+          cfg: {},
+          store: {
+            [sessionKey]: {
+              sessionId: "conversation",
+              lifecycleRevision: "incarnation",
+              updatedAt: 1,
+              modelSelectionLocked: true,
+              visibility: "shared",
+              createdActor: { type: "human", source: "profile", id: writer.id },
+            },
           },
-        },
-      });
-      const context = bindSessionRowProjection(createContext(), () => projection);
-      const method = "portal.session.open";
-      const handler = vi.fn(portalHandlers[method]!);
-      const methodRegistry = createGatewayMethodRegistry(
-        createCoreGatewayMethodDescriptors({ [method]: handler }),
-      );
-      const respond = vi.fn();
-      await handleGatewayRequest({
-        req: {
-          type: "req",
-          id: "locked-preview",
-          method,
-          params: { sessionKey, environmentId: "attached", port: 3000 },
-        },
-        client: createOperatorClient({ profileId: "writer", scopes: [scope] }),
-        context,
-        methodRegistry,
-        respond,
-        isWebchatConnect: () => false,
-      });
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "FORBIDDEN",
-          message: expect.stringContaining("locked model selection"),
-          details: { code: "SESSION_RESOURCE_TOOL_POLICY" },
-        }),
-      );
-      expect(handler).not.toHaveBeenCalled();
-    },
+        });
+        const context = bindSessionRowProjection(createContext(), () => projection);
+        const method = "portal.session.open";
+        const handler = vi.fn(portalHandlers[method]!);
+        const methodRegistry = createGatewayMethodRegistry(
+          createCoreGatewayMethodDescriptors({ [method]: handler }),
+        );
+        const respond = vi.fn();
+        await handleGatewayRequest({
+          req: {
+            type: "req",
+            id: "locked-preview",
+            method,
+            params: { sessionKey, environmentId: "attached", port: 3000 },
+          },
+          client: createOperatorClient({ profileId: writer.id, scopes: [scope] }),
+          context,
+          methodRegistry,
+          respond,
+          isWebchatConnect: () => false,
+        });
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: "FORBIDDEN",
+            message: expect.stringContaining("locked model selection"),
+            details: { code: "SESSION_RESOURCE_TOOL_POLICY" },
+          }),
+        );
+        expect(handler).not.toHaveBeenCalled();
+      }),
   );
 });
 
@@ -84,6 +80,11 @@ describe("session Portal authority through worker dispatch", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
   it("admits its writer, denies an unrelated writer, and fences withdrawn qualification before node I/O", async () => {
+    const environment = captureEnv(["OPENCLAW_STATE_DIR"]);
+    onTestFinished(() => environment.restore());
+    setTestEnvValue("OPENCLAW_STATE_DIR", support.testState.root);
+    const writer = await ensureCanonicalUserProfileForEmail("portal-writer@example.test");
+    const unrelated = await ensureCanonicalUserProfileForEmail("portal-unrelated@example.test");
     const identity = {
       agentId: "main",
       sessionKey: "agent:main:preview",
@@ -138,7 +139,7 @@ describe("session Portal authority through worker dispatch", () => {
           sessionId: identity.sessionId,
           updatedAt: 1,
           visibility: "shared",
-          createdActor: { type: "human", source: "profile", id: "writer" },
+          createdActor: { type: "human", source: "profile", id: writer.id },
         },
       },
     });
@@ -173,10 +174,10 @@ describe("session Portal authority through worker dispatch", () => {
       return respond.mock.calls[0];
     };
     try {
-      expect((await invoke("unrelated"))?.[0]).toBe(false);
+      expect((await invoke(unrelated.id))?.[0]).toBe(false);
       expect(open).not.toHaveBeenCalled();
       expect(transport.invoke).not.toHaveBeenCalled();
-      expect((await invoke("writer"))?.[0]).toBe(true);
+      expect((await invoke(writer.id))?.[0]).toBe(true);
       const target = open.mock.calls[0]?.[0].target;
       if (target?.kind !== "worker") {
         throw new Error("missing worker preview");

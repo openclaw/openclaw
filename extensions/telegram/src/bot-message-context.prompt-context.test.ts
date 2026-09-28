@@ -523,7 +523,7 @@ describe("Telegram registered topic recovery", () => {
           },
         },
       };
-      const bot = createBot(false, true, cfg, false, accountId);
+      const bot = await createBot(false, true, cfg, false, accountId);
       const binding: SessionBindingRecord = {
         bindingId: "registered-history-recovery",
         targetSessionKey: sessionKey,

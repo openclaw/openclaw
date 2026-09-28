@@ -35,6 +35,22 @@ function themeBranding(settings: UiPreferences, catalogTheme?: CatalogTheme) {
   );
 }
 
+function subscribeMediaQuery(query: string, onChange: () => void): (() => void) | undefined {
+  if (typeof globalThis.matchMedia !== "function") {
+    return undefined;
+  }
+  const mediaQuery = globalThis.matchMedia(query);
+  if (typeof mediaQuery.addEventListener === "function") {
+    mediaQuery.addEventListener("change", onChange);
+    return () => mediaQuery.removeEventListener("change", onChange);
+  }
+  if (typeof mediaQuery.addListener === "function") {
+    mediaQuery.addListener(onChange);
+    return () => mediaQuery.removeListener(onChange);
+  }
+  return undefined;
+}
+
 function applyThemePresentation(settings: UiPreferences, catalogTheme?: CatalogTheme): void {
   if (typeof document === "undefined") {
     return;
@@ -70,6 +86,18 @@ function applyThemePresentation(settings: UiPreferences, catalogTheme?: CatalogT
   syncControlUiSystemChrome();
 }
 
+function livePreferencesKey(settings: UiPreferences): string {
+  // Persisted navigation bindings are boot/resume state. Live selection is
+  // published by the Gateway and agent-selection owners, not theme subscribers.
+  const {
+    sessionKey: _sessionKey,
+    lastActiveSessionKey: _lastActiveSessionKey,
+    selectedAgentId: _selectedAgentId,
+    ...preferences
+  } = settings;
+  return JSON.stringify(preferences);
+}
+
 export function createApplicationTheme(
   initialSettings: UiSettings,
   gateway: ApplicationGateway,
@@ -78,7 +106,6 @@ export function createApplicationTheme(
   let settings: UiPreferences = initialPreferences;
   let serverSelection: ApplicationThemeServerSelection | null = null;
   let systemThemeCleanup: (() => void) | undefined;
-  let chromeBreakpointCleanup: (() => void) | undefined;
   const listeners = new Set<() => void>();
 
   let presentationGeneration = 0;
@@ -171,44 +198,28 @@ export function createApplicationTheme(
 
   const syncSystemThemeListener = () => {
     detachSystemThemeListener();
-    if (settings.themeMode !== "system" || typeof globalThis.matchMedia !== "function") {
+    if (settings.themeMode !== "system") {
       return;
     }
-    const mediaQuery = globalThis.matchMedia("(prefers-color-scheme: light)");
-    const onChange = () => {
+    systemThemeCleanup = subscribeMediaQuery("(prefers-color-scheme: light)", () => {
       if (settings.themeMode === "system") {
         publish();
       }
-    };
-    if (typeof mediaQuery.addEventListener === "function") {
-      mediaQuery.addEventListener("change", onChange);
-      systemThemeCleanup = () => mediaQuery.removeEventListener("change", onChange);
-    } else if (typeof mediaQuery.addListener === "function") {
-      mediaQuery.addListener(onChange);
-      systemThemeCleanup = () => mediaQuery.removeListener(onChange);
-    }
+    });
   };
 
-  if (typeof globalThis.matchMedia === "function") {
-    const mediaQuery = globalThis.matchMedia(
-      "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
-    );
-    const onChange = () => syncControlUiSystemChrome();
-    if (typeof mediaQuery.addEventListener === "function") {
-      mediaQuery.addEventListener("change", onChange);
-      chromeBreakpointCleanup = () => mediaQuery.removeEventListener("change", onChange);
-    } else if (typeof mediaQuery.addListener === "function") {
-      mediaQuery.addListener(onChange);
-      chromeBreakpointCleanup = () => mediaQuery.removeListener(onChange);
-    }
-  }
+  const chromeBreakpointCleanup = subscribeMediaQuery(
+    "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
+    () => syncControlUiSystemChrome(),
+  );
 
   const refresh = () => {
     const next = loadUiPreferences(gateway.connection.gatewayUrl);
-    if (JSON.stringify(next) === JSON.stringify(settings)) {
+    const changed = livePreferencesKey(next) !== livePreferencesKey(settings);
+    settings = next;
+    if (!changed) {
       return;
     }
-    settings = next;
     void loadCatalog();
     publish();
     syncSystemThemeListener();
@@ -261,13 +272,12 @@ export function createApplicationTheme(
       serverSelection = { revision: (serverSelection?.revision ?? 0) + 1, scope, theme };
       publish();
     },
-    setMode(mode: ThemeMode, element) {
+    setMode(mode: ThemeMode) {
       const currentTheme = resolveTheme(settings.theme, settings.themeMode);
       const nextTheme = resolveTheme(settings.theme, mode);
       startThemeTransition({
         nextTheme,
         currentTheme,
-        context: { element },
         applyTheme: () => {
           patchSettings({ themeMode: mode });
         },

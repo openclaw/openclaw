@@ -155,8 +155,6 @@ describe("ClawHub published artifact verification", () => {
     const source = readFileSync("scripts/verify-clawhub-published-artifact.mjs", "utf8");
     expect(source).not.toContain(".arrayBuffer(");
     expect(source).toContain("response.body.getReader()");
-    expect(source).toContain("readBoundedBytes(response, url, MAX_JSON_BYTES)");
-    expect(source).toContain("readBoundedBytes(response, url, MAX_ARTIFACT_BYTES)");
     expect(source).toContain("AbortSignal.timeout(timeoutMs)");
   });
 

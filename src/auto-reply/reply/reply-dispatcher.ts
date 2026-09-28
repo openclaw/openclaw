@@ -13,6 +13,7 @@ import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-comple
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { sleep } from "../../utils.js";
@@ -133,12 +134,10 @@ export function captureReplyDispatchDeliveryOutcome(payload: ReplyPayload): {
   // it so a later send of the same payload owns a separate settlement.
   let tracker = deliveryOutcomeTrackers.get(payload);
   if (!tracker) {
-    let resolveOutcome!: (outcome: ReplyDispatchDeliveryOutcome) => void;
+    const { promise, resolve } = createDeferredCore<ReplyDispatchDeliveryOutcome>();
     tracker = {
-      promise: new Promise((resolve) => {
-        resolveOutcome = resolve;
-      }),
-      resolve: (outcome) => resolveOutcome(outcome),
+      promise,
+      resolve,
       tracked: false,
       pending: false,
     };
@@ -292,8 +291,6 @@ export function createReplyDispatcher(
     void drained.then(() => drained === sendChain && pendingFinalizations > 0 && notifyIdle());
     return delivery;
   };
-  const enqueueSettlement = (settle: () => Promise<void>) =>
-    (settlementChain = settlementChain.then(settle));
   const waitForIdle = async () => {
     let sent: Promise<void>;
     let settled: Promise<void>;
@@ -577,7 +574,7 @@ export function createReplyDispatcher(
       kind,
     );
     const delivery = startSerializedDelivery(normalizedInput, dispatchInfo, shouldDelay);
-    void enqueueSettlement(async () => {
+    settlementChain = settlementChain.then(async () => {
       let attempt: Awaited<typeof delivery> | undefined;
       try {
         attempt = await delivery;
@@ -606,7 +603,11 @@ export function createReplyDispatcher(
           deliveryOutcomeTracker.resolve(deliveryOutcome);
         }
         try {
-          options.onDeliverySettled?.(dispatchInfo);
+          if (options.onDeliverySettled) {
+            void Promise.resolve(options.onDeliverySettled(dispatchInfo)).catch((err: unknown) => {
+              reportObserverError(err, dispatchInfo);
+            });
+          }
         } catch (err: unknown) {
           reportObserverError(err, dispatchInfo);
         }

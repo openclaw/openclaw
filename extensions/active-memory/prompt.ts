@@ -5,8 +5,9 @@ import {
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { extractTextContentParts } from "./query.js";
 import {
-  ACTIVE_MEMORY_PLUGIN_TAG,
+  ACTIVE_MEMORY_CLOSE_TAG,
   ACTIVE_MEMORY_CONTEXT_HEADER,
+  ACTIVE_MEMORY_OPEN_TAG,
   NO_RECALL_VALUES,
   STRUCTURED_MEMORY_EMPTY_STATUSES,
   STRUCTURED_MEMORY_FAILURE_STATUSES,
@@ -75,7 +76,7 @@ function buildPromptStyleLines(style: ActiveMemoryPromptStyle): string[] {
   }
 }
 
-function buildRecallPrompt(params: {
+export function buildRecallPrompt(params: {
   config: ResolvedActiveRecallPluginConfig;
   query: string;
   searchQuery: string;
@@ -157,11 +158,7 @@ function escapeXml(str: string): string {
     .replace(/'/g, "&apos;");
 }
 
-function normalizeNoRecallValue(value: string): boolean {
-  return NO_RECALL_VALUES.has(value.trim().toLowerCase());
-}
-
-function readExplicitMemoryEvidence(source: Record<string, unknown>): boolean | undefined {
+export function readExplicitMemoryEvidence(source: Record<string, unknown>): boolean | undefined {
   const status = normalizeOptionalString(source.status)
     ?.toLowerCase()
     .replace(/[\s-]+/g, "_");
@@ -190,7 +187,7 @@ function readExplicitMemoryEvidence(source: Record<string, unknown>): boolean | 
   return undefined;
 }
 
-function readStructuredMemoryFailure(source: unknown): boolean | undefined {
+export function readStructuredMemoryFailure(source: unknown): boolean | undefined {
   const record = asOptionalRecord(source);
   if (!record) {
     return undefined;
@@ -247,16 +244,12 @@ function readStructuredContentState(
   return sawOtherState ? !decisiveState : undefined;
 }
 
-function readStructuredMemoryFailureFromContent(content: unknown): boolean | undefined {
+export function readStructuredMemoryFailureFromContent(content: unknown): boolean | undefined {
   return readStructuredContentState(content, readStructuredMemoryFailure, true);
 }
 
-function readStructuredMemoryEvidenceFromContent(content: unknown): boolean | undefined {
+export function readStructuredMemoryEvidenceFromContent(content: unknown): boolean | undefined {
   return readStructuredContentState(content, readStructuredMemoryEvidence, false);
-}
-
-function isTimeoutBoilerplateSummary(value: string): boolean {
-  return TIMEOUT_BOILERPLATE_PATTERNS.some((pattern) => pattern.test(value));
 }
 
 const ASSISTANT_CHITCHAT_PATTERNS = [
@@ -270,16 +263,11 @@ const ASSISTANT_CHITCHAT_PATTERNS = [
   /^(?:当前模型|当前日期|当前时间|今天).{0,100}(?:帮助|请|如果)/u,
 ];
 
-function normalizeActiveSummary(rawReply: string): string | null {
-  const trimmed = rawReply.trim();
-  if (normalizeNoRecallValue(trimmed)) {
-    return null;
-  }
-  const singleLine = trimmed.replace(/\s+/g, " ").trim();
+export function normalizeActiveSummary(rawReply: string): string | null {
+  const singleLine = rawReply.replace(/\s+/g, " ").trim();
   if (
-    !singleLine ||
-    normalizeNoRecallValue(singleLine) ||
-    isTimeoutBoilerplateSummary(singleLine) ||
+    NO_RECALL_VALUES.has(singleLine.toLowerCase()) ||
+    TIMEOUT_BOILERPLATE_PATTERNS.some((pattern) => pattern.test(singleLine)) ||
     ASSISTANT_CHITCHAT_PATTERNS.some((pattern) => pattern.test(singleLine))
   ) {
     return null;
@@ -287,7 +275,7 @@ function normalizeActiveSummary(rawReply: string): string | null {
   return singleLine;
 }
 
-function truncateSummary(summary: string, maxSummaryChars: number): string {
+export function truncateSummary(summary: string, maxSummaryChars: number): string {
   const trimmed = summary.trim();
   if (trimmed.length <= maxSummaryChars) {
     return trimmed;
@@ -313,32 +301,15 @@ function truncateSummary(summary: string, maxSummaryChars: number): string {
   return `${bounded}${ellipsis}`;
 }
 
-function buildMetadata(summary: string): string {
+export function buildPromptPrefix(summary: string): string {
   return [
-    `<${ACTIVE_MEMORY_PLUGIN_TAG}>`,
+    ACTIVE_MEMORY_CONTEXT_HEADER,
+    ACTIVE_MEMORY_OPEN_TAG,
     escapeXml(summary),
-    `</${ACTIVE_MEMORY_PLUGIN_TAG}>`,
+    ACTIVE_MEMORY_CLOSE_TAG,
   ].join("\n");
 }
 
-function buildPromptPrefix(summary: string): string {
-  const metadata = buildMetadata(summary);
-  return [ACTIVE_MEMORY_CONTEXT_HEADER, metadata].join("\n");
-}
-
-function buildRecallOutcomePrefix(outcome: ActiveMemoryRecallOutcome): string {
+export function buildRecallOutcomePrefix(outcome: ActiveMemoryRecallOutcome): string {
   return buildPromptPrefix(ACTIVE_MEMORY_RECALL_OUTCOME_TEXT[outcome]);
 }
-
-export {
-  buildMetadata,
-  buildPromptPrefix,
-  buildRecallOutcomePrefix,
-  buildRecallPrompt,
-  normalizeActiveSummary,
-  readExplicitMemoryEvidence,
-  readStructuredMemoryEvidenceFromContent,
-  readStructuredMemoryFailure,
-  readStructuredMemoryFailureFromContent,
-  truncateSummary,
-};

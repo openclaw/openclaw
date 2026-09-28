@@ -185,6 +185,8 @@ export function isolatedVitestCreateArgs(options: {
     "--userns=keep-id",
     `--user=${uid}:${gid}`,
     "--pid=private",
+    // Detached test children outlive their launcher; Node cannot reap adopted orphans.
+    "--init",
     "--ipc=private",
     "--cpus=4",
     "--memory=8g",
@@ -267,6 +269,7 @@ export function verifyIsolatedVitestContainer(
     host.NetworkMode !== "none" ||
     host.Privileged !== false ||
     host.ReadonlyRootfs !== true ||
+    host.Init !== true ||
     config.User !== `${process.getuid?.()}:${process.getgid?.()}`
   ) {
     throw new Error("Container isolation settings differ from the admitted invocation.");

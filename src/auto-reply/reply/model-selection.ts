@@ -18,8 +18,8 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { ModelFallbackRouteResolution } from "../../agents/model-fallback.types.js";
 import {
-  type ModelAliasIndex,
   normalizeProviderId,
+  normalizeModelRef,
   resolveModelAliasFromPair,
   resolveReasoningDefault,
   resolveThinkingDefault,
@@ -56,7 +56,6 @@ import type { ThinkLevel } from "../thinking.shared.js";
 import {
   findSelectedCatalogEntry,
   mergePreparedConfiguredCatalog,
-  normalizeRuntimeRef,
   resolveRuntimeNormalization,
 } from "./model-runtime-normalization.js";
 import { isStaleHeartbeatAutoFallbackOverride } from "./stored-model-override.js";
@@ -84,7 +83,6 @@ type ModelSelectionState = {
   operatorModelOverride?: boolean;
   allowedModelKeys: Set<string>;
   allowedModelCatalog: ModelCatalog;
-  policyAliasIndex: ModelAliasIndex;
   resetModelOverride: boolean;
   resetModelOverrideRef?: string;
   resetModelOverrideReason?: "disallowed" | "stale" | "temporarily-unavailable";
@@ -107,14 +105,6 @@ const modelCatalogRuntimeLoader = createLazyImportLoader(
 const sessionPersistenceRuntimeLoader = createLazyImportLoader(
   () => import("./session-entry-persistence.js"),
 );
-
-function loadPreparedModelCatalogRuntime() {
-  return modelCatalogRuntimeLoader.load();
-}
-
-function loadSessionPersistenceRuntime() {
-  return sessionPersistenceRuntimeLoader.load();
-}
 
 /** Resolves provider/model, allowlist, catalog, and thinking defaults for a reply run. */
 export async function createModelSelectionState(params: {
@@ -172,7 +162,7 @@ export async function createModelSelectionState(params: {
   const loadRuntimeCatalogSnapshot = async (): Promise<ModelCatalogSnapshot> =>
     params.preparedModelCatalog ??
     (await (
-      await loadPreparedModelCatalogRuntime()
+      await modelCatalogRuntimeLoader.load()
     ).loadPreparedModelCatalogSnapshot({
       config: cfg,
       ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -188,14 +178,16 @@ export async function createModelSelectionState(params: {
   const modelSelectionLocked = sessionEntry?.modelSelectionLocked === true;
   const agentEntry = params.agentId ? resolveAgentConfig(cfg, params.agentId) : undefined;
 
-  let visibilityPolicy: ModelVisibilityPolicy = createModelVisibilityPolicy({
-    cfg,
-    catalog: [],
-    defaultProvider,
-    defaultModel: { provider: defaultProvider, model: defaultModel },
-    agentId: params.agentId,
-    ...runtimeModelNormalization,
-  });
+  const createVisibilityPolicy = (catalog: ModelCatalog) =>
+    createModelVisibilityPolicy({
+      cfg,
+      catalog,
+      defaultProvider,
+      defaultModel: { provider: defaultProvider, model: defaultModel },
+      agentId: params.agentId,
+      ...runtimeModelNormalization,
+    });
+  let visibilityPolicy = createVisibilityPolicy([]);
   const hasAllowlist = !visibilityPolicy.allowAny;
   const hasConfiguredModels =
     Object.keys(agentCfg?.models ?? {}).length > 0 ||
@@ -219,14 +211,21 @@ export async function createModelSelectionState(params: {
   // (discovery threw, static/empty fallback) must not destroy a pinned override.
   let catalogAuthoritative = true;
   let resetModelOverride = false;
+  // Refusing a pin for this run does not imply ownership of it or a successful persisted reset.
+  let storedOverrideResetForRun = false;
   let resetModelOverrideRef: string | undefined;
   let resetModelOverrideReason: "disallowed" | "stale" | "temporarily-unavailable" | undefined;
-  const directStoredModelOverride = storedModelOverrides.resolveDirectStoredModelOverride({
+  const effectiveStoredModelOverride = storedModelOverrides.resolveStoredModelOverrideCore({
     sessionEntry,
+    sessionStore,
+    sessionKey,
+    parentSessionKey,
     defaultProvider,
     allowPluginNormalization: runtimeModelNormalization.allowPluginNormalization,
     manifestPlugins: runtimeModelNormalization.manifestPlugins,
   });
+  const directStoredModelOverride =
+    effectiveStoredModelOverride?.source === "session" ? effectiveStoredModelOverride : null;
   const primaryHarnessPolicy = resolveAgentHarnessPolicy({
     provider: primaryProvider,
     modelId: primaryModel,
@@ -234,10 +233,10 @@ export async function createModelSelectionState(params: {
     agentId: params.agentId,
     sessionKey,
   });
-  const directOverrideRef = directStoredModelOverride
+  const storedOverrideRef = effectiveStoredModelOverride
     ? {
-        provider: directStoredModelOverride.provider ?? defaultProvider,
-        model: directStoredModelOverride.model,
+        provider: effectiveStoredModelOverride.provider ?? defaultProvider,
+        model: effectiveStoredModelOverride.model,
       }
     : undefined;
   const isStaleStoredOverride = (
@@ -260,8 +259,8 @@ export async function createModelSelectionState(params: {
       normalizeProviderId(override.provider ?? "") === OPENAI_CODEX_PROVIDER_ID &&
       normalizeProviderId(primaryProvider) === OPENAI_PROVIDER_ID &&
       primaryHarnessPolicy.runtime === "codex" &&
-      normalizeRuntimeRef(OPENAI_PROVIDER_ID, override.model, runtimeModelNormalization).model ===
-        normalizeRuntimeRef(OPENAI_PROVIDER_ID, primaryModel, runtimeModelNormalization).model;
+      normalizeModelRef(OPENAI_PROVIDER_ID, override.model, runtimeModelNormalization).model ===
+        normalizeModelRef(OPENAI_PROVIDER_ID, primaryModel, runtimeModelNormalization).model;
     // Reapplying the current selection must not fight an explicit override.
     const staleLegacyAutoFallbackWithoutOrigin =
       override?.source === "session" &&
@@ -285,14 +284,7 @@ export async function createModelSelectionState(params: {
       "catalog-loaded",
       `entries=${modelCatalog.length} authoritative=${catalogAuthoritative}`,
     );
-    visibilityPolicy = createModelVisibilityPolicy({
-      cfg,
-      catalog: modelCatalog,
-      defaultProvider,
-      defaultModel: { provider: defaultProvider, model: defaultModel },
-      agentId: params.agentId,
-      ...runtimeModelNormalization,
-    });
+    visibilityPolicy = createVisibilityPolicy(modelCatalog);
     allowedModelCatalog = visibilityPolicy.allowedCatalog;
     allowedModelKeys = visibilityPolicy.allowedKeys;
     logStage(
@@ -300,14 +292,7 @@ export async function createModelSelectionState(params: {
       `allowed=${allowedModelCatalog.length} keys=${allowedModelKeys.size}`,
     );
   } else if (hasAllowlist || hasConfiguredModels || configuredModelCatalog.length > 0) {
-    visibilityPolicy = createModelVisibilityPolicy({
-      cfg,
-      catalog: configuredModelCatalog,
-      defaultProvider,
-      defaultModel: { provider: defaultProvider, model: defaultModel },
-      agentId: params.agentId,
-      ...runtimeModelNormalization,
-    });
+    visibilityPolicy = createVisibilityPolicy(configuredModelCatalog);
     allowedModelCatalog = visibilityPolicy.allowedCatalog;
     allowedModelKeys = visibilityPolicy.allowedKeys;
     logStage(
@@ -320,22 +305,31 @@ export async function createModelSelectionState(params: {
     sessionEntry &&
     sessionStore &&
     sessionKey &&
-    directOverrideRef &&
+    storedOverrideRef &&
+    (effectiveStoredModelOverride?.source === "session" ||
+      (!params.skipStoredModelOverride && !params.hasResolvedHeartbeatModelOverride)) &&
     !hasOneTurnModelOverride &&
     (!params.hasModelDirective || !operatorAuthority?.modelPolicy)
   ) {
-    const key = buildModelCatalogRef(directOverrideRef.provider, directOverrideRef.model);
+    const key = buildModelCatalogRef(storedOverrideRef.provider, storedOverrideRef.model);
     const overrideAllowed =
-      hasSessionAutoModelSelection(sessionEntry) || visibilityPolicy.allows(directOverrideRef);
+      (effectiveStoredModelOverride?.source === "session" &&
+        hasSessionAutoModelSelection(sessionEntry)) ||
+      visibilityPolicy.allows(storedOverrideRef);
     // A degraded catalog cannot prove a pin is disallowed. Preserve it while the turn falls back
     // to primary, then re-evaluate after discovery recovers; config-proven stale pins still reset.
     const shouldResetOverride =
       (staleDirectStoredOverride || !overrideAllowed) && !modelSelectionLocked;
     const overrideTemporarilyUnavailable =
       shouldResetOverride && !staleDirectStoredOverride && !catalogAuthoritative;
+    storedOverrideResetForRun = shouldResetOverride;
     if (overrideTemporarilyUnavailable) {
       resetModelOverrideRef = key;
       resetModelOverrideReason = "temporarily-unavailable";
+    } else if (shouldResetOverride && effectiveStoredModelOverride?.source === "parent") {
+      // The child's policy cannot clear the parent's choice.
+      resetModelOverrideRef = key;
+      resetModelOverrideReason = "disallowed";
     } else if (shouldResetOverride) {
       const initialSessionEntry = { ...sessionEntry };
       const nextSessionEntry = { ...sessionEntry };
@@ -347,7 +341,7 @@ export async function createModelSelectionState(params: {
       let resetApplied = updated;
       if (updated) {
         if (storePath) {
-          const { persistReplySessionEntry } = await loadSessionPersistenceRuntime();
+          const { persistReplySessionEntry } = await sessionPersistenceRuntimeLoader.load();
           const persistence = await persistReplySessionEntry({
             storePath,
             sessionKey,
@@ -380,10 +374,12 @@ export async function createModelSelectionState(params: {
       }
     }
   }
+  // Resolve refused pins from the primary, not catalog order, even when the pin must be preserved.
+  // Only replace a pin-seeded selection; explicit per-run choices keep their precedence.
   if (
-    staleDirectStoredOverride &&
-    params.provider === directOverrideRef?.provider &&
-    params.model === directOverrideRef.model
+    (storedOverrideResetForRun || staleDirectStoredOverride) &&
+    params.provider === storedOverrideRef?.provider &&
+    params.model === storedOverrideRef.model
   ) {
     provider = primaryProvider;
     model = primaryModel;
@@ -545,15 +541,6 @@ export async function createModelSelectionState(params: {
     }
   }
 
-  const buildThinkingCatalog = (catalog: ModelCatalog): ModelCatalog =>
-    createModelVisibilityPolicy({
-      cfg,
-      catalog,
-      defaultProvider,
-      defaultModel: { provider: defaultProvider, model: defaultModel },
-      agentId: params.agentId,
-      ...runtimeModelNormalization,
-    }).catalog;
   const resolveThinkingSelection = (selection: ThinkingDefaultSelection) => {
     const selected = findSelectedCatalogEntry({ ...selection, catalog: visibilityPolicy.catalog });
     return {
@@ -585,7 +572,7 @@ export async function createModelSelectionState(params: {
     }
     let catalog = visibilityPolicy.catalog;
     if (needsThinkHydration(catalog, selection.provider, selection.model, agentRuntime)) {
-      const { loadProviderScopedThinkingCatalog } = await loadPreparedModelCatalogRuntime();
+      const { loadProviderScopedThinkingCatalog } = await modelCatalogRuntimeLoader.load();
       const preparedCatalog = await loadProviderScopedThinkingCatalog({
         config: cfg,
         agentId: params.agentId,
@@ -595,7 +582,7 @@ export async function createModelSelectionState(params: {
       });
       // An empty refresh cannot replace the admitted owner with a configuration-only row.
       if (findSelectedCatalogEntry({ catalog: preparedCatalog, ...selection })) {
-        catalog = buildThinkingCatalog(preparedCatalog);
+        catalog = createVisibilityPolicy(preparedCatalog).catalog;
       }
     }
     thinkingCatalogs.set(key, catalog);
@@ -657,7 +644,6 @@ export async function createModelSelectionState(params: {
     ...(operatorModelOverride ? { operatorModelOverride } : {}),
     allowedModelKeys,
     allowedModelCatalog,
-    policyAliasIndex: visibilityPolicy.policyAliasIndex,
     resetModelOverride,
     resetModelOverrideRef,
     resetModelOverrideReason,

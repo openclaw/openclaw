@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
+import { icons } from "../../components/icons.ts";
 import "../../components/file-preview-modal-registration.ts";
 import "../../components/modal-dialog.ts";
 import "../../components/resizable-divider.ts";
@@ -137,7 +138,7 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
               ?disabled=${cancelDisabled}
               @click=${props.onRevisionCancel}
             >
-              ×
+              ${icons.x}
             </button>
           </openclaw-tooltip>
         </div>
@@ -155,7 +156,7 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
             !props.access.canRevise || Boolean(props.actionBusy) || props.revisionRecoveryActive
           }
           @input=${(event: Event) =>
-            props.onRevisionDraftChange((event.target as HTMLTextAreaElement).value ?? "")}
+            props.onRevisionDraftChange((event.target as HTMLTextAreaElement).value)}
         ></textarea>
         ${
           busy
@@ -248,8 +249,12 @@ function renderDetail(props: SkillWorkshopProps, proposal: SkillWorkshopProposal
   const editedAt =
     proposal.updatedAt && proposal.updatedAt > proposal.createdAt ? proposal.updatedAt : null;
   const createdLabel = editedAt
-    ? t("skillWorkshop.detail.edited", { time: formatRelative(editedAt) })
-    : t("skillWorkshop.detail.created", { time: formatRelative(proposal.createdAt) });
+    ? t("skillWorkshop.detail.edited", {
+        time: formatRelativeTimestamp(editedAt, { dateFallback: true }),
+      })
+    : t("skillWorkshop.detail.created", {
+        time: formatRelativeTimestamp(proposal.createdAt, { dateFallback: true }),
+      });
   const detailLoading = props.inspectingKey === proposal.key && !proposal.bodyLoaded;
   const firstSupportFile = proposal.supportFiles[0];
   return html`
@@ -436,8 +441,4 @@ function queueEmptyText(props: SkillWorkshopProps): string {
     return t("skillWorkshop.queue.noMatch");
   }
   return t("skillWorkshop.queue.noSuggestions");
-}
-
-function formatRelative(ms: number): string {
-  return formatRelativeTimestamp(ms, { dateFallback: true });
 }

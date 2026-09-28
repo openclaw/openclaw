@@ -32,7 +32,13 @@ export function createWorkerWorkspaceReconcileRequest(params: {
   const { workspace, remoteWorkspaceDir, baseManifestRef, journal, stagedResult } = params;
   if (workspace.kind === "local") {
     return {
-      source: { kind: "local", path: workspace.path, journal, stagedResult },
+      source: {
+        kind: "local",
+        path: workspace.path,
+        journal,
+        stagedResult,
+        assertCurrent: params.assertCurrent,
+      },
       remoteWorkspaceDir,
       baseManifestRef,
     };
@@ -47,6 +53,7 @@ export function createWorkerWorkspaceReconcileRequest(params: {
     baseManifestRef: workspace.repository.baseManifestHash,
     source: {
       kind: "repository",
+      authorize: params.assertCurrent,
       referenceManifestRef: workspace.repository.manifestHash,
       prepareCheckpoint: async (payload) => {
         const prepared = await stageSessionRepositoryCheckpoint({

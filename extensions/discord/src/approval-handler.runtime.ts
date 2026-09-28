@@ -4,6 +4,8 @@ import {
   type ApprovalViewModel,
   type ChannelApprovalCapabilityHandlerContext,
   type PendingApprovalView,
+  type ExpiredApprovalView,
+  type ResolvedApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { ExecApprovalActionDescriptor } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { formatChannelApprovalResolvedLabel } from "openclaw/plugin-sdk/approval-runtime";
@@ -13,6 +15,7 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import { logDebug, logError } from "openclaw/plugin-sdk/logging-core";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { findGraphemeChunkEnd } from "openclaw/plugin-sdk/text-grapheme";
 import { buildExecApprovalCustomId } from "./approval-custom-id.js";
 import {
   DISCORD_APPROVAL_ALLOWED_MENTIONS,
@@ -72,56 +75,6 @@ function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext):
   return { accountId, context };
 }
 
-class ExecApprovalContainer extends DiscordUiContainer {
-  constructor(params: {
-    cfg: OpenClawConfig;
-    accountId: string;
-    title: string;
-    description?: string;
-    commandLabel?: string;
-    commandPreview: string;
-    commandSecondaryPreview?: string | null;
-    metadataLines?: string[];
-    actionRow?: Row<Button>;
-    footer?: string;
-    accentColor?: string;
-  }) {
-    const components: Array<TextDisplay | Separator | Row<Button>> = [
-      new TextDisplay(`## ${params.title}`),
-    ];
-    if (params.description) {
-      components.push(new TextDisplay(params.description));
-    }
-    components.push(new Separator({ divider: true, spacing: "small" }));
-    components.push(
-      new TextDisplay(
-        `### ${params.commandLabel ?? "Command"}\n\`\`\`\n${params.commandPreview}\n\`\`\``,
-      ),
-    );
-    if (params.commandSecondaryPreview) {
-      components.push(
-        new TextDisplay(`### Shell Preview\n\`\`\`\n${params.commandSecondaryPreview}\n\`\`\``),
-      );
-    }
-    if (params.metadataLines?.length) {
-      components.push(new TextDisplay(params.metadataLines.join("\n")));
-    }
-    if (params.actionRow) {
-      components.push(params.actionRow);
-    }
-    if (params.footer) {
-      components.push(new Separator({ divider: false, spacing: "small" }));
-      components.push(new TextDisplay(`-# ${params.footer}`));
-    }
-    super({
-      cfg: params.cfg,
-      accountId: params.accountId,
-      components,
-      accentColor: params.accentColor,
-    });
-  }
-}
-
 class ExecApprovalActionButton extends Button {
   override customId: string;
   override label: string;
@@ -150,37 +103,17 @@ class ExecApprovalActionButton extends Button {
   }
 }
 
-class ExecApprovalActionRow extends Row<Button> {
-  constructor(params: {
-    approvalId: string;
-    approvalKind: PendingApprovalView["approvalKind"];
-    actions: readonly ExecApprovalActionDescriptor[];
-  }) {
-    super(
-      params.actions.map(
-        (descriptor) =>
-          new ExecApprovalActionButton({
-            approvalId: params.approvalId,
-            approvalKind: params.approvalKind,
-            descriptor,
-          }),
-      ),
-    );
-  }
-}
-
 function createApprovalActionRow(view: PendingApprovalView): Row<Button> {
-  return new ExecApprovalActionRow({
-    approvalId: view.approvalId,
-    approvalKind: view.approvalKind,
-    actions: view.actions,
-  });
-}
-
-function buildApprovalMetadataLines(
-  metadata: readonly { label: string; value: string }[],
-): string[] {
-  return metadata.map((item) => `- ${item.label}: ${item.value}`);
+  return new Row(
+    view.actions.map(
+      (descriptor) =>
+        new ExecApprovalActionButton({
+          approvalId: view.approvalId,
+          approvalKind: view.approvalKind,
+          descriptor,
+        }),
+    ),
+  );
 }
 
 function buildExecApprovalPayload(container: DiscordUiContainer): MessagePayloadObject {
@@ -188,38 +121,10 @@ function buildExecApprovalPayload(container: DiscordUiContainer): MessagePayload
   return { components, allowed_mentions: DISCORD_APPROVAL_ALLOWED_MENTIONS };
 }
 
-const commandPreviewSegmenter =
-  typeof Intl !== "undefined" && "Segmenter" in Intl
-    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
-    : null;
-
-function* iterateCommandPreviewSegments(commandText: string): Iterable<string> {
-  if (!commandPreviewSegmenter) {
-    yield* Array.from(commandText);
-    return;
-  }
-  try {
-    for (const segment of commandPreviewSegmenter.segment(commandText)) {
-      yield segment.segment;
-    }
-  } catch {
-    yield* Array.from(commandText);
-  }
-}
-
-function truncateCommandPreview(commandText: string, maxChars: number): string {
-  let commandRaw = "";
-  for (const segment of iterateCommandPreviewSegments(commandText)) {
-    if (commandRaw.length + segment.length > maxChars) {
-      return `${commandRaw}...`;
-    }
-    commandRaw += segment;
-  }
-  return commandText;
-}
-
 function formatCommandPreview(commandText: string, maxChars: number): string {
-  return truncateCommandPreview(commandText, maxChars).replace(/`/g, "\u200b`");
+  const end = findGraphemeChunkEnd(commandText, 0, maxChars, maxChars, false);
+  const preview = end < commandText.length ? `${commandText.slice(0, end)}...` : commandText;
+  return preview.replace(/`/g, "\u200b`");
 }
 
 function formatOptionalCommandPreview(
@@ -232,24 +137,12 @@ function formatOptionalCommandPreview(
   return formatCommandPreview(commandText, maxChars);
 }
 
-function resolveCommandPreviews(
-  commandText: string,
-  commandPreview: string | null | undefined,
-  maxChars: number,
-  secondaryMaxChars: number,
-): { commandPreview: string; commandSecondaryPreview: string | null } {
-  return {
-    commandPreview: formatCommandPreview(commandText, maxChars),
-    commandSecondaryPreview: formatOptionalCommandPreview(commandPreview, secondaryMaxChars),
-  };
-}
-
 function createApprovalContainer(params: {
   view: ApprovalViewModel;
   cfg: OpenClawConfig;
   accountId: string;
   actionRow?: Row<Button>;
-}): ExecApprovalContainer {
+}): DiscordUiContainer {
   const { view } = params;
   const plugin = view.approvalKind === "plugin";
   const systemAgent = view.approvalKind === "system-agent";
@@ -260,12 +153,13 @@ function createApprovalContainer(params: {
         commandPreview: formatCommandPreview(view.title, 700),
         commandSecondaryPreview: formatOptionalCommandPreview(view.description, 1000),
       }
-    : resolveCommandPreviews(
-        view.commandText,
-        view.commandPreview,
-        pending ? 1000 : 500,
-        pending ? 500 : 300,
-      );
+    : {
+        commandPreview: formatCommandPreview(view.commandText, pending ? 1000 : 500),
+        commandSecondaryPreview: formatOptionalCommandPreview(
+          view.commandPreview,
+          pending ? 500 : 300,
+        ),
+      };
   const decisionLabel =
     view.phase === "resolved"
       ? formatChannelApprovalResolvedLabel(view, (decision) =>
@@ -311,17 +205,33 @@ function createApprovalContainer(params: {
     ? `Expires <t:${Math.max(0, Math.floor(view.expiresAtMs / 1000))}:R> · ID: ${approvalId}`
     : `ID: ${approvalId}`;
 
-  return new ExecApprovalContainer({
+  const components: Array<TextDisplay | Separator | Row<Button>> = [
+    new TextDisplay(`## ${title}`),
+    new TextDisplay(description),
+    new Separator({ divider: true, spacing: "small" }),
+    new TextDisplay(`### ${systemAgent ? "Change" : "Command"}\n\`\`\`\n${commandPreview}\n\`\`\``),
+  ];
+  if (commandSecondaryPreview) {
+    components.push(
+      new TextDisplay(`### Shell Preview\n\`\`\`\n${commandSecondaryPreview}\n\`\`\``),
+    );
+  }
+  if (view.metadata.length) {
+    components.push(
+      new TextDisplay(view.metadata.map((item) => `- ${item.label}: ${item.value}`).join("\n")),
+    );
+  }
+  if (params.actionRow) {
+    components.push(params.actionRow);
+  }
+  components.push(
+    new Separator({ divider: false, spacing: "small" }),
+    new TextDisplay(`-# ${footer}`),
+  );
+  return new DiscordUiContainer({
     cfg: params.cfg,
     accountId: params.accountId,
-    title,
-    description,
-    commandLabel: systemAgent ? "Change" : "Command",
-    commandPreview,
-    commandSecondaryPreview,
-    metadataLines: buildApprovalMetadataLines(view.metadata),
-    actionRow: params.actionRow,
-    footer,
+    components,
     accentColor,
   });
 }
@@ -386,6 +296,23 @@ async function finalizeMessage(params: {
   }
 }
 
+function buildTerminalApprovalResult(
+  params: ChannelApprovalCapabilityHandlerContext & {
+    view: ResolvedApprovalView | ExpiredApprovalView;
+  },
+) {
+  const resolved = resolveHandlerContext(params);
+  if (!resolved) {
+    return { kind: "delete" } as const;
+  }
+  const container = createApprovalContainer({
+    view: params.view,
+    cfg: params.cfg,
+    accountId: resolved.accountId,
+  });
+  return { kind: "update", payload: container } as const;
+}
+
 export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
   DiscordPendingDelivery,
   PreparedDeliveryTarget,
@@ -432,30 +359,8 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
         body: stripUndefinedFields(serializePayload(buildExecApprovalPayload(container))),
       };
     },
-    buildResolvedResult: ({ cfg, accountId, context, view }) => {
-      const resolvedContext = resolveHandlerContext({ cfg, accountId, context });
-      if (!resolvedContext) {
-        return { kind: "delete" } as const;
-      }
-      const container = createApprovalContainer({
-        view,
-        cfg,
-        accountId: resolvedContext.accountId,
-      });
-      return { kind: "update", payload: container } as const;
-    },
-    buildExpiredResult: ({ cfg, accountId, context, view }) => {
-      const resolvedContext = resolveHandlerContext({ cfg, accountId, context });
-      if (!resolvedContext) {
-        return { kind: "delete" } as const;
-      }
-      const container = createApprovalContainer({
-        view,
-        cfg,
-        accountId: resolvedContext.accountId,
-      });
-      return { kind: "update", payload: container } as const;
-    },
+    buildResolvedResult: buildTerminalApprovalResult,
+    buildExpiredResult: buildTerminalApprovalResult,
   },
   transport: {
     prepareTarget: async ({ cfg, accountId, context, plannedTarget }) => {

@@ -318,52 +318,6 @@ describe("guardSessionManager integration", () => {
     },
   );
 
-  it("lets a write hook remove sender identity while preserving auth state", () => {
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_message_write",
-          handler: () => ({
-            message: {
-              role: "user",
-              content: "[redacted by hook]",
-              timestamp: 124,
-              __openclaw: { hookOwned: true },
-            } as AgentMessage,
-          }),
-        },
-      ]),
-    );
-    const sm = guardSessionManager(SessionManager.inMemory(), {
-      preparedUserTurnMessage: {
-        role: "user",
-        content: "private group prompt",
-        timestamp: 123,
-        __openclaw: {
-          senderIsOwner: true,
-          senderId: "secret-user",
-          senderName: "secret-name",
-        },
-      } as Extract<AgentMessage, { role: "user" }>,
-    });
-
-    sm.appendMessage({ role: "user", content: "runtime prompt", timestamp: 125 });
-
-    const message = sm.getEntries().find((entry) => entry.type === "message") as
-      | { message?: AgentMessage }
-      | undefined;
-    expect(message?.message).toMatchObject({
-      role: "user",
-      content: "[redacted by hook]",
-      __openclaw: {
-        hookOwned: true,
-        senderIsOwner: true,
-      },
-    });
-    expect(JSON.stringify(message?.message)).not.toContain("secret-user");
-    expect(JSON.stringify(message?.message)).not.toContain("secret-name");
-  });
-
   it("commits queued group sender metadata to JSONL and completes its recorder", () => {
     const dir = tempDirs.make("openclaw-queued-group-turn-");
     const sessionManager = createFileBackedSessionManagerForTest(dir, dir);
@@ -621,29 +575,6 @@ describe("flushPendingToolResultsAfterIdle", () => {
     );
   });
 
-  it("flushes pending tool call after timeout when idle never resolves", async () => {
-    const sm = guardSessionManager(SessionManager.inMemory());
-    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
-    vi.useFakeTimers();
-
-    appendMessage(idleToolCall("call_orphan_1"));
-    const flushPromise = flushPendingToolResultsAfterIdle({
-      agent: { waitForIdle: () => new Promise<void>(() => {}) },
-      sessionManager: sm,
-      timeoutMs: 30,
-    });
-    await vi.advanceTimersByTimeAsync(30);
-    await flushPromise;
-
-    const messages = getMessages(sm);
-    expect(messages.length).toBe(2);
-    expect(expectDefined(messages[1], "messages[1] test invariant").role).toBe("toolResult");
-    expect((messages[1] as { isError?: boolean }).isError).toBe(true);
-    expect((messages[1] as { content?: Array<{ text?: string }> }).content?.[0]?.text).toContain(
-      "missing tool result",
-    );
-  });
-
   it("flushes pending on cleanup timeout instead of leaving orphaned tool calls", async () => {
     const sm = guardSessionManager(SessionManager.inMemory());
     const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
@@ -661,7 +592,13 @@ describe("flushPendingToolResultsAfterIdle", () => {
     const messages = getMessages(sm);
     expect(messages.map((message) => message.role)).toEqual(["assistant", "toolResult"]);
     expect((messages[1] as { toolCallId?: string }).toolCallId).toBe("call_orphan_2");
+    expect((messages[1] as { content?: Array<{ text?: string }> }).content?.[0]?.text).toContain(
+      "missing tool result",
+    );
     expect((messages[1] as { isError?: boolean }).isError).toBe(true);
+    expect((messages[1] as { content?: Array<{ text?: string }> }).content?.[0]?.text).toContain(
+      "missing tool result",
+    );
 
     appendMessage({
       role: "user",

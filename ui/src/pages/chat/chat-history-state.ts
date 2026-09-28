@@ -65,6 +65,7 @@ export type InitialChatSnapshotHydration = {
   promise: Promise<void>;
   readyAt?: number;
   wait?: Promise<boolean>;
+  complete?: () => void;
   cancel?: () => void;
 };
 
@@ -135,6 +136,7 @@ export function waitForInitialChatSnapshot(state: ChatHistoryHost): Promise<bool
       }
       resolve(current);
     };
+    hydration.complete = () => finish(true);
     hydration.cancel = () => finish(false);
     const timer = setTimeout(() => finish(true), remaining);
     void hydration.promise.then(
@@ -328,10 +330,17 @@ export function resetChatHistoryProjection(state: ChatState, agentId?: string): 
   reduceChatSessionProjection(state, { type: "sessionReset" }, { scope });
 }
 
-export function setChatError(state: ChatState, error: string | null) {
+export function setChatError(
+  state: { lastError?: string | null; chatError?: string | null; requestUpdate?: () => void },
+  error: string | null,
+  requestUpdate = false,
+) {
   const message = error === null ? null : formatUiError(error);
   state.lastError = message;
   state.chatError = message;
+  if (requestUpdate) {
+    state.requestUpdate?.();
+  }
 }
 
 export function chatScopedEventSessionMatches(

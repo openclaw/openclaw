@@ -185,6 +185,7 @@ async function mutateSqliteSessionAtMessage(
             };
           },
           toDatabaseOptions(resolved),
+          { operationLabel: "session.transcript.message-cut" },
         );
         if (result.status === "created") {
           invalidateSessionBranchCache(databasePath, [
@@ -276,7 +277,7 @@ function mutateSqliteSessionAtMessageInTransaction(
     version: findSessionTranscriptHeader(events)?.version ?? MIN_READABLE_SESSION_VERSION,
   });
   const nextEvents =
-    params.mode === "fork" && cut?.status === "cut"
+    params.mode === "fork" && cut
       ? [header, ...cut.prefix]
       : [
           header,
@@ -338,13 +339,9 @@ function mutateSqliteSessionAtMessageInTransaction(
     status: "created",
     key: params.targetKey,
     entry: nextEntry,
-    ...(cut?.status === "cut" && cut.editorText ? { editorText: cut.editorText } : {}),
-    ...(cut?.status === "cut" && cut.editorAttachments
-      ? { editorAttachments: cut.editorAttachments }
-      : {}),
-    ...(cut?.status === "cut" && cut.editorMediaRefs
-      ? { editorMediaRefs: cut.editorMediaRefs }
-      : {}),
+    ...(cut?.editorText ? { editorText: cut.editorText } : {}),
+    ...(cut?.editorAttachments ? { editorAttachments: cut.editorAttachments } : {}),
+    ...(cut?.editorMediaRefs ? { editorMediaRefs: cut.editorMediaRefs } : {}),
   };
 }
 

@@ -1,15 +1,9 @@
-import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   detectPluginInstallPathIssue,
   formatPluginInstallPathIssue,
   removePluginFromConfig,
 } from "openclaw/plugin-sdk/doctor-repair-runtime";
-import {
-  legacyConfigRules as MATRIX_LEGACY_CONFIG_RULES,
-  normalizeCompatibilityConfig as normalizeMatrixCompatibilityConfig,
-} from "./doctor-contract.js";
-
 export async function collectMatrixInstallPathWarnings(cfg: OpenClawConfig): Promise<string[]> {
   const issue = await detectPluginInstallPathIssue({
     pluginId: "matrix",
@@ -70,15 +64,3 @@ export async function runMatrixDoctorSequence(params: {
   }
   return { changeNotes: [], warningNotes };
 }
-
-export const matrixDoctor: ChannelDoctorAdapter = {
-  dmAllowFromMode: "nestedOnly",
-  groupModel: "sender",
-  groupAllowFromFallbackToAllowFrom: false,
-  warnOnEmptyGroupSenderAllowlist: true,
-  legacyConfigRules: MATRIX_LEGACY_CONFIG_RULES,
-  normalizeCompatibilityConfig: normalizeMatrixCompatibilityConfig,
-  runConfigSequence: async ({ cfg, env, shouldRepair }) =>
-    await runMatrixDoctorSequence({ cfg, env, shouldRepair }),
-  cleanStaleConfig: async ({ cfg }) => await cleanStaleMatrixPluginConfig(cfg),
-};

@@ -255,13 +255,10 @@ export function sourceFamilyForInstallPolicySource(
 ): PluginSecuritySourceFamily {
   switch (source?.kind) {
     case "archive":
-      return "archive";
     case "file":
-      return "file";
     case "git":
-      return "git";
     case "npm":
-      return "npm";
+      return source.kind;
     case "bundled":
     case "clawhub":
     case "local-path":

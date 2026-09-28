@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
+import type { ManagedHandoffLease } from "../../infra/update-managed-service-handoff-lease.js";
 import { isChildProcessTreeAlive } from "../../process/child-process-tree.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import * as pidAlive from "../../shared/pid-alive.js";
@@ -40,21 +41,29 @@ describe("candidate executor delegation", () => {
       const createStore = leaseOwner.createManagedHandoffLeaseStore;
       vi.spyOn(leaseOwner, "createManagedHandoffLeaseStore").mockImplementation((...args) => {
         const store = createStore(...args);
-        return {
-          ...store,
-          release(lease) {
+        const observeRelease = (leases: ManagedHandoffLease[], runRelease: () => boolean) => {
+          for (const lease of leases) {
             if (expectedReleases.has(lease.key)) {
               assert(descendant !== undefined && candidatePid !== undefined);
               expect(pidAlive.isPidDefinitelyDead(descendant)).toBe(true);
               expect(isChildProcessTreeAlive({ pid: candidatePid })).toBe(false);
               expect(store.current(lease)).toBe(true);
             }
-            const confirmed = store.release(lease);
-            if (confirmed && expectedReleases.has(lease.key)) {
-              released.add(lease.key);
+          }
+          const confirmed = runRelease();
+          if (confirmed) {
+            for (const lease of leases) {
+              if (expectedReleases.has(lease.key)) {
+                released.add(lease.key);
+              }
             }
-            return confirmed;
-          },
+          }
+          return confirmed;
+        };
+        return {
+          ...store,
+          release: (lease) => observeRelease([lease], () => store.release(lease)),
+          releaseAll: (leases) => observeRelease(leases, () => store.releaseAll(leases)),
         };
       });
       const store = createStore();

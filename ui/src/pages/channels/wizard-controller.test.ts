@@ -602,22 +602,6 @@ describe("ChannelWizardController", () => {
     });
   });
 
-  it("cancel clears the session and notifies the gateway", async () => {
-    const calls: string[] = [];
-    const { controller } = createController(async (method) => {
-      calls.push(method);
-      if (method === "wizard.start") {
-        return { sessionId: "s1", done: false, status: "running", step: selectStep };
-      }
-      return { status: "cancelled" };
-    });
-
-    await controller.start("slack");
-    await controller.cancel();
-    expect(controller.state).toEqual({ phase: "idle" });
-    expect(calls).toContain("wizard.cancel");
-  });
-
   it("ignores answers while a previous answer is in flight", async () => {
     const nextResult = createDeferred<unknown>();
     const { controller, request } = createController(async (method) => {

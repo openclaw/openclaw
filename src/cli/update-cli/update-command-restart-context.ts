@@ -1,6 +1,6 @@
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { resolveManagedGatewayServiceProcessEnv } from "../../daemon/service-types.js";
-import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import { resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { UpdateRestartParams } from "./update-command-service-context-types.js";
 import {
@@ -8,9 +8,9 @@ import {
   stripGatewayServiceMarkerEnv,
 } from "./update-command-service-env.js";
 import {
-  assertGatewayServiceManagementAllowedForUpdate,
   GatewayServiceUpdateOwnershipError,
   isGatewayServiceManagementAllowedForUpdate,
+  readGatewayServiceStateForUpdate,
   resolveGatewayServiceManagementBlockMessageForUpdate,
 } from "./update-command-service-plan.js";
 import {
@@ -21,7 +21,7 @@ import {
 } from "./update-command-service.js";
 
 export async function prepareUpdateRestart(
-  params: UpdateRestartParams,
+  params: UpdateRestartParams & { assertCurrent: () => void },
   restartConfigSnapshot: ConfigFileSnapshot,
 ) {
   let refreshGatewayServiceEnv = false;
@@ -54,13 +54,12 @@ export async function prepareUpdateRestart(
   });
   if (params.shouldRestart && serviceMutationAllowed && !skipLegacyServiceRestart) {
     try {
-      const serviceState = await readGatewayServiceState(resolveGatewayService(), {
-        env: serviceStateReadEnv,
-        requireEffective: true,
-        requireLoadedCommand: true,
-        validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
-        timeoutMs: params.updateStepTimeoutMs,
-      });
+      const serviceState = await readGatewayServiceStateForUpdate(
+        resolveGatewayService(),
+        serviceStateReadEnv,
+        params.updateStepTimeoutMs,
+        { managerUid: serviceManagerUid, assertCurrent: params.assertCurrent },
+      );
       serviceUpdateVerdict = await revalidateManagedGatewayServiceAfterUpdate({
         state: serviceState,
         root: params.result.root ?? params.root,

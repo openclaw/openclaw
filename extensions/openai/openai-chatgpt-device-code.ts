@@ -1,5 +1,4 @@
 import { collectErrorGraphCandidates, extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
-// Openai plugin module implements openai chatgpt device code behavior.
 import {
   shouldUseEnvHttpProxyForUrl,
   withTrustedEnvProxyGuardedFetchMode,
@@ -12,7 +11,10 @@ import { resolveOpenAICodexAccessTokenExpiry } from "openclaw/plugin-sdk/provide
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { trimNonEmptyString } from "./openai-chatgpt-shared.js";
+import {
+  asNullableObjectRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const OPENAI_AUTH_BASE_URL = "https://auth.openai.com";
 const OPENAI_CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -46,25 +48,6 @@ type OpenAICodexDeviceCodeCredentials = {
   expires: number;
 };
 
-type DeviceCodeUserCodePayload = {
-  device_auth_id?: unknown;
-  user_code?: unknown;
-  usercode?: unknown;
-  interval?: unknown;
-};
-
-type DeviceCodeTokenPayload = {
-  authorization_code?: unknown;
-  code_challenge?: unknown;
-  code_verifier?: unknown;
-};
-
-type OAuthTokenPayload = {
-  access_token?: unknown;
-  refresh_token?: unknown;
-  expires_in?: unknown;
-};
-
 type RequestedDeviceCode = {
   deviceAuthId: string;
   userCode: string;
@@ -85,8 +68,7 @@ type DeviceCodeHttpResult = {
 
 function parseJsonObject(text: string): Record<string, unknown> | null {
   try {
-    const parsed = JSON.parse(text);
-    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
+    return asNullableObjectRecord(JSON.parse(text));
   } catch {
     return null;
   }
@@ -135,8 +117,8 @@ function formatDeviceCodeError(params: {
   bodyText: string;
 }): string {
   const body = parseJsonObject(params.bodyText);
-  const error = trimNonEmptyString(body?.error);
-  const description = trimNonEmptyString(body?.error_description);
+  const error = normalizeOptionalString(body?.error);
+  const description = normalizeOptionalString(body?.error_description);
   const safeError = error ? sanitizeDeviceCodeErrorText(error) : undefined;
   const safeDescription = description ? sanitizeDeviceCodeErrorText(description) : undefined;
   if (safeError && safeDescription) {
@@ -149,16 +131,6 @@ function formatDeviceCodeError(params: {
   return bodyText
     ? `${params.prefix}: HTTP ${params.status} ${bodyText}`
     : `${params.prefix}: HTTP ${params.status}`;
-}
-
-async function readOpenAICodexDeviceBody(response: Response, timeoutMs: number): Promise<string> {
-  return await readResponseTextLimited(
-    response,
-    response.ok
-      ? OPENAI_CODEX_DEVICE_JSON_BODY_LIMIT_BYTES
-      : OPENAI_CODEX_DEVICE_ERROR_BODY_LIMIT_BYTES,
-    { chunkTimeoutMs: timeoutMs },
-  );
 }
 
 async function runOpenAICodexDeviceRequest(params: {
@@ -188,7 +160,13 @@ async function runOpenAICodexDeviceRequest(params: {
     return {
       ok: response.ok,
       status: response.status,
-      bodyText: await readOpenAICodexDeviceBody(response, params.timeoutMs),
+      bodyText: await readResponseTextLimited(
+        response,
+        response.ok
+          ? OPENAI_CODEX_DEVICE_JSON_BODY_LIMIT_BYTES
+          : OPENAI_CODEX_DEVICE_ERROR_BODY_LIMIT_BYTES,
+        { chunkTimeoutMs: params.timeoutMs },
+      ),
     };
   } finally {
     await release();
@@ -256,9 +234,10 @@ async function requestOpenAICodexDeviceCode(
     );
   }
 
-  const body = parseJsonObject(result.bodyText) as DeviceCodeUserCodePayload | null;
-  const deviceAuthId = trimNonEmptyString(body?.device_auth_id);
-  const userCode = trimNonEmptyString(body?.user_code) ?? trimNonEmptyString(body?.usercode);
+  const body = parseJsonObject(result.bodyText);
+  const deviceAuthId = normalizeOptionalString(body?.device_auth_id);
+  const userCode =
+    normalizeOptionalString(body?.user_code) ?? normalizeOptionalString(body?.usercode);
   if (!deviceAuthId || !userCode) {
     throw new Error("OpenAI device code response was missing the device code or user code.");
   }
@@ -328,9 +307,9 @@ async function pollOpenAICodexDeviceCode(params: {
     }
 
     if (result.ok) {
-      const body = parseJsonObject(result.bodyText) as DeviceCodeTokenPayload | null;
-      const authorizationCode = trimNonEmptyString(body?.authorization_code);
-      const codeVerifier = trimNonEmptyString(body?.code_verifier);
+      const body = parseJsonObject(result.bodyText);
+      const authorizationCode = normalizeOptionalString(body?.authorization_code);
+      const codeVerifier = normalizeOptionalString(body?.code_verifier);
       if (!authorizationCode || !codeVerifier) {
         throw new Error("OpenAI device authorization response was missing the exchange code.");
       }
@@ -397,9 +376,9 @@ async function exchangeOpenAICodexDeviceCode(params: {
     );
   }
 
-  const body = parseJsonObject(result.bodyText) as OAuthTokenPayload | null;
-  const access = trimNonEmptyString(body?.access_token);
-  const refresh = trimNonEmptyString(body?.refresh_token);
+  const body = parseJsonObject(result.bodyText);
+  const access = normalizeOptionalString(body?.access_token);
+  const refresh = normalizeOptionalString(body?.refresh_token);
   if (!access || !refresh) {
     throw new Error("OpenAI token exchange succeeded but did not return OAuth tokens.");
   }

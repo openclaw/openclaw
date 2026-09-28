@@ -20,7 +20,7 @@ export interface PublicationIntent {
 }
 export interface PublicationDispatchEnvelope extends PublicationIntent {
   trustedWorkflow: { ref: string; fullRef: string; sha: string } | null;
-  laneInputs?: { extension_test_exclude_patterns_json?: string; known_flaky_jobs_json?: string };
+  laneInputs?: { extension_test_exclude_patterns_json?: string };
 }
 export interface PublicationSourceRequest extends PublicationIntent {
   repository: string;
@@ -37,7 +37,11 @@ export interface PublicationSourceFact extends PublicationSourceRequest {
   contract: "1";
   status: "source-admitted" | "not-applicable";
   inventoryDigest: string | null;
-  projection: { version: string; packages: unknown[]; platforms: unknown[] } | null;
+  projection: {
+    version: string;
+    packages: Array<{ name: string; version: string; targets: string[] }>;
+    platforms: unknown[];
+  } | null;
   digest: string;
 }
 export function publicationSourceContract(source: string): "1" | undefined;
@@ -65,7 +69,7 @@ export function publicationSourceRequest(
 export function createPublicationSourceFact(
   request: PublicationSourceRequest,
   inventory: unknown,
-  projection: PublicationSourceFact["projection"],
+  projection: { version: string; packages: unknown[]; platforms: unknown[] } | null,
 ): PublicationSourceFact;
 export function validatePublicationSourceBinding(
   record: Record<string, unknown>,

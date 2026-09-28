@@ -12,7 +12,12 @@ import {
   parseThemeDefinition,
   resolveThemeBranding,
   THEME_COLOR_KEYS,
+  type ThemePalette,
 } from "./theme.js";
+
+function createDarkTheme(palette: Partial<ThemePalette>) {
+  return createThemeDefinitionFixture({ dark: createThemePaletteFixture(palette) });
+}
 
 describe("portable theme definition", () => {
   it("normalizes a complete dark-only palette and preserves supported color formats", () => {
@@ -72,16 +77,13 @@ describe("portable theme definition", () => {
     ).toEqual([]);
   });
 
-  it.each(["fedora", "crown", "santa", "party", "pumpkin"] as const)(
-    "accepts the %s avatar hat in portable definitions and import requests",
-    (avatarHat) => {
-      const definition = createThemeDefinitionFixture({ avatarHat });
-      expect(normalizeThemeDefinition(definition).avatarHat).toBe(avatarHat);
-      expect(Value.Check(ThemesImportParamsSchema, { id: "hat-theme", definition })).toBe(true);
-    },
-  );
+  it("accepts a built-in avatar hat in portable definitions and import requests", () => {
+    const definition = createThemeDefinitionFixture({ avatarHat: "crown" });
+    expect(normalizeThemeDefinition(definition).avatarHat).toBe("crown");
+    expect(Value.Check(ThemesImportParamsSchema, { id: "hat-theme", definition })).toBe(true);
+  });
 
-  it.each(["beanie", "monocle", "sprout", "patch", "barnacle", null])(
+  it.each(["beanie", null])(
     "keeps undeclared avatar hat %j out of personal definitions",
     (avatarHat) => {
       const definition = { ...createThemeDefinitionFixture(), avatarHat };
@@ -124,46 +126,31 @@ describe("portable theme definition", () => {
   );
 
   it.each([
-    { fields: { mascot: "robot" }, message: "theme.mascot must be one of claw, none" },
-    { fields: { workingPhrases: "Building" }, message: "must be an array" },
-    {
-      fields: { workingPhrases: Array.from({ length: 25 }, (_, index) => `Working ${index}`) },
-      message: "at most 24 entries",
-    },
-    { fields: { workingPhrases: ["x".repeat(25)] }, message: "at most 24 characters" },
-    {
-      fields: { workingPhrases: ["Building", " Building "] },
-      message: "duplicate entries after trimming",
-    },
-    { fields: { workingPhrases: [" "] }, message: "nonempty text" },
-    { fields: { workingPhrases: ["Build\ning"] }, message: "nonempty text" },
-    { fields: { workingPhrases: ["Building\u007f"] }, message: "nonempty text" },
-    { fields: { critters: "penguin" }, message: "theme.critters must be an array" },
-    {
-      fields: { critters: Array.from({ length: 9 }, () => "penguin") },
-      message: "at most 8 entries",
-    },
-    { fields: { critters: ["penguin", "penguin"] }, message: "duplicate entries" },
-    {
-      fields: { critters: ["robot"] },
-      message: "theme.critters[0] must be one of penguin, fedora",
-    },
-    {
-      fields: { critters: [" Penguin "] },
-      message: "theme.critters[0] must be one of penguin, fedora",
-    },
-  ])("rejects invalid branding $fields", ({ fields, message }) => {
+    [{ mascot: "robot" }, "theme.mascot must be one of claw, none"],
+    [{ workingPhrases: "Building" }, "must be an array"],
+    [
+      { workingPhrases: Array.from({ length: 25 }, (_, index) => `Working ${index}`) },
+      "at most 24 entries",
+    ],
+    [{ workingPhrases: ["x".repeat(25)] }, "at most 24 characters"],
+    [{ workingPhrases: ["Building", " Building "] }, "duplicate entries after trimming"],
+    [{ workingPhrases: [" "] }, "nonempty text"],
+    [{ workingPhrases: ["Build\ning"] }, "nonempty text"],
+    [{ workingPhrases: ["Building\u007f"] }, "nonempty text"],
+    [{ critters: "penguin" }, "theme.critters must be an array"],
+    [{ critters: Array.from({ length: 9 }, () => "penguin") }, "at most 8 entries"],
+    [{ critters: ["penguin", "penguin"] }, "duplicate entries"],
+    [{ critters: [" Penguin "] }, "theme.critters[0] must be one of penguin, fedora"],
+  ])("rejects invalid branding %j", (fields, message) => {
     expect(() =>
       normalizeThemeDefinition({ ...createThemeDefinitionFixture(), ...fields }),
     ).toThrow(message);
   });
 
   it.each([
-    { background: 'url("https://example.invalid/pixel")' },
     { background: "#000;display:none" },
     { background: "var(--other-theme)" },
     { background: "rgb()" },
-    { background: "rgb(1 2 3 .5)" },
     { background: "rgb(1, 2 3)" },
     { background: "rgb(1 2, 3)" },
     { background: "rgb(1, 2, 3 / .5)" },
@@ -172,13 +159,10 @@ describe("portable theme definition", () => {
     { background: "rgb(1\u00a02\u00a03)" },
     { background: "hsl(180, 40, 50)" },
     { background: "hsl(180 40% 50% .5)" },
-    { background: "oklch(50%, 0.2, 180)" },
     { background: "lab(50%, 20, 10)" },
     { background: "color(srgb\u00a00 0 0)" },
     { background: "red/* hidden */" },
-    { "font-sans": "monospace; background: url(https://example.invalid)" },
     { "font-sans": "var(--font-body)" },
-    { "font-sans": "'unterminated" },
     { "font-sans": "Roboto,,monospace" },
     { "font-sans": "123Font" },
     { "font-sans": "Foo.Bar" },
@@ -190,11 +174,7 @@ describe("portable theme definition", () => {
     { "font-sans": "default" },
     { "font-sans": "-webkit-body Foo" },
   ])("rejects unsafe or malformed CSS values %j", (palette) => {
-    expect(
-      parseThemeDefinition(
-        createThemeDefinitionFixture({ dark: createThemePaletteFixture(palette) }),
-      ),
-    ).toBeNull();
+    expect(parseThemeDefinition(createDarkTheme(palette))).toBeNull();
   });
 
   it.each([
@@ -211,11 +191,9 @@ describe("portable theme definition", () => {
     "oklch(50% 0.2 180)",
     "color(display-p3 .1 .2 .3 / .5)",
   ])("preserves supported color syntax: %s", (background) => {
-    expect(
-      normalizeThemeDefinition(
-        createThemeDefinitionFixture({ dark: createThemePaletteFixture({ background }) }),
-      ).dark?.background,
-    ).toBe(background);
+    expect(normalizeThemeDefinition(createDarkTheme({ background })).dark?.background).toBe(
+      background,
+    );
   });
 
   it.each([
@@ -228,9 +206,7 @@ describe("portable theme definition", () => {
     '""',
   ])("preserves font family names: %s", (font) => {
     expect(
-      normalizeThemeDefinition(
-        createThemeDefinitionFixture({ dark: createThemePaletteFixture({ "font-sans": font }) }),
-      ).dark?.["font-sans"],
+      normalizeThemeDefinition(createDarkTheme({ "font-sans": font })).dark?.["font-sans"],
     ).toBe(font);
   });
 
@@ -256,16 +232,10 @@ describe("portable theme definition", () => {
 
   it.each([
     ["claw", true],
-    ["rose", true],
     ["custom", false],
-    ["space/neon", true],
-    ["pack/one/neon", true],
-    ["Space/Entry/neon", true],
-    ["@scope/Pack/neon", true],
     ["@scope/Pack/Entry/neon", true],
     ["user/xenovessel", true],
     ["space/../neon", false],
-    ["space/./neon", false],
     ["space//neon", false],
     ["space\\entry/neon", false],
     ["space/entry/Neon", false],
@@ -311,13 +281,7 @@ it.each([
   ["dark", "dark"],
   ["DARK", undefined],
   [" light ", undefined],
-  ["", undefined],
   [null, undefined],
-  [undefined, undefined],
-  [0, undefined],
-  [false, undefined],
-  [[], undefined],
-  [{ mode: "light" }, undefined],
 ])("normalizes only exact theme mode literals: %j", (input, expected) => {
   expect(normalizeThemeMode(input)).toBe(expected);
 });

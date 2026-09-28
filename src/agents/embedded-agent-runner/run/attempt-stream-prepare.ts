@@ -1,6 +1,3 @@
-/**
- * Prepares stream subscription, tool execution, and the active run queue.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { captureAgentRunLifecycleGeneration } from "../../../infra/agent-events.js";
@@ -14,10 +11,6 @@ import {
   closeDiagnosticEmbeddedRunOwner,
   type DiagnosticEmbeddedRunOwner,
 } from "../../../logging/diagnostic-run-activity.js";
-import {
-  buildAgentHookContextChannelFields,
-  buildAgentHookContextIdentityFields,
-} from "../../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { getModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import {
@@ -34,9 +27,8 @@ import {
   createAgentRunSupersededAbortError,
   isAgentRunRestartAbortReason,
 } from "../../run-termination.js";
-import type { AgentMessage } from "../../runtime/index.js";
-import type { AgentSession } from "../../sessions/index.js";
 import type { ToolSearchCatalogToolExecutor } from "../../tool-search.js";
+import { isRunnerAbortError } from "../abort.js";
 import { log } from "../logger.js";
 import {
   ACTIVE_EMBEDDED_RUN_REGISTRATIONS,
@@ -50,6 +42,7 @@ import {
   type EmbeddedAgentQueueMessageOptions,
   setActiveEmbeddedRun,
 } from "../runs.js";
+import { buildEmbeddedAgentHookContext } from "./agent-hook-context.js";
 import {
   requiresCompletionRequiredAsyncTaskWait,
   type AsyncStartedToolMeta,
@@ -58,6 +51,7 @@ import {
   claimEmbeddedPendingUserInputAnswer,
   steerActiveSessionWithOptionalDeliveryWait,
 } from "./attempt-queue-message.js";
+import type { prepareEmbeddedAttemptAgentSession } from "./attempt-session-prepare.js";
 import {
   withEmbeddedAttemptSteeringAdmission,
   type EmbeddedAttemptSteeringAdmission,
@@ -73,13 +67,7 @@ import {
   resolveReportedModelRef,
 } from "./helpers.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
-import type {
-  EmbeddedAttemptClientToolCallSlot,
-  EmbeddedRunAttemptParams,
-  StreamRunState,
-} from "./types.js";
-
-type HookRunner = ReturnType<typeof getGlobalHookRunner>;
+import type { EmbeddedRunAttemptParams, StreamRunState } from "./types.js";
 
 type AttemptStreamQueueHandle = EmbeddedAgentQueueHandle & {
   kind: "embedded";
@@ -88,34 +76,36 @@ type AttemptStreamQueueHandle = EmbeddedAgentQueueHandle & {
 
 type PrepareEmbeddedAttemptStreamInput = {
   attempt: EmbeddedRunAttemptInternalParams;
+  agentSession: Pick<
+    Awaited<ReturnType<typeof prepareEmbeddedAttemptAgentSession>>,
+    | "activeSession"
+    | "hookRunner"
+    | "clientToolCallSlots"
+    | "hasDeliveredSourceReply"
+    | "markSourceReplyDelivered"
+    | "builtinToolNames"
+    | "coreBuiltinToolNames"
+    | "replaySafeToolNames"
+    | "codeModeExecToolNames"
+    | "sideEffectToolOwners"
+    | "trustedLocalMediaToolNames"
+  >;
   applyPermissionMode?: (
     mode: NonNullable<EmbeddedRunAttemptParams["permissionMode"]> | null,
     revokeApprovals: () => void,
   ) => void;
-  activeSession: AgentSession;
   onModelUsage?: Parameters<typeof subscribeEmbeddedAgentSession>[0]["onModelUsage"];
   runtimeChannel?: string;
-  hookRunner: HookRunner;
   hookAgentId: string;
   diagnosticTrace: DiagnosticTraceContext;
-  clientToolCallSlots: readonly EmbeddedAttemptClientToolCallSlot[];
   nestedToolActivities: NestedToolActivity[];
   isReplaySafeTool: (tool: Parameters<ToolSearchCatalogToolExecutor>[0]["tool"]) => boolean;
   runAbortController: AbortController;
   abortRun: (isTimeout?: boolean, reason?: unknown) => void;
   markExternalAbort: () => void;
   getRunState: () => StreamRunState;
-  hasDeliveredSourceReply: () => boolean;
-  markSourceReplyDelivered: () => void;
   onBlockReply: EmbeddedRunAttemptParams["onBlockReply"];
   onBlockReplyFlush: EmbeddedRunAttemptParams["onBlockReplyFlush"];
-  sandboxSessionKey: string;
-  builtinToolNames: ReadonlySet<string>;
-  coreBuiltinToolNames?: ReadonlySet<string>;
-  replaySafeToolNames: ReadonlySet<string>;
-  codeModeExecToolNames?: ReadonlySet<string>;
-  sideEffectToolOwners?: ReadonlyMap<string, string>;
-  trustedLocalMediaToolNames: ReadonlySet<string>;
   diagnosticOwner: DiagnosticEmbeddedRunOwner;
   trajectoryRecorder?: Parameters<
     typeof createEmbeddedAttemptDeferredLifecycleOwner
@@ -124,7 +114,7 @@ type PrepareEmbeddedAttemptStreamInput = {
 
 export function prepareEmbeddedAttemptStream(input: PrepareEmbeddedAttemptStreamInput) {
   return withEmbeddedAttemptSteeringAdmission(
-    input.activeSession,
+    input.agentSession.activeSession,
     input.runAbortController.signal,
     (admission) => prepareStream(input, admission),
   );
@@ -134,7 +124,8 @@ function prepareStream(
   input: PrepareEmbeddedAttemptStreamInput,
   admission: EmbeddedAttemptSteeringAdmission,
 ) {
-  const { attempt, hookRunner } = input;
+  const { attempt, agentSession } = input;
+  const { activeSession, hookRunner } = agentSession;
   let beforeAgentFinalizeRevisionReason: string | undefined;
   let beforeAgentFinalizeRevisionEntryId: string | undefined;
   let activeQueueAdmissions = 0;
@@ -143,18 +134,10 @@ function prepareStream(
   const shouldRunBeforeAgentFinalize =
     attempt.operation !== "settled-tool-finalization" &&
     hookRunner?.hasHooks("before_agent_finalize");
-  const onBeforeTerminalDelivery = shouldRunBeforeAgentFinalize
-    ? async (event: {
-        messages: AgentMessage[];
-        willRetry: boolean;
-        assistantEntryId?: string;
-        lastAssistant?: AgentMessage;
-        assistantTexts: readonly string[];
-        hasAssistantVisibleText: boolean;
-        isError: boolean;
-        incompleteTerminalAssistant: boolean;
-        hadDeterministicSideEffect: boolean;
-      }): Promise<void | { suppressTerminalDelivery: true }> => {
+  const onBeforeTerminalDelivery: Parameters<
+    typeof subscribeEmbeddedAgentSession
+  >[0]["onBeforeTerminalDelivery"] = shouldRunBeforeAgentFinalize
+    ? async (event): Promise<void | { suppressTerminalDelivery: true }> => {
         if (
           beforeAgentFinalizeRevisionReason ||
           event.willRetry ||
@@ -173,7 +156,9 @@ function prepareStream(
           return;
         }
         const state = input.getRunState();
-        const hasCompletedClientToolCall = input.clientToolCallSlots.some((slot) => slot.completed);
+        const hasCompletedClientToolCall = agentSession.clientToolCallSlots.some(
+          (slot) => slot.completed,
+        );
         if (
           state.aborted ||
           state.promptError ||
@@ -185,7 +170,7 @@ function prepareStream(
           return;
         }
         const hookMessages = projectNestedToolActivityForHooks(
-          input.activeSession.messages,
+          activeSession.messages,
           input.nestedToolActivities,
         );
         const reportedModelRef = resolveReportedModelRef({
@@ -210,8 +195,8 @@ function prepareStream(
         admission.accepting = false;
         if (
           activeQueueAdmissions > 0 ||
-          input.activeSession.pendingMessageCount > 0 ||
-          input.activeSession.agent.hasQueuedMessages()
+          activeSession.pendingMessageCount > 0 ||
+          activeSession.agent.hasQueuedMessages()
         ) {
           admission.accepting = true;
           return;
@@ -234,22 +219,13 @@ function prepareStream(
               messages: hookMessages,
             },
             ctx: {
-              runId: attempt.runId,
-              trace: freezeDiagnosticTraceContext(input.diagnosticTrace),
-              agentId: input.hookAgentId,
-              sessionKey: attempt.sessionKey,
-              sessionId: attempt.sessionId,
-              workspaceDir: attempt.workspaceDir,
+              ...buildEmbeddedAgentHookContext(
+                attempt,
+                input.hookAgentId,
+                freezeDiagnosticTraceContext(input.diagnosticTrace),
+              ),
               modelProviderId: reportedModelRef.provider,
               modelId: reportedModelRef.model,
-              trigger: attempt.trigger,
-              ...buildAgentHookContextChannelFields(attempt),
-              ...buildAgentHookContextIdentityFields({
-                trigger: attempt.trigger,
-                senderId: attempt.senderId,
-                chatId: attempt.chatId,
-                channelContext: attempt.channelContext,
-              }),
             },
             hookRunner,
           });
@@ -287,7 +263,7 @@ function prepareStream(
   // phase so active-run clearing and subscription teardown share one owner.
   let deferredLifecycleOwner: EmbeddedAttemptDeferredLifecycleOwner | undefined;
   const streamSubscription = subscribeEmbeddedAgentSession({
-    session: input.activeSession,
+    session: activeSession,
     onModelUsage: input.onModelUsage,
     runId: attempt.runId,
     lifecycleGeneration: attempt.lifecycleGeneration,
@@ -303,8 +279,8 @@ function prepareStream(
     shouldEmitToolResult: attempt.shouldEmitToolResult,
     shouldEmitToolOutput: attempt.shouldEmitToolOutput,
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
-    hasDeliveredMessageToolOnlySourceReply: input.hasDeliveredSourceReply,
-    onDeliveredMessageToolOnlySourceReply: input.markSourceReplyDelivered,
+    hasDeliveredMessageToolOnlySourceReply: agentSession.hasDeliveredSourceReply,
+    onDeliveredMessageToolOnlySourceReply: agentSession.markSourceReplyDelivered,
     onAgentToolResult: attempt.onAgentToolResult,
     observeToolTerminal: attempt.observeToolTerminal,
     trajectoryRecorder: input.trajectoryRecorder,
@@ -328,14 +304,24 @@ function prepareStream(
       isAgentRunRestartAbortReason(input.runAbortController.signal.reason)
         ? AGENT_RUN_RESTART_ABORT_STOP_REASON
         : undefined,
-    onBeforeLifecycleTerminal: () => {
-      if (
-        deferredLifecycleOwner ||
-        requiresCompletionRequiredAsyncTaskWait({
+    onBeforeLifecycleTerminal: async () => {
+      if (deferredLifecycleOwner) {
+        return;
+      }
+      let requiresTaskWait = false;
+      try {
+        requiresTaskWait = requiresCompletionRequiredAsyncTaskWait({
           sessionKey: attempt.sessionKey,
           toolMetas: toolMetasForTerminal,
-        })
-      ) {
+          abortSignal: input.runAbortController.signal,
+        });
+      } catch (error) {
+        if (!input.runAbortController.signal.aborted || !isRunnerAbortError(error)) {
+          throw error;
+        }
+        // Cancelling this observation must not defer cleanup past the terminal event.
+      }
+      if (deferredLifecycleOwner || requiresTaskWait) {
         return;
       }
       // Clear active-run state before terminal events and post-completion cleanup.
@@ -366,12 +352,12 @@ function prepareStream(
     hasRepliedRef: attempt.hasRepliedRef,
     sessionId: attempt.sessionId,
     agentId: input.hookAgentId,
-    builtinToolNames: input.builtinToolNames,
-    coreBuiltinToolNames: input.coreBuiltinToolNames,
-    replaySafeToolNames: input.replaySafeToolNames,
-    ...(input.codeModeExecToolNames ? { codeModeExecToolNames: input.codeModeExecToolNames } : {}),
-    ...(input.sideEffectToolOwners ? { sideEffectToolOwners: input.sideEffectToolOwners } : {}),
-    trustedLocalMediaToolNames: input.trustedLocalMediaToolNames,
+    builtinToolNames: agentSession.builtinToolNames,
+    coreBuiltinToolNames: agentSession.coreBuiltinToolNames,
+    replaySafeToolNames: agentSession.replaySafeToolNames,
+    codeModeExecToolNames: agentSession.codeModeExecToolNames,
+    sideEffectToolOwners: agentSession.sideEffectToolOwners,
+    trustedLocalMediaToolNames: agentSession.trustedLocalMediaToolNames,
     internalEvents: attempt.internalEvents,
   });
   const unsubscribe = admission.bindStreamUnsubscribe(streamSubscription.unsubscribe);
@@ -381,7 +367,7 @@ function prepareStream(
   const toolSearchCatalogExecutor = createSubscribedToolSearchExecutor({
     attempt,
     runSignal: input.runAbortController.signal,
-    sessionManager: input.activeSession.sessionManager,
+    sessionManager: activeSession.sessionManager,
     subscription,
     isCurrent: () =>
       ACTIVE_EMBEDDED_RUNS.get(attempt.sessionId) === queueHandle && !input.getRunState().aborted,
@@ -452,10 +438,10 @@ function prepareStream(
     activeQueueAdmissions++;
     try {
       if (options?.steeringMode) {
-        input.activeSession.agent.steeringMode = options.steeringMode;
+        activeSession.agent.steeringMode = options.steeringMode;
       }
       return await steerActiveSessionWithOptionalDeliveryWait(
-        input.activeSession,
+        activeSession,
         text,
         options,
         attempt.sessionKey,
@@ -539,7 +525,7 @@ function prepareStream(
     queueMessage,
     messageInjection,
     messageInjectionV2: messageInjection,
-    isStreaming: () => input.activeSession.isStreaming,
+    isStreaming: () => activeSession.isStreaming,
     isAborted: () => input.getRunState().aborted,
     isStopped: () => !isSteeringAdmissionOpen(),
     isCompacting: () => subscription.isCompacting(),
@@ -549,7 +535,7 @@ function prepareStream(
     terminalReplyExpectation: resolveReplyExpectation(attempt),
     taskSuggestionDeliveryMode: attempt.taskSuggestionDeliveryMode,
     cancel: abortActiveRunExternally,
-    abort: (reason) => abortActiveRunExternally(reason),
+    abort: abortActiveRunExternally,
   };
   attempt.replyOperation?.attachBackend(queueHandle);
   setActiveEmbeddedRunLifecycleGeneration(

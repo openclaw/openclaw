@@ -1,8 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
-import ts from "typescript";
 import { afterEach, expect, it } from "vitest";
+import { typeCheckSources } from "../../test/helpers/typescript.js";
 import { createCodeModeToolApiFile } from "./code-mode-tool-api.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
@@ -57,9 +57,7 @@ it("infers literal and union selectors while keeping dynamic and missing inputs 
     return [list.rows.length, status.total, selectedCount, broadCount, omittedCount, explicitCount];
   `;
   const fileName = "/records-consumer.ts";
-  const source = ts.createSourceFile(
-    fileName,
-    `${file.content}
+  const source = `${file.content}
 async function consume() { ${composition} }
 async function checkContracts(kind: string, choice: "list" | "status") {
   const list = await records({kind: "list"});
@@ -76,20 +74,8 @@ async function checkContracts(kind: string, choice: "list" | "status") {
   omitted.rows;
   // @ts-expect-error A generic selector cannot supply an omitted runtime argument.
   await records<{kind: "list"}>();
-}`,
-    ts.ScriptTarget.ESNext,
-    true,
-  );
-  const options = { noEmit: true, strict: true, types: [], target: ts.ScriptTarget.ESNext };
-  const host = ts.createCompilerHost(options);
-  const original = host.getSourceFile.bind(host);
-  host.getSourceFile = (name, ...args) => (name === fileName ? source : original(name, ...args));
-  const program = ts.createProgram([fileName], options, host);
-  expect(
-    ts
-      .getPreEmitDiagnostics(program)
-      .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")),
-  ).toEqual([]);
+}`;
+  expect(typeCheckSources({ [fileName]: source })).toEqual([]);
   expect(tool.execute).not.toHaveBeenCalled();
 
   const result = resultDetails(await exec.execute("literal-and-union", { code: composition }));

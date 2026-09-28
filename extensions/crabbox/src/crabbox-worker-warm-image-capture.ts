@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { leaseRunArgs } from "./crabbox-worker-command.js";
 import {
   resolveCrabboxWarmImageProfileKey,
   type parseCrabboxProfile,
@@ -47,7 +48,6 @@ export function createCrabboxWarmImageCapture(dependencies: {
   deleteImage: (context: LeaseContext, key: string, record: WarmProfileRecord) => Promise<void>;
   retireImage: (context: LeaseContext, key: string, record: WarmProfileRecord) => Promise<void>;
   checkpointCommand: ReturnType<typeof createCheckpointCommands>["checkpointCommand"];
-  runArgs: (context: LeaseContext) => string[];
 }) {
   const {
     openStore,
@@ -69,7 +69,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
       projectCaptureRequired?: true;
       projectCaptureReplay?: true;
     },
-    prepareSource?: () => Promise<void>,
+    prepareAndScrubSource?: (scrubScript: string) => Promise<void>,
   ): Promise<boolean> {
     assertCurrent(context);
     const captureId = randomUUID();
@@ -215,16 +215,19 @@ export function createCrabboxWarmImageCapture(dependencies: {
         // Runtime preparation belongs only to a claimed capture. Scrub its forwarded
         // credential artifacts afterward, before any native image can include them.
         assertCurrent(context);
-        preparing = true;
-        await prepareSource?.();
-        preparing = false;
-        await checkpointCommand(
-          context,
-          "scrub",
-          dependencies.runArgs(context),
-          WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS,
-          SCRUB_WORKER_STATE,
-        );
+        if (prepareAndScrubSource) {
+          preparing = true;
+          await prepareAndScrubSource(SCRUB_WORKER_STATE);
+          preparing = false;
+        } else {
+          await checkpointCommand(
+            context,
+            "scrub",
+            leaseRunArgs(context),
+            WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS,
+            SCRUB_WORKER_STATE,
+          );
+        }
         // A stopped allocation or manual recovery must not start another paid operation.
         assertCurrent(context);
         creating = await openStore().update(key, (current) => {
