@@ -459,8 +459,8 @@ struct CommandCenterTab: View {
     }
 
     private var gatewayAddressText: String {
-        self.normalized(self.appModel.gatewayRemoteAddress)
-            ?? self.normalized(self.appModel.gatewayServerName)
+        Self.normalized(self.appModel.gatewayRemoteAddress)
+            ?? Self.normalized(self.appModel.gatewayServerName)
             ?? String(localized: "Unknown")
     }
 
@@ -583,28 +583,20 @@ struct CommandCenterTab: View {
     }
 
     static func sessionTitle(_ session: OpenClawChatSessionEntry) -> String {
-        let label = session.label?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let label, !label.isEmpty {
+        if let label = self.normalized(session.label) {
             return label
         }
-
-        let displayName = session.displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let displayName, !displayName.isEmpty {
+        if let displayName = self.normalized(session.displayName) {
             return Self.redactedSessionTitle(for: displayName) ?? displayName
         }
-        let autoLabel = session.autoLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let autoLabel, !autoLabel.isEmpty {
+        if let autoLabel = self.normalized(session.autoLabel) {
             return autoLabel
         }
-        let subject = session.subject?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let subject, !subject.isEmpty {
+        if let subject = self.normalized(session.subject) {
             return Self.redactedSessionTitle(for: subject) ?? subject
         }
         // Generic key placeholders only after real topic names are absent.
-        if let title = redactedSessionTitle(for: session.key) {
-            return title
-        }
-        return session.key
+        return self.redactedSessionTitle(for: session.key) ?? session.key
     }
 
     fileprivate static func redactedSessionTitle(for key: String) -> String? {
@@ -630,8 +622,6 @@ struct CommandCenterTab: View {
         let words = key
             .replacingOccurrences(of: "_", with: "-")
             .split(separator: "-")
-            .map(String.init)
-            .filter { !$0.isEmpty }
         guard !words.isEmpty else { return nil }
 
         return words
@@ -710,13 +700,13 @@ struct CommandCenterTab: View {
     }
 
     private var gatewaySubtitle: String {
-        if let server = normalized(appModel.gatewayServerName) {
+        if let server = Self.normalized(appModel.gatewayServerName) {
             return String(
                 format: String(localized: "%@ on %@"),
                 self.appModel.activeAgentName,
                 server)
         }
-        if let address = normalized(appModel.gatewayRemoteAddress) {
+        if let address = Self.normalized(appModel.gatewayRemoteAddress) {
             return String(
                 format: String(localized: "%@ via %@"),
                 self.appModel.activeAgentName,
@@ -725,7 +715,7 @@ struct CommandCenterTab: View {
         return self.appModel.gatewayDisplayStatusText
     }
 
-    private func normalized(_ value: String?) -> String? {
+    private static func normalized(_ value: String?) -> String? {
         guard let value else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed

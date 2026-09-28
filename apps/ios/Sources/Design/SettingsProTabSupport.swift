@@ -128,7 +128,7 @@ struct SettingsBuildMetadataStrip: View {
                     Divider()
                         .frame(height: 30)
                 }
-                self.metadataField(field, alignment: .center)
+                self.metadataField(field)
                     .frame(minWidth: 72, maxWidth: .infinity)
                     .padding(.horizontal, 4)
             }
@@ -139,13 +139,13 @@ struct SettingsBuildMetadataStrip: View {
     private var metadataColumn: some View {
         VStack(alignment: .center, spacing: 8) {
             ForEach(self.fields) { field in
-                self.metadataField(field, alignment: .center)
+                self.metadataField(field)
             }
         }
     }
 
-    private func metadataField(_ field: Field, alignment: HorizontalAlignment) -> some View {
-        VStack(alignment: alignment, spacing: 1) {
+    private func metadataField(_ field: Field) -> some View {
+        VStack(alignment: .center, spacing: 1) {
             Text(field.title)
                 .font(OpenClawType.caption2SemiBold)
                 .textCase(.uppercase)
