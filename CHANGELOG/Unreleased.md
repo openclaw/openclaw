@@ -2,6 +2,8 @@
 
 ### Fixes
 
+- Developer checks: serialize package-boundary compilers within the shared memory budget, reject crashed negative canaries, and retain canary inputs until compiler cleanup is verified.
+
 - Developer checks: contain SDK declaration compilers within the shared host memory budget, serialize their batches, and join cancellation through artifact release before publishing lint or compiler completion.
 
 - Developer checks: contain compiler graph discovery within the shared host memory budget, preserve cancellation while waiting or between queries, and refuse unbounded execution on unsupported local hosts.

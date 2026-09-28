@@ -582,14 +582,11 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
       process.stdout.write(usage());
       process.exitCode = 0;
     } else {
-      const concurrencyRaw =
-        process.env.OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY ??
-        process.env.OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY;
-      const concurrencyLabel =
-        process.env.OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY === undefined
-          ? "OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY"
-          : "OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY";
-      const concurrency = resolveConcurrency(concurrencyRaw, 4, concurrencyLabel);
+      const concurrency = resolveConcurrency(
+        process.env.OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY,
+        4,
+        "OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY",
+      );
       const checkTimeoutMs = resolvePositiveInteger(
         process.env.OPENCLAW_ADDITIONAL_BOUNDARY_TIMEOUT_MS,
         DEFAULT_CHECK_TIMEOUT_MS,
