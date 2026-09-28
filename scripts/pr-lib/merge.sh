@@ -597,13 +597,13 @@ merge_run() {
   local legacy_directory="${6:-}" legacy_refusal="" legacy_captures=()
   local cancel_auto="${7:-false}"
   local refusal_directory="${8:-}" refusal="" qualified_refusal=false
-  local provider_rejection="" qualified_pending_recovery=false
+  local provider_rejection="" qualified_pending_recovery=false retired_auto_admin=false
   local MERGE_REFUSAL_DIRECTORY=""
   local MERGE_ADMIN_EVIDENCE="${9:-}" confirmed_admin="${10:-false}" MERGE_PRIOR_CI_PROOF=""
   local MERGE_USE_PRIOR_CI_ADMIN=false
   if [ -n "$MERGE_ADMIN_EVIDENCE" ] || [ "$confirmed_admin" = true ]; then
     [ -n "$MERGE_ADMIN_EVIDENCE" ] && [ "$confirmed_admin" = true ] && [ "$auto_merge_requested" = false ] &&
-      [ -z "$replacement_head$legacy_directory$refusal_directory" ] && [ "$cancel_auto" = false ] &&
+      [ -z "$legacy_directory$refusal_directory" ] && [ "$cancel_auto" = false ] &&
       [ "${OPENCLAW_PR_MERGE_METHOD:-squash}" = squash ] || return 2
     MERGE_ADMIN_EVIDENCE=$(node -e 'process.stdout.write(require("node:path").resolve(process.argv[1]))' -- "$MERGE_ADMIN_EVIDENCE") || return 1
     MERGE_USE_PRIOR_CI_ADMIN=true
@@ -629,15 +629,16 @@ merge_run() {
     }
   elif [ -n "$recovery_oid" ]; then
     if [ "$recovery_oid" != "$MERGE_OUTCOME_OID" ] ||
-      ! printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e --arg refusal "$refusal_directory" --argjson admin "$MERGE_USE_PRIOR_CI_ADMIN" '
+      ! printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e --arg refusal "$refusal_directory" --arg replacement "$replacement_head" --argjson admin "$MERGE_USE_PRIOR_CI_ADMIN" '
         .phase == "intent" and
-        (if $admin then .accepted == false and .route == "admin" and .method == "squash" and
-          .priorCiAdmin.dispatchTransport == "rest"
+        (if $admin then .method == "squash" and
+          (if $replacement != "" then .route == "auto" and .cancellation.state == "confirmed" and .head != $replacement
+           else .accepted == false and .route == "admin" and .priorCiAdmin.dispatchTransport == "rest" end)
          else (.accepted == false and (.route == "immediate" or ($refusal != "" and .route == "auto" and .method == "squash"))) or
           (.route == "auto" and .cancellation.state == "confirmed") end)
       ' >/dev/null; then
       if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
-        merge_outcome_stop "operator recovery requires the exact unaccepted prior-CI REST admin squash intent; no attempt was authorized"
+        merge_outcome_stop "operator admin recovery requires an exact rejected prior-CI intent or a confirmed auto cancellation with an explicit different replacement; no attempt was authorized"
       else
         merge_outcome_stop "operator recovery requires the exact unaccepted immediate intent or confirmed auto cancellation; no attempt was authorized"
       fi
@@ -684,8 +685,14 @@ merge_run() {
   fi
 
   if [ -n "$recovery_oid" ] && [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
-    provider_rejection=$(node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" provider-rejection "$recovery_record" .local) || return 1
-    recovery_artifact_head=$(printf '%s\n' "$recovery_record" | jq -er .head) || return 1
+    if [ -n "$replacement_head" ]; then
+      # The retained cancellation qualified this transition; current-head evidence
+      # still passes both live admin checks before the successor intent is written.
+      retired_auto_admin=true
+    else
+      provider_rejection=$(node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" provider-rejection "$recovery_record" .local) || return 1
+      recovery_artifact_head=$(printf '%s\n' "$recovery_record" | jq -er .head) || return 1
+    fi
     qualified_pending_recovery=true
   fi
 
@@ -921,7 +928,7 @@ merge_run() {
     return 1
   fi
   if [ -n "$recovery_oid" ] && [ "$route" != immediate ] &&
-    { [ "$route" != admin ] || [ -z "$provider_rejection" ]; }; then
+    { [ "$route" != admin ] || { [ -z "$provider_rejection" ] && [ "$retired_auto_admin" != true ]; }; }; then
     merge_outcome_stop "operator recovery requires current immediate admission without admin, auto, or queue routing"
     return 1
   fi

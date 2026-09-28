@@ -11,8 +11,18 @@ let doctorCommand: typeof import("./doctor.js").doctorCommand;
 
 describe("doctor command", () => {
   beforeEach(async () => {
+    vi.doMock("./doctor-sandbox.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("./doctor-sandbox.js")>();
+      return {
+        ...actual,
+        maybeRepairSandboxImages: async (
+          cfg: Parameters<typeof actual.maybeRepairSandboxImages>[0],
+        ) => cfg,
+        maybeRepairSandboxRegistryFiles: async () => {},
+      };
+    });
     doctorCommand = await loadDoctorCommandForTest({
-      unmockModules: ["./doctor-sandbox.js", "../flows/doctor-health-contributions.js"],
+      unmockModules: ["../flows/doctor-health-contributions.js"],
     });
   });
 

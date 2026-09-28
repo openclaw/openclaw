@@ -327,6 +327,28 @@ export function createDesktopSessionRegistry(
     };
   }
 
+  function takeControl(sourceKey: string, ownerEpoch: number): void {
+    const entry = entries.get(sourceKey);
+    const claimedEpoch = claimedOwnerEpochs.get(sourceKey);
+    if (
+      (entry && entry.ownerEpoch !== ownerEpoch) ||
+      (claimedEpoch !== undefined && claimedEpoch !== ownerEpoch)
+    ) {
+      throw new DesktopSessionStaleOwnerError();
+    }
+    if (!entry || entry.stopped || !entry.controller) {
+      return;
+    }
+    const previous = entry.controller;
+    previous.released = true;
+    entry.observers.delete(previous);
+    entry.controller = undefined;
+    // The observer bridge retires input synchronously; the UI reconnects view-only.
+    closeObserver(previous, 4000, "control-taken:Agent");
+    notifyControl(entry);
+    scheduleLinger(entry);
+  }
+
   function reserveObserver(sourceKey: string, ownerEpoch: number) {
     const entry = entries.get(sourceKey);
     if (
@@ -533,6 +555,7 @@ export function createDesktopSessionRegistry(
     acquire,
     activate,
     attachObserver,
+    takeControl,
     claimStream,
     createStream,
     retainActivity,

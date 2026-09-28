@@ -77,19 +77,9 @@ function renderNodeServiceStartHints(): string[] {
   });
 }
 
-function buildNodeRuntimeHints(env: NodeJS.ProcessEnv = process.env): string[] {
-  return buildPlatformRuntimeLogHints({
-    env,
-    systemdServiceName: resolveNodeSystemdServiceName(),
-    windowsTaskName: resolveNodeWindowsTaskName(),
-  });
-}
-
 /**
- * Warns (does NOT auto-enable) when systemd user lingering is disabled.
- * The installed user-level node service stops when the last SSH session ends
- * unless `loginctl enable-linger <user>` has been run. Read-only: this never
- * changes host state, matching the operator-consent policy used elsewhere.
+ * User-level node services stop with the last SSH session unless lingering is enabled.
+ * Diagnose this without changing the operator's login policy.
  */
 async function warnIfSystemdUserLingerDisabled(warn: (message: string) => void): Promise<void> {
   if (process.platform !== "linux") {
@@ -129,7 +119,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     return;
   }
   const { host, port, contextPath, tls, tlsFingerprint, cloudflareAccess } = gatewayOptions;
-  if (!Number.isFinite(port ?? Number.NaN) || (port ?? 0) <= 0 || (port ?? 0) > 65_535) {
+  if (port === null || !Number.isFinite(port) || port <= 0 || port > 65_535) {
     fail(
       opts.port !== undefined
         ? formatInvalidPortOption("--port")
@@ -216,7 +206,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     await buildNodeInstallPlan({
       env: installEnv,
       host,
-      port: port ?? 18789,
+      port,
       contextPath,
       tls: Boolean(tls),
       tlsFingerprint,
@@ -252,14 +242,8 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
         description,
       });
     },
-    // Run the linger diagnostic only on the verified-success path: placing it
-    // in `install` (before service-load verification) would let a linger
-    // warning accompany a failed install or verification, misdirecting the
-    // operator (see #107033 review). The already-installed short-circuit
-    // above warns separately.
-    onVerified: async () => {
-      await warnIfSystemdUserLingerDisabled(warn);
-    },
+    // Failed installation must not carry a misleading linger warning (#107033).
+    onVerified: () => warnIfSystemdUserLingerDisabled(warn),
   });
 }
 
@@ -368,25 +352,25 @@ export async function runNodeDaemonStatus(opts: NodeDaemonOutputOptions = {}) {
   }
 
   const baseEnv = {
-    ...(process.env as Record<string, string | undefined>),
-    ...(command?.environment ?? undefined),
+    ...process.env,
+    ...command?.environment,
   };
   const hintEnv = {
     ...baseEnv,
     OPENCLAW_LOG_PREFIX: baseEnv.OPENCLAW_LOG_PREFIX ?? "node",
-  } as NodeJS.ProcessEnv;
+  };
 
-  if (runtime?.missingUnit) {
-    defaultRuntime.error(errorText("Service unit not found."));
-    for (const hint of buildNodeRuntimeHints(hintEnv)) {
-      defaultRuntime.log(errorText(hint));
-    }
-    return;
-  }
-
-  if (runtime?.status === "stopped") {
-    defaultRuntime.error(errorText("Service is loaded but not running."));
-    for (const hint of buildNodeRuntimeHints(hintEnv)) {
+  if (runtime?.missingUnit || runtime?.status === "stopped") {
+    defaultRuntime.error(
+      errorText(
+        runtime.missingUnit ? "Service unit not found." : "Service is loaded but not running.",
+      ),
+    );
+    for (const hint of buildPlatformRuntimeLogHints({
+      env: hintEnv,
+      systemdServiceName: resolveNodeSystemdServiceName(),
+      windowsTaskName: resolveNodeWindowsTaskName(),
+    })) {
       defaultRuntime.log(errorText(hint));
     }
   }

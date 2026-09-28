@@ -199,6 +199,10 @@ public enum OpenClawChatGatewayPayloadCodec {
             return .modelSelectionChanged
         case "sessions.changed":
             return decode(OpenClawChatSessionsChangedEvent.self).map(OpenClawChatTransportEvent.sessionsChanged)
+        case "session.narration":
+            // Native foreground subscriptions use full streams; bounded narration
+            // tails cannot replace transcript messages.
+            return nil
         case "session.observer":
             return decode(SessionObserverDigest.self).map(OpenClawChatTransportEvent.sessionObserver)
         case "seqGap":

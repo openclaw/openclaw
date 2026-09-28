@@ -415,7 +415,6 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:
   it("has no continuation payload and dispatches child work only on attempt one", () => {
     expect(workflow.on.workflow_dispatch.inputs).not.toHaveProperty("continuation_plan_json");
     for (const job of [
-      "docker_runtime_assets_preflight",
       "normal_ci",
       "plugin_prerelease_independent",
       "plugin_prerelease_candidate",

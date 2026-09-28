@@ -190,6 +190,7 @@ function bindingFromWindowsTask(
  */
 export async function discoverManagedGatewayBindings(
   env: Record<string, string | undefined>,
+  options: { requireComplete?: boolean } = {},
 ): Promise<ManagedGatewayBinding[]> {
   const results: ManagedGatewayBinding[] = [];
   const seen = new Set<string>();
@@ -203,8 +204,11 @@ export async function discoverManagedGatewayBindings(
   };
 
   try {
-    const { services } = await listManagedOpenClawGatewayServices(env);
-    // Discovery warnings cannot establish a live process holding this checkout's dist.
+    const { services, errors } = await listManagedOpenClawGatewayServices(env, options);
+    if (options.requireComplete && errors.length > 0) {
+      throw new Error("Managed Gateway inventory could not be completely inspected.");
+    }
+    // Best-effort callers retain known bindings; automatic writers require complete discovery.
     for (const svc of services) {
       if (svc.platform === "linux") {
         push(await bindingFromSystemdService(svc, env));
@@ -228,7 +232,10 @@ export async function discoverManagedGatewayBindings(
       }
       push(bindingFromWindowsTask(svc.label, svc.windowsProfile, env));
     }
-  } catch {
+  } catch (error) {
+    if (options.requireComplete) {
+      throw error;
+    }
     return results;
   }
 
