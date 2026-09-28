@@ -6732,7 +6732,7 @@ describe("chat model controls", () => {
           '[data-chat-model-provider-group="anthropic"] [data-chat-model-provider-toggle]',
         )!
         .click();
-      details!.dispatchEvent(new KeyboardEvent("keydown", { key: "1", bubbles: true }));
+      details!.dispatchEvent(new KeyboardEvent("keydown", { key: "3", bubbles: true }));
       expect(onModelSelect).toHaveBeenCalledExactlyOnceWith(
         "anthropic/claude-sonnet-4-6",
         "main",
