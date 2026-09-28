@@ -261,6 +261,12 @@ const runtimeConsumers = [
     dir: "src/commands",
   })),
   {
+    file: "src/commands/doctor-config-preflight.legacy-driver.live.test.ts",
+    configs: ["test/vitest/vitest.live.config.ts"],
+    mode: "runtime",
+    dir: "src/commands",
+  },
+  {
     file: "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts",
     configs: ["test/vitest/vitest.tooling.config.ts"],
     mode: "private-qa",

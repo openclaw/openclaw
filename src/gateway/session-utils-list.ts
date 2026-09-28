@@ -144,6 +144,7 @@ function buildSessionsListResult(
     hasMore: list.hasMore,
     owners: list.ownerFacet,
     involvingProfileId: list.involvingProfileId,
+    ...(list.activityPulse ? { activityPulse: list.activityPulse } : {}),
     ...(list.people
       ? {
           people: list.people,

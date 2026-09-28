@@ -205,6 +205,7 @@ data class ChatToolActivity(
   val arguments: kotlinx.serialization.json.JsonObject? = null,
   @kotlinx.serialization.Transient val activity: ChatAgentActivity? = null,
   @kotlinx.serialization.Transient val activityPrepared: Boolean = false,
+  @kotlinx.serialization.Transient val browserTab: ChatBrowserTab? = null,
 )
 
 @Serializable
@@ -447,6 +448,9 @@ data class ChatSessionEntry(
   val updatedAtMs: Long?,
   val sessionId: String? = null,
   val ownerAgentId: String? = null,
+  val createdActorType: String? = null,
+  val createdVia: String? = null,
+  val subject: String? = null,
   val classification: String? = null,
   val accountId: String? = null,
   val peerKind: String? = null,

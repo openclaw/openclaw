@@ -1,6 +1,5 @@
 // Onboard helper tests cover workspace setup, state cleanup, control UI links, and gateway probes.
 import * as fs from "node:fs";
-import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -25,6 +24,7 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const mocks = vi.hoisted(() => ({
+  removeAgentSessions: vi.fn(async () => {}),
   movePathToTrash: vi.fn(async (targetPath: string) => `${targetPath}.trashed`),
   runCommandWithTimeout: vi.fn<
     (
@@ -51,6 +51,11 @@ const mocks = vi.hoisted(() => ({
       warnings: [],
     }),
   ),
+}));
+
+vi.mock("./cleanup-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./cleanup-utils.js")>()),
+  removeAgentSessions: mocks.removeAgentSessions,
 }));
 
 vi.mock("../infra/fs-safe.js", async (importOriginal) => ({
@@ -91,6 +96,7 @@ vi.mock("../agents/workspace-legacy-state.js", async () => ({
 }));
 
 afterEach(() => {
+  mocks.removeAgentSessions.mockReset().mockResolvedValue(undefined);
   vi.clearAllMocks();
   mocks.movePathToTrash.mockReset();
   mocks.movePathToTrash.mockImplementation(async (targetPath: string) => `${targetPath}.trashed`);
@@ -173,13 +179,9 @@ describe("handleReset", () => {
     fs.writeFileSync(profileConfigPath, "{}\n");
 
     const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
-    const expectedTrashedPaths = [
-      profileConfigPath,
-      profileCredentialsDir,
-      profileSessionsDir,
-      secondarySessionsDir,
-      workspaceDir,
-    ].map(expectedTrashSourcePath);
+    const expectedTrashedPaths = [profileConfigPath, profileCredentialsDir, workspaceDir].map(
+      expectedTrashSourcePath,
+    );
     const expectedDefaultCredentialsDir = expectedTrashSourcePath(defaultCredentialsDir);
 
     try {
@@ -222,7 +224,7 @@ describe("handleReset", () => {
     );
   });
 
-  it("reports config, credentials, and session failures together", async () => {
+  it("reports config and credential Trash failures together", async () => {
     const homeDir = tempDirs.make("openclaw-reset-state-failures-");
     const stateDir = path.join(homeDir, ".openclaw");
     const configPath = path.join(stateDir, "openclaw.json");
@@ -244,7 +246,7 @@ describe("handleReset", () => {
       async () => {
         await expect(handleReset("config+creds+sessions", "unused", runtime)).rejects.toThrow(
           new RegExp(
-            [configPath, credentialsDir, sessionsDir]
+            [configPath, credentialsDir]
               .map((targetPath) => targetPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
               .join("[\\s\\S]*"),
           ),
@@ -253,40 +255,31 @@ describe("handleReset", () => {
     );
   });
 
-  it("deduplicates unreadable session state while still attempting workspace removal", async () => {
+  it("preserves config and workspace when canonical session reset fails", async () => {
     const homeDir = tempDirs.make("openclaw-reset-session-enumeration-");
     const stateDir = path.join(homeDir, ".openclaw");
     const workspaceDir = path.join(stateDir, "agents");
     fs.mkdirSync(workspaceDir, { recursive: true });
     const inspectError = Object.assign(new Error("permission denied"), { code: "EACCES" });
-    const readdir = vi.spyOn(fsPromises, "readdir").mockRejectedValueOnce(inspectError);
-    mocks.movePathToTrash.mockRejectedValueOnce(new Error("trash unavailable"));
+    mocks.removeAgentSessions.mockRejectedValueOnce(inspectError);
     const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
 
-    try {
-      await withEnvAsync(
-        {
-          HOME: homeDir,
-          OPENCLAW_HOME: homeDir,
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-        },
-        async () => {
-          const failure = await handleReset("full", workspaceDir, runtime).catch(
-            (error: unknown) => error,
-          );
-          expect(failure).toEqual(
-            new Error(`Reset failed to remove required state:\n${workspaceDir}`),
-          );
-        },
-      );
-    } finally {
-      readdir.mockRestore();
-    }
+    await withEnvAsync(
+      {
+        HOME: homeDir,
+        OPENCLAW_HOME: homeDir,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+      },
+      async () => {
+        const failure = await handleReset("full", workspaceDir, runtime).catch(
+          (error: unknown) => error,
+        );
+        expect(failure).toBe(inspectError);
+      },
+    );
 
-    expect(mocks.movePathToTrash).toHaveBeenCalledWith(expectedTrashSourcePath(workspaceDir), {
-      allowedRoots: [path.dirname(expectedTrashSourcePath(workspaceDir))],
-    });
+    expect(mocks.movePathToTrash).not.toHaveBeenCalled();
     expect(mocks.deleteWorkspaceState).not.toHaveBeenCalled();
   });
 
@@ -389,11 +382,12 @@ describe("handleReset", () => {
     fs.writeFileSync(profileConfigPath, "{}\n");
 
     const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
-    mocks.movePathToTrash
-      .mockResolvedValueOnce("config.trashed")
-      .mockResolvedValueOnce("credentials.trashed")
-      .mockResolvedValueOnce("sessions.trashed")
-      .mockRejectedValueOnce(new Error("trash unavailable"));
+    mocks.movePathToTrash.mockImplementation(async (targetPath) => {
+      if (targetPath === expectedTrashSourcePath(workspaceDir)) {
+        throw new Error("trash unavailable");
+      }
+      return `${targetPath}.trashed`;
+    });
 
     try {
       await withEnvAsync(

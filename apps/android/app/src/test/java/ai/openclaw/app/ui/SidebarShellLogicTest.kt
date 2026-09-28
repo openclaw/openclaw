@@ -35,33 +35,36 @@ class SidebarShellLogicTest {
 
   @Test
   fun storedSidebarOrderAppendsMissingDestinationsInCanonicalOrder() {
+    val destinations = orderedSidebarDestinations(listOf("threads", "home", "threads", "unknown"))
     assertEquals(
       listOf(
         SidebarDestination.Threads,
         SidebarDestination.Home,
         SidebarDestination.Skills,
         SidebarDestination.Work,
-        SidebarDestination.Settings,
+        SidebarDestination.Agents,
       ),
-      orderedSidebarDestinations(listOf("threads", "home", "threads", "unknown")),
+      destinations.take(5),
     )
+    assertTrue(SidebarDestination.SkillWorkshop in destinations.drop(5))
+    assertEquals(destinations.size, destinations.distinct().size)
   }
 
   @Test
   fun reorderMovesOnePositionAndKeepsCanonicalDestinations() {
-    val initial = listOf("settings", "work", "home", "skills", "threads")
+    val initial = orderedSidebarDestinations(listOf("agents", "work", "home", "skills", "threads")).map(SidebarDestination::stableId)
 
     assertEquals(
-      listOf("work", "settings", "home", "skills", "threads"),
+      listOf("work", "agents") + initial.drop(2),
       moveSidebarDestination(initial, destinationId = "work", direction = -1),
     )
     assertEquals(
-      listOf("settings", "home", "work", "skills", "threads"),
+      listOf("agents", "home", "work") + initial.drop(3),
       moveSidebarDestination(initial, destinationId = "work", direction = 1),
     )
     assertEquals(
       initial,
-      moveSidebarDestination(initial, destinationId = "settings", direction = -1),
+      moveSidebarDestination(initial, destinationId = "agents", direction = -1),
     )
     assertEquals(
       initial,
@@ -84,10 +87,10 @@ class SidebarShellLogicTest {
   @Test
   fun pinnedItemVisibilityKeepsCanonicalOrderAndAtLeastOnePage() {
     assertEquals(
-      listOf("settings", "home", "threads"),
+      listOf("work", "home", "threads"),
       updateSidebarDestinationVisibility(
         visibleIds = listOf("threads", "home"),
-        destination = SidebarDestination.Settings,
+        destination = SidebarDestination.Work,
         visible = true,
       ),
     )

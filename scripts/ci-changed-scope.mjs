@@ -1,6 +1,7 @@
 // Determines CI scope from changed paths.
 import { execFileSync } from "node:child_process";
-import { appendFileSync, readFileSync, readdirSync } from "node:fs";
+import { appendFileSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { requireOptionArgument } from "./lib/arg-utils.runtime.mjs";
 import { getChangedPathFacts } from "./lib/changed-path-facts.mjs";
 import {
@@ -93,13 +94,13 @@ const MACOS_SCRIPT_SCOPE_RE =
 const WORKER_DEPLOY_ARTIFACT_SCOPE_RE =
   /^src\/(?:agents\/github-exec-(?:launcher|credential)\.ts|shared\/worker-bundle-hash\.ts|worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$/;
 const IOS_BUILD_RE =
-  /^(apps\/ios\/|apps\/shared\/|apps\/swabble\/|Swabble\/|scripts\/(?:check-swift-tools|format-swift|install-simslim|install-swift-tools|install-xcodegen|lint-swift)\.sh$|scripts\/(?:ios-(?:configure-signing|screenshots|simulator-prepare|team-id|write-version-xcconfig)\.sh|ios-screenshot-evidence\.(?:mjs|d\.mts)|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|scripts\/lib\/(?:(?:ios-fastlane|swift-toolchain)\.sh|ios-version\.ts|release-version\.mjs|version-script-args\.ts)$)/;
+  /^(apps\/ios\/|apps\/shared\/|apps\/swabble\/|Swabble\/|scripts\/(?:check-swift-tools|format-swift|install-simslim|install-swift-tools|install-xcodegen|lint-swift)\.sh$|scripts\/(?:ios-(?:configure-signing|screenshots|simulator-prepare|team-id|write-version-xcconfig)\.sh|ios-screenshot-evidence\.(?:mjs|d\.mts)|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|scripts\/lib\/(?:(?:ios-fastlane|swift-toolchain)\.sh|(?:ios|mobile)-version\.ts|release-version\.mjs|version-script-args\.ts)$)/;
 // Tests and WatchTests Swift sources belong only to retained native unit-test targets.
 // UITests, resources, and project changes still prove the screenshot target graph.
 const IOS_SCREENSHOT_APP_SCOPE_RE =
   /^(?:apps\/ios\/(?!(?:Tests|WatchTests)\/.*\.swift$)|apps\/shared\/OpenClawKit\/|apps\/swabble\/|Swabble\/)/;
 const IOS_SCREENSHOT_SCRIPT_SCOPE_RE =
-  /^scripts\/(?:check-swift-tools|format-swift|install-simslim|install-swift-tools|install-xcodegen|lint-swift)\.sh$|^scripts\/(?:ios-(?:configure-signing|screenshots|simulator-prepare|team-id|write-version-xcconfig)\.sh|ios-screenshot-evidence\.(?:mjs|d\.mts)|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|^scripts\/lib\/(?:(?:ios-fastlane|swift-toolchain)\.sh|ios-version\.ts|release-version\.mjs|version-script-args\.ts)$/;
+  /^scripts\/(?:check-swift-tools|format-swift|install-simslim|install-swift-tools|install-xcodegen|lint-swift)\.sh$|^scripts\/(?:ios-(?:configure-signing|screenshots|simulator-prepare|team-id|write-version-xcconfig)\.sh|ios-screenshot-evidence\.(?:mjs|d\.mts)|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|^scripts\/lib\/(?:(?:ios-fastlane|swift-toolchain)\.sh|(?:ios|mobile)-version\.ts|release-version\.mjs|version-script-args\.ts)$/;
 const ANDROID_NATIVE_RE =
   /^(apps\/android\/|apps\/shared\/|\.github\/actions\/setup-android-toolchain\/)/;
 // Native bundling reads the root aliases and this shared coercion dependency.
@@ -796,6 +797,10 @@ export function writeGitHubOutput(
     "utf8",
   );
   const changedPathsJson = JSON.stringify(changedPaths);
+  // Same-job consumers read the complete manifest without Actions output or env limits.
+  const changedPathsFile = resolve(`${outputPath}.changed-paths.json`);
+  writeFileSync(changedPathsFile, changedPathsJson, "utf8");
+  appendFileSync(outputPath, `changed_paths_file=${changedPathsFile}\n`, "utf8");
   appendFileSync(
     outputPath,
     `changed_paths_json=${Buffer.byteLength(changedPathsJson, "utf8") <= CHANGED_PATHS_OUTPUT_MAX_BYTES ? changedPathsJson : "null"}\n`,

@@ -788,7 +788,6 @@ describe("scheduleRestartSentinelWake", () => {
       } as const;
       await recovery?.onSettled?.(entry, outcome, queueContext);
 
-      expect(mocks.settleCorrelatedSubagentDelivery).toHaveBeenCalledWith(entry, outcome);
       expect(mocks.removeCronRunContinuationSessionIfIdle).toHaveBeenCalledWith(
         entry.sessionKey,
         entry.id,

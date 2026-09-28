@@ -1245,6 +1245,13 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-shell__body {
+  /* Ease row backgrounds to clear before the clip instead of leaving an edge. */
+  --sidebar-fade-in:
+    transparent 2px, rgb(0 0 0 / 12%) 8px, rgb(0 0 0 / 50%) 16px, rgb(0 0 0 / 88%) 24px, black 32px;
+  --sidebar-fade-out:
+    black calc(100% - 32px), rgb(0 0 0 / 88%) calc(100% - 24px), rgb(0 0 0 / 50%) calc(100% - 16px),
+    rgb(0 0 0 / 12%) calc(100% - 8px), transparent calc(100% - 2px);
+
   min-height: 0;
   flex: 1;
   display: flex;
@@ -1501,26 +1508,15 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-shell__body--scroll-top {
-  --sidebar-body-mask: linear-gradient(
-    to bottom,
-    black 0,
-    black calc(100% - 23px),
-    transparent 100%
-  );
+  --sidebar-body-mask: linear-gradient(to bottom, var(--sidebar-fade-out));
 }
 
 .sidebar-shell__body--scroll-middle {
-  --sidebar-body-mask: linear-gradient(
-    to bottom,
-    transparent 0,
-    black 23px,
-    black calc(100% - 23px),
-    transparent 100%
-  );
+  --sidebar-body-mask: linear-gradient(to bottom, var(--sidebar-fade-in), var(--sidebar-fade-out));
 }
 
 .sidebar-shell__body--scroll-bottom {
-  --sidebar-body-mask: linear-gradient(to bottom, transparent 0, black 23px, black 100%);
+  --sidebar-body-mask: linear-gradient(to bottom, var(--sidebar-fade-in));
 }
 
 .sidebar-shell__body--scroll-top,

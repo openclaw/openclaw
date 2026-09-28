@@ -975,6 +975,8 @@ enum class GatewayMethod(
   CronHistory("cron.history"),
   PresenceActivity("presence.activity"),
   PresenceQuery("presence.query"),
+  UsersMerge("users.merge"),
+  GatewayStopRequest("gateway.stop.request"),
 }
 
 enum class GatewayEvent(

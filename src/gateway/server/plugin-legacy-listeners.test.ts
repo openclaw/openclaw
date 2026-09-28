@@ -143,6 +143,8 @@ describe("legacy channel webhook ports", () => {
       let continues = 0;
       const req = request(
         {
+          // Probe the listener with a new connection, never a pooled retired socket.
+          agent: false,
           host: "127.0.0.1",
           port: claim.port + offset,
           path,
@@ -157,7 +159,6 @@ describe("legacy channel webhook ports", () => {
           });
           res.on("error", reject);
           res.on("end", () => {
-            req.destroy();
             resolve({ status: res.statusCode, headers: res.headers, body, continues });
           });
         },
@@ -680,7 +681,7 @@ describe("legacy channel webhook ports", () => {
       const finished = createDeferred();
       const unregister = register({
         path: `/callback-${offset}`,
-        legacyListener: endpoint(offset),
+        legacyListener: { ...endpoint(offset), health: { path: "/healthz" } },
         handler: async (_req, res) => {
           entered.resolve();
           try {
@@ -704,6 +705,12 @@ describe("legacy channel webhook ports", () => {
     );
     try {
       await Promise.all(callbacks.map(({ entered }) => entered.promise));
+      for (const { offset } of callbacks) {
+        // A prior keep-alive response must not supply the retired-port probe's socket.
+        expect(
+          await send(offset, "/healthz", { headers: { Connection: "keep-alive" } }),
+        ).toMatchObject({ status: 200, body: "ok" });
+      }
       for (const { unregister } of callbacks) {
         unregister();
       }

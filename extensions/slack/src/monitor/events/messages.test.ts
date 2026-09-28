@@ -527,7 +527,7 @@ describe("registerSlackMessageEvents", () => {
     expect(call?.[0]?.subtype).toBe("thread_broadcast");
     expect(call?.[0]?.channel).toBe("C1");
     expect(call?.[0]?.user).toBe("U1");
-    expect(call?.[1]).toEqual({ source: "message" });
+    expect(call?.[1]).toEqual({ source: "message", senderAuthentication: "asserted" });
     expect(messageQueueMock).not.toHaveBeenCalled();
   });
 

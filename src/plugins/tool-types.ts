@@ -68,6 +68,12 @@ type OpenClawPluginToolContextBase = {
   /** Live host-bound authority. Recheck inside the final synchronous effect/write guard. */
   assertInvocationCurrent?: () => void;
   /**
+   * Host-bound client-input policy. Pure synchronous guard for final storage admission;
+   * performs no database reads and grants no invocation or mutation authority.
+   * Omitted for agent-generated input. Do not apply to accepted results or cleanup.
+   */
+  assertInputCommitAllowed?: () => void;
+  /**
    * Server-owned origin for this operation. Missing values are delegated.
    * Plugins must use it only for conversation-read visibility policy.
    */

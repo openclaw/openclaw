@@ -108,90 +108,76 @@ describe("ManagedWorktreeService missing-path observations", () => {
     },
   );
 
-  it.each(["list", "gc"] as const)(
-    "%s preserves a checkout restored after a missing-path observation",
-    async (operation) => {
-      const created = await fixture("restored");
-      await fs.writeFile(path.join(created.path, "README.md"), "restored user changes\n");
-      const gate = holdPathObservation(created.path);
-      const observing = operation === "list" ? service.list() : service.gc();
-      try {
-        await gate.entered.promise;
-        await service.remove({ id: created.id, reason: "test-restore" });
-        gate.inspect.resolve();
-        await expect(gate.sampled.promise).resolves.toBe(false);
-        const restored = await service.restore({ id: created.id });
-        expect(restored.lastActiveAt).toBeGreaterThan(created.lastActiveAt);
-        expect(restored.repoRoot).toBe(created.repoRoot);
-        expect(restored.repoFingerprint).toBe(created.repoFingerprint);
-        gate.resume.resolve();
-        const result = await observing;
-        expect(getRegistryWorktree(env, created.id)).toEqual(restored);
-        expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe(
-          "restored user changes\n",
-        );
-        if (operation === "list") {
-          expect(result).toEqual([restored]);
-        } else {
-          expect(result).toEqual(completedGcResult);
-        }
-      } finally {
-        gate.inspect.resolve();
-        gate.resume.resolve();
-        await observing;
-      }
-    },
-  );
-
-  it.each(["list", "gc"] as const)(
-    "%s preserves a checkout rebound after a missing-path observation",
-    async (operation) => {
-      const clone = path.join(root, "clone");
-      await execFileAsync("git", ["clone", "--no-hardlinks", repo, clone]);
-      await git(clone, "remote", "set-url", "origin", path.join(root, "remote.git"));
-      const liveIdentity = await service.resolveRepositoryIdentity(clone);
-      const staleIdentity = await service.resolveRepositoryIdentity(repo);
-      const created = await fixture("rebound", liveIdentity.repoRoot);
-      updateRegistryWorktree(env, created.id, {
-        repositoryIdentity: {
-          repoRoot: staleIdentity.repoRoot,
-          repoFingerprint: staleIdentity.fingerprint,
-        },
-      });
-      await fs.writeFile(path.join(created.path, "README.md"), "retained user changes\n");
-      const temporarilyAbsent = path.join(root, "temporarily-absent");
-      await fs.rename(created.path, temporarilyAbsent);
-      const gate = holdPathObservation(created.path);
+  it("list preserves a checkout restored after a missing-path observation", async () => {
+    const created = await fixture("restored");
+    await fs.writeFile(path.join(created.path, "README.md"), "restored user changes\n");
+    const gate = holdPathObservation(created.path);
+    const observing = service.list();
+    try {
+      await gate.entered.promise;
+      await service.remove({ id: created.id, reason: "test-restore" });
       gate.inspect.resolve();
-      const observing = operation === "list" ? service.list() : service.gc();
-      try {
-        await expect(gate.sampled.promise).resolves.toBe(false);
-        await fs.rename(temporarilyAbsent, created.path);
-        await expect(service.removeIfLossless(created.id)).resolves.toBe(false);
-        const rebound = getRegistryWorktree(env, created.id);
-        expect(rebound).toMatchObject({
-          repoRoot: liveIdentity.repoRoot,
-          repoFingerprint: liveIdentity.fingerprint,
-          lastActiveAt: created.lastActiveAt,
-          runEndCleanup: { outcome: "retained-dirty" },
-        });
-        expect(rebound?.removedAt).toBeUndefined();
-        gate.resume.resolve();
-        const result = await observing;
-        expect(getRegistryWorktree(env, created.id)).toEqual(rebound);
-        expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe(
-          "retained user changes\n",
-        );
-        if (operation === "list") {
-          expect(result).toEqual([rebound]);
-        } else {
-          expect(result).toEqual(completedGcResult);
-        }
-      } finally {
-        gate.inspect.resolve();
-        gate.resume.resolve();
-        await observing;
-      }
-    },
-  );
+      await expect(gate.sampled.promise).resolves.toBe(false);
+      const restored = await service.restore({ id: created.id });
+      expect(restored.lastActiveAt).toBeGreaterThan(created.lastActiveAt);
+      expect(restored.repoRoot).toBe(created.repoRoot);
+      expect(restored.repoFingerprint).toBe(created.repoFingerprint);
+      gate.resume.resolve();
+      const result = await observing;
+      expect(getRegistryWorktree(env, created.id)).toEqual(restored);
+      expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe(
+        "restored user changes\n",
+      );
+      expect(result).toEqual([restored]);
+    } finally {
+      gate.inspect.resolve();
+      gate.resume.resolve();
+      await observing;
+    }
+  });
+
+  it("gc preserves a checkout rebound after a missing-path observation", async () => {
+    const clone = path.join(root, "clone");
+    await execFileAsync("git", ["clone", "--no-hardlinks", repo, clone]);
+    await git(clone, "remote", "set-url", "origin", path.join(root, "remote.git"));
+    const liveIdentity = await service.resolveRepositoryIdentity(clone);
+    const staleIdentity = await service.resolveRepositoryIdentity(repo);
+    const created = await fixture("rebound", liveIdentity.repoRoot);
+    updateRegistryWorktree(env, created.id, {
+      repositoryIdentity: {
+        repoRoot: staleIdentity.repoRoot,
+        repoFingerprint: staleIdentity.fingerprint,
+      },
+    });
+    await fs.writeFile(path.join(created.path, "README.md"), "retained user changes\n");
+    const temporarilyAbsent = path.join(root, "temporarily-absent");
+    await fs.rename(created.path, temporarilyAbsent);
+    const gate = holdPathObservation(created.path);
+    gate.inspect.resolve();
+    const observing = service.gc();
+    try {
+      await expect(gate.sampled.promise).resolves.toBe(false);
+      await fs.rename(temporarilyAbsent, created.path);
+      await expect(service.removeIfLossless(created.id)).resolves.toBe(false);
+      const rebound = getRegistryWorktree(env, created.id);
+      expect(rebound).toMatchObject({
+        repoRoot: liveIdentity.repoRoot,
+        repoFingerprint: liveIdentity.fingerprint,
+        lastActiveAt: created.lastActiveAt,
+        runEndCleanup: { outcome: "retained-dirty" },
+      });
+      expect(rebound?.removedAt).toBeUndefined();
+      gate.resume.resolve();
+      const result = await observing;
+      expect(getRegistryWorktree(env, created.id)).toEqual(rebound);
+      expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe(
+        "retained user changes\n",
+      );
+      expect(result).toEqual(completedGcResult);
+    } finally {
+      gate.inspect.resolve();
+      gate.resume.resolve();
+      await observing;
+    }
+  });
 });

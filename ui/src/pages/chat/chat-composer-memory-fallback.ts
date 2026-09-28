@@ -1,4 +1,5 @@
 import type { ChatGoalDraftMode, ChatReplyTarget } from "../../lib/chat/chat-types.ts";
+import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
 import { parseStoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
 import {
   resolveUiConversationIdentity,
@@ -12,7 +13,6 @@ import {
   loadChatComposerDraftRevision,
   storedChatOutboxScopeKey,
   type ChatComposerDraftRetry,
-  type StoredChatOutboxScope,
 } from "./composer-persistence.ts";
 
 let lastChatComposerMemoryFallbackSequence = 0;

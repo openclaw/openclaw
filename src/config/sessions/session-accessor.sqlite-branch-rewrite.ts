@@ -81,78 +81,85 @@ export function prepareTranscriptRewriteSync(
       }
     }
     let committedVersion: SessionTranscriptContextVersion;
-    runOpenClawAgentWriteTransaction((current) => {
-      // Custody stages commit first; insert observers must also see the committed manager view.
-      // The version is assigned before COMMIT; rollback discards this publication.
-      if (!deferOpenClawAgentPostCommitPublication(current, () => adopt(committedVersion))) {
-        throw new Error("Transcript rewrite requires a commit publication");
-      }
-      assertActive();
-      assertOwnedTranscriptWriteCommit(fencedScope);
-      const fresh = readSessionEntryRow(current, resolved.sessionKey);
-      const refusal = resolveTranscriptAppendRefusal(fresh?.entry, resolved, fencedScope);
-      if (refusal) {
-        throw new SessionTranscriptWriterClaimReboundError(refusal);
-      }
-      const currentVersion = readTranscriptContextVersionInTransaction(current, resolved.sessionId);
-      if (
-        currentVersion.generation !== version.generation ||
-        currentVersion.rawSeq !== version.rawSeq
-      ) {
-        throw conflict();
-      }
-      // A loaded manager may predate an in-place repair even when its entry ids match.
-      // Compare only the copied suffix, never hydrate the complete archive under the lock.
-      for (const source of sources.values()) {
-        const row = executeSqliteQueryTakeFirstSync(
-          current.db,
-          getSessionKysely(current.db)
-            .selectFrom("transcript_event_identities as identity")
-            .innerJoin("transcript_events as event", (join) =>
-              join
-                .onRef("event.session_id", "=", "identity.session_id")
-                .onRef("event.seq", "=", "identity.seq"),
-            )
-            .select(transcriptEventJsonSql(current.db, "event").as("event_json"))
-            .where("identity.session_id", "=", resolved.sessionId)
-            .where("identity.event_id", "=", source.id),
-        );
-        if (!row || !isDeepStrictEqual(JSON.parse(row.event_json), source)) {
-          throw conflict();
+    runOpenClawAgentWriteTransaction(
+      (current) => {
+        // Custody stages commit first; insert observers must also see the committed manager view.
+        // The version is assigned before COMMIT; rollback discards this publication.
+        if (!deferOpenClawAgentPostCommitPublication(current, () => adopt(committedVersion))) {
+          throw new Error("Transcript rewrite requires a commit publication");
         }
-      }
-      // The existing append/relocation owners participate in the same transaction.
-      // Interruption rolls back entries, key ownership, and receipt publications together.
-      for (const entry of entries) {
         assertActive();
         assertOwnedTranscriptWriteCommit(fencedScope);
-        if (entry.type === "message") {
-          const source = sources.get(entry.id);
-          if (!source) {
-            throw new Error("Transcript rewrite message has no source entry");
-          }
-          const result = withSessionPendingInputRelocation(source.id, entry.message, () =>
-            appendTranscriptMessageInTransaction(current, resolved, {
-              eventId: entry.id,
-              parentId: entry.parentId,
-              now: Date.parse(entry.timestamp),
-              message: entry.message,
-              messageAlreadyRedacted: true,
-              appendMode: entry.appendMode,
-              idempotencyLookup: "caller-checked",
-            }),
-          );
-          if (!result?.appended || result.messageId !== entry.id) {
-            throw new Error("Transcript rewrite message was not appended");
-          }
-          entry.message = result.message;
-        } else if (!appendTranscriptEventInTransaction(current, resolved, entry)) {
-          throw new Error("Transcript rewrite entry was not appended");
+        const fresh = readSessionEntryRow(current, resolved.sessionKey);
+        const refusal = resolveTranscriptAppendRefusal(fresh?.entry, resolved, fencedScope);
+        if (refusal) {
+          throw new SessionTranscriptWriterClaimReboundError(refusal);
         }
-      }
-      assertActive();
-      assertOwnedTranscriptWriteCommit(fencedScope);
-      committedVersion = readTranscriptContextVersionInTransaction(current, resolved.sessionId);
-    }, options);
+        const currentVersion = readTranscriptContextVersionInTransaction(
+          current,
+          resolved.sessionId,
+        );
+        if (
+          currentVersion.generation !== version.generation ||
+          currentVersion.rawSeq !== version.rawSeq
+        ) {
+          throw conflict();
+        }
+        // A loaded manager may predate an in-place repair even when its entry ids match.
+        // Compare only the copied suffix, never hydrate the complete archive under the lock.
+        for (const source of sources.values()) {
+          const row = executeSqliteQueryTakeFirstSync(
+            current.db,
+            getSessionKysely(current.db)
+              .selectFrom("transcript_event_identities as identity")
+              .innerJoin("transcript_events as event", (join) =>
+                join
+                  .onRef("event.session_id", "=", "identity.session_id")
+                  .onRef("event.seq", "=", "identity.seq"),
+              )
+              .select(transcriptEventJsonSql(current.db, "event").as("event_json"))
+              .where("identity.session_id", "=", resolved.sessionId)
+              .where("identity.event_id", "=", source.id),
+          );
+          if (!row || !isDeepStrictEqual(JSON.parse(row.event_json), source)) {
+            throw conflict();
+          }
+        }
+        // The existing append/relocation owners participate in the same transaction.
+        // Interruption rolls back entries, key ownership, and receipt publications together.
+        for (const entry of entries) {
+          assertActive();
+          assertOwnedTranscriptWriteCommit(fencedScope);
+          if (entry.type === "message") {
+            const source = sources.get(entry.id);
+            if (!source) {
+              throw new Error("Transcript rewrite message has no source entry");
+            }
+            const result = withSessionPendingInputRelocation(source.id, entry.message, () =>
+              appendTranscriptMessageInTransaction(current, resolved, {
+                eventId: entry.id,
+                parentId: entry.parentId,
+                now: Date.parse(entry.timestamp),
+                message: entry.message,
+                messageAlreadyRedacted: true,
+                appendMode: entry.appendMode,
+                idempotencyLookup: "caller-checked",
+              }),
+            );
+            if (!result?.appended || result.messageId !== entry.id) {
+              throw new Error("Transcript rewrite message was not appended");
+            }
+            entry.message = result.message;
+          } else if (!appendTranscriptEventInTransaction(current, resolved, entry)) {
+            throw new Error("Transcript rewrite entry was not appended");
+          }
+        }
+        assertActive();
+        assertOwnedTranscriptWriteCommit(fencedScope);
+        committedVersion = readTranscriptContextVersionInTransaction(current, resolved.sessionId);
+      },
+      options,
+      { operationLabel: "session.transcript.prepare-rewrite" },
+    );
   };
 }

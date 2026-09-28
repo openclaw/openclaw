@@ -1810,6 +1810,14 @@ existing contracts. This changes no schema, migration, or persistent data.
 
 ### Preserve the data and concurrency contracts
 
+Transcript turn predicates acquire the latest assistant only when they need it.
+Assistant replay and predicate lookups inspect navigation metadata before loading
+the matching message body, so unrelated compressed tool results stay compressed
+inside the write transaction. Session-row updates and transcript appends retain
+their atomic commit and current-authority checks. Agent-store write diagnostics
+name the domain operation. Stored bytes, schemas, durability, and update behavior
+are unchanged; existing stores need no migration.
+
 Async device identity loads use the shared-state worker. A first creator runs
 the existing identity owner before database bootstrap, so pending legacy identity
 files still prevent creation. Read-only loads do not create a missing database

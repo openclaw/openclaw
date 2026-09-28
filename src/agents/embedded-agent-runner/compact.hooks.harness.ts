@@ -1,6 +1,3 @@
-/**
- * Test harness mocks for embedded-agent compaction hook coverage.
- */
 import { join } from "node:path";
 import { vi, type Mock } from "vitest";
 import type { ContextEngine } from "../../context-engine/types.js";
@@ -16,9 +13,11 @@ import {
 } from "../sessions/agent-session-compaction.js";
 import {
   acquireCompactHooksPreparedModelRuntime,
+  createCompactHooksResolvedModel,
   emptyPluginMetadataSnapshot,
   getCurrentPluginMetadataSnapshotMock,
   mockCompactHooksPluginMetadata,
+  resolveCompactHooksApiKeyMock,
   type CompactHooksQueuedCompaction,
   type MockResolvedModel,
 } from "./compact.hooks.metadata.test-support.js";
@@ -56,19 +55,7 @@ export const resolveContextEngineMock = vi.fn(async () => ({
 }));
 export const resolveModelMock: Mock<
   (provider?: string, modelId?: string, agentDir?: string, cfg?: unknown) => MockResolvedModel
-> = vi.fn((provider?: string, modelId?: string, _agentDir?: string, _cfg?: unknown) => ({
-  logicalRef: { provider: provider ?? "openai", model: modelId ?? "fake" },
-  model: {
-    provider: provider ?? "openai",
-    api: "openai-responses",
-    baseUrl: "https://api.openai.com/v1",
-    id: modelId ?? "fake",
-    input: [],
-  },
-  error: null,
-  authStorage: { setRuntimeApiKey: vi.fn() },
-  modelRegistry: {},
-}));
+> = vi.fn(createCompactHooksResolvedModel);
 export const resolveModelAsyncMock = vi.fn(
   async (
     provider: string,
@@ -568,19 +555,7 @@ export function resetCompactHooksHarnessMocks(workspaceDir: string, sessionId = 
   });
 
   resolveModelMock.mockReset();
-  resolveModelMock.mockImplementation((provider?: string, modelId?: string) => ({
-    logicalRef: { provider: provider ?? "openai", model: modelId ?? "fake" },
-    model: {
-      provider: provider ?? "openai",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      id: modelId ?? "fake",
-      input: [],
-    },
-    error: null,
-    authStorage: { setRuntimeApiKey: vi.fn() },
-    modelRegistry: {},
-  }));
+  resolveModelMock.mockImplementation(createCompactHooksResolvedModel);
   resolveModelAsyncMock.mockReset();
   resolveModelAsyncMock.mockImplementation(
     async (
@@ -866,7 +841,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
   }));
 
   vi.doMock("./stream-resolution.js", () => ({
-    resolveEmbeddedAgentApiKey: vi.fn(async () => "test-api-key"),
+    resolveEmbeddedAgentApiKey: resolveCompactHooksApiKeyMock,
     resolveEmbeddedAgentBaseStreamFn: vi.fn(() => vi.fn()),
     resolveEmbeddedAgentStream: resolveEmbeddedAgentStreamMock,
   }));

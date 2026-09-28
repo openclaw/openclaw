@@ -56,12 +56,28 @@ function boundClaudeSource(
     : undefined;
 }
 
+const boundSessionsByApi = new WeakMap<
+  OpenClawPluginApi,
+  WeakMap<
+    object,
+    WeakMap<OpenClawConfig, Map<string | undefined, ReadonlyMap<string, BoundClaudeSession>>>
+  >
+>();
+
 export function listBoundClaudeSessions(
   api: OpenClawPluginApi,
   agentId?: string,
   sessionEntries?: SessionCatalogEntrySnapshot,
-): Map<string, BoundClaudeSession> {
+): ReadonlyMap<string, BoundClaudeSession> {
   const config = currentClaudeSessionCatalogConfig(api);
+  const revision = sessionEntries?.revision;
+  let revisions = boundSessionsByApi.get(api);
+  let configs = revision ? revisions?.get(revision) : undefined;
+  let agents = configs?.get(config);
+  const cached = agents?.get(agentId);
+  if (cached) {
+    return cached;
+  }
   const bound = new Map<string, BoundClaudeSession>();
   for (const { sessionKey, entry } of listSessionCatalogEntries({
     agentId,
@@ -82,6 +98,21 @@ export function listBoundClaudeSessions(
       continue;
     }
     bound.set(sourceKey, { adopted: source.adopted, sessionKey });
+  }
+  if (revision) {
+    if (!revisions) {
+      revisions = new WeakMap();
+      boundSessionsByApi.set(api, revisions);
+    }
+    if (!configs) {
+      configs = new WeakMap();
+      revisions.set(revision, configs);
+    }
+    if (!agents) {
+      agents = new Map();
+      configs.set(config, agents);
+    }
+    agents.set(agentId, bound);
   }
   return bound;
 }

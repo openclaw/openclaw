@@ -92,6 +92,7 @@ suite.define(() => {
             expect(await page.getByText(readyText, { exact: true }).count()).toBe(0);
             expect(await gateway.getRequests("chat.send")).toHaveLength(0);
             expect(await composer.inputValue()).toBe(draft);
+            await page.clock.resume();
             await page.getByRole("button", { name: "Retry", exact: true }).click();
           } else {
             expect(await page.locator('[data-chat-model-select="true"]').textContent()).toContain(
@@ -103,9 +104,9 @@ suite.define(() => {
                 .getAttribute("aria-disabled"),
             ).toBe("true");
             expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+            await page.clock.resume();
             await page.locator('[data-chat-model-select="true"]').click();
           }
-          await page.clock.runFor(100);
           await expect.poll(async () => (await gateway.getRequests(method)).length).toBe(2);
           if (method === "chat.startup") {
             await page.getByText(readyText, { exact: true }).waitFor();

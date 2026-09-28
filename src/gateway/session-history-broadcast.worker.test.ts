@@ -18,6 +18,7 @@ import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createHandler,
@@ -64,31 +65,61 @@ async function seedBroadcastHistory(storePath: string) {
   ]);
   await waitForSessionTranscriptProjection(target);
   loadAccessorSessionEntryReadOnlyMock.mockReturnValue(entry);
-  return { target, ...createHandler(false) };
+  return { target, readers, ...createHandler(false) };
 }
 
 it.each(["by-id", "count"] as const)(
-  "keeps the event loop available while broadcasting a stored %s read",
+  "awaits the stored %s read without host SQLite before broadcasting",
   async (kind) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const { target, handler, broadcastToConnIds } = await seedBroadcastHistory(
+      const { target, readers, handler, broadcastToConnIds } = await seedBroadcastHistory(
         state.statePath("broadcast.sqlite"),
       );
+      const held = createDeferredCore();
+      const release = createDeferredCore();
+      const holdResult = async <T>(pending: Promise<T>): Promise<T> => {
+        const result = await pending;
+        held.resolve();
+        await release.promise;
+        return result;
+      };
+      if (kind === "by-id") {
+        readSessionMessageByIdAsyncMock.mockImplementation(
+          (...args: Parameters<typeof readers.readSessionMessageByIdAsync>) =>
+            holdResult(readers.readSessionMessageByIdAsync(...args)),
+        );
+      } else {
+        readSessionMessageCountAsyncMock.mockImplementation(
+          (...args: Parameters<typeof readers.readSessionMessageCountAsync>) =>
+            holdResult(readers.readSessionMessageCountAsync(...args)),
+        );
+      }
       const snapshot = vi.spyOn(projection, "withCurrentProjectionSnapshot");
+      const sql = observeMainThreadSql();
+      sql.calibrate();
       let eventLoopProgress = false;
-      const turn = setImmediate().then(() => {
-        eventLoopProgress = true;
-      });
       let progressedBeforeDelivery = false;
       broadcastToConnIds.mockImplementation(() => {
         progressedBeforeDelivery = eventLoopProgress;
       });
+      const pending = handler({
+        target,
+        ...(kind === "by-id" ? { messageId: "answer" } : {}),
+        message: { role: "assistant", content: "Queued answer" },
+      });
       try {
-        await handler({
-          target,
-          ...(kind === "by-id" ? { messageId: "answer" } : {}),
-          message: { role: "assistant", content: "Queued answer" },
-        });
+        await Promise.race([
+          held.promise,
+          pending.then(() => {
+            throw new Error("Broadcast completed before its stored read result was held");
+          }),
+        ]);
+        await setImmediate();
+        eventLoopProgress = true;
+        expect(broadcastToConnIds).not.toHaveBeenCalled();
+        sql.expectIdle();
+        release.resolve();
+        await pending;
         expect(broadcastToConnIds).toHaveBeenCalledWith(
           "session.message",
           expect.objectContaining({
@@ -100,9 +131,12 @@ it.each(["by-id", "count"] as const)(
           expect.any(Set),
         );
         expect(progressedBeforeDelivery).toBe(true);
+        sql.expectIdle();
         expect(snapshot).not.toHaveBeenCalled();
       } finally {
-        await turn;
+        release.resolve();
+        await pending.catch(() => undefined);
+        sql.restore();
         snapshot.mockRestore();
       }
     });

@@ -49,6 +49,12 @@ that finishes before the requester yields: successor admission must not depend
 on the later lifecycle-end notification. The successor keeps the same task,
 and a delayed notification from the predecessor cannot reopen it.
 
+While the requester executes a settle-wake continuation, its own completion
+batch can still be marked dispatching. The yield tool excludes that exact batch
+from older pending children: it must not promise another wake for the results
+already being processed. Unrelated pending batches and newly spawned work keep
+their existing completion ownership.
+
 Settlement dispatch uses `subagent_settle` input provenance. Individual
 announcements and the older descendant-wake path retain `subagent_announce`:
 the latter already owns its run replacement after dispatch and must not trigger

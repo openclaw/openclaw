@@ -114,10 +114,7 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
     record: PluginRecord,
     provider: Parameters<OpenClawPluginApi["registerCompactionProvider"]>[0],
   ) => {
-    const id = normalizeOptionalString(
-      (provider as Partial<Parameters<OpenClawPluginApi["registerCompactionProvider"]>[0]> | null)
-        ?.id,
-    );
+    const id = normalizeOptionalString(provider?.id);
     if (!id) {
       reportRegistrationError(record, "compaction provider registration missing id");
       return;

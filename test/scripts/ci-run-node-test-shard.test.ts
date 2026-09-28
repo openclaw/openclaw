@@ -211,7 +211,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     "preserves selected UI discovery before runtime partitioning under %s",
     async (policy) => {
       vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(true);
-      const bunFile = "ui/src/pages/chat/chat-pane-retained-presentation.test.ts";
+      const bunFile = "ui/src/pages/chat/chat-pane-history.test.ts";
       const nodeFile = "ui/src/pages/usage/usage-page-details.test.ts";
       const includePatterns = [bunFile, nodeFile];
       const seen: Array<{ runtime: string | undefined; membership?: string[] }> = [];
@@ -639,6 +639,47 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     },
   );
 
+  it.each(["bun-compatible", "dual"] as const)(
+    "runs native Bun PTY coverage on Bun while retaining process siblings on Node under %s",
+    async (policy) => {
+      const bunFile = "src/process/terminal-pty-bun.test.ts";
+      const nodeFile = "src/process/terminal-pty.test.ts";
+      const seen: Array<{ runtime: string | undefined; includes: string[] }> = [];
+      await expect(
+        runShardPlans(
+          [
+            {
+              kind: "group",
+              name: "process",
+              plan: {
+                configs: ["test/vitest/vitest.process.config.ts"],
+                includePatterns: [bunFile, nodeFile],
+              },
+            },
+          ],
+          {
+            env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: policy },
+            scratchDir: makeScratchDir(),
+            runChild: async (_args, env) => {
+              seen.push({
+                runtime: env.OPENCLAW_VITEST_RUNTIME,
+                includes: JSON.parse(readFileSync(env.OPENCLAW_VITEST_INCLUDE_FILE!, "utf8")),
+              });
+              return 0;
+            },
+          },
+        ),
+      ).resolves.toBe(0);
+      expect(seen).toEqual([
+        { runtime: "node", includes: policy === "dual" ? [bunFile, nodeFile] : [nodeFile] },
+        { runtime: "bun", includes: [bunFile] },
+      ]);
+      expect(resolveCiTestRuntimeSelections({ targets: [bunFile] }, policy)).toEqual(
+        policy === "dual" ? [{ runtime: "node" }, { runtime: "bun" }] : [{ runtime: "bun" }],
+      );
+    },
+  );
+
   it("intersects unit-fast glob envelopes before partitioning runtimes", () => {
     expect(
       resolveCiTestRuntimeSelections(
@@ -915,7 +956,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       const seen: string[] = [];
       let receiptFile: string | undefined;
       const nodeFile = "ui/src/pages/usage/usage-page-details.test.ts";
-      const bunFile = "ui/src/pages/chat/chat-pane-retained-presentation.test.ts";
+      const bunFile = "ui/src/pages/chat/chat-pane-history.test.ts";
       await expect(
         runShardPlans([{ kind: "group", name: "ui", plan: { configs: ["ui/vitest.config.ts"] } }], {
           env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: "bun-compatible" },
@@ -926,7 +967,11 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
               const included = JSON.parse(
                 readFileSync(env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE!, "utf8"),
               );
-              expect(included).toEqual(["ui/src/pages/chat/chat-thread.test.ts", nodeFile]);
+              expect(included).toEqual([
+                "ui/src/pages/chat/chat-pane-retained-presentation.test.ts",
+                "ui/src/pages/chat/chat-thread.test.ts",
+                nodeFile,
+              ]);
               return 0;
             }
             receiptFile = env.OPENCLAW_VITEST_NATIVE_SHARD_RECEIPT;
@@ -2015,6 +2060,86 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
 
     expect(started).toEqual(["a", "b", "c", "d"]);
     expect(exitCode).toBe(7);
+  });
+
+  it.each([
+    { name: "success", code: 0, signal: null, complete: true },
+    { name: "ordinary failure", code: 7, signal: null, complete: true },
+    { name: "early stop", code: 7, signal: null, stop: true },
+    { name: "killed child", code: null, signal: "SIGKILL" },
+    { name: "unknown exit", code: null, signal: null },
+    { name: "unjoined child", code: 1, signal: null, unjoined: true, rejects: true },
+    { name: "scratch cleanup failure", code: 0, signal: null, scratchFailure: true },
+    { name: "owner cleanup failure", code: 0, signal: null, ownerFailure: true, rejects: true },
+  ] as const)("publishes a completion receipt only for verified $name", async (scenario) => {
+    vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(true);
+    const processOwner = await import("../../scripts/lib/vitest-process.mts");
+    const createWorker = workerOwner.createVitestWorkerRun;
+    const directories: string[] = [];
+    vi.spyOn(workerOwner, "createVitestWorkerRun").mockImplementation((...args) => {
+      const worker = createWorker(...args);
+      directories.push(worker.descriptor.directory);
+      scratchDirs.push(worker.descriptor.directory);
+      if ("ownerFailure" in scenario) {
+        const dispose = worker.dispose.bind(worker);
+        vi.spyOn(worker, "dispose").mockImplementation(async () => {
+          await dispose();
+          throw new Error("owner cleanup failed");
+        });
+      }
+      return worker;
+    });
+    if ("scratchFailure" in scenario) {
+      vi.spyOn(fsPromises, "rm").mockRejectedValue(new Error("scratch cleanup failed"));
+    }
+    let invocations = 0;
+    const spawn = vi.spyOn(processOwner, "spawnOwnedVitestProcess").mockImplementation((spec) => {
+      const child = new childProcess.ChildProcess();
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      const scratch = path.dirname(spec.options.env!.OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT!);
+      if (!scratchDirs.includes(scratch)) {
+        scratchDirs.push(scratch);
+      }
+      const first = invocations++ === 0;
+      const outcome = {
+        code: first ? scenario.code : 0,
+        signal: first ? scenario.signal : null,
+        groupJoined: !("unjoined" in scenario),
+      };
+      const completion = new Promise<typeof outcome>((resolve) => {
+        queueMicrotask(() => {
+          child.emit("close", outcome.code, outcome.signal);
+          resolve(outcome);
+        });
+      });
+      return { child, completion };
+    });
+    const receipts: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      if (String(chunk).startsWith("[shard:completion] ")) {
+        expect(directories.some(existsSync)).toBe(false);
+        receipts.push(String(chunk));
+      }
+      return true;
+    });
+    const pending = runShardPlans(
+      ["one", "two"].map((name) => ({ kind: "target" as const, name, target: `${name}.test.ts` })),
+      { concurrency: 1, continueOnFailure: !("stop" in scenario), env: {} },
+    );
+    if ("rejects" in scenario) {
+      await expect(pending).rejects.toThrow();
+    } else {
+      await expect(pending).resolves.toBe(scenario.code ?? 1);
+    }
+    expect(spawn).toHaveBeenCalledTimes("stop" in scenario || "unjoined" in scenario ? 1 : 2);
+    expect(receipts).toEqual(
+      "complete" in scenario
+        ? [
+            `[shard:completion] {"version":1,"planned":2,"completed":2,"invocations":2,"failedInvocations":${scenario.code === 0 ? 0 : 1}}\n`,
+          ]
+        : [],
+    );
   });
 
   it.each([

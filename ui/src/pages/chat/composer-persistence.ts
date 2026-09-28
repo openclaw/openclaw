@@ -10,6 +10,7 @@ import {
   rememberDraftRevision,
   readDraftRevisionState,
 } from "../../lib/chat/outbox-store-draft-state.ts";
+import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
 import {
   captureChatOutboxAdmission,
   notifyStoredChatOutboxChanges,
@@ -19,7 +20,6 @@ import {
   storageTargetForGateway,
   writeStoredOutboxStore as writeStore,
   type ChatComposerScope,
-  type StoredChatOutboxScope,
 } from "../../lib/chat/outbox-store.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { getSafeSessionStorage } from "../../local-storage.ts";
@@ -62,7 +62,7 @@ export const CHAT_COMPOSER_DRAFT_STORAGE_ERROR =
 
 export { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 export { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
-export type { ChatComposerScope, StoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
+export type { ChatComposerScope } from "../../lib/chat/outbox-store.ts";
 export type { StoredChatOutbox } from "../../lib/chat/outbox-store-projection.ts";
 
 export type { ChatComposerDraftRetry } from "../../lib/chat/chat-types.ts";

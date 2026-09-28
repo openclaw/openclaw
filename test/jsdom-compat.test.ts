@@ -1,5 +1,8 @@
 /* @vitest-environment jsdom */
 import { resolveObjectURL } from "node:buffer";
+import { spawnSync } from "node:child_process";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 
 // Exercise the environment installed by the native preload, including in VM tests.
@@ -7,6 +10,39 @@ const require = process.getBuiltinModule("module").createRequire(import.meta.url
 const { builtinEnvironments }: typeof import("vitest/runtime") = require("vitest/runtime");
 
 describe("jsdom native API boundary", () => {
+  it("adapts the package-local Vitest environment before creating object URLs", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        pathToFileURL(path.resolve("test/vitest/vitest.jsdom-preload.mts")).href,
+        "--input-type=module",
+        "--eval",
+        `
+          import { createRequire } from "node:module";
+          const require = createRequire(process.argv[1]);
+          const { builtinEnvironments } = require("vitest/runtime");
+          const environment = await builtinEnvironments.jsdom.setup(globalThis, {});
+          try {
+            const url = URL.createObjectURL(new Blob(["complete asset"], { type: "image/png" }));
+            try {
+              process.stdout.write(await (await fetch(url)).text());
+            } finally {
+              URL.revokeObjectURL(url);
+            }
+          } finally {
+            await environment.teardown(globalThis);
+          }
+        `,
+        path.resolve("ui/package.json"),
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("complete asset");
+  });
+
   it.each([0, 1, 2])("keeps window event identity across %i iframe levels", (depth) => {
     let target: Window = window;
     let outerFrame: HTMLIFrameElement | undefined;

@@ -1713,6 +1713,23 @@ process.stdout.write(sessionDir + "\\n");
     },
   );
 
+  it("requires the authored Tool Search config to migrate without disabling it", () => {
+    const run = (toolSearch: unknown, stage: "baseline" | "survival" = "survival") =>
+      assertConfig({
+        acceptedIntents: ["tool-search"],
+        config: { tools: { toolSearch } },
+        scenario: "base",
+        stage,
+      });
+    expect(() => run({ mode: "code", codeTimeoutMs: 5000 }, "baseline")).not.toThrow();
+    expect(() => run({ mode: "tools" })).not.toThrow();
+    expect(() => run({ mode: "code", codeTimeoutMs: 5000 })).toThrow(/Tool Search mode/);
+    expect(() => run({ mode: "tools", codeTimeoutMs: 5000 })).toThrow(/legacy timeout/);
+    expect(() => run({ mode: "tools", enabled: false })).toThrow(/disabled/);
+    expect(() => run(undefined)).toThrow(/Tool Search mode/);
+    expect(() => assertConfig({ acceptedIntents: [], config: {}, scenario: "base" })).not.toThrow();
+  });
+
   it("requires password auth for the mobile pairing reconnect scenario", () => {
     expect(() =>
       assertConfig({

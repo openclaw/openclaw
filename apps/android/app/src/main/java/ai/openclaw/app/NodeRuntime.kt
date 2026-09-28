@@ -1107,6 +1107,7 @@ class NodeRuntime private constructor(
     val token: String?,
     val password: String?,
     val tlsFingerprintSha256: String?,
+    val browserFocusAvailable: Boolean = false,
   )
 
   private val appContext = context.applicationContext
@@ -1674,7 +1675,7 @@ class NodeRuntime private constructor(
           // device-owned session without changing the shipped key or its existing transcript.
           chat.onGatewayConnected(mainSessionBinding(mainSessionKey))
         }
-        refreshGatewayControlPage()
+        refreshGatewayControlPage(browserFocusAvailable = hello.capabilities?.contains("control-ui-browser-focus") == true)
         updateStatus {
           operatorConnectionProblem = null
           operatorConnected = true
@@ -1969,6 +1970,7 @@ class NodeRuntime private constructor(
     _gatewayUpdateAvailable.value = null
     replaceGatewayMethods(null, present = false)
     replaceGatewayCapabilities(null)
+    _gatewayControlPage.value = _gatewayControlPage.value?.copy(browserFocusAvailable = false)
     _operatorScopes.value = emptyList()
     _devicePairingCapabilities.value = GatewayDevicePairingCapabilities()
     _gatewayAccentArgb.value = null
@@ -3228,6 +3230,7 @@ class NodeRuntime private constructor(
         token = null,
         password = null,
         tlsFingerprintSha256 = null,
+        browserFocusAvailable = AndroidScreenshotFixture.browserFocusAvailable,
       )
     _gatewaySourcePreviewConfig.value = AndroidScreenshotFixture.sourcePreviewConfig
     updateGatewayDefaultAgentId("main")
@@ -5180,6 +5183,7 @@ class NodeRuntime private constructor(
     endpoint: GatewayEndpoint? = connectedEndpoint,
     auth: GatewayConnectAuth? = activeGatewayConnection?.auth,
     storedOperatorToken: String? = endpoint?.let { loadStoredRoleDeviceAuthEntry(it, "operator")?.token },
+    browserFocusAvailable: Boolean = false,
   ) {
     if (endpoint == null) {
       _gatewayControlPage.value = null
@@ -5192,6 +5196,7 @@ class NodeRuntime private constructor(
         token = pageAuth.token,
         password = pageAuth.password,
         tlsFingerprintSha256 = gatewayControlPageTlsFingerprint(prefs, endpoint),
+        browserFocusAvailable = browserFocusAvailable,
       )
   }
 

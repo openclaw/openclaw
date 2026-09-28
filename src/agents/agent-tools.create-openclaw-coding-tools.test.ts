@@ -252,7 +252,6 @@ describe("createOpenClawCodingTools", () => {
     });
     const names = new Set(tools.map((tool) => tool.name));
 
-    expect(names.has("tool_search_code")).toBe(false);
     expect(names.has("tool_search")).toBe(false);
     expect(names.has("tool_describe")).toBe(false);
     expect(names.has("tool_call")).toBe(false);
@@ -443,7 +442,6 @@ describe("createOpenClawCodingTools", () => {
     });
     const names = new Set(tools.map((tool) => tool.name));
 
-    expect(names.has("tool_search_code")).toBe(true);
     expect(names.has("tool_search")).toBe(true);
     expect(names.has("tool_describe")).toBe(true);
     expect(names.has("tool_call")).toBe(true);
@@ -464,7 +462,6 @@ describe("createOpenClawCodingTools", () => {
 
     expect(names.has("read")).toBe(true);
     expect(names.has("exec")).toBe(false);
-    expect(names.has("tool_search_code")).toBe(true);
     expect(names.has("tool_search")).toBe(true);
     expect(names.has("tool_describe")).toBe(true);
     expect(names.has("tool_call")).toBe(true);
@@ -476,14 +473,14 @@ describe("createOpenClawCodingTools", () => {
       config: {
         tools: {
           profile: "coding",
-          deny: ["tool_search_code"],
+          deny: ["tool_call"],
           toolSearch: true,
         },
       },
     });
     const names = new Set(tools.map((tool) => tool.name));
 
-    expect(names.has("tool_search_code")).toBe(false);
+    expect(names.has("tool_call")).toBe(false);
     expect(names.has("read")).toBe(true);
   });
 
@@ -510,7 +507,6 @@ describe("createOpenClawCodingTools", () => {
     const names = new Set(tools.map((tool) => tool.name));
 
     expect(createOpenClawToolsMock).not.toHaveBeenCalled();
-    expect(names.has("tool_search_code")).toBe(true);
     expect(names.has("tool_search")).toBe(true);
     expect(names.has("tool_describe")).toBe(true);
     expect(names.has("tool_call")).toBe(true);

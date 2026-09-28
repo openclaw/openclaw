@@ -45,6 +45,7 @@ export async function createDiskSwap(sourceRoot, base) {
     Date,
     Error,
     AggregateError,
+    AbortController,
     Buffer,
     performance,
     setTimeout,

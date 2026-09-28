@@ -50,6 +50,7 @@ export type UserChannelIdentityLink = { profileId: string; identity: UserChannel
 export type UserChannelIdentityAuthorityFacts = {
   authorization?: UserChannelAuthorization;
   profileId: string;
+  displayName: string | null;
   role: string | null;
   emails: string[];
   loginIdentities: string[];

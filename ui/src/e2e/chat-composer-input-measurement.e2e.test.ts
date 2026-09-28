@@ -8,6 +8,7 @@ import {
 declare global {
   interface Window {
     composerTranscriptLayoutReads: number;
+    composerTranscriptFirstLayoutRead: string | undefined;
   }
 }
 
@@ -41,10 +42,14 @@ suite.define(() => {
         }
         const read = descriptor.get.bind(element);
         window.composerTranscriptLayoutReads = 0;
+        window.composerTranscriptFirstLayoutRead = undefined;
         Object.defineProperty(element, "scrollHeight", {
           configurable: true,
           get() {
             window.composerTranscriptLayoutReads += 1;
+            window.composerTranscriptFirstLayoutRead ??=
+              new Error(`Transcript scrollHeight read (fonts: ${document.fonts.status})`).stack ??
+              "Call stack unavailable";
             return read();
           },
         });
@@ -59,7 +64,11 @@ suite.define(() => {
         );
       }
       expect(await textarea.inputValue()).toBe("Typing abcdefghij");
-      expect(await page.evaluate(() => window.composerTranscriptLayoutReads)).toBe(0);
+      const probe = await page.evaluate(() => ({
+        reads: window.composerTranscriptLayoutReads,
+        firstRead: window.composerTranscriptFirstLayoutRead,
+      }));
+      expect(probe.reads, probe.firstRead).toBe(0);
     });
   });
 });

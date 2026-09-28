@@ -405,7 +405,7 @@ function holdLease() {
     try {
       return fs.readFileSync(lease, "utf8") === actorLease;
     } catch (error) {
-      if (error.code === "ENOENT") return false;
+      if (error.code === "ENOENT" || error.code === "EPERM") return false;
       throw error;
     }
   };

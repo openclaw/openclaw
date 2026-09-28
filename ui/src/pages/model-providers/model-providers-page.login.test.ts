@@ -170,7 +170,7 @@ describe("Models provider login", () => {
             {
               id: "openai/siwc",
               brandId: "openai",
-              label: "Sign in with ChatGPT",
+              label: "Sign in with ChatGPT (Beta)",
               kind: "oauth",
               featured: false,
             },
@@ -190,7 +190,7 @@ describe("Models provider login", () => {
     await selectProvider(page, "openai");
     const options = [...page.querySelectorAll("[data-models-login-choice] button")];
     expect(options.map((option) => option.textContent?.trim())).toEqual([
-      "Sign in with ChatGPT",
+      "Sign in with ChatGPT (Beta)",
       "Codex login (device code)",
     ]);
     expect(document.activeElement).toBe(options[0]);

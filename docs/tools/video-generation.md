@@ -1,5 +1,5 @@
 ---
-summary: "Generate videos via video_generate from text, image, or video references across 16 provider backends"
+summary: "Generate videos via video_generate from text, image, or video references across 15 provider backends"
 read_when:
   - Generating videos via the agent
   - Configuring video-generation providers and models
@@ -9,7 +9,7 @@ sidebarTitle: "Video generation"
 ---
 
 OpenClaw agents generate videos from text prompts, reference images, or
-existing videos through `video_generate`. Sixteen provider backends are
+existing videos through `video_generate`. Fifteen provider backends are
 supported; the agent picks the right one automatically based on config and
 available API keys.
 
@@ -104,7 +104,6 @@ of failing the task if local persistence rejects an oversized file.
 | fal                   | `fal-ai/minimax/video-01-live`  |  ✓   | 1 image; up to 9 with Seedance reference-to-video    | Up to 3 videos with Seedance reference-to-video | `FAL_KEY`                                |
 | Google                | `veo-3.1-fast-generate-preview` |  ✓   | 1 image                                              | 1 video                                         | `GEMINI_API_KEY`                         |
 | MiniMax               | `MiniMax-Hailuo-2.3`            |  ✓   | 1 image                                              | -                                               | `MINIMAX_API_KEY` or MiniMax OAuth       |
-| OpenAI                | `sora-2`                        |  ✓   | 1 image                                              | 1 video                                         | `OPENAI_API_KEY`                         |
 | OpenRouter            | `google/veo-3.1-fast`           |  ✓   | Up to 4 images (first/last frame or references)      | -                                               | `OPENROUTER_API_KEY`                     |
 | Qwen                  | `wan2.6-t2v`                    |  ✓   | Yes (remote URL)                                     | Yes (remote URL)                                | `QWEN_API_KEY`                           |
 | Runway                | `gen4.5`                        |  ✓   | 1 image                                              | 1 video                                         | `RUNWAYML_API_SECRET`                    |
@@ -132,7 +131,6 @@ the shared live sweep:
 | fal        |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` only when using Seedance reference-to-video                                                  |
 | Google     |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; shared `videoToVideo` skipped because the current buffer-backed Gemini/Veo sweep does not accept that input |
 | MiniMax    |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
-| OpenAI     |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; shared `videoToVideo` skipped because this org/input path needs provider-side video edit access             |
 | OpenRouter |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
 | Qwen       |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` skipped because this provider needs remote `http(s)` video URLs                              |
 | Runway     |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` runs only when the selected model is `runway/gen4_aleph`                                     |
@@ -386,11 +384,6 @@ OpenClaw does not append auto-detected providers.
     resolutions; requests such as `720P` are normalized to the closest
     supported value before submission.
   </Accordion>
-  <Accordion title="OpenAI">
-    Only `size` override is forwarded. Other style overrides
-    (`aspectRatio`, `resolution`, `audio`, `watermark`) are ignored with
-    a warning.
-  </Accordion>
   <Accordion title="OpenRouter">
     Uses OpenRouter's asynchronous `/videos` API. OpenClaw submits the
     job, polls `polling_url`, and downloads either `unsigned_urls` or the
@@ -547,7 +540,6 @@ openclaw config set agents.defaults.mediaModels.video.primary "qwen/wan2.6-t2v"
 - [Google (Gemini)](/providers/google)
 - [MiniMax](/providers/minimax)
 - [Models](/concepts/models)
-- [OpenAI](/providers/openai)
 - [OpenRouter](/providers/openrouter)
 - [Qwen](/providers/qwen)
 - [Runway](/providers/runway)

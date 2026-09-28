@@ -298,7 +298,7 @@ export function registerDefaultAuthTokenSuite(): void {
       const path = await import("node:path");
       const token = resolveGatewayTokenOrEnv();
       const deviceIdentityPath = path.join(
-        os.tmpdir(),
+        os.homedir(),
         `openclaw-shared-auth-scope-reuse-${randomUUID()}.json`,
       );
       const wsInitial = await openWs(port);
@@ -379,7 +379,7 @@ export function registerDefaultAuthTokenSuite(): void {
         scopes: [],
         clientId: GATEWAY_CLIENT_NAMES.TEST,
         clientMode: GATEWAY_CLIENT_MODES.TEST,
-        identityPath: path.join(os.tmpdir(), `openclaw-test-device-${randomUUID()}.sqlite`),
+        identityPath: path.join(os.homedir(), `openclaw-test-device-${randomUUID()}.sqlite`),
         nonce,
       });
 

@@ -18,7 +18,6 @@ import {
 } from "./attempt-client-cleanup.js";
 import { buildCodexPluginThreadConfigEligibilityLogData } from "./attempt-diagnostics.js";
 import { verifyStartupArtifact } from "./attempt-runtime-artifact.js";
-import type { StartCodexAttemptThreadResult } from "./attempt-startup-result.js";
 import { CodexAppServerStartupError, withCodexStartupTimeout } from "./attempt-timeouts.js";
 import { ensureCodexAppServerClientRuntime } from "./client-runtime.js";
 import { isCodexAppServerConnectionClosedError, type CodexAppServerClient } from "./client.js";
@@ -137,7 +136,7 @@ export async function startCodexAttemptThread(params: {
   onStartupTimeout: () => void | Promise<void>;
   onExecutionDisconnect?: (error: Error) => void;
   spawnedBy: EmbeddedRunAttemptParams["spawnedBy"];
-}): Promise<StartCodexAttemptThreadResult> {
+}) {
   let pluginAppServer = params.appServer;
   const startupRuntimeAuthProfileId =
     params.startupPreparedAuth?.kind === "profile"

@@ -1,6 +1,3 @@
-/**
- * Shared result and attempt types for embedded-agent run internals.
- */
 import type { AgentRunTimeoutPhase } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import type { HeartbeatToolResponse } from "../../../auto-reply/heartbeat-tool-response.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
@@ -17,6 +14,7 @@ import type { AgentHarnessCompletionScope } from "../../agent-harness-completion
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.types.js";
 import type { AuthProfileStore } from "../../auth-profiles/types.js";
+import type { ContextWindowInfo } from "../../context-window-guard.js";
 import type { DelegationCapability } from "../../delegation-capability.js";
 import type {
   MessagingToolSend,
@@ -92,12 +90,6 @@ type EmbeddedRunAttemptBase = Omit<
   | "preparedRunAdmission"
   | "admittedRunContext"
 >;
-
-type EmbeddedRunContextWindowInfo = {
-  tokens: number;
-  referenceTokens?: number;
-  source: "model" | "modelsConfig" | "agentContextTokens" | "default";
-};
 
 export type EmbeddedRunFastModeParam = boolean | (() => boolean | undefined);
 
@@ -181,7 +173,7 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   /** Per-model contextTokens cap authored by the operator; absent when none was authored. */
   authoredContextTokenCap?: number;
   /** Source metadata for the resolved model context budget. */
-  contextWindowInfo?: EmbeddedRunContextWindowInfo;
+  contextWindowInfo?: ContextWindowInfo;
   /** Resolved API key for this run when runtime auth did not replace it. */
   resolvedApiKey?: string;
   /** Auth profile resolved for this attempt's provider/model call. */

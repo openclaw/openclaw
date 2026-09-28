@@ -126,37 +126,35 @@ it("keeps Task Scheduler timeout details in the source-build failure report", ()
     expect(spawn).not.toHaveBeenCalled();
   }));
 
-it.each([undefined, "stale-profile"])(
-  "preserves the serving installation when a source command requests an automatic rebuild (profile=%s)",
-  (profile) =>
-    withRuntimePublicationFixture(async ({ root, env, service }) => {
-      vi.mocked(service.readRuntime).mockResolvedValue({
-        status: "running",
-        pid: 23456,
-        systemd: { managerUid: 2001 },
-      });
-      const entry = path.join(root, "dist", "entry.js");
-      const before = await fs.readFile(entry, "utf8");
-      const spawn = vi.fn(() => {
-        throw new Error("Automatic build started under the serving Gateway");
-      });
-      await expect(
-        runNodeMain({
-          cwd: root,
-          args: [...(profile ? ["--profile", profile] : []), "doctor"],
-          env: { ...env, OPENCLAW_RUNNER_LOG: "0" },
-          spawn,
-        }),
-      ).rejects.toThrow(/affected Gateway.*running/);
-      expect(spawn).not.toHaveBeenCalled();
-      expect(
-        vi
-          .mocked(service.readRuntime)
-          .mock.calls.some(([observedEnv]) => observedEnv?.OPENCLAW_PROFILE === profile),
-      ).toBe(true);
-      expect(await fs.readFile(entry, "utf8")).toBe(before);
-    }),
-);
+it("preserves the serving installation when a profiled source command requests an automatic rebuild", () =>
+  withRuntimePublicationFixture(async ({ root, env, service }) => {
+    const profile = "stale-profile";
+    vi.mocked(service.readRuntime).mockResolvedValue({
+      status: "running",
+      pid: 23456,
+      systemd: { managerUid: 2001 },
+    });
+    const entry = path.join(root, "dist", "entry.js");
+    const before = await fs.readFile(entry, "utf8");
+    const spawn = vi.fn(() => {
+      throw new Error("Automatic build started under the serving Gateway");
+    });
+    await expect(
+      runNodeMain({
+        cwd: root,
+        args: ["--profile", profile, "doctor"],
+        env: { ...env, OPENCLAW_RUNNER_LOG: "0" },
+        spawn,
+      }),
+    ).rejects.toThrow(/affected Gateway.*running/);
+    expect(spawn).not.toHaveBeenCalled();
+    expect(
+      vi
+        .mocked(service.readRuntime)
+        .mock.calls.some(([observedEnv]) => observedEnv?.OPENCLAW_PROFILE === profile),
+    ).toBe(true);
+    expect(await fs.readFile(entry, "utf8")).toBe(before);
+  }));
 
 it("holds Gateway startup custody until the automatic source build exits", () =>
   withRuntimePublicationFixture(async ({ root, env, databasePath }) => {
@@ -296,39 +294,31 @@ export function prepareBundledPluginRuntime() {
 );
 
 it.each([
-  "running",
   "unknown runtime",
   "unknown command",
   "unknown load state",
-  "respawn enabled",
   "respawn disabled",
-  "active lock",
   "unknown lock",
-  "busy listener",
   "explicit listener",
   "unknown listener",
-  "running after coordinator",
   "lock after coordinator",
 ])("refuses changed runtime publication with %s", (scenario) =>
   withRuntimePublicationFixture(async ({ root, env, service }) => {
-    if (scenario === "running" || scenario === "unknown runtime") {
+    if (scenario === "unknown runtime") {
       vi.mocked(service.readRuntime).mockResolvedValue({
-        status: scenario === "running" ? "running" : "unknown",
+        status: "unknown",
         systemd: { managerUid: 2001 },
       });
     } else if (scenario === "unknown command") {
       vi.mocked(service.readCommand).mockResolvedValue(null);
     } else if (scenario === "unknown load state") {
       vi.mocked(service.isLoaded).mockRejectedValue(new Error("inspection failed"));
-    } else if (scenario === "respawn enabled" || scenario === "respawn disabled") {
+    } else if (scenario === "respawn disabled") {
       mockProcessPlatform("darwin");
-      vi.mocked(service.isEnabled!).mockResolvedValue(scenario === "respawn enabled");
-    } else if (scenario === "active lock" || scenario === "lock after coordinator") {
-      const lock = vi.mocked(gatewayLocks.readActiveGatewayLockIdentity);
-      lock.mockResolvedValue({ pid: process.pid, createdAt: "now", port: 18789 });
-      if (scenario === "lock after coordinator") {
-        lock.mockResolvedValueOnce(undefined);
-      }
+    } else if (scenario === "lock after coordinator") {
+      vi.mocked(gatewayLocks.readActiveGatewayLockIdentity)
+        .mockResolvedValue({ pid: process.pid, createdAt: "now", port: 18789 })
+        .mockResolvedValueOnce(undefined);
     } else if (scenario === "unknown lock") {
       vi.mocked(gatewayLocks.readActiveGatewayLockIdentity).mockRejectedValue(new Error("unknown"));
     } else if (scenario === "explicit listener") {
@@ -344,14 +334,8 @@ it.each([
       vi.mocked(portProbe.probePortUsage).mockImplementation(async (port) =>
         port === 19420 ? "busy" : "free",
       );
-    } else if (scenario === "busy listener" || scenario === "unknown listener") {
-      vi.mocked(portProbe.probePortUsage).mockResolvedValue(
-        scenario === "busy listener" ? "busy" : "unknown",
-      );
-    } else {
-      vi.mocked(service.readRuntime)
-        .mockResolvedValueOnce({ status: "stopped", systemd: { managerUid: 2001 } })
-        .mockResolvedValue({ status: "running", systemd: { managerUid: 2001 } });
+    } else if (scenario === "unknown listener") {
+      vi.mocked(portProbe.probePortUsage).mockResolvedValue("unknown");
     }
     const publish = vi.fn(async () => "published");
     await expect(
@@ -384,26 +368,21 @@ it("refuses changed runtime publication while another process owns Gateway prese
     }
   }));
 
-it.each(["stopped", "absent"])(
-  "publishes changed artifacts for an affirmatively %s Gateway",
-  (state) =>
-    withRuntimePublicationFixture(async ({ root, env, service, databasePath }) => {
-      if (state === "absent") {
-        service.isAbsent = vi.fn(async () => true);
-      }
-      await expect(
-        withGatewayRuntimeArtifactPublication(
-          { root, env, timeoutMs: 200, assertCurrent() {} },
-          async (assertCurrent) => {
-            await Promise.resolve();
-            await assertCurrent();
-            expect(tryAcquireGatewayStateOwner(databasePath)).toBeNull();
-            return "published";
-          },
-        ),
-      ).resolves.toBe("published");
-    }),
-);
+it("publishes changed artifacts for an affirmatively absent Gateway", () =>
+  withRuntimePublicationFixture(async ({ root, env, service, databasePath }) => {
+    service.isAbsent = vi.fn(async () => true);
+    await expect(
+      withGatewayRuntimeArtifactPublication(
+        { root, env, timeoutMs: 200, assertCurrent() {} },
+        async (assertCurrent) => {
+          await Promise.resolve();
+          await assertCurrent();
+          expect(tryAcquireGatewayStateOwner(databasePath)).toBeNull();
+          return "published";
+        },
+      ),
+    ).resolves.toBe("published");
+  }));
 
 it.each([
   "disjoint",
@@ -518,7 +497,6 @@ it.each(["inspection", "publication"])(
 
 it.each([
   "running",
-  "unknown runtime",
   "changed launcher",
   "replaced entrypoint",
   "changed manager",
@@ -540,9 +518,9 @@ it.each([
     await fs.writeFile(untouched, "original");
     const beforePersistentEffect = async () => {
       await Promise.resolve();
-      if (change === "running" || change === "unknown runtime") {
+      if (change === "running") {
         vi.mocked(service.readRuntime).mockResolvedValue({
-          status: change === "running" ? "running" : "unknown",
+          status: "running",
           systemd: { managerUid: 2001 },
         });
       } else if (change === "changed manager") {

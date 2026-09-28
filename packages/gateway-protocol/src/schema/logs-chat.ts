@@ -91,6 +91,7 @@ export const ChatInputReceiptsSchema = Type.Array(
       runId: Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS }),
       state: Type.Literal("pending"),
       queued: Type.Optional(Type.Literal(true)),
+      cancelled: Type.Optional(Type.Literal(true)),
     }),
     closedObject({
       runId: Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS }),
@@ -338,6 +339,7 @@ export const ChatAbortParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   runId: Type.Optional(NonEmptyString),
   preserveSideRuns: Type.Optional(Type.Boolean()),
+  discardPendingInput: Type.Optional(Type.Boolean()),
 });
 
 /** Inserts an operator-visible synthetic message into an existing chat transcript. */

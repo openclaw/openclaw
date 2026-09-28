@@ -71,6 +71,7 @@ async function resolveOpenAiEmbeddingClient(
   const originalModel = options.model;
   const client = await resolveRemoteEmbeddingClient({
     provider: options.provider ?? "openai",
+    capability: "embedding",
     options,
     defaultBaseUrl: DEFAULT_OPENAI_BASE_URL,
     normalizeModel: normalizeOpenAiModel,

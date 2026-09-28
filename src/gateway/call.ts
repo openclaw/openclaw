@@ -35,7 +35,9 @@ import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { VERSION } from "../version.js";
 import { resolveGatewayAuth } from "./auth-resolve.js";
 import {
+  GatewayCredentialsRequiredError,
   GatewayLocalBackendSharedAuthUnavailableError,
+  GatewayStoredDeviceAuthUnavailableError,
   loadStoredOperatorDeviceAuthToken,
   resolveGatewayCallDeviceAuth,
   type GatewayCallDeviceAuthOptions,
@@ -162,33 +164,12 @@ export type CallGatewayOptions = CallGatewayBaseOptions & {
   scopes?: OperatorScope[];
 };
 
-export class GatewayCredentialsRequiredError extends Error {
-  readonly method: string;
-  readonly configPath: string;
-
-  constructor(params: { method: string; configPath: string }) {
-    super(
-      [
-        `gateway ${params.method} requires credentials before opening a websocket`,
-        "Fix: configure gateway.auth token/password, pair this device, or pass --token/--password.",
-        `Config: ${params.configPath}`,
-      ].join("\n"),
-    );
-    this.name = "GatewayCredentialsRequiredError";
-    this.method = params.method;
-    this.configPath = params.configPath;
-  }
-}
-
 export { GatewayExplicitAuthRequiredError } from "./client-bootstrap.js";
-export { GatewayLocalBackendSharedAuthUnavailableError } from "./call-device-auth.js";
-
-export class GatewayStoredDeviceAuthUnavailableError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "GatewayStoredDeviceAuthUnavailableError";
-  }
-}
+export {
+  GatewayCredentialsRequiredError,
+  GatewayLocalBackendSharedAuthUnavailableError,
+  GatewayStoredDeviceAuthUnavailableError,
+} from "./call-device-auth.js";
 
 export type GatewayTransportErrorJson = {
   ok: false;
@@ -694,6 +675,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
   connectionDetails: GatewayConnectionDetails;
   deviceIdentity: DeviceIdentity | null;
   deviceAuthScope?: string;
+  sshTunnel?: GatewayClientOptions["sshTunnel"];
   storedAuth?: DeviceAuthEntry;
   surfaceGatewayClientRequestErrors: boolean;
 }): Promise<T> {
@@ -710,6 +692,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
     safeTimerTimeoutMs,
     deviceIdentity,
     deviceAuthScope,
+    sshTunnel,
     storedAuth,
     surfaceGatewayClientRequestErrors,
   } = params;
@@ -783,6 +766,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
 
     const client: GatewayClient | undefined = new GatewayClient({
       url,
+      sshTunnel,
       token,
       password,
       edgeAuthHeaders,
@@ -1024,7 +1008,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
       throw new GatewayStoredDeviceAuthUnavailableError(
         [
           "No stored device auth for this gateway origin.",
-          `Run \`openclaw tui --url ${deviceAuthScope}\` to send a pairing request, approve it in that gateway's Control UI (Settings -> Devices) or run \`openclaw devices approve --latest\` on the gateway host, then retry.`,
+          `Run \`openclaw tui${bootstrap.sshTunnel ? "" : ` --url ${projectGatewayUrlForDiagnostics(url)}`}\` to send a pairing request, approve it in that gateway's Control UI (Settings -> Devices) or run \`openclaw devices approve --latest\` on the gateway host, then retry.`,
         ].join("\n"),
       );
     }
@@ -1115,6 +1099,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     connectionDetails,
     deviceIdentity,
     deviceAuthScope,
+    sshTunnel: bootstrap.sshTunnel,
     ...(storedAuth ? { storedAuth } : {}),
     surfaceGatewayClientRequestErrors:
       useStoredDeviceAuth ||

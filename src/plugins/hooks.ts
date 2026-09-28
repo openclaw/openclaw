@@ -583,19 +583,16 @@ export function createHookRunner(
   const getPluginPackageVersion = (pluginId: string): string | undefined =>
     registry.plugins.find((plugin) => plugin.id === pluginId)?.packageVersion;
 
-  const getVoidHookTimeoutMs = (
-    hookName: PluginHookName,
+  const awaitHook = <T>(
     hook: PluginHookRegistration,
-  ): number | undefined =>
-    clampPositiveTimerTimeoutMs(hook.timeoutMs) ??
-    clampPositiveTimerTimeoutMs(voidHookTimeoutMsByHook[hookName]);
-
-  const getModifyingHookTimeoutMs = (
-    hookName: PluginHookName,
-    hook: PluginHookRegistration,
-  ): number | undefined =>
-    clampPositiveTimerTimeoutMs(hook.timeoutMs) ??
-    clampPositiveTimerTimeoutMs(modifyingHookTimeoutMsByHook[hookName]);
+    promise: Promise<T>,
+    defaultTimeoutMs?: number,
+    timeoutOptions?: { unref?: boolean },
+  ): Promise<T> => {
+    const timeoutMs =
+      clampPositiveTimerTimeoutMs(hook.timeoutMs) ?? clampPositiveTimerTimeoutMs(defaultTimeoutMs);
+    return timeoutMs ? withHookTimeout(promise, timeoutMs, timeoutOptions) : promise;
+  };
 
   const runSyncMessageHookStep = <K extends SyncHookName>(
     hook: PluginHookRegistration<K>,
@@ -669,8 +666,8 @@ export function createHookRunner(
    */
   async function runVoidHook<K extends PluginHookName>(
     hookName: K,
-    event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
-    ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
+    event: HookEvent<K>,
+    ctx: HookContext<K>,
     optionsValue: VoidHookRunOptions = {},
     matcherToolName?: string,
   ): Promise<void> {
@@ -688,12 +685,9 @@ export function createHookRunner(
         const promise = Promise.resolve(
           hookName === "gateway_stop" ? runPluginCleanup(hook.handler, invoke) : invoke(),
         );
-        const timeoutMs = getVoidHookTimeoutMs(hookName, hook);
-        if (timeoutMs) {
-          await withHookTimeout(promise, timeoutMs, { unref: optionsValue.unrefTimeout ?? true });
-        } else {
-          await promise;
-        }
+        await awaitHook(hook, promise, voidHookTimeoutMsByHook[hookName], {
+          unref: optionsValue.unrefTimeout ?? true,
+        });
       } catch (err) {
         handleHookError({ hookName, pluginId: hook.pluginId, error: err });
       }
@@ -736,8 +730,8 @@ export function createHookRunner(
    */
   async function runModifyingHook<K extends PluginHookName, TResult>(
     hookName: K,
-    event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
-    ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
+    event: HookEvent<K>,
+    ctx: HookContext<K>,
     policy: ModifyingHookPolicy<K, TResult> = {},
     matcherToolName?: string,
   ): Promise<TResult | undefined> {
@@ -791,8 +785,7 @@ export function createHookRunner(
         let handlerResult: TResult | undefined;
         try {
           const promise = Promise.resolve(handler(handlerEvent, handlerContext));
-          const timeoutMs = getModifyingHookTimeoutMs(hookName, hook);
-          handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+          handlerResult = await awaitHook(hook, promise, modifyingHookTimeoutMsByHook[hookName]);
         } finally {
           // Expiry closes this handler even while its work or a later handler continues.
           if (invocation) {
@@ -842,8 +835,8 @@ export function createHookRunner(
    */
   async function runClaimingHook<K extends PluginHookName, TResult extends { handled: boolean }>(
     hookName: K,
-    event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
-    ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1] & ClaimingHookAdmission,
+    event: HookEvent<K>,
+    ctx: HookContext<K> & ClaimingHookAdmission,
     runHandler?: (run: () => Promise<TResult | void>) => Promise<TResult | void>,
   ): Promise<TResult | undefined> {
     const hooks = getHooksForName(registry, hookName, ctx);
@@ -863,8 +856,8 @@ export function createHookRunner(
   >(
     hooks: Array<PluginHookRegistration<K> & { pluginId: string }>,
     hookName: K,
-    event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
-    ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1] & ClaimingHookAdmission,
+    event: HookEvent<K>,
+    ctx: HookContext<K> & ClaimingHookAdmission,
     runHandler?: (run: () => Promise<TResult | void>) => Promise<TResult | void>,
   ): Promise<
     | { status: "handled"; result: TResult }
@@ -883,8 +876,7 @@ export function createHookRunner(
           const promise = Promise.resolve(
             (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>)(event, ctx),
           );
-          const timeoutMs = clampPositiveTimerTimeoutMs(hook.timeoutMs);
-          return timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+          return await awaitHook(hook, promise);
         };
         const handlerResult = runHandler ? await runHandler(invokeHandler) : await invokeHandler();
         if (handlerResult?.handled) {
@@ -1231,8 +1223,7 @@ export function createHookRunner(
             ctx: PluginHookSkillContext,
           ) => Promise<PluginHookSkillProposalEvaluateResult | void>;
           const promise = Promise.resolve(handler(immutableEvent, ctx));
-          const timeoutMs = getModifyingHookTimeoutMs(hookName, hook);
-          const result = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+          const result = await awaitHook(hook, promise, modifyingHookTimeoutMsByHook[hookName]);
           return result
             ? Object.assign({}, attribution, { status: "completed" as const, result })
             : Object.assign({}, attribution, { status: "skipped" as const });

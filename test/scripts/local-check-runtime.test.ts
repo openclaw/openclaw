@@ -56,6 +56,19 @@ function makeEnv(overrides: Record<string, string | undefined> = {}) {
   return env;
 }
 
+function makeBoundedOxlintEnv(args: string[], overrides: NodeJS.ProcessEnv = {}) {
+  return makeEnv({
+    CI: "true",
+    OPENCLAW_LOCAL_CHECK: "0",
+    OPENCLAW_OXLINT_BATCH_CONCURRENCY: "1",
+    OPENCLAW_OXLINT_BOUNDED_SHARD_ARGS: JSON.stringify(args),
+    GOMAXPROCS: undefined,
+    GOGC: undefined,
+    GOMEMLIMIT: undefined,
+    ...overrides,
+  });
+}
+
 describe("local-check-runtime", () => {
   it("resolves repo tools from the primary checkout for dependency-less worktrees", () => {
     const primaryRoot = createTempDir("openclaw-primary-checkout-");
@@ -351,6 +364,106 @@ describe("local-check-runtime", () => {
     expect(env.GOMEMLIMIT).toBe("5GiB");
     expect(args.filter((arg) => arg.startsWith("--threads"))).toEqual(["--threads=3"]);
   });
+
+  it.each(["config/tsconfig/oxlint.core.json", "extensions/tsconfig.json"])(
+    "uses the measured serial shard budget for %s on admitted Linux CI hosts",
+    (config) => {
+      const inputArgs = ["--tsconfig", config];
+      const inputEnv = makeBoundedOxlintEnv(inputArgs);
+      const { args, env } = applyLocalOxlintPolicy(inputArgs, inputEnv, {
+        logicalCpuCount: 4,
+        totalMemoryBytes: 16 * GIB,
+        memoryCapacityBytes: 15 * GIB,
+        memoryLimitBytes: 14 * GIB,
+        platform: "linux",
+      });
+      expect(args).toContain("--threads=2");
+      expect(args).toContain("--type-aware");
+      expect(env).toMatchObject({ GOMAXPROCS: "4", GOGC: "100", GOMEMLIMIT: "8GiB" });
+      expect(inputEnv.GOMEMLIMIT).toBeUndefined();
+    },
+  );
+
+  it.each([
+    { cpus: 2, capacity: 16 * GIB, platform: "linux" as const, concurrency: "1" },
+    { cpus: 4, capacity: 8 * GIB, platform: "linux" as const, concurrency: "1" },
+    { cpus: 4, capacity: null, platform: "linux" as const, concurrency: "1" },
+    { cpus: 4, capacity: 16 * GIB, platform: "win32" as const, concurrency: "1" },
+    { cpus: 4, capacity: 16 * GIB, platform: "linux" as const, concurrency: "2" },
+  ])(
+    "retains the small-host budget for $cpus CPUs/$capacity bytes/$platform/$concurrency Programs",
+    (host) => {
+      const { args, env } = applyLocalOxlintPolicy(
+        ["--tsconfig=extensions/tsconfig.json"],
+        makeBoundedOxlintEnv(["--tsconfig=extensions/tsconfig.json"], {
+          OPENCLAW_OXLINT_BATCH_CONCURRENCY: host.concurrency,
+        }),
+        {
+          logicalCpuCount: host.cpus,
+          totalMemoryBytes: 16 * GIB,
+          memoryCapacityBytes: host.capacity,
+          memoryLimitBytes: 16 * GIB,
+          platform: host.platform,
+        },
+      );
+      expect(args).toContain("--threads=1");
+      expect(env).toMatchObject({ GOMAXPROCS: "2", GOGC: "30", GOMEMLIMIT: "3GiB" });
+    },
+  );
+
+  it("preserves explicit limits and leaves unmeasured configurations on their existing policy", () => {
+    const host = {
+      logicalCpuCount: 4,
+      totalMemoryBytes: 16 * GIB,
+      memoryCapacityBytes: 16 * GIB,
+      memoryLimitBytes: 16 * GIB,
+      platform: "linux" as const,
+    };
+    const explicit = { GOMAXPROCS: "1", GOGC: "20", GOMEMLIMIT: "2GiB" };
+    const { args, env } = applyLocalOxlintPolicy(
+      ["--tsconfig", "extensions/tsconfig.json", "--threads=1"],
+      makeBoundedOxlintEnv(["--tsconfig", "extensions/tsconfig.json", "--threads=1"], explicit),
+      host,
+    );
+    expect(args).toContain("--threads=1");
+    expect(env).toMatchObject(explicit);
+    for (const unmeasured of [
+      ["--tsconfig", "test/tsconfig/tsconfig.test.root.json"],
+      ["--tsconfig", "extensions/tsconfig.json", "--threads=4"],
+      ["--tsconfig", "extensions/tsconfig.json", "--", "--threads=4"],
+    ]) {
+      const result = applyLocalOxlintPolicy(unmeasured, makeBoundedOxlintEnv(unmeasured), host);
+      expect(result.env).toMatchObject({ GOMAXPROCS: "2", GOGC: "30", GOMEMLIMIT: "3GiB" });
+    }
+  });
+
+  it.each([
+    { config: "config/tsconfig/oxlint.core.json", available: 13 * GIB, admission: "bound" },
+    { config: "extensions/tsconfig.json", available: 9 * GIB, admission: "bound" },
+    { config: "extensions/tsconfig.json", available: null, admission: "bound" },
+    { config: "extensions/tsconfig.json", available: 16 * GIB, admission: "missing" },
+    { config: "extensions/tsconfig.json", available: 16 * GIB, admission: "changed" },
+  ])(
+    "refuses the larger budget with $available available bytes and $admission admission",
+    (row) => {
+      const args = ["--tsconfig", row.config, "extensions/example"];
+      const env = makeBoundedOxlintEnv(args);
+      if (row.admission === "missing") {
+        delete env.OPENCLAW_OXLINT_BOUNDED_SHARD_ARGS;
+      } else if (row.admission === "changed") {
+        args.push("scripts/unmeasured.mts");
+      }
+      const result = applyLocalOxlintPolicy(args, env, {
+        logicalCpuCount: 4,
+        totalMemoryBytes: 16 * GIB,
+        memoryCapacityBytes: 16 * GIB,
+        memoryLimitBytes: row.available,
+        platform: "linux",
+      });
+      expect(result.args).toContain("--threads=1");
+      expect(result.env).toMatchObject({ GOMAXPROCS: "2", GOGC: "30", GOMEMLIMIT: "3GiB" });
+    },
+  );
 
   it.each([
     {

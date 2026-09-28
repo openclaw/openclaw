@@ -60,12 +60,7 @@ describe("audit writer shared worker", () => {
       calibration.close();
       expect(nativeOpens).toBe(1);
       nativeOpens = 0;
-      let eventLoopTicks = 0;
-      const progress = setInterval(() => {
-        eventLoopTicks += 1;
-      }, 1);
       const counters = observeMainThreadSql({ includeClose: true });
-      const startedAt = performance.now();
       const writer = createAuditEventWriter({
         scheduler: createTestGatewayScheduler(),
         stateDir,
@@ -77,17 +72,8 @@ describe("audit writer shared worker", () => {
         writer,
       });
       const clearSink = configureExecutionIdentityAdmissionSink(writer.recordExecutionIdentity);
-      let hostSqlCounts: number[];
-      let readyMs = 0;
-      let readyTicks = 0;
-      let batchStartedAt = startedAt;
-      let batchDrainMs = 0;
-      let stopMs = 0;
       try {
         await writer.ready;
-        readyMs = performance.now() - startedAt;
-        readyTicks = eventLoopTicks;
-        batchStartedAt = performance.now();
         expect(
           enqueueExecutionIdentityContextAtAdmission(
             {
@@ -124,16 +110,10 @@ describe("audit writer shared worker", () => {
       } finally {
         clearSink();
         try {
-          const stopStartedAt = performance.now();
           await recorder.stop();
-          stopMs = performance.now() - stopStartedAt;
-          batchDrainMs = performance.now() - batchStartedAt;
+          expect(nativeOpens).toBe(0);
+          counters.expectIdle();
         } finally {
-          clearInterval(progress);
-          hostSqlCounts = [
-            nativeOpens,
-            ...counters.calls.map((counter) => counter.mock.calls.length),
-          ];
           counters.restore();
           restoreConstructor();
         }
@@ -172,21 +152,6 @@ describe("audit writer shared worker", () => {
       );
 
       expect(owner.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
-      expect(hostSqlCounts).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);
-      console.info(
-        "audit writer probe",
-        JSON.stringify({
-          mode,
-          node: process.versions.node,
-          requests: 6,
-          constructorCalibrationOpens: 1,
-          readyMs,
-          batchDrainMs,
-          stopMs,
-          eventLoopTicks: { readiness: readyTicks, drain: eventLoopTicks - readyTicks },
-          hostSqlCounts,
-        }),
-      );
     },
   );
 });

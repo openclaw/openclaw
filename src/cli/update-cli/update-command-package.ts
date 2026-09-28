@@ -396,7 +396,10 @@ export async function prepareGitPackageExposure(
           ? normalizeFallbackFailureReason(failure.name)
           : "source-exposure-preparation-failed"),
       failure?.stderrTail ?? "Global source exposure did not reach the activation gate",
-      { failureFacts: failure?.failureFacts },
+      {
+        failureFacts: failure?.failureFacts,
+        stepResult: { steps: outcome.steps, failedStep: failure ?? undefined },
+      },
     );
   }
   return {
@@ -524,7 +527,7 @@ export async function stagePackageInstallUpdate(
     throw new UpdatePreMutationError(
       ready.result.reason ?? "package-staging-failed",
       ready.result.failedStep?.stderrTail ?? "Package staging did not produce a target runtime.",
-      { failureFacts: ready.result.failedStep?.failureFacts },
+      { failureFacts: ready.result.failedStep?.failureFacts, stepResult: ready.result },
     );
   }
   return {
