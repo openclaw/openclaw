@@ -1,6 +1,6 @@
 import type { UserProfile } from "../../../packages/gateway-protocol/src/index.ts";
 import { BUILTIN_THEMES } from "../../../packages/gateway-protocol/src/theme.js";
-import type { ControlUiMockGatewayScenario } from "./control-ui-e2e.ts";
+import type { ControlUiMockPresenceUser } from "./control-ui-e2e-contract.ts";
 
 export const defaultControlUiFeatureMethods = [
   "chat.abort",
@@ -61,9 +61,9 @@ export const defaultControlUiFeatureMethods = [
   "worktrees.branches",
 ] as const;
 
-export function createControlUiDefaultResponses(
-  scenario: Pick<ControlUiMockGatewayScenario, "presenceUsers">,
-) {
+export function createControlUiDefaultResponses(scenario: {
+  presenceUsers?: ControlUiMockPresenceUser[];
+}) {
   const user = scenario.presenceUsers?.find((entry) => entry.self);
   const profile: UserProfile | null = user
     ? {
