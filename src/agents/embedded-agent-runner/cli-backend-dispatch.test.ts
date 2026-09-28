@@ -270,6 +270,48 @@ describe("runEmbeddedAgentViaCliBackendIfEligible gate", () => {
     expect(runCliAgent.mock.calls[0]?.[0]).toMatchObject({ provider: "claude-cli" });
   });
 
+  it("preserves host-owned Owner and cron provenance for CLI prompt hooks", async () => {
+    const chatId = `telegram-private:axi_${"a".repeat(32)}:123`;
+    await runGate({
+      trigger: "user",
+      senderId: "owner-123",
+      senderIsOwner: true,
+      chatId,
+      agentAccountId: "pati",
+      currentChannelId: "telegram:123",
+      inputProvenance: { kind: "external_user", sourceChannel: "telegram" },
+    });
+    expect(runCliAgent.mock.calls[0]?.[0]).toMatchObject({
+      trigger: "user",
+      senderId: "owner-123",
+      senderIsOwner: true,
+      chatId,
+      agentAccountId: "pati",
+      currentChannelId: "telegram:123",
+      inputProvenance: { kind: "external_user", sourceChannel: "telegram" },
+    });
+
+    await runGate({
+      trigger: "cron",
+      sessionKey: "agent:main:cron:arxi-proactive-steward",
+      inputProvenance: {
+        kind: "internal_system",
+        sourceTool: "cron",
+        sourcePromptPrefix: "[cron:123 arxi-proactive-steward]",
+      },
+    });
+    expect(runCliAgent.mock.calls[1]?.[0]).toMatchObject({
+      trigger: "cron",
+      sessionKey: "agent:main:cron:arxi-proactive-steward",
+      inputProvenance: {
+        kind: "internal_system",
+        sourceTool: "cron",
+        sourcePromptPrefix: "[cron:123 arxi-proactive-steward]",
+      },
+    });
+    expect(runCliAgent.mock.calls[1]?.[0]?.senderIsOwner).toBeUndefined();
+  });
+
   it("dispatches when no credential mode resolves for the passthrough", async () => {
     resolveModelAuthMode.mockReturnValue(undefined);
     expect(await runGate()).toBeDefined();
