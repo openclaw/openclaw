@@ -331,6 +331,43 @@ describe("slack native approval adapter", () => {
     expect(canApprove("dormant")).toBe(false);
   });
 
+  it("revokes an old reviewer as soon as the current plugin policy changes", async () => {
+    installationStates.push(registerSlackInstallationState("default", "workspace", "T11111111"));
+    const request = buildPluginRequest({
+      turnSourceChannel: "slack",
+      turnSourceTo: "team:T11111111:channel:C11111111",
+      policySubject: { pluginKey: "diffs", tool: "view" },
+    });
+    const config = (reviewer: string): OpenClawConfig => ({
+      channels: { slack: { botToken: "xoxb-default", appToken: "xapp-default" } },
+      approvals: { plugin: { slack: { approvers: [reviewer] } } },
+    });
+    const oldReviewer = "team:T11111111:user:U11111111";
+    const newReviewer = "team:T11111111:user:U22222222";
+    const canApprove = (cfg: OpenClawConfig, senderId: string) =>
+      slackApprovalCapability.authorizeActorAction?.({
+        cfg,
+        accountId: "default",
+        senderId,
+        action: "approve",
+        approvalKind: "plugin",
+        request,
+      }).authorized;
+
+    expect(canApprove(config(oldReviewer), oldReviewer)).toBe(true);
+    const publishedConfig = config(newReviewer);
+    expect(canApprove(publishedConfig, oldReviewer)).toBe(false);
+    expect(canApprove(publishedConfig, newReviewer)).toBe(true);
+    expect(
+      await slackApprovalCapability.native?.resolveApproverDmTargets?.({
+        cfg: publishedConfig,
+        accountId: "default",
+        approvalKind: "plugin",
+        request,
+      }),
+    ).toEqual([{ to: newReviewer }]);
+  });
+
   it("routes scoped reviewers only while their Slack installation has authenticated identity", async () => {
     const cfg = {
       channels: { slack: { botToken: "xoxb-default", appToken: "xapp-default" } },

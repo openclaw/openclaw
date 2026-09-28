@@ -872,6 +872,35 @@ describe("buildGatewayReloadPlan", () => {
 
   describe("registered Slack policy reload boundaries", () => {
     it.each([
+      ["added", undefined, "team:T123:user:U111"],
+      ["edited", "team:T123:user:U111", "team:T123:user:U222"],
+      ["removed", "team:T123:user:U111", undefined],
+    ] as const)("restarts Slack when plugin approvers are %s", async (_change, before, after) => {
+      const { slackSetupPlugin } = await loadBundledPluginFacade<{
+        slackSetupPlugin: ChannelPlugin;
+      }>({
+        pluginId: "slack",
+        artifactBasename: "setup-plugin-api.ts",
+      });
+      setActivePluginRegistry(
+        createTestRegistry([{ pluginId: "slack", plugin: slackSetupPlugin, source: "test" }]),
+      );
+      const configWithApprover = (approver?: string): OpenClawConfig =>
+        approver ? { approvals: { plugin: { slack: { approvers: [approver] } } } } : {};
+      const changedPaths = diffGatewayReloadPaths(
+        configWithApprover(before),
+        configWithApprover(after),
+        listConfigReloadRefinementPrefixes(),
+      );
+
+      const plan = buildGatewayReloadPlan(changedPaths);
+      expect(plan.restartGateway).toBe(false);
+      expect(plan.restartChannels).toEqual(new Set(["slack"]));
+      expect(plan.restartChannelAccounts).toEqual(new Map());
+      expect(plan.reloadPlugins).toBe(false);
+    });
+
+    it.each([
       ["channels.slack.allowFrom", true],
       ["channels.slack.accounts.ops.dmPolicy", true],
       ["channels.slack.accounts.ops.dm.groupChannels", true],

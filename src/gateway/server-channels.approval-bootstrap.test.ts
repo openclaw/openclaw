@@ -4,6 +4,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { getGatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime-context.js";
 import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
 import {
@@ -92,6 +93,7 @@ function createManager(
   options?: {
     channelRuntime?: PluginRuntime["channel"];
     nativeApprovalRuntime?: GatewayNativeApprovalRuntime;
+    getRuntimeConfig?: () => OpenClawConfig;
   },
 ) {
   const log = createSubsystemLogger("gateway/server-channels-approval-bootstrap-test");
@@ -100,7 +102,7 @@ function createManager(
   const channelRuntimeEnvs = { discord: runtime } as unknown as Record<ChannelId, RuntimeEnv>;
   return createChannelManager({
     scheduler: createTestGatewayScheduler(),
-    getRuntimeConfig: () => ({}),
+    getRuntimeConfig: options?.getRuntimeConfig ?? (() => ({})),
     getPluginRegistry: requireActivePluginChannelRegistry,
     channelLogs,
     channelRuntimeEnvs,
@@ -215,6 +217,48 @@ describe("server-channels approval bootstrap", () => {
         capability: "approval.native",
       }),
     ).toBeUndefined();
+  });
+
+  it("starts a replacement approval handler with the published reviewer policy", async () => {
+    const configWithReviewer = (reviewer: string): OpenClawConfig => ({
+      approvals: { plugin: { slack: { approvers: [reviewer] } } },
+    });
+    const firstConfig = configWithReviewer("team:T11111111:user:U11111111");
+    const nextConfig = configWithReviewer("team:T11111111:user:U22222222");
+    let config = firstConfig;
+    const startAccount = vi.fn(
+      async ({
+        abortSignal,
+      }: Parameters<NonNullable<NonNullable<ChannelPlugin["gateway"]>["startAccount"]>>[0]) => {
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    );
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager(createChannelManager, {
+      channelRuntime: createRuntimeChannel(),
+      getRuntimeConfig: () => config,
+    });
+    try {
+      await manager.startChannel("discord");
+      config = nextConfig;
+      await manager.stopChannel("discord");
+      await manager.startChannel("discord");
+
+      expect(hoisted.startChannelApprovalHandlerBootstrap).toHaveBeenCalledTimes(2);
+      expect(hoisted.startChannelApprovalHandlerBootstrap).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ cfg: firstConfig }),
+      );
+      expect(hoisted.startChannelApprovalHandlerBootstrap).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ cfg: nextConfig }),
+      );
+      expect(startAccount).toHaveBeenCalledTimes(2);
+    } finally {
+      await manager.stopChannel("discord");
+    }
   });
 
   it("continues account startup when approval bootstrap startup fails", async () => {
