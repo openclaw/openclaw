@@ -133,7 +133,7 @@ describe("promptCustomApiConfig", () => {
       text: [],
       select: ["plaintext", "openai"],
     });
-    prompter.text.mockImplementationOnce(async ({ validate }) => {
+    prompter.text.mockImplementationOnce(({ validate }) => {
       expect(prompter.select).not.toHaveBeenCalled();
       for (const baseUrl of ["ftp://localhost/v1", "file:///tmp/model", "not-a-url"]) {
         expect(validate(baseUrl)).toMatch(/HTTP.*HTTPS/);
