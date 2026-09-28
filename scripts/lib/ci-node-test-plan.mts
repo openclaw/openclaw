@@ -839,7 +839,7 @@ const COMPACT_BLACKSMITH_SPLIT_OWNERS = new Set([
 const EXCLUSIVE_COMPACT_GROUP_RE =
   /^core-tooling(?:-\d+(?:-hosted-\d+)?|-isolated)$|^core-runtime-tui-pty$|^agentic-gateway-core-(?:runtime|inventory)$|^agentic-cli(?:-hosted-\d+|-process(?:-hosted-\d+)?)?$/u;
 // Exclusive bins run serially, so their packed estimate is their wall clock.
-// An indivisible file above this budget must not acquire additional work.
+// An indivisible file above this budget must not acquire additional serial wall time.
 const COMPACT_EXCLUSIVE_JOB_SECONDS = 150;
 const COMPACT_HYBRID_SERIAL_CLI_JOB_SECONDS = 250;
 
@@ -3687,7 +3687,11 @@ function splitOversizedCompactGroup(
           patterns.toSorted(
             (a, b) => weightForValue(b) - weightForValue(a) || discoveryOrder(a, b),
           ),
-          (bin, file) => batchWeight([...bin, file]) <= secondsCap,
+          // Overflow may fill the pinned workers beside an indivisible file,
+          // but cannot extend that file's existing wall or increase its workers.
+          (bin, file) =>
+            batchWeight([...bin, file]) <=
+            (splitHostedToolingTails ? Math.max(secondsCap, batchWeight(bin)) : secondsCap),
         ).map((batch) => batch.toSorted(discoveryOrder));
       // Full children plus small tails can strand a whole row even when the
       // files fit. On overflow, expose smaller file envelopes for placement.
