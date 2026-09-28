@@ -38,6 +38,8 @@ export async function prepareCronSessionWorkspace(params: {
     cfg: params.cfg,
     agentId: params.agentId,
     sessionTarget: params.input.job.sessionTarget,
+    admissionSource: params.input.admissionSource,
+    ownerSessionKey: params.input.job.owner?.sessionKey,
     sessionKey: params.sessionKey,
     entry: params.cronSession.initialSessionEntry,
     defaultWorkspaceDir: params.defaultWorkspaceDir,
@@ -75,6 +77,8 @@ async function resolveCronSessionWorkspace(params: {
   cfg: OpenClawConfig;
   agentId: string;
   sessionTarget: string;
+  admissionSource: RunCronAgentTurnParams["admissionSource"];
+  ownerSessionKey?: string;
   sessionKey: string;
   entry?: SessionEntry;
   defaultWorkspaceDir: string;
@@ -108,10 +112,30 @@ async function resolveCronSessionWorkspace(params: {
     workspaceDir: entry.spawnedWorkspaceDir,
     cwd: entry.spawnedCwd,
   });
+  const requestedCwd = normalizeOptionalString(entry.spawnedCwd);
+  if (
+    params.admissionSource === "requester-schedule" &&
+    (override || requestedCwd || entry.worktree)
+  ) {
+    const ownerSessionKey = normalizeOptionalString(params.ownerSessionKey);
+    if (
+      !ownerSessionKey ||
+      resolveCronAgentSessionKey({
+        sessionKey: ownerSessionKey,
+        agentId: params.agentId,
+        cfg: params.cfg,
+        mainKey: params.cfg.session?.mainKey,
+      }) !== params.sessionKey
+    ) {
+      throw new CronSessionLifecycleClaimError(
+        params.sessionKey,
+        "Requester-scoped automation can only use its owning conversation’s workspace.",
+      );
+    }
+  }
   const workspaceDir = override
     ? await fs.realpath(resolveUserPath(override))
     : params.defaultWorkspaceDir;
-  const requestedCwd = normalizeOptionalString(entry.spawnedCwd);
   const cwd = requestedCwd ? await fs.realpath(resolveUserPath(requestedCwd)) : undefined;
   params.assertCurrent();
   // A configured fallback is not a saved binding: host-rooted custom sessions
