@@ -273,6 +273,19 @@ async function runWithAdvisoryLimits(
       },
     });
     if (overflow) {
+      if (enabled) {
+        reportLimitViolations(
+          [
+            {
+              file: path.relative(process.cwd(), configPath),
+              title: "Oxlint advisory report exceeded capture limit",
+              message:
+                "The report exceeded 1 MiB. Individual advisory annotations and static evidence were skipped; the complete report was streamed to the job log.",
+            },
+          ],
+          env,
+        );
+      }
       return { status };
     }
     if (status !== 0 && status !== 1) {
