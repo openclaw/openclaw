@@ -128,7 +128,7 @@ export async function runGitRollbackSteps({
     name: string,
     args: string[],
     expectedSource = source,
-    refChange?: "keep" | "rewrite",
+    refChange?: "keep" | "rewrite" | "detach",
   ) => {
     if (source) {
       await assertSourceCurrent();
@@ -146,30 +146,6 @@ export async function runGitRollbackSteps({
         assertCurrent();
         if (refChange === "keep") {
           return { code: 0, stdout: "", stderr: "" };
-        }
-        if (refChange === "rewrite" && source && branch) {
-          const ref = `refs/heads/${branch}`;
-          const reflog = await stepOptions.runCommand(
-            ["git", "-C", gitRoot, "reflog", "exists", ref],
-            options,
-          );
-          assertCurrent();
-          const latest =
-            reflog.code === 0
-              ? await stepOptions.runCommand(
-                  ["git", "-C", gitRoot, "rev-parse", "--verify", `${ref}@{0}`],
-                  options,
-                )
-              : reflog;
-          assertCurrent();
-          if (latest.code !== 0 || !latest.stdout.trim()) {
-            return {
-              ...latest,
-              code: 1,
-              stdout: "",
-              stderr: `Cannot rewrite rollback branch ${branch}: a usable branch reflog is required to verify the transition. Source untouched; previous runtime retained. Inspect the branch and its reflog configuration before recovering manually.`,
-            };
-          }
         }
         const commandResult = await stepOptions.runCommand(argv, options);
         if (refChange === "rewrite" && source && branch && commandResult.code === 0) {
@@ -207,6 +183,13 @@ export async function runGitRollbackSteps({
         kind: "recoverable-maintenance",
         message: `Kept branch ${DEV_BRANCH} created by this update at ${activatedSource.sha}. Once no worktree uses it, remove it with: git branch -d ${quote(DEV_BRANCH)}`,
       };
+    } else if (refChange === "detach" && source && branch && !isFailedUpdateStep(result)) {
+      const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
+      const git = `git -C ${quote(gitRoot)}`;
+      result.advisory = {
+        kind: "recoverable-maintenance",
+        message: `Restored ${quote(gitRoot)} to ${beforeSha} on a detached HEAD: branch ${quote(branch)} has no usable reflog to verify a rollback rewrite, so the rewrite was skipped and it still points to ${source.sha}. Inspect it with: ${git} log -1 ${quote(branch)}. Once no worktree uses it, restore it with: ${git} branch -f ${quote(branch)} ${beforeSha}, then ${git} switch ${quote(branch)}. Enable reflogs for future rollbacks with: ${git} config core.logAllRefUpdates true`,
+      };
     }
     stepOptions.progress?.onStepComplete?.({
       ...result,
@@ -229,7 +212,7 @@ export async function runGitRollbackSteps({
     name: string,
     args: string[],
     expectedSource = source,
-    refChange?: "keep" | "rewrite",
+    refChange?: "keep" | "rewrite" | "detach",
   ) => !isFailedUpdateStep(await execute(name, args, expectedSource, refChange));
   // A retained transaction admitted a clean source tree. It owns no dirty
   // files to reset or clean, even if they appear after its last observation.
@@ -261,13 +244,30 @@ export async function runGitRollbackSteps({
   if (attached && checkedOut) {
     if (source) {
       if (source.sha !== beforeSha) {
+        const { runCommand, cwd, timeoutMs } = recoveryStep("git-rollback-source", [], gitRoot);
+        const options = { cwd, timeoutMs };
+        const ref = `refs/heads/${branch}`;
+        const reflog = await runCommand(["git", "-C", gitRoot, "reflog", "exists", ref], options);
+        assertCurrent();
+        const latest =
+          reflog.code === 0
+            ? await runCommand(
+                ["git", "-C", gitRoot, "rev-parse", "--verify", `${ref}@{0}`],
+                options,
+              )
+            : reflog;
+        assertCurrent();
+        const rewrite = latest.code === 0 && Boolean(latest.stdout.trim());
         // Stay attached for branch custody; porcelain also protects ignored files.
         // checkout -B lacks CAS, so execute verifies its reflog transition afterward.
+        // Without a reflog, detaching writes no branch ref yet restores every tracked input.
         await restore(
           "git-rollback-source",
-          ["checkout", "--no-overwrite-ignore", "-B", branch, beforeSha],
-          { sha: beforeSha, branch },
-          "rewrite",
+          rewrite
+            ? ["checkout", "--no-overwrite-ignore", "-B", branch, beforeSha]
+            : ["checkout", "--detach", "--no-overwrite-ignore", beforeSha],
+          { sha: beforeSha, branch: rewrite ? branch : "HEAD" },
+          rewrite ? "rewrite" : "detach",
         );
       }
     } else {
