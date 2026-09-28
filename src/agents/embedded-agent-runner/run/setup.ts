@@ -35,6 +35,9 @@ type HookContext = {
   messageProvider?: string;
   trigger?: string;
   channelId?: string;
+  /** Current logical model selection, mirroring the embedded hook context. */
+  modelProviderId?: string;
+  modelId?: string;
 };
 
 type HookRunnerLike = {

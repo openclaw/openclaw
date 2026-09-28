@@ -15,6 +15,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import { onAgentEventForRun } from "../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  buildAgentHookContextChannelFields,
+  buildAgentHookContextIdentityFields,
+} from "../../plugins/hook-agent-context.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolvePreparedRunAdmission } from "../admitted-run-context.js";
 import { stripOpenClawMcpToolPrefix } from "../cli-runner/tool-policy.js";
 import { normalizeToolPolicyName } from "../tool-policy.js";
@@ -23,6 +28,7 @@ import { resolveEmbeddedCliBackendDispatchEligibility } from "./cli-backend-disp
 import { createCliDispatchTranscriptRecorder } from "./cli-backend-dispatch-transcript.js";
 import type { RunEmbeddedAgentInternalParams } from "./run/internal-params.js";
 import type { RunEmbeddedAgentParams } from "./run/params.js";
+import { buildBeforeModelResolveAttachments, resolveHookModelSelection } from "./run/setup.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
 const log = createSubsystemLogger("agents/embedded-cli-dispatch");
@@ -121,6 +127,68 @@ async function runEmbeddedAgentViaCliBackend(
   };
   const onAgentToolResult = params.onAgentToolResult;
   const { storePath, expectedLifecycleRevision, expectedWriterRunId } = params.sessionTarget;
+  // Run before_model_resolve hooks so plugins can swap the CLI model before
+  // child process spawn (#156038). The hook sees the run's logical provider
+  // and model identity, matching the embedded setup contract. The override is
+  // honored only when it dispatches to the same CLI backend as the current
+  // run — canonical refs (anthropic/<model> on claude-cli) resolve through
+  // the shared eligibility path, so same-backend swaps pass while
+  // cross-runtime pivots stay rejected.
+  const hookRunner = getGlobalHookRunner();
+  const modelSelection = await resolveHookModelSelection({
+    prompt: params.prompt,
+    attachments: buildBeforeModelResolveAttachments(params.images),
+    provider: params.provider ?? "",
+    modelId: params.model ?? "",
+    modelSelectionLocked: params.modelSelectionLocked,
+    hookRunner,
+    hookContext: {
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      workspaceDir: params.workspaceDir,
+      trigger: params.trigger,
+      modelProviderId: params.provider,
+      modelId: params.model,
+      ...buildAgentHookContextChannelFields(params),
+      ...buildAgentHookContextIdentityFields({
+        trigger: params.trigger,
+        senderId: params.senderId,
+        chatId: params.chatId,
+        channelContext: params.channelContext,
+      }),
+    },
+  });
+  const modelSelectionChangedByHook =
+    modelSelection.provider !== (params.provider ?? "") ||
+    modelSelection.modelId !== (params.model ?? "");
+  const overrideDispatch = modelSelectionChangedByHook
+    ? resolveEmbeddedCliBackendDispatchEligibility({
+        ...params,
+        provider: modelSelection.provider,
+        model: modelSelection.modelId,
+      })
+    : undefined;
+  const sameBackendFamily =
+    !modelSelectionChangedByHook ||
+    overrideDispatch?.provider === dispatch.provider ||
+    (dispatch.provider !== undefined &&
+      typeof modelSelection.provider === "string" &&
+      modelSelection.provider.startsWith(`${dispatch.provider}/`));
+  const hookModel =
+    sameBackendFamily && modelSelection.modelId !== params.model
+      ? modelSelection.modelId
+      : params.model;
+  if (sameBackendFamily && hookModel !== params.model) {
+    log.debug(
+      `CLI dispatch applied before_model_resolve model override ${params.model} -> ${hookModel}.`,
+    );
+  }
+  if (!sameBackendFamily && modelSelectionChangedByHook) {
+    log.debug(
+      `CLI dispatch ignoring cross-family provider override ${dispatch.provider} -> ${modelSelection.provider}; backend family locked to ${dispatch.provider}.`,
+    );
+  }
   // Durable turns mirror CLI output for transcript readers and timeout salvage.
   // Detached runs may borrow the identity without owning its transcript.
   const transcript =
@@ -135,7 +203,7 @@ async function runEmbeddedAgentViaCliBackend(
           runId: params.runId,
           prompt: params.prompt,
           provider: dispatch.provider,
-          model: params.model,
+          model: hookModel,
           cwd: params.cwd ?? params.workspaceDir,
           config: params.config,
           expectedLifecycleRevision,
@@ -228,7 +296,7 @@ async function runEmbeddedAgentViaCliBackend(
       imageOrder: params.imageOrder,
       media: params.media,
       provider: dispatch.provider,
-      model: params.model,
+      model: hookModel,
       ...(params.requestedRouteResolution === "resolved" && params.provider && params.model
         ? { requesterModel: { provider: params.provider, model: params.model } }
         : {}),
