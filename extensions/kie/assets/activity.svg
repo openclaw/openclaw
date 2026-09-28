@@ -1,3 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-  <path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 4h16v16H4ZM10 8l6 4-6 4Z" />
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="8 39 284 222" fill="none" stroke="currentColor" stroke-width="15.5" stroke-linecap="round" stroke-linejoin="round">
+<!--
+Source: https://kie.ai/logo-icon.webp (official website header mark).
+Also verified against https://kie.ai/favicon.ico.
+Hand-traced monochrome approximation of the raster mark for compact activity rows.
+The Kie AI name and mark remain the property of their owner.
+-->
+  <path d="M44 203 123 61M142 60H176L255 203M64 233.5H96M132.5 97V106L77 204H111L116 197H184L204 233.5H235M132.5 106 168 168H100M165.5 102 191 147M206 173 223 204" />
+  <path d="M148.5 75a16 16 0 1 1-32 0 16 16 0 0 1 32 0ZM60 224.5a16 16 0 1 1-32 0 16 16 0 0 1 32 0ZM271.5 224.5a16 16 0 1 1-32 0 16 16 0 0 1 32 0Z" />
 </svg>
