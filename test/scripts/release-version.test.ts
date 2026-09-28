@@ -103,6 +103,12 @@ function readJson(filePath: string): Record<string, unknown> {
   return JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
 }
 
+it("rejects alpha release preparation before reading or changing packages", () => {
+  expect(() => planReleaseVersion({ version: "2026.9.24-alpha.1" })).toThrow(
+    "Alpha releases are retired;",
+  );
+});
+
 describe("release version argument parsing", () => {
   it("defaults to check mode and keeps Android opt-in", () => {
     expect(parseReleaseVersionArgs(["--version", "2026.7.2-beta.1"])).toMatchObject({
