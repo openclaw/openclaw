@@ -164,21 +164,32 @@ describe("Slack Enterprise Grid approval delivery", () => {
     );
   });
 
-  it("delivers a qualified reviewer DM through its authenticated workspace client", async () => {
+  it("delivers a qualified approver DM through its authenticated workspace client", async () => {
     const open = vi.fn().mockResolvedValue({ channel: { id: "D123" } });
     const appClient = {
       conversations: { open },
+    };
+    const cfg = {
+      channels: { slack: { botToken: "xoxb-test", appToken: "xapp-test" } },
     };
     const context = {
       app: { client: appClient },
       config: {},
       workspaceTeamId: "T123",
+      installationIdentity: { kind: "workspace", teamId: "T123" },
     };
 
     const entry = await slackApprovalNativeRuntime.transport.deliverPending({
-      cfg: {} as never,
+      cfg,
       accountId: "default",
       context,
+      request: EXEC_REQUEST,
+      approvalKind: "exec",
+      plannedTarget: {
+        surface: "approver-dm",
+        reason: "preferred",
+        target: { to: "team:T123:user:U123" },
+      },
       preparedTarget: { to: "user:U123", teamId: "T123" },
       pendingPayload: { text: "approve", blocks: [] },
     } as never);
@@ -187,19 +198,30 @@ describe("Slack Enterprise Grid approval delivery", () => {
     expect(sendMessageSlackMock).toHaveBeenCalledWith(
       "channel:D123",
       "approve",
-      expect.objectContaining({ client: appClient, eventScope: undefined }),
+      expect.objectContaining({
+        client: appClient,
+        eventScope: expect.objectContaining({ teamId: "T123", client: appClient }),
+      }),
     );
     expect(entry).toEqual({
       channelId: "C123",
       messageTs: "1712345678.123456",
       teamId: "T123",
+      showMessageExcerpt: false,
     });
 
     await expect(
       slackApprovalNativeRuntime.transport.deliverPending({
-        cfg: {} as never,
+        cfg,
         accountId: "default",
         context,
+        request: EXEC_REQUEST,
+        approvalKind: "exec",
+        plannedTarget: {
+          surface: "approver-dm",
+          reason: "preferred",
+          target: { to: "team:TOTHER:user:U123" },
+        },
         preparedTarget: { to: "user:U123", teamId: "TOTHER" },
         pendingPayload: { text: "approve", blocks: [] },
       } as never),
