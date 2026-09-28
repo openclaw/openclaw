@@ -13,10 +13,8 @@
  *     pnpm test:live -- extensions/anthropic/cli-output.compaction.live.test.ts
  */
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 
 const LIVE =
@@ -86,24 +84,22 @@ function lifecycleEvents(stdout: string) {
 }
 
 describe.skipIf(!LIVE)("claude cli native compaction records", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
   it("maps a real compaction to lifecycle start and end events", async () => {
-    const cwd = await mkdtemp(path.join(os.tmpdir(), "openclaw-claude-compaction-live-"));
-    try {
-      const seed = await runClaude(["Reply with exactly: ok"], cwd);
-      expect(seed.code, `seed run failed: ${seed.stderr}`).toBe(0);
-      const sessionId = readSessionId(seed.stdout);
-      // A seeded turn has content to compact, so /compact does real work here.
-      expect(lifecycleEvents(seed.stdout)).toEqual([]);
+    const cwd = tempDirs.make("openclaw-claude-compaction-live-");
+    const seed = await runClaude(["Reply with exactly: ok"], cwd);
+    expect(seed.code, `seed run failed: ${seed.stderr}`).toBe(0);
+    const sessionId = readSessionId(seed.stdout);
+    // A seeded turn has content to compact, so /compact does real work here.
+    expect(lifecycleEvents(seed.stdout)).toEqual([]);
 
-      const compaction = await runClaude(["/compact", "--resume", sessionId], cwd);
-      expect(compaction.code, `compaction run failed: ${compaction.stderr}`).toBe(0);
+    const compaction = await runClaude(["/compact", "--resume", sessionId], cwd);
+    expect(compaction.code, `compaction run failed: ${compaction.stderr}`).toBe(0);
 
-      expect(lifecycleEvents(compaction.stdout)).toEqual([
-        { kind: "compaction", phase: "start" },
-        { kind: "compaction", phase: "end", completed: true },
-      ]);
-    } finally {
-      await rm(cwd, { recursive: true, force: true });
-    }
+    expect(lifecycleEvents(compaction.stdout)).toEqual([
+      { kind: "compaction", phase: "start" },
+      { kind: "compaction", phase: "end", completed: true },
+    ]);
   }, 600_000);
 });
