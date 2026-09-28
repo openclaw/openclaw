@@ -1,6 +1,8 @@
 import type { proto, WAMessageKey } from "baileys";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { fireAndForgetBoundedHook } from "openclaw/plugin-sdk/hook-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { enqueueWhatsAppHookQueueBarrierForTests } from "../hook-queue.test-helper.js";
 import {
   decodeWhatsAppPollVote,
   maybeEmitWhatsAppPollVoteReceivedHook,
@@ -402,6 +404,7 @@ describe("maybeEmitWhatsAppPollVoteReceivedHook", () => {
     } as never;
     const params = {
       cfg,
+      loadConfig: () => cfg,
       accountId: "default",
       message: voteMessage,
       key: voteKeyFor("VOTE-CACHE-EXPIRED"),
@@ -434,6 +437,10 @@ describe("maybeEmitWhatsAppPollVoteReceivedHook", () => {
 
     maybeEmitWhatsAppPollVoteReceivedHook({
       cfg: { channels: { whatsapp: { pluginHooks: { pollVoteReceived: true } } } } as never,
+      loadConfig: () =>
+        ({
+          channels: { whatsapp: { pluginHooks: { pollVoteReceived: true } } },
+        }) as never,
       accountId: "default",
       message: voteMessage,
       key: voteKeyFor("VOTE-THIRD-PARTY"),
@@ -445,10 +452,10 @@ describe("maybeEmitWhatsAppPollVoteReceivedHook", () => {
   });
 
   it("rechecks the current opt-in before dispatching a queued vote", async () => {
-    const initialConfig = {
+    const initialConfig: OpenClawConfig = {
       channels: { whatsapp: { pluginHooks: { pollVoteReceived: true } } },
     };
-    let currentConfig: typeof initialConfig = initialConfig;
+    let currentConfig: OpenClawConfig = initialConfig;
     const loadConfig = vi.fn(() => currentConfig);
     let releaseQueue!: () => void;
     const queueBlocker = new Promise<void>((resolve) => {
@@ -480,27 +487,35 @@ describe("maybeEmitWhatsAppPollVoteReceivedHook", () => {
       });
 
       rememberWhatsAppOwnPollCreation("default", CHAT_JID, pollMessageId);
-      maybeEmitWhatsAppPollVoteReceivedHook({
-        cfg: initialConfig as never,
+      const voteParams = {
+        cfg: initialConfig,
         loadConfig,
         accountId: "default",
         message: buildPollUpdateMessageForTests({ creationKey, vote }),
         key: voteKeyFor("VOTE-OPT-OUT-QUEUED"),
         getCachedMessage: () => pollCreationMessage,
         selfJid: POLL_CREATOR_JID,
-      } as never);
+      };
+      maybeEmitWhatsAppPollVoteReceivedHook(voteParams);
 
       currentConfig = {
         channels: { whatsapp: { pluginHooks: { pollVoteReceived: false } } },
       };
+      const disabledDispatchBarrier = enqueueWhatsAppHookQueueBarrierForTests();
       releaseQueue();
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      await disabledDispatchBarrier;
 
       expect(loadConfig).toHaveBeenCalled();
       expect(runPollVoteReceivedMock).not.toHaveBeenCalled();
+
+      currentConfig = initialConfig;
+      maybeEmitWhatsAppPollVoteReceivedHook(voteParams);
+      await enqueueWhatsAppHookQueueBarrierForTests();
+
+      expect(runPollVoteReceivedMock).toHaveBeenCalledTimes(1);
     } finally {
       releaseQueue();
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      await enqueueWhatsAppHookQueueBarrierForTests();
     }
   });
 });

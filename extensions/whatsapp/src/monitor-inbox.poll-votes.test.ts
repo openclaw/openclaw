@@ -1,5 +1,6 @@
 // WhatsApp monitor inbox poll-vote hook behavior.
 import { describe, expect, it, vi } from "vitest";
+import { enqueueWhatsAppHookQueueBarrierForTests } from "./hook-queue.test-helper.js";
 import {
   maybeEmitWhatsAppPollVoteReceivedHook,
   rememberWhatsAppOwnPollCreation,
@@ -148,10 +149,7 @@ describe("web monitor inbox poll vote hook", () => {
       pollMessageId: "POLL-GATE-OFF",
       voteMessageId: "VOTE-GATE-OFF",
     });
-    // Give the fire-and-forget dispatch a tick to (not) run.
-    await new Promise((resolve) => {
-      setTimeout(resolve, 20);
-    });
+    await enqueueWhatsAppHookQueueBarrierForTests();
 
     expect(runPollVoteReceivedMock).not.toHaveBeenCalled();
   });
@@ -240,10 +238,7 @@ describe("web monitor inbox poll vote hook", () => {
       pollMessageId: "POLL-THIRD-PARTY",
       voteMessageId: "VOTE-THIRD-PARTY",
     });
-    // Give the fire-and-forget dispatch a tick to (not) run.
-    await new Promise((resolve) => {
-      setTimeout(resolve, 20);
-    });
+    await enqueueWhatsAppHookQueueBarrierForTests();
 
     expect(runPollVoteReceivedMock).not.toHaveBeenCalled();
   });
@@ -305,10 +300,12 @@ describe("web monitor inbox poll vote hook", () => {
         },
       ],
     });
-    // Give the fire-and-forget dispatch a tick to (not) run.
-    await new Promise((resolve) => {
-      setTimeout(resolve, 20);
+    await vi.waitFor(() => {
+      expect(maybeEmitWhatsAppPollVoteReceivedHookMock).toHaveBeenCalledWith(
+        expect.objectContaining({ key: expect.objectContaining({ id: voteMessageId }) }),
+      );
     });
+    await enqueueWhatsAppHookQueueBarrierForTests();
 
     expect(runPollVoteReceivedMock).not.toHaveBeenCalled();
   });
@@ -410,9 +407,7 @@ describe("web monitor inbox poll vote hook", () => {
     // Simulate WhatsApp redelivering the same messages.upsert (e.g. after a
     // brief reconnect) with the identical vote-update message key.
     sock.ev.emit("messages.upsert", voteUpsert);
-    await new Promise((resolve) => {
-      setTimeout(resolve, 20);
-    });
+    await enqueueWhatsAppHookQueueBarrierForTests();
 
     expect(runPollVoteReceivedMock).toHaveBeenCalledTimes(1);
   });
@@ -461,10 +456,7 @@ describe("web monitor inbox poll vote hook", () => {
       pollMessageId: "POLL-ACCOUNT-OVERRIDE-OFF",
       voteMessageId: "VOTE-ACCOUNT-OVERRIDE-OFF",
     });
-    // Give the fire-and-forget dispatch a tick to (not) run.
-    await new Promise((resolve) => {
-      setTimeout(resolve, 20);
-    });
+    await enqueueWhatsAppHookQueueBarrierForTests();
 
     expect(runPollVoteReceivedMock).not.toHaveBeenCalled();
   });
@@ -548,9 +540,7 @@ describe("web monitor inbox poll vote hook", () => {
         getCachedMessage: () => pollCreationMessage,
         selfJid: SELF_JID,
       });
-      await new Promise((resolve) => {
-        setTimeout(resolve, 20);
-      });
+      await enqueueWhatsAppHookQueueBarrierForTests();
       expect(runPollVoteReceivedMock).not.toHaveBeenCalled();
 
       // The same vote, dispatched as account A (the actual owner), does fire.

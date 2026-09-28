@@ -1,6 +1,8 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { fireAndForgetBoundedHook } from "openclaw/plugin-sdk/hook-runtime";
 // Whatsapp tests cover process message plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { enqueueWhatsAppHookQueueBarrierForTests } from "../../hook-queue.test-helper.js";
 import { createAcceptedWhatsAppSendResult } from "../../inbound/send-result.test-helper.js";
 import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
 
@@ -649,10 +651,10 @@ describe("processMessage group system prompt wiring", () => {
     const internalReceived = vi.fn();
     registerInternalHook("message:received", internalReceived);
     resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
-    const initialConfig = {
+    const initialConfig: OpenClawConfig = {
       channels: { whatsapp: { pluginHooks: { messageReceived: true } } },
     };
-    let currentConfig: typeof initialConfig = initialConfig;
+    let currentConfig: OpenClawConfig = initialConfig;
     const loadConfig = vi.fn(() => currentConfig);
     const releaseQueue = occupyWhatsAppHookQueue();
 
@@ -664,15 +666,16 @@ describe("processMessage group system prompt wiring", () => {
       currentConfig = {
         channels: { whatsapp: { pluginHooks: { messageReceived: false } } },
       };
+      const disabledDispatchBarrier = enqueueWhatsAppHookQueueBarrierForTests();
       releaseQueue();
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      await disabledDispatchBarrier;
 
       expect(loadConfig).toHaveBeenCalled();
       expect(runMessageReceivedMock).not.toHaveBeenCalled();
       expect(internalReceived).not.toHaveBeenCalled();
     } finally {
       releaseQueue();
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      await enqueueWhatsAppHookQueueBarrierForTests();
     }
   });
 

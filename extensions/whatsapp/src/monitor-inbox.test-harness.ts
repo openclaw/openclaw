@@ -334,6 +334,7 @@ export async function startInboxMonitor(
   }
   const merged = {
     cfg: mockLoadConfig() as never,
+    loadConfig: mockLoadConfig,
     verbose: false,
     onMessage,
     accountId: DEFAULT_ACCOUNT_ID,
