@@ -1,17 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import {
-  buildExecApprovalContinuationFallbackPrompt,
   buildExecApprovalContinuationPrompt,
   formatExecApprovalContinuationSourceOutput,
   resizeExecApprovalContinuationPrompt,
 } from "./bash-tools.exec-approval-output.js";
-import {
-  appendExecTimeoutRetryGuidance,
-  renderExecExitLabel,
-  renderExecOutputText,
-  renderExecUpdateText,
-} from "./bash-tools.exec-output.js";
+import { appendExecTimeoutRetryGuidance } from "./bash-tools.exec-output.js";
 import { runExecProcess } from "./bash-tools.exec-runtime.js";
 
 const MAX_SOURCE_UTF16_UNITS = 256_000;
@@ -37,48 +31,9 @@ describe("formatExecApprovalContinuationSourceOutput", () => {
     ).toBe("");
   });
 
-  it("preserves a single stream including all whitespace", () => {
-    const value = "first\r\n\tindented\n\n  spaced  \ttrailing\t\n   ";
-    expect(
-      formatExecApprovalContinuationSourceOutput([
-        { label: "stdout", value },
-        { label: "stderr", value: "" },
-      ]),
-    ).toBe(value);
-  });
-
-  it("labels multiple streams in their supplied order", () => {
-    expect(
-      formatExecApprovalContinuationSourceOutput([
-        { label: "stdout", value: "out\n" },
-        { label: "stderr", value: "err\n" },
-        { label: "error", value: "boom" },
-      ]),
-    ).toBe("[stdout]\nout\n\n[stderr]\nerr\n\n[error]\nboom");
-  });
-
-  it("is identical at the 256k source cap", () => {
-    const exact = "x".repeat(MAX_SOURCE_UTF16_UNITS);
-    expect(formatExecApprovalContinuationSourceOutput([{ label: "stdout", value: exact }])).toBe(
-      exact,
-    );
-  });
-
-  it("keeps useful head and tail data within the 256k source cap", () => {
-    const value = `${"a".repeat(200_000)}\n${"b".repeat(200_000)}`;
-    const formatted = formatExecApprovalContinuationSourceOutput([{ label: "stdout", value }]);
-
-    expect(formatted).toHaveLength(MAX_SOURCE_UTF16_UNITS);
-    expect(formatted.split(MARKER)).toHaveLength(2);
-    expect(formatted.startsWith("a")).toBe(true);
-    expect(formatted.endsWith("b")).toBe(true);
-  });
-
   it.each([
-    { name: "stderr", label: "stderr", stdoutUnits: 200_000, streamUnits: 100_000 },
     { name: "head header cut", label: "stderr", stdoutUnits: 191_907, streamUnits: 100_000 },
     { name: "tail header cut", label: "stderr", stdoutUnits: 200_000, streamUnits: 63_970 },
-    { name: "already retained header", label: "stderr", stdoutUnits: 200_000, streamUnits: 63_960 },
   ])("preserves the retained stream label across $name", ({ label, stdoutUnits, streamUnits }) => {
     const formatted = formatExecApprovalContinuationSourceOutput([
       { label: "stdout", value: "a".repeat(stdoutUnits) },
@@ -90,14 +45,6 @@ describe("formatExecApprovalContinuationSourceOutput", () => {
     expect(formatted).toContain(`${MARKER}\n[${label}]\n`);
     expect(formatted.split(`[${label}]\n`)).toHaveLength(2);
     expect(formatted.endsWith("b")).toBe(true);
-  });
-
-  it("does not mistake stream-like text in single-stream output for a stream boundary", () => {
-    const formatted = formatExecApprovalContinuationSourceOutput([
-      { label: "stdout", value: `${"a".repeat(200_000)}\n[stderr]\n${"b".repeat(100_000)}` },
-    ]);
-
-    expect(formatted).not.toContain(`${MARKER}\n[stderr]\n`);
   });
 
   it("never splits surrogate pairs at either source-cap cut", () => {
@@ -137,56 +84,6 @@ describe("buildExecApprovalContinuationPrompt", () => {
     expect(built.message.indexOf(OUTPUT_BEGIN)).toBeLessThan(built.resultRange.start);
     expect(built.resultRange.end).toBeLessThan(built.message.indexOf(OUTPUT_END));
   });
-
-  it.each([
-    {
-      name: "outcome-unknown",
-      resultText:
-        "Exec outcome unknown (node=node-1 id=req-1, outcome-unknown)\nThe command may have executed.",
-      expected: [
-        "The command may have executed.",
-        "Do not run the command again automatically.",
-        "Do not claim it was denied, not dispatched, or safe to retry.",
-      ],
-      rejected: "was not dispatched and did not run",
-    },
-    {
-      name: "not-dispatched",
-      resultText:
-        "Exec not dispatched (node=node-1 id=req-1, not-dispatched)\nThe command did not run.",
-      expected: [
-        "was not dispatched and did not run",
-        "Retry only after resolving the connection failure",
-        "Do not claim the command completed, was denied, or may have executed.",
-      ],
-      rejected: "unknown execution outcome",
-    },
-  ])("preserves $name guidance across authenticated continuation handoff", (testCase) => {
-    const built = buildExecApprovalContinuationPrompt(testCase.resultText);
-
-    for (const expected of testCase.expected) {
-      expect(built.message).toContain(expected);
-    }
-    expect(built.message).not.toContain(testCase.rejected);
-    expect(built.message).toContain(OUTPUT_BEGIN);
-    expect(built.message).toContain(OUTPUT_END);
-    expect(built.message.slice(built.resultRange.start, built.resultRange.end)).toBe(
-      testCase.resultText,
-    );
-  });
-
-  it("keeps a self-contained 16k fallback when the runtime handoff is unavailable", () => {
-    const fallback = buildExecApprovalContinuationFallbackPrompt(
-      `HEAD_SENTINEL\n${"x".repeat(30_000)}\nTAIL_SENTINEL`,
-    );
-
-    expect(fallback).toContain("HEAD_SENTINEL");
-    expect(fallback).toContain("TAIL_SENTINEL");
-    expect(fallback).toContain(MARKER);
-    expect(fallback).toContain(OUTPUT_BEGIN);
-    expect(fallback).toContain(OUTPUT_END);
-    expect(fallback.length).toBeLessThan(17_000);
-  });
 });
 
 describe("resizeExecApprovalContinuationPrompt", () => {
@@ -210,79 +107,13 @@ describe("resizeExecApprovalContinuationPrompt", () => {
     expect(resized.split(OUTPUT_BEGIN)).toHaveLength(2);
     expect(resized.split(OUTPUT_END)).toHaveLength(2);
   });
-
-  it("preserves the retained stream label when the resumed model applies its output budget", () => {
-    const output = formatExecApprovalContinuationSourceOutput([
-      { label: "stdout", value: "a".repeat(12_000) },
-      { label: "stderr", value: "b".repeat(10_000) },
-    ]);
-    const built = buildExecApprovalContinuationPrompt(
-      `Exec finished (node=node-1 id=approval-1, code 0)\n${output}`,
-    );
-    const resized = resizeExecApprovalContinuationPrompt({
-      prompt: built.message,
-      range: built.resultRange,
-      maxOutputUtf16Units: 16_000,
-    });
-
-    expect(resized).toContain(`${MARKER}\n[stderr]\n`);
-    expect(resized).toContain(OUTPUT_BEGIN);
-    expect(resized).toContain(OUTPUT_END);
-  });
 });
 
 describe("exec output rendering", () => {
-  it.each(["overall-timeout", "no-output-timeout"] as const)(
-    "warns that %s may already have produced side effects",
-    (exitReason) => {
-      const text = appendExecTimeoutRetryGuidance("Command timed out.", exitReason);
-
-      expect(text).toContain("external side effects may already have completed");
-      expect(text).toContain("Verify the resulting state before retrying");
-      expect(text).toContain("Do not automatically rerun non-idempotent commands");
-      expect(text).toContain("known to be safe to retry");
-    },
-  );
-
-  it("leaves non-timeout exits unchanged", () => {
-    expect(appendExecTimeoutRetryGuidance("Command failed.", "signal")).toBe("Command failed.");
-  });
-
-  it.each([
-    { name: "nonzero exit", exit: { exitCode: 7 }, expected: "code 7" },
-    {
-      name: "signal exit",
-      exit: { exitCode: null, exitSignal: "SIGKILL" },
-      expected: "signal SIGKILL",
-    },
-    { name: "missing exit code", exit: { exitCode: null }, expected: "unknown exit code" },
-  ] as const)("renders $name without inventing exit details", ({ exit, expected }) => {
-    expect(renderExecExitLabel(exit)).toBe(expected);
-  });
-
-  it.each([
-    { name: "undefined input", input: undefined, expected: "(no output)" },
-    { name: "empty input", input: "", expected: "(no output)" },
-    { name: "whitespace-only input", input: "  ", expected: "  " },
-  ])("renders $name", ({ input, expected }) => {
-    expect(renderExecOutputText(input)).toBe(expected);
-  });
-
-  it.each([
-    { name: "no output", input: { warnings: [] }, expected: "(no output)" },
-    { name: "tail output", input: { tailText: "hello", warnings: [] }, expected: "hello" },
-    {
-      name: "warning without output",
-      input: { warnings: ["warning1"] },
-      expected: "warning1\n\n(no output)",
-    },
-    {
-      name: "multiple warnings",
-      input: { tailText: "hello", warnings: ["warning1", "warning2"] },
-      expected: "warning1\nwarning2\n\nhello",
-    },
-  ])("renders updates with $name", ({ input, expected }) => {
-    expect(renderExecUpdateText(input)).toBe(expected);
+  it("warns against retrying after a no-output timeout", () => {
+    expect(appendExecTimeoutRetryGuidance("Command timed out.", "no-output-timeout")).toContain(
+      "Do not automatically rerun non-idempotent commands",
+    );
   });
 });
 

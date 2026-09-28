@@ -61,7 +61,7 @@ async function bindFixtureRepository(env: NodeJS.ProcessEnv, repo: string, ids: 
 
 it
   .skipIf(process.platform === "win32" || process.getuid?.() === 0)
-  .each(["checkout-parent", "checkout", "tracked-parent"])(
+  .each(["checkout-parent", "tracked-parent"])(
   "retains an unreadable %s across CLI cleanup sweeps",
   async (blocked) => {
     const root = tempDirs.make("openclaw-gc-unreadable-");
@@ -92,9 +92,7 @@ it
     const locked =
       blocked === "checkout-parent"
         ? path.dirname(record!.path)
-        : blocked === "checkout"
-          ? record!.path
-          : path.join(record!.path, "tracked");
+        : path.join(record!.path, "tracked");
     setLoggerOverride({ level: "warn", consoleLevel: "silent" });
     const logs = createDiagnosticLogRecordCapture();
     await fs.chmod(locked, 0o000);

@@ -89,6 +89,7 @@ function createWorkloadGateway(readSummary: () => Promise<SessionsListResult>, i
   });
   const gateway = createGatewayHarness(createTestGatewayClient(request));
   gateway.publish({
+    selfUser: { id: "ada", identity: { type: "profile", id: "ada" }, name: "ada" },
     hello: {
       ...gatewayHelloForMethods(["sessions.list", "sessions.subscribe", "sessions.groups.list"]),
       snapshot: { presence: presence(includeRaw) },
@@ -184,7 +185,24 @@ describe("sidebar people workload", () => {
     },
   );
 
-  it("uses one complete cross-agent summary, not the paginated or owner-filtered sidebar", async () => {
+  it("keeps a single deduplicated self visible in the roster and collapsed facepile", async () => {
+    const { sidebar, gateway } = await mountWorkload();
+    const self = presence()[0]!;
+    gateway.publishEvent("presence", {
+      presence: [self, { ...self, instanceId: "second-self-tab" }],
+    });
+    await settle(sidebar);
+    expect(names(sidebar)).toEqual(["ada"]);
+    expect(counts(sidebar, "ada")).toEqual(["1", "7"]);
+    await click(sidebar, ".sidebar-online .sidebar-session-group-toggle");
+    const facepile = sidebar.querySelector("openclaw-viewer-facepile");
+    expect(facepile?.staticUsers?.map((user) => user.id)).toEqual(["ada"]);
+    gateway.publishEvent("presence", { presence: [{ ...self, reason: "disconnect" }] });
+    await settle(sidebar);
+    expect(sidebar.querySelector(".sidebar-online")).toBeNull();
+  });
+
+  it("uses one complete cross-agent summary, including self, not the paginated or owner-filtered sidebar", async () => {
     const pending = createDeferred<SessionsListResult>();
     const { sidebar, sessions, context, request, summaryRequest } = await mountWorkload(
       () => pending.promise,

@@ -620,7 +620,6 @@ export class MatrixClient extends MatrixClientVerification {
 
   private emitMembershipForRoom(room: Room): void {
     emitMatrixMembershipForRoom({
-      client: this.client,
       emitter: this.emitter,
       room,
       selfUserId: this.client.getUserId() ?? this.selfUserId ?? "",

@@ -42,9 +42,9 @@ type ParsedReleaseTag = {
 };
 
 type NpmPublishPlan = {
-  channel: "stable" | "alpha" | "beta";
-  publishTag: "latest" | "alpha" | "beta";
-  mirrorDistTags: ("latest" | "alpha" | "beta")[];
+  channel: "stable" | "beta";
+  publishTag: "latest" | "beta";
+  mirrorDistTags: ("latest" | "beta")[];
 };
 
 type NpmDistTagMirrorAuth = {
@@ -134,26 +134,21 @@ function isLocalDependencySpec(value: string | undefined): boolean {
 export function resolveNpmPublishPlan(
   version: string,
   _currentBetaVersion?: string | null,
-  requestedPublishTag?: "latest" | "alpha" | "beta" | null,
+  requestedPublishTag?: string | null,
 ): NpmPublishPlan {
   const parsedVersion = parseReleaseVersion(version);
   if (parsedVersion === null) {
     throw new Error(`Unsupported release version "${version}".`);
   }
 
-  const publishTag =
-    requestedPublishTag?.trim() === "latest"
-      ? "latest"
-      : requestedPublishTag?.trim() === "alpha"
-        ? "alpha"
-        : "beta";
+  if (parsedVersion.channel === "alpha" || requestedPublishTag?.trim() === "alpha") {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
+  const publishTag = requestedPublishTag?.trim() === "latest" ? "latest" : "beta";
 
   if (parsedVersion.channel !== "stable") {
     if (publishTag !== parsedVersion.channel) {
-      const label = parsedVersion.channel === "alpha" ? "Alpha" : "Beta";
-      throw new Error(
-        `${label} prereleases must publish to the ${parsedVersion.channel} dist-tag.`,
-      );
+      throw new Error("Beta prereleases must publish to the beta dist-tag.");
     }
     return {
       channel: parsedVersion.channel,
@@ -301,7 +296,7 @@ export function collectReleaseTagErrors(params: {
   const parsedVersion = parseReleaseVersion(packageVersion);
   if (parsedVersion === null) {
     errors.push(
-      `package.json version must match YYYY.M.PATCH, YYYY.M.PATCH-N, YYYY.M.PATCH-alpha.N, or YYYY.M.PATCH-beta.N; found "${packageVersion || "<missing>"}".`,
+      `package.json version must match YYYY.M.PATCH, YYYY.M.PATCH-N, or YYYY.M.PATCH-beta.N; found "${packageVersion || "<missing>"}".`,
     );
   } else {
     errors.push(...collectReleaseVersionFloorErrorsBase(parsedVersion));
@@ -315,8 +310,12 @@ export function collectReleaseTagErrors(params: {
   const parsedTag = parseReleaseTagVersion(tagVersion);
   if (parsedTag === null) {
     errors.push(
-      `Release tag must match vYYYY.M.PATCH, vYYYY.M.PATCH-alpha.N, vYYYY.M.PATCH-beta.N, or fallback correction tag vYYYY.M.PATCH-N; found "${releaseTag || "<missing>"}".`,
+      `Release tag must match vYYYY.M.PATCH, vYYYY.M.PATCH-beta.N, or fallback correction tag vYYYY.M.PATCH-N; found "${releaseTag || "<missing>"}".`,
     );
+  }
+
+  if (parsedVersion?.channel === "alpha" || parsedTag?.channel === "alpha") {
+    errors.push("Alpha releases are retired; use a beta prerelease instead.");
   }
 
   const expectedTag = packageVersion ? `v${packageVersion}` : "<missing>";

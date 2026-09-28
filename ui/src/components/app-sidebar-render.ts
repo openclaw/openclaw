@@ -33,6 +33,7 @@ import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-n
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { renderGatewayStatus } from "./gateway-status.ts";
 import { icons } from "./icons.ts";
+import { renderShortcutHint } from "./kbd.ts";
 import { renderNewSessionLink } from "./new-session-link.ts";
 import { HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import {
@@ -190,6 +191,7 @@ export function renderAppSidebarBrand(
       <div class="sidebar-brand__actions">
         <openclaw-tooltip
           .content=${`${collapseLabel} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar)})`}
+          .contentTemplate=${renderShortcutHint(collapseLabel, KEYBOARD_SHORTCUT_COMBOS.toggleSidebar)}
         >
           <button
             type="button"
@@ -204,6 +206,7 @@ export function renderAppSidebarBrand(
         </openclaw-tooltip>
         <openclaw-tooltip
           .content=${`${t("chat.openCommandPalette")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette)})`}
+          .contentTemplate=${renderShortcutHint(t("chat.openCommandPalette"), KEYBOARD_SHORTCUT_COMBOS.commandPalette)}
         >
           <button
             type="button"
@@ -409,6 +412,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
           isHomePanelAvailable(host.sessionDataContext?.gateway)
             ? html`<openclaw-tooltip
                 .content=${`${t("assistantPanel.toggle")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.homePanel)})`}
+                .contentTemplate=${renderShortcutHint(t("assistantPanel.toggle"), KEYBOARD_SHORTCUT_COMBOS.homePanel)}
                 ><button
                   type="button"
                   class="sidebar-brand__icon sidebar-footer-bar__home"

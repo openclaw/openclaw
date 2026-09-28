@@ -13,6 +13,7 @@ import type { NormalizeReplySkipReason } from "../auto-reply/reply/normalize-rep
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveControlUiAutomationRunUrl } from "../config/control-ui-link-base.js";
+import { DEFAULT_CRON_ENABLED } from "../config/cron-limits.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
   resolveSessionStoreCompatibilityAgentId,
@@ -396,7 +397,8 @@ export function buildGatewayCronService(params: {
   const runSchedulerOwned = createScheduledGatewayRunner(scheduledGatewayContextResolver);
   const env = params.env ?? process.env;
   const storePath = resolveCronJobsStorePathFromConfig(params.cfg, env);
-  const cronEnabled = env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
+  const cronEnabled =
+    env.OPENCLAW_SKIP_CRON !== "1" && (params.cfg.cron?.enabled ?? DEFAULT_CRON_ENABLED);
   // Resolve once per cron service snapshot so every webhook route shares the
   // same explicit opt-in while omitted config keeps the guard strict.
   const webhookSsrfPolicy = mergeSsrFPolicies(params.cfg.cron?.webhookSsrfPolicy);
@@ -1182,9 +1184,9 @@ export function buildGatewayCronService(params: {
       }, "cron:watcher-state"),
     logger: cronServiceLogger,
   } satisfies CronExitWatcherHandlers;
-  exitWatchersRef.current = createCronExitWatchers(exitWatcherHandlers);
-  const updateCron = cron.update.bind(cron);
+  exitWatchersRef.current = createCronExitWatchers(exitWatcherHandlers, params.scheduler);
   streamWatchersRef.current = createCronStreamWatchers({
+    scheduler: params.scheduler,
     getProcessSupervisor,
     updateState: async (jobId, patch, streamScheduleKey, streamSourceIdentity) => {
       return await cron.updateExternalState(jobId, streamScheduleKey, streamSourceIdentity, patch);
@@ -1219,13 +1221,9 @@ export function buildGatewayCronService(params: {
       ),
     logger: cronServiceLogger,
   });
-  const routeLiveStreamJob = async (jobId: string) => {
-    const current = cron.getJob(jobId);
-    await routeStreamWatcherMutation(jobId, current, current ? "updated" : "removed");
-  };
   const queueStreamStopAfterValidation = (
     current: CronJob,
-    patch: Parameters<typeof updateCron>[1],
+    patch: Parameters<CronService["update"]>[1],
     nowMs: number,
   ): Promise<void> | undefined => {
     if (
@@ -1283,7 +1281,7 @@ export function buildGatewayCronService(params: {
     } catch (error) {
       // The durable update already committed and the owner persisted its own
       // terminal stream diagnostic. Failing the caller here would claim a
-      // rollback that never happened; routeLiveStreamJob below retries teardown.
+      // rollback that never happened; routeLiveStreamJobLogged below retries teardown.
       cronLogger.warn(
         { jobId, err: String(error) },
         "cron-stream: source teardown failed after committed update",
@@ -1295,7 +1293,8 @@ export function buildGatewayCronService(params: {
   // already-persisted change into a caller-visible error.
   const routeLiveStreamJobLogged = async (jobId: string) => {
     try {
-      await routeLiveStreamJob(jobId);
+      const current = cron.getJob(jobId);
+      await routeStreamWatcherMutation(jobId, current, current ? "updated" : "removed");
     } catch (error) {
       cronLogger.warn(
         { jobId, err: String(error) },

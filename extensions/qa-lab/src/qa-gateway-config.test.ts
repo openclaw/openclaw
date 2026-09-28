@@ -444,7 +444,7 @@ describe("buildQaGatewayConfig", () => {
     });
   });
 
-  it("routes forced Codex mock cells through the app-server OpenAI provider", () => {
+  it("keeps forced Codex mock catalogs static and routes through the app server", () => {
     const cfg = buildConfig({
       providerBaseUrl: "http://127.0.0.1:44080/v1",
       providerMode: "mock-openai",
@@ -457,7 +457,7 @@ describe("buildQaGatewayConfig", () => {
 
     expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("openai/gpt-5.6-luna");
     expect(getModelFallbacks(cfg.agents?.defaults?.model)).toEqual(["openai/gpt-5.6-luna-alt"]);
-    expect(cfg.models?.mode).toBe("merge");
+    expect(cfg.models?.mode).toBe("replace");
     expect(cfg.models?.providers?.openai?.baseUrl).toBe("https://api.openai.com/v1");
     expect(cfg.models?.providers?.openai?.request).toBeUndefined();
     for (const model of cfg.models?.providers?.openai?.models ?? []) {

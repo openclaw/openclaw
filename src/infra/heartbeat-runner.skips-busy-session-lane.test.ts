@@ -17,7 +17,10 @@ import {
 } from "../auto-reply/reply/agent-runner.test-fixtures.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import { resolveReplyOperationRunState } from "../auto-reply/reply/reply-operation-run-state.js";
-import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
+import {
+  createReplyOperation,
+  waitForReplyRunSuccessorAdmission,
+} from "../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunRegistryTesting } from "../auto-reply/reply/reply-run-registry.test-support.js";
 import { createMockTypingController } from "../auto-reply/reply/test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -765,6 +768,8 @@ describe("heartbeat runner skips when target session lane is busy", () => {
         }
         runState.admission = { status: "owned" };
         replyOptions.replyOperation.complete();
+        // Clearing the slot starts asynchronous database-claim release.
+        await waitForReplyRunSuccessorAdmission(sessionKey, null);
         operation = createReplyOperation({
           sessionKey,
           sessionId: "racing-visible-session",

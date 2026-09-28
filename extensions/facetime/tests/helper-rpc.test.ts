@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import net from "node:net";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { FaceTimeHelperActionError } from "../src/helper-results.js";
 import { FaceTimeHelperSocketServer, FaceTimeHelperUnavailableError } from "../src/helper-rpc.js";
 
@@ -91,22 +91,6 @@ function sendHelperPayload(socket: net.Socket, payload: Record<string, unknown>)
   socket.write(encodeHelperPayload(socket, payload));
 }
 
-async function reservePort(): Promise<number> {
-  const server = net.createServer();
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => resolve());
-  });
-  const address = server.address();
-  await new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
-  if (!address || typeof address === "string") {
-    throw new Error("failed to reserve TCP port");
-  }
-  return address.port;
-}
-
 async function waitFor(predicate: () => boolean): Promise<void> {
   const deadline = Date.now() + 1000;
   while (Date.now() < deadline) {
@@ -187,21 +171,37 @@ describe("FaceTime helper RPC", () => {
   const clients = new Set<net.Socket>();
 
   async function startDefaultHelper(
-    port: number,
     overrides: Partial<ConstructorParameters<typeof FaceTimeHelperSocketServer>[0]> = {},
-  ): Promise<FaceTimeHelperSocketServer> {
-    const startedHelper = new FaceTimeHelperSocketServer({
-      host: "127.0.0.1",
-      port,
-      logger: console,
-      ipcKey: TEST_HELPER_AUTH_TOKEN,
-      buildId: TEST_HELPER_BUILD_ID,
-      onMessage: () => undefined,
-      ...overrides,
-    });
-    helper = startedHelper;
-    await startedHelper.start();
-    return startedHelper;
+  ): Promise<{ rpc: FaceTimeHelperSocketServer; port: number }> {
+    // Observe the real listener so its ephemeral port stays bound until helper.stop().
+    const createServer = vi.spyOn(net, "createServer");
+    let listener: net.Server;
+    let rpc: FaceTimeHelperSocketServer;
+    try {
+      rpc = new FaceTimeHelperSocketServer({
+        host: "127.0.0.1",
+        port: 0,
+        logger: console,
+        ipcKey: TEST_HELPER_AUTH_TOKEN,
+        buildId: TEST_HELPER_BUILD_ID,
+        onMessage: () => undefined,
+        ...overrides,
+      });
+      helper = rpc;
+      const created = createServer.mock.results[0];
+      if (created?.type !== "return") {
+        throw new Error("helper did not create its TCP listener");
+      }
+      listener = created.value;
+    } finally {
+      createServer.mockRestore();
+    }
+    await rpc.start();
+    const address = listener.address();
+    if (!address || typeof address === "string") {
+      throw new Error("helper did not bind a TCP port");
+    }
+    return { rpc, port: address.port };
   }
 
   async function connectClient(port: number): Promise<net.Socket> {
@@ -213,8 +213,7 @@ describe("FaceTime helper RPC", () => {
   }
 
   async function startConnectedHelper() {
-    const port = await reservePort();
-    const rpc = await startDefaultHelper(port);
+    const { rpc, port } = await startDefaultHelper();
     const client = await connectClient(port);
     await registerHelper(client, rpc, "com.apple.FaceTime");
     return { rpc, client };
@@ -256,8 +255,7 @@ describe("FaceTime helper RPC", () => {
     ["answerCall", "answer-call"],
     ["leaveCall", "leave-call"],
   ] as const)("fans %s out to FaceTime and Phone helpers", async (method, action) => {
-    const port = await reservePort();
-    const rpc = await startDefaultHelper(port);
+    const { rpc, port } = await startDefaultHelper();
 
     const [faceTimeClient, phoneClient] = await Promise.all([
       connectClient(port),
@@ -298,8 +296,7 @@ describe("FaceTime helper RPC", () => {
   });
 
   it("keeps a disconnected carrier peer in inspect-call completeness", async () => {
-    const port = await reservePort();
-    const rpc = await startDefaultHelper(port);
+    const { rpc, port } = await startDefaultHelper();
 
     const [faceTimeClient, phoneClient] = await Promise.all([
       connectClient(port),
@@ -391,8 +388,7 @@ describe("FaceTime helper RPC", () => {
   });
 
   it("routes outbound calls to FaceTime regardless of helper connection order", async () => {
-    const port = await reservePort();
-    const rpc = await startDefaultHelper(port);
+    const { rpc, port } = await startDefaultHelper();
 
     const phoneClient = await connectClient(port);
     await registerHelper(phoneClient, rpc, "com.apple.mobilephone");
@@ -429,8 +425,7 @@ describe("FaceTime helper RPC", () => {
   });
 
   it("reports a dial as definitely unsent when no helper is connected", async () => {
-    const port = await reservePort();
-    const rpc = await startDefaultHelper(port);
+    const { rpc } = await startDefaultHelper();
 
     await expect(
       rpc.startCall(
@@ -442,9 +437,8 @@ describe("FaceTime helper RPC", () => {
   });
 
   it("rejects an authenticated stale helper and reports its process", async () => {
-    const port = await reservePort();
     let staleHelper: { bundleIdentifier: string; processId: number } | undefined;
-    const rpc = await startDefaultHelper(port, {
+    const { rpc, port } = await startDefaultHelper({
       onStale: (bundleIdentifier, processId) => {
         staleHelper = { bundleIdentifier, processId };
       },
@@ -462,9 +456,8 @@ describe("FaceTime helper RPC", () => {
   });
 
   it("rejects the retired pre-build-id authentication shape", async () => {
-    const port = await reservePort();
     let staleReported = false;
-    const rpc = await startDefaultHelper(port, {
+    const { rpc, port } = await startDefaultHelper({
       onStale: () => {
         staleReported = true;
       },
@@ -501,9 +494,8 @@ describe("FaceTime helper RPC", () => {
   });
 
   it("excludes unauthenticated sockets from call-control fanout", async () => {
-    const port = await reservePort();
     let injectedEvents = 0;
-    const rpc = await startDefaultHelper(port, {
+    const { rpc, port } = await startDefaultHelper({
       onMessage: () => {
         injectedEvents += 1;
       },
@@ -558,9 +550,8 @@ describe("FaceTime helper RPC", () => {
   });
 
   it("delivers a signed helper event once and closes the connection on replay", async () => {
-    const port = await reservePort();
     const events: unknown[] = [];
-    const rpc = await startDefaultHelper(port, {
+    const { rpc, port } = await startDefaultHelper({
       onMessage: (message, peer) => {
         expect(peer).toMatchObject({ bundleIdentifier: "com.apple.FaceTime", processId: 1234 });
         events.push(message);
@@ -583,9 +574,8 @@ describe("FaceTime helper RPC", () => {
   });
 
   it("notifies when the last helper socket disconnects", async () => {
-    const port = await reservePort();
     let disconnects = 0;
-    const rpc = await startDefaultHelper(port, {
+    const { rpc, port } = await startDefaultHelper({
       onDisconnect: () => {
         disconnects += 1;
       },
@@ -604,8 +594,7 @@ describe("FaceTime helper RPC", () => {
     { name: "complete", payload: `${"x".repeat(64 * 1024 + 1)}\n` },
     { name: "incomplete", payload: "x".repeat(64 * 1024 + 1) },
   ])("closes an oversized $name helper frame before parsing", async ({ payload }) => {
-    const port = await reservePort();
-    const rpc = await startDefaultHelper(port, {
+    const { rpc, port } = await startDefaultHelper({
       onMessage: () => {
         throw new Error("oversized input reached the message boundary");
       },
@@ -618,8 +607,7 @@ describe("FaceTime helper RPC", () => {
   });
 
   it("closes a byte-dripping unauthenticated helper socket at the absolute deadline", async () => {
-    const port = await reservePort();
-    const rpc = await startDefaultHelper(port);
+    const { rpc, port } = await startDefaultHelper();
     const client = await connectClient(port);
     const closed = waitForSocketEvent(client, "close");
     const socketErrors: Error[] = [];
@@ -638,8 +626,7 @@ describe("FaceTime helper RPC", () => {
   }, 5_000);
 
   it("rejects helper connections beyond the bounded socket set", async () => {
-    const port = await reservePort();
-    await startDefaultHelper(port);
+    const { port } = await startDefaultHelper();
     const sockets: net.Socket[] = [];
     try {
       for (let index = 0; index < 8; index += 1) {

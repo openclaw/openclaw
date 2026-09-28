@@ -116,8 +116,7 @@ regular beta and stable publishes from a protected lightweight
 `release-publish/<tooling-sha12>-<epoch>` tag at the frozen Tooling SHA after the
 release tag exists and after the OpenClaw npm preflight has succeeded (the preflight runs
 `pnpm plugins:sync:check` among its checks). The tag still selects the exact
-release commit, including a commit on `release/YYYY.M.PATCH`; Tideclaw alpha
-publishes keep using their matching alpha branch. For current validation runs,
+release commit, including a commit on `release/YYYY.M.PATCH`. For current validation runs,
 set `preflight_run_id` and `full_release_validation_run_id` to the same successful
 Full Release Validation run ID and pin `full_release_validation_run_attempt`.
 The publisher resolves the independent `Full Release Artifacts` producer from
@@ -200,13 +199,14 @@ For nonpublish work, explicitly select
 publication selection; profile and filters still select the actual coverage.
 
 GitHub workflow dispatch refs must be branches or tags, not raw commit SHAs. The
-helper pushes a temporary `release-ci/<sha>-...` branch at a trusted Tooling
-SHA, passes the requested Validation SHA through `ref` and `expected_sha`, reuses
+helper first proves GitHub serves the exact Validation SHA by bare-SHA fetch in a
+fresh temporary repository, including in dry runs. It then pushes one immutable
+`release-ci/*` workflow ref at the trusted Tooling SHA, passes the exact Validation
+SHA through `ref` and `expected_sha`, reuses
 strict exact-target evidence when available, and verifies every child workflow
 `headSha` matches the Tooling SHA. Record that Tooling SHA once and never refresh
 it from moving `main`. Regular release branches accept only their final package
-version or a matching beta prerelease; Tideclaw alpha validation uses its exact
-alpha tag and matching alpha branch.
+version or a matching beta prerelease.
 
 `release_profile` controls live/provider breadth passed into release checks. The
 manual release workflows default to `stable`; use `full` only when you

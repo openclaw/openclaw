@@ -33,9 +33,9 @@ import {
   setupWorkerTurnLauncherTest,
   turn,
 } from "./worker-turn-launcher.test-support.js";
+import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
-import { readActualWorkspaceManifest } from "./workspace-reconcile.js";
 import { executeRemoteExecTurn, reconcileWorkspaceAfterTurn } from "./workspace-result-finalize.js";
 import { workerWorkspaceResultStaging } from "./workspace-result-staging.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
@@ -106,6 +106,8 @@ describe("concurrent worker workspace results", () => {
             changed: false,
             verifyStable: async () => {},
             verifyLocalStable: async () => {},
+            publishStagedResult: async () => {},
+            discardPreparedStagedResult: async () => {},
             getAppliedWorkspaceResult: () => ({
               manifestRef: MANIFEST_REF,
               manifest: { version: 1, baseCommit: null, entries: [] },
@@ -241,6 +243,8 @@ describe("concurrent worker workspace results", () => {
           changed: false,
           verifyStable: async () => {},
           verifyLocalStable: async () => {},
+          publishStagedResult: async () => {},
+          discardPreparedStagedResult: async () => {},
         };
       },
       syncWorkspace: vi.fn(),
@@ -326,10 +330,10 @@ describe("concurrent worker workspace results", () => {
         "base",
       );
       const baseCommit = await git(repository, "rev-parse", "HEAD");
-      const base = await readActualWorkspaceManifest({ root: repository, baseCommit });
+      const base = await captureWorkspaceManifest({ root: repository, baseCommit });
       const bytes = Buffer.from("worker result\n\0binary\xff", "latin1");
       await fs.writeFile(path.join(payload, "result.bin"), bytes);
-      const current = await readActualWorkspaceManifest({ root: payload, baseCommit });
+      const current = await captureWorkspaceManifest({ root: payload, baseCommit });
       const node = new NodeWorkerWorkspaceRuntime({ root: path.join(root, "node") });
       // Model HTTP delivery only; command serialization, manifest verification, retention,
       // claims, journals, and managed-worktree application all use their real owners.

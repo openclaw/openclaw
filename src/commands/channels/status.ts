@@ -32,10 +32,6 @@ function redactGatewayUrlSecretsInText(text: string): string {
   });
 }
 
-function formatChannelsStatusError(err: unknown): string {
-  return redactGatewayUrlSecretsInText(formatErrorMessage(err));
-}
-
 /** Query gateway channel status, falling back to config-only output when unavailable. */
 export async function channelsStatusCommand(
   opts: ChannelsStatusOptions,
@@ -90,7 +86,7 @@ export async function channelsStatusCommand(
     if (isGatewayProtocolResponseError(err)) {
       throw err;
     }
-    const safeError = formatChannelsStatusError(err);
+    const safeError = redactGatewayUrlSecretsInText(formatErrorMessage(err));
     const expectedError = isExpectedCliError(err);
     const gatewayAuthUnavailable =
       isGatewayCredentialsCliError(err) || isGatewaySecretRefUnavailableError(err);

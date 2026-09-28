@@ -950,7 +950,17 @@ describe("requester settle wake product flow", () => {
             // Cross both native retry deadlines; a transferred obligation must not
             // start an extra parent turn, while an empty failed handoff must recover.
             await flushOwnedWork();
-            await vi.advanceTimersByTimeAsync(151_000);
+            const retryHorizon = Date.now() + 151_000;
+            if (!acceptNextChild) {
+              const retryAt = registry.getSubagentRunByRunId(alpha.runId)?.requesterSettleWake
+                ?.nextAttemptAt;
+              expect(retryAt).toEqual(expect.any(Number));
+              // The retry starts real worker I/O. Join it before advancing fake time
+              // across that worker's timeout, while retaining the full no-replay window.
+              await vi.advanceTimersByTimeAsync(retryAt! - Date.now());
+              await flushOwnedWork();
+            }
+            await vi.advanceTimersByTimeAsync(retryHorizon - Date.now());
             await registry.testing.sweepOnceForTests();
             await vi.advanceTimersByTimeAsync(0);
             await flushOwnedWork();

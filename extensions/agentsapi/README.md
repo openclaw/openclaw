@@ -1,7 +1,7 @@
 # Agents API harness
 
-The `agentsapi` harness uses API-key authentication and an OpenAI-hosted Linux
-environment. Select it through `agents.defaults.agentRuntime.id` or an agent's
+The `agentsapi` harness uses API-key authentication and defaults to an OpenAI-hosted
+Linux environment. Select it through `agents.defaults.agentRuntime.id` or an agent's
 `agentRuntime.id`. See the [harness configuration reference](https://docs.openclaw.ai/plugins/sdk-agent-harness/runtime-config).
 
 Multi-user Gateways are not supported by the Agents API MVP.
@@ -38,9 +38,68 @@ guaranteed. Tool-bearing output is rejected and no required function is executed
 Token and temperature limits are not forwarded because the Agents API session
 contract does not expose those settings.
 
-The Gateway must be the only writer to each hosted session bound to OpenClaw.
+Set `plugins.entries.agentsapi.config.environment` to `openai_hosted` or
+`self_hosted`, the official Agents API environment discriminator values:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "agentsapi": {
+        "enabled": true,
+        "config": {
+          "environment": "self_hosted",
+          "hostExecutorSkillDirectories": ["/workspace/skills", "/opt/agent/skills"]
+        }
+      }
+    }
+  }
+}
+```
+
+Omitting the setting keeps `openai_hosted`. Self-hosted session creation sends
+the absolute host-prepared OpenClaw workspace as `workspace_directory`. That
+directory must already exist at the same path inside the executor. See the
+[official self-hosted guide](https://developers.openai.com/api/docs/guides/agents-api/environments/self-hosted).
+Before enabling `self_hosted`, configure an operator-owned controller using the
+[official webhook-managed lifecycle](https://developers.openai.com/api/docs/guides/agents-api/environments/lifecycle#start-compute-from-webhooks).
+It receives `agent.session.action_required` with an `environment_connection`
+action, retrieves that session through the authenticated Agents API, and connects
+the executor using `session.environment.id` and the unchanged
+`session.environment.remote_url`. Route only this Gateway's sessions to the
+controller and match its workspace path. The controller owns startup,
+reconnection, and cleanup; this plugin does not launch, provision, or authenticate
+an executor. Input submission has a 60-second HTTP deadline, including any wait
+for the executor to connect. Configure the controller to connect promptly;
+the API's longer connection window does not extend this deadline. Session
+connection events remain visible while it connects.
+Hosted environments support input
+attachments and output file transfers. Self-hosted environments do not support
+file transfers. Gateway function availability follows the configured OpenClaw
+tool policy. Native Agents API apps and connectors are not configured by this
+plugin, and the Gateway image-generation tool is not exposed.
+
+For self-hosted sessions, `hostExecutorSkillDirectories` lists absolute paths on
+the executor host machine. These directories must already be set up with the
+skill files and be available to the Agents API harness through the executor.
+OpenClaw sends the paths as the Agents API `capability_directories` field; it does
+not copy or install files or resolve these paths against the Gateway's filesystem.
+Install any supporting scripts and dependencies on the executor host as well.
+The Agents API harness discovers skills in these directories and reads their
+contents through the executor. OpenClaw's per-skill eligibility filters do not apply to this
+explicit native discovery list; choose only directories you intend to expose.
+Gateway tool policies continue to apply to Gateway functions.
+Sessions created without skill directories remain valid when the list is
+omitted or empty. Changing a nonempty list requires a session reset.
+The list is unused for hosted sessions.
+
+Changing the environment, self-hosted workspace, or skill directories requires resetting the
+OpenClaw session. Existing hosted bindings remain valid with the setting omitted
+or explicitly `openai_hosted`. No saved session is reset or migrated automatically.
+
+The Gateway must be the only writer to each native session bound to OpenClaw.
 Send messages, steering, and interrupts through OpenClaw. Do not also write to
-that hosted session from another API client or a Gateway with independent state.
+that native session from another API client or a Gateway with independent state.
 Keep write credentials under the trusted Gateway operator's control. This
 exclusivity is a deployment requirement, not API-enforced session isolation.
 Binding leases coordinate OpenClaw attempts; tool execution retains current
@@ -54,15 +113,15 @@ server instruction not to retry. Other HTTP errors, including conflicts, are
 returned to the existing turn recovery logic. This does not repair a session
 whose backend startup remains unresolved.
 
-Saved sessions keep their hosted conversation, workspace, and original tool
+Saved sessions keep their native conversation, workspace, and original tool
 declarations when Gateway tools are added. Fresh sessions receive the current
 Gateway tool declarations. Reset an existing session to adopt the new tool
 surface; changing its model or API key still requires a reset.
 
 Child sessions use the same Gateway tool-policy filtering as other OpenClaw
 runtimes, including inherited restrictions and the child's role. Denied session
-and control tools stay unavailable. Policies that restrict hosted shell, file,
-or native web-search access are rejected before the hosted session starts or
+and control tools stay unavailable. Policies that restrict native shell, file,
+or native web-search access are rejected before the native session starts or
 resumes; the MVP cannot narrow those native capabilities.
 
 Token accounting reads canonical native turn records after settlement, since

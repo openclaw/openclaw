@@ -504,11 +504,11 @@ describe("collaboration event scope guards", () => {
         for (const peer of unrelated) {
           expect(frames(peer)).toEqual([]);
         }
-        expect(getSubscribers).toHaveBeenCalledExactlyOnceWith(sessionKey);
         expect(filter).toHaveBeenCalledTimes(2);
 
         await upsertSessionEntryCore(target, { ...entry, ...hidden, updatedAt: 2 });
         invalidateSessionSharingSnapshot(sessionKey);
+        getSubscribers.mockClear();
         filter.mockClear();
         broadcast("chat", payload);
         broadcast("tick", {});
@@ -525,6 +525,8 @@ describe("collaboration event scope guards", () => {
             },
           ]);
         }
+        // Hidden recipients skip narration's intent lookups, isolating admission's shared lookup.
+        expect(getSubscribers).toHaveBeenCalledExactlyOnceWith(sessionKey);
         expect(filter).toHaveBeenCalledTimes(2);
       });
     },

@@ -1,6 +1,7 @@
 /** Shared Computer Use plugin cache reconciliation for isolated Codex homes. */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
   assertDirectoryIdentityStable,
   directoryIdentityIsStable,
@@ -115,7 +116,20 @@ async function ensureRealDirectoryCopy(
   if (stat?.isDirectory() && !stat.isSymbolicLink()) {
     const cachedVersion = await readBundledPluginVersion(physicalCachePath);
     if (cachedVersion === version && !boundary.forceRefresh) {
-      return;
+      // Generated launcher paths can change without a plugin version bump.
+      const [cachedMcp, sourceMcp] = await Promise.all(
+        [physicalCachePath, sourcePluginRoot].map(async (root) =>
+          fs.readFile(path.join(root, ".mcp.json"), "utf8").catch((error: unknown) => {
+            if (extractErrorCode(error) === "ENOENT") {
+              return undefined;
+            }
+            throw error;
+          }),
+        ),
+      );
+      if (cachedMcp === sourceMcp) {
+        return;
+      }
     }
   }
   const cacheName = path.basename(cachePath);
@@ -128,7 +142,10 @@ async function ensureRealDirectoryCopy(
   );
   let backupCreated = false;
   try {
-    await fs.cp(sourcePluginRoot, stagedPath, { recursive: true });
+    // The managed marketplace links to desktop plugins; native discovery needs a
+    // real version directory. Resolve only the root, preserving nested symlinks.
+    const physicalSourceRoot = await fs.realpath(sourcePluginRoot);
+    await fs.cp(physicalSourceRoot, stagedPath, { recursive: true });
     // Source-copy notifications are only invalidations; reconcile them before
     // the original generation's synchronous guard authorizes publication.
     await waitForCodexDesktopGeneration();

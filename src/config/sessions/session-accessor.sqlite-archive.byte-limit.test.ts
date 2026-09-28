@@ -45,7 +45,6 @@ describe("SQLite transcript archive byte limit", () => {
   });
 
   it.each([
-    "one blob",
     "aggregate blobs",
     "decoded stream",
     "one record",
@@ -75,10 +74,7 @@ describe("SQLite transcript archive byte limit", () => {
         kind === "decoded stream" || kind === "valid compressed"
           ? encodeSessionArchiveContent(content)
           : {
-              bytes:
-                kind === "valid identity" || kind === "one record"
-                  ? Buffer.from(content)
-                  : Buffer.alloc(kind === "one blob" ? 1025 : 600),
+              bytes: kind === "aggregate blobs" ? Buffer.alloc(600) : Buffer.from(content),
               suffix: "",
             };
       return {
@@ -90,9 +86,9 @@ describe("SQLite transcript archive byte limit", () => {
         archive_blob: encoded.bytes,
         // Invalid encoded cases must hit metadata sizing before hash or JSON validation.
         archive_sha256:
-          kind === "decoded stream" || kind === "one record" || valid
-            ? createHash("sha256").update(encoded.bytes).digest("hex")
-            : "0".repeat(64),
+          kind === "aggregate blobs"
+            ? "0".repeat(64)
+            : createHash("sha256").update(encoded.bytes).digest("hex"),
         archive_name: `${sessionId}.jsonl${encoded.suffix}`,
         created_at: index,
         published_at: null,

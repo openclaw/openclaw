@@ -10,7 +10,6 @@ import type {
   ToolsCatalogResult,
   ToolsEffectiveResult,
 } from "../../api/types.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForAgentPanel } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import {
@@ -19,7 +18,6 @@ import {
   createPanelRefreshStatus,
   failPanelRefresh,
 } from "../../components/panel-refresh-status.ts";
-import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
 import { t } from "../../i18n/index.ts";
@@ -87,9 +85,8 @@ import {
 } from "./route-navigation.ts";
 import type { AgentsRouteData } from "./route.ts";
 import { clearAgentSkillFilter, loadAgentSkills } from "./skills.ts";
-import { renderAgents } from "./view.ts";
+import { renderAgents, renderAgentsPageHeader } from "./view.ts";
 
-const AGENTS_DOCS_URL = "https://docs.openclaw.ai/concepts/multi-agent";
 type AgentsRequestSources = Partial<
   Pick<ApplicationContext, "agents" | "agentIdentity" | "sessions">
 >;
@@ -1030,14 +1027,7 @@ class AgentsPage
     };
     this.syncGitHubIdentity(selectedAgentId);
     return html`
-      <section class="content-header">
-        <div>
-          <div class="page-title">${titleForRoute("agents")}</div>
-          <div class="page-subtitle">
-            ${subtitleForRoute("agents")} ${renderLearnMoreLink(AGENTS_DOCS_URL)}
-          </div>
-        </div>
-      </section>
+      ${renderAgentsPageHeader()}
       ${renderSettingsWorkspace(
         this.identityAvatarLoader.withActiveRoutes(() =>
           renderAgents({

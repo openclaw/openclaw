@@ -28,6 +28,8 @@ While the initial connection or a route loads, shimmer placeholders reserve the 
 
 The selected chat loads before automatic sidebar session lists refresh. Live events remain subscribed during startup, and explicit sidebar actions remain available. Background lists resume after the transcript loads or reports an error.
 
+Session details share concurrent reads across the sidebar, chat, and resource panels. Returning to an unchanged session reuses its details on the same connection. Session changes, explicit refreshes, and reconnects fetch current details; failed reads remain retryable.
+
 Sidebar pull-request indicators reuse the last known snapshot. Opening a session, its progress card, or its Git activity requests current checkout facts; sidebar rows alone do not poll Git. Active panels detect branch and staged changes from Git metadata. Tool completion refreshes working-tree stats, with a five-minute fallback for edits made outside OpenClaw.
 
 The sidebar’s **Online** list shows compact person rows with avatar presence indicators: solid green means active, amber means idle, and a hollow green ring means connected with activity unavailable. Names stay on one line and fade at the edge when space is tight. The indicators, hovercard, and accessible description preserve the activity distinctions. A compact group at the end of each row shows a theme-accent spinner and running count, then a small message-circle icon and muted open count. Each icon-number pair keeps its natural width, with a wider gap between running and open groups. The group rests at the right edge; names and counts share a text baseline, without fixed digit columns. Counts have no pill background at rest, with explanatory tooltips; hovering or keyboard-focusing the row reveals a subtle grouping pill without shifting the content. Reduced motion keeps the spinner still. Known zero counts are omitted. Open counts each person’s owned, unarchived conversations that you can access across configured agents, excluding hidden subagents, automation, system, and global/unknown sessions. Running counts those conversations actively executing an agent turn, not queued work or activity in descendant sessions. Counts cover the matching sessions before pagination and do not change with your session-list filters. All connected people remain visible, ordered Active, Idle, then Online with activity unavailable. Unavailable counts show no placeholder; the row tooltip and accessible description identify them as unavailable rather than zero. A failed refresh keeps the last counts with a retry notice.
@@ -64,6 +66,9 @@ not whether the active run’s narration survives a history refresh. Completed
 dashboard turns collapse their narration and tool activity under **Worked for …**
 above the answer. Expanding it restores the sequence with the existing tool-call
 groups. When no run duration is available, the heading reads **Worked**.
+The heading includes the total tool-call count followed by any failures, such as
+**Worked · 200 tool calls · 20 failed**. Calls without failures still show the
+total; turns without tool calls omit it.
 
 Consecutive tool activity shares one expandable log, including when background
 work resumes in a new run. Visible messages, media, and conversation markers
@@ -114,6 +119,26 @@ Opening **New agent** keeps your existing Ask OpenClaw conversation. Finish any
 pending wizard or approval before opening the creation choices.
 If team creation stops partway through, the custodian reports the retained
 agents so you can inspect them before creating the missing members.
+
+## Take a photo in chat
+
+Choose **Add attachment → Take photo** in chat or New Session to open a camera
+preview. Allow camera access when your browser asks, then choose **Capture**,
+**Retake**, or **Use photo**. The chosen photo becomes a draft attachment; it does
+not send the message. The preview stays in your browser and does not request
+microphone access.
+
+The live preview requires HTTPS or localhost and a browser that supports camera
+access. On plain HTTP LAN addresses or browsers without the camera API, choose
+**Use device camera** to open the native capture picker instead. This preserves
+mobile camera capture without silently substituting a picker for the preview;
+your browser decides whether it shows a camera or a file picker. If access is denied,
+allow the site in your browser and operating-system camera settings and retry.
+If no camera is available, choose **Upload photo** instead.
+
+The camera stops when you capture a photo, close the dialog, or leave its draft.
+File and photo uploads remain available through their existing pickers, including
+the combined **Attach…** picker on iOS Safari.
 
 ## Watch a desktop in Picture-in-Picture
 
@@ -177,7 +202,8 @@ agent switcher. This enables **team mode**, a browser preference that is off by
 default. The top row becomes a workspace header with the configured Gateway display
 name, or **OpenClaw**, and the OpenClaw mark. Its menu contains **Show one agent**,
 **Agent settings**, and the existing documentation, help, community, and changelog
-links. Sessions appear under collapsible agent headers in configured roster order,
+links. Pinned sessions stay in **Pages**, using their agent's avatar as the icon.
+Other sessions appear under collapsible agent headers in configured roster order,
 which stays stable as activity changes. **Home** disappears from Pages: click an agent header's avatar or name to
 open that agent's main chat. The separate collapse control only folds its sessions.
 The top **+**, labeled **New conversation**, opens an agent menu with avatars and names in

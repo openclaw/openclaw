@@ -88,6 +88,7 @@ describe("channel startup trust refusal", () => {
     setActivePluginRegistry(builder.registry);
     const log = createSubsystemLogger("gateway/channel-trust-refusal-test");
     manager = createChannelManager({
+      scheduler: createTestGatewayScheduler(),
       getRuntimeConfig: () => ({}),
       getPluginRegistry: () => builder.registry,
       channelLogs: { discord: log },

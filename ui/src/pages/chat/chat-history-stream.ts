@@ -21,6 +21,7 @@ import {
 } from "./history-merge.ts";
 import {
   adoptStartedChatRun,
+  type ChatHistoryRunObservation,
   reconcileChatRunFromSessionRow,
   setChatRunError,
 } from "./run-lifecycle.ts";
@@ -165,6 +166,7 @@ export function applyHistoryRun(params: {
   state: ChatState;
   run: ChatHistoryResult["inFlightRun"];
   sessionInfo: GatewaySessionRow | undefined;
+  historyRun: ChatHistoryRunObservation | undefined;
   previousRunProjections: ReturnType<typeof getChatSessionProjection>["runs"];
   runProjectionsBeforeApply: ReturnType<typeof getChatSessionProjection>["runs"];
   currentRunProjections: ReturnType<typeof getChatSessionProjection>["runs"];
@@ -175,6 +177,7 @@ export function applyHistoryRun(params: {
     state,
     run,
     sessionInfo,
+    historyRun,
     previousRunProjections,
     runProjectionsBeforeApply,
     currentRunProjections,
@@ -281,14 +284,29 @@ export function applyHistoryRun(params: {
     isSessionRunActive(sessionInfo ?? {}) &&
     (!Array.isArray(activeRunIds) || activeRunIds.includes(inFlightRunId)) &&
     (!projectedInFlightRun || projectedInFlightRun.status === "streaming");
+  // Only a read issued while this pane still owned the old run can replace it.
+  // The exact active set proves that custody ended, not how the old run finished.
+  // A copied row, a late shared-read consumer, or a different session is not proof.
+  const replacesOwnedRun = Boolean(
+    state.chatRunId &&
+    state.chatRunId !== inFlightRunId &&
+    Array.isArray(activeRunIds) &&
+    !activeRunIds.includes(state.chatRunId) &&
+    historyRun?.runId === state.chatRunId &&
+    historyRun.sessionId === sessionInfo?.sessionId &&
+    historyRun.isCurrent() &&
+    !state.chatQueue.some(
+      (item) => item.sendState === "sending" && item.sendRunId && item.sendRunId !== inFlightRunId,
+    ),
+  );
   const canAdoptInFlightRun =
     inFlightRunIsActive &&
     ((resetStream &&
-      !state.chatRunId &&
+      (!state.chatRunId || replacesOwnedRun) &&
       runProjectionsUnchanged(previousRunProjections, runProjectionsBeforeApply)) ||
       sameRunContinued);
   if (canAdoptInFlightRun) {
-    const recoveringRun = !state.chatRunId;
+    const recoveringRun = state.chatRunId !== inFlightRunId;
     // Canonical run projections change on every live delta or terminal.
     // Their identity fences ABA races where a run starts and finishes while
     // history is pending; deltas from this same live run must still merge.
@@ -303,12 +321,14 @@ export function applyHistoryRun(params: {
   }
   const snapshotStartedAt =
     typeof run.startedAt === "number" && Number.isFinite(run.startedAt) ? run.startedAt : null;
-  const liveText = sameRunContinued
-    ? mergeInFlightAssistantText(
-        resolveInFlightAssistantText(extractText(projectedInFlightRun?.message)),
-        activeStreamBeforeReset,
-      )
-    : activeStreamBeforeReset;
+  const liveText = replacesOwnedRun
+    ? null
+    : sameRunContinued
+      ? mergeInFlightAssistantText(
+          resolveInFlightAssistantText(extractText(projectedInFlightRun?.message)),
+          activeStreamBeforeReset,
+        )
+      : activeStreamBeforeReset;
   state.chatStream = mergeInFlightAssistantText(resolveInFlightAssistantText(run.text), liveText);
   state.chatStreamStartedAt = snapshotStartedAt ?? state.chatStreamStartedAt ?? Date.now();
   // A retained pane gets its boundary from session.message. Only fresh adoption

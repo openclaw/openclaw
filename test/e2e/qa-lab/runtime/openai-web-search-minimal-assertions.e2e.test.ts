@@ -3,7 +3,10 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/openai-web-search-minimal/assertions.mjs";
 
@@ -22,7 +25,8 @@ describe("openai web-search minimal assertions", () => {
         logPath,
         `${JSON.stringify({
           body: {
-            input: "OPENCLAW_SCHEMA_E2E_OK",
+            model: "gpt-5",
+            input: "Return exactly OPENCLAW_SCHEMA_E2E_OK.",
             reasoning: { effort: "low" },
             tools: [{ type: "web_search" }],
           },
@@ -37,6 +41,45 @@ describe("openai web-search minimal assertions", () => {
     }
   });
 
+  it.each([
+    { tools: [{ type: "web_search" }], effort: "low", error: undefined },
+    { tools: [], effort: "low", error: "did not include native web_search" },
+    { tools: [{ type: "web_search" }], effort: "minimal", error: "avoid minimal reasoning" },
+  ])("selects the agent after an Activity recap ($effort, $error)", ({ tools, effort, error }) => {
+    const dir = tempDirs.make("openclaw-web-search-activity-");
+    const logPath = path.join(dir, "requests.jsonl");
+    const prompt = "Return exactly OPENCLAW_SCHEMA_E2E_OK.";
+    const bodies = [
+      { model: "gpt-5", input: [{ role: "user", content: `Summarize this activity: ${prompt}` }] },
+      { model: "gpt-5-mini", input: prompt },
+      {
+        model: "gpt-5",
+        input: [
+          {
+            role: "user",
+            content: [{ type: "input_text", text: `[Mon 2026-09-28 06:00 UTC] ${prompt}` }],
+          },
+        ],
+        reasoning: { effort },
+        tools,
+      },
+    ];
+    writeFileSync(
+      logPath,
+      bodies
+        .map((body) => JSON.stringify({ method: "POST", path: "/v1/responses", body }))
+        .join("\n"),
+    );
+    const result = runAssertSuccessRequest(logPath);
+    if (error) {
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(error);
+    } else {
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+    }
+  });
+
   it("finds success requests split across large scan chunks", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "openclaw-web-search-minimal-"));
     try {
@@ -46,7 +89,8 @@ describe("openai web-search minimal assertions", () => {
         `${JSON.stringify({ path: "/health", body: { pad: "x".repeat(70 * 1024) } })}\n${JSON.stringify(
           {
             body: {
-              input: "OPENCLAW_SCHEMA_E2E_OK",
+              model: "gpt-5",
+              input: "Return exactly OPENCLAW_SCHEMA_E2E_OK.",
               reasoning: { effort: "low" },
               tools: [{ type: "web_search" }],
             },
@@ -121,7 +165,8 @@ describe("openai web-search minimal assertions", () => {
         logPath,
         `${JSON.stringify({
           body: {
-            input: "OPENCLAW_SCHEMA_E2E_OK",
+            model: "gpt-5",
+            input: "Return exactly OPENCLAW_SCHEMA_E2E_OK.",
             reasoning: { effort: "low" },
             tools: [{ name: "web_search", type: "function" }],
           },

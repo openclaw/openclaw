@@ -54,7 +54,6 @@ await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 describe("update-cli", () => {
   const {
     createCaseDir,
-    mockCurrentProcessFreshDoctor,
     mockGatewayHealth,
     mockPackageGatewayLifecycle,
     mockPackageInstallAtCaseDir,
@@ -267,7 +266,6 @@ describe("update-cli", () => {
       vi.spyOn(process, "platform", "get").mockReturnValue(platform);
       if (kind === "package") {
         await mockPackageInstallAtCaseDir();
-        mockCurrentProcessFreshDoctor();
       } else {
         mockGitUpdateAfterMutation();
       }
@@ -329,7 +327,6 @@ describe("update-cli", () => {
     async ({ kind, restart }) => {
       if (kind === "package") {
         await mockPackageInstallAtCaseDir();
-        mockCurrentProcessFreshDoctor();
       } else {
         mockGitUpdateAfterMutation();
       }

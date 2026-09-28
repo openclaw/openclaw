@@ -7,6 +7,7 @@ import "@awesome.me/webawesome/dist/components/radio-group/radio-group.js";
 import "@awesome.me/webawesome/dist/components/switch/switch.js";
 import { html, nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
+import { shellLayoutTraits } from "../app/shell-layout-traits.ts";
 import { t } from "../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { icons } from "./icons.ts";
@@ -76,7 +77,12 @@ export function renderSettingsPage(
   ]
     .filter(Boolean)
     .join(" ");
-  return html`<div class=${className}>${children}</div>`;
+  return html`<div
+    class=${className}
+    ${shellLayoutTraits({ settingsPage: true, settingsWide: options.wide })}
+  >
+    ${children}
+  </div>`;
 }
 
 export function renderDocsLink(url: string, label: unknown): TemplateResult {
@@ -115,7 +121,10 @@ export function renderLearnMoreLink(url: string): TemplateResult {
 
 export function renderSettingsPageHeader(props: SettingsPageHeaderProps): TemplateResult {
   return html`
-    <section class="content-header content-header--settings">
+    <section
+      class="content-header content-header--settings"
+      ${shellLayoutTraits({ toolbarHeader: true })}
+    >
       <div>
         <h1 class="page-title">${props.title}</h1>
         ${props.subtitle ? html`<div class="page-subtitle">${props.subtitle}</div>` : nothing}
@@ -209,6 +218,21 @@ export function renderSettingsGroup(
   return html`<div class=${groupClass}>${rows}</div>`;
 }
 
+function renderSettingsRowText(title: unknown, description: unknown, carapace = false) {
+  return html`
+    <div class="settings-row__text ${carapace ? "oc-settings-row-content" : ""}">
+      <span class="settings-row__title ${carapace ? "oc-settings-row-title" : ""}">${title}</span>
+      ${
+        description
+          ? html`<span class="settings-row__desc ${carapace ? "oc-settings-row-description" : ""}"
+              >${description}</span
+            >`
+          : nothing
+      }
+    </div>
+  `;
+}
+
 export function renderSettingsRow(
   props: SettingsRowProps & { role?: "alert" | "status" },
 ): TemplateResult {
@@ -222,19 +246,7 @@ export function renderSettingsRow(
     .join(" ");
   return html`
     <div class=${className} role=${props.role ?? nothing}>
-      <div class="settings-row__text ${props.carapace ? "oc-settings-row-content" : ""}">
-        <span class="settings-row__title ${props.carapace ? "oc-settings-row-title" : ""}"
-          >${props.title}</span
-        >
-        ${
-          props.description
-            ? html`<span
-                class="settings-row__desc ${props.carapace ? "oc-settings-row-description" : ""}"
-                >${props.description}</span
-              >`
-            : nothing
-        }
-      </div>
+      ${renderSettingsRowText(props.title, props.description, props.carapace)}
       ${
         props.control !== undefined && props.control !== nothing
           ? html`<div
@@ -254,14 +266,7 @@ export function renderSettingsNavRow(
 ): TemplateResult {
   return html`
     <button type="button" class="settings-row settings-row--nav" @click=${props.onClick}>
-      <div class="settings-row__text">
-        <span class="settings-row__title">${props.title}</span>
-        ${
-          props.description
-            ? html`<span class="settings-row__desc">${props.description}</span>`
-            : nothing
-        }
-      </div>
+      ${renderSettingsRowText(props.title, props.description)}
       <div class="settings-row__control">
         ${props.control ?? nothing}
         <span class="settings-row__chevron">${icons.chevronRight}</span>
@@ -298,8 +303,7 @@ export function renderSettingsToggle(props: {
   `;
 }
 
-/** Toggle row: one <label> wraps title, description, and switch, so the whole
- * row is clickable and the checkbox gets its accessible name from the title. */
+/** The whole row activates the switch, whose accessible name follows the title. */
 export function renderSettingsToggleRow(props: {
   icon?: unknown;
   title: unknown;
@@ -337,15 +341,7 @@ export function renderSettingsToggleRow(props: {
         props.onChange(checked);
       }}
     >
-      ${props.icon ?? nothing}
-      <div class="settings-row__text">
-        <span class="settings-row__title">${props.title}</span>
-        ${
-          props.description
-            ? html`<span class="settings-row__desc">${props.description}</span>`
-            : nothing
-        }
-      </div>
+      ${props.icon ?? nothing} ${renderSettingsRowText(props.title, props.description)}
       <div class="settings-row__control">
         <wa-switch
           class="settings-toggle"

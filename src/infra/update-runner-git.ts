@@ -23,7 +23,12 @@ import {
 } from "./update-runner-git-recovery.js";
 import { prepareGitRuntimePromotion } from "./update-runner-git-runtime.js";
 import { createGitUpdateSteps } from "./update-runner-git-step-policy.js";
-import { runGitCleanCheckStep, runGitUpstreamStep } from "./update-runner-git-steps.js";
+import {
+  runGitActivationBranchCheckStep,
+  runGitCleanCheckStep,
+  runGitRollbackSteps,
+  runGitUpstreamStep,
+} from "./update-runner-git-steps.js";
 import {
   fetchGitUpdateTarget,
   prepareGitMutation,
@@ -135,51 +140,22 @@ export async function updateGitCheckout(params: {
     steps,
     durationMs: Date.now() - startedAt,
   });
-  const rollback = async (assertCurrent = () => {}) => {
-    if (!beforeSha) {
-      return false;
-    }
-    const execute = async (name: string, args: string[]) => {
-      assertCurrent();
-      const result = await runStep(recoveryStep(name, ["git", "-C", gitRoot, ...args], gitRoot));
-      assertCurrent();
-      return result;
-    };
-    const restore = async (name: string, args: string[]) =>
-      !isFailedUpdateStep(await execute(name, args));
-    let restored = await restore("git-rollback-clean", ["reset", "--hard"]);
-    restored =
-      (await restore("git-rollback-clean-untracked", [
-        "clean",
-        "-fd",
-        "-e",
-        "dist/control-ui/",
-        ...(runtimePromotion?.sourceTreeStagingPaths.flatMap((relative) => [
-          "-e",
-          `/${relative}/`,
-        ]) ?? []),
-      ])) && restored;
-    const attached = branch && branch !== "HEAD";
-    const checkedOut = await restore(
-      "git-rollback-checkout",
-      attached ? ["checkout", "--force", branch] : ["checkout", "--detach", beforeSha],
-    );
-    if (attached && checkedOut) {
-      restored = (await restore("git-rollback-reset", ["reset", "--hard", beforeSha])) && restored;
-    }
-    if (createdDevBranchDuringUpdate && (!attached || checkedOut)) {
-      await restore("git-rollback-delete-branch", ["branch", "-D", DEV_BRANCH]);
-    }
-    const head = await execute("git-rollback-verify-head", ["rev-parse", "HEAD"]);
-    const verified = !isFailedUpdateStep(head) && head.stdoutTail?.trim() === beforeSha;
-    head.exitCode = verified ? 0 : 1;
-    if (!verified) {
-      head.stderrTail = `expected ${beforeSha}, found ${head.stdoutTail?.trim() || "unreadable HEAD"}`;
-    }
-    return restored && checkedOut && verified;
-  };
-  const restoreRuntime = async (assertCurrent = () => {}, runtimeSha = beforeSha) => {
-    const sourceRestored = await rollback(assertCurrent);
+  const restoreRuntime = async (
+    assertCurrent = () => {},
+    runtimeSha = beforeSha,
+    source?: { sha: string; branch: string | null },
+  ) => {
+    const sourceRestored = await runGitRollbackSteps({
+      beforeSha,
+      branch,
+      gitRoot,
+      createdDevBranchDuringUpdate,
+      sourceTreeStagingPaths: runtimePromotion?.sourceTreeStagingPaths,
+      recoveryStep,
+      checkSourceUnchanged,
+      assertCurrent,
+      activatedSource: source,
+    });
     let runtimeRestored = true;
     try {
       await runtimePromotion?.restore(assertCurrent);
@@ -260,54 +236,32 @@ export async function updateGitCheckout(params: {
       ["git", "-C", gitRoot, "branch", "--force", DEV_BRANCH, devBranchRef],
       gitRoot,
     );
-    const branchCheck = await runStep({
-      ...branchCheckOptions,
-      runCommand: async (argv, options) => {
-        const exists = await runCommand(
-          ["git", "-C", gitRoot, "show-ref", "--verify", "--quiet", devBranchRef],
-          options,
-        );
-        if (exists.code === 1) {
-          return { ...exists, code: 0, stdout: "", stderr: "" };
-        }
-        if (exists.code !== 0) {
-          return {
-            ...exists,
-            stdout: "",
-            stderr: `Could not inspect local branch ${DEV_BRANCH} before activation. Resolve the Git branch error, then rerun openclaw update.`,
-          };
-        }
-        // Resetting a branch to its current ref is a ref/reflog no-op, but Git still
-        // enforces every worktree owner state, including paused rebase and bisect.
-        const result = await runCommand(argv, options);
-        const sanitized = { ...result, stdout: "" };
-        return result.code !== 0
-          ? {
-              ...sanitized,
-              stderr:
-                `Cannot activate this dev update because a Git worktree uses or reserves branch ${DEV_BRANCH}. ` +
-                `Finish or abort its rebase or bisect, or move it off ${DEV_BRANCH}, then rerun openclaw update.`,
-            }
-          : sanitized;
-      },
-    });
+    const branchCheck = await runGitActivationBranchCheckStep(branchCheckOptions, DEV_BRANCH);
     if (isFailedUpdateStep(branchCheck)) {
       return buildError("checkout-failed");
     }
   }
-  const checkSourceUnchanged = async (expectedSha = beforeSha, expectedBranch = branch) => {
+  const checkSourceUnchanged = async (
+    expectedSha = beforeSha,
+    expectedBranch = branch,
+    assertCurrent = () => {},
+  ) => {
+    assertCurrent();
     const currentHead = await runCommand(["git", "-C", gitRoot, "rev-parse", "HEAD"], {
       cwd: gitRoot,
       timeoutMs,
     });
+    assertCurrent();
     const currentStatus = await runCommand(
       gitCleanCheckArgs(gitRoot, runtimePromotion?.sourceTreeStagingPaths),
       { cwd: gitRoot, timeoutMs },
     );
+    assertCurrent();
     if (currentHead.code !== 0 || currentStatus.code !== 0) {
       return { status: "error" as const, reason: "clean-check-failed" as const };
     }
     const currentBranch = await readBranchName(runCommand, gitRoot, timeoutMs);
+    assertCurrent();
     if (
       currentHead.stdout.trim() !== expectedSha ||
       currentBranch !== expectedBranch ||
@@ -612,7 +566,10 @@ export async function updateGitCheckout(params: {
           return (restored ??= (async () => {
             await assertRollbackSafe();
             assertCurrent();
-            const verified = await restoreRuntime(assertCurrent, beforeBuiltCommit ?? beforeSha);
+            const verified = await restoreRuntime(assertCurrent, beforeBuiltCommit ?? beforeSha, {
+              sha: preflight.candidateSha,
+              branch: activatedBranch,
+            });
             return {
               name: "git-runtime-rollback",
               command: "restore previous Git runtime",

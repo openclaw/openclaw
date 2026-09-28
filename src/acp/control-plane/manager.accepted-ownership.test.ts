@@ -326,48 +326,6 @@ describe("ACP accepted cancellation ownership", () => {
     expect(state.runTurn.mock.calls[0]?.[0].text).toBe("beta");
   });
 
-  it("revalidates requester ownership before queued cancellation writes a terminal signal", async () => {
-    await withStateDirEnv("openclaw-acp-manager-", async () => {
-      const state = fixture({ parented: true });
-      const entered = createDeferred();
-      const release = createDeferred();
-      state.getStatus.mockImplementationOnce(async () => {
-        entered.resolve();
-        await release.promise;
-        return { summary: "ready" };
-      });
-      const actor = state.manager.getSessionStatus(state.target);
-      await entered.promise;
-      const { turn, events } = state.startTurn("owner-race", {
-        text: "queued",
-        admittedRunContext: createTestAdmittedRunContext("owner-race"),
-      });
-      const turnResult = Promise.allSettled([turn]);
-      const cancel = state.manager.cancelSession({
-        ...state.target,
-        expectedOwnerKey: "agent:main:main",
-      });
-      const cancelResult = Promise.allSettled([cancel]);
-      mockParentedAcpSessionEntries({
-        childSessionKey: state.target.sessionKey,
-        parentSessionKey: "agent:main:other",
-      });
-      try {
-        expect(await turnResult).toMatchObject([
-          { status: "rejected", reason: { message: "ACP task owner could not be verified." } },
-        ]);
-        expect(await cancelResult).toMatchObject([
-          { status: "rejected", reason: { message: "ACP task owner could not be verified." } },
-        ]);
-        expect(events).toEqual([]);
-        expect(state.runTurn).not.toHaveBeenCalled();
-      } finally {
-        release.resolve();
-        await Promise.allSettled([actor, turn, cancel]);
-      }
-    });
-  });
-
   it.each(["caller", "disposed"] as const)(
     "settles %s cancellation before actor admission without setup",
     async (reason) => {

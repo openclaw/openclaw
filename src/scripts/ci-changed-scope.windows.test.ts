@@ -239,6 +239,10 @@ describe("detectChangedScope Windows routing", () => {
       ],
     },
     {
+      name: "routes the browser version probe owner to Windows",
+      paths: ["extensions/browser/src/browser/chrome.executable-probe.ts"],
+    },
+    {
       name: "routes workspace quiescence owners and native coverage to Windows",
       paths: [
         "src/gateway/worker-environments/workspace-quiescence.ts",
@@ -274,7 +278,6 @@ describe("detectChangedScope Windows routing", () => {
 
   it("routes shared test-state and process fixture owners to Windows", () => {
     for (const fixturePath of [
-      "test/vitest/vitest.shared.config.ts",
       "src/test-utils/openclaw-test-state.ts",
       "test/helpers/openclaw-test-instance.ts",
       "test/helpers/openclaw-test-instance.cli.test-support.mjs",

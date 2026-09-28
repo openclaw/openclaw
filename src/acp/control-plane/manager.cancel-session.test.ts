@@ -12,6 +12,7 @@ import {
   extractStatesFromUpserts,
   hoisted,
   installAcpSessionManagerTestLifecycle,
+  installMutableAcpSessionMetaUpsert,
   mockCallArg,
   mockParentedAcpSessionEntries,
   readySessionMeta,
@@ -36,11 +37,13 @@ describe("AcpSessionManager cancelSession", () => {
         runtime: runtimeState.runtime,
       });
       const sessionKey = "agent:codex:acp:idle-cancel";
-      hoisted.readAcpSessionEntryMock.mockReturnValue({
+      const state = { currentMeta: readySessionMeta() };
+      installMutableAcpSessionMetaUpsert(state);
+      hoisted.readAcpSessionEntryMock.mockImplementation(() => ({
         sessionKey,
         storeSessionKey: sessionKey,
-        acp: readySessionMeta(),
-      });
+        acp: state.currentMeta,
+      }));
 
       const cancellation = new AcpSessionManager().cancelSession({
         cfg: baseCfg,
@@ -69,9 +72,12 @@ describe("AcpSessionManager cancelSession", () => {
         id: "acpx",
         runtime: runtimeState.runtime,
       });
+      const state = { currentMeta: readySessionMeta() };
+      installMutableAcpSessionMetaUpsert(state);
       mockParentedAcpSessionEntries({
         childSessionKey: "agent:codex:acp:child-1",
         parentSessionKey: "agent:main:main",
+        state,
       });
 
       let enteredRun = false;
@@ -144,9 +150,12 @@ describe("AcpSessionManager cancelSession", () => {
         id: "acpx",
         runtime: runtimeState.runtime,
       });
+      const state = { currentMeta: readySessionMeta() };
+      installMutableAcpSessionMetaUpsert(state);
       mockParentedAcpSessionEntries({
         childSessionKey: "agent:codex:acp:child-1",
         parentSessionKey: "agent:main:main",
+        state,
       });
 
       let runCount = 0;

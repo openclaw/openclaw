@@ -574,6 +574,10 @@ export type StatusSummary = Omit<
     "heartbeat" | "channelSummary" | "queuedSystemEvents" | "sessions"
   > & {
     runtimeVersion?: string | null;
+    childRuntime?: {
+      execPath: string;
+      available: boolean;
+    };
     eventLoop?: NonNullable<SystemInfoResult["eventLoop"]>;
     processMemory?: NonNullable<SystemInfoResult["processMemory"]>;
     degradedSecretOwners?: Array<
