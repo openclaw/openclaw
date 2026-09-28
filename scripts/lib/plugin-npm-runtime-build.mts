@@ -51,6 +51,37 @@ const BUNDLED_SDK_EXPORTS: Record<string, Record<string, string[]>> = {
 const BUNDLED_SDK_PREFIX = "\0openclaw:bundled-sdk:";
 const HOST_SDK_PREFIX = "\0openclaw:host-sdk:";
 
+function collectNamedSourceExports(source: string) {
+  const names = new Set<string>();
+  const exportClausePattern =
+    /export\s+(?:type\s+)?\{([^}]*)\}\s*(?:from\s+["'][^"']+["'])?\s*;?/gms;
+  for (const match of source.matchAll(exportClausePattern)) {
+    for (const segment of (match[1] ?? "").split(",")) {
+      const name = segment
+        .trim()
+        .replace(/^type\s+/u, "")
+        .match(/(?:^|\s+as\s+)([A-Za-z_$][\w$]*)$/u)?.[1];
+      if (name) {
+        names.add(name);
+      }
+    }
+  }
+  for (const pattern of [
+    /\bexport\s+(?:declare\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/gu,
+    /\bexport\s+(?:declare\s+)?const\s+([A-Za-z_$][\w$]*)/gu,
+    /\bexport\s+type\s+([A-Za-z_$][\w$]*)\s*=/gu,
+    /\bexport\s+interface\s+([A-Za-z_$][\w$]*)/gu,
+    /\bexport\s+class\s+([A-Za-z_$][\w$]*)/gu,
+  ]) {
+    for (const match of source.matchAll(pattern)) {
+      if (match[1]) {
+        names.add(match[1]);
+      }
+    }
+  }
+  return names;
+}
+
 function selectAvailableBundledSdkExports(
   repoRoot: string,
   bundledSdkExports: typeof BUNDLED_SDK_EXPORTS,
@@ -58,9 +89,17 @@ function selectAvailableBundledSdkExports(
   return Object.fromEntries(
     Object.entries(bundledSdkExports).flatMap(([specifier, sources]) => {
       // Trusted current tooling also builds immutable older source roots. Only
-      // inject compatibility code owned by that selected root; absent additions stay host-owned.
+      // inject bindings owned by that root; later files and exports stay host-owned.
       const availableSources = Object.fromEntries(
-        Object.entries(sources).filter(([source]) => fs.existsSync(path.join(repoRoot, source))),
+        Object.entries(sources).flatMap(([source, names]) => {
+          const sourcePath = path.join(repoRoot, source);
+          if (!fs.existsSync(sourcePath)) {
+            return [];
+          }
+          const exportedNames = collectNamedSourceExports(fs.readFileSync(sourcePath, "utf8"));
+          const availableNames = names.filter((name) => exportedNames.has(name));
+          return availableNames.length > 0 ? [[source, availableNames]] : [];
+        }),
       );
       return Object.keys(availableSources).length > 0 ? [[specifier, availableSources]] : [];
     }),
