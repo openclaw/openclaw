@@ -1,18 +1,24 @@
 // Rooted cron reviews preserve their host-selected root and instructions across runtimes.
 import { describe, expect, it, vi } from "vitest";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import {
   runFallbackModelAttempt,
   runInitialModelFallbackAttempt,
   type TestModelFallbackRunnerParams,
 } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import {
   SKILL_WORKSHOP_MAINTENANCE_PROMPT,
   SKILL_WORKSHOP_MAINTENANCE_TOOLS,
 } from "../../skills/workshop/maintenance-prompt.js";
-import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   isCliProviderMock,
+  isThinkingLevelSupportedMock,
+  acquirePreparedModelRuntimeMock,
+  loadPublishedReplyDispatchRuntimeMock,
   loadRunCronIsolatedAgentTurn,
   mockRunCronFallbackPassthrough,
   pickLastNonEmptyTextFromPayloadsMock,
@@ -29,6 +35,192 @@ const executionRoot = "/tmp/workshop-skills";
 
 describe("runCronIsolatedAgentTurn — rooted runtime fallback", () => {
   setupRunCronIsolatedAgentTurnSuite();
+
+  it("carries the review runtime override through preparation and fallback execution", async () => {
+    const original: OpenClawConfig = {
+      agents: { entries: { main: {} } },
+      models: {
+        providers: {
+          openai: { api: "openai-responses", baseUrl: "https://api.openai.com/v1", models: [] },
+        },
+      },
+    };
+    loadPublishedReplyDispatchRuntimeMock.mockResolvedValue({
+      agentId: "main",
+      agentDir: "/tmp/agent-dir",
+      workspaceDir: "/tmp/workspace",
+      config: original,
+      modelCatalog: { entries: [], routeVariants: [] },
+      pluginGeneration: {
+        pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
+        configuredCatalogEntries: [],
+        inlineProviderModels: [],
+      },
+    });
+    resolveEffectiveAgentRuntimeMock.mockImplementation(
+      ({ cfg, provider, modelId }: { cfg: OpenClawConfig; provider: string; modelId: string }) =>
+        resolveAgentHarnessPolicy({ config: cfg, agentId: "main", provider, modelId }).runtime,
+    );
+    runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => {
+      await runInitialModelFallbackAttempt(params);
+      const result = await runFallbackModelAttempt(params, "openai", "gpt-fallback", "unknown");
+      return { result, provider: "openai", model: "gpt-fallback", attempts: [] };
+    });
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({
+        cfg: original,
+        agentId: "main",
+        executionRoot,
+        job: makeIsolatedAgentJobFixture({ declarationKey: "skill-collection-review:main" }),
+      }),
+    );
+    expect(result.status).toBe("ok");
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+    expect(isThinkingLevelSupportedMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentRuntime: "openclaw" }),
+    );
+    expect(isThinkingLevelSupportedMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ agentRuntime: "codex" }),
+    );
+    const admittedConfig = acquirePreparedModelRuntimeMock.mock.calls[0]?.[0].config;
+    expect(admittedConfig.agents?.entries?.main.models).toBeUndefined();
+    expect(
+      acquirePreparedModelRuntimeMock.mock.calls[0]?.[0].runtimePluginSelections,
+    ).toContainEqual({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      runtime: "openclaw",
+      agentId: "main",
+    });
+    expect(
+      resolveAgentHarnessPolicy({
+        config: original,
+        agentId: "main",
+        provider: "openai",
+        modelId: "gpt-5.4",
+      }).runtime,
+    ).toBe("codex");
+    for (const [params] of runEmbeddedAgentMock.mock.calls) {
+      expect(
+        resolveAgentHarnessPolicy({
+          config: params.config,
+          agentId: "main",
+          provider: "openai",
+          modelId: params.model,
+        }).runtime,
+      ).toBe("codex");
+      expect(params.agentHarnessRuntimeOverride).toBe("openclaw");
+      expect(params.sessionRoot).toBe(executionRoot);
+    }
+    expect(runCliAgentMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["primary", "fallback"])(
+    "preserves a custom provider for a bare %s model",
+    async (position) => {
+      const original: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model:
+              position === "primary"
+                ? "gpt-shared"
+                : {
+                    primary: "openai/gpt-5.4",
+                    fallbacks: ["backup"],
+                  },
+            models: {
+              "gpt-shared": { agentRuntime: { id: "auto" } },
+              ...(position === "fallback" ? { "relay/gpt-shared": { alias: "backup" } } : {}),
+            },
+          },
+          entries: { main: {} },
+        },
+        models: {
+          providers: {
+            openai: { api: "openai-responses", baseUrl: "https://api.openai.com/v1", models: [] },
+            relay: {
+              api: "openai-responses",
+              baseUrl: "https://relay.example.test/v1",
+              models: [
+                {
+                  id: "gpt-shared",
+                  name: "Shared",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 32000,
+                  maxTokens: 4000,
+                },
+              ],
+            },
+          },
+        },
+      };
+      loadPublishedReplyDispatchRuntimeMock.mockResolvedValue({
+        agentId: "main",
+        agentDir: "/tmp/agent-dir",
+        workspaceDir: "/tmp/workspace",
+        config: original,
+        modelCatalog: { entries: [], routeVariants: [] },
+        pluginGeneration: {
+          pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
+          configuredCatalogEntries: [],
+          inlineProviderModels: [],
+        },
+      });
+      const selection = await vi.importActual<
+        typeof import("../../agents/model-selection-shared.js")
+      >("../../agents/model-selection-shared.js");
+      resolveConfiguredModelRefMock.mockImplementation(selection.resolveConfiguredModelRef);
+      const { resolveModelCandidateChain } = await vi.importActual<
+        typeof import("../../agents/model-fallback-candidates.js")
+      >("../../agents/model-fallback-candidates.js");
+      runWithModelFallbackMock.mockImplementation(
+        async (
+          params: TestModelFallbackRunnerParams & {
+            cfg: OpenClawConfig;
+            fallbacksOverride?: string[];
+          },
+        ) => {
+          const candidates = resolveModelCandidateChain({
+            ...params,
+            agentId: "main",
+            requestedRouteResolution: "resolved",
+          });
+          const candidate = candidates.at(-1)!;
+          expect(candidate.provider).toBe("relay");
+          const result =
+            position === "primary"
+              ? await runInitialModelFallbackAttempt(params)
+              : await runFallbackModelAttempt(
+                  params,
+                  candidate.provider,
+                  candidate.model,
+                  "unknown",
+                );
+          return { result, provider: candidate.provider, model: candidate.model, attempts: [] };
+        },
+      );
+      const result = await runCronIsolatedAgentTurn(
+        makeIsolatedAgentParamsFixture({
+          cfg: original,
+          agentId: "main",
+          executionRoot,
+          job: makeIsolatedAgentJobFixture({ declarationKey: "skill-collection-review:main" }),
+        }),
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe("ok");
+      expect(runEmbeddedAgentMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "relay",
+          model: "gpt-shared",
+          sessionRoot: executionRoot,
+        }),
+      );
+      expect(original.agents?.entries?.main?.models).toBeUndefined();
+    },
+  );
 
   it("rejects a rooted turn before the unsupported Codex harness starts", async () => {
     resolveEffectiveAgentRuntimeMock.mockReturnValue("codex");

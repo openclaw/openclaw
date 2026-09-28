@@ -28,7 +28,6 @@ import {
   resolveScheduledToolPolicyContext,
 } from "../../agents/scheduled-tool-policy.js";
 import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
-import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { needsThinkHydration } from "../../agents/thinking-runtime.js";
 import { resolveAgentLifecycleTerminalMetadata } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import type { VerboseLevel } from "../../auto-reply/thinking.js";
@@ -213,7 +212,8 @@ function createCronPromptExecutor(
   const currentAttemptCommittedMedia = () =>
     hasNewGeneratedMediaTaskForSessionKey(params.runSessionKey, attemptMediaTaskIds);
 
-  const resolveCandidateExecution = createCronCandidateExecutionResolver(params);
+  const { resolveRuntimeOverride, resolveExecution: resolveCandidateExecution } =
+    createCronCandidateExecutionResolver(params);
 
   return async (promptText: string, runStartedAt: number): Promise<CronCompletedPromptRun> => {
     // A retry can fail during preparation, before any backend start callback.
@@ -301,12 +301,7 @@ function createCronPromptExecutor(
         workspaceDir: params.executionRoot ?? params.workspaceDir,
         sessionKey: params.runSessionKey,
         preparation: { kind: "direct" },
-        resolveRuntimeOverride: (provider) =>
-          resolveSessionRuntimeOverrideForProvider({
-            provider,
-            entry: params.cronSession.sessionEntry,
-            cfg: params.cfgWithAgentDefaults,
-          }),
+        resolveRuntimeOverride,
         resolveContextEngineHost: (provider, model, runtimeOverride) => {
           const { executionProvider, cliExecution } = resolveCandidateExecution(
             provider,

@@ -1,4 +1,7 @@
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
+import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
+import { resolveSkillCollectionReviewRuntimeOverride } from "../skill-collection-review-runtime.js";
+import { SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX } from "../system-owned-declaration.js";
 import { isCliProvider } from "./run-execution.runtime.js";
 import type { CronRunExecutionParams } from "./run-execution.types.js";
 import { resolveEffectiveAgentRuntime } from "./run.runtime.js";
@@ -7,10 +10,32 @@ import { resolveEffectiveAgentRuntime } from "./run.runtime.js";
 export function createCronCandidateExecutionResolver(
   params: Pick<
     CronRunExecutionParams,
-    "cfgWithAgentDefaults" | "agentId" | "runSessionKey" | "cronSession"
+    "cfgWithAgentDefaults" | "agentId" | "runSessionKey" | "cronSession" | "job" | "executionRoot"
   >,
 ) {
-  return (provider: string, model: string, sessionRuntimeOverride: string | undefined) => {
+  const isSkillCollectionReview = Boolean(
+    params.executionRoot &&
+    params.job.declarationKey === `${SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX}${params.agentId}`,
+  );
+  const resolveRuntimeOverride = (provider: string, modelId: string) =>
+    isSkillCollectionReview
+      ? resolveSkillCollectionReviewRuntimeOverride({
+          config: params.cfgWithAgentDefaults,
+          agentId: params.agentId,
+          provider,
+          modelId,
+          sessionEntry: params.cronSession.sessionEntry,
+        })
+      : resolveSessionRuntimeOverrideForProvider({
+          cfg: params.cfgWithAgentDefaults,
+          provider,
+          entry: params.cronSession.sessionEntry,
+        });
+  const resolveExecution = (
+    provider: string,
+    model: string,
+    sessionRuntimeOverride = resolveRuntimeOverride(provider, model),
+  ) => {
     const executionProvider = sessionRuntimeOverride
       ? isCliProvider(sessionRuntimeOverride, params.cfgWithAgentDefaults)
         ? sessionRuntimeOverride
@@ -38,4 +63,5 @@ export function createCronCandidateExecutionResolver(
       runtime,
     };
   };
+  return { resolveRuntimeOverride, resolveExecution };
 }

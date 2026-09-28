@@ -38,6 +38,7 @@ import {
   resolveCronModelSelectionOwner,
   resolveCronThinkingSelection,
 } from "./model-selection.js";
+import { createCronCandidateExecutionResolver } from "./run-candidate-runtime.js";
 import { resolveCronCommandPromptPreflight } from "./run-command-preflight.js";
 import { resolveCronActiveRuntimeConfig, resolveCronAgentConfig } from "./run-config.js";
 import { buildCurrentConversationContextBlock } from "./run-current-context.js";
@@ -82,7 +83,6 @@ import {
   resolveAgentDir,
   resolveAgentTimeoutMs,
   resolveAgentWorkspaceDir,
-  resolveEffectiveAgentRuntime,
   resolveCronStyleNow,
   resolveHookExternalContentSource,
   resolveSessionRuntimeOverrideForProvider,
@@ -420,14 +420,15 @@ export async function prepareCronRunContext(params: {
       };
     }
     const { provider, model, modelFallbacksOverride, runtimePluginCandidates } = preflight;
-    const effectiveAgentRuntime = resolveEffectiveAgentRuntime({
-      cfg: cfgWithAgentDefaults,
-      provider,
-      modelId: model,
-      agentId: modelOwner.agentId,
-      sessionKey: agentSessionKey,
-      sessionEntry: cronSession.sessionEntry,
+    const runtimeSelection = createCronCandidateExecutionResolver({
+      cfgWithAgentDefaults,
+      agentId,
+      runSessionKey: agentSessionKey,
+      cronSession,
+      job: input.job,
+      executionRoot: input.executionRoot,
     });
+    const { runtime: effectiveAgentRuntime } = runtimeSelection.resolveExecution(provider, model);
     const thinkingSelection = await resolveCronThinkingSelection({
       cfg: cfgWithAgentDefaults,
       owner: modelOwner,
@@ -467,11 +468,10 @@ export async function prepareCronRunContext(params: {
         workspaceDir,
         allowGatewaySubagentBinding: true,
         runtimePluginSelections: runtimePluginCandidates.map((candidate) => {
-          const runtime = resolveSessionRuntimeOverrideForProvider({
-            provider: candidate.provider,
-            entry: cronSession.sessionEntry,
-            cfg: cfgWithAgentDefaults,
-          });
+          const runtime = runtimeSelection.resolveRuntimeOverride(
+            candidate.provider,
+            candidate.model,
+          );
           return runtime
             ? { provider: candidate.provider, modelId: candidate.model, runtime, agentId }
             : { provider: candidate.provider, modelId: candidate.model, agentId };

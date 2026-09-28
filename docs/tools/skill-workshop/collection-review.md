@@ -35,8 +35,13 @@ Workshop skill contents remain review material. OpenClaw carries the Workshop
 file root and prepared sandbox to the mediated tools. Changing the CLI working
 directory alone does not provide containment.
 
-Runtimes without those guarantees, including undeclared CLI backends, the Codex harness, and
-node-placed CLI execution, remain unsupported for rooted reviews. When the configured
+When an OpenAI model would implicitly select the native Codex harness, the system-owned
+review uses the embedded OpenClaw runtime for that run instead. Ordinary turns and explicit
+model, provider, or session runtime choices are unchanged. The selected model and provider
+remain the same, and the rooted-execution admission check still applies.
+
+Runtimes without those guarantees, including undeclared CLI backends, explicitly selected
+Codex, and node-placed CLI execution, remain unsupported for rooted reviews. When the configured
 model chain is provably unsupported, the weekly job remains visible but disabled
 with `no-rooted-runtime` in its display name. Configure a supported runtime or fallback;
 Gateway startup and config reload reconcile enablement and clear that reason.
@@ -45,8 +50,8 @@ between updates so fleet-wide review preparation does not block Gateway health r
 Stored session model or runtime preferences are preserved; reviews with these
 preferences remain enabled because configuration alone cannot prove their execution path.
 If eligibility cannot be determined statically, the job remains enabled and runtime
-admission still rejects unsupported execution with an explanation. No runtime is
-substituted to bypass that check. If an enabled sandbox has
+admission still rejects unsupported execution with an explanation. Explicit runtime choices
+are not substituted to bypass that check. If an enabled sandbox has
 `workspaceAccess: "ro"` or `"none"`, the turn refuses to run rather than editing
 a disposable copy. A writable sandbox uses the agent's Workshop directory.
 Sandbox backends must support directory reads to provide shell-free discovery.
