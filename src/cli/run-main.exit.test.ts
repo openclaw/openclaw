@@ -850,9 +850,9 @@ describe("runCli exit behavior", () => {
     expect(closeMcpLoopbackServerMock).toHaveBeenCalledTimes(1);
   });
 
-  it("shows the standard spinner while loading the full CLI", async () => {
+  it("finishes the standard startup spinner before parsing the full CLI", async () => {
     tryRouteCliMock.mockResolvedValueOnce(false);
-    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    const parseAsync = vi.fn(async () => expect(progressDoneMock).toHaveBeenCalled());
     buildProgramMock.mockReturnValueOnce(makeProgram("config", parseAsync));
 
     await runCli(["node", "openclaw", "config"]);
@@ -862,12 +862,12 @@ describe("runCli exit behavior", () => {
       indeterminate: true,
       delayMs: 0,
     });
-    expect(progressDoneMock).toHaveBeenCalledTimes(1);
+    expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "config"]);
   });
 
   it("suppresses startup progress for json output commands before full CLI parsing", async () => {
     tryRouteCliMock.mockResolvedValueOnce(false);
-    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    const parseAsync = vi.fn(async () => expect(progressDoneMock).toHaveBeenCalled());
     buildProgramMock.mockReturnValueOnce(makeProgram("sessions", parseAsync));
 
     await runCli(["node", "openclaw", "sessions", "--json", "--limit", "all"]);
@@ -886,12 +886,11 @@ describe("runCli exit behavior", () => {
       "--limit",
       "all",
     ]);
-    expect(progressDoneMock).toHaveBeenCalledTimes(1);
   });
 
   it("suppresses startup progress for plain model output before full CLI parsing", async () => {
     tryRouteCliMock.mockResolvedValueOnce(false);
-    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    const parseAsync = vi.fn(async () => expect(progressDoneMock).toHaveBeenCalled());
     buildProgramMock.mockReturnValueOnce(makeProgram("models", parseAsync));
 
     await runCli(["node", "openclaw", "models", "aliases", "list", "--plain"]);
@@ -910,7 +909,6 @@ describe("runCli exit behavior", () => {
       "list",
       "--plain",
     ]);
-    expect(progressDoneMock).toHaveBeenCalledTimes(1);
   });
 
   it("pauses non-tty stdin after full CLI command completion", async () => {

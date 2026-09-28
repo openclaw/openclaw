@@ -90,16 +90,11 @@ export function readConfigMutationFileSync(
   }
 }
 
-export function hasBatchMode(opts: ConfigSetOptions): boolean {
-  return opts.batchJson !== undefined || opts.batchFile !== undefined;
-}
-
-export function hasRefBuilderOptions(opts: ConfigSetOptions): boolean {
-  return Boolean(opts.refProvider || opts.refSource || opts.refId);
-}
-
-export function hasProviderBuilderOptions(opts: ConfigSetOptions): boolean {
-  return Boolean(
+export function resolveConfigSetMode(
+  opts: ConfigSetOptions,
+): "value" | "json" | "ref_builder" | "provider_builder" | "batch" {
+  const hasRef = Boolean(opts.refProvider || opts.refSource || opts.refId);
+  const hasProvider = Boolean(
     opts.providerSource ||
     opts.providerAllowlist?.length ||
     opts.providerPath ||
@@ -115,6 +110,26 @@ export function hasProviderBuilderOptions(opts: ConfigSetOptions): boolean {
     opts.providerPassEnv?.length ||
     opts.providerTrustedDir?.length,
   );
+  if (opts.batchJson !== undefined || opts.batchFile !== undefined) {
+    if (hasRef || hasProvider) {
+      throw new Error(
+        "config set mode error: batch mode (--batch-json/--batch-file) cannot be combined with ref builder (--ref-*) or provider builder (--provider-*) flags.",
+      );
+    }
+    return "batch";
+  }
+  if (hasRef && hasProvider) {
+    throw new Error(
+      "config set mode error: choose exactly one mode: ref builder (--ref-provider/--ref-source/--ref-id) or provider builder (--provider-*), not both.",
+    );
+  }
+  return hasRef
+    ? "ref_builder"
+    : hasProvider
+      ? "provider_builder"
+      : opts.strictJson || opts.json
+        ? "json"
+        : "value";
 }
 
 function parseJson5Raw(raw: string, label: string): unknown {
