@@ -8,6 +8,7 @@ import path from "node:path";
 import { zstdDecompressSync } from "node:zlib";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { Agent, fetch as fetchProvider } from "undici";
 import { expect } from "vitest";
 import { WebSocketServer } from "ws";
 import { createExternalAuthRuntime } from "../../../../src/agents/auth-profiles/external-auth.js";
@@ -514,8 +515,13 @@ export async function startQuotaProvider(
   if (!address || typeof address === "string") {
     throw new Error("Provider did not bind loopback");
   }
+  const baseUrl = `${tls ? "https" : "http"}://127.0.0.1:${address.port}`;
+  const dispatcher = new Agent(tls ? { connect: { ca: tls.cert } } : {});
   return {
-    baseUrl: `${tls ? "https" : "http"}://127.0.0.1:${address.port}`,
+    baseUrl,
+    fetch(requestPath: string, init?: Parameters<typeof fetchProvider>[1]) {
+      return fetchProvider(`${baseUrl}${requestPath}`, { ...init, dispatcher });
+    },
     requests,
     upgrades,
     responses,
@@ -551,6 +557,7 @@ export async function startQuotaProvider(
       return { arrived: hold.arrived.promise, release: () => hold.released.resolve() };
     },
     async stop() {
+      await dispatcher.destroy();
       for (const socket of sockets.clients) {
         socket.terminate();
       }
