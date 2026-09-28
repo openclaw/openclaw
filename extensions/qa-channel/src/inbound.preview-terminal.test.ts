@@ -138,6 +138,9 @@ describe("QA preview terminal ownership", () => {
     turn.delivery.onError?.(new Error("dispatch failed"), { kind: "final" });
     await turn.replyOptions?.onPartialReply?.({ text: "late" });
     expect(deleteQaBusMessage).toHaveBeenCalledOnce();
+    expect(deleteQaBusMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "preview-1" }),
+    );
     expect(sendQaBusMessage).toHaveBeenCalledOnce();
     expect(editQaBusMessage).not.toHaveBeenCalled();
   });

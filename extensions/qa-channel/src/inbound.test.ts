@@ -440,25 +440,6 @@ describe("handleQaInbound", () => {
     );
   });
 
-  it("deletes an active preview when reply dispatch fails", async () => {
-    const runtime = createPluginRuntimeMock();
-    setQaChannelRuntime(runtime);
-
-    await startQaInbound(runtime, createQaInboundParams());
-
-    const assembled = firstRunAssembledParams(runtime);
-    await assembled.replyOptions?.onPartialReply?.({ text: "unfinished preview" });
-    await Promise.resolve(
-      assembled.delivery.onError?.(new Error("model failed"), { kind: "final" }),
-    );
-
-    await vi.waitFor(() => {
-      expect(deleteQaBusMessage).toHaveBeenCalledWith(
-        expect.objectContaining({ messageId: "preview-1" }),
-      );
-    });
-  });
-
   it("deletes a preview after a queued edit fails", async () => {
     const runtime = createPluginRuntimeMock();
     setQaChannelRuntime(runtime);
@@ -642,7 +623,7 @@ describe("handleQaInbound", () => {
 
     expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
     const ctxPayload = firstRunAssembledParams(runtime).ctxPayload;
-    expect(ctxPayload.media?.every((fact) => fact.path === undefined)).toBe(true);
+    expect(ctxPayload.media).toEqual([]);
   });
 
   it("projects saved inline attachments through a media-store URL", async () => {
@@ -705,7 +686,7 @@ describe("handleQaInbound", () => {
 
       expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
       const ctxPayload = firstRunAssembledParams(runtime).ctxPayload;
-      expect(ctxPayload.media?.every((fact) => fact.path === undefined)).toBe(true);
+      expect(ctxPayload.media).toEqual([]);
       expect(warn).toHaveBeenCalledTimes(2);
     } finally {
       warn.mockRestore();
