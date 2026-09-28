@@ -27,6 +27,35 @@ function catalogOutput(name: string, result: Record<string, unknown>) {
 }
 
 describe("mock tool surface dispatch", () => {
+  it("resolves the current Telegram session through structured tool controls", async () => {
+    const server = await startMockServer();
+    const sessionKey = "agent:qa:telegram:group:qa-command-room";
+    const input: unknown[] = [
+      {
+        role: "system",
+        content: [{ type: "input_text", text: "Use session_status to inspect the current session." }],
+      },
+      makeUserInput(
+        "Telegram current session_status QA check. Call session_status with sessionKey set to current, then reply with the exact QA marker and resolved session key.",
+      ),
+    ];
+    const request = () =>
+      expectNonStreamingResponsesJson(server, { tools: STRUCTURED_CATALOG_TOOLS, input });
+    const statusCall = outputToolCall(await request(), "tool_call");
+    expect(outputToolArgsFromItem(statusCall)).toEqual({
+      id: "session_status",
+      args: { sessionKey: "current" },
+    });
+    input.push(
+      statusCall,
+      makeToolOutputWithCallId(
+        outputToolCallId(statusCall, "session-status"),
+        catalogOutput("session_status", { details: { sessionKey } }),
+      ),
+    );
+    expect(outputText(await request())).toBe(`QA-TELEGRAM-CURRENT-SESSION-OK ${sessionKey}`);
+  });
+
   it.each([false, true])(
     "tracks a deferred command and its poll through structured results (failed=%s)",
     async (failed) => {
