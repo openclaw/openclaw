@@ -13,11 +13,9 @@ import type {
 } from "../../config/sessions/transcript-entry-anchor.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import * as agentDatabase from "../../state/openclaw-agent-db.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import {
-  runOpenClawAgentWriteAdmission,
-  SQLITE_SESSION_WRITER_QUEUES,
-} from "../../state/openclaw-agent-write-admission.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
 import { drainPendingContextEngineTurnsBeforeRun } from "./context-engine-turn-attempt.js";
@@ -831,25 +829,51 @@ describe("context-engine turn outbox", () => {
       sessionTarget: target,
     });
 
-    // The session manager reports runtime persistence from inside its write lane.
-    const queuedInsideLane = await runOpenClawAgentWriteAdmission(
-      { agentId: database.agentId, path: database.path },
+    // An unrelated store may have queued work when runtime persistence is reported.
+    const otherDatabase = openOpenClawAgentDatabase({
+      agentId: "other",
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const releaseOther = Promise.withResolvers<void>();
+    const otherEntered = Promise.withResolvers<void>();
+    const otherWrite = runOpenClawAgentWriteAdmission(
+      { agentId: otherDatabase.agentId, path: otherDatabase.path },
       async () => {
-        recorder.markRuntimePersisted(currentMessage, admission);
-        return [...SQLITE_SESSION_WRITER_QUEUES.values()].reduce(
-          (count, queue) => count + queue.pending.length,
-          0,
-        );
+        otherEntered.resolve();
+        await releaseOther.promise;
       },
     );
-    await recorder.waitForRuntimePersistence();
+    await otherEntered.promise;
+    const otherQueuedWrite = runOpenClawAgentWriteAdmission(
+      { agentId: otherDatabase.agentId, path: otherDatabase.path },
+      () => undefined,
+    );
+    const databaseAccess = vi.spyOn(agentDatabase, "withOpenClawAgentDatabaseAsync");
+    const accessesToTarget = () =>
+      databaseAccess.mock.calls.filter(([options]) => options.path === database.path);
+    try {
+      // Observe the real database entry: worker I/O alone can delay even a reentrant write.
+      const accessesInsideLane = await runOpenClawAgentWriteAdmission(
+        { agentId: database.agentId, path: database.path },
+        () => {
+          recorder.markRuntimePersisted(currentMessage, admission);
+          return accessesToTarget().length;
+        },
+      );
+      await recorder.waitForRuntimePersistence();
 
-    expect(queuedInsideLane).toBe(1);
-    expect(lease.degradeBeforeStart).not.toHaveBeenCalled();
-    const queued = database.db
-      .prepare("SELECT payload_json FROM context_engine_turn_outbox WHERE advancement_key = ?")
-      .get(admission.logicalTurnId) as { payload_json: string } | undefined;
-    expect(JSON.parse(queued?.payload_json ?? "{}")).toMatchObject({ state: "admitted" });
+      expect(accessesInsideLane).toBe(0);
+      expect(accessesToTarget()).toHaveLength(1);
+      expect(lease.degradeBeforeStart).not.toHaveBeenCalled();
+      const queued = database.db
+        .prepare("SELECT payload_json FROM context_engine_turn_outbox WHERE advancement_key = ?")
+        .get(admission.logicalTurnId) as { payload_json: string } | undefined;
+      expect(JSON.parse(queued?.payload_json ?? "{}")).toMatchObject({ state: "admitted" });
+    } finally {
+      databaseAccess.mockRestore();
+      releaseOther.resolve();
+      await Promise.all([otherWrite, otherQueuedWrite]);
+    }
   });
 
   it("rejects the pre-dispatch runtime wait when the admission write fails", async () => {
