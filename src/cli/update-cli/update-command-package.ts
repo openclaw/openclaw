@@ -467,6 +467,7 @@ export async function stagePackageInstallUpdate(
   const staged = createDeferredCore<string>();
   const continuation = createDeferredCore<PackageInstallUpdateParams | undefined>();
   let continued = false;
+  let deliveredFailure: { error: unknown } | undefined;
   let active: PackageInstallUpdateParams | undefined;
   const requireActive = () => {
     if (!active) {
@@ -544,14 +545,30 @@ export async function stagePackageInstallUpdate(
       }
       continued = true;
       continuation.resolve(next);
-      return await completed;
+      try {
+        return await completed;
+      } catch (error) {
+        deliveredFailure = { error };
+        throw error;
+      }
     },
     async close() {
       if (!continued) {
         continued = true;
         continuation.resolve(undefined);
       }
-      await completed;
+      try {
+        await completed;
+      } catch (error) {
+        // Closing joins the same operation; a delivered refusal is not a new cleanup failure.
+        if (
+          !deliveredFailure ||
+          deliveredFailure.error !== error ||
+          hasCommandProcessCleanupError(error)
+        ) {
+          throw error;
+        }
+      }
     },
   };
 }
