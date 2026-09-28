@@ -186,9 +186,6 @@ export async function runAgentHarnessAttempt(
   params: EmbeddedRunAttemptParams,
   nativeSessionRuntime?: import("../embedded-agent-runner/run/model-setup.js").PreparedNativeSessionRuntime,
 ): Promise<EmbeddedRunAttemptResult> {
-  let internalParams = params as EmbeddedRunAttemptParams & {
-    systemAgentTool?: SystemAgentToolOptions;
-  };
   if (nativeSessionRuntime) {
     await nativeSessionRuntime.assertCurrent();
   } else {
@@ -209,6 +206,17 @@ export async function runAgentHarnessAttempt(
         })
       : selectPreparedAgentHarness(params);
   const harness = selection.harness;
+  if (params.trigger === "cron" && harness.scheduledToolPolicy === "current-agent") {
+    // Normalize before host capabilities and tool authority capture the attempt.
+    // Keep the caller's parameters intact for any fallback to another harness.
+    params = {
+      ...params,
+      toolsAllow: undefined,
+    };
+  }
+  let internalParams = params as EmbeddedRunAttemptParams & {
+    systemAgentTool?: SystemAgentToolOptions;
+  };
   const nativeOwnsModel = nativeSessionRuntime?.auth === "native";
   const nativeModelPolicySupported = harness.nativeModelPolicySupport === "exact";
   assertHarnessModelPolicySupport(harness, params);

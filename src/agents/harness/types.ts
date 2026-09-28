@@ -407,6 +407,8 @@ type AgentHarnessRunCapability<
    */
   contextEngineHostCapabilities?: readonly import("../../context-engine/types.js").ContextEngineHostCapability[];
   deliveryDefaults?: AgentHarnessDeliveryDefaults;
+  /** Ignore saved cron tool lists at dispatch, before host policy and authority preparation. */
+  scheduledToolPolicy?: "current-agent";
   /** Core must reject containment this runtime cannot implement before invoking it. */
   executionEnvironment?: "host-only";
   /** Certifies exact runAttempt enforcement; direct-policy-restricted channel side questions fail in core. */

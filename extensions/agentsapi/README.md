@@ -6,6 +6,13 @@ Linux environment. Select it through `agents.defaults.agentRuntime.id` or an age
 
 Multi-user Gateways are not supported by the Agents API MVP.
 
+Agents API does not apply per-job cron tool lists. At harness dispatch, it
+uses current agent policy instead of the saved `toolsAllow` list. Cron still
+creates and stores jobs normally, including that list; this exception applies
+only when Agents API executes the turn.
+Current account, channel, sandbox, and other run restrictions still apply.
+Earlier scheduler checks and fallback backends retain their existing behavior.
+
 Ordinary conversation attempts run OpenClaw's shared `before_prompt_build` hook,
 including tool-authorized recall and heartbeat prompt contributions. Per-turn
 `prependContext` and `appendContext` are applied on both new and resumed sessions.

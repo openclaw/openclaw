@@ -41,6 +41,7 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
     label: "OpenAI Agents API (MVP)",
     autoSelection: { providerIds: [] },
     deliveryDefaults: { visibleReplies: "automatic" },
+    scheduledToolPolicy: "current-agent",
     conversationToolPolicySupport: "exact",
     conversationToolPolicyNativeTools: AGENTS_API_NATIVE_TOOL_REQUIREMENTS,
     // These capabilities exist only in the policy-filtered Gateway tool surface.
@@ -195,6 +196,7 @@ function validateAgentsApiInput(params: AgentHarnessAttemptParamsV2) {
     params.disableTools ||
     params.pluginHarnessToolPolicyRestricted ||
     params.toolExecutionAllow !== undefined ||
+    params.scheduledToolPolicy?.execTarget !== undefined ||
     params.toolsAllow?.length === 0 ||
     AGENTS_API_NATIVE_TOOL_REQUIREMENTS.some((name) => !runtimeToolAllowed(name))
   ) {

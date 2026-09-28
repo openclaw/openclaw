@@ -53,6 +53,18 @@ export default definePluginEntry({
 `authBootstrap: "harness"` only when the harness meets the
 [harness-owned auth bootstrap contract](/plugins/sdk-agent-harness/core-ownership#harness-owned-auth-bootstrap).
 
+### Scheduled tools
+
+A harness can declare `scheduledToolPolicy: "current-agent"` when it does not
+apply a cron job's saved tool list. For `trigger: "cron"`, dispatch clears the
+attempt's `toolsAllow` before host policy and tool authority preparation. Current configured restrictions and
+scheduled ownership remain enforced. The caller's parameters are preserved so
+other harnesses retain their existing behavior on fallback.
+
+This capability does not change cron creation, storage, or earlier scheduler
+checks. Agents API declares it because its native tools cannot be restricted by
+a per-job list.
+
 ### Isolated completion
 
 The optional `runIsolatedCompletionV2(params)` capability serves product paths
