@@ -163,7 +163,7 @@ function resolveDelegatedPolicy(
         !envelope ||
         envelopes.some((entry) => !entry || policyKey(entry) !== policyKey(envelope))
       ) {
-        throw new Error("Settled children do not share a verified requester tool policy.");
+        return { delegated: false };
       }
     }
     return envelope

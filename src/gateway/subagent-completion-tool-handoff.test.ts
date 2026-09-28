@@ -73,6 +73,26 @@ describe("subagent completion tool handoff", () => {
     expect(cancelSubagentCompletionToolHandoff(handoffId)).toBe(true);
   });
 
+  it("binds an accepted replay source only within the registered settle cohort", () => {
+    const acceptedSource = "agent:main:subagent:sibling";
+    const handoffId = registerSubagentCompletionToolHandoff({
+      ...registration,
+      settleBatch: {
+        sourceSessionKeys: [registration.sourceSessionKey, acceptedSource],
+        isCurrent: () => true,
+      },
+    });
+    expect(
+      consume(handoffId, {
+        sourceTool: "subagent_settle",
+        sourceSessionKey: "agent:main:subagent:outside-batch",
+      }),
+    ).toBeUndefined();
+    const accepted = { sourceTool: "subagent_settle", sourceSessionKey: acceptedSource };
+    expect(consume(handoffId, accepted)?.sourceSessionKey).toBe(acceptedSource);
+    expect(consume(handoffId, accepted)).toBeUndefined();
+  });
+
   it("expires capabilities and removes cancelled capabilities", () => {
     const expiredId = registerSubagentCompletionToolHandoff({ ...registration, nowMs: 1_000 });
     expect(consume(expiredId, { nowMs: 301_001 })).toBeUndefined();

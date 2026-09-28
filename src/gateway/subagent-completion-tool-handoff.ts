@@ -130,7 +130,9 @@ export function consumeSubagentCompletionToolHandoff(params: {
     !entry ||
     params.sourceTool !== (entry.settleBatch ? "subagent_settle" : "subagent_announce") ||
     entry.settleBatch?.isCurrent() === false ||
-    entry.sourceSessionKey !== sourceSessionKey ||
+    (entry.settleBatch
+      ? !entry.settleBatch.sourceSessionKeys.includes(sourceSessionKey)
+      : entry.sourceSessionKey !== sourceSessionKey) ||
     entry.sourceSessionId !== sourceSessionId ||
     entry.targetSessionKey !== targetSessionKey ||
     entry.targetSessionId !== targetSessionId ||

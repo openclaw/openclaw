@@ -141,10 +141,6 @@ describe("resolveRequesterToolPolicies", () => {
         },
         trustedInternalHandoff,
       });
-    if (["different allow", "different deny", "missing lineage"].includes(authority)) {
-      expect(resolve).toThrow("Settled children do not share a verified requester tool policy.");
-      return;
-    }
     const result = resolve();
     if (authority !== "current") {
       expect(result.delegated).toBe(false);

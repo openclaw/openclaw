@@ -16,7 +16,8 @@ When settled children resume a requester after `sessions_yield`, the continuatio
 keeps the requester policy captured at spawn. The handoff must still belong to
 the current requester session and settled batch, and every child in that batch
 must carry the same verified requester policy. Conflicting or missing child
-policies stop the continuation. Current tool restrictions still apply; the
+policies leave the continuation under its ordinary restricted policy. Current
+tool restrictions and live revocation checks still apply at execution; the
 handoff does not grant additional tools or infer a sender identity.
 
 Sub-agents always lose `gateway`, `agents_list`, `session_status`, `progress_card`, `cron`,
