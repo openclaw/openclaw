@@ -157,23 +157,10 @@ describe("prepared configured model indexes", () => {
         );
         const before = structuredClone(rows);
         const { snapshot, stores, resolve, expected } = fixture(state, rows, metadata(), [modelId]);
-        const descriptor = Object.getOwnPropertyDescriptor(rows, "find");
-        const find = rows.find;
-        let visits = 0;
         Object.defineProperty(rows, "find", {
           configurable: true,
-          value(
-            predicate: (
-              row: PreparedConfiguredRuntimeModel,
-              index: number,
-              rows: PreparedConfiguredRuntimeModel[],
-            ) => unknown,
-            thisArg?: unknown,
-          ) {
-            return find.call(rows, (row, index, array) => {
-              visits += 1;
-              return predicate.call(thisArg, row, index, array);
-            });
+          value() {
+            throw new Error("Configured models must be indexed before resolution");
           },
         });
         const resolved = [];
@@ -182,11 +169,7 @@ describe("prepared configured model indexes", () => {
             resolved.push(await resolve(modelId));
           }
         } finally {
-          if (descriptor) {
-            Object.defineProperty(rows, "find", descriptor);
-          } else {
-            Reflect.deleteProperty(rows, "find");
-          }
+          Reflect.deleteProperty(rows, "find");
         }
         expect(resolved).toEqual(
           Array.from({ length: 1000 }, () => ({
@@ -198,15 +181,13 @@ describe("prepared configured model indexes", () => {
         expect(snapshot.configuredRuntimeModels).toBe(rows);
         expect(rows).toEqual(before);
         expect(Object.isFrozen(snapshot)).toBe(true);
-        expect(visits).toBe(0);
       });
     },
   );
 
   it.each([
     { modelId: "selected", maxSidePx: 1100 },
-    { modelId: "SELECTED", maxSidePx: 2200 },
-    { modelId: "  selected  ", maxSidePx: 2200 },
+    { modelId: "  SELECTED  ", maxSidePx: 2200 },
   ])(
     "preserves exact-first and first-equivalent precedence for $modelId",
     async ({ modelId, maxSidePx }) => {

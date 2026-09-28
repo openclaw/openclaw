@@ -7,7 +7,7 @@ import { resolveBundledPluginSources } from "./bundled-sources.js";
 import { listChannelCatalogEntries } from "./channel-catalog-registry.js";
 import { resolvePluginConfigContractsById } from "./config-contracts.js";
 import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
-import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
+import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { listOpenClawPluginManifestMetadata } from "./manifest-metadata-scan.js";
 import { loadPluginManifest } from "./manifest.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
@@ -213,7 +213,7 @@ describe("listOpenClawPluginManifestMetadata", () => {
     expect(readdirSpy.mock.calls.length).toBeGreaterThan(firstReaddirCalls);
   });
 
-  it("prefers the active bundled manifest over stale persisted bundled installs", () => {
+  it("prefers the active bundled manifest over stale persisted bundled installs", async () => {
     const root = createTempRoot();
     const home = path.join(root, "home");
     const bundledRoot = path.join(root, "extensions");
@@ -227,7 +227,7 @@ describe("listOpenClawPluginManifestMetadata", () => {
       id: "openai",
       providers: ["openai"],
     });
-    writePersistedInstalledPluginIndexSync(
+    await writePersistedInstalledPluginIndex(
       {
         version: 1,
         hostContractVersion: "test",

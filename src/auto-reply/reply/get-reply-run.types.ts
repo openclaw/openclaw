@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ExplicitSkillSelection } from "../../skills/types.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
+import type { resolveBlockStreamingChunking } from "./block-streaming.js";
 import type { buildCommandContext } from "./commands.js";
 import type { InlineDirectives } from "./directive-handling.js";
 import type { ReplyExecOverrides } from "./get-reply-exec-overrides.js";
@@ -51,12 +52,7 @@ export type RunPreparedReplyParams = {
   elevatedEnabled: boolean;
   elevatedAllowed: boolean;
   blockStreamingEnabled: boolean;
-  blockReplyChunking?: {
-    minChars: number;
-    maxChars: number;
-    breakPreference: "paragraph" | "newline" | "sentence";
-    flushOnParagraph?: boolean;
-  };
+  blockReplyChunking?: ReturnType<typeof resolveBlockStreamingChunking>;
   resolvedBlockStreamingBreak: "text_end" | "message_end";
   modelState: Awaited<ReturnType<typeof createModelSelectionState>>;
   provider: string;
@@ -67,11 +63,7 @@ export type RunPreparedReplyParams = {
     ReturnType<typeof createModelSelectionState>
   >["requestedRouteResolution"];
   perMessageQueueMode?: InlineDirectives["queueMode"];
-  perMessageQueueOptions?: {
-    debounceMs?: number;
-    cap?: number;
-    dropPolicy?: InlineDirectives["dropPolicy"];
-  };
+  perMessageQueueOptions?: Pick<InlineDirectives, "debounceMs" | "cap" | "dropPolicy">;
   typing: TypingController;
   opts?: InternalGetReplyOptions;
   defaultModel: string;

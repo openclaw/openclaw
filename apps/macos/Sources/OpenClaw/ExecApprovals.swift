@@ -99,12 +99,6 @@ enum ExecApprovalHelpers {
         return .valid(trimmed)
     }
 
-    static func parseDecision(_ raw: String?) -> ExecApprovalDecision? {
-        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !trimmed.isEmpty else { return nil }
-        return ExecApprovalDecision(rawValue: trimmed)
-    }
-
     static func requiresAsk(
         ask: ExecAsk,
         security: ExecSecurity,
@@ -242,13 +236,6 @@ actor SkillBinsCache {
             return FileManager().isExecutableFile(atPath: expanded) ? expanded : nil
         }
         return CommandResolver.findExecutable(named: expanded, searchPaths: searchPaths)
-    }
-
-    static func _testBuildTrustIndex(
-        report: SkillsStatusReport,
-        searchPaths: [String]) -> SkillBinTrustIndex
-    {
-        self.buildTrustIndex(report: report, searchPaths: searchPaths)
     }
 }
 

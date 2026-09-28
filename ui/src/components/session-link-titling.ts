@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { ControlUiSessionPreview } from "../../../src/gateway/control-ui-contract.js";
+import { pruneMapToMaxSize } from "../../../src/infra/map-size.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { pathForSession } from "../app-session-path-builder.ts";
 import type { ApplicationContext } from "../app/context.ts";
@@ -14,8 +15,8 @@ import {
   markdownSessionPublicOrigin,
   parseLocalMarkdownSessionUrl,
 } from "./markdown-session-links.ts";
+import { SESSION_PROGRESS_HOVER_LINK_SELECTOR } from "./session-progress-hovercard-target.ts";
 
-const SESSION_LINK_SELECTOR = "a.markdown-session-link, [data-session-href]";
 const SUCCESS_CACHE_MS = 5 * 60_000;
 const FAILURE_CACHE_MS = 30_000;
 const CACHE_LIMIT = 100;
@@ -74,10 +75,10 @@ export class SessionLinkTitler {
   refresh(root = this.host): void {
     // Share repeated references only within this synchronous roster projection.
     const targets = new Map<string, SessionTitleTarget | null>();
-    if (root.matches(SESSION_LINK_SELECTOR)) {
+    if (root.matches(SESSION_PROGRESS_HOVER_LINK_SELECTOR)) {
       void this.decorate(root, false, targets);
     }
-    for (const anchor of root.querySelectorAll<HTMLElement>(SESSION_LINK_SELECTOR)) {
+    for (const anchor of root.querySelectorAll<HTMLElement>(SESSION_PROGRESS_HOVER_LINK_SELECTOR)) {
       void this.decorate(anchor, false, targets);
     }
   }
@@ -176,12 +177,7 @@ export class SessionLinkTitler {
   private setCacheEntry(key: string, entry: CacheEntry): void {
     this.cache.delete(key);
     this.cache.set(key, entry);
-    for (const oldest of this.cache.keys()) {
-      if (this.cache.size <= CACHE_LIMIT) {
-        break;
-      }
-      this.cache.delete(oldest);
-    }
+    pruneMapToMaxSize(this.cache, CACHE_LIMIT);
   }
 
   private cachedOrSeededEntry(target: SessionTitleTarget): CacheEntry | undefined {

@@ -18,10 +18,10 @@ import {
 import { appendTranscriptMessage } from "./session-accessor.js";
 import {
   bindSessionPendingInputSources,
-  listSessionPendingInputReceipts,
   listSessionPendingInputs,
   stageSessionPendingInput,
 } from "./session-accessor.pending-inputs.js";
+import { listSessionPendingInputReceipts } from "./session-accessor.sqlite-pending-input-receipts.js";
 
 const { tempDirs, createFixture } = setupLegacyMainSessionMigrationTests();
 const completed = buildAgentRunTerminalOutcome({ status: "ok" });

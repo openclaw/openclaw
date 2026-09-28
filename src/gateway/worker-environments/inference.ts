@@ -47,7 +47,6 @@ import { formatWorkerInferenceError } from "./worker-error.js";
 
 export type { WorkerInferenceExecutor, WorkerInferenceSink } from "./inference.types.js";
 
-const DEFAULT_REQUEST_MAX_BYTES = WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES;
 // One active turn plus one provider that ignored abort. This prevents repeated
 // cancel/restart from creating unbounded provider work without wedging the session forever.
 const MAX_PROVIDER_OPERATIONS_PER_SESSION = 2;
@@ -70,7 +69,7 @@ function trySend(
 
 export function createWorkerInferenceManager(options: WorkerInferenceManagerOptions) {
   const store = options.store ?? createWorkerInferenceStore();
-  const requestMaxBytes = options.requestMaxBytes ?? DEFAULT_REQUEST_MAX_BYTES;
+  const requestMaxBytes = options.requestMaxBytes ?? WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES;
   const streamMaxBytes = options.streamMaxBytes ?? WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES;
   const active = new Map<string, ActiveInference>();
   const operations = new Map<Promise<unknown>, { sessionId: string; storeKey: string }>();
@@ -215,12 +214,7 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
         try {
           const begin = await entry.begun;
           assertKnownTurn(entry.storeKey);
-          if (!begin || begin.kind === "rejected") {
-            entry.settled = true;
-            forget(entry);
-            return;
-          }
-          if (begin.kind === "replay") {
+          if (!begin || begin.kind === "rejected" || begin.kind === "replay") {
             entry.settled = true;
             forget(entry);
             return;
@@ -490,8 +484,7 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
     ) {
       return { ok: false, reason: "provider-error" };
     }
-    const measured = boundedJsonUtf8Bytes(params.request, requestMaxBytes);
-    if (!measured.complete || measured.bytes > requestMaxBytes) {
+    if (!boundedJsonUtf8Bytes(params.request, requestMaxBytes).complete) {
       return { ok: false, reason: "invalid-context" };
     }
     const serialized = stableStringify(params.request);

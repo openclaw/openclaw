@@ -5,9 +5,9 @@ import {
   sameQueuedDeliveryVersion,
   type StoredComposerSession,
 } from "../../lib/chat/outbox-store-codec.ts";
+import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
 import {
   applyStoredChatOutboxScope,
-  type StoredChatOutboxScope,
   type StoredComposerState,
 } from "../../lib/chat/outbox-store.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
@@ -21,6 +21,7 @@ export function writeStoredComposerSession(
   if (
     !session?.draft &&
     !session?.goalMode &&
+    !session?.replyTarget &&
     session?.draftRevision === undefined &&
     queue.length === 0
   ) {
@@ -32,6 +33,7 @@ export function writeStoredComposerSession(
     ...(session?.draft ? { draft: session.draft } : {}),
     ...(session?.draftMentions ? { draftMentions: session.draftMentions } : {}),
     ...(session?.goalMode ? { goalMode: session.goalMode } : {}),
+    ...(session?.replyTarget ? { replyTarget: session.replyTarget } : {}),
     ...(session?.draftRevision !== undefined ? { draftRevision: session.draftRevision } : {}),
     ...(queue.length ? { queue } : {}),
     updatedAt: Date.now(),

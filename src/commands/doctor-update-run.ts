@@ -4,15 +4,12 @@ import {
   UPDATE_ENVIRONMENT_FAILURE_REASONS,
 } from "../shared/update-outcome.js";
 
-/** Startup and proven-pristine preflights do not need a public ledger snapshot. */
-export async function noteStaleUpdateRuns(options: {
-  migrateState?: boolean;
-  requireStartupMigrationCheckpoint?: boolean;
-  skipPristineStartupStateMigrations?: boolean;
-}): Promise<void> {
-  if (options.requireStartupMigrationCheckpoint || options.skipPristineStartupStateMigrations) {
-    return;
-  }
+/** Report unfinished or failed update work during Doctor diagnostics. */
+export async function noteStaleUpdateRuns(
+  options: {
+    migrateState?: boolean;
+  } = {},
+): Promise<void> {
   const [
     { staleUpdateRunGuidance },
     { listUpdateRunsAsync },

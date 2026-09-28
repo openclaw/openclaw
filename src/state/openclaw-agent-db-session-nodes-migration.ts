@@ -1,15 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
+import { migratedSessionColumn as migratedColumn } from "./openclaw-agent-db-schema-helpers.js";
 import { readSqliteTableColumns } from "./openclaw-agent-db-session-migrations.js";
 
 const SESSION_NODE_SCHEMA_VERSION = 14;
-
-function migratedColumn(
-  columns: ReadonlySet<string>,
-  columnName: string,
-  fallback: string,
-): string {
-  return columns.has(columnName) ? columnName : fallback;
-}
 
 function jsonText(path: string): string {
   return `CASE
@@ -153,36 +146,20 @@ function createLegacySessionWindowSelect(
   const routeColumns = readSqliteTableColumns(db, "session_routes");
   // Keep owner preference local to each scalar query: supported SQLite 3.51
   // cannot resolve an outer column reference from a correlated ORDER BY.
-  const entryOwner = entryColumns
-    ? `(SELECT se.session_key
-        FROM session_entries AS se
-        INNER JOIN ${source} AS owner_window ON owner_window.session_id = se.session_id
-        WHERE se.session_id = ${source}.session_id
-        ORDER BY CASE WHEN se.session_key = owner_window.session_key THEN 0 ELSE 1 END,
-                 se.updated_at DESC,
-                 se.session_key ASC
-        LIMIT 1)`
-    : "NULL";
-  const routeOwner = routeColumns
-    ? `(SELECT sr.session_key
-        FROM session_routes AS sr
-        INNER JOIN ${source} AS owner_window ON owner_window.session_id = sr.session_id
-        WHERE sr.session_id = ${source}.session_id
-        ORDER BY CASE WHEN sr.session_key = owner_window.session_key THEN 0 ELSE 1 END,
-                 sr.updated_at DESC,
-                 sr.session_key ASC
-        LIMIT 1)`
-    : "NULL";
-  const currentEntryJson = entryColumns
-    ? `(SELECT se.entry_json
-        FROM session_entries AS se
-        INNER JOIN ${source} AS owner_window ON owner_window.session_id = se.session_id
-        WHERE se.session_id = ${source}.session_id
-        ORDER BY CASE WHEN se.session_key = owner_window.session_key THEN 0 ELSE 1 END,
-                 se.updated_at DESC,
-                 se.session_key ASC
-        LIMIT 1)`
-    : "NULL";
+  const ownerValue = (
+    table: "session_entries" | "session_routes",
+    column: "session_key" | "entry_json",
+  ) => `(SELECT candidate.${column}
+        FROM ${table} AS candidate
+        INNER JOIN ${source} AS owner_window ON owner_window.session_id = candidate.session_id
+        WHERE candidate.session_id = ${source}.session_id
+        ORDER BY CASE WHEN candidate.session_key = owner_window.session_key THEN 0 ELSE 1 END,
+                 candidate.updated_at DESC,
+                 candidate.session_key ASC
+        LIMIT 1)`;
+  const entryOwner = entryColumns ? ownerValue("session_entries", "session_key") : "NULL";
+  const routeOwner = routeColumns ? ownerValue("session_routes", "session_key") : "NULL";
+  const currentEntryJson = entryColumns ? ownerValue("session_entries", "entry_json") : "NULL";
 
   return {
     columns: `session_id, session_key, previous_session_id, reason, session_scope,

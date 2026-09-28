@@ -18,13 +18,15 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import {
   appendTranscriptMessage,
-  appendTranscriptEvent,
   listSessionParticipantsReadOnly,
   loadSessionEntry,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
+import { resolveWorkerPlacementSessionTarget } from "../../gateway/server-worker-placement-session-target.js";
+import { resolveGatewaySessionStoreTargetWithStore } from "../../gateway/session-utils-store-lookup.js";
+import { resolveCanonicalSessionEntryFromStoreKeys } from "../../gateway/session-utils-store.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import {
   testing as sessionBindingTesting,
@@ -78,6 +80,7 @@ import {
   readSessionStore as readSessionStoreFast,
   runExplicitResetCases,
   writeSessionStore as writeSessionStoreFast,
+  writeTerminalTranscriptSessionStore,
 } from "./test/session.test-support.js";
 
 const sessionForkMocks = vi.hoisted(() => ({
@@ -264,47 +267,6 @@ describe("resolveReplySessionPreprocessingState", () => {
     await expect(resolvePreprocessingState(storePath)).rejects.toThrow();
   });
 });
-
-async function writeTerminalTranscriptSessionStore(params: {
-  storePath: string;
-  sessionKey: string;
-  sessionId: string;
-  status?: SessionEntry["status"];
-  omitStatus?: boolean;
-  updatedAt: number;
-  endedAt: number;
-  transcriptMutationOrder: "after-registry" | "before-registry";
-}): Promise<void> {
-  const sessionFile = `${params.sessionId}.jsonl`;
-  const status = params.status ?? (params.omitStatus ? undefined : "done");
-  const appendTranscript = () =>
-    appendTranscriptEvent(
-      {
-        agentId: "main",
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-      },
-      { type: "custom", timestamp: "1970-01-01T00:00:00.001Z" },
-    );
-  if (params.transcriptMutationOrder === "before-registry") {
-    await appendTranscript();
-  }
-  await writeSessionStoreFast(params.storePath, {
-    [params.sessionKey]: {
-      sessionId: params.sessionId,
-      sessionFile,
-      updatedAt: params.updatedAt,
-      startedAt: params.endedAt - 10_000,
-      endedAt: params.endedAt,
-      runtimeMs: 9_000,
-      ...(status ? { status } : {}),
-    },
-  });
-  if (params.transcriptMutationOrder === "after-registry") {
-    await appendTranscript();
-  }
-}
 
 function setMinimalCurrentConversationBindingRegistryForTests(): void {
   setActivePluginRegistry(
@@ -973,8 +935,7 @@ describe("initSessionState thread forking", () => {
   });
 
   it("keeps a restart tombstone terminal when its claimed parent is missing", async () => {
-    const root = await makeCaseDir("openclaw-thread-session-missing-parent-");
-    const storePath = path.join(root, "sessions.json");
+    const storePath = await makeStorePath("openclaw-thread-session-missing-parent-");
     const threadSessionKey = "agent:main:slack:channel:c1:thread:missing";
     await writeSessionStoreFast(storePath, {
       [threadSessionKey]: {
@@ -1009,8 +970,7 @@ describe("initSessionState thread forking", () => {
   });
 
   it("keeps a restart tombstone terminal for an unauthorized parent-fork turn", async () => {
-    const root = await makeCaseDir("openclaw-thread-session-unauthorized-parent-");
-    const storePath = path.join(root, "sessions.json");
+    const storePath = await makeStorePath("openclaw-thread-session-unauthorized-parent-");
     const parentSessionKey = "agent:main:slack:channel:c1";
     const threadSessionKey = "agent:main:slack:channel:c1:thread:unauthorized";
     await writeSessionStoreFast(storePath, {
@@ -1047,8 +1007,7 @@ describe("initSessionState thread forking", () => {
   });
 
   it("keeps a model-locked restart tombstone terminal for a parent-fork turn", async () => {
-    const root = await makeCaseDir("openclaw-thread-session-model-locked-parent-");
-    const storePath = path.join(root, "sessions.json");
+    const storePath = await makeStorePath("openclaw-thread-session-model-locked-parent-");
     const parentSessionKey = "agent:main:slack:channel:c1";
     const threadSessionKey = "agent:main:slack:channel:c1:thread:model-locked";
     const existingEntry = {
@@ -1153,8 +1112,7 @@ describe("initSessionState thread forking", () => {
   });
 
   it("keeps a restart tombstone terminal when its parent fork fails", async () => {
-    const root = await makeCaseDir("openclaw-thread-session-fork-failure-");
-    const storePath = path.join(root, "sessions.json");
+    const storePath = await makeStorePath("openclaw-thread-session-fork-failure-");
     const parentSessionKey = "agent:main:slack:channel:c1";
     const threadSessionKey = "agent:main:slack:channel:c1:thread:failed";
     await writeSessionStoreFast(storePath, {
@@ -1226,8 +1184,7 @@ describe("initSessionState thread forking", () => {
   });
 
   it("records topic-specific SQLite session identity when MessageThreadId is present", async () => {
-    const root = await makeCaseDir("openclaw-topic-session-");
-    const storePath = path.join(root, "sessions.json");
+    const storePath = await makeStorePath("openclaw-topic-session-");
 
     const cfg = {
       session: { store: storePath },
@@ -1270,8 +1227,7 @@ describe("initSessionState thread forking", () => {
 
 describe("initSessionState RawBody", () => {
   it("uses RawBody for command extraction and reset triggers when Body contains wrapped context", async () => {
-    const root = await makeCaseDir("openclaw-rawbody-");
-    const storePath = path.join(root, "sessions.json");
+    const storePath = await makeStorePath("openclaw-rawbody-");
     const cfg: OpenClawConfig = { session: { store: storePath } };
 
     const statusResult = await initSessionState({
@@ -1299,8 +1255,7 @@ describe("initSessionState RawBody", () => {
   });
 
   it("preserves argument casing while still matching reset triggers case-insensitively", async () => {
-    const root = await makeCaseDir("openclaw-rawbody-reset-case-");
-    const storePath = path.join(root, "sessions.json");
+    const storePath = await makeStorePath("openclaw-rawbody-reset-case-");
 
     const cfg = {
       session: {
@@ -1336,10 +1291,6 @@ describe("initSessionState RawBody", () => {
         "Please fix this bug:\n[2026-07-29 10:00:00] ERROR: connection refused\nStack: at foo()",
     },
     {
-      body: "/new summarize [Q3 report] for me",
-      expected: "summarize [Q3 report] for me",
-    },
-    {
       body: "/new: take notes",
       expected: "take notes",
     },
@@ -1348,8 +1299,7 @@ describe("initSessionState RawBody", () => {
       expected: "explain [Current message - respond to this] and /new syntax",
     },
   ])("preserves the raw message after a reset trigger", async ({ body, expected }) => {
-    const root = await makeCaseDir("openclaw-rawbody-reset-message-");
-    const storePath = path.join(root, "sessions.json");
+    const storePath = await makeStorePath("openclaw-rawbody-reset-message-");
     const result = await initSessionState({
       ctx: {
         RawBody: body,
@@ -1418,8 +1368,7 @@ describe("initSessionState RawBody", () => {
   it.each(["@openclaw /new", "@openclaw/new"])(
     "preserves bracketed multiline payloads after group mention form %s",
     async (prefix) => {
-      const root = await makeCaseDir("openclaw-group-reset-message-");
-      const storePath = path.join(root, "sessions.json");
+      const storePath = await makeStorePath("openclaw-group-reset-message-");
       const expected = "review [Q3]\n[Current message - respond to this]\nand explain /new syntax";
       const result = await initSessionState({
         ctx: {
@@ -1476,8 +1425,7 @@ describe("initSessionState RawBody", () => {
   ])(
     "preserves reset payloads with $name",
     async ({ body, resetTriggers, expected, omitBotUsername }) => {
-      const root = await makeCaseDir("openclaw-suffixed-reset-message-");
-      const storePath = path.join(root, "sessions.json");
+      const storePath = await makeStorePath("openclaw-suffixed-reset-message-");
       const result = await initSessionState({
         ctx: {
           RawBody: body,
@@ -1505,8 +1453,7 @@ describe("initSessionState RawBody", () => {
   );
 
   it("anchors a reset payload after an explicit channel envelope and sender prefix", async () => {
-    const root = await makeCaseDir("openclaw-structural-reset-message-");
-    const storePath = path.join(root, "sessions.json");
+    const storePath = await makeStorePath("openclaw-structural-reset-message-");
     const result = await initSessionState({
       ctx: {
         BodyForCommands: "/NEW: keep [Q3]\nline 2",
@@ -1529,8 +1476,7 @@ describe("initSessionState RawBody", () => {
   });
 
   it("does not search past an anchored reset-like payload", async () => {
-    const root = await makeCaseDir("openclaw-reset-like-sender-message-");
-    const storePath = path.join(root, "sessions.json");
+    const storePath = await makeStorePath("openclaw-reset-like-sender-message-");
     const result = await initSessionState({
       ctx: {
         BodyForCommands: "/NEW keep [Q3]\nline 2",
@@ -1552,8 +1498,7 @@ describe("initSessionState RawBody", () => {
   });
 
   it("keeps quoted markers and reset text in history out of reset parsing", async () => {
-    const root = await makeCaseDir("openclaw-history-reset-message-");
-    const storePath = path.join(root, "sessions.json");
+    const storePath = await makeStorePath("openclaw-history-reset-message-");
     const payload = "review [Current message - respond to this]\nand explain /new syntax";
     const ctx = buildChannelInboundEventContext({
       channel: "whatsapp",
@@ -1696,8 +1641,7 @@ describe("initSessionState RawBody", () => {
   });
 
   it("drops cached skills snapshot when /new rotates an existing session", async () => {
-    const root = await makeCaseDir("openclaw-rawbody-reset-skills-");
-    const storePath = path.join(root, "sessions.json");
+    const storePath = await makeStorePath("openclaw-rawbody-reset-skills-");
     const sessionKey = "agent:main:signal:direct:uuid:reset-skills";
     const existingSessionId = "session-with-stale-skills";
 
@@ -1947,52 +1891,154 @@ describe("initSessionState RawBody", () => {
     },
   );
 
-  it.each(["owed", "unresolved", "acknowledged"] as const)(
-    "preserves %s delivery-notice debt across an implicit daily stale rollover",
-    async (noticeState) => {
-      const root = await makeCaseDir("openclaw-daily-rollover-notice-");
-      const storePath = path.join(root, "sessions.json");
-      const sessionKey = "agent:main:telegram:notice-rollover";
-      const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
-      const pendingDeliveryNotice = {
-        createdAt: staleStartedAt,
-        context: { channel: "telegram", to: "chat-1", accountId: "default" },
-        intentId: "intent-rollover",
-        state: noticeState,
-      };
+  it("preserves owed delivery-notice debt across an implicit daily stale rollover", async () => {
+    const noticeState = "owed";
+    const storePath = await makeStorePath("openclaw-daily-rollover-notice-");
+    const sessionKey = "agent:main:telegram:notice-rollover";
+    const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
+    const pendingDeliveryNotice = {
+      createdAt: staleStartedAt,
+      context: { channel: "telegram", to: "chat-1", accountId: "default" },
+      intentId: "intent-rollover",
+      state: noticeState,
+    };
 
-      await writeSessionStoreFast(storePath, {
-        [sessionKey]: {
-          sessionId: "session-before-notice-rollover",
-          updatedAt: staleStartedAt,
-          sessionStartedAt: staleStartedAt,
-          lastInteractionAt: staleStartedAt,
-          systemSent: true,
-          pendingDeliveryNotice,
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "session-before-notice-rollover",
+        updatedAt: staleStartedAt,
+        sessionStartedAt: staleStartedAt,
+        lastInteractionAt: staleStartedAt,
+        systemSent: true,
+        pendingDeliveryNotice,
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "hello again",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+      },
+      cfg: {
+        session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
+      } as OpenClawConfig,
+    });
+
+    // Erasing the debt at rollover would recreate the silent ambiguous loss.
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionEntry.pendingDeliveryNotice).toEqual(pendingDeliveryNotice);
+    const store = readSessionStoreFast(storePath) as Record<
+      string,
+      { pendingDeliveryNotice?: unknown }
+    >;
+    expect(store[sessionKey]?.pendingDeliveryNotice).toEqual(pendingDeliveryNotice);
+  });
+
+  it("preserves the session-owned worktree binding across an implicit daily stale rollover (#159452)", async () => {
+    // Regression: a worker-placed session's worktree reference was dropped at
+    // the implicit daily/idle rollover boundary even though the underlying
+    // worktree stays live, so the next worker dispatch failed with "dispatch
+    // requires a session-owned workspace". A session entry cannot carry both
+    // `worktree` and `repositoryWorkspaceId` (worker placement rejects that
+    // combination before dispatch), so this case covers the worktree binding
+    // and proves the placement boundary resolves after rollover.
+    const storePath = await makeStorePath("openclaw-daily-rollover-worktree-");
+    const sessionKey = "agent:main:dashboard:worktree-rollover";
+    const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
+    const worktree = { id: "worktree-159452", branch: "main", repoRoot: "/repo" };
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "session-before-worktree-rollover",
+        updatedAt: staleStartedAt,
+        sessionStartedAt: staleStartedAt,
+        lastInteractionAt: staleStartedAt,
+        systemSent: true,
+        worktree,
+      },
+    });
+
+    const cfg = {
+      session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
+    } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "hello again",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+      },
+      cfg,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(false);
+    expect(result.sessionEntry.worktree).toEqual(worktree);
+
+    const store = readSessionStoreFast(storePath) as Record<string, { worktree?: unknown }>;
+    expect(store[sessionKey]?.worktree).toEqual(worktree);
+
+    // Boundary proof: worker placement, which failed with "dispatch requires
+    // a session-owned workspace" before the fix, now resolves the rolled-over
+    // entry against its live worktree.
+    const placement = resolveWorkerPlacementSessionTarget({
+      sessionRuntime: {
+        resolveGatewaySessionStoreTargetWithStore,
+        resolveCanonicalSessionEntryFromStoreKeys,
+        managedWorktrees: {
+          findLiveByOwner: (_kind, ownerId) => ({
+            id: worktree.id,
+            ownerId,
+            path: worktree.repoRoot,
+          }),
         },
-      });
+      },
+      config: cfg,
+      sessionId: result.sessionEntry.sessionId,
+      sessionKey,
+      agentId: "main",
+      errorMessage: "placement identity changed",
+    });
+    expect(placement.workspace).toEqual({ kind: "local", path: worktree.repoRoot });
+  });
 
-      const result = await initSessionState({
-        ctx: {
-          RawBody: "hello again",
-          ChatType: "direct",
-          SessionKey: sessionKey,
-        },
-        cfg: {
-          session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
-        } as OpenClawConfig,
-      });
+  it("preserves the session-owned repository workspace binding across an implicit daily stale rollover (#159452)", async () => {
+    const storePath = await makeStorePath("openclaw-daily-rollover-repo-workspace-");
+    const sessionKey = "agent:main:dashboard:repo-workspace-rollover";
+    const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
 
-      // Erasing the debt at rollover would recreate the silent ambiguous loss.
-      expect(result.isNewSession).toBe(true);
-      expect(result.sessionEntry.pendingDeliveryNotice).toEqual(pendingDeliveryNotice);
-      const store = readSessionStoreFast(storePath) as Record<
-        string,
-        { pendingDeliveryNotice?: unknown }
-      >;
-      expect(store[sessionKey]?.pendingDeliveryNotice).toEqual(pendingDeliveryNotice);
-    },
-  );
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "session-before-repo-workspace-rollover",
+        updatedAt: staleStartedAt,
+        sessionStartedAt: staleStartedAt,
+        lastInteractionAt: staleStartedAt,
+        systemSent: true,
+        repositoryWorkspaceId: "repo-workspace-159452",
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "hello again",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+      },
+      cfg: {
+        session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
+      } as OpenClawConfig,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(false);
+    expect(result.sessionEntry.repositoryWorkspaceId).toBe("repo-workspace-159452");
+
+    const store = readSessionStoreFast(storePath) as Record<
+      string,
+      { repositoryWorkspaceId?: string }
+    >;
+    expect(store[sessionKey]?.repositoryWorkspaceId).toBe("repo-workspace-159452");
+  });
 
   it.each([undefined, "required"] as const)(
     "stamps trusted creation provenance for a new session (sandbox=%s)",
@@ -2081,20 +2127,11 @@ describe("initSessionState RawBody", () => {
       preservesSpawnLineage: false,
     },
     {
-      name: "ordinary ACP session with a stale role",
+      name: "ordinary ACP session with stale lineage",
       sessionKey: "agent:main:acp:ordinary-stale-role",
       spawnedBy: "agent:main:main",
       createdVia: "run" as const,
       subagentRole: "leaf" as const,
-      subagentControlScope: undefined,
-      preservesSpawnLineage: true,
-    },
-    {
-      name: "ordinary ACP session with a stale control scope",
-      sessionKey: "agent:main:acp:ordinary-stale-control-scope",
-      spawnedBy: "agent:main:main",
-      createdVia: "run" as const,
-      subagentRole: undefined,
       subagentControlScope: "none" as const,
       preservesSpawnLineage: true,
     },
@@ -2107,18 +2144,8 @@ describe("initSessionState RawBody", () => {
       subagentControlScope: "none" as const,
       preservesSpawnLineage: true,
     },
-    {
-      name: "real ACP child",
-      sessionKey: "agent:main:acp:daily-rollover-lineage",
-      spawnedBy: "agent:main:subagent:parent",
-      createdVia: "spawn" as const,
-      subagentRole: "leaf" as const,
-      subagentControlScope: "none" as const,
-      preservesSpawnLineage: true,
-    },
   ])("keeps spawned-run lineage only for a $name rollover", async (testCase) => {
-    const root = await makeCaseDir("openclaw-daily-rollover-lineage-");
-    const storePath = path.join(root, "sessions.json");
+    const storePath = await makeStorePath("openclaw-daily-rollover-lineage-");
     const sessionKey = testCase.sessionKey;
     const existingSessionId = "session-before-daily-reset-lineage";
     const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
@@ -2303,8 +2330,7 @@ describe("initSessionState RawBody", () => {
     }
   });
   it("does not suppress /new when active conversation binding points to a non-ACP session", async () => {
-    const root = await makeCaseDir("openclaw-rawbody-acp-nonacp-binding-");
-    const storePath = path.join(root, "sessions.json");
+    const storePath = await makeStorePath("openclaw-rawbody-acp-nonacp-binding-");
     const sessionKey = "agent:codex:acp:binding:discord:default:feedface";
     const existingSessionId = "session-existing";
     const now = Date.now();
@@ -2388,8 +2414,7 @@ describe("initSessionState RawBody", () => {
   });
 
   it("does not suppress /new when active target session key is non-ACP even with configured ACP binding", async () => {
-    const root = await makeCaseDir("openclaw-rawbody-acp-configured-fallback-target-");
-    const storePath = path.join(root, "sessions.json");
+    const storePath = await makeStorePath("openclaw-rawbody-acp-configured-fallback-target-");
     const channelId = "1478836151241412759";
     const fallbackSessionKey = "agent:main:discord:channel:focus-target";
     const existingSessionId = "session-existing";
@@ -2917,8 +2942,7 @@ describe("initSessionState reset policy", () => {
 
   it("reuses completed run entries while the session is still fresh", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
-    const root = await makeCaseDir("openclaw-reset-terminal-entry-");
-    const storePath = path.join(root, "sessions.json");
+    const storePath = await makeStorePath("openclaw-reset-terminal-entry-");
     const sessionKey = "agent:main:whatsapp:dm:terminal-entry";
     const existingSessionId = "terminal-entry-old";
     await writeSessionStoreFast(storePath, {
@@ -3054,8 +3078,7 @@ describe("initSessionState reset policy", () => {
 
   it("recovers failed group sessions without rotating the transcript", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
-    const root = await makeCaseDir("openclaw-reset-failed-entry-");
-    const storePath = path.join(root, "sessions.json");
+    const storePath = await makeStorePath("openclaw-reset-failed-entry-");
     const sessionKey = "agent:main:telegram:group:-1001";
     const existingSessionId = "failed-entry-old";
     await writeSessionStoreFast(storePath, {
@@ -3155,8 +3178,7 @@ describe("initSessionState reset policy", () => {
   });
 
   it("keeps multiline slash skill payloads on the current session", async () => {
-    const root = await makeCaseDir("openclaw-skill-multiline-session-");
-    const storePath = path.join(root, "sessions.json");
+    const storePath = await makeStorePath("openclaw-skill-multiline-session-");
     const sessionKey = "agent:main:whatsapp:dm:skill-multiline";
     const existingSessionId = "skill-multiline-session-id";
     const body = "/skill demo_skill first line\nsecond line";
@@ -3186,8 +3208,7 @@ describe("initSessionState reset policy", () => {
 
   it("does not preserve a stale session for unauthorized /reset soft", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
-    const root = await makeCaseDir("openclaw-reset-soft-stale-unauthorized-");
-    const storePath = path.join(root, "sessions.json");
+    const storePath = await makeStorePath("openclaw-reset-soft-stale-unauthorized-");
     const sessionKey = "agent:main:whatsapp:dm:soft-stale-unauthorized";
     const existingSessionId = "soft-stale-unauthorized-session-id";
 
@@ -3384,8 +3405,7 @@ describe("initSessionState browser tab cleanup", () => {
 
 describe("initSessionState channel reset overrides", () => {
   it("uses channel-specific reset policy when configured", async () => {
-    const root = await makeCaseDir("openclaw-channel-idle-");
-    const storePath = path.join(root, "sessions.json");
+    const storePath = await makeStorePath("openclaw-channel-idle-");
     const sessionKey = "agent:main:discord:dm:123";
     const sessionId = "session-override";
     const updatedAt = Date.now() - (10080 - 1) * 60_000;
@@ -5134,6 +5154,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
   });
 
   it("disposes the previous bundle MCP runtime on session rollover", async () => {
+    await mcpFixture.bindSessionMcpRuntimeTestScheduler();
     const storePath = await makeStorePath("openclaw-stale-runtime-dispose-");
     const sessionKey = "agent:main:telegram:dm:runtime-stale-user";
     const existingSessionId = "stale-runtime-session";

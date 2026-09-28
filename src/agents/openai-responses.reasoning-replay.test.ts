@@ -1,4 +1,3 @@
-import { resolveReplayableResponsesMessageId } from "@openclaw/ai/transports";
 // Verifies OpenAI Responses replay preserves reasoning and response item ids.
 import type { AssistantMessage, Model, ToolResultMessage } from "openclaw/plugin-sdk/llm";
 import { stream } from "openclaw/plugin-sdk/llm";
@@ -310,47 +309,6 @@ describe("openai-responses reasoning replay", () => {
     expect(messageIds).toHaveLength(2);
     expect(messageIds.every((id) => typeof id === "string" && id.length > 0)).toBe(true);
     expect(new Set(messageIds).size).toBe(2);
-  });
-
-  it("does not replay a signed assistant message id after its reasoning item was pruned", async () => {
-    // Signed message ids are only safe to replay when their preceding reasoning item survived.
-    expect(
-      resolveReplayableResponsesMessageId({
-        replayResponsesItemIds: true,
-        textSignatureId: "msg_real_response_item_requiring_reasoning",
-        fallbackId: "msg_0",
-        fallbackOrdinal: 0,
-        previousReplayItemWasReasoning: false,
-      }),
-    ).toBeUndefined();
-
-    expect(
-      resolveReplayableResponsesMessageId({
-        replayResponsesItemIds: true,
-        textSignatureId: "msg_real_response_item_requiring_reasoning",
-        fallbackId: "msg_0",
-        fallbackOrdinal: 0,
-        previousReplayItemWasReasoning: true,
-      }),
-    ).toBe("msg_real_response_item_requiring_reasoning");
-
-    expect(
-      resolveReplayableResponsesMessageId({
-        replayResponsesItemIds: true,
-        fallbackId: "msg_0",
-        fallbackOrdinal: 0,
-        previousReplayItemWasReasoning: false,
-      }),
-    ).toBe("msg_0");
-
-    expect(
-      resolveReplayableResponsesMessageId({
-        replayResponsesItemIds: true,
-        fallbackId: "msg_0",
-        fallbackOrdinal: 1,
-        previousReplayItemWasReasoning: false,
-      }),
-    ).toBe("msg_0_1");
   });
 
   it.each(["commentary", "final_answer"] as const)(

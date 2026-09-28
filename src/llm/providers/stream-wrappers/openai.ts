@@ -15,7 +15,6 @@ import {
 } from "@openclaw/ai/transports";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-// OpenAI stream wrapper normalizes OpenAI-compatible streamed tool and text events.
 import {
   normalizeFastMode,
   normalizeOptionalLowercaseString,
@@ -325,15 +324,6 @@ export function resolveOpenAIFastMode(
   return normalized;
 }
 
-function applyOpenAIFastModePayloadOverrides(params: {
-  payloadObj: Record<string, unknown>;
-  model: { provider?: unknown; id?: unknown; baseUrl?: unknown; api?: unknown };
-}): void {
-  if (params.payloadObj.service_tier === undefined && shouldApplyOpenAIServiceTier(params.model)) {
-    params.payloadObj.service_tier = "priority";
-  }
-}
-
 /** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function createOpenAIResponsesContextManagementWrapper(
   baseStreamFn: StreamFn | undefined,
@@ -357,7 +347,6 @@ export function createOpenAIResponsesContextManagementWrapper(
       return underlying(model, context, options);
     }
 
-    const originalOnPayload = options?.onPayload;
     const effectiveStore = policy.shouldStripStore ? false : policy.explicitStore;
     const replayResponsesItemIds =
       effectiveStore ??
@@ -365,14 +354,10 @@ export function createOpenAIResponsesContextManagementWrapper(
     const nextOptions: OpenAIResponsesReplayOptions = {
       ...options,
       ...(replayResponsesItemIds === undefined ? {} : { replayResponsesItemIds }),
-      onPayload: (payload) => {
-        if (payload && typeof payload === "object") {
-          applyOpenAIResponsesPayloadPolicy(payload as Record<string, unknown>, policy);
-        }
-        return originalOnPayload?.(payload, model);
-      },
     };
-    return underlying(model, context, nextOptions);
+    return streamWithPayloadPatch(underlying, model, context, nextOptions, (payload) => {
+      applyOpenAIResponsesPayloadPolicy(payload, policy);
+    });
   };
 }
 
@@ -503,18 +488,10 @@ export function createOpenAIFastModeWrapper(
     if (normalizeOpenAIFastMode(enabled) !== true || !supportsOpenAIResponsesFastMode(model)) {
       return underlying(model, context, options);
     }
-    const originalOnPayload = options?.onPayload;
-    return underlying(model, context, {
-      ...options,
-      onPayload: (payload) => {
-        if (payload && typeof payload === "object") {
-          applyOpenAIFastModePayloadOverrides({
-            payloadObj: payload as Record<string, unknown>,
-            model,
-          });
-        }
-        return originalOnPayload?.(payload, model);
-      },
+    return streamWithPayloadPatch(underlying, model, context, options, (payload) => {
+      if (payload.service_tier === undefined && shouldApplyOpenAIServiceTier(model)) {
+        payload.service_tier = "priority";
+      }
     });
   };
 }
@@ -550,22 +527,14 @@ export function createOpenAITextVerbosityWrapper(
     const resolvedVerbosity = resolveOpenAITextVerbosityForModel(model, verbosity);
     const shouldOverrideExistingVerbosity =
       model.api === "openai-chatgpt-responses" || resolvedVerbosity !== verbosity;
-    const originalOnPayload = options?.onPayload;
-    return underlying(model, context, {
-      ...options,
-      onPayload: (payload) => {
-        if (payload && typeof payload === "object") {
-          const payloadObj = payload as Record<string, unknown>;
-          const existingText =
-            payloadObj.text && typeof payloadObj.text === "object"
-              ? (payloadObj.text as Record<string, unknown>)
-              : {};
-          if (shouldOverrideExistingVerbosity || existingText.verbosity === undefined) {
-            payloadObj.text = { ...existingText, verbosity: resolvedVerbosity };
-          }
-        }
-        return originalOnPayload?.(payload, model);
-      },
+    return streamWithPayloadPatch(underlying, model, context, options, (payload) => {
+      const existingText =
+        payload.text && typeof payload.text === "object"
+          ? (payload.text as Record<string, unknown>)
+          : {};
+      if (shouldOverrideExistingVerbosity || existingText.verbosity === undefined) {
+        payload.text = { ...existingText, verbosity: resolvedVerbosity };
+      }
     });
   };
 }

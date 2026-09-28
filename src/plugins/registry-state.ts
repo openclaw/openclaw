@@ -94,8 +94,8 @@ export function createPluginRegistryState(registryParams: PluginRegistryParams) 
   for (const name of Object.keys(registryParams.coreGatewayHandlers ?? {})) {
     coreGatewayMethods.add(name);
   }
-  // oxlint-disable-next-line unicorn/no-array-sort -- This array is separate from the membership index.
-  registry.coreGatewayMethodNames = Array.from(coreGatewayMethods).sort();
+  registry.coreGatewayMethodNames = Array.from(coreGatewayMethods);
+  registry.coreGatewayMethodNames.sort();
 
   const pushDiagnostic = (diagnostic: PluginDiagnostic) => {
     registry.diagnostics.push(diagnostic);

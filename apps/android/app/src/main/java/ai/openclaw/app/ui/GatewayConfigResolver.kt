@@ -6,10 +6,9 @@ import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeText
+import ai.openclaw.app.nonBlankString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import java.net.URI
 import java.util.Base64
@@ -24,7 +23,6 @@ internal data class GatewayEndpointConfig(
   val contextPath: String = "",
 )
 
-/** Effective transport shown by manual gateway forms before they connect. */
 internal data class GatewayManualTransportPresentation(
   val requiresTls: Boolean,
   val effectiveTls: Boolean,
@@ -71,20 +69,17 @@ internal enum class GatewayEndpointValidationError {
   IPV6_ZONE_ID_UNSUPPORTED,
 }
 
-/** User input source used to choose endpoint-validation wording. */
 internal enum class GatewayEndpointInputSource {
   SETUP_CODE,
   MANUAL,
   QR_SCAN,
 }
 
-/** Endpoint parse result that preserves the reason when no usable config exists. */
 internal data class GatewayEndpointParseResult(
   val config: GatewayEndpointConfig? = null,
   val error: GatewayEndpointValidationError? = null,
 )
 
-/** QR scan result that separates a usable setup code from validation copy. */
 internal data class GatewayScannedSetupCodeResult(
   val setupCode: String? = null,
   val error: GatewayEndpointValidationError? = null,
@@ -217,10 +212,8 @@ private fun GatewayEndpointConfig.sameEndpoint(config: GatewayConnectConfig): Bo
     tls == config.tls &&
     contextPath == config.contextPath
 
-/** Parses an endpoint string and returns only the valid connection config. */
 internal fun parseGatewayEndpoint(rawInput: String): GatewayEndpointConfig? = parseGatewayEndpointResult(rawInput).config
 
-/** Parses and validates gateway endpoint input with user-facing error reasons. */
 internal fun parseGatewayEndpointResult(rawInput: String): GatewayEndpointParseResult {
   val raw = rawInput.trim()
   if (raw.isEmpty()) return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
@@ -260,13 +253,12 @@ internal fun parseGatewayEndpointResult(rawInput: String): GatewayEndpointParseR
   val displayPort = if (tls) 443 else 80
   val port = gatewayPort(uri.port, defaultPort) ?: return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
   val contextPath = normalizeGatewayContextPath(uri.rawPath)
-  val displayPath = contextPath
   val displayHost = if (host.contains(":")) "[$host]" else host
   val displayUrl =
     if (port == displayPort && defaultPort == displayPort) {
-      "${if (tls) "https" else "http"}://$displayHost$displayPath"
+      "${if (tls) "https" else "http"}://$displayHost$contextPath"
     } else {
-      "${if (tls) "https" else "http"}://$displayHost:$port$displayPath"
+      "${if (tls) "https" else "http"}://$displayHost:$port$contextPath"
     }
 
   return GatewayEndpointParseResult(
@@ -281,7 +273,6 @@ internal fun parseGatewayEndpointResult(rawInput: String): GatewayEndpointParseR
   )
 }
 
-/** Decodes base64url setup-code payloads produced by gateway onboarding. */
 internal fun decodeGatewaySetupCode(rawInput: String): GatewaySetupCode? {
   val trimmed = stripPairingSetupUrlPrefix(rawInput.trim())
   if (trimmed.isEmpty()) return null
@@ -298,11 +289,11 @@ internal fun decodeGatewaySetupCode(rawInput: String): GatewaySetupCode? {
   return try {
     val decoded = String(Base64.getDecoder().decode(padded), Charsets.UTF_8)
     val obj = parseJsonObject(decoded) ?: return null
-    val url = jsonField(obj, "url").orEmpty()
+    val url = obj.nonBlankString("url").orEmpty()
     if (url.isEmpty()) return null
-    val bootstrapToken = jsonField(obj, "bootstrapToken")
-    val token = jsonField(obj, "token")
-    val password = jsonField(obj, "password")
+    val bootstrapToken = obj.nonBlankString("bootstrapToken")
+    val token = obj.nonBlankString("token")
+    val password = obj.nonBlankString("password")
     GatewaySetupCode(url = url, bootstrapToken = bootstrapToken, token = token, password = password)
   } catch (_: IllegalArgumentException) {
     null
@@ -311,7 +302,6 @@ internal fun decodeGatewaySetupCode(rawInput: String): GatewaySetupCode? {
 
 internal fun manualTokenLooksLikeSetupCode(rawInput: String): Boolean = resolveSetupCodeCandidate(rawInput)?.let(::decodeGatewaySetupCode) != null
 
-/** Resolves QR scanner text to setup-code or validation error for UI copy. */
 internal fun resolveScannedSetupCodeResult(rawInput: String): GatewayScannedSetupCodeResult {
   val setupCode =
     resolveSetupCodeCandidate(rawInput)
@@ -326,7 +316,6 @@ internal fun resolveScannedSetupCodeResult(rawInput: String): GatewayScannedSetu
   return GatewayScannedSetupCodeResult(setupCode = setupCode)
 }
 
-/** Converts endpoint validation errors into setup-source-specific UI copy. */
 internal fun gatewayEndpointValidationMessage(
   error: GatewayEndpointValidationError,
   source: GatewayEndpointInputSource,
@@ -537,16 +526,8 @@ private fun parseJsonObject(input: String): JsonObject? = runCatching { gatewayS
 private fun resolveSetupCodeCandidate(rawInput: String): String? {
   val trimmed = rawInput.trim()
   if (trimmed.isEmpty()) return null
-  val qrSetupCode = parseJsonObject(trimmed)?.let { jsonField(it, "setupCode") }
+  val qrSetupCode = parseJsonObject(trimmed).nonBlankString("setupCode")
   return qrSetupCode ?: trimmed
-}
-
-private fun jsonField(
-  obj: JsonObject,
-  key: String,
-): String? {
-  val value = (obj[key] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
-  return value.ifEmpty { null }
 }
 
 private const val PAIRING_SETUP_URL_PREFIX = "oc-pair://"

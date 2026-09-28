@@ -37,7 +37,6 @@ export {
   ensureExecApprovals,
   ensureExecApprovalsSnapshot,
   loadExecApprovals,
-  loadExecApprovalsAsync,
   loadExecApprovalsReadOnly,
   readExecApprovalsSnapshot,
   restoreExecApprovalsSnapshot,

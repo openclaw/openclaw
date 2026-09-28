@@ -120,22 +120,16 @@ export async function executeWorkspaceManifestComputation(
         await import("./workspace-result-inventory.runtime.js");
       return ownedWorkerBytes(await readStagedWorkerWorkspaceEntries(command.input));
     }
-    case "workspace.manifest.capture": {
-      const { readActualWorkspaceManifestImpl } = await import("./workspace-actual-manifest.js");
-      const input = decodeManifestValue(command);
-      return await withHashes(input.hashes, async () => {
-        const { manifest, manifestRef } = await readActualWorkspaceManifestImpl(
-          captureArguments(input),
-        );
-        return { manifest, manifestRef };
-      });
-    }
+    case "workspace.manifest.capture":
     case "workspace.manifest.snapshot": {
       const { readActualWorkspaceManifestImpl } = await import("./workspace-actual-manifest.js");
       const input = decodeManifestValue(command);
-      return await withHashes(input.hashes, () =>
-        readActualWorkspaceManifestImpl(captureArguments(input)),
-      );
+      return await withHashes(input.hashes, async () => {
+        const snapshot = await readActualWorkspaceManifestImpl(captureArguments(input));
+        return command.type === "workspace.manifest.snapshot"
+          ? snapshot
+          : { manifest: snapshot.manifest, manifestRef: snapshot.manifestRef };
+      });
     }
     case "workspace.manifest.file": {
       const { readWorkspaceFileSnapshotWithLimit } = await import("./workspace-actual-manifest.js");

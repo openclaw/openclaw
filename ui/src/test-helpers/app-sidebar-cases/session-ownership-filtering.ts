@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { activateSessionMenuValue, openSessionMenu } from "../app-sidebar-menu.ts";
 import {
   createGateway,
   createGatewayHarness,
@@ -11,23 +12,7 @@ import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
 
 async function selectOwner(sidebar: SidebarLifecycleState, ownerId: string, involvingMe = false) {
-  const trigger = sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort");
-  if (!trigger) {
-    throw new Error("expected session sort trigger");
-  }
-  trigger.click();
-  await sidebar.updateComplete;
-  const menu = sidebar.querySelector<HTMLElement>(".sidebar-session-sort-menu");
-  if (!menu) {
-    throw new Error("expected session sort menu");
-  }
-  menu.dispatchEvent(
-    new CustomEvent("wa-select", {
-      bubbles: true,
-      detail: { item: { value: involvingMe ? "involving-me" : `owner:${ownerId}` } },
-    }),
-  );
-  await sidebar.updateComplete;
+  await activateSessionMenuValue(sidebar, involvingMe ? "involving-me" : `owner:${ownerId}`);
   await waitForFast(() => expect(sidebar.sessionData.sessionsLoading).toBe(false));
   await sidebar.updateComplete;
 }
@@ -74,8 +59,8 @@ describe("AppSidebar session ownership filtering", () => {
     sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort")?.click();
     await sidebar.updateComplete;
 
-    const menu = sidebar.querySelector(".sidebar-session-sort-menu");
-    expect(menu?.querySelector('[value="owner:profile:channel:opaque"]')).not.toBeNull();
+    const menu = await openSessionMenu(sidebar);
+    expect(menu?.querySelector('[data-value="owner:profile:channel:opaque"]')).not.toBeNull();
     expect(menu?.textContent).toContain("Channel Keeper");
     expect(
       sidebar.querySelector(
@@ -92,15 +77,17 @@ describe("AppSidebar session ownership filtering", () => {
         '[data-session-key="agent:main:session-principal"] openclaw-session-owner-chip',
       ),
     ).toBeNull();
-    expect(menu?.querySelector('[value="owner:discord:channel:123"]')).toBeNull();
-    expect(menu?.querySelector('[value="owner:agent:roboclaw:discord:channel:456"]')).toBeNull();
+    expect(menu?.querySelector('[data-value="owner:discord:channel:123"]')).toBeNull();
+    expect(
+      menu?.querySelector('[data-value="owner:agent:roboclaw:discord:channel:456"]'),
+    ).toBeNull();
 
     result.owners = undefined;
     harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
 
-    const unavailableMenu = sidebar.querySelector(".sidebar-session-sort-menu");
-    expect(unavailableMenu?.querySelector('[value^="owner:"]') ?? null).toBeNull();
+    const unavailableMenu = sidebar.querySelector("#sidebar-sessions-owner");
+    expect(unavailableMenu?.querySelector('[data-value^="owner:"]') ?? null).toBeNull();
     expect(unavailableMenu?.textContent ?? "").not.toContain("Channel Keeper");
   });
 
@@ -154,14 +141,7 @@ describe("AppSidebar session ownership filtering", () => {
       sidebar.querySelector(".sidebar-session-toolbar .sidebar-session-sort--filtered"),
     ).not.toBeNull();
 
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort")!.click();
-    await sidebar.updateComplete;
-    sidebar.querySelector(".sidebar-session-sort-menu")!.dispatchEvent(
-      new CustomEvent("wa-select", {
-        bubbles: true,
-        detail: { item: { value: "empty-groups:never" } },
-      }),
-    );
+    await activateSessionMenuValue(sidebar, "empty-groups:never");
     await sidebar.updateComplete;
     // The explicit display choice restores the heading, never filtered-out sessions.
     expect(sidebar.querySelector('[data-session-section="category:Operations"]')).not.toBeNull();

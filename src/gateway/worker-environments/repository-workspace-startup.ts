@@ -88,6 +88,7 @@ export async function syncSessionRepositoryWorkspace(params: {
       generation: params.generation,
       gitAuthor: params.gitAuthor,
       source: { ...source, ...(checkpoint ? { checkpoint } : {}) },
+      authorize: params.assertCurrent,
     });
   };
   const synced = repository.checkpointRef
@@ -137,6 +138,7 @@ export async function syncSessionRepositoryWorkspace(params: {
       baseManifestRef: synced.baseManifestRef,
       source: {
         kind: "repository",
+        authorize: params.assertCurrent,
         referenceManifestRef: synced.manifestRef,
         prepareCheckpoint: (payload) =>
           stageSessionRepositoryCheckpoint({

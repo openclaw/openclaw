@@ -1,13 +1,12 @@
 import type { AllMiddlewareArgs } from "@slack/bolt";
-import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
 import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
-import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { dispatchSlackPluginInteractiveHandler } from "../../interactive-dispatch.js";
 import { parseSlackModalPrivateMetadata } from "../../modal-metadata.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
 import { resolveSlackDeferredActionTarget } from "../deferred-action-routing.js";
 import { resolveSlackListenerEventScope, type SlackEventScope } from "../event-scope.js";
+import { enqueueSlackInteractionEvent } from "./interaction-event.js";
 import type { ModalInputSummary } from "./modal-input-summary.js";
 
 type SlackModalBody = {
@@ -380,7 +379,7 @@ async function emitSlackModalLifecycleEvent(params: {
       })
     : undefined;
 
-  const queued = enqueueRoutedSystemEvent(
+  enqueueSlackInteractionEvent(
     params.formatSystemEvent({ ...eventPayload, ...pluginEventFields }),
     sessionRouting,
     {
@@ -394,16 +393,6 @@ async function emitSlackModalLifecycleEvent(params: {
       },
     },
   );
-  if (queued) {
-    requestHeartbeat({
-      source: "hook",
-      intent: "immediate",
-      reason: "hook:slack-interaction",
-      agentId: sessionRouting.agentId,
-      sessionKey: sessionRouting.sessionKey,
-      heartbeat: { target: "last" },
-    });
-  }
 }
 
 export function registerModalLifecycleHandler(params: {

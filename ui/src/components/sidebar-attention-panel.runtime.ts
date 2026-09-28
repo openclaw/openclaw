@@ -1,7 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import "../app/device-scope-upgrade-controller.runtime.ts";
 import type { ExecApprovalDecision } from "../app/exec-approval.ts";
 import type { MentionsCapability } from "../app/mentions.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
@@ -9,6 +8,7 @@ import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { t } from "../i18n/index.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import "../styles/sidebar-menus.css";
 import "../styles/sidebar-issues.css";
 import { renderHubTabs } from "./hub-tabs.ts";
 import { icons } from "./icons.ts";
@@ -133,7 +133,6 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
           context: params.context,
           onDismiss,
           onNavigate: () => params.onNavigate("updates"),
-          visible: true,
           watchUpdateProgress: params.watchUpdateProgress,
         });
     }

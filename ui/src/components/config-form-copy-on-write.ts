@@ -1,8 +1,4 @@
-const INVALID_PATH_PATCH = Symbol("invalid-path-patch");
-
-type PathPatchResult =
-  | { ok: true; value: unknown }
-  | { ok: false; value: typeof INVALID_PATH_PATCH };
+type PathPatchResult = { ok: true; value: unknown } | { ok: false };
 
 function patchPathValue(
   current: unknown,
@@ -12,13 +8,13 @@ function patchPathValue(
 ): PathPatchResult {
   const segment = path[index];
   if (segment === undefined) {
-    return { ok: false, value: INVALID_PATH_PATCH };
+    return { ok: false };
   }
   const last = index === path.length - 1;
 
   if (typeof segment === "number") {
     if (current != null && !Array.isArray(current)) {
-      return { ok: false, value: INVALID_PATH_PATCH };
+      return { ok: false };
     }
     const next = Array.isArray(current) ? [...current] : [];
     if (last) {
@@ -38,7 +34,7 @@ function patchPathValue(
   }
 
   if (current != null && (typeof current !== "object" || Array.isArray(current))) {
-    return { ok: false, value: INVALID_PATH_PATCH };
+    return { ok: false };
   }
   const next = current ? { ...(current as Record<string, unknown>) } : {};
   const child = last

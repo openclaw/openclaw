@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 // Whatsapp connection-owner lease serializes auth-backed Baileys sockets across processes.
 import {
   acquireFileLock,
@@ -74,12 +75,10 @@ async function reserveProcessOwner(params: {
     }
     const current = processOwners.get(params.ownerPath);
     if (!current) {
-      let resolveReleased = () => {};
+      const released = createDeferred<void>();
       const owner: ProcessOwner = {
-        released: new Promise<void>((resolve) => {
-          resolveReleased = resolve;
-        }),
-        resolveReleased,
+        released: released.promise,
+        resolveReleased: released.resolve,
         token: Symbol(params.ownerPath),
       };
       processOwners.set(params.ownerPath, owner);

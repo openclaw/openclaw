@@ -75,11 +75,6 @@ type OpenAIQuicksilverBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
   connectTimeoutMs?: number;
 };
 
-type ActiveSideband = {
-  socket: OpenAIQuicksilverSocket;
-  requestIds: OpenAIQuicksilverRequestIds;
-};
-
 type OpenAIQuicksilverGatewayTransport = "direct" | "webrtc";
 
 function normalizeSidebandCloseReason(reason: Buffer | string | undefined): string {
@@ -114,7 +109,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
   private readonly pendingRawAudio: QuicksilverSocketAudioQueue;
   private directSocket: QuicksilverMediaSocket | undefined;
   private ready = false;
-  private sideband: ActiveSideband | undefined;
+  private sideband: OpenAIQuicksilverSocket | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private transport: OpenAIQuicksilverGatewayTransport | undefined;
   private readonly audio: OpenAIQuicksilverAudioAdapter;
@@ -420,7 +415,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       connected.socket.close(1000, "session stopped");
       throw connectSignal.reason;
     }
-    this.sideband = { socket: connected.socket, requestIds };
+    this.sideband = connected.socket;
     this.attachSidebandHandlers(connected.socket);
     this.adoptConnectedSocket(connected, directSocket);
   }
@@ -457,7 +452,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
     }
     return new OpenAIQuicksilverDelegationController(
       {
-        getSocket: () => this.sideband?.socket,
+        getSocket: () => this.sideband,
         logger: this.config.logger,
         model: this.config.model,
         onError: this.config.onError,
@@ -513,7 +508,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
   }
 
   private sendSocketEvent(event: object): void {
-    const socket = this.sideband?.socket;
+    const socket = this.sideband;
     if (socket?.readyState === WEBSOCKET_OPEN) {
       socket.send(JSON.stringify(event));
     }
@@ -587,7 +582,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
     this.closeAudioOutput();
     this.directSocket?.stopAudio();
     this.closeReason = reason;
-    const socket = this.sideband?.socket;
+    const socket = this.sideband;
     if (
       socket?.readyState === WEBSOCKET_OPEN &&
       isOpenAIGptLiveApiModel(this.config.model) &&
@@ -662,7 +657,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       clearTimeout(this.timer);
       this.timer = undefined;
     }
-    const socket = this.sideband?.socket;
+    const socket = this.sideband;
     this.sideband = undefined;
     this.directSocket = undefined;
     if (

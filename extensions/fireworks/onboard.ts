@@ -16,7 +16,7 @@ export const { applyConfig: applyFireworksConfig } = createDefaultModelsPresetAp
       baseUrl: defaultProvider.baseUrl,
       defaultModels: cfg.models?.mode === "replace" ? buildFireworksCatalogModels() : [],
       defaultModelId: FIREWORKS_DEFAULT_MODEL_ID,
-      aliases: [{ modelRef: FIREWORKS_DEFAULT_MODEL_REF, alias: "GLM 5.2 Fast" }],
+      aliases: [{ modelRef: FIREWORKS_DEFAULT_MODEL_REF, alias: "GLM 5.3 Fast" }],
     };
   },
 });

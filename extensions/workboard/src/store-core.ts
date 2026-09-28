@@ -7,6 +7,7 @@ import type {
   WorkboardMetadata,
   WorkboardStatus,
 } from "@openclaw/workboard-contract";
+import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   PersistedWorkboardAttachment,
@@ -62,7 +63,6 @@ import {
   normalizeLinkType,
   normalizeMetadata,
   normalizeNotes,
-  normalizePosition,
   normalizePriority,
   normalizeStatus,
   normalizeStringList,
@@ -123,20 +123,16 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
     } catch (operationError) {
       const compensationErrors = await this.rollbackCardMutations(journal);
       if (compensationErrors.length > 0) {
-        throw this.compensationError(operationError, compensationErrors);
+        const message =
+          operationError instanceof Error ? operationError.message : String(operationError);
+        throw new AggregateError([operationError, ...compensationErrors], message, {
+          cause: operationError,
+        });
       }
       throw operationError;
     } finally {
       this.compensationJournal = undefined;
     }
-  }
-
-  private compensationError(operationError: unknown, cleanupErrors: unknown[]): AggregateError {
-    const message =
-      operationError instanceof Error ? operationError.message : String(operationError);
-    return new AggregateError([operationError, ...cleanupErrors], message, {
-      cause: operationError,
-    });
   }
 
   private recordCardMutation(before: WorkboardCard | undefined, after: WorkboardCard): void {
@@ -187,7 +183,13 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
         ...merged,
         updatedAt: Math.max(Date.now(), current.updatedAt + 1),
       };
-      if (await this.registerCardIfUpdatedAt(compensation, current.updatedAt)) {
+      if (
+        await this.store.registerIfUpdatedAt(
+          compensation.id,
+          { version: 1, card: compensation },
+          current.updatedAt,
+        )
+      ) {
         return;
       }
     }
@@ -200,22 +202,11 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
       if (!current || !sameWorkboardCardState(current, created)) {
         return;
       }
-      if (await this.deleteCardIfUpdatedAt(created.id, current.updatedAt)) {
+      if (await this.store.deleteIfUpdatedAt(created.id, current.updatedAt)) {
         return;
       }
     }
     throw new Error(`card changed repeatedly during compensation: ${created.id}`);
-  }
-
-  private async registerCardIfUpdatedAt(
-    card: WorkboardCard,
-    expectedUpdatedAt: number,
-  ): Promise<boolean> {
-    return await this.store.registerIfUpdatedAt(card.id, { version: 1, card }, expectedUpdatedAt);
-  }
-
-  private async deleteCardIfUpdatedAt(id: string, expectedUpdatedAt: number): Promise<boolean> {
-    return await this.store.deleteIfUpdatedAt(id, expectedUpdatedAt);
   }
 
   protected async updateLatestCard(
@@ -519,12 +510,11 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
       },
       automation,
     );
-    const normalizedPosition = normalizePosition(input.position, Number.NaN);
+    const normalizedPosition = resolveNonNegativeIntegerOption(input.position, Number.NaN);
     const notes = normalizeNotes(input.notes);
     const agentId = normalizeOptionalString(input.agentId);
     const sessionKey = normalizeOptionalString(input.sessionKey);
     const runId = normalizeOptionalString(input.runId);
-    const taskId = normalizeOptionalString(input.taskId);
     const sourceUrl = normalizeOptionalString(input.sourceUrl);
     const normalizedExecution = normalizeExecution(input.execution);
     const execution =
@@ -586,7 +576,6 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
       ...(agentId ? { agentId } : {}),
       ...(sessionKey ? { sessionKey } : {}),
       ...(runId ? { runId } : {}),
-      ...(taskId ? { taskId } : {}),
       ...(sourceUrl ? { sourceUrl } : {}),
       ...(execution ? { execution } : {}),
       ...(startedAt ? { startedAt } : {}),
@@ -801,10 +790,6 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
         effectivePatch.runId === undefined
           ? existing.runId
           : normalizeOptionalString(effectivePatch.runId),
-      taskId:
-        effectivePatch.taskId === undefined
-          ? existing.taskId
-          : normalizeOptionalString(effectivePatch.taskId),
       sourceUrl:
         effectivePatch.sourceUrl === undefined
           ? existing.sourceUrl
@@ -817,7 +802,7 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
       position:
         effectivePatch.position === undefined
           ? existing.position
-          : normalizePosition(effectivePatch.position, existing.position),
+          : resolveNonNegativeIntegerOption(effectivePatch.position, existing.position),
       updatedAt: now,
       ...(startedAt ? { startedAt } : {}),
       ...(completedAt ? { completedAt } : {}),
@@ -923,7 +908,7 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
     const deleted =
       options.expectedUpdatedAt === undefined
         ? await this.store.delete(cardId)
-        : await this.deleteCardIfUpdatedAt(cardId, options.expectedUpdatedAt);
+        : await this.store.deleteIfUpdatedAt(cardId, options.expectedUpdatedAt);
     if (!deleted) {
       if (options.expectedUpdatedAt !== undefined) {
         const current = await this.get(cardId);

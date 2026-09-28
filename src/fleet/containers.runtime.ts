@@ -574,6 +574,35 @@ export function createFleetContainerRuntime(
     }
   };
 
+  const inspectResource = async <T extends { kind: "ok" }>(
+    runtime: FleetContainerRuntimeName,
+    resource: "container" | "network",
+    name: string,
+    isMissing: (stderr: string) => boolean,
+    parse: (stdout: string) => T,
+  ): Promise<T | { kind: "missing" } | { kind: "unavailable"; error: string }> => {
+    const args = [resource, "inspect", name];
+    let result: FleetContainerCommandResult;
+    try {
+      result = await execute(runtime, args, { allowFailure: true });
+    } catch (error) {
+      return { kind: "unavailable", error: formatExecutorError(error, runtime, args).message };
+    }
+    if (result.code !== 0) {
+      return isMissing(result.stderr)
+        ? { kind: "missing" }
+        : {
+            kind: "unavailable",
+            error: result.stderr.trim() || `${runtime} ${resource} inspect failed`,
+          };
+    }
+    try {
+      return parse(result.stdout);
+    } catch {
+      return { kind: "unavailable", error: `${resource} inspect returned an invalid response` };
+    }
+  };
+
   return {
     async assertLocal(runtime: FleetContainerRuntimeName): Promise<void> {
       if (runtime === "podman") {
@@ -596,69 +625,31 @@ export function createFleetContainerRuntime(
       runtime: FleetContainerRuntimeName,
       containerName: string,
     ): Promise<FleetContainerInspectResult> {
-      const args = ["container", "inspect", validateContainerName(containerName)];
-      let result: FleetContainerCommandResult;
-      try {
-        result = await execute(runtime, args, { allowFailure: true });
-      } catch (error) {
-        return {
-          kind: "unavailable",
-          state: "unknown",
-          error: formatExecutorError(error, runtime, args).message,
-        };
-      }
-      if (result.code !== 0) {
-        if (isMissingContainerError(result.stderr)) {
-          return { kind: "missing", state: "missing" };
-        }
-        return {
-          kind: "unavailable",
-          state: "unknown",
-          error: result.stderr.trim() || `${runtime} container inspect failed`,
-        };
-      }
-      try {
-        return parseInspectOutput(result.stdout);
-      } catch {
-        return {
-          kind: "unavailable",
-          state: "unknown",
-          error: "container inspect returned an invalid response",
-        };
-      }
+      const result = await inspectResource(
+        runtime,
+        "container",
+        validateContainerName(containerName),
+        isMissingContainerError,
+        parseInspectOutput,
+      );
+      return result.kind === "ok"
+        ? result
+        : result.kind === "missing"
+          ? { ...result, state: "missing" }
+          : { ...result, state: "unknown" };
     },
 
     async inspectNetwork(
       runtime: FleetContainerRuntimeName,
       networkName: string,
     ): Promise<FleetNetworkInspectResult> {
-      const args = ["network", "inspect", validateNetworkName(networkName)];
-      let result: FleetContainerCommandResult;
-      try {
-        result = await execute(runtime, args, { allowFailure: true });
-      } catch (error) {
-        return {
-          kind: "unavailable",
-          error: formatExecutorError(error, runtime, args).message,
-        };
-      }
-      if (result.code !== 0) {
-        if (isMissingNetworkError(result.stderr)) {
-          return { kind: "missing" };
-        }
-        return {
-          kind: "unavailable",
-          error: result.stderr.trim() || `${runtime} network inspect failed`,
-        };
-      }
-      try {
-        return parseNetworkInspectOutput(result.stdout);
-      } catch {
-        return {
-          kind: "unavailable",
-          error: "network inspect returned an invalid response",
-        };
-      }
+      return await inspectResource(
+        runtime,
+        "network",
+        validateNetworkName(networkName),
+        isMissingNetworkError,
+        parseNetworkInspectOutput,
+      );
     },
 
     async isDockerRootless(): Promise<boolean> {

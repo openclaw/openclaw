@@ -323,7 +323,7 @@ export function dedicatedSectionVersionForTag(tag: unknown) {
   return /-(?:alpha\.)?[1-9][0-9]*$/u.test(taggedVersion) ? taggedVersion : undefined;
 }
 
-export function releaseNotesSectionForTag(changelog: unknown, version: unknown, tag: unknown) {
+function releaseNotesSectionForTag(changelog: unknown, version: unknown, tag: unknown) {
   // Alpha and correction tags prefer their own exact heading when the
   // changelog carries one; otherwise they fall back to the base version.
   assertString(tag, "tag");
@@ -437,23 +437,11 @@ export function renderGithubReleaseNotes({
 
 export function verifyGithubReleaseNotes({
   body,
-  changelog,
-  version,
-  tag,
-  repository,
-  regularStableVersion,
-  contributionRecordPath,
+  ...target
 }: ReleaseNotesTarget & { body: unknown }) {
   assertString(body, "release body");
   const normalizedBody = body.trimEnd();
-  const base = renderGithubReleaseNotes({
-    changelog,
-    version,
-    tag,
-    repository,
-    regularStableVersion,
-    contributionRecordPath,
-  });
+  const base = renderGithubReleaseNotes(target);
   if (normalizedBody === base.body) {
     return {
       ...base,
@@ -465,17 +453,7 @@ export function verifyGithubReleaseNotes({
   const verification = normalizedBody.startsWith(verificationPrefix)
     ? normalizedBody.slice(base.body.length + 2)
     : "";
-  const expected = verification
-    ? renderGithubReleaseNotes({
-        changelog,
-        version,
-        tag,
-        repository,
-        regularStableVersion,
-        contributionRecordPath,
-        verification,
-      })
-    : base;
+  const expected = verification ? renderGithubReleaseNotes({ ...target, verification }) : base;
   return {
     ...expected,
     matches: normalizedBody === expected.body,
@@ -573,15 +551,18 @@ function main() {
     : changelogPath
       ? readFileSync(changelogPath, "utf8")
       : fail("release notes source was not validated");
+  const target = {
+    changelog,
+    version,
+    tag,
+    repository,
+    regularStableVersion: options.regularStableVersion,
+    contributionRecordPath: source?.recordPath ?? undefined,
+  };
   if (options.verifyBody) {
     const result = verifyGithubReleaseNotes({
+      ...target,
       body: readFileSync(options.verifyBody, "utf8"),
-      changelog,
-      version,
-      tag,
-      repository,
-      regularStableVersion: options.regularStableVersion,
-      contributionRecordPath: source?.recordPath ?? undefined,
     });
     if (!result.matches) {
       fail("Release body does not match canonical release notes.");
@@ -591,15 +572,7 @@ function main() {
   const verification = options.verificationFile
     ? readFileSync(options.verificationFile, "utf8")
     : "";
-  const rendered = renderGithubReleaseNotes({
-    changelog,
-    version,
-    tag,
-    repository,
-    regularStableVersion: options.regularStableVersion,
-    verification,
-    contributionRecordPath: source?.recordPath ?? undefined,
-  });
+  const rendered = renderGithubReleaseNotes({ ...target, verification });
   if (options.output) {
     writeFileSync(options.output, rendered.body);
     if (options.metadataOutput) {

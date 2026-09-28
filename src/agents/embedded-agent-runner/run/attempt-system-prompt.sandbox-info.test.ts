@@ -13,7 +13,6 @@ const disabled: ElevationCase = {
 const cases: ElevationCase[] = [
   { name: "absent", required: false },
   disabled,
-  { ...disabled, name: "required and disabled", required: true },
   {
     name: "enabled and allowed",
     elevated: { enabled: true, allowed: true, defaultLevel: "off" },

@@ -1,4 +1,3 @@
-// File Transfer plugin module implements file fetch behavior.
 import crypto from "node:crypto";
 import path from "node:path";
 import { readFileHandleBounded } from "openclaw/plugin-sdk/file-access-runtime";

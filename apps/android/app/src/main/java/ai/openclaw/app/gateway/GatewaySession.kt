@@ -244,6 +244,15 @@ data class GatewayUpdateAvailableSummary(
   val channel: String?,
 )
 
+internal fun parseGatewayUpdateAvailableSummary(value: JsonObject?): GatewayUpdateAvailableSummary? {
+  if (value == null) return null
+  return GatewayUpdateAvailableSummary(
+    currentVersion = value["currentVersion"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty),
+    latestVersion = value["latestVersion"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty),
+    channel = value["channel"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty),
+  )
+}
+
 private data class SelectedConnectAuth(
   val authToken: String?,
   val authBootstrapToken: String?,
@@ -581,7 +590,9 @@ class GatewaySession(
       val target = desired ?: return
       if (resumeAuthPaused) {
         target.reconnectPausedForAuthFailure = false
-      } else if (target.reconnectPausedForAuthFailure || currentConnection?.isReady() == true) {
+      } else if (target.reconnectPausedForAuthFailure || currentConnection?.hasOpenTransport() == true) {
+        // Another network becoming available does not invalidate an open WebSocket.
+        // Its handshake may already have consumed a one-time setup code.
         return
       }
       connectionToClose = currentConnection
@@ -623,10 +634,6 @@ class GatewaySession(
       )
     }
 
-  internal suspend fun refreshCanvasHostUrl(): String? = refreshCanvasHostUrl(observedSurfaceUrl = null, requireObservedMatch = false)
-
-  internal suspend fun refreshCanvasHostUrlIfCurrent(observedSurfaceUrl: String?): String? = refreshCanvasHostUrl(observedSurfaceUrl = observedSurfaceUrl, requireObservedMatch = true)
-
   internal suspend fun refreshCanvasHostRouteIfCurrent(observedSurfaceUrl: String?): GatewayCanvasHostRoute? {
     refreshCanvasHostUrlIfCurrent(observedSurfaceUrl)
     // Pair the URL with the currently installed connection after suspension;
@@ -634,14 +641,11 @@ class GatewaySession(
     return currentCanvasHostRoute()
   }
 
-  private suspend fun refreshCanvasHostUrl(
-    observedSurfaceUrl: String?,
-    requireObservedMatch: Boolean,
-  ): String? {
+  internal suspend fun refreshCanvasHostUrlIfCurrent(observedSurfaceUrl: String?): String? {
     val (lease, target, requestObservedSurfaceUrl) =
       synchronized(lifecycleLock) {
         val current = pluginSurfaceUrls["canvas"]
-        if (requireObservedMatch && current != observedSurfaceUrl) return current
+        if (current != observedSurfaceUrl) return current
         val capturedLease = captureRequestLease() ?: return null
         val capturedTarget =
           desired
@@ -683,7 +687,7 @@ class GatewaySession(
       lease.commitIfCurrent {
         val current = pluginSurfaceUrls["canvas"]
         result =
-          if (requireObservedMatch && current != observedSurfaceUrl) {
+          if (current != observedSurfaceUrl) {
             current
           } else {
             pluginSurfaceUrls = pluginSurfaceUrls + ("canvas" to refreshed)
@@ -742,12 +746,6 @@ class GatewaySession(
   }
 
   /** Sends node.event and preserves the gateway RPC error shape for callers that need diagnostics. */
-  suspend fun sendNodeEventDetailed(
-    event: String,
-    payloadJson: String?,
-    timeoutMs: Long = 8_000,
-  ): RpcResult = sendNodeEventDetailedForEndpoint(null, event, payloadJson, timeoutMs)
-
   internal suspend fun sendNodeEventDetailedForEndpoint(
     expectedEndpointStableId: String?,
     event: String,
@@ -763,8 +761,7 @@ class GatewaySession(
         )
     val params = buildNodeEventParams(event = event, payloadJson = payloadJson)
     try {
-      val res = conn.request(GatewayMethod.NodeEvent.rawValue, params, timeoutMs = timeoutMs)
-      return RpcResult(ok = res.ok, payloadJson = res.payloadJson, error = res.error)
+      return conn.request(GatewayMethod.NodeEvent.rawValue, params, timeoutMs = timeoutMs)
     } catch (err: Throwable) {
       Log.w("OpenClawGateway", "node.event failed: ${err::class.java.simpleName}")
       return RpcResult(
@@ -790,11 +787,7 @@ class GatewaySession(
     method: String,
     paramsJson: String?,
     timeoutMs: Long = 15_000,
-  ): String {
-    val res = requestDetailed(method = method, paramsJson = paramsJson, timeoutMs = timeoutMs)
-    if (res.ok) return res.payloadJson ?: ""
-    throw GatewayRequestRejected(res.error ?: ErrorShape("UNAVAILABLE", "request failed"))
-  }
+  ): String = requestDetailed(method = method, paramsJson = paramsJson, timeoutMs = timeoutMs).payloadOrThrow()
 
   suspend fun loadImageArtifact(
     expectedEndpointStableId: String?,
@@ -883,10 +876,11 @@ class GatewaySession(
     method: String,
     paramsJson: String?,
     timeoutMs: Long = 15_000,
-  ): String {
-    val res = requestDetailed(expectedEndpointStableId, method, paramsJson, timeoutMs)
-    if (res.ok) return res.payloadJson ?: ""
-    throw GatewayRequestRejected(res.error ?: ErrorShape("UNAVAILABLE", "request failed"))
+  ): String = requestDetailed(expectedEndpointStableId, method, paramsJson, timeoutMs).payloadOrThrow()
+
+  private fun RpcResult.payloadOrThrow(): String {
+    if (!ok) throw GatewayRequestRejected(error ?: ErrorShape("UNAVAILABLE", "request failed"))
+    return payloadJson ?: ""
   }
 
   /** Captures the current physical connection; requests never resolve a replacement socket. */
@@ -908,11 +902,7 @@ class GatewaySession(
           }
         },
       ) { method, paramsJson, timeoutMs, withEnqueue ->
-        val res = requestDetailed(conn, method, paramsJson, timeoutMs, withEnqueue)
-        if (!res.ok) {
-          throw GatewayRequestRejected(res.error ?: ErrorShape("UNAVAILABLE", "request failed"))
-        }
-        res.payloadJson ?: ""
+        requestDetailed(conn, method, paramsJson, timeoutMs, withEnqueue).payloadOrThrow()
       }
     }
 
@@ -952,8 +942,7 @@ class GatewaySession(
       } else {
         json.parseToJsonElement(paramsJson)
       }
-    val res = conn.request(method, params, timeoutMs, guardRequestEnqueue(conn, withEnqueue))
-    return RpcResult(ok = res.ok, payloadJson = res.payloadJson, error = res.error)
+    return conn.request(method, params, timeoutMs, guardRequestEnqueue(conn, withEnqueue))
   }
 
   private fun guardRequestEnqueue(
@@ -977,14 +966,6 @@ class GatewaySession(
     }
 
   /** Sends an RPC request frame and reports errors asynchronously through [onError]. */
-  suspend fun sendRequestFrame(
-    method: String,
-    paramsJson: String?,
-    timeoutMs: Long = 15_000,
-    withEnqueue: (() -> Unit) -> Unit = { it() },
-    onError: (ErrorShape) -> Unit = {},
-  ) = sendRequestFrameForEndpoint(null, method, paramsJson, timeoutMs, withEnqueue, onError)
-
   internal suspend fun sendRequestFrameForEndpoint(
     expectedEndpointStableId: String?,
     method: String,
@@ -1002,13 +983,6 @@ class GatewaySession(
       }
     conn.sendRequestFrame(method, params, timeoutMs, guardRequestEnqueue(conn, withEnqueue), onError)
   }
-
-  private data class RpcResponse(
-    val id: String,
-    val ok: Boolean,
-    val payloadJson: String?,
-    val error: ErrorShape?,
-  )
 
   private data class TicketedMediaRequest(
     val url: String,
@@ -1080,9 +1054,10 @@ class GatewaySession(
     private val loggerTag = "OpenClawGateway"
     private val incomingMessages = Channel<String>(Channel.UNLIMITED)
     private var lastEventSequence: Long? = null
+    private val liveTextProjection = GatewayLiveTextProjection()
 
     // RPC waiters belong to this socket generation. Closing it must not touch a replacement connection.
-    private val pending = ConcurrentHashMap<String, CompletableDeferred<RpcResponse>>()
+    private val pending = ConcurrentHashMap<String, CompletableDeferred<RpcResult>>()
 
     private val pendingLock = Any()
     private val messagePumpJob =
@@ -1184,7 +1159,7 @@ class GatewaySession(
       params: JsonElement?,
       timeoutMs: Long,
       withEnqueue: (() -> Unit) -> Unit = { it() },
-    ): RpcResponse {
+    ): RpcResult {
       val id = UUID.randomUUID().toString()
       if (method == "connect") connectRequestId = id
       val deferred = registerPending(id)
@@ -1376,8 +1351,8 @@ class GatewaySession(
       }
     }
 
-    private fun registerPending(id: String): CompletableDeferred<RpcResponse> {
-      val deferred = CompletableDeferred<RpcResponse>()
+    private fun registerPending(id: String): CompletableDeferred<RpcResult> {
+      val deferred = CompletableDeferred<RpcResult>()
       // Registration and the close drain are one lifecycle decision; no waiter may slip between them.
       synchronized(pendingLock) {
         if (state.get() == ConnectionState.CLOSED) {
@@ -1430,6 +1405,8 @@ class GatewaySession(
     }
 
     fun isReady(): Boolean = state.get() == ConnectionState.READY
+
+    fun hasOpenTransport(): Boolean = state.get() != ConnectionState.CLOSED && connectHandshakeJob != null
 
     fun markReady(methods: Set<String>?): Boolean {
       if (!state.compareAndSet(ConnectionState.CONNECTING, ConnectionState.READY)) return false
@@ -1773,7 +1750,7 @@ class GatewaySession(
     }
 
     private fun parseConnectSuccess(
-      res: RpcResponse,
+      res: RpcResult,
       deviceId: String,
       selectedAuth: SelectedConnectAuth,
     ): ConnectedGateway {
@@ -1893,24 +1870,12 @@ class GatewaySession(
             remoteAddress = remoteAddress,
             serverVersion = serverVersion,
             mainSessionKey = nextMainSessionKey,
-            updateAvailable = parseUpdateAvailable(snapshot?.get("updateAvailable").asObjectOrNull()),
+            updateAvailable = parseGatewayUpdateAvailableSummary(snapshot?.get("updateAvailable").asObjectOrNull()),
             authRole = authRole,
             authScopes = authScopes,
             methods = methods,
             capabilities = capabilities,
           ),
-      )
-    }
-
-    private fun parseUpdateAvailable(value: JsonObject?): GatewayUpdateAvailableSummary? {
-      if (value == null) return null
-      val latestVersion = value["latestVersion"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
-      val currentVersion = value["currentVersion"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
-      val channel = value["channel"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
-      return GatewayUpdateAvailableSummary(
-        currentVersion = currentVersion,
-        latestVersion = latestVersion,
-        channel = channel,
       )
     }
 
@@ -2074,7 +2039,7 @@ class GatewaySession(
             }
           ErrorShape(wireError.code, wireError.message, details)
         }
-      pending.remove(id)?.complete(RpcResponse(id, response.ok, payloadJson, error))
+      pending.remove(id)?.complete(RpcResult(response.ok, payloadJson, error))
     }
 
     private fun handleEvent(frame: JsonObject) {
@@ -2103,9 +2068,16 @@ class GatewaySession(
       gatewayEvent.seq?.let { sequence ->
         val previous = lastEventSequence
         if (previous != null && sequence > previous + 1) {
-          onEvent("seqGap", null)
-          // Recovery can retire this socket before its triggering event is delivered.
-          if (currentConnection !== this || !isReady()) return
+          if (event == "chat" && payloadJson != null) {
+            val payload = frame["payload"].asObjectOrNull() ?: parseJsonOrNull(payloadJson).asObjectOrNull()
+            if (payload != null && payload["state"].asStringOrNull() in listOf("final", "error", "aborted")) {
+              liveTextProjection.project(event, payload)
+              onEvent(event, payloadJson)
+              if (currentConnection !== this || !isReady()) return
+            }
+          }
+          recoverLiveEvents()
+          return
         }
         lastEventSequence = sequence
       }
@@ -2113,7 +2085,31 @@ class GatewaySession(
         handleInvokeEvent(payloadJson)
         return
       }
-      onEvent(event, payloadJson)
+      val projectedPayload =
+        if ((event == "chat" || event == "agent") && payloadJson != null) {
+          val payload = frame["payload"].asObjectOrNull() ?: parseJsonOrNull(payloadJson).asObjectOrNull()
+          if (payload == null) {
+            payloadJson
+          } else {
+            val projected = liveTextProjection.project(event, payload)
+            if (projected == null) {
+              recoverLiveEvents()
+              return
+            }
+            projected.toString()
+          }
+        } else {
+          payloadJson
+        }
+      onEvent(event, projectedPayload)
+    }
+
+    private fun recoverLiveEvents() {
+      onEvent("seqGap", null)
+      synchronized(lifecycleLock) {
+        // A recovery callback can disconnect or replace this connection itself.
+        if (currentConnection === this && state.get() != ConnectionState.CLOSED) reconnect()
+      }
     }
 
     private suspend fun awaitConnectChallenge(): ConnectChallenge =
@@ -2720,12 +2716,6 @@ private fun JsonElement?.asBooleanOrNull(): Boolean? =
     else -> {
       null
     }
-  }
-
-private fun JsonElement?.asLongOrNull(): Long? =
-  when (this) {
-    is JsonPrimitive -> content.toLongOrNull()
-    else -> null
   }
 
 private fun JsonElement?.asJsonIntegerLongOrNull(): Long? =

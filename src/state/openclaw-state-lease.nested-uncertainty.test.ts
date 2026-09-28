@@ -36,14 +36,6 @@ vi.mock("./openclaw-state-lease-storage.js", () => ({
   releaseOpenClawStateLeaseBestEffort: async () => fixture.release(),
   releaseOpenClawStateLease: fixture.release,
 }));
-vi.mock("./openclaw-state-lease-exclusion.js", () => ({
-  createOpenClawStateLeaseExclusion: () => ({
-    canRelease: () => true,
-    assertIfExcluded: () => false,
-    runWithOwnerScope: (run: () => Promise<unknown>) => run(),
-    drain: async () => {},
-  }),
-}));
 vi.mock("./openclaw-state-lease-heartbeat.js", () => ({
   startOpenClawStateLeaseHeartbeat: fixture.forbiddenNative,
 }));

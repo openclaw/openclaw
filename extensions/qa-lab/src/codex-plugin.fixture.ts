@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements codex plugin.fixture behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveCodexAuthProfile, type QaAuthProfileSnapshot } from "./auth-profile.fixture.js";

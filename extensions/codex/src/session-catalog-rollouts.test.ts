@@ -292,7 +292,7 @@ describe("resident catalog rollout currency", () => {
     });
   });
 
-  it.each(["", '{"type":"session_meta","payload":', meta().slice(0, -1)])(
+  it.each(["", meta().slice(0, -1)])(
     "retries incomplete metadata rather than inventing a row (%j)",
     async (contents) => {
       const f = await fixture(contents);

@@ -9,6 +9,7 @@ import type {
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
+import type { SessionPatchResult } from "../../lib/sessions/patch.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import {
   createTestGatewayClient,
@@ -288,23 +289,21 @@ describe("chat pane composer controls", () => {
     "renders separate footer inputs with a $label catalog",
     ({ cached, connected, error, message }) => {
       const container = document.createElement("div");
-      const state = {
+      const state = makeChatHost({
         chatRunId: null,
         connected,
-        client: {},
+        requestHandlers: {},
         chatLoading: false,
         chatModelCatalog: cached
           ? [{ id: "cached-model", name: "Cached Model", provider: "openai", available: false }]
           : [],
-        chatModelCatalogError: error,
-        sessions: { state: { modelOverrides: {} }, think: () => undefined, patch: vi.fn() },
         chatModelSwitchPromises: {},
         sessionKey: "main",
-        chatModelsLoading: false,
         chatSending: false,
         sessionsResult: null,
         chatStream: null,
-      } as unknown as ChatPageHost;
+      }) as unknown as ChatPageHost;
+      state.chatModelCatalogError = error;
       const onModelSetup = vi.fn();
 
       const controls = renderChatPaneComposerControls({
@@ -435,28 +434,31 @@ describe("chat pane composer controls", () => {
 
   it("patches a rootless session, clears to default, and locks full access", async () => {
     const container = document.createElement("div");
-    const patch = vi.fn(async () => ({}));
     const selectedSession: GatewaySessionRow = {
       key: "agent:main:permission-test",
       kind: "direct",
       permissionMode: "full",
       sessionId: "permission-test-session",
     };
-    const state = {
+    const state = makeChatHost({
       chatRunId: null,
       connected: true,
-      client: {},
+      requestHandlers: {},
       hello: sessionMutationGatewayHello(["operator.write"]),
       chatLoading: false,
       chatModelCatalog: [],
-      sessions: { state: { modelOverrides: {} }, think: () => undefined, patch },
       chatModelSwitchPromises: {},
       sessionKey: "agent:main:permission-test",
-      chatModelsLoading: false,
       chatSending: false,
       sessionsResult: { ...createSessionsListResult(), sessions: [selectedSession] },
       chatStream: null,
-    } as unknown as ChatPageHost;
+    }) as unknown as ChatPageHost;
+    const patch = vi.spyOn(state.sessions, "patch").mockResolvedValue({
+      ok: true,
+      path: "",
+      key: selectedSession.key,
+      entry: { sessionId: "permission-test-session" },
+    } satisfies SessionPatchResult);
 
     const controls = renderChatPaneComposerControls({
       state,
@@ -528,21 +530,23 @@ describe("chat pane composer controls", () => {
   });
 
   it("patches an identity-less session while its first identity materializes", async () => {
-    const patchResult = createDeferred<Record<string, never>>();
-    const patch = vi.fn(() => patchResult.promise);
+    const patchResult = createDeferred<SessionPatchResult>();
     const key = "agent:main:first-materialization";
     const selectedSession = { key, kind: "direct" as const, permissionMode: "guarded" as const };
-    const state = {
+    const state = makeChatHost({
       connected: true,
       connectionEpoch: 1,
-      client: {},
+      requestHandlers: {},
       hello: sessionMutationGatewayHello(),
-      sessions: { state: { modelOverrides: {} }, think: () => undefined, patch },
       sessionKey: key,
-      sessionsResult: { defaults: {}, sessions: [selectedSession] },
+      sessionsResult: {
+        ...createSessionsListResult({ defaultsModel: null, defaultsProvider: null }),
+        sessions: [selectedSession],
+      },
       chatModelCatalog: [],
       chatModelSwitchPromises: {},
-    } as unknown as ChatPageHost;
+    }) as unknown as ChatPageHost;
+    const patch = vi.spyOn(state.sessions, "patch").mockImplementation(() => patchResult.promise);
     const controls = renderChatPaneComposerControls({
       state,
       selectedSession,
@@ -568,7 +572,7 @@ describe("chat pane composer controls", () => {
       defaults: {},
       sessions: [{ ...selectedSession, permissionMode: "workspace", sessionId: "materialized" }],
     } as ChatPageHost["sessionsResult"];
-    patchResult.resolve({});
+    patchResult.resolve({ ok: true, path: "", key, entry: { sessionId: "materialized" } });
     await selection;
 
     expect(state.chatError).toBeNull();
@@ -620,7 +624,7 @@ describe("chat pane composer controls", () => {
     },
   ] as const)("suppresses alerts for a $label", async (lifecycleCase) => {
     const { invalidate, result } = lifecycleCase;
-    const pending = createDeferred<Record<string, never> | null>();
+    const pending = createDeferred<SessionPatchResult | null>();
     const sessionKey =
       "initialSessionKey" in lifecycleCase
         ? (lifecycleCase.initialSessionKey ?? "agent:main:remote-worker")
@@ -631,29 +635,24 @@ describe("chat pane composer controls", () => {
       hasActiveRun: true,
       sessionId: "lifecycle-session",
     };
-    const state = {
+    const state = makeChatHost({
       assistantAgentId: "main",
       chatRunId: "remote-worker-run",
       chatError: null,
       connected: true,
       connectionEpoch: 1,
-      client: {},
+      requestHandlers: {},
       hello: sessionMutationGatewayHello(),
       chatLoading: false,
       chatModelCatalog: [],
-      sessions: {
-        state: { modelOverrides: {} },
-        think: () => undefined,
-        patch: vi.fn(() => pending.promise),
-      },
       chatModelSwitchPromises: {},
       sessionKey,
-      chatModelsLoading: false,
       chatSending: false,
       sessionsResult: { ...createSessionsListResult(), sessions: [selectedSession] },
       chatStream: null,
       requestUpdate: vi.fn(),
-    } as unknown as ChatPageHost;
+    }) as unknown as ChatPageHost;
+    const patch = vi.spyOn(state.sessions, "patch").mockImplementation(() => pending.promise);
     const controls = renderChatPaneComposerControls({
       state,
       selectedSession,
@@ -667,11 +666,16 @@ describe("chat pane composer controls", () => {
     });
 
     const selection = controls.permissionPicker.onSelect("full");
+    expect(patch).toHaveBeenCalledOnce();
     invalidate(state);
     if (result === "failure") {
       pending.reject(new Error("original remote worker disconnected"));
     } else {
-      pending.resolve(result === "null" ? null : {});
+      pending.resolve(
+        result === "null"
+          ? null
+          : { ok: true, path: "", key: sessionKey, entry: { sessionId: "lifecycle-session" } },
+      );
     }
     await selection;
 

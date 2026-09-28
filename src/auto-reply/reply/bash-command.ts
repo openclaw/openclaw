@@ -25,6 +25,7 @@ import type { ReplyPayload } from "../types.js";
 import { buildDisabledCommandReply } from "./command-gates.js";
 import { formatElevatedUnavailableMessage } from "./elevated-unavailable.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import type { resolveElevatedPermissions } from "./reply-elevated.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 
 const CHAT_BASH_SCOPE_KEY = "chat:bash";
@@ -154,11 +155,7 @@ export async function handleBashChatCommand(params: {
   agentId?: string;
   sessionKey: string;
   isGroup: boolean;
-  elevated: {
-    enabled: boolean;
-    allowed: boolean;
-    failures: Array<{ gate: string; key: string }>;
-  };
+  elevated: ReturnType<typeof resolveElevatedPermissions>;
 }): Promise<ReplyPayload> {
   if (!isCommandFlagEnabled(params.cfg, "bash")) {
     return buildDisabledCommandReply({

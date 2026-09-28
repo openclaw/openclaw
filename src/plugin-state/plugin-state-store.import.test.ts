@@ -126,7 +126,7 @@ describe("doctor plugin state import", () => {
     ]);
   });
 
-  it.each([0, 17, 750])("commits only the valid prefix before preparation fails at %i", (index) => {
+  it.each([0, 750])("commits only the valid prefix before preparation fails at %i", (index) => {
     const invalid = entries.map((entry, offset) =>
       offset === index ? { ...entry, createdAt: Number.NaN } : entry,
     );

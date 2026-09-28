@@ -3,6 +3,7 @@ import {
   isRecord,
   normalizeOptionalString as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { escapeTableCell } from "./report.js";
 import {
   runtimeParityCellStatus,
   normalizeRuntimePair,
@@ -34,12 +35,11 @@ export type QaToolCoverageSuiteSummary = {
 
 type QaToolCoverageStatus = "pass" | "fail" | "skip" | "missing" | "not-run";
 type QaToolCoverageDrift = RuntimeParityDrift | "not-run";
-type QaToolCoverageBucket = QaRuntimeToolBucket;
 
 type QaToolCoverageRow = {
   tool: string;
   runtimeToolName?: string;
-  bucket: QaToolCoverageBucket;
+  bucket: QaRuntimeToolBucket;
   expectedLayer: QaRuntimeToolExpectedLayer;
   capabilityLayer: QaRuntimeCapabilityLayer;
   required: boolean;
@@ -169,9 +169,7 @@ function mergeScenarioResults(
   if (scenarioResults.length === 0) {
     return undefined;
   }
-  const failingResult =
-    scenarioResults.find((result) => !PASSING_DRIFTS.has(result.drift)) ?? scenarioResults[0];
-  return failingResult;
+  return scenarioResults.find((result) => !PASSING_DRIFTS.has(result.drift)) ?? scenarioResults[0];
 }
 
 function summarizeRuntimeToolCalls(
@@ -352,8 +350,4 @@ export function renderQaToolCoverageMarkdownReport(report: QaToolCoverageReport)
   }
 
   return `${lines.join("\n").trimEnd()}\n`;
-}
-
-function escapeTableCell(value: string): string {
-  return value.replace(/\\/gu, "\\\\").replace(/\|/gu, "\\|").replace(/\s+/gu, " ").trim();
 }

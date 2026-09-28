@@ -1,5 +1,8 @@
+import { once } from "node:events";
+import { readFile } from "node:fs/promises";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runCommandBuffered, runExec } from "../exec.js";
+import { prepareOomScoreAdjustedSpawn } from "../linux-oom-score.js";
 import { createChildAdapter } from "../supervisor/adapters/child.js";
 import { runWithSpawnBroker } from "./context.js";
 import { createSpawnBrokerHost } from "./host.js";
@@ -17,6 +20,49 @@ describe.skipIf(skipBrokerTests)("Gateway spawn transports", () => {
   afterAll(async () => {
     await broker?.close();
   });
+
+  it.runIf(process.platform === "linux")(
+    "spawns OOM-adjusted children without a shell and preserves the broker score for opt-outs",
+    async () => {
+      const scorePath = `/proc/${broker.pid}/oom_score_adj`;
+      const original = (await readFile(scorePath, "utf8")).trim();
+      for (const enabled of [true, false]) {
+        const prepared = prepareOomScoreAdjustedSpawn("/bin/cat", ["/proc/self/oom_score_adj"], {
+          env: { ...process.env, OPENCLAW_CHILD_OOM_SCORE_ADJ: enabled ? "1" : "0" },
+        });
+        const child = broker.spawn(prepared.command, prepared.args, {
+          env: prepared.env,
+          stdio: ["ignore", "pipe", "ignore"],
+        });
+        await child.ready();
+        let output = "";
+        child.stdout!.on("data", (chunk) => {
+          output += chunk;
+        });
+        expect(await once(child, "close")).toEqual([0, null]);
+        expect(output.trim()).toBe(enabled ? "1000" : original);
+        expect(child.spawnfile).toBe("/bin/cat");
+        expect((await readFile(scorePath, "utf8")).trim()).toBe(original);
+      }
+    },
+  );
+
+  it.runIf(process.platform === "linux")(
+    "restores the broker score after an adjusted spawn fails",
+    async () => {
+      const scorePath = `/proc/${broker.pid}/oom_score_adj`;
+      const original = await readFile(scorePath, "utf8");
+      const prepared = prepareOomScoreAdjustedSpawn("/openclaw-nonexistent-oom-command", [], {
+        env: { ...process.env, OPENCLAW_CHILD_OOM_SCORE_ADJ: "1" },
+      });
+      const child = broker.spawn(prepared.command, prepared.args, {
+        env: prepared.env,
+        stdio: "ignore",
+      });
+      await expect(child.ready()).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await readFile(scorePath, "utf8")).toBe(original);
+    },
+  );
 
   it("runs buffered exec and Git-style commands as children of the broker", async () => {
     await runWithSpawnBroker(broker, async () => {

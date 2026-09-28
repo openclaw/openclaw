@@ -3,7 +3,41 @@ import {
   ensureManagedCrabboxBinary,
   resolveCrabboxBinary,
 } from "@openclaw/crabbox-provider/cli-runtime-api.js";
-import { trimToValue } from "../mantis-options.runtime.js";
+import { isTruthyOptIn, trimToValue } from "../mantis-options.runtime.js";
+
+export type MantisCrabboxLeaseOptions = {
+  idleTimeout?: string;
+  keepLease?: boolean;
+  leaseId?: string;
+  machineClass?: string;
+  provider?: string;
+  ttl?: string;
+};
+
+export function resolveMantisCrabboxLeaseOptions(
+  opts: MantisCrabboxLeaseOptions,
+  env: NodeJS.ProcessEnv,
+  defaults: { idleTimeout?: string; keepLease?: boolean; ttl?: string } = {},
+) {
+  return {
+    provider:
+      trimToValue(opts.provider) ?? trimToValue(env.OPENCLAW_MANTIS_CRABBOX_PROVIDER) ?? "hetzner",
+    machineClass:
+      trimToValue(opts.machineClass) ?? trimToValue(env.OPENCLAW_MANTIS_CRABBOX_CLASS) ?? "beast",
+    idleTimeout:
+      trimToValue(opts.idleTimeout) ??
+      trimToValue(env.OPENCLAW_MANTIS_CRABBOX_IDLE_TIMEOUT) ??
+      defaults.idleTimeout ??
+      "60m",
+    ttl:
+      trimToValue(opts.ttl) ??
+      trimToValue(env.OPENCLAW_MANTIS_CRABBOX_TTL) ??
+      defaults.ttl ??
+      "120m",
+    leaseId: trimToValue(opts.leaseId) ?? trimToValue(env.OPENCLAW_MANTIS_CRABBOX_LEASE_ID),
+    keepLease: opts.keepLease ?? (defaults.keepLease || isTruthyOptIn(env.OPENCLAW_MANTIS_KEEP_VM)),
+  };
+}
 
 type CommandResult = {
   stderr: string;
@@ -295,4 +329,39 @@ export async function copyCrabboxArtifacts(params: {
     env: params.env,
     runner: params.runner,
   });
+}
+
+export function renderMantisBrowserDiscoveryScript() {
+  return `browser_bin=""
+for candidate in "\${BROWSER:-}" "\${CHROME_BIN:-}" google-chrome chromium chromium-browser; do
+  if [ -n "$candidate" ] && command -v "$candidate" >/dev/null 2>&1; then
+    browser_bin="$(command -v "$candidate")"
+    break
+  fi
+done
+if [ -z "$browser_bin" ]; then
+  echo "No browser binary found. Checked BROWSER, CHROME_BIN, google-chrome, chromium, chromium-browser." >&2
+  exit 127
+fi`;
+}
+
+export function renderMantisDesktopRecordingScript(fileName: string, durationSeconds: number) {
+  return `video_pid=""
+if command -v ffmpeg >/dev/null 2>&1; then
+  :
+else
+  sudo apt-get update -y >>"$out/apt.log" 2>&1 || true
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg >>"$out/apt.log" 2>&1 || true
+fi
+if command -v ffmpeg >/dev/null 2>&1; then
+  display_input="$DISPLAY"
+  case "$display_input" in
+    *.*) ;;
+    *) display_input="$display_input.0" ;;
+  esac
+  ffmpeg -hide_banner -loglevel error -y -f x11grab -framerate 15 -i "$display_input" -t ${durationSeconds} -pix_fmt yuv420p "$out/${fileName}" >"$out/ffmpeg.log" 2>&1 &
+  video_pid=$!
+else
+  echo "ffmpeg missing; video artifact skipped" >"$out/ffmpeg.log"
+fi`;
 }

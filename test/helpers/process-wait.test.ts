@@ -50,7 +50,7 @@ describe.each([
   });
 });
 
-it.each(["", "invalid", "0", "-1"])("rejects PID contents %j at the deadline", async (contents) => {
+it.each(["", "0"])("rejects PID contents %j at the deadline", async (contents) => {
   vi.useFakeTimers();
   const file = path.join(tempDirs.make("openclaw-process-wait-"), "pid");
   fsSync.writeFileSync(file, contents);

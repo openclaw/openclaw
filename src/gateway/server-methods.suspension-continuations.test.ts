@@ -10,6 +10,10 @@ import {
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import type { ExecApprovalManager } from "./exec-approval-manager.js";
 import { createTestApprovalManager } from "./exec-approval-manager.test-support.js";
 import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
@@ -286,7 +290,7 @@ describe("draining Gateway completion ownership", () => {
   it.each(completionDrainModes)(
     "admits exact question inspection and resolution during %s without admitting unrelated roots",
     async (mode) => {
-      const manager = new QuestionManager();
+      const manager = new QuestionManager(createTestGatewayScheduler());
       managerCleanups.push(() => manager.close());
       const client = createClient("operator");
       const context = createContext({ questionManager: manager });
@@ -402,7 +406,8 @@ describe("draining Gateway completion ownership", () => {
   )(
     "does not borrow a replacement question root for $method during $mode after synchronous expiry",
     async ({ mode, method }) => {
-      const manager = new QuestionManager();
+      const clock = createGatewaySchedulerClock(Date.now());
+      const manager = new QuestionManager(createTestGatewayScheduler(clock.clock));
       managerCleanups.push(() => manager.close());
       const originalRoot = tryBeginGatewayRootWorkAdmission();
       const replacementRoot = tryBeginGatewayRootWorkAdmission();
@@ -438,7 +443,7 @@ describe("draining Gateway completion ownership", () => {
       originalRoot.release();
       expect(getActiveGatewayRootWorkCount()).toBe(2);
       const suspension = closeAdmission(mode);
-      const now = vi.spyOn(Date, "now").mockReturnValue(original.expiresAtMs + 1);
+      clock.setTime(original.expiresAtMs + 1);
       const handler = vi.fn<GatewayRequestHandler>();
       try {
         const response = await dispatch({
@@ -461,7 +466,6 @@ describe("draining Gateway completion ownership", () => {
         });
         expect(getActiveGatewayRootWorkCount()).toBe(1);
       } finally {
-        now.mockRestore();
         await replacement;
         originalRoot.release();
         replacementRoot.release();

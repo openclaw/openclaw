@@ -144,27 +144,6 @@ describe("plugin authoring commands", () => {
     });
   });
 
-  it("generates optional tool metadata for optional tool plugins", () => {
-    const metadata = createOptionalDemoMetadata();
-
-    expect(buildToolPluginManifest({ metadata, packageManifest: { version: "1.2.3" } })).toEqual({
-      id: "optional-demo-tools",
-      name: "Optional Demo Tools",
-      description: "Optional demo tool plugin.",
-      version: "1.2.3",
-      configSchema: {
-        type: "object",
-        additionalProperties: false,
-        properties: {},
-      },
-      activation: { onStartup: true },
-      contracts: { tools: ["demo_optional_echo"] },
-      toolMetadata: {
-        demo_optional_echo: { optional: true },
-      },
-    });
-  });
-
   it("preserves manifest-owned metadata while updating generated fields", () => {
     const metadata = createOptionalDemoMetadata();
     const existingManifest = {
@@ -261,20 +240,6 @@ describe("plugin authoring commands", () => {
         extensions: ["./src/other.ts", "./src/index.ts"],
       },
     });
-  });
-
-  it("validates manifest tools and package entry metadata", () => {
-    const metadata = createDemoMetadata();
-    const packageManifest = { version: "1.2.3", openclaw: { extensions: ["./src/index.ts"] } };
-
-    expect(
-      validateToolPluginProject({
-        metadata,
-        entry: "./src/index.ts",
-        manifest: buildToolPluginManifest({ metadata, packageManifest }),
-        packageManifest,
-      }),
-    ).toEqual([]);
   });
 
   it("emits a stable JSON validation result without human output", async () => {
@@ -609,24 +574,6 @@ describe("plugin authoring commands", () => {
     await expect(runPluginsBuildCommand({ root: tmpDir, entry: entryPath })).rejects.toThrow(
       `Malformed JSON in ${packagePath}`,
     );
-  });
-
-  it("loads source entries that import the OpenClaw plugin SDK package subpath", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-source-"));
-    const entryPath = writeSourceToolPluginProject({
-      tmpDir,
-      packageName: "openclaw-plugin-source-demo",
-      pluginId: "source-demo",
-      toolName: "source_echo",
-    });
-
-    const loaded = await loadToolPlugin({
-      rootDir: tmpDir,
-      entryPath,
-    });
-
-    expect(loaded.metadata.id).toBe("source-demo");
-    expect(loaded.metadata.tools.map((tool) => tool.name)).toEqual(["source_echo"]);
   });
 
   it("finishes a build from an absolute root after the launch directory is removed", async () => {

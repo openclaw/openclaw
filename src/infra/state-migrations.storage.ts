@@ -128,10 +128,10 @@ export function readLegacyInstalledPluginIndex(sourcePath: string): InstalledPlu
 function readLegacyTopLevelInstallRecords(
   parsed: unknown,
 ): Record<string, PluginInstallRecord> | null | undefined {
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+  const legacy = asNullableRecord(parsed);
+  if (!legacy) {
     return null;
   }
-  const legacy = parsed as Record<string, unknown>;
   const key = Object.hasOwn(legacy, "installRecords")
     ? "installRecords"
     : Object.hasOwn(legacy, "records")
@@ -143,24 +143,21 @@ function readLegacyTopLevelInstallRecords(
 function readLegacyEmbeddedInstallRecords(
   parsed: unknown,
 ): Record<string, PluginInstallRecord> | null {
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return null;
-  }
-  const plugins = (parsed as { plugins?: unknown }).plugins;
+  const plugins = asNullableRecord(parsed)?.plugins;
   if (!Array.isArray(plugins)) {
     return null;
   }
   const records = createPluginInstallRecordMap<unknown>();
   let found = false;
-  for (const plugin of plugins) {
-    if (!plugin || typeof plugin !== "object" || Array.isArray(plugin)) {
+  for (const item of plugins) {
+    const plugin = asNullableRecord(item);
+    if (!plugin) {
       return null;
     }
     if (!Object.hasOwn(plugin, "installRecord")) {
       continue;
     }
-    const pluginId = (plugin as { pluginId?: unknown }).pluginId;
-    const installRecord = (plugin as { installRecord?: unknown }).installRecord;
+    const { pluginId, installRecord } = plugin;
     if (typeof pluginId !== "string" || !pluginId.trim()) {
       return null;
     }

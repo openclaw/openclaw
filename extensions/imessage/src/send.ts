@@ -192,16 +192,6 @@ function isNumericMessageRowId(value: string | null | undefined): value is strin
   return typeof value === "string" && /^\d+$/.test(value.trim());
 }
 
-function resolveTargetService(target: ParsedIMessageTarget): IMessageService | undefined {
-  if (target.kind !== "handle") {
-    return undefined;
-  }
-  if (target.serviceExplicit || target.service !== "auto") {
-    return target.service;
-  }
-  return undefined;
-}
-
 function normalizeResolvedMessageGuid(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -328,10 +318,6 @@ function canCheckSentMessageAfterRpcTimeout(params: {
   );
 }
 
-function resolveOutboundEchoText(text: string): string | undefined {
-  return text.trim() || undefined;
-}
-
 function resolveOutboundEchoMedia(
   mediaContentType: string | undefined,
 ): MediaPlaceholderTextFact | undefined {
@@ -407,7 +393,7 @@ function canSynthesizeAttachmentChatHandle(raw: string): boolean {
 function resolveOutboundEchoScope(params: {
   accountId: string;
   target: ReturnType<typeof parseIMessageTarget>;
-}): string | null {
+}): string {
   if (params.target.kind === "chat_id") {
     return `${params.accountId}:${formatIMessageChatTarget(params.target.chatId)}`;
   }
@@ -581,15 +567,13 @@ async function trySendAttachmentForTarget(params: {
   let result: Record<string, unknown>;
   let pendingEchoKey: string | undefined;
   try {
-    if (echoScope) {
-      pendingEchoKey = await rememberPersistedIMessageEcho({
-        scope: echoScope,
-        text: params.echoText,
-        media: params.echoMedia,
-        ttlMs: params.pendingEchoTtlMs,
-        pending: true,
-      });
-    }
+    pendingEchoKey = await rememberPersistedIMessageEcho({
+      scope: echoScope,
+      text: params.echoText,
+      media: params.echoMedia,
+      ttlMs: params.pendingEchoTtlMs,
+      pending: true,
+    });
     result = await withOriginalIMessageAttachmentPath(params.filePath, async (attachmentPath) => {
       if (params.remoteHost) {
         const requestRpc = params.requestRpc;
@@ -659,14 +643,12 @@ async function trySendAttachmentForTarget(params: {
     resolveMessageGuidImpl: params.resolveMessageGuidImpl,
   });
   const messageId = resolvedId ?? (result.ok || result.success ? "ok" : "unknown");
-  if (echoScope) {
-    await rememberPersistedIMessageEcho({
-      scope: echoScope,
-      text: params.echoText,
-      media: params.echoMedia,
-      messageId: resolvedId ?? undefined,
-    });
-  }
+  await rememberPersistedIMessageEcho({
+    scope: echoScope,
+    text: params.echoText,
+    media: params.echoMedia,
+    messageId: resolvedId ?? undefined,
+  });
   if (resolvedId && isConcreteIMessageMessageId(resolvedId)) {
     await rememberIMessageReplyCache({
       accountId: params.accountId,
@@ -729,7 +711,9 @@ export async function sendMessageIMessage(
   const target = parseIMessageTarget(opts.chatId ? formatIMessageChatTarget(opts.chatId) : to);
   const service =
     opts.service ??
-    resolveTargetService(target) ??
+    (target.kind === "handle" && (target.serviceExplicit || target.service !== "auto")
+      ? target.service
+      : undefined) ??
     (account.config.service as IMessageService | undefined);
   const sendTransport = (account.config.sendTransport ?? "auto") as IMessageSendTransport;
   const resolvedReplyToId = await resolveAuthorizedIMessageReplyReference({
@@ -817,7 +801,7 @@ export async function sendMessageIMessage(
   if (!message.trim() && !filePath) {
     throw new Error("iMessage send requires text or media");
   }
-  const echoText = resolveOutboundEchoText(message);
+  const echoText = message.trim() || undefined;
   const echoMedia = filePath ? resolveOutboundEchoMedia(mediaContentType) : undefined;
   // The reply id actually delivered. The threaded-reply fallback below clears it
   // so the receipt and approval binding report the unthreaded send it became,
@@ -833,9 +817,11 @@ export async function sendMessageIMessage(
   };
   const requestOwnedRpc = async (method: string, rpcParams: Record<string, unknown>) => {
     opts.assertDirectAdapterHandoff?.();
-    const rpcClient = opts.createClient
-      ? await opts.createClient({ cliPath, dbPath, remoteHost })
-      : await createIMessageRpcClient({ cliPath, dbPath, remoteHost });
+    const rpcClient = await (opts.createClient ?? createIMessageRpcClient)({
+      cliPath,
+      dbPath,
+      remoteHost,
+    });
     try {
       return await requestIMessageRpcSend(rpcClient, method, rpcParams, timeoutMs, opts);
     } finally {
@@ -948,9 +934,7 @@ export async function sendMessageIMessage(
   opts.assertDirectAdapterHandoff?.();
   const client =
     opts.client ??
-    (opts.createClient
-      ? await opts.createClient({ cliPath, dbPath, remoteHost })
-      : await createIMessageRpcClient({ cliPath, dbPath, remoteHost }));
+    (await (opts.createClient ?? createIMessageRpcClient)({ cliPath, dbPath, remoteHost }));
   const shouldClose = !opts.client;
   const requestSuccessfulSend = async (sendParams: Record<string, unknown>) => {
     const request = async (nativeParams: Record<string, unknown>) =>
@@ -980,15 +964,13 @@ export async function sendMessageIMessage(
   let pendingEchoKey: string | undefined;
   try {
     try {
-      if (echoScope) {
-        pendingEchoKey = await rememberPersistedIMessageEcho({
-          scope: echoScope,
-          text: echoText,
-          media: echoMedia,
-          ttlMs: pendingEchoTtlMs,
-          pending: true,
-        });
-      }
+      pendingEchoKey = await rememberPersistedIMessageEcho({
+        scope: echoScope,
+        text: echoText,
+        media: echoMedia,
+        ttlMs: pendingEchoTtlMs,
+        pending: true,
+      });
       result = await requestSuccessfulSend(params);
     } catch (error) {
       if (resolvedReplyToId && isThreadedReplyUnsupportedError(error)) {
@@ -1059,14 +1041,12 @@ export async function sendMessageIMessage(
         resolveSentMessageGuidImpl: opts.resolveSentMessageGuidImpl,
       });
     }
-    if (echoScope) {
-      await rememberPersistedIMessageEcho({
-        scope: echoScope,
-        text: echoText,
-        media: echoMedia,
-        messageId: resolvedId ?? undefined,
-      });
-    }
+    await rememberPersistedIMessageEcho({
+      scope: echoScope,
+      text: echoText,
+      media: echoMedia,
+      messageId: resolvedId ?? undefined,
+    });
     // Record the outbound message in the reply cache with isFromMe=true so
     // edit/unsend actions can verify the agent actually sent the message
     // before dispatching. Inbound recording (in monitor/inbound-processing)

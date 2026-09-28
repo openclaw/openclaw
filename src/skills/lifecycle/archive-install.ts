@@ -123,6 +123,7 @@ export async function installExtractedSkillRoot(
     }
     const applyRoot = access?.applySkillRoot ?? applyExtractedSkillRoot;
     const { policy: _policy, ...files } = params;
+    params.beforePersistentApply?.();
     const result = await applyRoot({
       ...files,
       ...(captureChanges ? { changes: { source: changeSource, sourceVersion } } : {}),
@@ -142,6 +143,7 @@ export async function installExtractedSkillRoot(
           skillName: params.slug,
           sourceDir: params.extractedRoot,
         });
+        params.beforePersistentApply?.();
         return scanResult?.blocked
           ? {
               error: scanResult.blocked.reason,
@@ -219,6 +221,7 @@ export async function applyExtractedSkillRoot(
       timeoutMs: params.timeoutMs ?? 120_000,
       logger: params.logger,
       copyErrorPrefix: "failed to install skill",
+      beforePersistentApply: params.beforePersistentApply,
       hasDeps: false,
       depsLogMessage: "",
       ...(expectedClawHubState !== undefined
@@ -269,6 +272,7 @@ export async function installSkillArchiveFromPath(params: {
   timeoutMs?: number;
   logger?: ArchiveLogger;
   policy?: SkillArchiveInstallPolicy;
+  beforePersistentApply?: () => void;
 }): Promise<SkillArchiveInstallResult> {
   const result = await withExtractedArchiveRoot({
     archivePath: params.archivePath,
@@ -285,6 +289,7 @@ export async function installSkillArchiveFromPath(params: {
         timeoutMs: params.timeoutMs,
         logger: params.logger,
         policy: params.policy,
+        beforePersistentApply: params.beforePersistentApply,
       }),
   });
   if (!result.ok) {

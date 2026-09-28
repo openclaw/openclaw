@@ -6,6 +6,7 @@ import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
+import type { ChatReplyTarget } from "../../../lib/chat/chat-types.ts";
 import { readHumanMentions } from "../../../lib/chat/human-mentions.ts";
 import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
 import {
@@ -23,12 +24,7 @@ import { extractMessageMediaText } from "./chat-message-media.ts";
 
 registerChatMessageMetadataEnglish();
 
-export type MessageReplyTarget = {
-  messageId: string;
-  text: string;
-  senderLabel?: string | null;
-  sourceMessageId?: string | null;
-};
+export type MessageReplyTarget = ChatReplyTarget;
 
 export type MessageActionDetails = {
   /** Source for context copy, independent of footer visibility and reply truncation. */

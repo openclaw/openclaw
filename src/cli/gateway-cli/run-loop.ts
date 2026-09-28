@@ -723,13 +723,13 @@ export async function runGatewayLoop(params: {
       }
       shutdownDeadline = performance.now() + forceExitMs;
       forceExitTimer = setTimeout(() => {
-        const cleanExit = budget.nativeStopBudget && !restartWithoutSupervisor && !shutdownFailure;
+        const exitOk = budget.nativeStopBudget && !restartWithoutSupervisor && !shutdownFailure;
         gatewayLog.warn(
-          `shutdown deadline reached; abandoning unfinished cleanup and active work before ${action}; last observed: ${lastDrainCounts}; exiting ${cleanExit ? "cleanly" : "with incomplete cleanup"}`,
+          `shutdown deadline reached; abandoning unfinished cleanup and active work before ${action}; last observed: ${lastDrainCounts}; cleanup incomplete; exitCode=${exitOk ? 0 : 1}`,
         );
         void forceExitAfterStabilityBundle(
           isRestart ? "gateway.restart_shutdown_timeout" : "gateway.stop_shutdown_timeout",
-          cleanExit ? 0 : 1,
+          exitOk ? 0 : 1,
           shutdownFailure,
         );
       }, forceExitMs);
@@ -784,7 +784,7 @@ export async function runGatewayLoop(params: {
         | undefined;
       const drainBudget = resolveGatewayShutdownDrainBudget({
         budget,
-        isRestart,
+        action,
         forceRestart: Boolean(restartIntent?.force || restartIntent?.drainBudgetExhausted),
         restartWithoutSupervisor,
         acceptedAtMs: acceptedRequest.acceptedAtMs,

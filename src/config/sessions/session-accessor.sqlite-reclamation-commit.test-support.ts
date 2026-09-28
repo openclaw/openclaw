@@ -11,7 +11,7 @@ type CommitFixture = {
   gate: SharedArrayBuffer;
   progress: SharedArrayBuffer;
   holdAfterApproval?: boolean;
-  outcome?: "rollback" | "exit-before-commit" | "exit-after-commit";
+  outcome?: "rollback" | "exit-before-commit";
 };
 
 const port = parentPort;
@@ -41,9 +41,6 @@ try {
     throw new Error("injected worker transaction failure");
   }
   database.exec("COMMIT");
-  if (fixture.outcome === "exit-after-commit") {
-    process.exit(9);
-  }
 } catch {
   if (database.isTransaction) {
     database.exec("ROLLBACK");

@@ -1,9 +1,10 @@
+import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import { DAY_MS } from "../periods.js";
 import type { PersonDay } from "../store.js";
 import type { Person } from "../types.js";
 import type { PersonWorkSessions } from "../work-sessions.js";
 import { affiliation, href, type PageContext, sectionHeading, shell } from "./page.js";
-import { escapeHtml, renderAvatar } from "./shared.js";
+import { renderAvatar } from "./shared.js";
 import { renderPersonWorkSessions } from "./work-sessions.js";
 
 function activityLevel(count: number): number {

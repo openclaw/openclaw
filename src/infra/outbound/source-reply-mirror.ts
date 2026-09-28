@@ -252,7 +252,10 @@ export async function reconcileTerminalSourceReplyDelivery(params: {
     return "not-delivered";
   }
   if (
-    !matchesDeliveredSourceTargets(params.mirror, deliveryFact) ||
+    !matchesDeliveredSourceTargets(
+      { ...params.mirror, deliveredPayload: params.deliveredPayload },
+      deliveryFact,
+    ) ||
     !isExactCurrentSourceConversation({
       ...params.mirror,
       deliveredPayload: params.deliveredPayload,
@@ -358,8 +361,30 @@ function matchesDeliveredSourceTargets(
 ): boolean {
   // Requested routes cannot override contradictory transport facts. Match each
   // reported recipient independently, without inheriting requested thread aliases.
+  // Aggregate metadata cannot hide a physical message delivered to another topic.
+  const receipt = resolveDeliveryReceipt(params);
+  const deliveredThreadId = normalizeOptionalString(receipt?.threadId);
+  const currentThreadId = normalizeOptionalString(params.toolContext?.currentThreadTs);
+  if (
+    Array.isArray(receipt?.parts) &&
+    receipt.parts.some((part) => {
+      const threadId = normalizeOptionalString(asRecord(part)?.threadId);
+      return threadId !== undefined && threadId !== (deliveredThreadId ?? currentThreadId);
+    })
+  ) {
+    return false;
+  }
   return (delivery?.deliveredTargets ?? []).every((target) =>
-    matchesCurrentSourceTarget({ ...params, actionParams: { target } }, "match"),
+    matchesCurrentSourceTarget(
+      {
+        ...params,
+        actionParams: {
+          target,
+          ...(deliveredThreadId ? { threadId: deliveredThreadId } : {}),
+        },
+      },
+      "match",
+    ),
   );
 }
 

@@ -40,6 +40,7 @@ import { createWorkerTranscriptCommitter } from "../gateway/worker-environments/
 import { onAgentRuntimeEvent } from "../infra/agent-events.js";
 import type { WorkerProvider, WorkerSshEndpoint } from "../plugins/types.js";
 import * as stateDb from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { createWorkerConnection, type WorkerConnection } from "./worker-connection.js";
@@ -48,7 +49,9 @@ import {
   WorkerFaultPlacementLifecycle,
 } from "./worker-fault-placement-lifecycle.test-support.js";
 import { bindWorkerFixtureTurnSource } from "./worker-fault-session-target.test-support.js";
-import * as workerRpc from "./worker-rpc-clients.js";
+import { WorkerInferenceProxyClient } from "./worker-rpc-inference-client.js";
+import { WorkerLiveEventClient } from "./worker-rpc-live-event-client.js";
+import { WorkerTranscriptCommitClient } from "./worker-rpc-transcript-client.js";
 
 export const SESSION_ID = "fault-session";
 export const SESSION_KEY = "agent:main:fault-session";
@@ -145,9 +148,9 @@ type ProviderPlan =
 
 export type WorkerClients = {
   connection: WorkerConnection;
-  transcript: workerRpc.WorkerTranscriptCommitClient;
-  live: workerRpc.WorkerLiveEventClient;
-  inference: workerRpc.WorkerInferenceProxyClient;
+  transcript: WorkerTranscriptCommitClient;
+  live: WorkerLiveEventClient;
+  inference: WorkerInferenceProxyClient;
 };
 
 type WorkerClientOptions = {
@@ -295,8 +298,8 @@ export class ComposedGatewayHarness {
     return gate;
   }
 
-  settleRun(runId: string): void {
-    this.placementLifecycle.settleRun(runId);
+  async settleRun(runId: string): Promise<void> {
+    await this.placementLifecycle.settleRun(runId);
     for (const [claimId, source] of this.turnSources) {
       if (source.operationalRunInstance.runId === runId) {
         source.dispose();
@@ -366,16 +369,16 @@ export class ComposedGatewayHarness {
     });
     return {
       connection,
-      transcript: new workerRpc.WorkerTranscriptCommitClient(connection, {
+      transcript: new WorkerTranscriptCommitClient(connection, {
         runEpoch: epoch,
         baseLeafId: params.baseLeafId ?? null,
         initialSeq: params.initialSeq ?? 1,
       }),
-      live: new workerRpc.WorkerLiveEventClient(connection, {
+      live: new WorkerLiveEventClient(connection, {
         runEpoch: epoch,
         initialAckedSeq: params.initialAckedSeq ?? 0,
       }),
-      inference: new workerRpc.WorkerInferenceProxyClient(connection),
+      inference: new WorkerInferenceProxyClient(connection),
     };
   }
 
@@ -407,7 +410,7 @@ export class ComposedGatewayHarness {
     ) {
       throw new Error("fault placement has no active worker claim to reclaim");
     }
-    this.settleRun(staleClaim.runId);
+    await this.settleRun(staleClaim.runId);
     this.placementLifecycle.reclaimPlacement(placement, staleClaim.owner.ownerEpoch);
     const attached = this.store.get(ENVIRONMENT_ID);
     if (!attached || attached.state !== "attached") {
@@ -540,6 +543,7 @@ export class ComposedGatewayHarness {
       return doneOutcome(plan.text);
     };
     return workerEnv.createWorkerEnvironmentService({
+      scheduler: createTestGatewayScheduler(),
       store: this.store,
       getConfig: () => this.cfg,
       resolveProvider: (providerId) => (providerId === PROVIDER.id ? PROVIDER : undefined),

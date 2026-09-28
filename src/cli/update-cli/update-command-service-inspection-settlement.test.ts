@@ -77,35 +77,49 @@ function inspectService(assertCurrent = () => {}) {
   });
 }
 
-it.each(["forced", "uncertain"] as const)(
-  "joins the maintenance fallback before returning unavailable (%s)",
-  async (cleanupResult) => {
-    const cleanup = createDeferredCore<"forced" | "uncertain">();
-    const joining = createDeferredCore();
-    boundary.read.mockRejectedValue(
-      new GatewayServiceUpdateOwnershipError("recorded selector changed", undefined),
-    );
-    vi.mocked(service.isLoaded).mockImplementation(async () => {
+function pendingCleanup() {
+  const cleanup = createDeferredCore<"forced" | "uncertain">();
+  const joining = createDeferredCore();
+  return {
+    retain() {
       retainCommandProcessCleanup(cleanup.promise);
       resolveCommandProcessSignal()?.addEventListener("abort", () => joining.resolve(), {
         once: true,
       });
+    },
+    async settle(work: Promise<unknown>, result: "forced" | "uncertain", beforeRelease = () => {}) {
+      try {
+        await Promise.race([
+          joining.promise,
+          work.then(() => {
+            throw new Error("inspection escaped cleanup ownership");
+          }),
+        ]);
+        beforeRelease();
+      } finally {
+        cleanup.resolve(result);
+        await work;
+      }
+      return await work;
+    },
+  };
+}
+
+it.each(["forced", "uncertain"] as const)(
+  "joins the maintenance fallback before returning unavailable (%s)",
+  async (cleanupResult) => {
+    const cleanup = pendingCleanup();
+    boundary.read.mockRejectedValue(
+      new GatewayServiceUpdateOwnershipError("recorded selector changed", undefined),
+    );
+    vi.mocked(service.isLoaded).mockImplementation(async () => {
+      cleanup.retain();
       throw new Error("manager unavailable");
     });
     const work = inspectService().catch((error: unknown) => error);
-    try {
-      await Promise.race([
-        joining.promise,
-        work.then(() => {
-          throw new Error("maintenance fallback escaped cleanup ownership");
-        }),
-      ]);
+    const result = await cleanup.settle(work, cleanupResult, () => {
       expect(service.stop).not.toHaveBeenCalled();
-    } finally {
-      cleanup.resolve(cleanupResult);
-      await work;
-    }
-    const result = await work;
+    });
     expect(hasCommandProcessCleanupError(result)).toBe(cleanupResult === "uncertain");
     if (cleanupResult === "forced") {
       expect(result).toEqual({
@@ -136,18 +150,14 @@ it("does not demote a canonical maintenance fallback failure to unavailable", as
 });
 
 it("rechecks retained authority after confirmed maintenance fallback cleanup", async () => {
-  const cleanup = createDeferredCore<"forced">();
-  const joining = createDeferredCore();
+  const cleanup = pendingCleanup();
   const lost = new Error("original executor lost");
   let current = true;
   boundary.read.mockRejectedValue(
     new GatewayServiceUpdateOwnershipError("recorded selector changed", undefined),
   );
   vi.mocked(service.isLoaded).mockImplementation(async () => {
-    retainCommandProcessCleanup(cleanup.promise);
-    resolveCommandProcessSignal()?.addEventListener("abort", () => joining.resolve(), {
-      once: true,
-    });
+    cleanup.retain();
     throw new Error("manager unavailable");
   });
   const work = inspectService(() => {
@@ -155,19 +165,10 @@ it("rechecks retained authority after confirmed maintenance fallback cleanup", a
       throw lost;
     }
   }).catch((error: unknown) => error);
-  try {
-    await Promise.race([
-      joining.promise,
-      work.then(() => {
-        throw new Error("maintenance returned before authority could be revalidated");
-      }),
-    ]);
+  const result = await cleanup.settle(work, "forced", () => {
     current = false;
-  } finally {
-    cleanup.resolve("forced");
-    await work;
-  }
-  expect(await work).toBe(lost);
+  });
+  expect(result).toBe(lost);
   expect(service.stop).not.toHaveBeenCalled();
 });
 
@@ -178,8 +179,7 @@ it.each([
 ] as const)(
   "settles context inspection before publishing selected contexts (owned=$owned, $cleanupResult)",
   async ({ owned, cleanupResult }) => {
-    const cleanup = createDeferredCore<"forced" | "uncertain">();
-    const joining = createDeferredCore();
+    const cleanup = pendingCleanup();
     const caller = { env: { OPENCLAW_STATE_DIR: "/synthetic/caller" }, config: {} };
     const managed = { env: { OPENCLAW_STATE_DIR: "/synthetic/managed" }, config: {} };
     const inspected: PreManagedServiceStop = {
@@ -193,10 +193,7 @@ it.each([
         : { kind: "unavailable", message: "manager unavailable" },
     };
     boundary.inspect.mockImplementation(async () => {
-      retainCommandProcessCleanup(cleanup.promise);
-      resolveCommandProcessSignal()?.addEventListener("abort", () => joining.resolve(), {
-        once: true,
-      });
+      cleanup.retain();
       return inspected;
     });
     boundary.callerContext.mockResolvedValue(caller);
@@ -209,18 +206,7 @@ it.each([
       timeoutMs: 1_000,
       managedServiceRootRedirect: null,
     }).catch((error: unknown) => error);
-    try {
-      await Promise.race([
-        joining.promise,
-        work.then(() => {
-          throw new Error("database contexts escaped cleanup ownership");
-        }),
-      ]);
-    } finally {
-      cleanup.resolve(cleanupResult);
-      await work;
-    }
-    const result = await work;
+    const result = await cleanup.settle(work, cleanupResult);
     expect(hasCommandProcessCleanupError(result)).toBe(cleanupResult === "uncertain");
     if (cleanupResult === "forced") {
       expect(result).toEqual({

@@ -11,6 +11,7 @@ import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/age
 import { ExpectedProfileMismatchError } from "../expected-profile.js";
 import { chatAbortMarkerTimestampMs, type ChatAbortMarker } from "../server-chat-state.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { formatForLog } from "../ws-log.js";
 import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
@@ -128,17 +129,19 @@ export async function handleChatSendSetupError(params: {
   clearAgentRunContext(clientRunId, lifecycleGeneration);
   params.context.removeChatRun(clientRunId, clientRunId, sessionKey);
   const error =
-    params.error instanceof SessionGoalOperationError
-      ? errorShape(ErrorCodes.INVALID_REQUEST, params.error.message, {
-          details: { code: "GOAL_OPERATION_REJECTED", reason: params.error.code },
-        })
-      : errorShape(
-          ErrorCodes.UNAVAILABLE,
-          errorMessage,
-          failureDisposition === "client-retry"
-            ? { retryable: true, retryAfterMs: 250 }
-            : undefined,
-        );
+    params.error instanceof SessionMutationAuthorizationChangedError
+      ? params.error.error
+      : params.error instanceof SessionGoalOperationError
+        ? errorShape(ErrorCodes.INVALID_REQUEST, params.error.message, {
+            details: { code: "GOAL_OPERATION_REJECTED", reason: params.error.code },
+          })
+        : errorShape(
+            ErrorCodes.UNAVAILABLE,
+            errorMessage,
+            failureDisposition === "client-retry"
+              ? { retryable: true, retryAfterMs: 250 }
+              : undefined,
+          );
   const payload = { runId: clientRunId, status: "error" as const, summary: errorMessage };
   if (params.cacheResult !== false && failureDisposition !== "client-retry") {
     setGatewayDedupeEntry({

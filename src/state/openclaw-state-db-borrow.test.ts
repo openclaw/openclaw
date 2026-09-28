@@ -37,22 +37,35 @@ function fixture(inTransaction = false) {
   const retire = vi.fn((source: OpenClawStateDatabase, _retireAdmission: boolean) =>
     source.db.close(),
   );
+  const assertOpen = vi.fn();
   const retainer = createStateDatabaseRetainer(
     { borrowers, cachedDatabases: new Map([[database.path, database]]) },
     {
-      assertOpen() {},
+      assertOpen,
       capture: () => ({ assertCurrent() {} }),
       retire,
       retainFailed: vi.fn(),
       touch() {},
     },
   );
-  const scope = createOpenClawDatabaseMaintenanceScope(() => undefined);
+  const scope = createOpenClawDatabaseMaintenanceScope();
   scope.own(database.db, "shared-handles", () => database.db.close());
-  return { database, borrowers, retire, retainer, scope };
+  return { database, borrowers, retire, retainer, scope, assertOpen };
 }
 
 describe.each(["borrowForRead", "retainForIndependentRead"] as const)("%s", (readPin) => {
+  it("checks access once when finding and retaining the same native owner", async () => {
+    const { database, retainer, scope, assertOpen } = fixture();
+    const pin = retainer[readPin](database.path);
+    try {
+      expect(pin).toBeDefined();
+      expect(assertOpen).toHaveBeenCalledExactlyOnceWith(database.path, undefined);
+    } finally {
+      pin?.release();
+      await scope.close();
+    }
+  });
+
   it.each([false, true])("observes a read pin only after source admission=%s", async (admitted) => {
     const { database, retainer, scope } = fixture(readPin === "retainForIndependentRead");
     const pin = retainer[readPin](database.path);

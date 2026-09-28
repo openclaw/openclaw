@@ -19,31 +19,22 @@ import {
 // clients while reusing the same WizardPrompter contract as the local CLI.
 export type WizardStep = ProtocolWizardStep;
 
-type WizardStepInputRequirement = "always" | "never" | "client-executor";
-
-const WIZARD_STEP_INPUT_REQUIREMENT_BY_TYPE = {
-  note: "never",
-  select: "always",
-  text: "always",
-  confirm: "always",
-  multiselect: "always",
-  progress: "never",
-  action: "client-executor",
-} as const satisfies Record<WizardStep["type"], WizardStepInputRequirement>;
-
 /** Whether a step needs a user answer instead of client or gateway acknowledgement. */
 export function wizardStepAwaitsInput(step: WizardStep): boolean {
-  const requirement = WIZARD_STEP_INPUT_REQUIREMENT_BY_TYPE[step.type];
-  switch (requirement) {
-    case "always":
+  switch (step.type) {
+    case "select":
+    case "text":
+    case "confirm":
+    case "multiselect":
       return true;
-    case "never":
+    case "note":
+    case "progress":
       return false;
-    case "client-executor":
+    case "action":
       return step.executor === "client";
   }
-  const unhandledRequirement: never = requirement;
-  return unhandledRequirement;
+  const unhandledType: never = step.type;
+  return unhandledType;
 }
 
 /** Remove secret prefill before a wizard step crosses a client boundary. */
@@ -120,12 +111,7 @@ function createWizardSessionPrompter(session: WizardSession): WizardPrompter {
       });
     },
 
-    async deviceCode(params: {
-      title: string;
-      code: string;
-      expiresInMinutes?: number;
-      message?: string;
-    }): Promise<void> {
+    async deviceCode(params): Promise<void> {
       const externalUrl = session.consumeExternalUrl(true);
       const fallbackMessage = [
         params.message ?? "Enter this one-time code on the provider's sign-in page.",

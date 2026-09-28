@@ -80,6 +80,16 @@ const retainedHost = {
   },
 } as const;
 
+function createCurrentRunner() {
+  const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
+  const client = createWorkerSupervisorNodeClient();
+  runtime.nodeRegistry.register(client, {
+    pairingIdentity: "identity-1",
+    pairingGeneration: "generation-1",
+  });
+  return { runtime, client };
+}
+
 beforeEach(() => {
   updatePairedNodeSessionHostMock.mockReset();
   updatePairedNodeSessionHostMock.mockResolvedValue(true);
@@ -164,12 +174,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
   );
 
   it("stores bundle status only for the exact current node proof", async () => {
-    const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
-    const client = createWorkerSupervisorNodeClient();
-    runtime.nodeRegistry.register(client, {
-      pairingIdentity: "identity-1",
-      pairingGeneration: "generation-1",
-    });
+    const { runtime, client } = createCurrentRunner();
     await runnerInventoryHandler(
       runnerInventoryOptions({
         nodeRegistry: runtime.nodeRegistry,
@@ -271,12 +276,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
   });
 
   it("retains the supervisor proof while full but rejects new launches", async () => {
-    const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
-    const client = createWorkerSupervisorNodeClient();
-    runtime.nodeRegistry.register(client, {
-      pairingIdentity: "identity-1",
-      pairingGeneration: "generation-1",
-    });
+    const { runtime, client } = createCurrentRunner();
     const publish = async (declaration: unknown) => {
       const opts = runnerInventoryOptions({
         nodeRegistry: runtime.nodeRegistry,
@@ -418,12 +418,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
   });
 
   it("persists false for current disabled and empty publications", async () => {
-    const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
-    const client = createWorkerSupervisorNodeClient();
-    runtime.nodeRegistry.register(client, {
-      pairingIdentity: "identity-1",
-      pairingGeneration: "generation-1",
-    });
+    const { runtime, client } = createCurrentRunner();
 
     await runnerInventoryHandler(
       runnerInventoryOptions({
@@ -450,12 +445,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
   });
 
   it("returns a retryable failure when durable consent does not commit", async () => {
-    const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
-    const client = createWorkerSupervisorNodeClient();
-    runtime.nodeRegistry.register(client, {
-      pairingIdentity: "identity-1",
-      pairingGeneration: "generation-1",
-    });
+    const { runtime, client } = createCurrentRunner();
     updatePairedNodeSessionHostMock.mockRejectedValueOnce(new Error("database busy"));
     const first = runnerInventoryOptions({
       nodeRegistry: runtime.nodeRegistry,
@@ -627,12 +617,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
       },
     ],
   ] as const)("routes the retired %s inventory to update recovery", async (_name, declaration) => {
-    const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
-    const client = createWorkerSupervisorNodeClient();
-    runtime.nodeRegistry.register(client, {
-      pairingIdentity: "identity-1",
-      pairingGeneration: "generation-1",
-    });
+    const { runtime, client } = createCurrentRunner();
     const opts = runnerInventoryOptions({
       nodeRegistry: runtime.nodeRegistry,
       client,
@@ -776,12 +761,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
       },
     },
   ])("rejects $name without changing private eligibility", async ({ params }) => {
-    const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
-    const client = createWorkerSupervisorNodeClient();
-    runtime.nodeRegistry.register(client, {
-      pairingIdentity: "identity-1",
-      pairingGeneration: "generation-1",
-    });
+    const { runtime, client } = createCurrentRunner();
     const opts = runnerInventoryOptions({
       nodeRegistry: runtime.nodeRegistry,
       client,
