@@ -94,6 +94,10 @@ describe.skipIf(process.platform === "win32")("survivor manager fixture", () => 
       firstHop.indexOf("reset_lane() {"),
       firstHop.indexOf("run_negative_control() {"),
     );
+    const firstHopTiming = firstHop.slice(
+      firstHop.indexOf("first_hop_timing() {"),
+      firstHop.indexOf("run_update() {"),
+    );
     writeFileSync(unit, buildSystemdUnit({ programArguments: ["/usr/bin/fixture", "gateway"] }));
     expect(systemctl("daemon-reload").status).toBe(0);
     rmSync(unit);
@@ -101,6 +105,7 @@ describe.skipIf(process.platform === "win32")("survivor manager fixture", () => 
     const reset = shell(`
 ARTIFACT_DIR="$HOME"
 openclaw() { return 1; }
+${firstHopTiming}
 ${resetLane}
 reset_lane negative
 `);
