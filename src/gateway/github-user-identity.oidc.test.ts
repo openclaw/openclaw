@@ -202,6 +202,48 @@ describe("Cloudflare Access OIDC profile resolution", () => {
   );
 
   it.each([
+    {
+      name: "malformed claim",
+      claim: "01",
+      githubFailure: false,
+      error: { message: "Cloudflare Access OIDC GitHub account id is invalid" },
+    },
+    {
+      name: "GitHub lookup failure",
+      claim: "101",
+      githubFailure: true,
+      error: { statusCode: 502, upstreamStatus: 503 },
+    },
+  ])(
+    "rejects custom enrichment on $name without changing an existing profile",
+    async ({ claim, githubFailure, error }) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const profile = ensureProfileForEmail("ada@example.test");
+        setUserProfileRole(profile.id, "maintainer");
+        setUserPreferences(profile.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: false });
+        const before = getUserProfileListItem(profile.id);
+        const transport = vi
+          .spyOn(globalThis, "fetch")
+          .mockResolvedValueOnce(identityResponse(oidcIdentity(claim, "custom")));
+        if (githubFailure) {
+          transport.mockResolvedValueOnce(identityResponse({}, 503));
+        }
+        const request = accessRequest("ada@example.test", githubCfg);
+        try {
+          await expect(resolveAuthenticatedHttpUserProfile(request)).rejects.toMatchObject(error);
+          expect(transport).toHaveBeenCalledTimes(githubFailure ? 2 : 1);
+          expect(getUserProfileListItem(profile.id)).toEqual(before);
+          expect(getUserPreferences(profile.id, [GIT_COAUTHOR_PREFERENCE_KEY])).toEqual({
+            [GIT_COAUTHOR_PREFERENCE_KEY]: false,
+          });
+        } finally {
+          request.req.destroy();
+        }
+      });
+    },
+  );
+
+  it.each([
     { name: "no opt-in", config: cfg },
     { name: "different issuer", issuer: "https://other.cloudflareaccess.com" },
     {
