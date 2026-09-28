@@ -189,34 +189,30 @@ describe("sandbox media container file URLs", () => {
     await fs.rm(tempRoot, { recursive: true, force: true });
   });
 
-  it.each([
-    "file:///workspace/image.png",
-    "FILE:///workspace/image.png",
-    "file:/workspace/image.png",
-    "FILE:/workspace/image.png",
-  ])("reads a mounted file from %s", async (mediaPath) => {
-    const resolved = await resolveSandboxedBridgeMediaPath({
-      sandbox: { root: workspace, bridge, workspaceOnly: true },
-      mediaPath,
-    });
-
-    expect(resolved).toEqual({ resolved: imagePath });
-    await expect(fs.readFile(resolved.resolved, "utf8")).resolves.toBe("image");
-  });
-
-  it.each([
-    "file:///outside/image.png",
-    "FILE:///outside/image.png",
-    "file:/outside/image.png",
-    "FILE:/outside/image.png",
-  ])("rejects an outside mounted file from %s", async (mediaPath) => {
-    await expect(
-      resolveSandboxedBridgeMediaPath({
+  it.each(["file:///workspace/image.png", "FILE:/workspace/image.png"])(
+    "reads a mounted file from %s",
+    async (mediaPath) => {
+      const resolved = await resolveSandboxedBridgeMediaPath({
         sandbox: { root: workspace, bridge, workspaceOnly: true },
         mediaPath,
-      }),
-    ).rejects.toThrow(/escapes sandbox root/i);
-  });
+      });
+
+      expect(resolved).toEqual({ resolved: imagePath });
+      await expect(fs.readFile(resolved.resolved, "utf8")).resolves.toBe("image");
+    },
+  );
+
+  it.each(["file:///outside/image.png", "FILE:/outside/image.png"])(
+    "rejects an outside mounted file from %s",
+    async (mediaPath) => {
+      await expect(
+        resolveSandboxedBridgeMediaPath({
+          sandbox: { root: workspace, bridge, workspaceOnly: true },
+          mediaPath,
+        }),
+      ).rejects.toThrow(/escapes sandbox root/i);
+    },
+  );
 
   it.each([
     {

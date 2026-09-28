@@ -4,7 +4,10 @@ import type {
   RuntimeConversationBindingRouteResult,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveAgentRoute, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
-import { getConversationSession } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  getConversationSession,
+  resolveStorePath,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveSlackReplyToMode } from "../../account-reply-mode.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import {
@@ -15,7 +18,6 @@ import { resolveSlackThreadContext } from "../../threading.js";
 import type { SlackMessageEvent } from "../../types.js";
 import { readSlackAssistantThreadContext } from "../assistant-thread-context.js";
 import type { SlackChannelConfigResolved } from "../channel-config.js";
-import { resolveStorePath } from "../config.runtime.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackEventScope } from "../event-scope.js";
 import { captureSlackSessionTargetGuard, getSlackSessionRuns } from "../session-run-targets.js";
@@ -47,18 +49,9 @@ type SlackRoutingContext = {
   sessionKey: string;
 };
 
-function resolveSlackBaseConversationId(params: {
-  message: SlackMessageEvent;
-  isDirectMessage: boolean;
-  eventScope?: SlackEventScope;
-}): string {
-  const raw = params.isDirectMessage
-    ? `user:${params.message.user ?? "unknown"}`
-    : params.message.channel;
-  return qualifySlackConversationId(raw, params.eventScope);
-}
-
 function resolveSlackInitialAgentRoute(params: {
+  boundAgentId?: string;
+  bindingOwnerAvailable: boolean;
   ctx: SlackRoutingContextDeps;
   account: ResolvedSlackAccount;
   message: SlackMessageEvent;
@@ -67,7 +60,11 @@ function resolveSlackInitialAgentRoute(params: {
   eventScope?: SlackEventScope;
 }) {
   const route = resolveAgentRoute({
-    cfg: normalizeSlackRouteBindingConfig(params.ctx.cfg),
+    cfg:
+      params.boundAgentId || !params.bindingOwnerAvailable
+        ? { session: params.ctx.cfg.session }
+        : normalizeSlackRouteBindingConfig(params.ctx.cfg),
+    defaultAgentId: params.boundAgentId,
     channel: "slack",
     accountId: params.account.accountId,
     teamId: params.eventScope?.teamId || params.ctx.teamId || undefined,
@@ -119,15 +116,6 @@ export function resolveSlackRoutingContext(params: {
     agentViewThreadTs,
     eventScope,
   } = params;
-  let route = resolveSlackInitialAgentRoute({
-    ctx,
-    account,
-    message,
-    isDirectMessage,
-    isRoom,
-    eventScope,
-  });
-
   const chatType = isDirectMessage ? "direct" : isGroupDm ? "group" : "channel";
   const replyToMode = channelConfig?.replyToMode ?? resolveSlackReplyToMode(account, chatType);
   const threadContext = resolveSlackThreadContext({ message, replyToMode, isDirectMessage });
@@ -170,16 +158,24 @@ export function resolveSlackRoutingContext(params: {
         ? threadTs
         : autoThreadId;
   const routedThreadId = canonicalThreadId ?? (isRoomish ? seededRoomThreadId : undefined);
-  const baseConversationId = resolveSlackBaseConversationId({
-    message,
-    isDirectMessage,
+  const baseConversationId = qualifySlackConversationId(
+    isDirectMessage ? `user:${message.user ?? "unknown"}` : message.channel,
     eventScope,
-  });
+  );
   const runtimeBindingThreadId =
     routedThreadId ?? (isDirectMessage && isThreadReply ? threadTs : undefined);
   const bindingRoute = resolveSlackConversationBindingRoute({
     cfg: ctx.cfg,
-    route,
+    resolveRoute: (selection) =>
+      resolveSlackInitialAgentRoute({
+        ...selection,
+        ctx,
+        account,
+        message,
+        isDirectMessage,
+        isRoom,
+        eventScope,
+      }),
     accountId: account.accountId,
     baseConversationId,
     runtimeBindingThreadId,
@@ -188,7 +184,7 @@ export function resolveSlackRoutingContext(params: {
   const runtimeRoute = bindingRoute.runtimeRoute;
   const configuredBinding = bindingRoute.configuredRoute?.bindingResolution ?? null;
   const configuredBindingSessionKey = bindingRoute.configuredRoute?.boundSessionKey ?? "";
-  route = bindingRoute.route;
+  const route = bindingRoute.route;
   const threadKeys =
     runtimeRoute.boundSessionKey || configuredBindingSessionKey
       ? { sessionKey: route.sessionKey, parentSessionKey: undefined }

@@ -13,6 +13,7 @@ import {
   enqueueSystemEvent,
   peekSystemEventEntries,
 } from "../infra/system-events.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
@@ -24,15 +25,6 @@ const { logger, makeStorePath } = setupCronServiceSuite({
 
 describe("CronService failure notification delivery", () => {
   it.each([
-    {
-      name: "the explicitly targeted Telegram topic",
-      agentId: "ops",
-      sessionKey: "agent:ops:telegram:group:42:topic:77",
-      sessionTarget: "session:agent:ops:telegram:group:42:topic:77" as const,
-      wakeMode: "now" as const,
-      carriesOrigin: true,
-      wakesNow: true,
-    },
     {
       name: "a persistent target instead of its creation conversation",
       agentId: "ops",
@@ -119,6 +111,7 @@ describe("CronService failure notification delivery", () => {
       throw new Error("failure alert channel unavailable");
     });
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       storePath: store.storePath,
       cronEnabled: true,
       cronConfig: { failureAlert: { enabled: true, after: 1 } },

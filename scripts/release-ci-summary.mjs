@@ -26,8 +26,6 @@ import {
   compareReleaseJobsByName,
   composeReleaseChildAttemptEvidence,
   formatReleaseStateOutcome,
-  normalizeReleaseLaneWaiver,
-  releaseJobAdvisoryReason,
   isReleaseGhArtifactMissingError,
   isSplitChangelogEvidenceDelta,
   classifyReleaseChangelogEvidenceComparison,
@@ -271,10 +269,6 @@ export function runReleaseCiGh(args, params = {}) {
   }
 }
 
-function gh(args) {
-  return runReleaseCiGh(args);
-}
-
 async function ghAsync(args) {
   for (let attempt = 0; ; attempt += 1) {
     try {
@@ -290,10 +284,10 @@ async function ghAsync(args) {
 }
 
 function jsonGh(args) {
-  return JSON.parse(gh(args));
+  return JSON.parse(runReleaseCiGh(args));
 }
 
-export function githubRestArgs(pathSuffix, repository = DEFAULT_REPO) {
+function githubRestArgs(pathSuffix, repository = DEFAULT_REPO) {
   return ["api", `repos/${repository}/${pathSuffix}`];
 }
 
@@ -305,7 +299,7 @@ async function githubRestJsonAsync(pathSuffix, repository = DEFAULT_REPO) {
   return JSON.parse(await ghAsync(githubRestArgs(pathSuffix, repository)));
 }
 
-export function artifactDownloadArgs(artifactId, repository = DEFAULT_REPO) {
+function artifactDownloadArgs(artifactId, repository = DEFAULT_REPO) {
   return ["api", `repos/${repository}/actions/artifacts/${artifactId}/zip`];
 }
 
@@ -350,12 +344,16 @@ function downloadArtifactZip(artifactId, destination, sizeInBytes, repository = 
   }
 }
 
-function tryDownloadExecutionPlan(runId, repository = DEFAULT_REPO) {
-  const artifactName = `full-release-execution-plan-${runId}`;
-  const downloadDir = mkdtempSync(join(tmpdir(), "openclaw-release-execution-plan-"));
+function downloadReleaseJsonArtifact(
+  runId,
+  repository,
+  { artifactName, entryName, directoryPrefix, label, retryTransient = false },
+  runGh = runReleaseCiGh,
+) {
+  const downloadDir = mkdtempSync(join(tmpdir(), directoryPrefix));
   try {
     try {
-      runReleaseCiGh(
+      runGh(
         [
           "run",
           "download",
@@ -374,21 +372,32 @@ function tryDownloadExecutionPlan(runId, repository = DEFAULT_REPO) {
       if (isReleaseGhArtifactMissingError(error)) {
         return undefined;
       }
-      throw new Error(`release execution plan artifact read failed: ${message}`, {
-        cause: error,
-      });
+      if (retryTransient && classifyReleaseGhTransportError(error) === "transient") {
+        console.warn(`${label} artifact unavailable this poll; retrying: ${message}`);
+        return undefined;
+      }
+      throw new Error(`${label} artifact read failed: ${message}`, { cause: error });
     }
-    const path = join(downloadDir, "full-release-execution-plan.json");
+    const path = join(downloadDir, entryName);
     if (!statSync(path, { throwIfNoEntry: false })) {
-      throw new Error(`release execution plan artifact ${artifactName} omitted its manifest`);
+      throw new Error(`${label} artifact ${artifactName} omitted its manifest`);
     }
     if (statSync(path).size > MAX_RELEASE_ARTIFACT_BYTES) {
-      throw new Error(`release execution plan artifact ${artifactName} exceeds the size limit`);
+      throw new Error(`${label} artifact ${artifactName} exceeds the size limit`);
     }
     return JSON.parse(readFileSync(path, "utf8"));
   } finally {
     rmSync(downloadDir, { force: true, recursive: true });
   }
+}
+
+function tryDownloadExecutionPlan(runId, repository = DEFAULT_REPO) {
+  return downloadReleaseJsonArtifact(runId, repository, {
+    artifactName: `full-release-execution-plan-${runId}`,
+    entryName: "full-release-execution-plan.json",
+    directoryPrefix: "openclaw-release-execution-plan-",
+    label: "release execution plan",
+  });
 }
 
 function readExecutionPlanEvidence(runId, repository) {
@@ -1159,52 +1168,6 @@ function normalizeManifestChildEvidence(value) {
   );
 }
 
-export function releaseAdvisoryJobEvidence(
-  childEvidence,
-  releaseProfile,
-  workflowRef,
-  laneWaiver = "",
-) {
-  const normalizedWaiver = normalizeReleaseLaneWaiver(laneWaiver);
-  return Object.entries(childEvidence ?? {})
-    .toSorted(([left], [right]) => left.localeCompare(right))
-    .flatMap(([child, evidence]) => {
-      const failed = evidence.jobs.filter(
-        (job) =>
-          job.status === "completed" &&
-          !["neutral", "skipped", "success"].includes(String(job.conclusion ?? "")),
-      );
-      return failed
-        .map((job) => ({
-          job,
-          reason: releaseJobAdvisoryReason({
-            childKey: child,
-            jobName: job.name,
-            releaseProfile,
-            workflowRef,
-            laneWaiver: normalizedWaiver,
-            jobs: evidence.jobs,
-          }),
-        }))
-        .filter(({ reason }) => reason !== "")
-        .toSorted((left, right) => compareReleaseJobsByName(left.job, right.job))
-        .map(({ job, reason }) => {
-          /** @type {{ child: string, job: string, status: string, conclusion: string, policy: string, reason?: string }} */
-          const entry = {
-            child,
-            job: job.name,
-            status: job.status,
-            conclusion: job.conclusion,
-            policy: "advisory",
-          };
-          if (reason === "lane_waiver") {
-            entry.reason = reason;
-          }
-          return entry;
-        });
-    });
-}
-
 function manifestEvidenceIdentity(manifest) {
   return sortReleaseJsonValueKeys({
     sourceAdmission: publicationSourceReuseIdentity(manifest.sourceAdmission) ?? null,
@@ -1341,64 +1304,25 @@ export function validateParentManifest(value, expected) {
       validationInputs.targetContextRef || String(value.targetRef ?? ""),
       validationInputs.targetVersion,
     ) ||
+      controls.performanceBlocking !== true ||
       controls.stableSoakRequired !== true)
   ) {
-    throw new Error("npm stable coverage policy requires release context and stable soak");
+    throw new Error(
+      "npm stable coverage policy requires release context, blocking performance, and stable soak",
+    );
   }
   const childEvidence = normalizeManifestChildEvidence(value.childEvidence);
-  const advisoryJobs = releaseAdvisoryJobEvidence(
-    childEvidence,
-    releaseProfile,
-    value.workflowRef,
-    validationInputs?.laneWaiver,
-  );
-  let recordedAdvisoryJobs = value.advisoryJobs;
   if (
-    Object.hasOwn(value, "knownFlakyJobs") &&
-    Object.hasOwn(value, "automaticRetries") &&
-    Array.isArray(recordedAdvisoryJobs)
+    validationInputs?.laneWaiver ||
+    value.publishInputs?.stableSoakWaiver ||
+    (value.advisoryJobs !== undefined &&
+      (!Array.isArray(value.advisoryJobs) || value.advisoryJobs.length > 0))
   ) {
-    const seen = new Set();
-    // Published empty-retry manifests classified execution rows descriptively.
-    // Authenticate the original row, then apply current policy to its outcome.
-    recordedAdvisoryJobs = recordedAdvisoryJobs.flatMap((row) => {
-      const key = JSON.stringify([row.child, row.job]);
-      if (seen.has(key)) {
-        throw new Error("release validation advisory jobs duplicate a child job");
-      }
-      seen.add(key);
-      if (row.reason !== undefined) {
-        return [row];
-      }
-      const jobs = (childEvidence?.[row.child]?.jobs ?? []).filter((job) => job.name === row.job);
-      const expectedRow =
-        jobs.length === 1
-          ? {
-              child: row.child,
-              job: jobs[0].name,
-              status: jobs[0].status,
-              conclusion: jobs[0].conclusion,
-              policy: "advisory",
-            }
-          : undefined;
-      if (
-        expectedRow === undefined ||
-        JSON.stringify(sortReleaseJsonValueKeys(row)) !==
-          JSON.stringify(sortReleaseJsonValueKeys(expectedRow))
-      ) {
-        throw new Error("release validation historical advisory job differs from child evidence");
-      }
-      const current = advisoryJobs.find((job) => job.child === row.child && job.job === row.job);
-      return current ? [current] : [];
-    });
+    throw new Error(
+      "Waived or advisory release evidence is no longer accepted; rerun Full Release Validation without waivers.",
+    );
   }
-  if (
-    recordedAdvisoryJobs !== undefined &&
-    JSON.stringify(sortReleaseJsonValueKeys(recordedAdvisoryJobs)) !==
-      JSON.stringify(sortReleaseJsonValueKeys(advisoryJobs))
-  ) {
-    throw new Error("release validation advisory jobs differ from canonical policy evidence");
-  }
+  const advisoryJobs = [];
   const childRuns = value.childRuns;
   if (!childRuns || typeof childRuns !== "object" || Array.isArray(childRuns)) {
     throw new Error("release validation manifest childRuns is invalid");
@@ -2546,7 +2470,6 @@ async function validateStrictChildRun({
   parentEvidence,
   parentJobs,
   plannedChild,
-  releaseProfile,
   repository,
   runId,
   expectedRunAttempts,
@@ -2650,12 +2573,9 @@ async function validateStrictChildRun({
               triggering_actor: { login: childEvidence.triggeringActor },
             },
     });
-    const expectedEvidence = {
-      ...evidence,
-    };
     if (
       JSON.stringify(sortReleaseJsonValueKeys(childEvidence)) !==
-      JSON.stringify(sortReleaseJsonValueKeys(expectedEvidence))
+      JSON.stringify(sortReleaseJsonValueKeys(evidence))
     ) {
       throw new Error(`manifest child composite evidence mismatch: ${child.name}`);
     }
@@ -2680,17 +2600,12 @@ async function validateStrictChildRun({
   if (
     run.repository?.full_name !== repository ||
     run.head_sha !== (plannedChild?.workflowSha ?? parentEvidence.manifest.workflowSha) ||
-    !terminalPolicyPass(
-      {
-        conclusion: run.conclusion,
-        jobs,
-        key: child.manifestKey,
-        status: run.status,
-      },
-      releaseProfile,
-      parentEvidence.manifest.workflowRef,
-      parentEvidence.manifest.validationInputs?.laneWaiver,
-    )
+    !terminalPolicyPass({
+      conclusion: run.conclusion,
+      jobs,
+      key: child.manifestKey,
+      status: run.status,
+    })
   ) {
     throw new Error(`manifest child run does not pass release policy: ${child.name}`);
   }
@@ -2703,12 +2618,7 @@ async function validateStrictChildRun({
   }
 
   return {
-    advisoryJobs: releaseAdvisoryJobEvidence(
-      { [child.manifestKey]: { jobs } },
-      releaseProfile,
-      parentEvidence.manifest.workflowRef,
-      parentEvidence.manifest.validationInputs?.laneWaiver,
-    ),
+    advisoryJobs: [],
     conclusion: run.conclusion,
     dispatchNonce: `full-release-validation-${reused ? childReuse.sourceParentRunId : parentEvidence.manifest.runId}-${originAttempt}${child.suffix}`,
     displayTitle: run.display_title,
@@ -3319,54 +3229,30 @@ export function tryReadReleaseDecisionArtifact(
   repository,
   runReleaseCiGhImpl = runReleaseCiGh,
 ) {
-  const artifactName = `full-release-decision-${runId}-${parent.attempt}`;
-  const downloadDir = mkdtempSync(join(tmpdir(), "openclaw-release-decision-watch-"));
-  try {
-    try {
-      runReleaseCiGhImpl(
-        [
-          "run",
-          "download",
-          String(runId),
-          "--repo",
-          repository,
-          "--name",
-          artifactName,
-          "--dir",
-          downloadDir,
-        ],
-        { stdio: ["ignore", "ignore", "pipe"] },
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (isReleaseGhArtifactMissingError(error)) {
-        return undefined;
-      }
-      if (classifyReleaseGhTransportError(error) === "transient") {
-        console.warn(`release decision artifact unavailable this poll; retrying: ${message}`);
-        return undefined;
-      }
-      throw new Error(`release decision artifact read failed: ${message}`, { cause: error });
-    }
-    const path = join(downloadDir, "full-release-decision.json");
-    if (!statSync(path, { throwIfNoEntry: false })) {
-      throw new Error(`release decision artifact ${artifactName} omitted its manifest`);
-    }
-    if (statSync(path).size > MAX_RELEASE_ARTIFACT_BYTES) {
-      throw new Error(`release decision artifact ${artifactName} exceeds the size limit`);
-    }
-    return validateReleaseStateArtifact(
-      JSON.parse(readFileSync(path, "utf8")),
-      {
-        parentRunAttempt: parent.attempt,
-        parentRunId: String(runId),
-        workflowSha: parent.headSha,
-      },
-      "decision",
-    );
-  } finally {
-    rmSync(downloadDir, { force: true, recursive: true });
+  const decision = downloadReleaseJsonArtifact(
+    runId,
+    repository,
+    {
+      artifactName: `full-release-decision-${runId}-${parent.attempt}`,
+      entryName: "full-release-decision.json",
+      directoryPrefix: "openclaw-release-decision-watch-",
+      label: "release decision",
+      retryTransient: true,
+    },
+    runReleaseCiGhImpl,
+  );
+  if (decision === undefined) {
+    return undefined;
   }
+  return validateReleaseStateArtifact(
+    decision,
+    {
+      parentRunAttempt: parent.attempt,
+      parentRunId: String(runId),
+      workflowSha: parent.headSha,
+    },
+    "decision",
+  );
 }
 
 function releaseDecisionBlockedDuringDrain(parent, runId, repository) {
@@ -3440,9 +3326,7 @@ async function watchReleaseCiRun(options) {
       }
       return;
     }
-    await new Promise((complete) => {
-      setTimeout(complete, options.intervalMs);
-    });
+    await sleep(options.intervalMs);
   }
 }
 
@@ -3460,24 +3344,10 @@ async function main() {
   if (options.validate) {
     try {
       const evidence = await validateReleaseRunEvidence({
-        expectedChangedPaths: options.expectedChangedPaths,
-        expectedEvidencePolicy: options.expectedEvidencePolicy,
-        expectedEvidenceSha: options.expectedEvidenceSha,
-        expectedRootRunId: options.expectedRootRunId,
-        expectedRunAttempts: options.expectedRunAttempts,
-        expectedSelectedRunId: options.expectedSelectedRunId,
-        expectedTargetSha: options.expectedTargetSha,
-        manifestPath: options.manifestPath,
-        repository,
-        reuseRequest: options.reuseRequest,
-        runId,
-        trustedWorkflowFullRef: options.trustedWorkflowFullRef,
-        trustedWorkflowRef: options.trustedWorkflowRef,
-        trustedWorkflowSha: options.trustedWorkflowSha,
+        ...options,
         verifierSourceContent: options.verifierSourceFile
           ? readFileSync(options.verifierSourceFile)
           : undefined,
-        verifierSourceSha: options.verifierSourceSha,
       });
       console.log(JSON.stringify(evidence, null, options.json ? 2 : 0));
     } catch (error) {
@@ -3630,18 +3500,7 @@ async function main() {
     }
 
     const selectedKeys = requiredChildKeysForManifest(sourceManifest);
-    if (sourceManifest.validationInputs?.laneWaiver) {
-      console.log(`lane-waiver: ${sourceManifest.validationInputs.laneWaiver}`);
-    }
-    if (sourceManifest.publishInputs?.stableSoakWaiver) {
-      console.log(`soak-waiver: ${sourceManifest.publishInputs.stableSoakWaiver}`);
-    }
-    for (const job of sourceManifest.advisoryJobs) {
-      const failed = job.status === "completed" && job.conclusion !== "success";
-      console.log(
-        `${failed ? "::warning title=Advisory lane failed::" : "advisory: "}${job.reason === "lane_waiver" ? "(lane waiver) " : ""}${job.child} ${job.status}/${job.conclusion || "none"} ${job.job}`,
-      );
-    }
+
     const expectedChildren = expectedSelectedChildDispatches(
       sourceManifest.runId,
       sourceManifest.runAttempt,

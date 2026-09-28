@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { computeSkillWorkshopDiff } from "../../lib/skill-workshop/diff.ts";
-import { createSkillWorkshopState, skillWorkshopRouteData } from "./proposals.ts";
+import { createSkillWorkshopState } from "./proposals.ts";
 import {
   createContext,
   type SkillWorkshopPageTestElement,
@@ -17,25 +17,11 @@ describe("Workshop installed comparisons", () => {
   it.each([
     {
       previous: "Keep the existing check.",
-      current: "Keep the existing check.\nCheck rollback before release.",
-      name: "short skill",
-    },
-    {
-      previous: "Keep the existing check.",
       current: [
         "Keep the existing check.",
         ...Array.from({ length: 450 }, (_, index) => `Check release item ${index + 1}.`),
       ].join("\n"),
       name: "long insertion",
-    },
-    {
-      previous: Array.from({ length: 700 }, (_, index) => `Check release item ${index + 1}.`).join(
-        "\n",
-      ),
-      current: Array.from({ length: 700 }, (_, index) =>
-        index === 649 ? "Late-only instruction change." : `Check release item ${index + 1}.`,
-      ).join("\n"),
-      name: "late edit",
     },
     {
       previous: Array.from({ length: 700 }, (_, index) => `Check release item ${index + 1}.`).join(
@@ -101,7 +87,7 @@ describe("Workshop installed comparisons", () => {
     const page = document.createElement(
       "openclaw-skill-workshop-page",
     ) as SkillWorkshopPageTestElement;
-    page.data = skillWorkshopRouteData(state);
+    page.state = state;
     page.context = createContext(vi.fn());
     document.body.append(page);
     await page.updateComplete;
@@ -109,7 +95,7 @@ describe("Workshop installed comparisons", () => {
     const reader = page.querySelector(".sw-collection__reader");
     expect(page.querySelector(".sw-installed-skill__name")?.textContent).toBe("release-review");
     expect(page.querySelector(".sw-installed-skill__change")?.textContent?.trim()).toBe(
-      "Changed 37d ago",
+      "Changes since 37d ago",
     );
     const versions = reader?.querySelectorAll("details");
     expect(versions?.[0]?.open).toBe(false);

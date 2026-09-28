@@ -3,6 +3,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { startCatalogRecoveryMcpServer } from "./agent-bundle-mcp-catalog-recovery.test-support.js";
 import { createSessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.js";
 
@@ -14,11 +18,9 @@ it("forgets an empty successor binding after the original idle disposal settles"
   const server = await startCatalogRecoveryMcpServer("idle-empty-successor", {
     holdTermination: terminate.promise,
   });
-  let nowMs = Date.now();
-  const manager = createSessionMcpRuntimeManager({
-    enableIdleSweepTimer: false,
-    now: () => nowMs,
-  });
+  const clock = createGatewaySchedulerClock(Date.now());
+  const scheduler = createTestGatewayScheduler(clock.clock);
+  const manager = createSessionMcpRuntimeManager({ scheduler });
   const params: RuntimeParams = {
     sessionId: "idle-empty-successor",
     sessionKey: "agent:test:idle-empty-successor",
@@ -38,7 +40,7 @@ it("forgets an empty successor binding after the original idle disposal settles"
     const original = await manager.acquire(params);
     try {
       expect((await original.runtime.getCatalog()).tools).toHaveLength(1);
-      nowMs = original.runtime.lastUsedAt + 100;
+      clock.setTime(original.runtime.lastUsedAt + 100);
     } finally {
       original.releaseLease();
     }
@@ -66,7 +68,11 @@ it("forgets an empty successor binding after the original idle disposal settles"
     try {
       await manager.disposeAll();
     } finally {
-      await server.close();
+      try {
+        await server.close();
+      } finally {
+        await scheduler.stop();
+      }
     }
   }
 });

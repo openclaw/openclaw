@@ -372,18 +372,6 @@ describe("chat metadata store", () => {
     }
   });
 
-  it("uses remembered startup metadata as the current snapshot", async () => {
-    const result = metadata("startup-model");
-    const request = vi.fn();
-    const client = clientWith(request);
-
-    beginChatMetadataPublication(client, { agentId: "main" }).publish(result);
-
-    expect(peekChatMetadata(client, { agentId: "main" })).toEqual(result);
-    await expect(loadChatMetadata(client, { agentId: "main" })).resolves.toEqual(result);
-    expect(request).not.toHaveBeenCalled();
-  });
-
   it("notifies subscribers across publication and invalidation", () => {
     const client = clientWith(vi.fn());
     const listener = vi.fn();

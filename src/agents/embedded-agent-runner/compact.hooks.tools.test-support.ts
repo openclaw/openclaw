@@ -26,9 +26,7 @@ export function mockCompactHooksTools(createTools: typeof createOpenClawCodingTo
     normalizeProviderToolSchemas: vi.fn(({ tools }: { tools: unknown[] }) => tools),
   }));
 
-  vi.doMock("./tool-split.js", () => ({
-    splitSdkTools: vi.fn(({ tools }: { tools?: unknown[] }) => ({
-      customTools: createMockToolDefinitions(tools),
-    })),
+  vi.doMock("../agent-tool-definition-adapter.js", () => ({
+    toToolDefinitions: vi.fn(createMockToolDefinitions),
   }));
 }

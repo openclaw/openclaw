@@ -164,6 +164,10 @@ describe("collectStatusScanOverview", () => {
             degradedPlugins: [],
             startupMigrationWarning: "Retained legacy state; run openclaw doctor --fix.",
             installationReplacementWarning: "Installation replaced; draining before handoff.",
+            childRuntime: {
+              execPath: "/opt/homebrew/Cellar/node@24/24.20.0/bin/node",
+              available: false,
+            },
             sqliteWal,
           }
         : { channelAccounts: {} },
@@ -175,7 +179,7 @@ describe("collectStatusScanOverview", () => {
   it("uses gateway fallback overrides for channels.status when requested", async () => {
     const result = await collectStatusScanOverview({
       commandName: "status --all",
-      opts: createStatusGatewayProbeBudget(1234),
+      opts: { ...createStatusGatewayProbeBudget(1234), deep: true },
       showSecrets: false,
       useGatewayCallOverridesForChannelsStatus: true,
     });
@@ -202,6 +206,10 @@ describe("collectStatusScanOverview", () => {
     expect(result.runtimeDegradation?.installationReplacementWarning).toBe(
       "Installation replaced; draining before handoff.",
     );
+    expect(result.runtimeDegradation?.childRuntime).toEqual({
+      execPath: "/opt/homebrew/Cellar/node@24/24.20.0/bin/node",
+      available: false,
+    });
   });
 
   it("can keep channel overview on metadata-only status paths", async () => {
@@ -222,6 +230,7 @@ describe("collectStatusScanOverview", () => {
     expect(channelTableCall?.[1]?.showSecrets).toBe(false);
     expect(channelTableCall?.[1]?.sourceConfig).toStrictEqual({ session: { raw: true } });
     expect(result.channelIssues).toStrictEqual([]);
+    expect(result.runtimeDegradation).not.toHaveProperty("childRuntime");
   });
 
   it("skips channels.status when the gateway is unreachable", async () => {

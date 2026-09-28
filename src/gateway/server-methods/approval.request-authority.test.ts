@@ -11,6 +11,7 @@ import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { StateDatabaseReadAdmissionInvalidatedError } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   withOpenClawTestState,
@@ -78,10 +79,12 @@ it.each([
     openOpenClawStateDatabase(databaseOptions);
     const persistence = { runtimeEpoch: "request-custody-test", databaseOptions };
     const exec = new ExecApprovalManager<ExecApprovalRequestPayload>({
+      scheduler: createTestGatewayScheduler(),
       persistence,
       resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
     });
     const plugin = new ExecApprovalManager<PluginApprovalRequestPayload>({
+      scheduler: createTestGatewayScheduler(),
       approvalKind: "plugin",
       persistence,
     });
@@ -144,88 +147,89 @@ it.each([
     const stages: string[] = [];
     let transaction = 0;
     const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation((admit) =>
-      createAdmission((request, grant) => {
-        if (request.stage === "transaction") {
-          transaction += 1;
-          if (transaction === 1) {
-            connection.abort();
-            stages.push("transport-retired");
-          }
-        } else if (request.stage === "commit") {
-          if (transaction === 1) {
-            stages.push("lookup-completed");
-            switch (revocation) {
-              case "current":
-              case "lookup":
-              case "native":
-              case "native-refused":
-              case "native-config-equivalent":
-              case "native-config-unrelated":
-              case "native-config-role-aba":
-              case "native-config-routing-aba":
-              case "verdict":
-              case "verdict-reviewer":
-              case "verdict-source":
-                break;
-              case "access":
-                bumpGatewayAccessRevision();
-                break;
-              case "transport-reviewer":
-              case "reviewer":
+    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
+      (admit, attachment) =>
+        createAdmission((request, grant) => {
+          if (request.stage === "transaction") {
+            transaction += 1;
+            if (transaction === 1) {
+              connection.abort();
+              stages.push("transport-retired");
+            }
+          } else if (request.stage === "commit") {
+            if (transaction === 1) {
+              stages.push("lookup-completed");
+              switch (revocation) {
+                case "current":
+                case "lookup":
+                case "native":
+                case "native-refused":
+                case "native-config-equivalent":
+                case "native-config-unrelated":
+                case "native-config-role-aba":
+                case "native-config-routing-aba":
+                case "verdict":
+                case "verdict-reviewer":
+                case "verdict-source":
+                  break;
+                case "access":
+                  bumpGatewayAccessRevision();
+                  break;
+                case "transport-reviewer":
+                case "reviewer":
+                  record.approvalReviewerDeviceIds = ["other-reviewer"];
+                  break;
+                case "transport-source":
+                case "source":
+                  record.request.sessionKey = "agent:main:other";
+                  break;
+                case "binding":
+                  exec.retire();
+                  break;
+                case "profile":
+                  client.authenticatedUserId = "other-user";
+                  break;
+                case "config":
+                  invocation.context.getRuntimeConfig = () => ({});
+                  break;
+                case "config-equivalent":
+                  publishConfig(structuredClone(initialConfig));
+                  break;
+                case "config-unrelated":
+                  publishConfig({ ...initialConfig, messages: { ackReaction: "ok" } });
+                  break;
+                case "config-role-revoked":
+                  publishConfig(rolePolicyConfig());
+                  break;
+                case "config-role-aba":
+                  publishConfig(rolePolicyConfig());
+                  publishConfig(initialConfig);
+                  break;
+                case "config-routing-aba":
+                  publishConfig({ ...initialConfig, session: { mainKey: "other" } });
+                  publishConfig(initialConfig);
+                  break;
+              }
+            }
+            if (transaction === 2 && verdictChange) {
+              stages.push("verdict-precommit");
+              if (revocation === "verdict-reviewer") {
                 record.approvalReviewerDeviceIds = ["other-reviewer"];
-                break;
-              case "transport-source":
-              case "source":
+              }
+              if (revocation === "verdict-source") {
                 record.request.sessionKey = "agent:main:other";
-                break;
-              case "binding":
-                exec.retire();
-                break;
-              case "profile":
-                client.authenticatedUserId = "other-user";
-                break;
-              case "config":
-                invocation.context.getRuntimeConfig = () => ({});
-                break;
-              case "config-equivalent":
-                publishConfig(structuredClone(initialConfig));
-                break;
-              case "config-unrelated":
-                publishConfig({ ...initialConfig, messages: { ackReaction: "ok" } });
-                break;
-              case "config-role-revoked":
-                publishConfig(rolePolicyConfig());
-                break;
-              case "config-role-aba":
-                publishConfig(rolePolicyConfig());
-                publishConfig(initialConfig);
-                break;
-              case "config-routing-aba":
-                publishConfig({ ...initialConfig, session: { mainKey: "other" } });
-                publishConfig(initialConfig);
-                break;
+              }
+            }
+            if (
+              (transaction === 1 && revocation === "lookup") ||
+              (transaction === 2 && revocation === "verdict")
+            ) {
+              invalidateGatewayDeviceRevocation(invocation.context, "reviewer", "operator");
+              stages.push("device-revoked");
             }
           }
-          if (transaction === 2 && verdictChange) {
-            stages.push("verdict-precommit");
-            if (revocation === "verdict-reviewer") {
-              record.approvalReviewerDeviceIds = ["other-reviewer"];
-            }
-            if (revocation === "verdict-source") {
-              record.request.sessionKey = "agent:main:other";
-            }
-          }
-          if (
-            (transaction === 1 && revocation === "lookup") ||
-            (transaction === 2 && revocation === "verdict")
-          ) {
-            invalidateGatewayDeviceRevocation(invocation.context, "reviewer", "operator");
-            stages.push("device-revoked");
-          }
-        }
-        admit(request, grant);
-      }),
+          admit(request, grant);
+        }, attachment),
     );
     try {
       const pending = invocation.invoke();
@@ -303,10 +307,12 @@ it("rechecks retained request authority after the real history read settles", as
     openOpenClawStateDatabase(databaseOptions);
     const persistence = { runtimeEpoch: "history-custody-test", databaseOptions };
     const exec = new ExecApprovalManager<ExecApprovalRequestPayload>({
+      scheduler: createTestGatewayScheduler(),
       persistence,
       resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
     });
     const plugin = new ExecApprovalManager<PluginApprovalRequestPayload>({
+      scheduler: createTestGatewayScheduler(),
       approvalKind: "plugin",
       persistence,
     });
@@ -362,11 +368,13 @@ it("rejects a revoked lookup waiting for a committed decision without losing the
     const persistence = { runtimeEpoch: "reconciliation-custody-test", databaseOptions };
     const onLifecycle = vi.fn();
     const exec = new ExecApprovalManager<ExecApprovalRequestPayload>({
+      scheduler: createTestGatewayScheduler(),
       persistence,
       resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
       onLifecycle,
     });
     const plugin = new ExecApprovalManager<PluginApprovalRequestPayload>({
+      scheduler: createTestGatewayScheduler(),
       approvalKind: "plugin",
       persistence,
     });
@@ -444,10 +452,12 @@ it.each(
   const databaseOptions = { env: state.env };
   const persistence = { runtimeEpoch: "worker-refusal-test", databaseOptions };
   const exec = new ExecApprovalManager<ExecApprovalRequestPayload>({
+    scheduler: createTestGatewayScheduler(),
     persistence,
     resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
   });
   const plugin = new ExecApprovalManager<PluginApprovalRequestPayload>({
+    scheduler: createTestGatewayScheduler(),
     approvalKind: "plugin",
     persistence,
   });

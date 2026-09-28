@@ -4,9 +4,9 @@ import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registr
 import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import type { NestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { createRunningTaskRun } from "../../../tasks/detached-task-runtime.js";
-import { withTaskRegistryTempDir } from "../../../tasks/task-registry.test-support.js";
 import { buildToolLifecycleErrorResult } from "../../embedded-agent-tool-results.js";
+import { createMediaGenerationOperation } from "../../media-generation-activity.js";
+import { resetGeneratedMediaTaskActivityForTests } from "../../media-generation-activity.test-support.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -42,6 +42,7 @@ export function prepareCatalogExecutor(
     toolProgressDetail?: "explain" | "raw";
     onAgentEvent?: (event: { stream: string; data: Record<string, unknown> }) => void;
     trustedLocalMediaToolNames?: ReadonlySet<string>;
+    streamReplies?: boolean;
   },
 ) {
   const runAbortController = options?.runAbortController ?? new AbortController();
@@ -95,8 +96,8 @@ export function prepareCatalogExecutor(
         timedOut: false,
         yieldDetected: false,
       })),
-    onBlockReply: vi.fn(),
-    onBlockReplyFlush: vi.fn(),
+    onBlockReply: options?.streamReplies === false ? undefined : vi.fn(),
+    onBlockReplyFlush: options?.streamReplies === false ? undefined : vi.fn(),
   });
 }
 
@@ -115,6 +116,7 @@ export function createBeforeFinalizeEvent() {
     isError: false,
     incompleteTerminalAssistant: false,
     hadDeterministicSideEffect: false,
+    hasPendingContinuation: false,
   };
 }
 
@@ -220,7 +222,8 @@ export async function observeTerminalRunActivity(
   scenario: "ordinary" | "cancelled" | "deferred cancellation" | "pending task",
   setSubscribe: Parameters<typeof trackPreparedStreamSubscriptions>[0],
 ) {
-  return withTaskRegistryTempDir(async () => {
+  resetGeneratedMediaTaskActivityForTests();
+  try {
     const { session, listeners } = await trackPreparedStreamSubscriptions(setSubscribe);
     const sessionKey = "agent:main:cron:terminal-ownership:run:run-output-schema";
     const cancelled = scenario === "cancelled" || scenario === "deferred cancellation";
@@ -230,23 +233,18 @@ export async function observeTerminalRunActivity(
       runAbortController.abort();
     }
     if (scenario === "pending task") {
-      const task = createRunningTaskRun({
-        runtime: "cli",
+      createMediaGenerationOperation({
+        taskId: "tool:image_generate:terminal",
+        status: "running",
+        createdAt: 1,
         taskKind: "image_generation",
         sourceId: "image_generate:terminal",
         requesterSessionKey: sessionKey,
-        ownerKey: sessionKey,
-        scopeKind: "session",
         runId: "tool:image_generate:terminal",
         task: "finish image before releasing run",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
         startedAt: 1,
         lastEventAt: 1,
       });
-      if (!task) {
-        throw new Error("Expected pending completion task");
-      }
     }
     const terminalEvents: Array<{ phase: unknown; active: boolean }> = [];
     const prepared = prepareCatalogExecutor([], {
@@ -294,5 +292,7 @@ export async function observeTerminalRunActivity(
         clearActiveEmbeddedRun("session-output-schema", prepared.queueHandle, sessionKey);
       }
     }
-  });
+  } finally {
+    resetGeneratedMediaTaskActivityForTests();
+  }
 }

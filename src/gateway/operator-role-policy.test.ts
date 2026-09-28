@@ -249,7 +249,9 @@ describe("operator role policy", () => {
         const fresh = await capture(target.id);
         try {
           expect(() => fresh.authority.assertCurrent()).not.toThrow();
-          expect(() => original.authority.assertCurrent()).toThrow("no longer active");
+          expect(() => original.authority.assertCurrent()).toThrow(
+            "operator source identity changed; start a new request",
+          );
         } finally {
           fresh.release();
         }

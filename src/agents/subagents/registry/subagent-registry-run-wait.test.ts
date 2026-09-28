@@ -69,7 +69,6 @@ function createWaitManager(params: {
       (async (request) => {
         waitExpiries.push(request);
       }),
-    resolveSubagentTask: () => ({ lookup: "available" as const, task: undefined }),
   } satisfies SubagentManagerOptions;
   return { manager: new SubagentWaitManager(options), completions, waitExpiries };
 }

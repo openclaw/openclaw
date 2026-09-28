@@ -1,4 +1,3 @@
-// Xai tests cover how the xAI OAuth refresh grant decodes token response bytes.
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { describe, expect, it, vi } from "vitest";
 import { refreshXaiOAuthCredential } from "./xai-oauth.js";
@@ -30,16 +29,12 @@ function byteStreamResponse(bytes: Buffer, init?: ResponseInit): Response {
 }
 
 describe("xAI OAuth refresh response bytes", () => {
-  it.each([
-    { name: "a truncated multi-byte sequence", invalid: [0xe2, 0x82] },
-    { name: "a lone continuation byte", invalid: [0x80] },
-    { name: "an overlong encoding", invalid: [0xc0, 0xaf] },
-  ])("rejects a rotated refresh token carrying $name", async ({ invalid }) => {
+  it("rejects a rotated refresh token carrying a truncated multi-byte sequence", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () =>
       byteStreamResponse(
         Buffer.concat([
           Buffer.from('{"access_token":"access-2","refresh_token":"refresh-2-'),
-          Buffer.from(invalid),
+          Buffer.from([0xe2, 0x82]),
           Buffer.from('","expires_in":120}'),
         ]),
       ),

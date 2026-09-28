@@ -8,11 +8,7 @@ import type {
 } from "baileys";
 import { formatCliCommand, VERSION } from "openclaw/plugin-sdk/cli-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
-import {
-  createHttp1EnvHttpProxyAgent,
-  createHttp1ProxyAgent,
-  createNodeProxyAgent,
-} from "openclaw/plugin-sdk/fetch-runtime";
+import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
 import { danger, success, getChildLogger, toPinoLikeLogger } from "openclaw/plugin-sdk/runtime-env";
 import { ensureDir, resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
@@ -68,31 +64,6 @@ const OPENCLAW_WHATSAPP_WEB_SOCKET_URL_ENV = "OPENCLAW_WHATSAPP_WEB_SOCKET_URL";
 
 async function rejectUnsafeWebCredsPath(authDir: string): Promise<void> {
   await assertWebCredsPathRegularFileOrMissing(resolveWebCredsPath(authDir));
-}
-
-function enqueueSaveCreds(
-  authDir: string,
-  saveCreds: () => Promise<void> | void,
-  logger: ReturnType<typeof getChildLogger>,
-  options?: {
-    beforeCredentialPersistence?: () => Promise<void>;
-    onError?: (error: unknown) => void;
-  },
-): void {
-  enqueueCredsSave(
-    authDir,
-    () =>
-      safeSaveCreds({
-        authDir,
-        saveCreds,
-        logger,
-        beforeCredentialPersistence: options?.beforeCredentialPersistence,
-      }),
-    (err) => {
-      logger.warn({ error: String(err) }, "WhatsApp creds save queue error");
-      options?.onError?.(err);
-    },
-  );
 }
 
 async function safeSaveCreds(params: {
@@ -248,8 +219,9 @@ async function createWaSocketInternal(
   };
   const { version } = await fetchLatestBaileysVersion();
   const waWebSocketUrl = resolveWaWebSocketUrl(opts.waWebSocketUrl) ?? resolveEnvWaWebSocketUrl();
-  const agent = await resolveEnvProxyAgent(sessionLogger);
-  const fetchAgent = await resolveEnvFetchDispatcher(sessionLogger, agent);
+  // The media agent owns proxy failures; an absent agent permits direct uploads.
+  const fetchAgent = createNodeProxyAgent({ mode: "env", protocol: "https" });
+  const agent = resolveEnvProxyAgent(sessionLogger, WHATSAPP_WEBSOCKET_PROXY_TARGET);
   const socketTiming = {
     keepAliveIntervalMs:
       opts.keepAliveIntervalMs ?? DEFAULT_WHATSAPP_SOCKET_TIMING.keepAliveIntervalMs,
@@ -335,9 +307,8 @@ async function createWaSocketInternal(
     markOnlineOnConnect: false,
     ...socketTiming,
     agent,
-    // Baileys types still model `fetchAgent` as a Node agent even though the
-    // runtime path accepts an undici dispatcher for upload fetches.
-    fetchAgent: fetchAgent as Agent | undefined,
+    // Baileys uploads through node:https; its media hosts need per-request proxy routing.
+    fetchAgent,
     ...(makeSignalRepository ? { makeSignalRepository } : {}),
     ...(waWebSocketUrl ? { waWebSocketUrl } : {}),
     ...(opts.getMessage ? { getMessage: opts.getMessage } : {}),
@@ -368,10 +339,20 @@ async function createWaSocketInternal(
   }
 
   sock.ev.on("creds.update", () =>
-    enqueueSaveCreds(authDir, saveCreds, sessionLogger, {
-      beforeCredentialPersistence: opts.beforeCredentialPersistence,
-      onError: reportCredentialPersistenceError,
-    }),
+    enqueueCredsSave(
+      authDir,
+      () =>
+        safeSaveCreds({
+          authDir,
+          saveCreds,
+          logger: sessionLogger,
+          beforeCredentialPersistence: opts.beforeCredentialPersistence,
+        }),
+      (err) => {
+        sessionLogger.warn({ error: String(err) }, "WhatsApp creds save queue error");
+        reportCredentialPersistenceError(err);
+      },
+    ),
   );
   sock.ev.on("connection.update", (update: Partial<import("baileys").ConnectionState>) => {
     try {
@@ -386,6 +367,8 @@ async function createWaSocketInternal(
         }
       }
       if (connection === "close") {
+        agent?.destroy();
+        fetchAgent?.destroy();
         const status = getStatusCode(lastDisconnect?.error);
         if (status === LOGGED_OUT_STATUS) {
           console.error(
@@ -419,85 +402,27 @@ export async function createWaDirectorySocket(
   return await createWaSocketInternal(false, false, { authDir }, "directory");
 }
 
-async function resolveEnvProxyAgent(
+function resolveEnvProxyAgent(
   logger: ReturnType<typeof getChildLogger>,
-): Promise<Agent | undefined> {
+  targetUrl: string,
+): Agent | undefined {
   try {
     const agent = createNodeProxyAgent({
       mode: "env",
-      targetUrl: WHATSAPP_WEBSOCKET_PROXY_TARGET,
+      targetUrl,
       protocol: "https",
-    }) as Agent | undefined;
-    if (!agent) {
-      return undefined;
+    });
+    if (agent) {
+      logger.info("Using ambient env proxy for WhatsApp connection");
     }
-    logger.info("Using ambient env proxy for WhatsApp WebSocket connection");
     return agent;
   } catch (error) {
     logger.warn(
       { error: String(error) },
-      "Failed to initialize env proxy agent for WhatsApp WebSocket connection",
+      "Failed to initialize env proxy agent for WhatsApp connection",
     );
     return undefined;
   }
-}
-
-async function resolveEnvFetchDispatcher(
-  logger: ReturnType<typeof getChildLogger>,
-  agent?: unknown,
-): Promise<unknown> {
-  const proxyUrl = resolveProxyUrlFromAgent(agent);
-  const envProxyUrl = resolveEnvHttpsProxyUrl();
-  if (!proxyUrl && !envProxyUrl) {
-    return undefined;
-  }
-  try {
-    return proxyUrl ? createHttp1ProxyAgent({ uri: proxyUrl }) : createHttp1EnvHttpProxyAgent();
-  } catch (error) {
-    logger.warn(
-      { error: String(error) },
-      "Failed to initialize env proxy dispatcher for WhatsApp media uploads",
-    );
-    return undefined;
-  }
-}
-
-function resolveProxyUrlFromAgent(agent: unknown): string | undefined {
-  if (
-    typeof agent === "object" &&
-    agent !== null &&
-    "getProxyForUrl" in agent &&
-    typeof agent.getProxyForUrl === "function"
-  ) {
-    const proxyUrl = agent.getProxyForUrl(WHATSAPP_WEBSOCKET_PROXY_TARGET);
-    return typeof proxyUrl === "string" && proxyUrl.length > 0 ? proxyUrl : undefined;
-  }
-  if (typeof agent !== "object" || agent === null || !("proxy" in agent)) {
-    return undefined;
-  }
-  const proxy = (agent as { proxy?: unknown }).proxy;
-  if (proxy instanceof URL) {
-    return proxy.toString();
-  }
-  return typeof proxy === "string" && proxy.length > 0 ? proxy : undefined;
-}
-
-function resolveEnvHttpsProxyUrl(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const lowerHttpsProxy = normalizeEnvProxyValue(env.https_proxy);
-  const lowerHttpProxy = normalizeEnvProxyValue(env.http_proxy);
-  const httpsProxy =
-    lowerHttpsProxy !== undefined ? lowerHttpsProxy : normalizeEnvProxyValue(env.HTTPS_PROXY);
-  const httpProxy =
-    lowerHttpProxy !== undefined ? lowerHttpProxy : normalizeEnvProxyValue(env.HTTP_PROXY);
-  return httpsProxy ?? httpProxy ?? undefined;
-}
-
-function normalizeEnvProxyValue(value: string | undefined): string | null | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
 }
 
 type WhatsAppConnectionWaitOptions =

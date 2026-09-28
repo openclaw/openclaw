@@ -1,4 +1,3 @@
-// Shared skill name normalization and prompt/command exposure predicates.
 import type { SkillEntry } from "../types.js";
 
 /** Normalizes a skill name to the comparable key used by filters and commands. */
@@ -16,20 +15,11 @@ export function isSkillPromptVisible(entry: SkillEntry): boolean {
   if (entry.exposure) {
     return entry.exposure.includeInAvailableSkillsPrompt ?? true;
   }
-  if (entry.invocation) {
-    return !entry.invocation.disableModelInvocation;
-  }
-  return !entry.skill.disableModelInvocation;
+  return !(entry.invocation ?? entry.skill).disableModelInvocation;
 }
 
 export function isSkillUserInvocable(entry: SkillEntry): boolean {
-  if (entry.exposure) {
-    return entry.exposure.userInvocable ?? true;
-  }
-  if (entry.invocation) {
-    return entry.invocation.userInvocable ?? true;
-  }
-  return true;
+  return (entry.exposure ?? entry.invocation)?.userInvocable ?? true;
 }
 
 export function filterPromptVisibleSkillEntries(entries: readonly SkillEntry[]): SkillEntry[] {

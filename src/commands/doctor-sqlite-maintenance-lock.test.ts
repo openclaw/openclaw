@@ -81,11 +81,29 @@ describe("doctor SQLite maintenance lock", () => {
         { lockOptions: fixture.lockOptions },
       );
       await expect(result).rejects.toBeInstanceOf(DoctorSqliteMaintenanceLockUnavailableError);
-      await expect(result).rejects.toThrow(/Gateway or another SQLite maintenance command owns/);
+      await expect(result).rejects.toThrow(/OpenClaw state database is busy/);
       expect(run).not.toHaveBeenCalled();
     } finally {
       await gatewayLock.release();
     }
+  });
+
+  it("preserves a failed lock operation and its recovery action without running maintenance", async () => {
+    const run = vi.fn();
+    await expect(
+      withDoctorSqliteMaintenanceLock(
+        { operation: "state SQLite compaction", run },
+        {
+          acquireLock: async () => {
+            throw new GatewayLockError(
+              "failed to acquire gateway state ownership",
+              Object.assign(new Error("permission denied"), { code: "EACCES" }),
+            );
+          },
+        },
+      ),
+    ).rejects.toThrow(/permission denied.*EACCES.*permissions/);
+    expect(run).not.toHaveBeenCalled();
   });
 
   it("prevents Gateway startup until maintenance releases ownership", async () => {
@@ -211,7 +229,7 @@ describe("doctor SQLite maintenance lock", () => {
           },
           { lockOptions: fixture.lockOptions },
         ),
-      ).rejects.toThrow(/Gateway or another SQLite maintenance command owns/);
+      ).rejects.toThrow(/OpenClaw state database is busy/);
       expect(run).not.toHaveBeenCalled();
     } finally {
       await gatewayLock.release();

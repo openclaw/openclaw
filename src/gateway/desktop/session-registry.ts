@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
+import type { Duplex } from "node:stream";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import { truncateUtf8Prefix } from "../../utils/utf8-truncate.js";
-import type { ConnectedRfbStream, DesktopRfbAttachment } from "./attachment.js";
+import type { DesktopRfbAttachment } from "./attachment.js";
 import type { DesktopAudioSource } from "./managed-linux-audio.js";
 
 const DEFAULT_LINGER_MS = 60_000;
@@ -72,7 +73,7 @@ type DesktopSessionEntry = {
   stopped: boolean;
   teardown?: DesktopSessionAcquireRequest["teardown"];
   dispose?: DesktopSessionAcquireRequest["dispose"];
-  pendingStreams: Map<string, { stream: ConnectedRfbStream; reservation: { release(): void } }>;
+  pendingStreams: Map<string, { stream: Duplex; reservation: { release(): void } }>;
 };
 
 /** Owns per-source desktop sessions and their connected observer lifetimes. */
@@ -326,6 +327,28 @@ export function createDesktopSessionRegistry(
     };
   }
 
+  function takeControl(sourceKey: string, ownerEpoch: number): void {
+    const entry = entries.get(sourceKey);
+    const claimedEpoch = claimedOwnerEpochs.get(sourceKey);
+    if (
+      (entry && entry.ownerEpoch !== ownerEpoch) ||
+      (claimedEpoch !== undefined && claimedEpoch !== ownerEpoch)
+    ) {
+      throw new DesktopSessionStaleOwnerError();
+    }
+    if (!entry || entry.stopped || !entry.controller) {
+      return;
+    }
+    const previous = entry.controller;
+    previous.released = true;
+    entry.observers.delete(previous);
+    entry.controller = undefined;
+    // The observer bridge retires input synchronously; the UI reconnects view-only.
+    closeObserver(previous, 4000, "control-taken:Agent");
+    notifyControl(entry);
+    scheduleLinger(entry);
+  }
+
   function reserveObserver(sourceKey: string, ownerEpoch: number) {
     const entry = entries.get(sourceKey);
     if (
@@ -355,7 +378,7 @@ export function createDesktopSessionRegistry(
     let invocation: Promise<unknown> | undefined;
     let reservation: ReturnType<typeof reserveObserver>;
     let attachment: ReturnType<typeof publishStream>;
-    let stream: ConnectedRfbStream | undefined;
+    let stream: Duplex | undefined;
     let unclaimedTimer: ReturnType<typeof setTimeout> | undefined;
     let stopped = false;
     const retire = () => {
@@ -385,7 +408,7 @@ export function createDesktopSessionRegistry(
         reservation = reserveObserver(params.sourceKey, params.ownerEpoch);
         return reservation !== undefined;
       },
-      async connect<T extends { stream: ConnectedRfbStream }>(
+      async connect<T extends { stream: Duplex }>(
         pending: { attached: Promise<T>; cancel(): void },
         invoke: () => Promise<{ error?: { message?: string } | null }>,
       ): Promise<T> {
@@ -456,7 +479,7 @@ export function createDesktopSessionRegistry(
   function publishStream(params: {
     sourceKey: string;
     ownerEpoch: number;
-    stream: ConnectedRfbStream;
+    stream: Duplex;
     reservation: NonNullable<ReturnType<typeof reserveObserver>>;
   }) {
     const entry = entries.get(params.sourceKey);
@@ -532,6 +555,7 @@ export function createDesktopSessionRegistry(
     acquire,
     activate,
     attachObserver,
+    takeControl,
     claimStream,
     createStream,
     retainActivity,

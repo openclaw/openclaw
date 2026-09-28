@@ -23,22 +23,19 @@ export function filterSkillEntries(
 ): SkillEntry[] {
   const bundledAllowlist = resolveBundledAllowlist(config);
   assertUnambiguousManagedSkillNames(entries);
-  let filtered = entries.filter((entry) =>
-    shouldIncludeSkill({ entry, config, bundledAllowlist, eligibility, hasBin, platform }),
-  );
-  if (skillFilter !== undefined || skillOverrides !== undefined) {
-    const normalized = normalizeSkillFilter(skillFilter) ?? [];
-    const label = normalized.length > 0 ? normalized.join(", ") : "(none)";
-    skillsLogger.debug(`Applying skill filter: ${label}`);
-    const resolvedFilter = skillFilter === undefined ? undefined : normalized;
-    filtered = filtered.filter((entry) =>
+  const normalized = normalizeSkillFilter(skillFilter);
+  const filtered = entries.filter(
+    (entry) =>
       isSessionSkillEnabled(
         entry.skill.name,
-        resolvedFilter,
+        normalized,
         skillOverrides,
         resolveSkillKey(entry.skill, entry),
-      ),
-    );
+      ) && shouldIncludeSkill({ entry, config, bundledAllowlist, eligibility, hasBin, platform }),
+  );
+  if (skillFilter !== undefined || skillOverrides !== undefined) {
+    const label = normalized?.length ? normalized.join(", ") : "(none)";
+    skillsLogger.debug(`Applying skill filter: ${label}`);
     skillsLogger.debug(
       `After skill filter: ${filtered.map((entry) => entry.skill.name).join(", ") || "(none)"}`,
     );

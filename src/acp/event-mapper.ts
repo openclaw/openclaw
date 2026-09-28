@@ -278,7 +278,7 @@ export function formatToolTitle(
     return base;
   }
   const parts = Object.entries(args).map(([key, value]) => {
-    const raw = typeof value === "string" ? value : JSON.stringify(value);
+    const raw = typeof value === "string" ? value : (JSON.stringify(value) ?? String(value));
     const safe = raw.length > 100 ? `${truncateUtf16Safe(raw, 100)}...` : raw;
     return `${key}: ${safe}`;
   });

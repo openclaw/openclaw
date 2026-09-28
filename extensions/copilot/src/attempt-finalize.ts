@@ -6,7 +6,7 @@ import {
 import { finalizeCopilotAttempt } from "./attempt-cleanup.js";
 import { createResult } from "./attempt-config.js";
 import type { AttemptTranscriptJournal } from "./attempt-transcript-journal.js";
-import { userText } from "./attempt-transcript-replay.js";
+import { isSameUserTurn } from "./attempt-transcript-replay.js";
 import { withPromptFailure } from "./attempt-types.js";
 import type {
   AgentHarnessAttemptResult,
@@ -193,7 +193,7 @@ function includePreparedUser(
     message: prepared,
   }) as Extract<AgentMessage, { role: "user" }>;
   const tail = messages.at(-1);
-  if (isSamePreparedUser(tail, projected, currentRunUserKey)) {
+  if (isSameUserTurn(tail, projected, currentRunUserKey)) {
     return [...messages.slice(0, -1), projected];
   }
   return [...messages, projected];
@@ -204,38 +204,7 @@ function removePreparedUser(
   prepared: Extract<AgentMessage, { role: "user" }> | undefined,
   currentRunUserKey: string,
 ): AgentMessage[] {
-  return prepared && isSamePreparedUser(messages.at(-1), prepared, currentRunUserKey)
+  return prepared && isSameUserTurn(messages.at(-1), prepared, currentRunUserKey)
     ? messages.slice(0, -1)
     : messages;
-}
-
-function isSamePreparedUser(
-  candidate: AgentMessage | undefined,
-  prepared: Extract<AgentMessage, { role: "user" }>,
-  currentRunUserKey: string,
-): boolean {
-  if (candidate?.role !== "user") {
-    return false;
-  }
-  if (candidate === prepared) {
-    return true;
-  }
-  const candidateKey = (candidate as { idempotencyKey?: unknown }).idempotencyKey;
-  const preparedKey = (prepared as { idempotencyKey?: unknown }).idempotencyKey;
-  if (typeof candidateKey === "string" || typeof preparedKey === "string") {
-    if (typeof candidateKey === "string" && typeof preparedKey === "string") {
-      return candidateKey === preparedKey;
-    }
-    if (
-      typeof candidateKey !== "string" ||
-      typeof preparedKey === "string" ||
-      (!candidateKey.startsWith("copilot:") && candidateKey !== currentRunUserKey)
-    ) {
-      return false;
-    }
-  }
-  return (
-    candidate.timestamp === prepared.timestamp &&
-    userText(candidate.content) === userText(prepared.content)
-  );
 }

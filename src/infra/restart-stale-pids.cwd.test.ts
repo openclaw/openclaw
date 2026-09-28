@@ -8,7 +8,11 @@ import {
   findVerifiedGatewayListenerPidsOnPortSync,
   signalVerifiedGatewayPidSync,
 } from "./gateway-processes.js";
-import { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } from "./restart-stale-pids.js";
+import {
+  cleanStaleGatewayProcessesSync,
+  findGatewayPidsOnPortSync,
+  inspectSelfAndAncestorPidsSync,
+} from "./restart-stale-pids.js";
 
 const mocks = vi.hoisted(() => ({
   spawn: vi.fn(),
@@ -38,7 +42,9 @@ vi.mock("./windows-port-pids.js", () => ({
   readWindowsListeningPidsResultSync: mocks.windowsListeners,
   readWindowsProcessArgsResultSync: mocks.windowsArgs,
 }));
-vi.mock("./windows-process-start.js", () => ({ readWindowsProcessAncestorsSync: () => [] }));
+vi.mock("./windows-process-start.js", () => ({
+  readWindowsProcessAncestorsSync: () => ({ pids: [], complete: false }),
+}));
 vi.mock("../process/supervisor/darwin-process-command.js", () => ({
   readDarwinProcessCommand: mocks.darwinCommand,
 }));
@@ -46,7 +52,30 @@ vi.mock("../process/supervisor/darwin-process-command.js", () => ({
 afterEach(() => {
   vi.restoreAllMocks();
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
 });
+
+it.each(
+  (["linux", "darwin"] as const).flatMap((platform) =>
+    [true, false].map((complete) => ({ platform, complete })),
+  ),
+)(
+  "distinguishes complete ancestry from unavailable parents on $platform ($complete)",
+  ({ platform, complete }) => {
+    vi.stubGlobal("process", { ...process, platform, pid: 41, ppid: 40 });
+    mocks.read.mockImplementation(() => {
+      if (!complete) {
+        throw new Error("process ancestry unavailable");
+      }
+      return "PPid:\t1\n";
+    });
+    mocks.spawn.mockReturnValue({ status: complete ? 0 : 1, stdout: complete ? "1\n" : "" });
+    expect(inspectSelfAndAncestorPidsSync()).toEqual({
+      pids: new Set(complete ? [41, 40, 1] : [41, 40]),
+      complete,
+    });
+  },
+);
 
 it("reports an unclassified Windows listener without reclaiming its process", () => {
   const pid = process.pid + 901;

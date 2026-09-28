@@ -1,8 +1,3 @@
-/**
- * Provider request configuration resolver.
- *
- * Normalizes operator request overrides into transport-ready auth, proxy, TLS, header, and SSRF policy state.
- */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ModelDefinitionConfig } from "../config/types.js";
 import type {
@@ -104,25 +99,6 @@ type ResolveProviderRequestPolicyConfigParams = {
   routeFacts?: ProviderRequestRouteFacts;
 };
 
-function resolvePrivateNetworkAccess(params: ResolveProviderRequestPolicyConfigParams): {
-  allowPrivateNetwork: boolean;
-  explicitlyDenied: boolean;
-} {
-  // Preserve existing precedence: runtime/caller policy overrides model config.
-  const configuredAllowPrivateNetwork =
-    params.allowPrivateNetwork ?? params.request?.allowPrivateNetwork;
-  if (configuredAllowPrivateNetwork !== undefined) {
-    return {
-      allowPrivateNetwork: configuredAllowPrivateNetwork,
-      explicitlyDenied: !configuredAllowPrivateNetwork,
-    };
-  }
-  return {
-    allowPrivateNetwork: false,
-    explicitlyDenied: false,
-  };
-}
-
 function sanitizeConfiguredRequestString(value: unknown, path: string): string | undefined {
   if (typeof value !== "string") {
     // Config transport overrides are sanitized after secrets runtime resolution.
@@ -193,36 +169,14 @@ export function sanitizeConfiguredProviderRequest(
     }
     const rawTls = tls as Record<string, unknown>;
     const next: ProviderRequestTlsOverride = {};
-    const ca = sanitizeConfiguredRequestString(rawTls.ca, `${pathPrefix}.ca`);
-    const cert = sanitizeConfiguredRequestString(rawTls.cert, `${pathPrefix}.cert`);
-    const key = sanitizeConfiguredRequestString(rawTls.key, `${pathPrefix}.key`);
-    const passphrase = sanitizeConfiguredRequestString(
-      rawTls.passphrase,
-      `${pathPrefix}.passphrase`,
-    );
-    const serverName = sanitizeConfiguredRequestString(
-      rawTls.serverName,
-      `${pathPrefix}.serverName`,
-    );
-    if (ca) {
-      next.ca = ca;
+    for (const key of ["ca", "cert", "key", "passphrase", "serverName"] as const) {
+      const value = sanitizeConfiguredRequestString(rawTls[key], `${pathPrefix}.${key}`);
+      if (value) {
+        next[key] = value;
+      }
     }
-    if (cert) {
-      next.cert = cert;
-    }
-    if (key) {
-      next.key = key;
-    }
-    if (passphrase) {
-      next.passphrase = passphrase;
-    }
-    if (serverName) {
-      next.serverName = serverName;
-    }
-    if (rawTls.insecureSkipVerify === true) {
-      next.insecureSkipVerify = true;
-    } else if (rawTls.insecureSkipVerify === false) {
-      next.insecureSkipVerify = false;
+    if (typeof rawTls.insecureSkipVerify === "boolean") {
+      next.insecureSkipVerify = rawTls.insecureSkipVerify;
     }
     return Object.keys(next).length > 0 ? next : undefined;
   };
@@ -277,11 +231,11 @@ export function sanitizeConfiguredModelProviderRequest(
   };
 }
 
-/** Merges provider request overrides with later entries taking precedence. */
-function mergeProviderRequestOverrides(
-  ...overrides: Array<ProviderRequestTransportOverrides | undefined>
-): ProviderRequestTransportOverrides | undefined {
-  const merged: ProviderRequestTransportOverrides = {};
+/** Merges model request overrides, preserving the latest private-network policy. */
+export function mergeModelProviderRequestOverrides(
+  ...overrides: Array<ModelProviderRequestTransportOverrides | undefined>
+): ModelProviderRequestTransportOverrides | undefined {
+  const merged: ModelProviderRequestTransportOverrides = {};
   let hasMerged = false;
   for (const current of overrides) {
     if (!current) {
@@ -300,24 +254,11 @@ function mergeProviderRequestOverrides(
     if (current.tls) {
       merged.tls = current.tls;
     }
-  }
-  return hasMerged ? merged : undefined;
-}
-
-/** Merges model request overrides, preserving the latest private-network policy. */
-export function mergeModelProviderRequestOverrides(
-  ...overrides: Array<ModelProviderRequestTransportOverrides | undefined>
-): ModelProviderRequestTransportOverrides | undefined {
-  let merged: ModelProviderRequestTransportOverrides | undefined = mergeProviderRequestOverrides(
-    ...overrides,
-  );
-  for (const current of overrides) {
-    if (current?.allowPrivateNetwork !== undefined) {
-      merged ??= {};
+    if (current.allowPrivateNetwork !== undefined) {
       merged.allowPrivateNetwork = current.allowPrivateNetwork;
     }
   }
-  return merged;
+  return hasMerged ? merged : undefined;
 }
 
 /** Normalizes provider base URLs by trimming trailing slashes. */
@@ -559,17 +500,10 @@ function toTlsConnectOptions(
     return undefined;
   }
   const next: Record<string, unknown> = {};
-  if (tls.ca) {
-    next.ca = tls.ca;
-  }
-  if (tls.cert) {
-    next.cert = tls.cert;
-  }
-  if (tls.key) {
-    next.key = tls.key;
-  }
-  if (tls.passphrase) {
-    next.passphrase = tls.passphrase;
+  for (const key of ["ca", "cert", "key", "passphrase"] as const) {
+    if (tls[key]) {
+      next[key] = tls[key];
+    }
   }
   if (tls.serverName) {
     next.servername = tls.serverName;
@@ -608,22 +542,15 @@ export function resolveProviderRequestPolicyConfig(
   params: ResolveProviderRequestPolicyConfigParams,
 ) {
   const baseUrl = normalizeBaseUrl(params.baseUrl, params.defaultBaseUrl);
-  const capability = params.capability ?? "llm";
-  const transport = params.transport ?? "http";
-  const policyInput = {
-    provider: params.provider,
-    api: params.api,
-    baseUrl,
-    ...(params.providerMetadataOwners
-      ? { providerMetadataOwners: params.providerMetadataOwners }
-      : {}),
-    capability,
-    transport,
-  };
   const capabilities =
     params.routeFacts?.capabilities ??
     resolveProviderRequestCapabilities({
-      ...policyInput,
+      provider: params.provider,
+      api: params.api,
+      baseUrl,
+      providerMetadataOwners: params.providerMetadataOwners,
+      capability: params.capability ?? "llm",
+      transport: params.transport ?? "http",
       compat: params.compat,
       modelId: params.modelId,
     });
@@ -657,7 +584,8 @@ export function resolveProviderRequestPolicyConfig(
     params.precedence === "caller-wins"
       ? mergeProviderRequestHeaders(mergedDefaults, unprotectedCallerHeaders)
       : mergeProviderRequestHeaders(unprotectedCallerHeaders, mergedDefaults);
-  const privateNetworkAccess = resolvePrivateNetworkAccess(params);
+  // Runtime/caller policy takes precedence over model config.
+  const allowPrivateNetwork = params.allowPrivateNetwork ?? params.request?.allowPrivateNetwork;
 
   return {
     api: params.api,
@@ -671,9 +599,9 @@ export function resolveProviderRequestPolicyConfig(
     proxy: resolveProxyOverride(params.request),
     tls: resolveTlsOverride(params.request?.tls),
     capabilities,
-    allowPrivateNetwork: privateNetworkAccess.allowPrivateNetwork,
+    allowPrivateNetwork: allowPrivateNetwork === undefined ? false : allowPrivateNetwork,
     trustConfiguredBaseUrlOrigin:
-      !privateNetworkAccess.explicitlyDenied &&
+      (allowPrivateNetwork === undefined || allowPrivateNetwork) &&
       (capabilities.endpointClass === "custom" || capabilities.endpointClass === "local"),
   };
 }
@@ -769,9 +697,7 @@ export function attachModelProviderRequestTransport<TModel extends object>(
   if (!request) {
     return model;
   }
-  const next = { ...model } as TModel & ModelWithProviderRequestTransport;
-  next[MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL] = request;
-  return next;
+  return { ...model, [MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL]: request };
 }
 
 /** Reads provider request transport metadata attached to a model definition. */
@@ -827,4 +753,3 @@ export function inheritModelProviderRequestRouteFacts<TModel extends ProviderReq
     getModelProviderRequestRouteFacts(source)?.providerMetadataOwners,
   );
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

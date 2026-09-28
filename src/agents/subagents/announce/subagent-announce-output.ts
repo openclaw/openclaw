@@ -379,6 +379,7 @@ export async function readChildCompletionFindings(
   return {
     text: buildChildCompletionFindings(
       results.map(({ child, text }) => ({
+        announceResult: text,
         childSessionKey: child.childSessionKey,
         task: child.task,
         taskName: child.taskName,
@@ -387,7 +388,6 @@ export async function readChildCompletionFindings(
         execution: child.execution,
         endedReason: child.endedReason,
         completion: child.completion,
-        announceResult: text,
       })),
     ),
     isCurrent,

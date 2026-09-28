@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   GATEWAY_CLIENT_CAPS,
   hasGatewayClientCap,
@@ -81,6 +82,7 @@ export type ReplyToolAuthorityInput = {
       | "traceAuthorized"
       | "approvalReviewerDeviceId"
       | "authProfileId"
+      | "authProfileIdSource"
       | "clientCaps"
       | "gatewayUiCommandTarget"
       | "toolBindings"
@@ -115,11 +117,7 @@ export function resolveInboundReplyToolAuthorityOverlay(params: {
     groupChannel:
       normalizeOptionalString(ctx.GroupChannel) ?? normalizeOptionalString(ctx.GroupSubject),
     groupSpace: normalizeOptionalString(ctx.GroupSpace),
-    memberRoleIds: Array.isArray(ctx.MemberRoleIds)
-      ? ctx.MemberRoleIds.map((roleId) => normalizeOptionalString(roleId)).filter(
-          (roleId): roleId is string => Boolean(roleId),
-        )
-      : undefined,
+    memberRoleIds: normalizeArrayBackedTrimmedStringList(ctx.MemberRoleIds),
     spawnedBy: normalizeOptionalString(params.sessionEntry?.spawnedBy),
     senderId: normalizeOptionalString(ctx.SenderId),
     senderName: normalizeOptionalString(ctx.SenderName),
@@ -347,6 +345,7 @@ function resolveReplyToolAuthorityInputFingerprint(
   const authority = snapshot.operatorAuthority;
   assertCurrentOperatorAuthority(authority);
   const screenTarget = resolveReplyScreenToolTarget(snapshot, capabilityProfile);
+  const themeProfileId = resolveReplyThemeProfileId(snapshot, capabilityProfile);
   return createHash("sha256")
     .update(
       stableStringify({
@@ -355,8 +354,8 @@ function resolveReplyToolAuthorityInputFingerprint(
         policy: capabilityProfile.policy,
         operatorAuthority: authority
           ? {
-              profileId: authority.profileId,
               scopes: [...new Set(authority.scopes)].toSorted(),
+              rolePolicy: authority.rolePolicy,
               gatewayAccessGrant:
                 authority.gatewayAccessGrant === undefined
                   ? resolveReplyOperatorAuthorityKey(authority)
@@ -381,13 +380,21 @@ function resolveReplyToolAuthorityInputFingerprint(
         elevatedLevel: execution.elevatedLevel,
         bashElevated: execution.bashElevated,
         traceAuthorized: execution.traceAuthorized === true,
-        authProfileId: execution.authProfileId,
+        // Automatic credential rotation retains the turn; explicit account pins stay exact.
+        authProfile:
+          execution.authProfileIdSource === "auto"
+            ? { source: "auto" }
+            : { id: execution.authProfileId },
         clientCaps: [...new Set(execution.clientCaps ?? [])].toSorted(),
+        // Own-profile targets retain the running turn's original bindings.
         gatewayUiCommandTarget:
           authority && screenTarget?.profileId === authority.profileId
-            ? { profileId: screenTarget.profileId }
+            ? { ownProfile: true }
             : screenTarget,
-        themeProfileId: resolveReplyThemeProfileId(snapshot, capabilityProfile),
+        themeProfileId:
+          authority && themeProfileId === authority.profileId
+            ? { ownProfile: true }
+            : themeProfileId,
         toolBindings: execution.toolBindings,
       }),
     )
@@ -409,6 +416,13 @@ export function prepareReplyToolAuthority(
 ): ReplyToolAuthoritySnapshot {
   const snapshot = snapshotFollowupRunToolAuthority(run);
   return {
+    personalToolOwner: {
+      operatorAuthority: snapshot.operatorAuthority,
+      senderId: snapshot.run.senderId,
+      senderName: snapshot.run.senderName,
+      gatewayUiCommandTarget: snapshot.run.gatewayUiCommandTarget,
+    },
+    requestedRoute: Object.freeze({ provider: snapshot.run.provider, model: snapshot.run.model }),
     fingerprint: (route) => resolveReplyToolAuthorityInputFingerprint(snapshot, route),
     project: (overlay, route) => {
       // Steering retains the running turn's authority and browser bindings across reconnects.

@@ -2,7 +2,11 @@ import path from "node:path";
 import { listSessionTranscriptCorpusEntriesForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { removeBackfillDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-dreams-file.js";
-import type { SessionIngestionFileState } from "./dreaming-ingestion-state.js";
+import {
+  readSessionIngestionState,
+  writeSessionIngestionState,
+  type SessionIngestionFileState,
+} from "./dreaming-ingestion-state.js";
 import {
   listMemorySessionTombstones,
   recordMemoryEntryOrigins,
@@ -31,13 +35,11 @@ import {
   appendSessionCorpusLines,
   foreignSessionIngestionSource,
   mergeTrackedMessageHashes,
-  readSessionIngestionState,
   resolveAdmissionPolicy,
   scanSessionIngestionSource,
   sessionExclusionReason,
   sessionIngestionSourceFromCorpus,
   trimTrackedSessionScopes,
-  writeSessionIngestionState,
   type SessionIngestionCandidate,
   type SessionIngestionSource,
   type SessionAdmissionPolicy,

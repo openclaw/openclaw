@@ -1,28 +1,13 @@
-// Discord tests cover pluralkit plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import { fetchPluralKitMessageInfo } from "./pluralkit.js";
 
-type MockResponse = {
-  status: number;
-  ok: boolean;
-  text: () => Promise<string>;
-  json: () => Promise<unknown>;
-  body: null;
-  arrayBuffer: () => Promise<Buffer>;
-};
-
-const buildResponse = (params: { status: number; body?: unknown }): MockResponse => {
+const buildResponse = (params: { status: number; body?: unknown }): Response => {
   const body = params.body;
-  const textPayload = typeof body === "string" ? body : body == null ? "" : JSON.stringify(body);
-  return {
+  return new Response(typeof body === "string" ? body : JSON.stringify(body ?? {}), {
     status: params.status,
-    ok: params.status >= 200 && params.status < 300,
-    text: async () => textPayload,
-    json: async () => body ?? {},
-    body: null,
-    arrayBuffer: async () => Buffer.from(textPayload),
-  };
+    headers: { "content-type": "application/json" },
+  });
 };
 
 describe("fetchPluralKitMessageInfo", () => {

@@ -12,6 +12,7 @@ import { resolveStateDir } from "../../config/paths.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { hasErrnoCode, isErrno } from "../../infra/errno.js";
 import { ensureAbsoluteDirectory, root, walkDirectory } from "../../infra/fs-safe.js";
+import { retainMutationAuthority } from "../../infra/mutation-authority.js";
 import { parseSkillFrontmatter } from "../loading/frontmatter.js";
 import { SkillLibraryError } from "./errors.js";
 
@@ -280,7 +281,12 @@ export async function stageSkillLibraryBundle(
   skillId: string,
   bundle: PreparedSkillLibraryBundle,
   env?: NodeJS.ProcessEnv,
+  assertFileMutationAllowed?: () => void,
 ) {
+  const assertCurrent = assertFileMutationAllowed
+    ? retainMutationAuthority(assertFileMutationAllowed)
+    : undefined;
+  assertCurrent?.();
   const destination = skillLibraryRevisionDir(skillId, bundle.revision, env);
   const parent = path.dirname(destination);
   const ensured = await ensureAbsoluteDirectory(parent, { mode: 0o700 });
@@ -288,24 +294,25 @@ export async function stageSkillLibraryBundle(
     throw ensured.error;
   }
   await cleanAbandonedSkillStaging(parent);
+  assertCurrent?.();
   const staging = await fs.mkdtemp(path.join(parent, `.staging-${process.pid}-`));
   try {
+    const stagingRoot = await root(staging, { assertBeforeMutation: assertCurrent });
     const directories = new Set([staging]);
     for (const file of bundle.files) {
       const target = path.join(staging, file.path);
+      assertCurrent?.();
       await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
       let directory = path.dirname(target);
       while (directory !== parent) {
         directories.add(directory);
         directory = path.dirname(directory);
       }
-      const handle = await fs.open(target, "wx", file.executable ? 0o500 : 0o400);
-      try {
-        await handle.writeFile(file.bytes);
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
+      await stagingRoot.create(`./${file.path}`, file.bytes, {
+        mode: (file.executable ? 0o500 : 0o400) & ~process.umask(),
+        mkdir: false,
+        durable: "file",
+      });
     }
     for (const directory of [...directories].toSorted((a, b) => b.length - a.length)) {
       await syncDirectory(directory);
@@ -313,6 +320,7 @@ export async function stageSkillLibraryBundle(
     return {
       staging,
       async publish() {
+        assertCurrent?.();
         try {
           await fs.rename(staging, destination);
         } catch (error) {

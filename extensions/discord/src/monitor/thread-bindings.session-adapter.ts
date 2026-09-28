@@ -2,7 +2,6 @@ import {
   registerSessionBindingAdapter,
   unregisterSessionBindingAdapter,
   resolveThreadBindingConversationIdFromBindingId,
-  type BindingTargetKind,
   type SessionBindingAdapter,
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
@@ -12,8 +11,10 @@ import {
   asOptionalObjectRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveDiscordChannelId } from "../target-parsing.js";
-import { resolveChannelIdForBinding } from "./thread-bindings.discord-api.js";
+import {
+  normalizeDiscordBindingChannelId,
+  resolveChannelIdForBinding,
+} from "./thread-bindings.discord-api.js";
 import { snapshotThreadBindingJson } from "./thread-bindings.persistence.js";
 import {
   resolveBindingRecordKey,
@@ -31,26 +32,6 @@ type ThreadBindingDefaults = {
   maxAgeMs: number;
 };
 
-function normalizeChildBindingParentChannelId(raw?: string | null): string | undefined {
-  const trimmed = normalizeOptionalString(raw) ?? "";
-  if (!trimmed) {
-    return undefined;
-  }
-  try {
-    return resolveDiscordChannelId(trimmed);
-  } catch {
-    return undefined;
-  }
-}
-
-function toSessionBindingTargetKind(raw: string): BindingTargetKind {
-  return raw === "subagent" ? "subagent" : "session";
-}
-
-function toThreadBindingTargetKind(raw: BindingTargetKind): "subagent" | "acp" {
-  return raw === "subagent" ? "subagent" : "acp";
-}
-
 function toSessionBindingRecord(
   record: ThreadBindingRecord,
   defaults: ThreadBindingDefaults,
@@ -64,7 +45,7 @@ function toSessionBindingRecord(
   return {
     bindingId,
     targetSessionKey: record.targetSessionKey,
-    targetKind: toSessionBindingTargetKind(record.targetKind),
+    targetKind: record.targetKind === "subagent" ? "subagent" : "session",
     conversation: {
       channel: "discord",
       accountId: record.accountId,
@@ -119,31 +100,20 @@ export function createThreadBindingSessionAdapter(params: {
         asOptionalObjectRecord(
           snapshotThreadBindingJson(input.metadata ? { ...input.metadata } : undefined),
         ) ?? {};
-      const targetKind = toThreadBindingTargetKind(input.targetKind);
+      const targetKind = input.targetKind === "subagent" ? "subagent" : "acp";
       const label = normalizeOptionalString(metadata.label);
-      const threadName =
-        typeof metadata.threadName === "string"
-          ? normalizeOptionalString(metadata.threadName)
-          : undefined;
-      const introText =
-        typeof metadata.introText === "string"
-          ? normalizeOptionalString(metadata.introText)
-          : undefined;
-      const boundBy =
-        typeof metadata.boundBy === "string"
-          ? normalizeOptionalString(metadata.boundBy)
-          : undefined;
-      const agentId =
-        typeof metadata.agentId === "string"
-          ? normalizeOptionalString(metadata.agentId)
-          : undefined;
+      const threadName = normalizeOptionalString(metadata.threadName);
+      const introText = normalizeOptionalString(metadata.introText);
+      const boundBy = normalizeOptionalString(metadata.boundBy);
+      const agentId = normalizeOptionalString(metadata.agentId);
       let threadId: string | undefined;
       let channelId: string | undefined;
       let createThread = false;
 
       if (placement === "child") {
         createThread = true;
-        channelId = normalizeChildBindingParentChannelId(input.conversation.parentConversationId);
+        channelId =
+          normalizeDiscordBindingChannelId(input.conversation.parentConversationId) ?? undefined;
         if (!channelId && conversationId) {
           channelId =
             (await resolveChannelIdForBinding({

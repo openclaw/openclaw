@@ -107,29 +107,7 @@ export function composeReleaseChildAttemptEvidence(input: {
   run: ReleaseRecord;
 }): ReleaseRecord;
 
-export function terminalPolicyPass(
-  child: ReleaseRecord,
-  releaseProfile: string,
-  workflowRef: string,
-  laneWaiver?: string,
-): boolean;
-export function normalizeReleaseLaneWaiver(value: unknown): string;
-export function validateReleaseLaneWaiverBinding(
-  plan: ReleaseRecord | undefined,
-  validationInputs?: ReleaseRecord,
-): void;
-export function releaseJobAdvisoryReason(input: {
-  childKey: string;
-  jobName: string;
-  releaseProfile: string;
-  workflowRef: string;
-  laneWaiver?: string;
-  jobs?: ReleaseRecord[];
-}): "" | "lane_waiver";
-export function releaseWaivedJobs(
-  children: ReleaseRecord[],
-  policy: { releaseProfile: string; workflowRef: string; laneWaiver?: string },
-): Array<{ child: string; job: string; conclusion: string }>;
+export function terminalPolicyPass(child: ReleaseRecord): boolean;
 
 export function classifyReleaseSnapshot(input: ReleaseRecord): ReleaseStateArtifact;
 export function releasePlanGateFailures(gates: ReleaseRecord[]): ReleaseRecord[];

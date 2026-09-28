@@ -30,8 +30,6 @@ import type {
 } from "./store-worker-contract.js";
 import type { WorkerEnvironmentPruneInput } from "./store-write-types.js";
 
-export { normalizeWorkerDesktopEndpoint } from "./desktop-endpoint.js";
-export { normalizeWorkerSshEndpoint } from "./store-validation.js";
 export type {
   PreparedEnvironmentPlacementBinding,
   PreparedEnvironmentSelection,
@@ -197,7 +195,6 @@ export async function createWorkerEnvironmentStore(
           },
           {
             assertCurrent: check,
-            requireStateLifecycle: true,
             createAdmission: () => {
               let stage: "transaction" | "commit" = "transaction";
               admission = createSqliteWorkerOperationAdmission((request, grant) => {

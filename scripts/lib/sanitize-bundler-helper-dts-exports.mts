@@ -12,16 +12,9 @@ import { pathToFileURL } from "node:url";
 import * as ts from "typescript/unstable/ast";
 import { createNativeTypeScriptParser, type NativeTypeScriptParser } from "./native-typescript.mts";
 
-/** Runtime helpers that must never appear as undeclared declaration exports. */
-const BUNDLER_RUNTIME_HELPER_EXPORT_NAMES = ["__exportAll"] as const;
-
-type BundlerRuntimeHelperExportName = (typeof BUNDLER_RUNTIME_HELPER_EXPORT_NAMES)[number];
-
-const HELPER_NAME_SET = new Set<string>(BUNDLER_RUNTIME_HELPER_EXPORT_NAMES);
-
 export type UndeclaredBundlerHelperDtsExport = {
   /** Helper local name as it appears in the export clause. */
-  name: BundlerRuntimeHelperExportName;
+  name: "__exportAll";
   /** 1-based line of the export clause. */
   line: number;
 };
@@ -30,10 +23,6 @@ type DtsSanitization = {
   edits: Array<{ start: number; end: number }>;
   removed: UndeclaredBundlerHelperDtsExport[];
 };
-
-function isBundlerHelperName(name: string | undefined): name is BundlerRuntimeHelperExportName {
-  return Boolean(name && HELPER_NAME_SET.has(name));
-}
 
 function hasLocalHelperBinding(sourceFile: ts.SourceFile, name: string): boolean {
   return sourceFile.statements.some((statement) => {
@@ -75,10 +64,6 @@ function hasLocalHelperBinding(sourceFile: ts.SourceFile, name: string): boolean
   });
 }
 
-function exportElementLocalName(element: ts.ExportSpecifier): string | undefined {
-  return element.propertyName?.text ?? element.name.text;
-}
-
 function removeListElement(
   sourceText: string,
   element: ts.Node,
@@ -101,6 +86,10 @@ function scanDts(
   fileName: string,
   parser?: NativeTypeScriptParser,
 ): DtsSanitization {
+  // Escaped identifiers and string names still need the native parser.
+  if (!sourceText.includes("\\") && !sourceText.includes("__exportAll")) {
+    return { edits: [], removed: [] };
+  }
   using ownedParser = parser ? undefined : createNativeTypeScriptParser();
   const sourceFile = (parser ?? ownedParser!).parseSourceFile(fileName, sourceText);
   const helperIsDeclared = hasLocalHelperBinding(sourceFile, "__exportAll");
@@ -112,8 +101,7 @@ function scanDts(
       ? statement.importClause?.namedBindings
       : undefined;
     if (importBindings && ts.isNamedImports(importBindings)) {
-      const namedBindings = importBindings;
-      const helpers = namedBindings.elements.filter(
+      const helpers = importBindings.elements.filter(
         (specifier): specifier is ts.ImportSpecifier =>
           ts.isImportSpecifier(specifier) &&
           specifier.name.text === "__exportAll" &&
@@ -121,7 +109,7 @@ function scanDts(
           specifier.propertyName.text !== "__exportAll",
       );
       if (helpers.length > 0) {
-        if (helpers.length === namedBindings.elements.length) {
+        if (helpers.length === importBindings.elements.length) {
           edits.push({ start: statement.getFullStart(), end: statement.getEnd() });
         } else {
           for (const helper of helpers) {
@@ -138,8 +126,8 @@ function scanDts(
       continue;
     }
     for (const element of exportClause.elements) {
-      const localName = exportElementLocalName(element);
-      if (!isBundlerHelperName(localName) || helperIsDeclared) {
+      const localName = element.propertyName?.text ?? element.name.text;
+      if (localName !== "__exportAll" || helperIsDeclared) {
         continue;
       }
       const { line } = sourceFile.getLineAndCharacterOfPosition(element.getStart(sourceFile));

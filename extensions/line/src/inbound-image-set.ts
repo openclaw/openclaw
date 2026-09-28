@@ -1,32 +1,10 @@
-// Line plugin module groups the durable claims LINE splits one multi-image send into.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 
-// LINE does not deliver several images picked in one action as one message. It
-// sends one webhook event per image, ties them together with an imageSet id, and
-// does not deliver them in order. Handled one at a time they become N concurrent
-// turns for a single user action: the agent cannot answer about the set, and the
-// turns contend so one of them ends with no reply at all.
-//
-// The parts are buffered here, at the ingress boundary that owns their durable
-// claims, so the set reaches the handler as one delivery whose ownership spans
-// every claim behind it.
-//
-// `index` and `total` are both optional in LINE's own contract, and `index` is
-// documented absent for senders on LINE 11.15 or earlier for Android - so completion
-// can never be assumed and the timer, not the count, guarantees a set is delivered.
-//
-// The shared `createInboundDebouncer` buffers by key and serializes by key too,
-// while a set needs two: the buffer is per sender's set so one member's images
-// cannot join another's turn, and the order queue is per lane so a message
-// released behind the set still waits for it. Its window also starts when an
-// item is buffered, and this one starts after the lane is entered, so time spent
-// queued behind earlier work on the lane is not charged to the gap between
-// parts. Its flush also runs on a bare timer, detached from the delivery
-// callback, while this turn has to stay inside the ingress admission the spool
-// pump holds open. Per-key serialization itself is the shared helper's.
-//
-// The delay bounds the gap between parts of one send, not a whole upload, so it
-// is generous next to the sub-second gaps LINE was measured delivering.
+// LINE sends each image separately, sometimes without index or total. Unlike
+// createInboundDebouncer, this buffer groups by sender/set but serializes by chat,
+// starts the gap timer after entering the lane, and retains live ingress adoption.
+// The timer bounds gaps between parts, not the whole upload or time spent queued.
 const IMAGE_SET_FLUSH_DELAY_MS = 4_000;
 
 type PendingImageSetPart<TEvent, TLifecycle> = {
@@ -41,38 +19,21 @@ type PendingImageSet<TEvent, TLifecycle> = {
   // adding a duplicate image to the turn.
   parts: Map<string, PendingImageSetPart<TEvent, TLifecycle>>;
   total?: number;
-  /** Wakes the holder once the set is whole or its wait has expired. */
   release: () => void;
   timer?: ReturnType<typeof setTimeout>;
-  /** Restarted on each arrival once the wait exists, so later parts need it too. */
   flushDelayMs: number;
 };
 
-/** The whole set, ordered the way the sender picked it. */
 type LineImageSetDelivery<TEvent, TLifecycle> = {
   events: readonly TEvent[];
   lifecycles: readonly TLifecycle[];
-  /**
-   * Parts LINE announced but never delivered before the wait expired. The turn
-   * answers what arrived, so this is the only place the shortfall is knowable.
-   */
+  /** Announced parts still missing when the wait expires. */
   missing?: number;
-  /**
-   * Leaves the lane queue. Call it once the set has been delivered, not when it
-   * is taken: the holder still has to fetch media and build its turn, and
-   * anything released before that finishes would overtake the images.
-   */
+  /** Release after delivery, so later messages cannot overtake media preparation. */
   finish: () => void;
 };
 
-/**
- * Ordered by the index the sender picked, falling back to arrival.
- *
- * `index` is optional per part in LINE's contract, so a set can arrive partly
- * indexed. Choosing the key per pair would make the comparator intransitive and
- * the resulting order depend on insertion; ranking unindexed parts last keeps
- * one total order for every mix.
- */
+// Unindexed parts sort last; choosing index/arrival per pair is not transitive.
 function orderedParts<TEvent, TLifecycle>(
   pending: PendingImageSet<TEvent, TLifecycle>,
 ): readonly PendingImageSetPart<TEvent, TLifecycle>[] {
@@ -83,75 +44,27 @@ function orderedParts<TEvent, TLifecycle>(
   );
 }
 
-/**
- * Buffers the parts of a LINE image set until the set is whole.
- *
- * The first part becomes the set's holder: its call does not resolve until the
- * set completes or its wait expires, and it is the one that delivers. Keeping
- * that call open is what keeps the combined turn inside a live ingress
- * adoption - a turn dispatched after every part had returned is refused by
- * admission, so a set that never completes would never be delivered at all.
- */
-export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
-  /** Whether anything on this lane is still queued behind deferred work. */
-  isBusy: (laneKey: string) => boolean;
-  /**
-   * Takes a place in the lane's queue, resolving when it is this event's turn.
-   * Deferring frees the drain's lane, so this queue is the only thing keeping
-   * events released behind a set from racing each other into delivery. Every
-   * deferred event takes a place here, image sets included, so one lane has one
-   * order rather than a set path and a message path that cannot see each other.
-   */
-  enterLane: (laneKey: string) => Promise<() => void>;
-  admit: (input: {
-    laneKey: string;
-    setId: string;
-    /** Whose send this set is: a group lane is shared by every member. */
-    senderKey: string;
-    messageId: string;
-    index?: number;
-    total?: number;
-    event: TEvent;
-    lifecycle: TLifecycle;
-    flushDelayMs?: number;
-  }) => Promise<LineImageSetDelivery<TEvent, TLifecycle> | null>;
-} {
-  // Sets still open to their remaining parts, keyed by the send they belong to:
-  // the conversation, the sender inside it, and the set id. A group lane is
-  // shared by every member, so the sender is what keeps one member's parts out
-  // of another's turn - the turn is authorized once, for its holder.
+// The first part holds admission open until the set completes or expires.
+// Returning every part early would leave no live adoption for the combined turn.
+export function createLineImageSetIngressBuffer<TEvent, TLifecycle>() {
+  // Sender separates group members' parts: the turn is authorized only for its holder.
   const pendingBySet = new Map<string, PendingImageSet<TEvent, TLifecycle>>();
-  // A set whose parts straddle the wait is delivered in pieces, and the pieces
-  // already handed over are not missing from the send. Message ids, not a count:
-  // a piece whose turn failed is redelivered, and counting it twice would report
-  // fewer missing parts than there are. Each entry carries its own removal timer
-  // (five windows), so a set nobody finishes cannot accumulate here. Three things
-  // drop the carry — that timer, a restart, and a round that was not short, since
-  // only a short one writes it back — and after any of them a later piece counts
-  // against the total on its own, reporting more missing rather than fewer. It
-  // reports fewer only when a delivered piece never reached the model, which
-  // takes a short round and a failed one together.
+  // Carry distinct delivered ids across partial sets to avoid double-counting redelivery.
+  // Expiry, restart, or completion drops this bounded carry; late parts may then
+  // over-report missing images. A failed partial turn can under-report them.
   const deliveredBySet = new Map<
     string,
     { messageIds: Set<string>; timer?: ReturnType<typeof setTimeout> }
   >();
   const pendingKey = (laneKey: string, senderKey: string, setId: string) =>
     `${laneKey}\u0000${senderKey}\u0000${setId}`;
-  // Tail of each lane's queue: everything that deferred waits behind it in turn.
   const laneChain = new Map<string, Promise<void>>();
 
-  // The queued task is the held region itself: it resolves once its holder calls
-  // the returned release, which is what keeps the lane occupied for the whole
-  // delivery rather than only for the wait.
+  // Deferred image sets and ordinary messages share one queue. Hold its slot
+  // until delivery finishes, not merely until the image-set wait finishes.
   const enterLane = async (laneKey: string): Promise<() => void> => {
-    let release = () => {};
-    const held = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    let entered = () => {};
-    const turn = new Promise<void>((resolve) => {
-      entered = resolve;
-    });
+    const { promise: held, resolve: release } = createDeferred<void>();
+    const { promise: turn, resolve: entered } = createDeferred<void>();
     void enqueueKeyedTask({
       tails: laneChain,
       key: laneKey,
@@ -192,11 +105,7 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
         forming.release();
         return null;
       }
-      // Restart the wait, once there is one, so the delay bounds the gap between
-      // parts rather than the whole upload: a slower part would otherwise miss
-      // the set and open a second one, answering the send twice. Before the
-      // holder takes the lane it has no wait, and starting one here would spend
-      // the delay on the queued time the holder deliberately does not count.
+      // Reset only a running timer: queued time must not consume the gap budget.
       if (forming.timer) {
         clearTimeout(forming.timer);
         forming.timer = setTimeout(forming.release, forming.flushDelayMs);
@@ -205,10 +114,7 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
       return null;
     }
 
-    let release = () => {};
-    const whole = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const { promise: whole, resolve: release } = createDeferred<void>();
     const pending: PendingImageSet<TEvent, TLifecycle> = {
       parts: new Map([[input.messageId, part]]),
       total: input.total,
@@ -256,5 +162,5 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
     };
   };
 
-  return { admit, enterLane, isBusy: (laneKey) => laneChain.has(laneKey) };
+  return { admit, enterLane, isBusy: (laneKey: string) => laneChain.has(laneKey) };
 }

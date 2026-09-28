@@ -127,6 +127,8 @@ async function runCommandPreflightMaintenance(
   params: CommandPreflight,
 ): Promise<SessionEntry | undefined> {
   const { prepared, opts, sessionEntry, modelSelection } = params;
+  const operatorAuthority = opts.operatorAuthority;
+  const assertSourceCurrent = opts.assertSourceCurrent;
   if (
     prepared.isNewSession ||
     !sessionEntry ||
@@ -137,6 +139,8 @@ async function runCommandPreflightMaintenance(
   }
   const assertActive = () => {
     opts.abortSignal?.throwIfAborted();
+    assertSourceCurrent?.();
+    operatorAuthority?.assertCurrent();
     assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
   };
   assertActive();
@@ -158,6 +162,8 @@ async function runCommandPreflightMaintenance(
       ),
     },
   });
+  // Required foreground preparation keeps the command's original source.
+  followupRun.operatorAuthority = operatorAuthority;
   followupRun.prompt = prepared.body;
   const maintenanceParams = {
     cfg: prepared.cfg,

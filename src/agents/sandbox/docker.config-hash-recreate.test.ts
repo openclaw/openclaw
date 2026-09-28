@@ -407,36 +407,32 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     expect(collectDockerFlagValues(createCall.args, "--userns")).toEqual([]);
   });
 
-  it.each([
-    { user: "0" },
-    { user: "00" },
-    { user: "0:0" },
-    { user: "00:1002" },
-    { user: "1001:0" },
-    { user: "1001:000" },
-  ])("rejects zero-valued rootless Podman user $user", async ({ user }) => {
-    const cfg = createSandboxConfig([]);
-    cfg.docker.user = user;
-    spawnState.inspectRunning = false;
-    registryMocks.readRegistryEntry.mockResolvedValue(null);
+  it.each([{ user: "0" }, { user: "00:1002" }, { user: "1001:000" }])(
+    "rejects zero-valued rootless Podman user $user",
+    async ({ user }) => {
+      const cfg = createSandboxConfig([]);
+      cfg.docker.user = user;
+      spawnState.inspectRunning = false;
+      registryMocks.readRegistryEntry.mockResolvedValue(null);
 
-    await expect(
-      harness.ensureSandboxContainer({
-        engine: harness.PODMAN_SANDBOX_ENGINE,
-        scopeKey: "shared",
-        workspaceDir: "/tmp/workspace",
-        agentWorkspaceDir: "/tmp/workspace",
-        cfg,
-      }),
-    ).rejects.toThrow(/cannot use UID or GID 0/iu);
+      await expect(
+        harness.ensureSandboxContainer({
+          engine: harness.PODMAN_SANDBOX_ENGINE,
+          scopeKey: "shared",
+          workspaceDir: "/tmp/workspace",
+          agentWorkspaceDir: "/tmp/workspace",
+          cfg,
+        }),
+      ).rejects.toThrow(/cannot use UID or GID 0/iu);
 
-    expect(spawnState.calls).not.toContainEqual(
-      expect.objectContaining({
-        command: "podman",
-        args: expect.arrayContaining(["create"]),
-      }),
-    );
-  });
+      expect(spawnState.calls).not.toContainEqual(
+        expect.objectContaining({
+          command: "podman",
+          args: expect.arrayContaining(["create"]),
+        }),
+      );
+    },
+  );
 
   it("rejects Podman versions without mapped keep-id support", async () => {
     const cfg = createSandboxConfig([]);

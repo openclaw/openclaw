@@ -15,6 +15,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { writeSessionStore } from "./test-helpers.js";
 import {
@@ -338,6 +339,7 @@ test("preserves ordered fallback through inventory rehydration, workspace sync, 
   const placements = createWorkerSessionPlacementStore({ database, now: () => 3_000 });
   tunnelManager = createWorkerTunnelManager({ runner });
   const environmentService = createWorkerEnvironmentService({
+    scheduler: createTestGatewayScheduler(),
     store: environmentStore,
     getConfig: () => ({
       cloudWorkers: {

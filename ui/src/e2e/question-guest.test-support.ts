@@ -28,6 +28,7 @@ import {
 } from "../../../src/infra/agent-run-registry.js";
 import { createDeferredCore } from "../../../src/shared/deferred.js";
 import { ensureProfileForEmail } from "../../../src/state/user-profiles.js";
+import { createTestGatewayScheduler } from "../../../src/test-utils/gateway-scheduler-clock.js";
 
 export const guestQuestionSessionKey = "agent:main:guest-question-proof";
 export const guestQuestionPrompt = "Which format should I use for your summary?";
@@ -64,7 +65,8 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
     instanceId: "guest-question-instance",
     runId,
   });
-  const manager = new QuestionManager();
+  const scheduler = createTestGatewayScheduler();
+  const manager = new QuestionManager(scheduler);
   const unregister = registerAgentRunDelegatedAuthorityClosedHandler((authority) =>
     manager.cancelClosedAuthorities(authority.operationalRunInstance),
   );
@@ -76,8 +78,13 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
     bufferedAmount: 0,
     close() {},
     terminate() {},
-    send(wire: string, callback?: (error?: Error) => void) {
-      const frame: unknown = JSON.parse(wire);
+    send(
+      wire: string | Buffer,
+      options?: { binary: false } | ((error?: Error) => void),
+      onSent?: (error?: Error) => void,
+    ) {
+      const callback = typeof options === "function" ? options : onSent;
+      const frame: unknown = JSON.parse(wire.toString());
       frames.push(frame);
       delivery = delivery
         .then(() => deliver(frame))
@@ -155,6 +162,7 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
   const handlers = createQuestionHandlers(
     manager,
     createSecretStoreWriteService({ reloadSecrets: async () => ({ warningCount: 0 }) }),
+    scheduler,
   );
   const requests: Array<{ method: string; params: unknown; result?: RpcResult }> = [];
   const registration = createDeferredCore<RpcResult>();
@@ -239,6 +247,8 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
       releaseAgentRunDelegatedAuthority(requesterAuthority);
       unregister();
       manager.close();
+      await manager.drain();
+      await scheduler.stop();
       clearAgentRunContext(runId);
       operator.release();
       await flushEvents();

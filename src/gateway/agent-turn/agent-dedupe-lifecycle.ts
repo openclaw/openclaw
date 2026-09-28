@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { AGENT_RUN_RESTART_ABORT_STOP_REASON } from "../../agents/run-termination.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -7,6 +8,7 @@ import {
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
 import { resolveAgentRunExpiresAtMs } from "../chat-abort.js";
+import { logAttachmentFailure } from "../chat-attachments.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { CommittedResetCompletion } from "../server-methods/agent-reset-phase.js";
 import {
@@ -16,14 +18,16 @@ import {
 } from "../server-methods/agent-session-reset.js";
 import { emitSessionsChanged } from "../server-methods/session-change-event.js";
 import {
+  AgentRequestReservationEndedError,
   buildAbortedAgentPayload,
   isAcceptedAgentDedupePayload,
   isPreRegistrationAbortedAgentDedupeEntryForSession,
   readGatewayDedupeEntry,
+  replayAgentTurnIfCached,
   setAbortedAgentDedupeEntries,
   setGatewayDedupeEntries,
 } from "./agent-dedupe.js";
-import type { AgentTurnContext, AgentTurnIo } from "./types.js";
+import type { AgentTurnContext, AgentTurnFrame, AgentTurnIo } from "./types.js";
 
 export type AgentDedupeLifecycle = ReturnType<typeof createAgentDedupeLifecycle>;
 
@@ -102,23 +106,99 @@ export function createAgentDedupeLifecycle(params: {
     reserved = true;
   };
 
-  const clearUnaccepted = () => {
-    if (!reserved || accepted) {
-      return;
+  const ownedReservationKeys = () =>
+    !reserved || accepted
+      ? []
+      : params.agentDedupeKeys.filter((key) => {
+          const entry = params.context.dedupe.get(key);
+          return (
+            entry?.ok &&
+            isAcceptedAgentDedupePayload(entry.payload) &&
+            entry.payload.reservationId === reservationId
+          );
+        });
+  const ownsReservation = () => ownedReservationKeys().length === params.agentDedupeKeys.length;
+
+  const assertReservationCurrent = () => {
+    if (!ownsReservation()) {
+      throw new AgentRequestReservationEndedError();
     }
-    const entry = readGatewayDedupeEntry({
+  };
+
+  const handlePreparationFailure =
+    (assertCallerCurrent: (() => void) | undefined) =>
+    (error: unknown): undefined => {
+      assertCallerCurrent?.();
+      // Preparation refusal must preserve the cached Stop or replacement response.
+      if (
+        !ownsReservation() &&
+        replayAgentTurnIfCached({
+          preflight: params,
+          context: params.context,
+          io: params.io,
+          acceptedOnly: params.privateCompletion,
+        })
+      ) {
+        return undefined;
+      }
+      if (error instanceof AgentRequestReservationEndedError) {
+        logAttachmentFailure(params.context.logGateway, "agent attachment parse failed", error);
+        params.io.emitAcceptance([
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, String(error)),
+        ]);
+        return undefined;
+      }
+      throw error;
+    };
+
+  const recordCommittedReset = (
+    completion: CommittedResetCompletion,
+    followUpNotice: string,
+    keys = params.agentDedupeKeys,
+  ) => {
+    const response: AgentTurnFrame = completion.replyError
+      ? [false, undefined, completion.replyError]
+      : [
+          true,
+          buildBareSessionResetResponse({
+            runId: params.runId,
+            result: buildBareSessionResetResult({
+              reason: completion.reason,
+              sessionId: completion.sessionId,
+              ackText: completion.followUpPending
+                ? `${sessionResetAckText(completion.reason)} ${followUpNotice}`
+                : undefined,
+            }),
+          }),
+          undefined,
+        ];
+    setGatewayDedupeEntries({
       dedupe: params.context.dedupe,
-      keys: params.agentDedupeKeys,
+      keys,
+      entry: { ts: Date.now(), ok: response[0], payload: response[1], error: response[2] },
     });
-    if (
-      isPreRegistrationAbortedAgentDedupeEntryForSession({ entry, runId: params.runId }) ||
-      (entry?.ok &&
-        isAcceptedAgentDedupePayload(entry.payload) &&
-        entry.payload.reservationId !== reservationId)
-    ) {
+    return response;
+  };
+
+  const clearUnaccepted = () => {
+    const keys = ownedReservationKeys();
+    if (!keys.length) {
       return;
     }
-    for (const key of params.agentDedupeKeys) {
+    if (committedResetCompletion) {
+      // Cleanup may follow any failed follow-up admission, not only reset-phase
+      // errors. Reconcile the reset fact without delivering or starting new work.
+      recordCommittedReset(
+        committedResetCompletion,
+        "Request ended before the follow-up ran; send the follow-up message again.",
+        keys,
+      );
+      accepted = true;
+      return;
+    }
+    for (const key of keys) {
       params.context.dedupe.delete(key);
     }
     reserved = false;
@@ -166,25 +246,34 @@ export function createAgentDedupeLifecycle(params: {
     if (params.lifecycleGeneration === getAgentEventLifecycleGeneration()) {
       return false;
     }
+    // Stop and replacement own their outcome even when the old caller observes
+    // restart later. Replay that owner instead of publishing an obsolete reset.
+    if (!ownsReservation()) {
+      clearUnaccepted();
+      if (
+        !replayAgentTurnIfCached({
+          preflight: params,
+          context: params.context,
+          io: params.io,
+        })
+      ) {
+        params.io.emitAcceptance([
+          true,
+          buildAbortedAgentPayload(params.runId, AGENT_RUN_RESTART_ABORT_STOP_REASON),
+          undefined,
+        ]);
+      }
+      accepted = true;
+      return true;
+    }
     if (committedResetCompletion) {
       const completion = committedResetCompletion;
-      const responsePayload = buildBareSessionResetResponse({
-        runId: params.runId,
-        result: buildBareSessionResetResult({
-          reason: completion.reason,
-          sessionId: completion.sessionId,
-          ackText: completion.followUpPending
-            ? `${sessionResetAckText(completion.reason)} Gateway restarted before the follow-up ran; send the follow-up message again.`
-            : undefined,
-        }),
-      });
       accepted = true;
-      setGatewayDedupeEntries({
-        dedupe: params.context.dedupe,
-        keys: params.agentDedupeKeys,
-        entry: { ts: Date.now(), ok: true, payload: responsePayload },
-      });
-      params.io.emitAcceptance([true, responsePayload, undefined], { runId: params.runId });
+      const response = recordCommittedReset(
+        completion,
+        "Gateway restarted before the follow-up ran; send the follow-up message again.",
+      );
+      params.io.emitAcceptance(response, { runId: params.runId });
       emitSessionsChanged(params.context, {
         sessionKey: completion.sessionKey,
         ...(completion.agentId ? { agentId: completion.agentId } : {}),
@@ -214,6 +303,10 @@ export function createAgentDedupeLifecycle(params: {
 
   return {
     reservationId,
+    ownsReservation,
+    ownedReservationKeys,
+    assertReservationCurrent,
+    handlePreparationFailure,
     reserve,
     bindSessionTarget,
     clearUnaccepted,

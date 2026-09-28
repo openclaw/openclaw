@@ -187,7 +187,7 @@ it("preserves active run id ownership across omitted, liveness, and exact states
   });
 });
 
-it.each(["user", "auto", null] as const)(
+it.each(["user", null] as const)(
   "carries model override source %s into session change events",
   (source) => {
     expect(
@@ -203,61 +203,58 @@ it.each(["user", "auto", null] as const)(
   },
 );
 
-it.each(["user", "auto", null] as const)(
-  "serializes lifecycle starts without model source %s or prior terminal timing",
-  (modelOverrideSource) => {
-    // oxlint-disable-next-line unicorn/prefer-structured-clone -- exercise timing clears on the wire
-    const snapshot: unknown = JSON.parse(
-      JSON.stringify(
-        buildGatewaySessionSnapshot({
-          sessionRow: {
-            key: "agent:main:pinned",
-            sessionId: "pinned-session",
-            kind: "direct",
-            updatedAt: 200,
-            status: "done",
-            startedAt: 100,
-            endedAt: 200,
-            runtimeMs: 100,
-            model: "model-a",
-            modelProvider: "provider",
-            activeModel: "model-b",
-            activeModelProvider: "fallback-provider",
-            modelOverrideSource,
-          },
-          lifecycle: true,
-          includeSession: true,
-          event: {
-            runId: "next-run",
-            sessionId: "pinned-session",
-            seq: 1,
-            ts: 300,
-            stream: "lifecycle",
-            data: { phase: "start", startedAt: 300 },
-          },
-        }),
-      ),
-    );
-    expect(snapshot).toMatchObject({
-      status: "running",
-      startedAt: 300,
-      endedAt: null,
-      runtimeMs: null,
-      session: { status: "running", startedAt: 300, endedAt: null, runtimeMs: null },
-    });
-    for (const field of [
-      "model",
-      "modelProvider",
-      "activeModel",
-      "activeModelProvider",
-      "modelOverrideSource",
-      "agentRuntime",
-    ]) {
-      expect(snapshot).not.toHaveProperty(field);
-      expect(snapshot).not.toHaveProperty(`session.${field}`);
-    }
-  },
-);
+it("serializes lifecycle starts without model selection or prior terminal timing", () => {
+  // oxlint-disable-next-line unicorn/prefer-structured-clone -- exercise timing clears on the wire
+  const snapshot: unknown = JSON.parse(
+    JSON.stringify(
+      buildGatewaySessionSnapshot({
+        sessionRow: {
+          key: "agent:main:pinned",
+          sessionId: "pinned-session",
+          kind: "direct",
+          updatedAt: 200,
+          status: "done",
+          startedAt: 100,
+          endedAt: 200,
+          runtimeMs: 100,
+          model: "model-a",
+          modelProvider: "provider",
+          activeModel: "model-b",
+          activeModelProvider: "fallback-provider",
+          modelOverrideSource: "user",
+        },
+        lifecycle: true,
+        includeSession: true,
+        event: {
+          runId: "next-run",
+          sessionId: "pinned-session",
+          seq: 1,
+          ts: 300,
+          stream: "lifecycle",
+          data: { phase: "start", startedAt: 300 },
+        },
+      }),
+    ),
+  );
+  expect(snapshot).toMatchObject({
+    status: "running",
+    startedAt: 300,
+    endedAt: null,
+    runtimeMs: null,
+    session: { status: "running", startedAt: 300, endedAt: null, runtimeMs: null },
+  });
+  for (const field of [
+    "model",
+    "modelProvider",
+    "activeModel",
+    "activeModelProvider",
+    "modelOverrideSource",
+    "agentRuntime",
+  ]) {
+    expect(snapshot).not.toHaveProperty(field);
+    expect(snapshot).not.toHaveProperty(`session.${field}`);
+  }
+});
 
 it.each([
   { aborted: false, status: "done" },

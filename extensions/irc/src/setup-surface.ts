@@ -1,4 +1,3 @@
-// Irc plugin module implements setup surface behavior.
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import type {
@@ -42,6 +41,24 @@ const t = createSetupTranslator();
 const channel = "irc" as const;
 const USE_ENV_FLAG = "__ircUseEnv";
 const TLS_FLAG = "__ircTls";
+
+type IrcTextInput = NonNullable<ChannelSetupWizard["textInputs"]>[number];
+
+function ircAccountTextInput(
+  configKey: "host" | "nick" | "username" | "realname",
+  input: Pick<IrcTextInput, "inputKey" | "message" | "initialValue">,
+): IrcTextInput {
+  return {
+    ...input,
+    currentValue: ({ cfg, accountId }) =>
+      resolveIrcAccount({ cfg: cfg as CoreConfig, accountId }).config[configKey] || undefined,
+    shouldPrompt: ({ credentialValues }) => credentialValues[USE_ENV_FLAG] !== "1",
+    validate: ({ value }) => (normalizeStringifiedOptionalString(value) ? undefined : "Required"),
+    normalizeValue: ({ value }) => normalizeStringifiedOptionalString(value) ?? "",
+    applySet: async ({ cfg, accountId, value }) =>
+      updateIrcAccountConfig(cfg as CoreConfig, accountId, { enabled: true, [configKey]: value }),
+  };
+}
 
 function parseListInput(raw: string): string[] {
   return normalizeStringEntries(raw.split(/[\n,;]+/g));
@@ -246,20 +263,10 @@ export const ircSetupWizard: ChannelSetupWizard = {
   },
   credentials: [],
   textInputs: [
-    {
+    ircAccountTextInput("host", {
       inputKey: "httpHost",
       message: t("wizard.irc.serverHostPrompt"),
-      currentValue: ({ cfg, accountId }) =>
-        resolveIrcAccount({ cfg: cfg as CoreConfig, accountId }).config.host || undefined,
-      shouldPrompt: ({ credentialValues }) => credentialValues[USE_ENV_FLAG] !== "1",
-      validate: ({ value }) => (normalizeStringifiedOptionalString(value) ? undefined : "Required"),
-      normalizeValue: ({ value }) => normalizeStringifiedOptionalString(value) ?? "",
-      applySet: async ({ cfg, accountId, value }) =>
-        updateIrcAccountConfig(cfg as CoreConfig, accountId, {
-          enabled: true,
-          host: value,
-        }),
-    },
+    }),
     {
       inputKey: "httpPort",
       message: t("wizard.irc.serverPortPrompt"),
@@ -286,54 +293,24 @@ export const ircSetupWizard: ChannelSetupWizard = {
           port: parsePort(value, 6697),
         }),
     },
-    {
+    ircAccountTextInput("nick", {
       inputKey: "token",
       message: t("wizard.irc.nickPrompt"),
-      currentValue: ({ cfg, accountId }) =>
-        resolveIrcAccount({ cfg: cfg as CoreConfig, accountId }).config.nick || undefined,
-      shouldPrompt: ({ credentialValues }) => credentialValues[USE_ENV_FLAG] !== "1",
-      validate: ({ value }) => (normalizeStringifiedOptionalString(value) ? undefined : "Required"),
-      normalizeValue: ({ value }) => normalizeStringifiedOptionalString(value) ?? "",
-      applySet: async ({ cfg, accountId, value }) =>
-        updateIrcAccountConfig(cfg as CoreConfig, accountId, {
-          enabled: true,
-          nick: value,
-        }),
-    },
-    {
+    }),
+    ircAccountTextInput("username", {
       inputKey: "userId",
       message: t("wizard.irc.usernamePrompt"),
-      currentValue: ({ cfg, accountId }) =>
-        resolveIrcAccount({ cfg: cfg as CoreConfig, accountId }).config.username || undefined,
-      shouldPrompt: ({ credentialValues }) => credentialValues[USE_ENV_FLAG] !== "1",
       initialValue: ({ cfg, accountId, credentialValues }) =>
         resolveIrcAccount({ cfg: cfg as CoreConfig, accountId }).config.username ||
         credentialValues.token ||
         "openclaw",
-      validate: ({ value }) => (normalizeStringifiedOptionalString(value) ? undefined : "Required"),
-      normalizeValue: ({ value }) => normalizeStringifiedOptionalString(value) ?? "",
-      applySet: async ({ cfg, accountId, value }) =>
-        updateIrcAccountConfig(cfg as CoreConfig, accountId, {
-          enabled: true,
-          username: value,
-        }),
-    },
-    {
+    }),
+    ircAccountTextInput("realname", {
       inputKey: "deviceName",
       message: t("wizard.irc.realNamePrompt"),
-      currentValue: ({ cfg, accountId }) =>
-        resolveIrcAccount({ cfg: cfg as CoreConfig, accountId }).config.realname || undefined,
-      shouldPrompt: ({ credentialValues }) => credentialValues[USE_ENV_FLAG] !== "1",
       initialValue: ({ cfg, accountId }) =>
         resolveIrcAccount({ cfg: cfg as CoreConfig, accountId }).config.realname || "OpenClaw",
-      validate: ({ value }) => (normalizeStringifiedOptionalString(value) ? undefined : "Required"),
-      normalizeValue: ({ value }) => normalizeStringifiedOptionalString(value) ?? "",
-      applySet: async ({ cfg, accountId, value }) =>
-        updateIrcAccountConfig(cfg as CoreConfig, accountId, {
-          enabled: true,
-          realname: value,
-        }),
-    },
+    }),
     {
       inputKey: "groupChannels",
       message: t("wizard.irc.autoJoinPrompt"),

@@ -18,6 +18,23 @@ import {
 } from "./thread-bindings-store.js";
 import { createTelegramThreadBindingManager } from "./thread-bindings.js";
 
+const acpHost = vi.hoisted(() => ({
+  read: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/acp-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/acp-runtime")>(
+    "openclaw/plugin-sdk/acp-runtime",
+  );
+  acpHost.read.mockImplementation(actual.readAcpSessionEntry);
+  return {
+    ...actual,
+    readAcpSessionEntry: acpHost.read,
+  };
+});
+
+export { acpHost };
+
 export const TELEGRAM_THREAD_BINDINGS_TEST_CFG: OpenClawConfig = {
   channels: { telegram: { botToken: "test-token" } },
 };
@@ -55,6 +72,11 @@ export function useTelegramThreadBindingsFixture() {
     );
   };
   beforeEach(async () => {
+    acpHost.read.mockReset();
+    const acpRuntime = await vi.importActual<typeof import("openclaw/plugin-sdk/acp-runtime")>(
+      "openclaw/plugin-sdk/acp-runtime",
+    );
+    acpHost.read.mockImplementation(acpRuntime.readAcpSessionEntry);
     await stopManagers();
     state = await createOpenClawTestState({
       layout: "state-only",

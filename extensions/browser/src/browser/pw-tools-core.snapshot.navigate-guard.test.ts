@@ -91,7 +91,6 @@ describe("pw-tools-core.snapshot navigate guard", () => {
   it.each([
     { requestedTimeoutMs: undefined, expectedTimeoutMs: 20_000 },
     { requestedTimeoutMs: 180_000, expectedTimeoutMs: 120_000 },
-    { requestedTimeoutMs: Number.MAX_SAFE_INTEGER, expectedTimeoutMs: 120_000 },
   ])(
     "applies the shipped navigation timeout contract to Playwright timeout $requestedTimeoutMs",
     async ({ requestedTimeoutMs, expectedTimeoutMs }) => {

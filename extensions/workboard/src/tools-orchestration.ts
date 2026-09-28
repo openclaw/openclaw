@@ -1,29 +1,18 @@
-import type { WorkboardCard } from "@openclaw/workboard-contract";
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/core";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
 import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { AgentToolResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
-import { redactClaimToken } from "./card-redaction.js";
+import { redactClaimToken, redactDispatchResult } from "./card-redaction.js";
 import type { WorkboardStore } from "./store.js";
 import {
   cardIdField,
+  createWorkboardCardMutations,
+  redactedCardResult,
+  requireScopedCard,
   claimTokenField,
   strictObject,
   workspaceField,
 } from "./tools-card-mutations.js";
-
-type ScopedCardParams = {
-  record: Record<string, unknown>;
-  id: string;
-  scope: { ownerId: string; token?: string };
-};
-
-type WorkboardCardMutation = (
-  id: string,
-  record: Record<string, unknown>,
-  scope: ScopedCardParams["scope"],
-) => Promise<WorkboardCard>;
 
 const CardIdSchema = strictObject({
   id: cardIdField(),
@@ -40,29 +29,10 @@ const OptionalOperatorNoteField = Type.Optional(
 export function createWorkboardOrchestrationTools(params: {
   store: WorkboardStore;
   ownerId: string;
-  requireScopedCard: (
-    store: WorkboardStore,
-    cardId: string,
-    ownerId: string,
-    token?: string,
-  ) => Promise<WorkboardCard>;
-  readScopedCardToolParams: (rawParams: unknown) => Promise<ScopedCardParams>;
-  readClaimedCardToolParams: (rawParams: unknown) => Promise<ScopedCardParams>;
-  runScopedCardMutation: (
-    rawParams: unknown,
-    mutate: WorkboardCardMutation,
-  ) => Promise<AgentToolResult<{ card: WorkboardCard }>>;
-  redactedCardResult: (card: WorkboardCard) => AgentToolResult<{ card: WorkboardCard }>;
 }): AnyAgentTool[] {
-  const {
-    store,
-    ownerId,
-    requireScopedCard,
-    readScopedCardToolParams,
-    readClaimedCardToolParams,
-    runScopedCardMutation,
-    redactedCardResult,
-  } = params;
+  const { store, ownerId } = params;
+  const { readScopedCardToolParams, readClaimedCardToolParams, runScopedCardMutation } =
+    createWorkboardCardMutations(store, ownerId);
   return [
     {
       name: "workboard_boards",
@@ -354,13 +324,7 @@ export function createWorkboardOrchestrationTools(params: {
       execute: async (_toolCallId, rawParams) => {
         const record = asNonArrayRecord(rawParams);
         const result = await store.dispatch({ boardId: record.boardId });
-        return jsonResult({
-          ...result,
-          promoted: result.promoted.map(redactClaimToken),
-          reclaimed: result.reclaimed.map(redactClaimToken),
-          blocked: result.blocked.map(redactClaimToken),
-          orchestrated: result.orchestrated.map(redactClaimToken),
-        });
+        return jsonResult(redactDispatchResult(result));
       },
     },
     {

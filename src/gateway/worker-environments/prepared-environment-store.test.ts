@@ -1,13 +1,11 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { hashWorkerCredential } from "./credential.js";
 import type {
   PreparedEnvironmentSelection,
@@ -24,6 +22,7 @@ const assertCurrent = () => undefined;
 // These exercise the shared database, since process-local exclusion cannot protect
 // a consumed machine after placement retirement or a second store opens the file.
 describe("prepared environment ownership", () => {
+  const tempDirs = useStateDatabaseTempDirs();
   let root: string;
   let database: OpenClawStateDatabase;
   let environments: Awaited<ReturnType<typeof createWorkerEnvironmentStore>>;
@@ -36,14 +35,9 @@ describe("prepared environment ownership", () => {
     placements = createWorkerSessionPlacementStore({ database, now: () => nowMs });
   };
   beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-prepared-"));
+    root = tempDirs.make("openclaw-prepared-");
     nowMs = 1_000;
     await openStores();
-  });
-  afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(root, { recursive: true, force: true });
   });
 
   function intent(environmentId = "prepared-1", key = PREPARATION_KEY) {
@@ -103,14 +97,14 @@ describe("prepared environment ownership", () => {
       },
     });
   }
-  function selection(sessionId = "session-1"): PreparedEnvironmentSelection {
+  async function selection(sessionId = "session-1"): Promise<PreparedEnvironmentSelection> {
     const identity = {
       sessionId,
       sessionKey: `agent:main:${sessionId}`,
       agentId: "main",
       executionMode: "worker-turn" as const,
     };
-    const placement = placements.startDispatch(identity);
+    const placement = await placements.startDispatch(identity);
     return {
       ...identity,
       expectedGeneration: placement.generation,
@@ -215,8 +209,8 @@ describe("prepared environment ownership", () => {
 
   it("assigns once across store instances and retains consumption after placement deletion and reopen", async () => {
     await ready();
-    const first = selection();
-    const second = selection("session-2");
+    const first = await selection();
+    const second = await selection("session-2");
     const assigned = placements.bindPreparedEnvironment(first)!;
     expect(assigned).toMatchObject({ state: "provisioning", environmentId: "prepared-1" });
     const anotherStore = createWorkerSessionPlacementStore({ database, now: () => nowMs });
@@ -243,7 +237,7 @@ describe("prepared environment ownership", () => {
     "excludes claim and expiry in %s order",
     async (order) => {
       await ready();
-      const request = selection();
+      const request = await selection();
       if (order === "claim-first") {
         expect(placements.bindPreparedEnvironment(request)?.state).toBe("provisioning");
         nowMs = 2_000;
@@ -288,7 +282,7 @@ describe("prepared environment ownership", () => {
     "counts consumed workers awaiting cleanup against the reserve cap for %s",
     async (providerId) => {
       await ready();
-      placements.bindPreparedEnvironment(selection());
+      placements.bindPreparedEnvironment(await selection());
       await environments.requestDestroy({ environmentId: "prepared-1", state: "ready" });
       expect(await reserve("prepared-2", PREPARATION_KEY, 4, providerId)).toBeUndefined();
     },
@@ -323,7 +317,7 @@ describe("prepared environment ownership", () => {
     { expectedGeneration: 999 },
   ])("rejects stale selection without consuming capacity: %j", async (changed) => {
     await ready();
-    const request = selection();
+    const request = await selection();
     expect(placements.bindPreparedEnvironment({ ...request, ...changed })).toBeUndefined();
     expect(environments.get("prepared-1")?.preparation?.consumedAtMs).toBeNull();
     expect(placements.get(request.sessionId)?.state).toBe("requested");
@@ -331,7 +325,7 @@ describe("prepared environment ownership", () => {
 
   it("rechecks live authority before consuming and atomically rolls back a rejected assignment", async () => {
     await ready();
-    const request = selection();
+    const request = await selection();
     let assertions = 0;
     expect(() =>
       placements.bindPreparedEnvironment({
@@ -351,7 +345,7 @@ describe("prepared environment ownership", () => {
     "requires the exact reservation for %s attachment and cannot recycle its rollback",
     async (timing) => {
       await ready();
-      const request = selection();
+      const request = await selection();
       const assigned = placements.bindPreparedEnvironment(request)!;
       if (timing === "after reserve expiry") {
         nowMs = 2_001;

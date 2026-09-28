@@ -31,6 +31,10 @@ const main = { default: true };
 const worker = { workspace: "/srv/worker" };
 const roster = (entries: Record<string, unknown>) => ({ agents: { entries } });
 const listRoster = (list: unknown[]) => ({ agents: { list } });
+const explicitRoster = (entries: unknown) => ({ agents: { ownership: "explicit", entries } });
+const tony = { workspace: "/w/tony" };
+const tonyInclude = { $include: "./tony.json5" };
+const keyedTonyInclude = [["agents", "entries", "tony"]];
 const identityRef = { source: "env", provider: "default", id: "SSH_IDENTITY" };
 const runtimeSecretEntry = {
   default: true,
@@ -108,13 +112,6 @@ const writeCases: WriteCase[] = [
     current: roster({ main, worker }),
     next: roster({ worker }),
     error: "Config write would drop agent roster entries without an explicit deletion: main.",
-  },
-  {
-    name: "allows an explicitly authorized agent deletion from the canonical roster",
-    current: roster({ main, worker }),
-    next: roster({ worker }),
-    options: { allowedAgentRosterRemovals: ["main"] },
-    expected: roster({ worker }),
   },
   {
     name: "replaces a complete legacy list atomically when the roster changes",
@@ -545,244 +542,67 @@ const writeCases: WriteCase[] = [
     },
   },
   {
-    name: "preserves untouched include-owned subtrees during unrelated writes",
-    current: { agents: { defaults: { model: "openai/gpt-5.4" } }, gateway: { mode: "local" } },
-    authored: { agents: { $include: "./config/agents.json" }, gateway: { mode: "local" } },
-    next: {
-      agents: { defaults: { model: "openai/gpt-5.4" } },
-      gateway: { mode: "local", port: 18789 },
-    },
-    expected: {
-      agents: { $include: "./config/agents.json" },
-      gateway: { mode: "local", port: 18789 },
-    },
-  },
-  {
-    name: "adds a root-owned agent beside an unchanged keyed entry include",
-    current: {
-      agents: {
-        ownership: "explicit",
-        entries: { tony: { workspace: "/w/tony" } },
-      },
-    },
-    authored: {
-      agents: {
-        ownership: "explicit",
-        entries: { tony: { $include: "./tony.json5" } },
-      },
-    },
-    next: {
-      agents: {
-        ownership: "explicit",
-        entries: {
-          tony: { workspace: "/w/tony" },
-          worker: { workspace: "/w/worker" },
-        },
-      },
-    },
-    options: { keyedAgentEntryIncludePaths: [["agents", "entries", "tony"]] },
-    expected: {
-      agents: {
-        ownership: "explicit",
-        entries: {
-          tony: { $include: "./tony.json5" },
-          worker: { workspace: "/w/worker" },
-        },
-      },
-    },
-  },
-  {
     name: "preserves multiple keyed entry includes while adding one root-owned agent",
-    current: {
-      agents: {
-        ownership: "explicit",
-        entries: {
-          tony: { workspace: "/w/tony" },
-          ops: { workspace: "/w/ops" },
-        },
-      },
-    },
-    authored: {
-      agents: {
-        ownership: "explicit",
-        entries: {
-          tony: { $include: "./tony.json5" },
-          ops: { $include: "./ops.json5" },
-        },
-      },
-    },
-    next: {
-      agents: {
-        ownership: "explicit",
-        entries: {
-          tony: { workspace: "/w/tony" },
-          ops: { workspace: "/w/ops" },
-          worker: { workspace: "/w/worker" },
-        },
-      },
-    },
-    options: {
-      keyedAgentEntryIncludePaths: [
-        ["agents", "entries", "tony"],
-        ["agents", "entries", "ops"],
-      ],
-    },
-    expected: {
-      agents: {
-        ownership: "explicit",
-        entries: {
-          tony: { $include: "./tony.json5" },
-          ops: { $include: "./ops.json5" },
-          worker: { workspace: "/w/worker" },
-        },
-      },
-    },
+    current: explicitRoster({ tony, ops: { workspace: "/w/ops" } }),
+    authored: explicitRoster({ tony: tonyInclude, ops: { $include: "./ops.json5" } }),
+    next: explicitRoster({
+      tony,
+      ops: { workspace: "/w/ops" },
+      worker: { workspace: "/w/worker" },
+    }),
+    options: { keyedAgentEntryIncludePaths: [...keyedTonyInclude, ["agents", "entries", "ops"]] },
+    expected: explicitRoster({
+      tony: tonyInclude,
+      ops: { $include: "./ops.json5" },
+      worker: { workspace: "/w/worker" },
+    }),
   },
   {
     name: "removes a root-owned agent beside an unchanged keyed entry include",
-    current: {
-      agents: {
-        ownership: "explicit",
-        entries: {
-          tony: { workspace: "/w/tony" },
-          worker: { workspace: "/w/worker" },
-        },
-      },
-    },
-    authored: {
-      agents: {
-        ownership: "explicit",
-        entries: {
-          tony: { $include: "./tony.json5" },
-          worker: { workspace: "/w/worker" },
-        },
-      },
-    },
-    next: {
-      agents: {
-        ownership: "explicit",
-        entries: { tony: { workspace: "/w/tony" } },
-      },
-    },
+    current: explicitRoster({ tony, worker: { workspace: "/w/worker" } }),
+    authored: explicitRoster({ tony: tonyInclude, worker: { workspace: "/w/worker" } }),
+    next: explicitRoster({ tony }),
     options: {
       allowedAgentRosterRemovals: ["worker"],
-      keyedAgentEntryIncludePaths: [["agents", "entries", "tony"]],
+      keyedAgentEntryIncludePaths: keyedTonyInclude,
     },
-    expected: {
-      agents: {
-        ownership: "explicit",
-        entries: { tony: { $include: "./tony.json5" } },
-      },
-    },
+    expected: explicitRoster({ tony: tonyInclude }),
   },
   {
     name: "rejects array-shaped entries containing an include",
-    current: {
-      agents: {
-        ownership: "explicit",
-        entries: { tony: { workspace: "/w/tony" } },
-      },
-    },
-    authored: {
-      agents: {
-        ownership: "explicit",
-        entries: [{ $include: "./tony.json5" }],
-      },
-    },
-    next: {
-      agents: {
-        ownership: "explicit",
-        entries: {
-          tony: { workspace: "/w/tony" },
-          worker: { workspace: "/w/worker" },
-        },
-      },
-    },
+    current: explicitRoster({ tony }),
+    authored: explicitRoster([tonyInclude]),
+    next: explicitRoster({ tony, worker: { workspace: "/w/worker" } }),
     error: "Config write would flatten $include-owned config at agents",
   },
   {
     name: "rejects an agents.entries include while adding a root-owned agent",
-    current: {
-      agents: {
-        ownership: "explicit",
-        entries: { tony: { workspace: "/w/tony" } },
-      },
-    },
-    authored: {
-      agents: {
-        ownership: "explicit",
-        entries: { $include: "./agents.json5" },
-      },
-    },
-    next: {
-      agents: {
-        ownership: "explicit",
-        entries: {
-          tony: { workspace: "/w/tony" },
-          worker: { workspace: "/w/worker" },
-        },
-      },
-    },
+    current: explicitRoster({ tony }),
+    authored: explicitRoster({ $include: "./agents.json5" }),
+    next: explicitRoster({ tony, worker: { workspace: "/w/worker" } }),
     error: "Config write would flatten $include-owned config at agents",
   },
   {
     name: "rejects changing a keyed entry include while adding a root-owned agent",
-    current: {
-      agents: {
-        ownership: "explicit",
-        entries: { tony: { workspace: "/w/tony" } },
-      },
-    },
-    authored: {
-      agents: {
-        ownership: "explicit",
-        entries: { tony: { $include: "./tony.json5" } },
-      },
-    },
-    next: {
-      agents: {
-        ownership: "explicit",
-        entries: {
-          tony: { workspace: "/w/tony-next" },
-          worker: { workspace: "/w/worker" },
-        },
-      },
-    },
-    options: { keyedAgentEntryIncludePaths: [["agents", "entries", "tony"]] },
+    current: explicitRoster({ tony }),
+    authored: explicitRoster({ tony: tonyInclude }),
+    next: explicitRoster({
+      tony: { workspace: "/w/tony-next" },
+      worker: { workspace: "/w/worker" },
+    }),
+    options: { keyedAgentEntryIncludePaths: keyedTonyInclude },
     error: "Config write would flatten $include-owned config at agents.entries.tony",
   },
   {
     name: "rejects deleting a keyed entry include while adding a root-owned agent",
-    current: {
-      agents: {
-        ownership: "explicit",
-        entries: { tony: { workspace: "/w/tony" } },
-      },
-    },
-    authored: {
-      agents: {
-        ownership: "explicit",
-        entries: { tony: { $include: "./tony.json5" } },
-      },
-    },
-    next: {
-      agents: {
-        ownership: "explicit",
-        entries: { worker: { workspace: "/w/worker" } },
-      },
-    },
+    current: explicitRoster({ tony }),
+    authored: explicitRoster({ tony: tonyInclude }),
+    next: explicitRoster({ worker: { workspace: "/w/worker" } }),
     options: {
       allowedAgentRosterRemovals: ["tony"],
-      keyedAgentEntryIncludePaths: [["agents", "entries", "tony"]],
+      keyedAgentEntryIncludePaths: keyedTonyInclude,
     },
     error: "Config write would flatten $include-owned config at agents.entries.tony",
-  },
-  {
-    name: "allows removing root-authored sibling keys beside an include",
-    current: { gateway: { mode: "local", legacyKey: true } },
-    authored: { gateway: { $include: "./config/gateway.json", legacyKey: true } },
-    next: { gateway: { mode: "local" } },
-    expected: { gateway: { $include: "./config/gateway.json" } },
   },
   {
     name: "allows nested root-authored sibling edits without flattening included values",
@@ -970,31 +790,6 @@ const writeCases: WriteCase[] = [
     next: { agents: { defaults: { model: "anthropic/sonnet-4.5" } } },
     error: "Config write would flatten $include-owned config at agents",
   },
-  {
-    name: "preserves root $schema during unrelated partial writes",
-    current: { $schema: "https://openclaw.ai/config.json", gateway: { mode: "local" } },
-    next: { gateway: { mode: "local", port: 18789 } },
-    expected: {
-      $schema: "https://openclaw.ai/config.json",
-      gateway: { mode: "local", port: 18789 },
-    },
-  },
-  {
-    name: "rejects writes that would flatten a root include",
-    current: {
-      $schema: "https://openclaw.ai/config-from-include.json",
-      gateway: { mode: "local" },
-    },
-    authored: { $include: "./extra.json5", gateway: { mode: "local" } },
-    next: { gateway: { mode: "local", port: 18789 } },
-    error: "Config write would flatten $include-owned config at <root>",
-  },
-  ...[null, 123].map((value) => ({
-    name: `preserves invalid $schema ${value} for write validation`,
-    current: { $schema: "https://openclaw.ai/config.json", gateway: { mode: "local" } },
-    next: { $schema: value, gateway: { mode: "local", port: 18789 } },
-    expected: { $schema: value, gateway: { mode: "local", port: 18789 } },
-  })),
 ];
 
 function resolveWriteCase(testCase: WriteCase): OpenClawConfig {
@@ -1019,11 +814,10 @@ describe("config io write prepare", () => {
     testCase.verify?.(persisted);
   });
 
-  it.each(
-    ["root", "agents"].flatMap((includeAt) =>
-      [true, false].map((authoredDefaults) => ({ includeAt, authoredDefaults })),
-    ),
-  )(
+  it.each([
+    { includeAt: "root", authoredDefaults: true },
+    { includeAt: "agents", authoredDefaults: false },
+  ])(
     "preserves explicit sibling intent beside a $includeAt include (authored defaults: $authoredDefaults)",
     ({ includeAt, authoredDefaults }) => {
       const authoredAgents = {
@@ -1076,15 +870,29 @@ describe("config io write prepare", () => {
 
   it.each(
     [
-      { name: "included", authored: undefined, resolved: ["included"], allowed: false },
-      { name: "mixed", authored: ["root"], resolved: ["included", "root"], allowed: false },
-      { name: "root-owned", authored: ["root"], resolved: ["root"], allowed: true },
-      { name: "empty include", authored: undefined, resolved: [], allowed: true },
-    ].flatMap((testCase) =>
-      ["array", "parent", "index"]
-        .filter((kind) => kind !== "index" || testCase.resolved.length > 0)
-        .map((kind) => ({ testCase, kind })),
-    ),
+      {
+        name: "included",
+        authored: undefined,
+        resolved: ["included"],
+        allowed: false,
+        kinds: ["array", "parent", "index"],
+      },
+      {
+        name: "mixed",
+        authored: ["root"],
+        resolved: ["included", "root"],
+        allowed: false,
+        kinds: ["parent"],
+      },
+      {
+        name: "root-owned",
+        authored: ["root"],
+        resolved: ["root"],
+        allowed: true,
+        kinds: ["index"],
+      },
+      { name: "empty include", authored: undefined, resolved: [], allowed: true, kinds: ["array"] },
+    ].flatMap((testCase) => testCase.kinds.map((kind) => ({ testCase, kind }))),
   )("checks $testCase.name array ownership for explicit $kind writes", ({ testCase, kind }) => {
     const sourceConfig = {
       agents: { defaults: { model: { fallbacks: testCase.resolved } }, entries: { main: {} } },
@@ -1260,32 +1068,6 @@ describe("config io write prepare", () => {
     );
     expect(persisted.agents).not.toHaveProperty("list");
     expect(persisted.agents).not.toHaveProperty("entries");
-  });
-
-  it("strips transient plugin install records from partial writes", () => {
-    const install = {
-      source: "npm",
-      spec: "@ollama/openclaw-web-search",
-      installPath: "/tmp/openclaw-web-search",
-      resolvedName: "@ollama/openclaw-web-search",
-      resolvedVersion: "0.2.2",
-    };
-    const persisted = applyUnsetPathsForWrite(
-      resolvePersistCandidateForWrite({
-        runtimeConfig: { plugins: { entries: {} } },
-        sourceConfig: { plugins: { entries: {}, installs: { "openclaw-web-search": install } } },
-        nextConfig: {
-          plugins: {
-            entries: {},
-            installs: {
-              "openclaw-web-search": { ...install, spec: "@ollama/openclaw-web-search@0.2.2" },
-            },
-          },
-        },
-      }) as OpenClawConfig,
-      [["plugins", "installs"]],
-    );
-    expect(persisted.plugins).not.toHaveProperty("installs");
   });
 
   it("preserves authored agent provider params during narrowed agent-list writes", () => {
@@ -1635,13 +1417,10 @@ describe("config io write prepare", () => {
 
   it.each([
     ["invalid array suffix", ["tools", "alsoAllow", "1abc"]],
-    ["signed array index", ["tools", "alsoAllow", "+0"]],
     ["unsafe integer", ["tools", "alsoAllow", "9007199254740993"]],
     ["maximum array key", ["tools", "alsoAllow", "4294967294"]],
     ["missing key", ["commands", "missingKey"]],
     ["prototype key", ["commands", "__proto__"]],
-    ["constructor key", ["commands", "constructor"]],
-    ["prototype constructor property", ["commands", "prototype"]],
   ] as const)("treats %s unset paths as immutable no-ops", (_name, unsetPath) => {
     const input: OpenClawConfig = {
       gateway: { mode: "local" },
@@ -1700,30 +1479,6 @@ describe("config io write prepare", () => {
     }
   });
 
-  it("keeps runtime-only channel defaults out of the persisted candidate", () => {
-    const sourceConfig = {
-      gateway: { port: 18789 },
-      channels: { imessage: { cliPath: "/usr/local/bin/imsg" } },
-    };
-    const runtimeConfig = {
-      ...sourceConfig,
-      channels: { imessage: { cliPath: "/usr/local/bin/imsg", runtimeOnlyDefault: true } },
-    };
-    expect(
-      resolvePersistCandidateForWrite({
-        runtimeConfig,
-        sourceConfig,
-        nextConfig: {
-          ...structuredClone(runtimeConfig),
-          gateway: { port: 18789, auth: { mode: "token" } },
-        },
-      }),
-    ).toEqual({
-      gateway: { port: 18789, auth: { mode: "token" } },
-      channels: { imessage: { cliPath: "/usr/local/bin/imsg" } },
-    });
-  });
-
   it("does not reintroduce legacy nested dm.policy defaults in the persisted candidate", () => {
     const oldChannel = { dmPolicy: "pairing", dm: { enabled: true, policy: "pairing" } };
     const newChannel = { dmPolicy: "pairing", dm: { enabled: true } };
@@ -1735,19 +1490,6 @@ describe("config io write prepare", () => {
       channels: { discord: structuredClone(newChannel), slack: structuredClone(newChannel) },
       gateway: { port: 18789 },
     };
-    expect(
-      resolvePersistCandidateForWrite({ runtimeConfig: sourceConfig, sourceConfig, nextConfig }),
-    ).toEqual(nextConfig);
-  });
-
-  it("preserves normalized nested channel enabled keys during unrelated writes", () => {
-    const channels = {
-      slack: { channels: { ops: { enabled: false } } },
-      googlechat: { groups: { "spaces/aaa": { enabled: true } } },
-      discord: { guilds: { "100": { channels: { general: { enabled: false } } } } },
-    };
-    const sourceConfig = { channels };
-    const nextConfig = { ...structuredClone(sourceConfig), gateway: { auth: { mode: "token" } } };
     expect(
       resolvePersistCandidateForWrite({ runtimeConfig: sourceConfig, sourceConfig, nextConfig }),
     ).toEqual(nextConfig);

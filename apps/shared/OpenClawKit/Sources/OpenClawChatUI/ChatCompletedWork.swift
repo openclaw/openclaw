@@ -158,7 +158,7 @@ extension OpenClawChatMessage {
         self.provenance?.kind == "inter_session" && self.provenance?.sourceTool == "sessions_send"
     }
 
-    fileprivate var workRunID: String? {
+    var workRunID: String? {
         if let transcriptRunID, !transcriptRunID.isEmpty { return transcriptRunID }
         if let key = self.idempotencyKey, key.hasSuffix(":user") { return String(key.dropLast(5)) }
         let fallbackRunID = self.streamFallback?.runId?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -173,7 +173,7 @@ extension OpenClawChatMessage {
         self.hasWorkMedia || (self.role.lowercased() == "assistant" && ChatMessageVisibleText.hasVisibleText(in: self))
     }
 
-    private var workPhase: String? {
+    var workPhase: String? {
         if self.streamSegmentID != nil { return "commentary" }
         struct Signature: Decodable {
             let v: Int?

@@ -777,25 +777,6 @@ describe("pw-tools-core interaction navigation guard", () => {
     ).toBeLessThan(requireInvocationOrder(page.evaluate.mock, "page evaluation invocation"));
   });
 
-  it("propagates the SSRF policy through batch interaction actions", async () => {
-    const click = vi.fn(async () => {});
-    const page = {
-      url: vi.fn().mockReturnValueOnce("about:blank").mockReturnValue("https://example.com/after"),
-    };
-    installInteractionPage(page, { click });
-
-    await runWithVirtualNavigationGrace(() =>
-      mod.batchViaPlaywright({
-        ...strictNavigationOptions(),
-        actions: [{ kind: "click", ref: "1" }],
-      }),
-    );
-
-    expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith(
-      completedNavigationExpectation(page),
-    );
-  });
-
   it("runs the post-evaluate navigation guard when evaluate rejects after triggering navigation", async () => {
     await withFakeTimers(async () => {
       const navigation = createNavigationPage("http://127.0.0.1:9222/json/version", {

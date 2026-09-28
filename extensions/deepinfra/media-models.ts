@@ -1,4 +1,3 @@
-// Deepinfra plugin module implements media models behavior.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 

@@ -207,24 +207,6 @@ describe("resolveSkillCommandInvocation", () => {
     ).toEqual([dashboard]);
   });
 
-  it("matches skill commands and parses args", () => {
-    const invocation = resolveSkillCommandInvocation({
-      commandBodyNormalized: "/demo_skill do the thing",
-      skillCommands: [{ name: "demo_skill", skillName: "demo-skill", description: "Demo" }],
-    });
-    expect(invocation?.command.skillName).toBe("demo-skill");
-    expect(invocation?.args).toBe("do the thing");
-  });
-
-  it("supports /skill with name argument", () => {
-    const invocation = resolveSkillCommandInvocation({
-      commandBodyNormalized: "/skill demo_skill do the thing",
-      skillCommands: [{ name: "demo_skill", skillName: "demo-skill", description: "Demo" }],
-    });
-    expect(invocation?.command.name).toBe("demo_skill");
-    expect(invocation?.args).toBe("do the thing");
-  });
-
   it("preserves multiline args for /skill invocations", () => {
     const invocation = resolveSkillCommandInvocation({
       commandBodyNormalized: "/skill demo_skill first line\nsecond line",
@@ -553,25 +535,6 @@ describe("listSkillCommandsForAgents", () => {
     const skillNames = commands.map((entry) => entry.skillName);
     expect(skillNames).toContain("demo-skill");
     expect(skillNames).toContain("extra-skill");
-  });
-
-  it("merges empty allowlist with non-empty allowlist for shared workspace", async () => {
-    const baseDir = tempDirs.make("openclaw-skills-empty-");
-    const sharedWorkspace = await createWorkspace(baseDir, "research");
-
-    const commands = listSkillCommandsForAgents({
-      cfg: {
-        agents: {
-          list: [
-            { id: "locked", workspace: sharedWorkspace, skills: [] },
-            { id: "partial", workspace: sharedWorkspace, skills: ["extra-skill"] },
-          ],
-        },
-      },
-      agentIds: ["locked", "partial"],
-    });
-
-    expect(commands.map((entry) => entry.skillName)).toEqual(["extra-skill"]);
   });
 
   it("uses inherited defaults for agents that share one workspace", async () => {

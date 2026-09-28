@@ -11,18 +11,9 @@ const TENCENT_PROVIDER_IDS: ReadonlySet<string> = new Set([
   TOKENPLAN_PROVIDER_ID,
 ]);
 
-type StreamModel = Parameters<StreamFn>[0];
 type StreamOptions = Parameters<StreamFn>[2];
 
-// hy3 (GA) is the only Tencent model with a verified two-rung effort ladder:
-// the gateway accepts `none` and `high` exclusively, so intermediate rungs must
-// collapse upward before dispatch.
-//
-// Scope this map to hy3 ONLY. Do not add new model ids here on the assumption
-// that they behave the same — an unverified collapse silently upgrades a `low`
-// request to `high` (extra thinking tokens and latency, no diagnostic). If a
-// future model turns out to need its own rewrite, give it its own map keyed on
-// that model id.
+// Only hy3 has a verified two-rung override. Other models retain shared effort handling.
 const TENCENT_TWO_RUNG_EFFORT_MAP: Readonly<Record<string, string>> = Object.freeze({
   off: "none",
   none: "none",
@@ -32,10 +23,6 @@ const TENCENT_TWO_RUNG_EFFORT_MAP: Readonly<Record<string, string>> = Object.fre
   high: "high",
   xhigh: "high",
 });
-
-// Keyed on the model id rather than the provider: hy3 behaves identically on
-// TokenHub and TokenPlan.
-const TENCENT_TWO_RUNG_MODEL_IDS: ReadonlySet<string> = new Set(["hy3"]);
 
 function resolveRequestedEffort(
   thinkingLevel: OpenAICompatibleThinkingLevel,
@@ -50,51 +37,24 @@ function resolveRequestedEffort(
   return raw ? raw.trim().toLowerCase() : undefined;
 }
 
-function mapEffortForTencent(model: StreamModel, effort: string | undefined): string | undefined {
-  if (!effort) {
-    return undefined;
-  }
-  const modelId = (model as { id?: unknown }).id;
-  if (typeof modelId === "string" && TENCENT_TWO_RUNG_MODEL_IDS.has(modelId)) {
-    return TENCENT_TWO_RUNG_EFFORT_MAP[effort];
-  }
-  // Every other Tencent model (hy3-preview, hy4-preview, …) is left untouched:
-  // returning undefined makes the wrapper skip the payload patch entirely, so
-  // the shared OpenClaw effort handling — which already normalized the payload
-  // against the model's declared supportedReasoningEfforts — stays in control.
-  return undefined;
-}
-
-function isTencentCompletionsCall(model: StreamModel): boolean {
-  const provider = (model as { provider?: unknown }).provider;
-  const api = (model as { api?: unknown }).api;
-  return (
-    typeof provider === "string" &&
-    TENCENT_PROVIDER_IDS.has(provider) &&
-    api === "openai-completions"
-  );
-}
-
 export function wrapTencentProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn {
   return createPayloadPatchStreamWrapper(
     ctx.streamFn,
-    ({ payload, model, options }) => {
+    ({ payload, options }) => {
       const requested = resolveRequestedEffort(ctx.thinkingLevel, options);
-      const mapped = mapEffortForTencent(model, requested);
-
-      if (mapped === undefined) {
-        return;
+      const mapped =
+        requested && Object.hasOwn(TENCENT_TWO_RUNG_EFFORT_MAP, requested)
+          ? TENCENT_TWO_RUNG_EFFORT_MAP[requested]
+          : undefined;
+      if (mapped !== undefined) {
+        payload.reasoning_effort = mapped;
       }
-
-      if (mapped === "none" || mapped === "off") {
-        payload.reasoning_effort = "none";
-        return;
-      }
-
-      payload.reasoning_effort = mapped;
     },
     {
-      shouldPatch: ({ model }) => isTencentCompletionsCall(model),
+      shouldPatch: ({ model }) =>
+        TENCENT_PROVIDER_IDS.has(model.provider) &&
+        model.api === "openai-completions" &&
+        model.id === "hy3",
     },
   );
 }

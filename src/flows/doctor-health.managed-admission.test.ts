@@ -4,6 +4,7 @@ import { registerDoctorManagedRepairTests } from "./doctor-health.managed.test-s
 describe("runDoctorHealthFlow managed service admission", () => {
   registerDoctorManagedRepairTests([
     "clean-repair",
+    "clean-stopped-repair",
     "clean-inspect",
     "clean-force-repair",
     "clean-force-inspect",

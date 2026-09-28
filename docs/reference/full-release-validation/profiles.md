@@ -33,7 +33,7 @@ These suites are skipped by `stable` and included by `full`:
 | Area                             | Full-only coverage                                                                                                          |
 | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | Docker live models               | OpenCode Go, OpenRouter, xAI, Z.ai, and Fireworks.                                                                          |
-| Docker live gateway              | Advisory providers split into DeepSeek/Fireworks, OpenCode Go/OpenRouter, and xAI/Z.ai shards.                              |
+| Docker live gateway              | Additional providers split into DeepSeek/Fireworks, OpenCode Go/OpenRouter, and xAI/Z.ai shards.                            |
 | Native gateway provider profiles | Full Anthropic Opus and Sonnet/Haiku shards, Fireworks, DeepSeek, full OpenCode Go model shards, OpenRouter, xAI, and Z.ai. |
 | Native plugin live shards        | Plugins A-K, L-N, O-Z other, Moonshot, and xAI.                                                                             |
 | Native media live shards         | Audio, Google music, MiniMax music, and video groups A-D.                                                                   |
@@ -91,17 +91,13 @@ for example `windows/packaged-upgrade`, `windows`, or `packaged-fresh`.
 All-group runs must keep every OS/suite pair: `-f cross_os_suite_filter=ubuntu,windows,macos`
 or `packaged-fresh,installer-fresh,packaged-upgrade` are accepted, while any all-group
 filter that omits one of the nine Linux/Windows/macOS install and upgrade pairs is
-rejected before scheduling. Windows/macOS outcomes are recorded as advisory; the Linux
-pairs are required proof.
+rejected before scheduling. All selected cross-OS outcomes block on failure. Every all-group run must retain
+all nine install/upgrade combinations. Every selected CI, plugin, QA, Telegram,
+and performance lane must succeed; no operator waiver can authorize publication
+with failed selected tests. Stable publication requires stable/full evidence,
+soak, and blocking performance.
 
-Selected QA, source and package Telegram, live-provider, Windows/macOS cross-OS,
-and performance failures are recorded as advisory during validation (Release
-Decision `- Advisory:` entries and `::warning` annotations); Linux Gateway
-cross-OS lanes and the other required proofs block. Publishing a stable with a
-recorded advisory failure, or without soak and blocking performance evidence,
-requires the operator waivers described in RELEASING.md "Publication modes";
-without them the publisher gates fail closed. Skipped or deferred attempts are
-never reported as passed. When
+Skipped or deferred attempts are never reported as passed. When
 `live_suite_filter` explicitly requests a gated QA live lane such as Discord,
 WhatsApp, or Slack, the matching `OPENCLAW_RELEASE_QA_*_LIVE_CI_ENABLED` repo
 variable must be enabled; otherwise input capture fails instead of silently skipping the lane.

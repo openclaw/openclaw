@@ -1,8 +1,9 @@
 /** Doctor-owned migration from workspace TOOLS.md into the AGENTS.md Tools section. */
-import { createHash } from "node:crypto";
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readRegularFile } from "@openclaw/fs-safe/advanced";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { DEFAULT_AGENTS_FILENAME, DEFAULT_TOOLS_FILENAME } from "../agents/workspace.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -43,10 +44,6 @@ type MigrationFileSnapshot = {
   stat?: syncFs.Stats;
 };
 
-function sha256(content: string): string {
-  return createHash("sha256").update(content).digest("hex");
-}
-
 async function readMigrationFileSnapshot(params: {
   filePath: string;
   label: string;
@@ -64,27 +61,18 @@ async function readMigrationFileSnapshot(params: {
   if (!stat.isFile() || stat.nlink > 1) {
     throw new Error(`${params.label} must be an unlinked regular file for automatic migration`);
   }
-  const noFollow = syncFs.constants.O_NOFOLLOW ?? 0;
-  const handle = await fs.open(params.filePath, syncFs.constants.O_RDONLY | noFollow);
-  try {
-    const openedStat = await handle.stat();
-    if (
-      !openedStat.isFile() ||
-      openedStat.nlink !== 1 ||
-      openedStat.dev !== stat.dev ||
-      openedStat.ino !== stat.ino
-    ) {
-      throw new Error(`${params.label} changed while opening it for migration`);
-    }
-    const content = await handle.readFile("utf8");
-    const currentStat = await fs.lstat(params.filePath);
-    if (currentStat.dev !== openedStat.dev || currentStat.ino !== openedStat.ino) {
-      throw new Error(`${params.label} changed while opening it for migration`);
-    }
-    return { content, stat: openedStat };
-  } finally {
-    await handle.close();
+  const file = await readRegularFile({ filePath: params.filePath });
+  const currentStat = await fs.lstat(params.filePath);
+  if (
+    file.stat.nlink !== 1 ||
+    file.stat.dev !== stat.dev ||
+    file.stat.ino !== stat.ino ||
+    currentStat.dev !== file.stat.dev ||
+    currentStat.ino !== file.stat.ino
+  ) {
+    throw new Error(`${params.label} changed while opening it for migration`);
   }
+  return { content: file.buffer.toString("utf8"), stat: file.stat };
 }
 
 async function readToolsMd(workspaceDir: string): Promise<ToolsMdSource | undefined> {
@@ -111,13 +99,9 @@ async function readToolsMd(workspaceDir: string): Promise<ToolsMdSource | undefi
   return {
     path: toolsPath,
     content: snapshot.content,
-    sha256: sha256(snapshot.content),
+    sha256: sha256Hex(snapshot.content),
     stat: snapshot.stat,
   };
-}
-
-function migratedBlock(content: string): string {
-  return `${MIGRATED_SUBSECTION_HEADING}\n\n${content}`;
 }
 
 function appendWithSpacing(before: string, addition: string, after = ""): string {
@@ -148,7 +132,7 @@ function mergeToolsMdIntoAgentsMd(agentsContent: string, toolsContent: string): 
       mergedAgentsContent.slice(insertAt),
     );
   }
-  const block = migratedBlock(toolsContent);
+  const block = `${MIGRATED_SUBSECTION_HEADING}\n\n${toolsContent}`;
   const toolsSection = findToolsSection(mergedAgentsContent);
   if (!toolsSection) {
     return appendWithSpacing(mergedAgentsContent, `## Tools\n\n${block}`);
@@ -235,12 +219,10 @@ async function writeAgentsAtomically(params: {
   const mode = stat?.mode ?? 0o600;
   const tempPath = `${params.agentsPath}.doctor-writing-${process.pid}-${Date.now()}`;
   try {
-    const handle = await fs.open(tempPath, "wx", mode);
-    try {
+    {
+      await using handle = await fs.open(tempPath, "wx", mode);
       await handle.writeFile(params.content, "utf8");
       await handle.sync();
-    } finally {
-      await handle.close();
     }
     // Doctor is a single-operator flow. This final snapshot catches edits before
     // commit without retaining the retired cross-process claim protocol.
@@ -291,7 +273,7 @@ async function removeToolsSource(source: ToolsMdSource, workspaceDir: string): P
     filePath: source.path,
     label: "TOOLS.md",
   });
-  if (sha256(current.content) !== source.sha256) {
+  if (sha256Hex(current.content) !== source.sha256) {
     throw new Error("TOOLS.md changed during migration");
   }
   // The original bytes are durable in both the archive and merged AGENTS.md;
@@ -334,12 +316,10 @@ async function archiveSource(params: {
   await fs.mkdir(archiveDir, { recursive: true, mode: 0o700 });
   const tempPath = `${archivePath}.doctor-writing-${process.pid}-${Date.now()}`;
   try {
-    const handle = await fs.open(tempPath, "wx", 0o600);
-    try {
+    {
+      await using handle = await fs.open(tempPath, "wx", 0o600);
       await handle.writeFile(params.source.content, "utf8");
       await handle.sync();
-    } finally {
-      await handle.close();
     }
     await publishFileNoClobber(tempPath, archivePath, NO_CLOBBER_PUBLICATION);
     await fs.rm(tempPath);
@@ -349,7 +329,7 @@ async function archiveSource(params: {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
       throw error;
     }
-    if (sha256(await fs.readFile(archivePath, "utf8")) !== params.source.sha256) {
+    if (sha256Hex(await fs.readFile(archivePath, "utf8")) !== params.source.sha256) {
       throw new Error(`TOOLS.md migration archive collision at ${archivePath}`, { cause: error });
     }
   }

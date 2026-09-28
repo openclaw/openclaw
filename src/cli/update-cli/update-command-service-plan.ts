@@ -22,10 +22,12 @@ import {
   resolveManagedServiceNodeRunner,
   summarizeGatewayServiceLayout,
 } from "../../daemon/service-layout.js";
+import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import {
   hasGatewayServiceDefinitionOverrides,
   type GatewayServiceCommandConfig,
   type GatewayServiceState,
+  type GatewayServiceUnitInspection,
 } from "../../daemon/service-types.js";
 import {
   readGatewayServiceState,
@@ -49,6 +51,7 @@ import {
   createFreeBsdPkgOwnershipInspection,
   type FreeBsdPkgOwnershipInspection,
 } from "../../infra/update-freebsd-pkg-ownership.js";
+import type { UPDATE_PREFLIGHT_DETAILS } from "../../infra/update-preflight-details.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
@@ -76,13 +79,18 @@ export type ManagedServiceRootRedirect = {
 export class GatewayServiceUpdateOwnershipError extends Error {
   readonly failureFacts: UpdateFailureFact[];
 
-  constructor(message: string, cause: unknown, inspectionReason?: ServiceInspectionReason) {
+  constructor(
+    message: string,
+    cause: unknown,
+    inspectionReason?: ServiceInspectionReason,
+    code?: keyof typeof UPDATE_PREFLIGHT_DETAILS,
+  ) {
     super(inspectionReason ? formatServiceInspectionReason(inspectionReason) : message, { cause });
     this.name = "GatewayServiceUpdateOwnershipError";
     this.failureFacts = [
       createUpdateFailureFact({
         check: "managed-service",
-        code: inspectionReason ?? "service-ownership-unverified",
+        code: inspectionReason ?? code ?? "service-ownership-unverified",
         message: this.message,
       }),
     ];
@@ -103,6 +111,7 @@ export function assertGatewayServiceAdmissionUnchanged(
       serviceUpdateVerdict.kind === "unavailable"
         ? serviceUpdateVerdict.inspectionReason
         : undefined,
+      serviceUpdateVerdict.kind === "unavailable" ? undefined : "service-ownership-changed",
     );
   }
   if (
@@ -115,6 +124,8 @@ export function assertGatewayServiceAdmissionUnchanged(
     throw new GatewayServiceUpdateOwnershipError(
       "Gateway service definition changed after database admission; retry against its current configuration.",
       undefined,
+      undefined,
+      "service-definition-changed",
     );
   }
 }
@@ -137,7 +148,12 @@ export function assertGatewayServiceManagementAllowedForUpdate(
     assertGatewayServiceMutationAllowed("manage the gateway service during update", env);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    throw new GatewayServiceUpdateOwnershipError(message, err);
+    throw new GatewayServiceUpdateOwnershipError(
+      message,
+      err,
+      undefined,
+      "service-mutation-refused",
+    );
   }
 }
 
@@ -155,10 +171,7 @@ function serviceInspectionWarningMessage(state: GatewayServiceState): string {
     return `${GATEWAY_SERVICE_INSPECTION_WARNING} ${formatServiceInspectionReason(state.inspectionReason)}`;
   }
   if (process.platform === "freebsd") {
-    return (
-      `${GATEWAY_SERVICE_INSPECTION_WARNING} ` +
-      "On FreeBSD, use the Gateway's rc.d or foreground process owner for service management."
-    );
+    return `${GATEWAY_SERVICE_INSPECTION_WARNING} On FreeBSD, use the Gateway's rc.d or foreground process owner for service management.`;
   }
   const runtime = state.runtime;
   const tasksCurrent = runtime?.systemd?.tasksCurrent;
@@ -213,6 +226,11 @@ export async function inspectManagedGatewayServiceBeforeUpdate(params: {
       ? { kind: "absent" }
       : unavailable();
   }
+  // Direct Windows actions are readable, but the updater cannot restore them
+  // through its managed CMD/VBS definition and control owners.
+  if (process.platform === "win32" && !command.sourcePath) {
+    return unavailable();
+  }
   if (
     !params.allowIncompleteInspection &&
     (state.loadState.status === "unknown" ||
@@ -221,16 +239,14 @@ export async function inspectManagedGatewayServiceBeforeUpdate(params: {
   ) {
     return unavailable();
   }
-  // Stable updaters through 2026.9.4 omit known-empty systemd override metadata.
-  // Keep their fingerprint while the full snapshot retains authored defaults for runtime pinning.
-  const {
-    managedDefinition: _managedDefinition,
-    managedOverrides: _managedOverrides,
-    ...effectiveCommand
-  } = command;
-  const serialized = stableStringify(
-    hasGatewayServiceDefinitionOverrides(command) ? command : effectiveCommand,
-  );
+  // Updaters through 2026.9.4 omit selection provenance and known-empty systemd overrides.
+  // Keep their fingerprint while discovery and runtime pinning retain the full snapshot.
+  const { startupEntryPaths: _startupEntryPaths, ...fingerprintCommand } = command;
+  if (!hasGatewayServiceDefinitionOverrides(fingerprintCommand)) {
+    delete fingerprintCommand.managedDefinition;
+    delete fingerprintCommand.managedOverrides;
+  }
+  const serialized = stableStringify(fingerprintCommand);
   if (Buffer.byteLength(serialized) > 4 * 1024 * 1024) {
     return unavailable();
   }
@@ -276,13 +292,31 @@ export function readGatewayServiceStateForUpdate(
   service: GatewayService,
   env: NodeJS.ProcessEnv | undefined,
   timeoutMs?: number,
+  inspection?: { managerUid: number | undefined; assertCurrent: () => void },
 ): Promise<GatewayServiceState> {
-  return readGatewayServiceState(service, {
-    env,
-    requireEffective: true,
-    requireLoadedCommand: true,
-    validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
-    timeoutMs,
+  const read = (loadForInspection?: GatewayServiceUnitInspection) =>
+    readGatewayServiceState(service, {
+      env,
+      requireEffective: true,
+      requireLoadedCommand: true,
+      loadForInspection,
+      validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
+      timeoutMs,
+    });
+  if (process.platform !== "linux" || inspection?.managerUid === undefined) {
+    return read();
+  }
+  const { managerUid } = inspection;
+  // systemd may collect a stopped unit; loading its metadata retains both owners.
+  return withGatewayServiceOperationLock(env ?? process.env, async (assertNative) => {
+    const assertCurrent = () => {
+      assertNative();
+      inspection.assertCurrent();
+    };
+    assertCurrent();
+    const state = await read({ managerUid, assertCurrent, assertReadCurrent: assertNative });
+    assertCurrent();
+    return state;
   });
 }
 
@@ -392,6 +426,10 @@ export async function resolvePackageRuntimePreflight(params: {
     if (!target) {
       return ok(unchanged());
     }
+    // The current Bun already passed its startup guard; Node engines do not apply.
+    if (!nodeRunner && process.versions.bun) {
+      return ok({ ...unchanged(), targetVersion: target.version });
+    }
     const runtime = await resolvePackageRuntimeForPreflight({
       nodeRunner,
       timeoutMs: params.timeoutMs,
@@ -411,6 +449,7 @@ export async function resolvePackageRuntimePreflight(params: {
     const fallbackNodeRunner =
       params.fallbackNodeRunner ??
       (params.shouldRestart &&
+      !process.versions.bun &&
       nodeRunner &&
       (params.alreadyCurrent
         ? canRefreshCurrentService

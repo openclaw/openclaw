@@ -1,7 +1,4 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -9,6 +6,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { hashWorkerCredential } from "./credential.js";
 import type {
   WorkerSessionPlacementIdentity,
@@ -27,6 +25,7 @@ const SESSION: WorkerSessionPlacementIdentity = {
 };
 
 describe("worker session placement activation", () => {
+  const tempDirs = useStateDatabaseTempDirs();
   let root: string;
   let database: OpenClawStateDatabase;
   let store: WorkerSessionPlacementStore;
@@ -34,17 +33,11 @@ describe("worker session placement activation", () => {
   let nowMs: number;
 
   beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-placement-"));
+    root = tempDirs.make("openclaw-placement-");
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     nowMs = 1_000;
     store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
     environments = await createWorkerEnvironmentStore({ database, now: () => nowMs });
-  });
-
-  afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(root, { recursive: true, force: true });
   });
 
   async function attachEnvironment(
@@ -101,12 +94,12 @@ describe("worker session placement activation", () => {
     return attachEnvironment(environmentId, identity.sessionId);
   }
 
-  function advanceToStarting(
+  async function advanceToStarting(
     identity: WorkerSessionPlacementIdentity = SESSION,
     executionMode: WorkerPlacementExecutionMode = "worker-turn",
     environmentId = `environment-${identity.sessionId}`,
   ) {
-    let placement = store.startDispatch({ ...identity, executionMode });
+    let placement = await store.startDispatch({ ...identity, executionMode });
     placement = store.transition({
       sessionId: identity.sessionId,
       from: "requested",
@@ -133,7 +126,7 @@ describe("worker session placement activation", () => {
     });
   }
 
-  function activate(placement: ReturnType<typeof advanceToStarting>, ownerEpoch: number) {
+  function activate(placement: Awaited<ReturnType<typeof advanceToStarting>>, ownerEpoch: number) {
     const active = store.transition({
       sessionId: placement.sessionId,
       from: "starting",
@@ -152,14 +145,14 @@ describe("worker session placement activation", () => {
     executionMode: WorkerPlacementExecutionMode = "worker-turn",
   ) {
     const environment = await createAttachedEnvironment(identity);
-    return activate(advanceToStarting(identity, executionMode), environment.ownerEpoch);
+    return activate(await advanceToStarting(identity, executionMode), environment.ownerEpoch);
   }
 
   it.each(["environment", "epoch", "state", "session", "multiple sessions", "closing", "revoked"])(
     "rolls back activation when the attached environment %s does not match",
     async (mismatch) => {
       const environment = await createAttachedEnvironment();
-      const starting = advanceToStarting(
+      const starting = await advanceToStarting(
         SESSION,
         "worker-turn",
         mismatch === "environment" ? "missing-environment" : environment.environmentId,
@@ -217,7 +210,7 @@ describe("worker session placement activation", () => {
 
   it("does not record a failed pre-active dispatch as successful demand", async () => {
     const environment = await createAttachedEnvironment();
-    const starting = advanceToStarting();
+    const starting = await advanceToStarting();
     nowMs = 5_000;
     const failed = store.fail({
       sessionId: SESSION.sessionId,
@@ -236,7 +229,7 @@ describe("worker session placement activation", () => {
     "retains %s activation time through claims, adoption, failure and retirement",
     async (executionMode) => {
       const environment = await createAttachedEnvironment();
-      const starting = advanceToStarting(SESSION, executionMode);
+      const starting = await advanceToStarting(SESSION, executionMode);
       expect(environments.get(environment.environmentId)?.lastActivatedAtMs).toBeNull();
       nowMs = 5_000;
       const active = activate(starting, environment.ownerEpoch);
@@ -246,7 +239,7 @@ describe("worker session placement activation", () => {
         environmentId: active.environmentId,
         ownerEpoch: active.activeOwnerEpoch,
       };
-      const claim = store.claimTurn({
+      const claim = await store.claimTurn({
         ...SESSION,
         owner:
           executionMode === "worker-turn"
@@ -255,7 +248,7 @@ describe("worker session placement activation", () => {
         claimId: "activation-claim",
         runId: "activation-run",
       });
-      store.releaseTurn(claim);
+      await store.releaseTurn(claim);
       expect(environments.get(environment.environmentId)?.lastActivatedAtMs).toBe(5_000);
 
       await closeOpenClawStateDatabaseAsync();
@@ -323,7 +316,7 @@ describe("worker session placement activation", () => {
       });
       nowMs = activationTime;
       const attached = await attachEnvironment(active.environmentId, SESSION.sessionId, "idle");
-      active = activate(advanceToStarting(), attached.ownerEpoch);
+      active = activate(await advanceToStarting(), attached.ownerEpoch);
       expect(environments.get(active.environmentId)?.lastActivatedAtMs).toBe(
         Math.max(5_000, activationTime),
       );

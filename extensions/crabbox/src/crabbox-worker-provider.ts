@@ -11,6 +11,7 @@ import { resolveCrabboxBinary } from "./crabbox-binary.js";
 import { ensureManagedCrabboxBinary } from "./crabbox-managed-binary.js";
 import {
   type CrabboxCommandRunner,
+  type LeaseCommandContext,
   runCrabboxCommand,
   stopCrabboxLease,
 } from "./crabbox-worker-command.js";
@@ -42,14 +43,12 @@ import {
   failProvisionAfterCleanup,
   inspectWithContext,
   isNonRunnableState,
-  leaseRunArgs,
   prepareProvisionDesktop,
   remainingProvisionTimeout,
   runProvisionSetup,
   runProvisionSetupAndWaitReady,
   waitForProvisionReady,
   type InspectCommandResult,
-  type LeaseCommandContext,
 } from "./crabbox-worker-provision-commands.js";
 import {
   createCrabboxSnapshotActions,
@@ -74,8 +73,6 @@ import { loadCrabboxWorkerWallpaperBase64 } from "./crabbox-worker-wallpaper.js"
 import type { CrabboxWarmImagePolicy } from "./crabbox-worker-warm-image-policy.js";
 import type { CrabboxState } from "./crabbox-worker-warm-image-store.js";
 import { createCrabboxWarmImageManager } from "./crabbox-worker-warm-image.js";
-
-export { resolveOpenClawRoot } from "./crabbox-worker-profile.js";
 
 // Local pack creation, two seed commands, upload, and runtime installation precede capture.
 const CRABBOX_PROJECT_PREPARATION_TIMEOUT_MS =
@@ -156,7 +153,6 @@ export function createCrabboxWorkerProvider(
   const warmImages = createCrabboxWarmImageManager({
     state: dependencies.state,
     runCommand,
-    runArgs: leaseRunArgs,
     warn,
     policy: dependencies.warmImagePolicy,
   });
@@ -173,10 +169,11 @@ export function createCrabboxWorkerProvider(
   });
   const stopLease = async (context: LeaseCommandContext): Promise<void> => {
     await heartbeats.stop(context.id);
-    // Cleanup has its own deadline. Only confirmed stop releases allocation/image ownership.
+    // Cleanup has its own deadline. Confirmed stop or absence releases allocation/image ownership.
     await stopCrabboxLease({
       ...context,
       runCommand,
+      warn,
     });
     await warmImages.release(context);
   };
@@ -348,7 +345,6 @@ export function createCrabboxWorkerProvider(
             id: leaseId,
             project,
             inspectPrepared: true,
-            runArgs: leaseRunArgs({ ...context, id: leaseId }),
             runCommand,
             signal: preparationSignal,
             timeoutMs: () => remainingProvisionTimeout(setupDeadline, CRABBOX_SETUP_TIMEOUT_MS),
@@ -366,7 +362,6 @@ export function createCrabboxWorkerProvider(
             ...context,
             id: leaseId,
             project,
-            runArgs: leaseRunArgs({ ...context, id: leaseId }),
             runCommand,
             signal: preparationSignal,
             timeoutMs: () => remainingProvisionTimeout(setupDeadline, CRABBOX_SETUP_TIMEOUT_MS),
@@ -499,7 +494,6 @@ export function createCrabboxWorkerProvider(
         const evidence = await collectCrabboxNodeEnrollmentEvidence({
           ...leaseContext,
           target: parsed.target,
-          args: leaseRunArgs(leaseContext),
           ...(enrollmentSignal ? { signal: enrollmentSignal } : {}),
         });
         signal?.throwIfAborted();

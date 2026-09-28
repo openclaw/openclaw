@@ -26,8 +26,6 @@ function normalizeRuntimeFormData(
     return body;
   }
 
-  // Node's global FormData and undici's runtime FormData can be different
-  // constructors. Rebuild entries so runtime fetch can stream multipart bodies.
   const next = new RuntimeFormData();
   for (const [key, value] of body.entries()) {
     const namedValue = value as FormDataEntryValueWithOptionalName;

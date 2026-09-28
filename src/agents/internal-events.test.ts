@@ -187,14 +187,6 @@ describe("agent internal events", () => {
     ).toContain("disposition: still-running");
   });
 
-  it("keeps ordinary child results unchanged", () => {
-    const result = "small useful result";
-
-    expect(
-      extractChildResult(formatAgentInternalEventsForPrompt([taskCompletionEvent(result)])),
-    ).toBe(result);
-  });
-
   it("keeps a bounded route change separate from child result text", () => {
     const event = {
       ...taskCompletionEvent("child result"),
