@@ -7703,19 +7703,38 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expectTimingFamilies(after, afterInherited);
       expect(policies(after, afterInherited)).toEqual(policies(before, beforeInherited));
       if (runnerBackend === "hybrid") {
-        const serial = structuredClone(before);
-        const serialGroup = expectDefined(
-          serial
-            .filter(
-              (job) => job.planConcurrency === 1 && job.env?.OPENCLAW_VITEST_MAX_WORKERS === "2",
-            )
-            .flatMap((job) => job.groups)
-            .find((group) => group.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined),
-          "already-serial group using its job worker cap",
-        );
-        serialGroup.env = { ...serialGroup.env, OPENCLAW_VITEST_MAX_WORKERS: "2" };
+        // Inventory changes need not leave an already-serial row in the generated plan.
+        const serialGroup: Group = {
+          shard_name: "serial-policy-control",
+          configs: ["test/vitest/vitest.commands-light.config.ts"],
+          requiresDist: false,
+          runner: DEFAULT_NODE_TEST_RUNNER,
+        };
+        const serialAdmission: CompactNodeTestShard = {
+          checkName: "serial-policy-control",
+          shardName: "serial-policy-control",
+          groups: [serialGroup],
+          requiresDist: false,
+          runner: DEFAULT_NODE_TEST_RUNNER,
+          planConcurrency: 1,
+          env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+        };
+        const serialInherited = inheritedGroupsFor([serialAdmission]);
+        const expectedSerialPolicy = {
+          descriptors: [
+            {
+              shard_name: "serial-policy-control",
+              configs: ["test/vitest/vitest.commands-light.config.ts"],
+              requiresDist: false,
+            },
+          ],
+          tooling: [],
+        };
+        expect(serialInherited.has(serialGroup.shard_name)).toBe(false);
+        expect(policies([serialAdmission], serialInherited)).toEqual(expectedSerialPolicy);
+        serialGroup.env = { OPENCLAW_VITEST_MAX_WORKERS: "2" };
         expect(() =>
-          expect(policies(serial, beforeInherited)).toEqual(policies(before, beforeInherited)),
+          expect(policies([serialAdmission], serialInherited)).toEqual(expectedSerialPolicy),
         ).toThrow();
         const promoted = structuredClone(before);
         const recipient = expectDefined(
