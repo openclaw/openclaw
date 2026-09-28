@@ -22,7 +22,10 @@ import {
 import { buildAssistantFailoverSignal } from "../../embedded-agent-helpers/assistant-message-failures.js";
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
-import { classifyRateLimitWindow } from "../../failover/retry-evidence.js";
+import {
+  classifyRateLimitWindow,
+  shouldRetryFailoverSignal,
+} from "../../failover/retry-evidence.js";
 import {
   resolveSessionSuspensionReason,
   type SessionSuspensionParams,
@@ -165,6 +168,16 @@ export async function handleEmbeddedAssistantFailure(input: {
     assistantFailoverReason === "no_error_details" ||
     assistantFailoverReason === "unclassified" ||
     assistantFailoverReason === "unknown";
+  const assistantSignal = failedAssistant
+    ? buildAssistantFailoverSignal(failedAssistant)
+    : undefined;
+  const assistantStatus = assistantSignal?.status;
+  const nonRetryableClientError =
+    assistantSignal !== undefined &&
+    assistantStatus !== undefined &&
+    assistantStatus >= 400 &&
+    assistantStatus < 500 &&
+    !shouldRetryFailoverSignal({ classification: null, signal: assistantSignal });
   const replaySafeSilentErrorFailure =
     !authFailure &&
     !rateLimitFailure &&
@@ -173,6 +186,7 @@ export async function handleEmbeddedAssistantFailure(input: {
     !imageDimensionError &&
     !terminalInterrupted &&
     !promptError &&
+    !nonRetryableClientError &&
     shouldRetrySilentErrorAssistantTurn({
       attempt: input.attempt,
       assistant: failedAssistant,
@@ -278,11 +292,6 @@ export async function handleEmbeddedAssistantFailure(input: {
     ? input.authProfileStore.profiles?.[input.authProfileId]?.type
     : undefined;
   const terminalOutcome = input.terminalState.outcome;
-  // Routing reasons group several HTTP failures; retain the provider's status
-  // when constructing the error so fallback summaries do not invent a timeout.
-  const assistantStatus = failedAssistant
-    ? buildAssistantFailoverSignal(failedAssistant).status
-    : undefined;
   const externalAbort = projectedExternalAbort || signalOwnedInterruption;
   let overloadProfileRotations = input.overloadProfileRotations;
   let decision = initialDecision;

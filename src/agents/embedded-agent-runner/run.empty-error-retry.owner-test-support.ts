@@ -104,6 +104,15 @@ describe("silent assistant-error retry owner", () => {
     });
   });
 
+  it.each([400, 422])("surfaces a bodyless HTTP %s without replaying the request", async (status) => {
+    const assistant = makeAssistant({ errorMessage: `${status} status code (no body)` });
+
+    expect(await handleEmbeddedAssistantFailure(makeInput({ assistant }))).toMatchObject({
+      action: "proceed",
+      emptyErrorRetries: 0,
+    });
+  });
+
   it("does not retry an error attempt after replay-unsafe tool activity", async () => {
     const outcome = await handleEmbeddedAssistantFailure(
       makeInput({
