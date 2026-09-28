@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionsListParamsSchema } from "../../../packages/gateway-protocol/src/schema/sessions-list.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { PresenceEntry, SessionsListResult } from "../api/types.ts";
+import { createConnectionBootstrapCoordinator } from "../app/connection-bootstrap.ts";
+import { createSessionCapability } from "../lib/sessions/index.ts";
 import {
   createTestSessionCapability,
   sessionsResult,
@@ -23,6 +25,7 @@ import {
 } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import "./app-sidebar.ts";
+import { SidebarOwnerSessionCounts } from "./sidebar-owner-session-counts.ts";
 
 const NOW = 1_800_000_000_000;
 const COUNTS = [
@@ -153,6 +156,40 @@ describe("sidebar people workload", () => {
     vi.setSystemTime(NOW);
   });
 
+  it.each([false, true])(
+    "holds automatic counts behind the selected transcript and fences queued retirement (%s)",
+    async (retired) => {
+      const { gateway, summaryRequest } = createWorkloadGateway(async () => summary());
+      const client = gateway.gateway.snapshot.client;
+      const bootstrap = createConnectionBootstrapCoordinator();
+      bootstrap.synchronize({ client, connected: true });
+      bootstrap.setForegroundRoute("agent:main:main");
+      const sessions = createSessionCapability(
+        gateway.gateway,
+        { state: { selectedId: "main" }, subscribe: () => () => undefined },
+        { connectionBootstrap: bootstrap },
+      );
+      const owner = new SidebarOwnerSessionCounts(() => undefined);
+      try {
+        owner.synchronize(sessions, "ada", bootstrap);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(summaryRequest).not.toHaveBeenCalled();
+        expect(owner.counts).toBeNull();
+        if (retired) {
+          owner.dispose();
+        }
+        bootstrap.setForegroundPane({}, { sessionKey: "agent:main:main", client, ready: true });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(summaryRequest).toHaveBeenCalledTimes(retired ? 0 : 1);
+        expect(owner.counts?.get("ada") ?? null).toEqual(retired ? null : { open: 7, running: 1 });
+      } finally {
+        owner.dispose();
+        sessions.dispose();
+        bootstrap.reset();
+      }
+    },
+  );
+
   it("uses one complete cross-agent summary, not the paginated or owner-filtered sidebar", async () => {
     const pending = createDeferred<SessionsListResult>();
     const { sidebar, sessions, context, request, summaryRequest } = await mountWorkload(
@@ -245,7 +282,7 @@ describe("sidebar people workload", () => {
       .mockReturnValue(current.promise);
     const { sidebar, gateway, summaryRequest } = await mountWorkload(response);
     expect(counts(sidebar, "ada")).toEqual(["7", "1"]);
-    sidebar.sessionData.ownerCounts.refresh();
+    void sidebar.sessionData.ownerCounts.refresh();
     expect(summaryRequest).toHaveBeenCalledTimes(2);
     gateway.publish({
       selfUser: {
@@ -276,7 +313,7 @@ describe("sidebar people workload", () => {
         .mockReturnValue(late.promise);
       const { sidebar, gateway, provider, summaryRequest } = await mountWorkload(response);
       expect(counts(sidebar, "ada")).toEqual(["7", "1"]);
-      sidebar.sessionData.ownerCounts.refresh();
+      void sidebar.sessionData.ownerCounts.refresh();
       expect(summaryRequest).toHaveBeenCalledTimes(2);
 
       if (boundary === "disconnect") {

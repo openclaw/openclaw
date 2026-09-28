@@ -236,6 +236,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.ownerCounts.synchronize(
       this.host.connected && hasProfiles ? this.context?.sessions : undefined,
       this.context?.gateway.snapshot.selfUser?.id ?? null,
+      this.context?.connectionBootstrap,
     );
   }
 

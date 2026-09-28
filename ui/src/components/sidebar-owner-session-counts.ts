@@ -1,3 +1,4 @@
+import type { ConnectionBootstrapCoordinator } from "../app/connection-bootstrap.ts";
 import type {
   SessionCapability,
   SessionListScope,
@@ -27,14 +28,18 @@ export class SidebarOwnerSessionCounts {
 
   constructor(private readonly changed: () => void) {}
 
-  synchronize(sessions: SessionCapability | undefined, viewerId: string | null): void {
+  synchronize(
+    sessions: SessionCapability | undefined,
+    viewerId: string | null,
+    bootstrap: ConnectionBootstrapCoordinator | undefined,
+  ): void {
     if (this.source === sessions && (!sessions || this.viewerId === viewerId)) {
       return;
     }
     const wasActive = this.source !== undefined;
     this.dispose();
     const scope = sessions?.captureConnectionScope();
-    if (!sessions || !scope) {
+    if (!sessions || !scope || !bootstrap) {
       if (wasActive) {
         this.changed();
       }
@@ -67,10 +72,21 @@ export class SidebarOwnerSessionCounts {
       ready = true;
       publish();
     };
-    this.refresh();
+    // Like other automatic sidebar hydration, counts wait for selected-chat startup.
+    // Capture the observation so a retired viewer cannot refresh its replacement.
+    const observation = this.observation;
+    void bootstrap.run(
+      observation,
+      async () => {
+        if (this.observation === observation && sessions.isConnectionScopeCurrent(scope)) {
+          await this.refresh();
+        }
+      },
+      { background: true },
+    );
   }
 
-  refresh(): void {
+  refresh(): Promise<void> {
     const observation = this.observation;
     const settled = () => {
       if (this.observation === observation) {
@@ -79,7 +95,7 @@ export class SidebarOwnerSessionCounts {
     };
     // Failure is published by the observation. Once the initial attempt settles,
     // a later event-driven successful refresh may also recover the display.
-    void observation?.refresh().then(settled, settled);
+    return observation?.refresh().then(settled, settled) ?? Promise.resolve();
   }
 
   dispose(): void {
