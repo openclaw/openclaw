@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { safeStatSync } from "@openclaw/fs-safe/path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { resolveNpmCommand } from "./npm-command.js";
 import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
 
 /** Options that scope npm config and cache paths for project-local installs. */
@@ -130,8 +131,9 @@ function readNpmGlobalConfigPath(env: NodeJS.ProcessEnv, scope: NpmConfigScope):
   if (NPM_GLOBAL_CONFIG_PATH_CACHE.has(cacheKey)) {
     return NPM_GLOBAL_CONFIG_PATH_CACHE.get(cacheKey) ?? null;
   }
+  const [command, ...args] = resolveNpmCommand(["config", "get", "globalconfig"]);
   try {
-    const raw = execFileSync("npm", ["config", "get", "globalconfig"], {
+    const raw = execFileSync(command, args, {
       encoding: "utf-8",
       env: {
         ...createNpmConfigPathProbeEnv(env),

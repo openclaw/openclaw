@@ -1,4 +1,5 @@
 import {
+  ConnectErrorDetailCodes,
   gatewayCredentialScope,
   isRetryableGatewayStartupUnavailableError,
   readControlUiBuildMismatchId,
@@ -535,6 +536,9 @@ export function createApplicationGateway(
           return;
         }
         const lastErrorCode = resolveGatewayErrorDetailCode(error) ?? error?.code ?? null;
+        if (lastErrorCode === ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID) {
+          connection = { ...connection, bootstrapToken: "", bootstrapProfile: undefined };
+        }
         // Fresh drain evidence re-arms the deadline: the server still says
         // "restarting", so the amber state stays honest for another window.
         const restartPending = isGatewayRestartUnavailableError(error);

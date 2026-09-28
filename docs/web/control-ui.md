@@ -66,6 +66,9 @@ not whether the active run’s narration survives a history refresh. Completed
 dashboard turns collapse their narration and tool activity under **Worked for …**
 above the answer. Expanding it restores the sequence with the existing tool-call
 groups. When no run duration is available, the heading reads **Worked**.
+The heading includes the total tool-call count followed by any failures, such as
+**Worked · 200 tool calls · 20 failed**. Calls without failures still show the
+total; turns without tool calls omit it.
 
 Consecutive tool activity shares one expandable log, including when background
 work resumes in a new run. Visible messages, media, and conversation markers
