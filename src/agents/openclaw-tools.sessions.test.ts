@@ -917,7 +917,13 @@ describe("sessions tools", () => {
     { name: "starts the same child after no_active_run", rejection: "no_active_run" as const },
     { name: "starts the same child after stale_run", rejection: "stale_run" as const },
     { name: "starts the same child after not_streaming", rejection: "not_streaming" as const },
-    { name: "rejects other steering failures", rejection: "runtime_rejected" as const },
+    { name: "falls back after runtime rejection", rejection: "runtime_rejected" as const },
+    { name: "starts the same child during compaction", rejection: "compacting" as const },
+    {
+      name: "rejects explicit steer in compaction",
+      mode: "steer" as const,
+      rejection: "compacting" as const,
+    },
     { name: "starts an explicit followup", mode: "followup" as const },
     { name: "starts a waited turn", timeoutSeconds: 1 },
     { name: "starts an idle child", idle: true },
@@ -953,12 +959,12 @@ describe("sessions tools", () => {
         timeoutSeconds,
         mode,
       });
-      const failed = rejection === "runtime_rejected";
+      const failed = mode === "steer" ? rejection : undefined;
       expect(result.details).toMatchObject(
         timeoutSeconds > 0
           ? { status: "no_reply", sessionKey: targetKey }
           : failed
-            ? { status: "error", sessionKey: targetKey, error: expect.stringContaining(rejection) }
+            ? { status: "error", sessionKey: targetKey, error: expect.stringContaining(failed) }
             : {
                 status: "accepted",
                 sessionKey: targetKey,
@@ -973,8 +979,9 @@ describe("sessions tools", () => {
           steeringMode: "all",
           debounceMs: 0,
           deliveryTimeoutMs: 30_000,
-          waitForTranscriptCommit: true,
-          sourceReplyDeliveryMode: "message_tool_only",
+          ...(mode === "steer"
+            ? { waitForTranscriptCommit: false }
+            : { waitForTranscriptCommit: true, sourceReplyDeliveryMode: "message_tool_only" }),
           userTurnTranscriptRecorder: expect.any(Object),
         });
       }
@@ -988,6 +995,11 @@ describe("sessions tools", () => {
       expect(prepare).toHaveBeenCalledTimes(steered || failed ? 0 : 1);
       if (agentCalls.length) {
         expect(agentCalls[0]?.[0].params).toMatchObject({ sessionKey: targetKey });
+        if (rejection) {
+          expect(queue.mock.invocationCallOrder[0]).toBeLessThan(
+            prepare.mock.invocationCallOrder[0]!,
+          );
+        }
         expect(prepare.mock.invocationCallOrder[0]).toBeLessThan(
           callGatewayMock.mock.invocationCallOrder[
             callGatewayMock.mock.calls.findIndex(([request]) => request.method === "agent")

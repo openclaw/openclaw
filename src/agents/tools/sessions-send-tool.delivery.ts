@@ -159,7 +159,7 @@ export async function trySessionsSendActiveRunDelivery(
       if (
         params.mode === "steer" ||
         (!ownChild && (params.expectedSessionId || !fallbackSessionKey)) ||
-        !shouldFallbackCronRunScopedActiveDelivery(queueOutcome)
+        (!ownChild && !shouldFallbackCronRunScopedActiveDelivery(queueOutcome))
       ) {
         throw new Error(
           formatEmbeddedAgentQueueFailureSummary(queueOutcome) ?? "active run queue rejected",

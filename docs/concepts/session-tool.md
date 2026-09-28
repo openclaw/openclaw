@@ -169,7 +169,7 @@ During healthy worker provisioning or workspace preparation, accepted input stay
 
 - **Fire-and-forget:** set `timeoutSeconds: 0` to enqueue and return immediately.
 - **Wait for reply:** set a timeout and get the response inline.
-- **Guide your running child:** with no `mode` and `timeoutSeconds: 0`, a send to your own spawned child steers into its active run; an idle child starts a new turn. Explicit modes keep their existing behavior.
+- **Guide your running child:** with no `mode` and `timeoutSeconds: 0`, a send to your own spawned child steers into its active run; an idle child or one whose run rejects the steer starts a new turn. Explicit modes keep their existing behavior.
 - **Continue a paused child task:** send the continuation without `mode`. When the caller controls a native child paused by `sessions_yield` with task-owned completion, the runtime resumes that task automatically, preserving its identity and original completion recipient. Use `mode: "resume"` to require this behavior explicitly. An explicit `mode: "followup"` starts a separate turn and leaves the paused task intact.
 
 A separate follow-up to your native child starts only after Gateway admission
