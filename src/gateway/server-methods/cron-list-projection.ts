@@ -2,6 +2,8 @@ import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coer
 import type { CronCompactJob } from "../../../packages/gateway-protocol/src/index.js";
 import type { CronJob } from "../../cron/types.js";
 
+export { markCronListPage } from "./cron-list-visibility.js";
+
 export function compactCronListJob(job: CronJob): CronCompactJob {
   // Optional declaration/delivery fields are omitted when unset so compact
   // rows stay lean for the common undeclared job.
