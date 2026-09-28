@@ -225,6 +225,26 @@ describe("durable inbound reply delivery", () => {
     );
   });
 
+  it("falls back to the context thread when a caller supplies an undefined thread target", async () => {
+    await deliverInboundReplyWithMessageSendContextCore({
+      cfg: {},
+      channel: "telegram",
+      agentId: "main",
+      info: { kind: "final" },
+      payload: { text: "plain reply" },
+      threadId: undefined,
+      ctxPayload: ctxPayload({
+        OriginatingTo: "chat-1",
+        MessageThreadId: "context-thread",
+      }),
+    });
+
+    expect(mocks.sendDurableMessageBatch).toHaveBeenCalledTimes(1);
+    const request = latestSendDurableMessageBatchRequest();
+    expect(request.to).toBe("chat-1");
+    expect(request.threadId).toBe("context-thread");
+  });
+
   it("does not require unknown-send reconciliation for the default best-effort final path", async () => {
     const executionIdentityToken = createExecutionIdentityAdmissionToken("run-exact");
     await deliverInboundReplyWithMessageSendContextCore({
