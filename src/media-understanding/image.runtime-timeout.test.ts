@@ -91,7 +91,7 @@ describe("describeImageWithModelCore", () => {
     );
     expect(context.systemPrompt).toBe("Describe the image.");
     expect(context.messages).toHaveLength(1);
-    expect(Object.keys(options).toSorted()).toEqual(["apiKey", "maxTokens", "signal", "timeoutMs"]);
+    expect(Object.keys(options).toSorted()).toEqual(["apiKey", "maxTokens", "sessionId", "signal", "timeoutMs"]);
     expect(options.apiKey).toBe("test-token");
     expect(options.maxTokens).toBe(4096);
     expect(options.signal).toBeInstanceOf(AbortSignal);
