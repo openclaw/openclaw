@@ -1865,7 +1865,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/cli/update-cli.target-schema.test.ts",
   "src/cli/update-cli.test.ts",
   "src/cli/update-cli.windows-lifecycle.test.ts",
-  "src/cli/update-cli.windows-recovery.test.ts",
   "src/cli/update-cli/schema-preflight.test.ts",
   "src/cli/update-cli/shared.command-runner.test.ts",
   "src/cli/update-cli/status.recovery.test.ts",
