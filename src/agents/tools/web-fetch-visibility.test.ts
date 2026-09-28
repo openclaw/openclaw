@@ -133,8 +133,8 @@ describe("sanitizeHtml", () => {
     expect(result).not.toContain("Scaled");
   });
 
-  it("strips transform:translateX far-offscreen elements", async () => {
-    const html = '<p>Show</p><div style="transform:translateX(-9999px)">Translated</div>';
+  it.each(["X", "Y"])("strips transform:translate%s far-offscreen elements", async (axis) => {
+    const html = `<p>Show</p><div style="transform:translate${axis}(-9999px)">Translated</div>`;
     const result = await sanitizeHtml(html);
     expect(result).not.toContain("Translated");
   });
@@ -145,8 +145,8 @@ describe("sanitizeHtml", () => {
     expect(result).not.toContain("Zero");
   });
 
-  it("strips left far-offscreen positioned elements", async () => {
-    const html = '<p>Show</p><div style="left:-9999px">Offscreen</div>';
+  it.each(["left", "top"])("strips %s far-offscreen positioned elements", async (position) => {
+    const html = `<p>Show</p><div style="${position}:-9999px">Offscreen</div>`;
     const result = await sanitizeHtml(html);
     expect(result).not.toContain("Offscreen");
   });

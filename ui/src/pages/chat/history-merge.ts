@@ -418,7 +418,8 @@ export function selectChatInputDisplay(
           !sendKeys.has(item.sendRunId) &&
           !sendKeys.has(`${item.sendRunId}:user`)),
     ),
-    pendingInputs: inputs.filter((input) => !userIds.has(input.id)),
+    pendingInputs: inputs.filter((input) => !userIds.has(input.id) && !input.queued),
+    queuedInputs: inputs.filter((input) => !userIds.has(input.id) && input.queued),
   };
 }
 

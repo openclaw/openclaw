@@ -17,7 +17,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import {
-  DEFAULT_LIVE_RETRIES,
   DEFAULT_RESOURCE_LIMITS,
   resolveDockerE2ePlan,
 } from "../../scripts/lib/docker-e2e-plan.mts";
@@ -395,7 +394,6 @@ describe("scripts/test-docker-all scheduler", () => {
       allowFrozenTargetScenarioOmissions: true,
       includeOpenWebUI: false,
       liveMode: "all",
-      liveRetries: DEFAULT_LIVE_RETRIES,
       orderLanes: <T>(lanes: T[]) => lanes,
       planReleaseAll: false,
       profile: "all",

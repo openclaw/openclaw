@@ -5,7 +5,7 @@ import corePackagePolicy from "./npm-core-release-packages.json" with { type: "j
 import {
   fetchNpmRegistryPackumentWithRetry,
   resolveNpmPublishPlan,
-  resolvePublishedNpmVersionRoute,
+  resolveNpmVersionPublicationDecision,
 } from "./npm-publish-plan.mjs";
 import {
   collectPluginReleaseVersionFloorErrors,
@@ -19,6 +19,7 @@ import {
 } from "./plugin-publication-collector.ts";
 import { isRecord } from "./record-shared.mjs";
 import type { ReleasePublishGate } from "./release-publish-gates.mts";
+import type { ReleaseNpmDecision } from "./release-publish-inputs.mjs";
 import { readPublishPreflightRelease } from "./release-publish-preflight-evidence.mts";
 import { collectReleaseVersionFloorErrors } from "./release-version.mjs";
 
@@ -125,6 +126,7 @@ export async function observeReleaseNpmState(input: {
   plugins: readonly PublishablePluginPackage[];
   corePackages?: readonly { packageName: string; version: string }[];
   publishOpenclawNpm?: boolean;
+  npmDecisions?: readonly ReleaseNpmDecision[];
 }) {
   const gates: ReleasePublishGate[] = [];
   const corePackages = input.publishOpenclawNpm === false ? [] : (input.corePackages ?? []);
@@ -156,71 +158,97 @@ export async function observeReleaseNpmState(input: {
     tasks: packages.map((pkg) => async () => {
       const id = `npm.package.${pkg.packageName}`;
       try {
-        const registry = await fetchNpmRegistryPackumentWithRetry({
-          packageName: pkg.packageName,
-          packageUrl: `https://registry.npmjs.org/${encodeURIComponent(pkg.packageName)}`,
-          maxBytes: 16 * 1024 * 1024,
-          timeoutMs: 15_000,
-          attempts: 2,
-          redirect: "manual",
-        });
-        if (
-          registry.status !== 404 &&
-          (!registry.ok || !isRecord(registry.packument) || !isRecord(registry.packument.versions))
-        ) {
-          throw new Error(`npm returned HTTP ${registry.status} or an invalid package inventory.`);
-        }
-        const packument = isRecord(registry.packument) ? registry.packument : {};
-        const versions = isRecord(packument.versions) ? packument.versions : {};
-        const published = Object.hasOwn(versions, pkg.version);
-        const bootstrap = registry.status === 404;
         const core = coreNames.has(pkg.packageName);
-        const tags = isRecord(packument["dist-tags"]) ? packument["dist-tags"] : {};
-        const plan = resolveNpmPublishPlan(
-          pkg.version,
-          typeof tags.beta === "string" ? tags.beta : undefined,
-          input.npmDistTag === "extended-stable" ? input.npmDistTag : undefined,
+        const sealed = input.npmDecisions?.find(
+          (entry) => entry.packageName === pkg.packageName && entry.packageVersion === pkg.version,
         );
-        if (core) {
-          validateNpmPublishBoundary(pkg.version, input.npmDistTag);
-          if (input.npmDistTag === "beta") {
-            plan.publishTag = "beta";
-            plan.mirrorDistTags = [];
+        if (input.npmDecisions && !sealed) {
+          throw new Error("Selected package is absent from the sealed publication decisions.");
+        }
+        let published: boolean;
+        let bootstrap: boolean;
+        let plan: ReturnType<typeof resolveNpmPublishPlan>;
+        let route: ReleaseNpmDecision["route"];
+        let supersededBy: string | null;
+        if (sealed) {
+          published = sealed.decision !== "plan";
+          bootstrap = sealed.bootstrap;
+          plan = sealed.plan;
+          route = sealed.route;
+          supersededBy = sealed.supersededBy;
+        } else {
+          const registry = await fetchNpmRegistryPackumentWithRetry({
+            packageName: pkg.packageName,
+            packageUrl: `https://registry.npmjs.org/${encodeURIComponent(pkg.packageName)}`,
+            maxBytes: 16 * 1024 * 1024,
+            timeoutMs: 15_000,
+            attempts: 2,
+            redirect: "manual",
+          });
+          if (
+            registry.status !== 404 &&
+            (!registry.ok ||
+              !isRecord(registry.packument) ||
+              !isRecord(registry.packument.versions))
+          ) {
+            throw new Error(
+              `npm returned HTTP ${registry.status} or an invalid package inventory.`,
+            );
           }
-        }
-        if (!bootstrap && Object.keys(versions).length === 0) {
-          throw new Error(
-            "The package exists with empty version history; missing-package bootstrap cannot be inferred.",
+          const packument = isRecord(registry.packument) ? registry.packument : {};
+          const versions = isRecord(packument.versions) ? packument.versions : {};
+          published = Object.hasOwn(versions, pkg.version);
+          bootstrap = registry.status === 404;
+          const tags = isRecord(packument["dist-tags"]) ? packument["dist-tags"] : {};
+          plan = resolveNpmPublishPlan(
+            pkg.version,
+            typeof tags.beta === "string" ? tags.beta : undefined,
+            input.npmDistTag === "extended-stable" ? input.npmDistTag : undefined,
           );
+          if (core) {
+            validateNpmPublishBoundary(pkg.version, input.npmDistTag);
+            if (input.npmDistTag === "beta") {
+              plan.publishTag = "beta";
+              plan.mirrorDistTags = [];
+            }
+          }
+          if (!bootstrap && Object.keys(versions).length === 0) {
+            throw new Error(
+              "The package exists with empty version history; missing-package bootstrap cannot be inferred.",
+            );
+          }
+          if (bootstrap && core) {
+            throw new Error(
+              "Core publication requires an existing package configured for trusted publishing; plugin token-bootstrap approval does not apply.",
+            );
+          }
+          ({ route, supersededBy } = bootstrap
+            ? { route: null, supersededBy: null }
+            : resolveNpmVersionPublicationDecision({
+                packageVersion: pkg.version,
+                publishPlan: plan,
+                distTags: tags,
+                published,
+              }));
         }
-        if (bootstrap && core) {
-          throw new Error(
-            "Core publication requires an existing package configured for trusted publishing; plugin token-bootstrap approval does not apply.",
-          );
-        }
-        const route = published
-          ? resolvePublishedNpmVersionRoute({
-              packageVersion: pkg.version,
-              publishPlan: plan,
-              distTags: tags,
-            })
-          : undefined;
         // Existing plugin versions take the readback path; this workflow does
         // not repair selectors with its OIDC identity. Surface that owner action.
         const pluginSelectorRepair = !core && route && route !== "npm-readback";
         const gate: ReleasePublishGate = {
           id,
           status: pluginSelectorRepair ? "FAIL" : bootstrap || published ? "WARN" : "PASS",
-          message: `${pkg.packageName}@${pkg.version}: ${bootstrap ? "not visible in npm; possible token bootstrap" : published ? `already published${route ? ` (${route})` : `; ${core ? "core subpackage" : "plugin"} publication skips this version`}` : `not published; ${plan.publishTag} publication planned`}.`,
+          message: `${pkg.packageName}@${pkg.version}: ${bootstrap ? "not visible in npm; possible token bootstrap" : supersededBy ? `already published; dist-tag ${plan.publishTag} stays at ${supersededBy} (superseded)` : published ? `already published (${route})` : `not published; ${plan.publishTag} publication planned`}.`,
           remediation: pluginSelectorRepair
             ? "Repair the reported npm dist-tag through credential-isolated release tooling, then repeat preflight; this plugin publisher only reads back existing versions."
-            : bootstrap
-              ? "If a recent run may have published this package, reconcile its registry readback first. Otherwise verify bootstrap approval eligibility and run the documented read-only whoami probe against the workflow's NPM_TOKEN before dispatch."
-              : published && pkg.packageName === "openclaw"
-                ? "Supply openclaw_npm_resume_run_id for the verified original successful publisher; resume rechecks immutable tarball identity."
-                : published
-                  ? "Retain the exact selection; published package versions are reused."
-                  : "",
+            : supersededBy
+              ? "No publication or dist-tag move; the newer release keeps the selector. Retain the exact selection."
+              : bootstrap
+                ? "If a recent run may have published this package, reconcile its registry readback first. Otherwise verify bootstrap approval eligibility and run the documented read-only whoami probe against the workflow's NPM_TOKEN before dispatch."
+                : published && pkg.packageName === "openclaw"
+                  ? "Supply openclaw_npm_resume_run_id for the verified original successful publisher; resume rechecks immutable tarball identity."
+                  : published
+                    ? "Retain the exact selection; published package versions are reused."
+                    : "",
         };
         return { gate, pkg, bootstrap, published, known: true };
       } catch (error) {

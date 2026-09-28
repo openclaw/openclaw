@@ -82,40 +82,6 @@ const DISCORD_FORUM_REQUIRE_TAG_FLAG = 1 << 4;
 
 type DiscordChannelMessageResult = DiscordReceiptResultSource;
 
-async function sendDiscordThreadTextChunks(params: {
-  rest: RequestClient;
-  threadId: string;
-  chunks: readonly string[];
-  request: DiscordClientRequest;
-  maxLinesPerMessage?: number;
-  chunkMode: ReturnType<typeof resolveChunkMode>;
-  maxChars?: number;
-  silent?: boolean;
-  suppressEmbeds?: boolean;
-  allowedMentions?: DiscordAllowedMentions;
-  onResult?: DiscordSendProgress;
-  onPlatformSendDispatch?: () => Promise<void>;
-  assertPlatformSendAuthorized?: () => void;
-}): Promise<void> {
-  for (const chunk of params.chunks) {
-    await sendDiscordText({
-      rest: params.rest,
-      channelId: params.threadId,
-      text: chunk,
-      request: params.request,
-      maxLinesPerMessage: params.maxLinesPerMessage,
-      chunkMode: params.chunkMode,
-      silent: params.silent,
-      suppressEmbeds: params.suppressEmbeds,
-      allowedMentions: params.allowedMentions,
-      maxChars: params.maxChars,
-      onResult: params.onResult,
-      onPlatformSendDispatch: params.onPlatformSendDispatch,
-      assertPlatformSendAuthorized: params.assertPlatformSendAuthorized,
-    });
-  }
-}
-
 /** Discord thread names are capped at 100 characters. */
 const DISCORD_THREAD_NAME_LIMIT = 100;
 
@@ -225,6 +191,27 @@ async function sendMessageDiscordInternal(
     await opts.onDeliveryResult?.(deliveredResult);
   };
 
+  const textSendOptions = {
+    rest,
+    request,
+    maxLinesPerMessage,
+    chunkMode,
+    silent: opts.silent,
+    suppressEmbeds,
+    allowedMentions: opts.allowedMentions,
+    maxChars: textLimit,
+    onResult: reportResult,
+    onPlatformSendDispatch: opts.onPlatformSendDispatch,
+    assertPlatformSendAuthorized: opts.assertPlatformSendAuthorized,
+  };
+  const mediaSendOptions = {
+    filename: opts.filename,
+    mediaAccess: opts.mediaAccess,
+    mediaLocalRoots: opts.mediaLocalRoots,
+    mediaReadFile: opts.mediaReadFile,
+    maxBytes: mediaMaxBytes,
+  };
+
   if (isForumLikeChannel(channel)) {
     if (((channel.flags ?? 0) & DISCORD_FORUM_REQUIRE_TAG_FLAG) !== 0) {
       throw new Error(
@@ -308,60 +295,20 @@ async function sendMessageDiscordInternal(
     await opts.onDeliveryResult?.(starterResult);
 
     try {
+      let textChunks = remainingChunks;
       if (opts.mediaUrl) {
         const [mediaCaption, ...afterMediaChunks] = remainingChunks;
         await sendDiscordMedia({
-          rest,
+          ...textSendOptions,
+          ...mediaSendOptions,
           channelId: threadId,
           text: mediaCaption ?? "",
           mediaUrl: opts.mediaUrl,
-          filename: opts.filename,
-          mediaAccess: opts.mediaAccess,
-          mediaLocalRoots: opts.mediaLocalRoots,
-          mediaReadFile: opts.mediaReadFile,
-          maxBytes: mediaMaxBytes,
-          request,
-          maxLinesPerMessage,
-          chunkMode,
-          silent: opts.silent,
-          suppressEmbeds,
-          allowedMentions: opts.allowedMentions,
-          maxChars: textLimit,
-          onResult: reportResult,
-          onPlatformSendDispatch: opts.onPlatformSendDispatch,
-          assertPlatformSendAuthorized: opts.assertPlatformSendAuthorized,
         });
-        await sendDiscordThreadTextChunks({
-          rest,
-          threadId,
-          chunks: afterMediaChunks,
-          request,
-          maxLinesPerMessage,
-          chunkMode,
-          maxChars: textLimit,
-          silent: opts.silent,
-          suppressEmbeds,
-          allowedMentions: opts.allowedMentions,
-          onResult: reportResult,
-          onPlatformSendDispatch: opts.onPlatformSendDispatch,
-          assertPlatformSendAuthorized: opts.assertPlatformSendAuthorized,
-        });
-      } else {
-        await sendDiscordThreadTextChunks({
-          rest,
-          threadId,
-          chunks: remainingChunks,
-          request,
-          maxLinesPerMessage,
-          chunkMode,
-          maxChars: textLimit,
-          silent: opts.silent,
-          suppressEmbeds,
-          allowedMentions: opts.allowedMentions,
-          onResult: reportResult,
-          onPlatformSendDispatch: opts.onPlatformSendDispatch,
-          assertPlatformSendAuthorized: opts.assertPlatformSendAuthorized,
-        });
+        textChunks = afterMediaChunks;
+      }
+      for (const chunk of textChunks) {
+        await sendDiscordText({ ...textSendOptions, channelId: threadId, text: chunk });
       }
     } catch (err) {
       throw await buildDiscordSendError(err, {
@@ -386,51 +333,17 @@ async function sendMessageDiscordInternal(
 
   let result: DiscordChannelMessageResult;
   try {
-    if (opts.mediaUrl) {
-      result = await sendDiscordMedia({
-        rest,
-        channelId,
-        text: textWithMentions,
-        mediaUrl: opts.mediaUrl,
-        filename: opts.filename,
-        mediaAccess: opts.mediaAccess,
-        mediaLocalRoots: opts.mediaLocalRoots,
-        mediaReadFile: opts.mediaReadFile,
-        maxBytes: mediaMaxBytes,
-        reply: opts.reply,
-        request,
-        maxLinesPerMessage,
-        components: opts.components,
-        embeds: opts.embeds,
-        chunkMode,
-        silent: opts.silent,
-        suppressEmbeds,
-        allowedMentions: opts.allowedMentions,
-        maxChars: textLimit,
-        onResult: reportResult,
-        onPlatformSendDispatch: opts.onPlatformSendDispatch,
-        assertPlatformSendAuthorized: opts.assertPlatformSendAuthorized,
-      });
-    } else {
-      result = await sendDiscordText({
-        rest,
-        channelId,
-        text: textWithMentions,
-        reply: opts.reply,
-        request,
-        maxLinesPerMessage,
-        components: opts.components,
-        embeds: opts.embeds,
-        chunkMode,
-        silent: opts.silent,
-        suppressEmbeds,
-        allowedMentions: opts.allowedMentions,
-        maxChars: textLimit,
-        onResult: reportResult,
-        onPlatformSendDispatch: opts.onPlatformSendDispatch,
-        assertPlatformSendAuthorized: opts.assertPlatformSendAuthorized,
-      });
-    }
+    const message = {
+      ...textSendOptions,
+      channelId,
+      text: textWithMentions,
+      reply: opts.reply,
+      components: opts.components,
+      embeds: opts.embeds,
+    };
+    result = opts.mediaUrl
+      ? await sendDiscordMedia({ ...message, ...mediaSendOptions, mediaUrl: opts.mediaUrl })
+      : await sendDiscordText(message);
   } catch (err) {
     throw await buildDiscordSendError(err, {
       channelId,

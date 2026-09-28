@@ -3,6 +3,7 @@ import * as stateReads from "../../../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRegistryPublicApi } from "./subagent-registry-public-api.js";
+import * as registryState from "./subagent-registry-state.js";
 import {
   clearSubagentRunsReadCacheForTest,
   prepareSubagentSessionListReadCache,
@@ -61,6 +62,74 @@ async function withPersistedReads(run: () => Promise<void>): Promise<void> {
 }
 
 describe("subagent registry known-run reads", () => {
+  it.each([0, 4])(
+    "counts %i retained children without preparing unrelated descendant graphs",
+    async (activeChildren) => {
+      await withPersistedReads(async () => {
+        const rows = Array.from({ length: 256 }, (_, index) =>
+          createRun(`unrelated-${index}`, {
+            requesterSessionKey: "agent:other:main",
+            swarmRequesterSessionKey: "agent:other:main",
+          }),
+        );
+        rows.push(
+          ...Array.from({ length: activeChildren }, (_, index) =>
+            createRun(`active-${index}`, {
+              collect: false,
+              requesterAgentId: "main",
+              createdAt: Date.now(),
+              execution: { status: "running", startedAt: Date.now() },
+            }),
+          ),
+        );
+        saveSubagentRegistryToSqlite(new Map(rows.map((row) => [row.runId, row])));
+        const readSnapshot = registryState.getSubagentRunsSnapshotForRead;
+        const snapshots: Map<string, SubagentRunRecord>[] = [];
+        let visitedRows = 0;
+        const read = vi
+          .spyOn(registryState, "getSubagentRunsSnapshotForRead")
+          .mockImplementation((runs) => {
+            const snapshot = readSnapshot(runs);
+            snapshots.push(snapshot);
+            const values = snapshot.values.bind(snapshot);
+            Object.defineProperty(snapshot, "values", {
+              configurable: true,
+              value: () => {
+                const iterator = values();
+                const next = iterator.next.bind(iterator);
+                iterator.next = () => {
+                  const result = next();
+                  if (!result.done) {
+                    visitedRows += 1;
+                  }
+                  return result;
+                };
+                return iterator;
+              },
+            });
+            return snapshot;
+          });
+        try {
+          expect(
+            createReadApi().countActiveRunsForSession("agent:main:main", {
+              collect: false,
+              requesterAgentId: "main",
+            }),
+          ).toBe(activeChildren);
+          expect(snapshots).toHaveLength(1);
+          expect(snapshots[0]?.size).toBe(rows.length);
+          // These children need only selection and current retention checks.
+          expect(visitedRows).toBeLessThanOrEqual(rows.length);
+        } finally {
+          read.mockRestore();
+          for (const snapshot of snapshots) {
+            Reflect.deleteProperty(snapshot, "values");
+          }
+        }
+      });
+    },
+  );
+
   it("resolves retained collector aliases without hydrating unrelated results", async () => {
     await withPersistedReads(async () => {
       const retainedResult = "unrelated-retained-result".repeat(128);

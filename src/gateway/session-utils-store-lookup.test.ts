@@ -354,11 +354,13 @@ describe("global session lookup ownership", () => {
       await withGlobalSessions("work", async (cfg) => {
         // Revisit Research after Main so shared sentinels cannot adopt the previous owner.
         const requests = ["research", "main", "research"].flatMap((agentId) =>
-          ["main", "work", "global"].map((suffix) => ({
-            key: `agent:${agentId}:${suffix}`,
-            agentId,
-            canonicalKey: suffix === "global" ? `agent:${agentId}:global` : "global",
-          })),
+          ["main", "work", "global"].flatMap((suffix) =>
+            ["", " "].map((padding) => ({
+              key: `${padding}agent:${agentId}:${suffix}${padding}`,
+              agentId,
+              canonicalKey: suffix === "global" ? `agent:${agentId}:global` : "global",
+            })),
+          ),
         );
         const targets =
           mode === "batch"

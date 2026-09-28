@@ -78,26 +78,17 @@ export class DiscordCommandDeployer {
       }
       return { mode: options.mode ?? "reconcile", usedDevGuilds: true };
     }
-    if (options.mode !== "overwrite") {
-      await this.putCommandSetIfChanged(
-        this.scopedCacheKey("global:reconcile"),
-        serializedGlobal,
-        async () => {
-          await this.reconcileGlobalCommands(serializedGlobal);
-        },
-        options,
-      );
-      return { mode: "reconcile" as const, usedDevGuilds: false };
-    }
+    const mode = options.mode === "overwrite" ? "overwrite" : "reconcile";
     await this.putCommandSetIfChanged(
-      this.scopedCacheKey("global:overwrite"),
+      this.scopedCacheKey(`global:${mode}`),
       serializedGlobal,
-      async () => {
-        await overwriteApplicationCommands(this.rest, this.params.clientId, serializedGlobal);
-      },
+      () =>
+        mode === "overwrite"
+          ? overwriteApplicationCommands(this.rest, this.params.clientId, serializedGlobal)
+          : this.reconcileGlobalCommands(serializedGlobal),
       options,
     );
-    return { mode: "overwrite" as const, usedDevGuilds: false };
+    return { mode, usedDevGuilds: false };
   }
 
   /**

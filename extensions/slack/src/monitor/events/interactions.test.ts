@@ -185,40 +185,13 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("../conversation.runtime.js", () => {
-  const parsePluginBindingApprovalCustomId = (value: string) => {
-    const prefix = "pluginbind:";
-    const trimmed = value.trim();
-    if (!trimmed.startsWith(prefix)) {
-      return null;
-    }
-    const body = trimmed.slice(prefix.length);
-    const separator = body.lastIndexOf(":");
-    if (separator <= 0 || separator === body.length - 1) {
-      return null;
-    }
-    const decisionCode = body.slice(separator + 1).trim();
-    const decision =
-      decisionCode === "o"
-        ? "allow-once"
-        : decisionCode === "a"
-          ? "allow-always"
-          : decisionCode === "d"
-            ? "deny"
-            : null;
-    if (!decision) {
-      return null;
-    }
-    return {
-      approvalId: decodeURIComponent(body.slice(0, separator).trim()),
-      decision,
-    };
-  };
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
 
   return {
+    ...actual,
     buildPluginBindingResolvedText: (...args: unknown[]) =>
       (buildPluginBindingResolvedTextMock as (...innerArgs: unknown[]) => string)(...args),
-    parsePluginBindingApprovalCustomId,
     resolvePluginConversationBindingApproval: (...args: unknown[]) =>
       (
         resolvePluginConversationBindingApprovalMock as (

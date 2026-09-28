@@ -783,9 +783,11 @@ describe("Gateway GitHub publication", () => {
     { phase: "commit", remoteInitiallyPublished: false, pullRequestExists: false },
     { phase: "push", remoteInitiallyPublished: true, pullRequestExists: false },
     { phase: "pull request", remoteInitiallyPublished: true, pullRequestExists: true },
+    { phase: "body-only credit", remoteInitiallyPublished: false, pullRequestExists: false },
   ])(
-    "resumes after $phase without duplicating completed publication steps",
+    "validates prepared credit when resuming after $phase",
     async ({ phase, remoteInitiallyPublished, pullRequestExists }) => {
+      const bodyOnlyCredit = phase === "body-only credit";
       const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
       const first = createGitHubPublicationCoordinator({
         placements: createWorkerSessionPlacementStore({ database }),
@@ -824,7 +826,11 @@ describe("Gateway GitHub publication", () => {
           return commandResult(JSON.stringify({ ref: "refs/heads/main", sha: BASE_HEAD }));
         }
         if (command === "git show -s --format=%B HEAD") {
-          return commandResult(`Resume the publication\n\nOpenClaw-Publication: ${requestId}\n`);
+          return commandResult(
+            bodyOnlyCredit
+              ? `Resume the publication\n\nCo-authored-by: alice <7+alice@users.noreply.github.com>\n\nThe line above is quoted attribution.\n\nOpenClaw-Publication: ${requestId}\n`
+              : `Resume the publication\n\nCo-authored-by: alice <7+alice@users.noreply.github.com>\nOpenClaw-Publication: ${requestId}\n`,
+          );
         }
         if (command === "git rev-parse HEAD^{tree}") {
           return commandResult(`${WORKSPACE_TREE}\n`);
@@ -886,6 +892,21 @@ describe("Gateway GitHub publication", () => {
       });
 
       await resumed.resumeSessionRequests();
+
+      if (bodyOnlyCredit) {
+        expect(resumed.read(requestId)).toMatchObject({
+          status: "failed",
+          code: "identity_changed",
+          nextAction: expect.stringMatching(/credit/i),
+        });
+        expect(
+          commands.some(
+            (argv) =>
+              argv.includes("commit-tree") || argv.includes("push") || argv.includes("POST"),
+          ),
+        ).toBe(false);
+        return;
+      }
 
       expect(resumed.read(requestId)).toEqual({
         publisher: { source: "system-configured", accountId: 42, login: "roboclaw-bot" },

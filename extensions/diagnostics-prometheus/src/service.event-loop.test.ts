@@ -28,6 +28,13 @@ describe("diagnostics-prometheus runtime metrics", () => {
             workerHeapUsedBytes: 250,
             workerCount: 3,
             workerHeapSampledCount: 2,
+            workerLifecycle: [
+              {
+                script: "sqlite-store.worker.js",
+                started: 5,
+                retired: [{ reason: "idle_timeout", count: 2 }],
+              },
+            ],
             workerHeaps: [
               { script: "sqlite-store.worker.js", heapUsed: 100, heapTotal: 200 },
               { script: "sqlite-store.worker.js", heapUsed: 150, heapTotal: 200 },
@@ -66,6 +73,12 @@ describe("diagnostics-prometheus runtime metrics", () => {
         'openclaw_worker_heap_used_bytes{script="sqlite-store.worker.js"} 250\n',
       );
       expect(rendered).toContain('openclaw_child_process_spawn_total{family="node"} 5\n');
+      expect(rendered).toContain(
+        'openclaw_worker_started_total{script="sqlite-store.worker.js"} 5\n',
+      );
+      expect(rendered).toContain(
+        'openclaw_worker_retired_total{reason="idle_timeout",script="sqlite-store.worker.js"} 2\n',
+      );
       const retiredSample = {
         ...baseEvent(),
         type: "diagnostic.memory.sample" as const,
@@ -76,6 +89,13 @@ describe("diagnostics-prometheus runtime metrics", () => {
           externalBytes: 200,
           arrayBuffersBytes: 100,
           workerHeaps: [{ script: "other", heapUsed: 50, heapTotal: 100 }],
+          workerLifecycle: [
+            {
+              script: "sqlite-store.worker.js",
+              started: 5,
+              retired: [{ reason: "idle_timeout", count: 2 }],
+            },
+          ],
         },
       };
       metrics.record(retiredSample, untrusted);
@@ -85,11 +105,20 @@ describe("diagnostics-prometheus runtime metrics", () => {
         'openclaw_worker_heap_used_bytes{script="sqlite-store',
       );
       expect(metrics.render()).toContain('openclaw_worker_heap_used_bytes{script="other"} 50\n');
+      expect(metrics.render()).toContain(
+        'openclaw_worker_started_total{script="sqlite-store.worker.js"} 5\n',
+      );
+      expect(metrics.render()).toContain(
+        'openclaw_worker_retired_total{reason="idle_timeout",script="sqlite-store.worker.js"} 2\n',
+      );
       metrics.record(
         { ...retiredSample, memory: { ...retiredSample.memory, workerHeaps: [] } },
         trusted,
       );
       expect(metrics.render()).not.toContain("openclaw_worker_heap_used_bytes");
+      expect(metrics.render()).toContain(
+        'openclaw_worker_started_total{script="sqlite-store.worker.js"} 5\n',
+      );
     } finally {
       metrics.stop();
     }

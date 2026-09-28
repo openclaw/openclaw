@@ -1,8 +1,13 @@
 // Ingress queue health tests cover conservative active-lane pressure aggregation.
+import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as sqliteQueries from "../../infra/kysely-sync.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { INGRESS_CLAIM_LEASE_MS } from "./ingress-claim-owner.js";
-import { countChannelIngressQueuePressure } from "./ingress-queue-health.js";
+import {
+  countChannelIngressQueuePressure,
+  countFailedChannelIngressQueueEntries,
+} from "./ingress-queue-health.js";
 import { createChannelIngressQueue, type ChannelIngressQueue } from "./ingress-queue.js";
 import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "./ingress-retry-policy.js";
 
@@ -22,7 +27,17 @@ async function recordAttempts(
 }
 
 describe("channel ingress queue health", () => {
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => vi.restoreAllMocks());
+
+  it("leaves absent ingress state uncreated when reading health", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-ingress-health-absent-", applyEnv: false },
+      async ({ stateDir }) => {
+        expect(await countFailedChannelIngressQueueEntries(stateDir)).toEqual([]);
+        expect(await fs.readdir(stateDir)).toEqual([]);
+      },
+    );
+  });
 
   it("reports durable pressured lanes without leaking private or null-lane rows", async () => {
     await withOpenClawTestState(
@@ -33,8 +48,7 @@ describe("channel ingress queue health", () => {
       },
       async ({ stateDir }) => {
         const now = 10 * INGRESS_CLAIM_LEASE_MS;
-        vi.useFakeTimers();
-        vi.setSystemTime(now);
+        vi.spyOn(Date, "now").mockReturnValue(now);
         let clock = now;
         const queue = createChannelIngressQueue<{ privatePayload: string }>({
           channelId: "telegram",
@@ -133,6 +147,17 @@ describe("channel ingress queue health", () => {
         }
         clock = now;
 
+        const hostQueries = vi
+          .spyOn(sqliteQueries, "executeSqliteQuerySync")
+          .mockImplementation(() => {
+            throw new Error("Ingress health must not query SQLite on the calling thread");
+          });
+        try {
+          expect(await countFailedChannelIngressQueueEntries(stateDir)).toEqual([]);
+          expect(hostQueries).not.toHaveBeenCalled();
+        } finally {
+          hostQueries.mockRestore();
+        }
         const pressure = countChannelIngressQueuePressure(stateDir);
         expect(pressure).toEqual([
           {

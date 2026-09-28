@@ -54,6 +54,14 @@ describe("renderSidebarIssueItem", () => {
 });
 
 describe("renderSidebarMentionItem", () => {
+  beforeEach(() => {
+    document.body.append(container);
+  });
+  afterEach(() => {
+    container.remove();
+    vi.useRealTimers();
+  });
+
   const mention: MentionInboxItem = {
     id: "mention-riley",
     senderProfileId: "profile-riley",
@@ -85,10 +93,28 @@ describe("renderSidebarMentionItem", () => {
     return params;
   }
 
-  it("opens the linked session without dismissing the mention", () => {
+  it("expands the thread-titled mention and opens its session without dismissing it", async () => {
+    vi.useFakeTimers({ now: mention.createdAt + 5 * 60_000 });
     const { onNavigate, onDismiss } = renderMention();
-    const open = container.querySelector<HTMLAnchorElement>("a[data-issue-row-focus]")!;
+    await container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+      "openclaw-relative-time",
+    )?.updateComplete;
+    const details = container.querySelector("details")!;
+    const summary = details.querySelector("summary")!;
+    const title = summary.querySelector(".sidebar-issues-panel__entity")!;
+    expect(title.textContent).toBe("Release notes");
+    expect(title.nextElementSibling?.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "Riley mentioned you · 5m ago",
+    );
+    expect(summary.querySelector(".sidebar-issues-panel__chevron svg")).not.toBeNull();
+    expect(container.querySelectorAll("[data-issue-row-focus]")).toHaveLength(1);
+    expect(summary.hasAttribute("data-issue-row-focus")).toBe(true);
+    expect(details.open).toBe(false);
+    summary.click();
+    expect(details.open).toBe(true);
+    const open = container.querySelector<HTMLAnchorElement>("a[href]")!;
     expect(open.getAttribute("href")).toBe(pathname);
+    expect(open.closest(".sidebar-issues-panel__body")).not.toBeNull();
 
     let nativeNavigationPreserved = false;
     open.addEventListener(
@@ -109,9 +135,27 @@ describe("renderSidebarMentionItem", () => {
     expect(onNavigate).toHaveBeenCalledExactlyOnceWith("chat", navigation);
     expect(onDismiss).not.toHaveBeenCalled();
 
-    container.querySelector<HTMLButtonElement>("[data-mention-id] button")!.click();
+    summary.click();
+    const dismiss = summary.querySelector<HTMLButtonElement>("button")!;
+    expect(dismiss.getAttribute("aria-label")).toBe("Dismiss Release notes");
+    expect(dismiss.textContent?.trim()).toBe("");
+    dismiss.click();
+    expect(details.open).toBe(false);
     expect(onDismiss).toHaveBeenCalledOnce();
     expect(onNavigate).toHaveBeenCalledOnce();
+  });
+
+  it("preserves expansion for the same mention but collapses a replacement mention", () => {
+    renderMention();
+    container.querySelector("summary")!.click();
+    expect(container.querySelector("details")?.open).toBe(true);
+
+    renderMention({ mention: { ...mention, excerpt: "Updated release notes" } });
+    expect(container.querySelector("details")?.open).toBe(true);
+
+    renderMention({ mention: { ...mention, id: "mention-next", sessionTitle: "Next release" } });
+    expect(container.querySelector("details")?.open).toBe(false);
+    expect(container.querySelector("summary")?.textContent).toContain("Next release");
   });
 
   it("renders the message excerpt as text rather than HTML or Markdown", () => {
@@ -121,6 +165,7 @@ describe("renderSidebarMentionItem", () => {
     const renderedExcerpt = container.querySelector(".sidebar-mention-row__excerpt")!;
     expect(renderedExcerpt.textContent).toBe(excerpt);
     expect(renderedExcerpt.children).toHaveLength(0);
+    expect(renderedExcerpt.closest(".sidebar-issues-panel__body")).not.toBeNull();
   });
 
   it("disables repeated dismissal while leaving the session link usable", () => {
@@ -130,7 +175,8 @@ describe("renderSidebarMentionItem", () => {
     dismiss.click();
     expect(onDismiss).not.toHaveBeenCalled();
 
-    container.querySelector<HTMLAnchorElement>("a[data-issue-row-focus]")!.click();
+    container.querySelector("summary")!.click();
+    container.querySelector<HTMLAnchorElement>("a[href]")!.click();
     expect(onNavigate).toHaveBeenCalledExactlyOnceWith("chat", navigation);
   });
 });

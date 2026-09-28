@@ -102,7 +102,7 @@ it("keeps prepared authority SQL-free and revokes the exact binding before worke
     let observedCommitGrant = false;
     const admissionSpy = vi
       .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit) =>
+      .mockImplementation((admit, attachment) =>
         createAdmission((request, grant) => {
           admit(request, () => {
             if (request.stage === "commit") {
@@ -112,7 +112,7 @@ it("keeps prepared authority SQL-free and revokes the exact binding before worke
             }
             return grant();
           });
-        }),
+        }, attachment),
       );
     try {
       await changeCanonicalUserChannelIdentity("unlink", ada.id, identity, options);
@@ -142,7 +142,7 @@ it("keeps prepared authority SQL-free and revokes the exact binding before worke
     let pendingSelection: ReturnType<typeof prepareUserProfileSelectionAuthority> | undefined;
     const mutationAdmissionSpy = vi
       .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit) =>
+      .mockImplementation((admit, attachment) =>
         createAdmission((request, grant) => {
           if (request.stage === "commit" && mutation === "reject") {
             actorCurrent = false;
@@ -168,7 +168,7 @@ it("keeps prepared authority SQL-free and revokes the exact binding before worke
             }
             return grant();
           });
-        }),
+        }, attachment),
       );
     try {
       await expect(

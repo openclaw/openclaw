@@ -18,9 +18,11 @@ import {
   applySessionEntryMaintenanceInDatabase,
   emptySessionEntryMaintenancePlan,
 } from "./session-accessor.sqlite-maintenance-store.js";
+import { replaceSessionOwnerInTransaction } from "./session-accessor.sqlite-owner.js";
 import { readSessionEntryReplacementLabelOwnerKeys } from "./session-accessor.sqlite-replacement-read.js";
 import { cloneSessionEntry } from "./session-accessor.sqlite-scope.js";
 import type { SessionEntryReplacement } from "./session-accessor.types.js";
+import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
 import type { SessionEntry } from "./types.js";
 
 export type SqliteSessionEntryReplacement = SessionEntryReplacement & {
@@ -35,6 +37,7 @@ export type SessionEntryReplacementCommit = {
   replacements: SqliteSessionEntryReplacement[];
   consumePendingReset?: boolean;
   maintenance?: SessionEntryMaintenanceInput;
+  ownerAssignment?: { sessionKey: string; owner: SessionOwnerAssignment };
 };
 
 export type SessionEntryReplacementCommitted = {
@@ -140,6 +143,15 @@ export function commitSessionEntryReplacementsInDatabase(
     current.set(replacement.sessionKey, written);
   }
   const maintenance = input.maintenance;
+  if (input.ownerAssignment) {
+    const { sessionKey, owner } = input.ownerAssignment;
+    if (
+      !current.has(sessionKey) ||
+      !replaceSessionOwnerInTransaction(database, sessionKey, owner)
+    ) {
+      throw new Error("Session owner assignment lost its creation target");
+    }
+  }
   const preservation = maintenance?.preservation;
   const maintenancePlan =
     maintenance && preservation

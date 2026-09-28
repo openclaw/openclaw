@@ -5,6 +5,7 @@ import fs from "node:fs";
 import nodePath from "node:path";
 import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { parseCLI } from "vitest/node";
 import {
@@ -108,7 +109,14 @@ describe("scripts/run-vitest", () => {
         }),
       ).toEqual({
         command: runtime === "bun" ? "bun" : process.execPath,
-        args: runtime === "bun" ? operands : [...flags, ...operands],
+        args:
+          runtime === "bun"
+            ? [
+                "--tsconfig-override",
+                fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
+                ...operands,
+              ]
+            : [...flags, ...operands],
       });
     },
   );

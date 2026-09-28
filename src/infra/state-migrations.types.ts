@@ -1,6 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { SessionScope } from "../config/sessions/types.js";
-import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-registry.js";
+import type {
+  PluginDoctorStateMigration,
+  PluginDoctorStateMigrationInventory,
+} from "../plugins/doctor-contract-registry.js";
 import type { LegacyAuditLogsDetection } from "./state-migrations.audit-logs.types.js";
 import type { LegacyChannelPairingStateDetection } from "./state-migrations.channel-pairing.js";
 import type { LegacyDeviceIdentityDetection } from "./state-migrations.device-identity.types.js";
@@ -55,10 +58,6 @@ export type LegacyStateDetection = Pick<MigrationMessages, "warningDisposition" 
     hasLegacy: boolean;
     plans: DetectedPluginDoctorStateMigrationPlan[];
   };
-  pluginStateSidecar: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
   pluginInstallIndex: {
     sourcePath: string;
     hasLegacy: boolean;
@@ -77,11 +76,6 @@ export type LegacyStateDetection = Pick<MigrationMessages, "warningDisposition" 
     hasLegacy: boolean;
     legacyIds: string[];
     pathRewrites: Array<{ id: string; fromPath: string; toPath: string }>;
-  };
-  taskStateSidecars: {
-    taskRunsPath: string;
-    flowRunsPath: string;
-    hasLegacy: boolean;
   };
   deliveryQueues: {
     outboundPath: string;
@@ -148,10 +142,6 @@ export type LegacyStateDetection = Pick<MigrationMessages, "warningDisposition" 
     hasLegacy: boolean;
   };
   nodeHost: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
-  subagentRegistry: {
     sourcePath: string;
     hasLegacy: boolean;
   };
@@ -257,6 +247,7 @@ export type PlannedPluginDoctorAction = {
 export type PreparedPostSessionPluginMigration = {
   step: Omit<LegacyStateMigrationStepPlan, "outcome">;
   plannedActions: readonly PlannedPluginDoctorAction[];
+  inventory?: PluginDoctorStateMigrationInventory;
 };
 
 type LegacyStateMigrationCandidate = {
@@ -294,7 +285,7 @@ export type LegacyStateMigrationStep = Omit<LegacyStateMigrationStepPlan, "outco
   collectNotices?: boolean;
   deferredExecution?: {
     kind: "post-session-plugin";
-    plannedActions: readonly PlannedPluginDoctorAction[];
+    migration: PreparedPostSessionPluginMigration;
   };
   run: () => MigrationMessages | Promise<MigrationMessages>;
 };

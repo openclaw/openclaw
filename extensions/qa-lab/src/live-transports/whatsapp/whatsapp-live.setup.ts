@@ -156,15 +156,12 @@ export async function unpackWhatsAppAuthArchive(params: {
   return authDir;
 }
 
-async function clearWhatsAppAuthSignalSessions(authDir: string): Promise<string[]> {
-  const removed: string[] = [];
+async function clearWhatsAppAuthSignalSessions(authDir: string): Promise<void> {
   const entries = await fs.readdir(authDir, { withFileTypes: true });
   for (const entry of entries) {
     if (!entry.isFile() || !WHATSAPP_QA_SIGNAL_SESSION_FILE_RE.test(entry.name)) {
       continue;
     }
     await fs.rm(path.join(authDir, entry.name), { force: true });
-    removed.push(entry.name);
   }
-  return removed.toSorted();
 }

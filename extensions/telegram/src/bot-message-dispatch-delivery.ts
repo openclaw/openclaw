@@ -29,7 +29,7 @@ import {
 } from "./bot-message-dispatch-payload.js";
 import {
   createCurrentTurnTranscriptFinalResolver,
-  mirrorTelegramAssistantReplyToTranscript,
+  createTelegramTranscriptMirror,
 } from "./bot-message-dispatch-session.js";
 import { deduplicateBlockSentMedia } from "./bot-message-dispatch.media-dedup.js";
 import type {
@@ -37,7 +37,6 @@ import type {
   TelegramDispatchTurnConfig as TurnConfig,
   CurrentTurnTranscriptFinal,
   TelegramDeliveryStateSlice,
-  TelegramTranscriptMirrorPayload,
 } from "./bot-message-dispatch.types.js";
 import {
   deliverReplies,
@@ -47,6 +46,10 @@ import {
 import { resolveTelegramReplyId } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { failPromptContextSequence, mergeTelegramPartialDeliveryError } from "./chunk-delivery.js";
+import {
+  copyTelegramDroppedControlFallback,
+  resolveFinalTelegramPresentationText,
+} from "./interactive-fallback.js";
 import { createLaneDeliveryStateTracker } from "./lane-delivery-state.js";
 import {
   createLaneTextDeliverer,
@@ -65,6 +68,7 @@ import {
 } from "./prompt-context-projection.js";
 import { registerTelegramQuestionDelivery } from "./question-finalization.js";
 import { editMessageReplyMarkupTelegram, editMessageTelegram } from "./send.js";
+import { resolveTelegramTargetChatType } from "./targets.js";
 
 type TelegramDeliveryConfig = TurnConfig & {
   lanes: Record<LaneName, DraftLaneState>;
@@ -147,23 +151,6 @@ const createPromptContextSequence = (
     record: async (record) => await recordPromptContextMessage(turn, record),
   });
 
-function createTranscriptMirror(turn: Turn, sequenceOwner: Turn = turn) {
-  const sessionKey = turn.context.ctxPayload.SessionKey;
-  return sessionKey
-    ? async (payload: TelegramTranscriptMirrorPayload) => {
-        const idempotencyKey = `telegram-final:${sessionKey}:${turn.transcriptMirrorTurnId}:${sequenceOwner.transcriptMirrorSequence++}`;
-        await mirrorTelegramAssistantReplyToTranscript({
-          cfg: turn.cfg,
-          idempotencyKey,
-          loadFreshSessionEntry: turn.loadFreshSessionEntry,
-          route: turn.context.route,
-          sessionKey,
-          payload,
-        });
-      }
-    : undefined;
-}
-
 function createDeliveryBaseOptions(turn: Turn) {
   const { context } = turn;
   return {
@@ -191,7 +178,7 @@ function createDeliveryBaseOptions(turn: Turn) {
     replyQuotePosition: turn.replyQuotePosition,
     replyQuoteEntities: turn.replyQuoteEntities,
     replyQuoteByMessageId: turn.replyQuoteByMessageId,
-    transcriptMirror: createTranscriptMirror(turn),
+    transcriptMirror: createTelegramTranscriptMirror(turn),
   };
 }
 
@@ -312,7 +299,7 @@ export async function sendPayload(
     }
   }
   try {
-    const transcriptMirror = createTranscriptMirror(turn, sourceTurn);
+    const transcriptMirror = createTelegramTranscriptMirror(turn, sourceTurn);
     const result = await (turn.telegramDeps.deliverStructuredReplies ?? deliverStructuredReplies)({
       ...createDeliveryBaseOptions(turn),
       replyToMode: effectiveReplyToMode,
@@ -375,7 +362,7 @@ async function emitPreviewFinalizedHook(turn: Turn, result: LaneDeliveryResult):
     isGroup: turn.context.isGroup,
     groupId: turn.context.isGroup ? String(turn.context.chatId) : undefined,
   });
-  const transcriptMirror = createTranscriptMirror(turn);
+  const transcriptMirror = createTelegramTranscriptMirror(turn);
   if (transcriptMirror && result.delivery.content) {
     void transcriptMirror({ text: result.delivery.content }).catch((err: unknown) => {
       logVerbose(`telegram preview-finalized transcriptMirror failed: ${formatErrorMessage(err)}`);
@@ -470,9 +457,12 @@ function recoverFinalPayload(
     final?.openclawDelivery,
   );
   return projected
-    ? deduplicateBlockSentMedia(
-        preserveReplyPayloadMediaSelection(payload, projected),
-        turn.sentBlockMediaUrls,
+    ? copyTelegramDroppedControlFallback(
+        payload,
+        deduplicateBlockSentMedia(
+          preserveReplyPayloadMediaSelection(payload, projected),
+          turn.sentBlockMediaUrls,
+        ),
       )
     : undefined;
 }
@@ -682,6 +672,14 @@ export function createDeliveryState(
       }
     },
     createPromptContextSequence: () => createPromptContextSequence(getTurn()),
+    resolveFinalPresentationText: ({ payload, text }) =>
+      resolveFinalTelegramPresentationText({
+        payload,
+        text,
+        richMessages: getTurn().telegramCfg.richMessages === true,
+        allowWebAppButtons:
+          resolveTelegramTargetChatType(String(getTurn().context.chatId)) === "direct",
+      }),
     resolveFinalPayloadCandidate: async ({ finalText, payload, candidateTexts }) => {
       const turn = getTurn();
       const transcriptFinal = await turn.resolveCurrentTurnTranscriptFinal();

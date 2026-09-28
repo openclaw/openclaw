@@ -12,6 +12,7 @@ import { hasReplyPayloadContent } from "../interactive/payload.js";
 import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { ReplyPayload, ReplyPayloadTtsSupplement } from "../shared/reply-payload.types.js";
+import type { CommandOwnerAssertion } from "./command-owner-authority.js";
 import type { BlockReplySource } from "./reply/block-reply-source.types.js";
 
 export type {
@@ -279,6 +280,7 @@ export type ReplyPayloadMetadata = {
   progressContinuation?: ProgressContinuationCapability;
   /** Exact persisted delivery owner; WeakMap-only and never serialized. */
   pendingFinalDeliveryCompletion?: {
+    commandOwnerReference?: CommandOwnerAssertion["recoveryReference"];
     agentId?: string;
     deliveryId: string;
     intentId: string;

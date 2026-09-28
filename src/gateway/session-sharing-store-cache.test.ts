@@ -372,10 +372,10 @@ describe("session mutation authorization store caches", () => {
         };
         const parseSpy = vi.spyOn(JSON, "parse");
         expect(canAccessTaskRequesterSession(access)).toBe(true);
-        // A cold handle validates the store once; repeated reads reuse its admission.
+        // Both cold and warm exact reads validate only their selected candidate keys.
         expect(
           parseSpy.mock.calls.filter(([value]) => value.includes("unrelated-task-access-session-")),
-        ).toHaveLength(mode === "warm" ? 0 : 24);
+        ).toHaveLength(0);
         parseSpy.mockClear();
         expect(canAccessTaskRequesterSession(access)).toBe(true);
         expect(

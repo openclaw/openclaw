@@ -1,5 +1,5 @@
+import { listAgentEntries, listAgentIds } from "../../agents/agent-roster.js";
 import { resolveAgentEntry } from "../../agents/agent-scope-config.js";
-import { listAgentEntries, listAgentIds } from "../../agents/agent-scope.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 

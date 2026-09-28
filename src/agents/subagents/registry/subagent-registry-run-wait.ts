@@ -238,6 +238,7 @@ export class SubagentWaitManager {
   ): Promise<void> => {
     // A current Gateway may observe historical execution; the wait itself owns this generation.
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    let waitedEntry: SubagentRunRecord | undefined;
     let completionForRetry: Parameters<typeof this.options.completeSubagentRun>[0] | undefined;
     const scheduleWaitRetry = (entry: SubagentRunRecord, reason: string, error?: string) => {
       this.options.scheduleSweep({ delayMs: 1_000 });
@@ -265,6 +266,7 @@ export class SubagentWaitManager {
       if (!entryBeforeWait || (expectedEntry && entryBeforeWait !== expectedEntry)) {
         return;
       }
+      waitedEntry = entryBeforeWait;
       const waitStartedAt = Date.now();
       const timeoutMs = capWaitToStoredDeadline
         ? resolveWaitTimeoutMsForRun(entryBeforeWait, waitTimeoutMs, waitStartedAt)
@@ -279,7 +281,7 @@ export class SubagentWaitManager {
         return;
       }
       const entry = this.options.runs.get(runId);
-      if (!entry || (expectedEntry && entry !== expectedEntry)) {
+      if (!entry || entry !== waitedEntry) {
         return;
       }
       if (wait.status === "pending") {
@@ -291,6 +293,22 @@ export class SubagentWaitManager {
         waitTerminalOutcome !== undefined &&
         classifySubagentTerminalOutcome(waitTerminalOutcome) === "cancellation";
       const waitStatus = waitTerminalOutcome?.status ?? wait.status;
+      const complete = (
+        completion: Omit<
+          SubagentCompletionRequest,
+          "runId" | "expectedEntry" | "sendFarewell" | "accountId" | "triggerCleanup"
+        >,
+      ) => {
+        completionForRetry = {
+          runId,
+          expectedEntry: entry,
+          sendFarewell: true,
+          accountId: entry.requesterOrigin?.accountId,
+          triggerCleanup: true,
+          ...completion,
+        };
+        return this.options.completeSubagentRun(completionForRetry);
+      };
       if (wait.yielded === true && waitStatus !== "timeout" && !waitBlocked) {
         this.options.clearPendingLifecycleError(runId);
         this.options.clearPendingLifecycleTimeout(runId);
@@ -311,20 +329,15 @@ export class SubagentWaitManager {
         // waiter blocks for good. The attempt's own terminal is the only result
         // this run will ever have: settle it as the ordinary success it is, which
         // freezes the collector completion the waiter reads.
-        completionForRetry = {
-          runId,
+        await complete({
           endedAt: typeof wait.endedAt === "number" ? wait.endedAt : Date.now(),
           outcome: { status: "ok" },
           reason: SUBAGENT_ENDED_REASON_COMPLETE,
-          sendFarewell: true,
-          accountId: entry.requesterOrigin?.accountId,
-          triggerCleanup: true,
           terminalReply: wait.terminalReply,
           ...(typeof wait.startedAt === "number" && Number.isFinite(wait.startedAt)
             ? { startedAt: wait.startedAt }
             : {}),
-        };
-        await this.options.completeSubagentRun(completionForRetry);
+        });
         return;
       }
       if (
@@ -350,25 +363,14 @@ export class SubagentWaitManager {
               childSessionKey: entry.childSessionKey,
               notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
             });
-      const completeAsRunTimeout = async (endedAt?: number, startedAt?: number) => {
-        const timeoutCompletion: Parameters<typeof this.options.completeSubagentRun>[0] = {
-          runId,
+      const completeAsRunTimeout = (endedAt?: number, startedAt?: number) =>
+        complete({
           outcome: { status: "timeout" },
           reason: SUBAGENT_ENDED_REASON_COMPLETE,
-          sendFarewell: true,
-          accountId: entry.requesterOrigin?.accountId,
-          triggerCleanup: true,
           terminalReply: wait.terminalReply,
-        };
-        if (typeof endedAt === "number") {
-          timeoutCompletion.endedAt = endedAt;
-        }
-        if (typeof startedAt === "number" && Number.isFinite(startedAt)) {
-          timeoutCompletion.startedAt = startedAt;
-        }
-        completionForRetry = timeoutCompletion;
-        await this.options.completeSubagentRun(completionForRetry);
-      };
+          ...(typeof endedAt === "number" ? { endedAt } : {}),
+          ...(typeof startedAt === "number" && Number.isFinite(startedAt) ? { startedAt } : {}),
+        });
       if (waitStatus === "timeout") {
         const isTerminalWaitTimeout =
           typeof wait.endedAt === "number" ||
@@ -397,17 +399,12 @@ export class SubagentWaitManager {
             await completeAsRunTimeout(completionAfterDeadline, completionStartedAt);
             return;
           }
-          completionForRetry = {
-            runId,
+          await complete({
             endedAt: completion.endedAt,
             outcome: completion.outcome,
             reason: completion.reason,
-            sendFarewell: true,
-            accountId: entry.requesterOrigin?.accountId,
-            triggerCleanup: true,
             startedAt: completionStartedAt,
-          };
-          await this.options.completeSubagentRun(completionForRetry);
+          });
           return;
         }
         if (isTerminalWaitTimeout || hardRunTimeoutEndedAt !== undefined) {
@@ -459,8 +456,7 @@ export class SubagentWaitManager {
         startedAt: observedStartedAt ?? entry.execution.startedAt,
         endedAt,
       });
-      completionForRetry = {
-        runId,
+      await complete({
         endedAt,
         outcome,
         reason: waitAborted
@@ -468,26 +464,22 @@ export class SubagentWaitManager {
           : waitStatus === "error"
             ? SUBAGENT_ENDED_REASON_ERROR
             : SUBAGENT_ENDED_REASON_COMPLETE,
-        sendFarewell: true,
-        accountId: entry.requesterOrigin?.accountId,
-        triggerCleanup: true,
         startedAt: observedStartedAt,
         terminalReply: wait.terminalReply,
-      };
-      await this.options.completeSubagentRun(completionForRetry);
+      });
     } catch (error) {
       if (!isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
         return;
       }
       const current = this.options.runs.get(runId);
-      log.warn("failed to complete subagent run; retrying completion", {
-        runId,
-        childSessionKey: current?.childSessionKey ?? expectedEntry?.childSessionKey,
-        error,
-      });
-      if (!current) {
+      if (!current || current !== waitedEntry) {
         return;
       }
+      log.warn("failed to complete subagent run; retrying completion", {
+        runId,
+        childSessionKey: current.childSessionKey,
+        error,
+      });
       if (completionForRetry) {
         try {
           await this.options.completeSubagentRun(completionForRetry);
@@ -500,7 +492,10 @@ export class SubagentWaitManager {
           });
         }
       }
-      if (!isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
+      if (
+        !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) ||
+        this.options.runs.get(runId) !== current
+      ) {
         return;
       }
       if (

@@ -12,12 +12,7 @@ import {
 
 async function readRootFile(root: Awaited<ReturnType<typeof fsRoot>>, relativePath: string) {
   try {
-    const opened = await root.open(relativePath);
-    try {
-      return { data: await opened.handle.readFile(), realPath: opened.realPath };
-    } finally {
-      await opened.handle.close().catch(() => {});
-    }
+    return await root.read(relativePath, { maxBytes: Infinity });
   } catch (error) {
     if (error instanceof FsSafeError) {
       return null;
@@ -39,7 +34,7 @@ async function resolveDocumentSandbox(
     return undefined;
   }
   try {
-    const manifest = JSON.parse(opened.data.toString("utf8")) as CanvasDocumentManifest;
+    const manifest = JSON.parse(opened.buffer.toString("utf8")) as CanvasDocumentManifest;
     return manifest.cspSandbox === "scripts" ? "scripts" : undefined;
   } catch {
     return undefined;
@@ -66,13 +61,7 @@ export async function handleCanvasDocumentHttpRequest(
     const documentsDir = resolveCanvasDocumentsDir();
     const relativePath = path.relative(documentsDir, localPath);
     const root = await fsRoot(documentsDir);
-    const opened = await readRootFile(root, relativePath);
-    if (!opened) {
-      res.statusCode = 404;
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.end("not found");
-      return true;
-    }
+    const opened = await root.read(relativePath, { maxBytes: Infinity });
 
     const lowerPath = opened.realPath.toLowerCase();
     const mime =
@@ -83,7 +72,7 @@ export async function handleCanvasDocumentHttpRequest(
     if (mime === "text/html") {
       // Measure the decoded representation: toString("utf8") expands invalid
       // bytes to U+FFFD, so the raw file length can differ from the body sent.
-      const body = opened.data.toString("utf8");
+      const body = opened.buffer.toString("utf8");
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       res.setHeader("Content-Length", String(Buffer.byteLength(body)));
       if ((await resolveDocumentSandbox(root, relativePath)) === "scripts") {
@@ -106,12 +95,12 @@ export async function handleCanvasDocumentHttpRequest(
       return true;
     }
     res.setHeader("Content-Type", mime);
-    res.setHeader("Content-Length", String(opened.data.byteLength));
+    res.setHeader("Content-Length", String(opened.buffer.byteLength));
     if (req.method === "HEAD") {
       res.end();
       return true;
     }
-    res.end(opened.data);
+    res.end(opened.buffer);
     return true;
   } catch (error) {
     res.statusCode = error instanceof FsSafeError ? 404 : 500;

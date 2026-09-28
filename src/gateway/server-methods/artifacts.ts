@@ -109,12 +109,6 @@ function normalizeArtifactType(value: string): string {
   if (normalized === "video" || normalized === "input_video") {
     return "video";
   }
-  if (normalized === "file" || normalized === "input_file") {
-    return "file";
-  }
-  if (normalized === "attachment") {
-    return "file";
-  }
   return "file";
 }
 

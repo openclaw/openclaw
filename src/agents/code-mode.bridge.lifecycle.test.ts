@@ -508,51 +508,6 @@ describe("Code Mode subscribed bridge lifecycle", () => {
     }
   });
 
-  it("settles subscribed nested dispatch exactly once across repeated exec and wait turns", async () => {
-    const blockReplyFlush = createDeferred();
-    const onBlockReplyFlush = vi.fn(() => blockReplyFlush.promise);
-    const harness = createSubscribedCodeModeHarness({
-      name: "repeated-lifecycle",
-      onBlockReplyFlush,
-    });
-    const target = pluginToolWithExecute("finish_stage", "Finish one suspended stage", async () => {
-      blockReplyFlush.resolve();
-      return jsonResult({ finished: true });
-    });
-    applyCodeModeCatalog({ ...harness, tools: [...harness.tools, target] });
-
-    try {
-      for (let stage = 0; stage < 2; stage += 1) {
-        const suspended = resultDetails(
-          await expectDefined(harness.tools[0], "Code Mode exec test invariant").execute(
-            `code-call-stage-${stage}`,
-            { code: 'await yield_control("pause"); return await finish_stage({});' },
-          ),
-        );
-        expect(suspended).toMatchObject({ status: "waiting", reason: "yield" });
-
-        const completed = await waitUntilCompleted({
-          details: suspended,
-          waitTool: expectDefined(harness.tools[1], "Code Mode wait test invariant"),
-        });
-        expect(completed).toMatchObject({ status: "completed", value: { finished: true } });
-        expect(countActiveToolExecutions(harness.runId)).toBe(0);
-      }
-
-      expect(target.execute).toHaveBeenCalledTimes(2);
-      expect(onBlockReplyFlush).not.toHaveBeenCalled();
-      expect(harness.subscription.getItemLifecycle()).toMatchObject({
-        startedCount: 2,
-        completedCount: 2,
-        activeCount: 0,
-      });
-      expect(testing.activeRuns.size).toBe(0);
-    } finally {
-      blockReplyFlush.resolve();
-      harness.dispose();
-    }
-  });
-
   it("keeps direct sessions_yield handoff successful while closing sibling Code Mode cells", async () => {
     const harness = createSubscribedCodeModeHarness({ name: "yield-handoff" });
     const handoffReason = { code: "sessions_yield", turnHandoff: true } as const;

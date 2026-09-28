@@ -247,6 +247,7 @@ it.each(["child", "parent"] as const)(
       referenced: (key) => projection.describe({ agentId: "main", key }),
       lookup: projection.describe,
       prepareExactRows: () => undefined,
+      retainExactPreparation: () => () => {},
       assertExactRowsPrepared: () => {},
       retainArchiveRows: () => ({ update: () => {}, release: () => {} }),
       describe: projection.describe,

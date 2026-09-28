@@ -9,6 +9,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/string-normalization";
 import { Command } from "commander";
 import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 import {
@@ -45,6 +46,7 @@ import { formatCliCommand } from "./command-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
 import { resolveGatewayAuthOptions } from "./gateway-secret-options.js";
 import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
+import { collectOption } from "./program/helpers.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 const createSessionMcpRuntime = createLazyRuntimeMethod(
@@ -127,18 +129,8 @@ type McpServerControlOptions = {
 };
 
 function parseCsvList(value: string | undefined): string[] | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const entries = value
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
+  const entries = normalizeCsvOrLooseStringList(value);
   return entries.length > 0 ? entries : undefined;
-}
-
-function collectOption(value: string, previous: string[] = []): string[] {
-  return [...previous, value];
 }
 
 function parseKeyValueEntries(values: readonly string[] | undefined, label: string) {
@@ -712,13 +704,6 @@ function resolveMcpProbeIssue(params: {
   return undefined;
 }
 
-function failOnMcpProbeIssues(params: Parameters<typeof resolveMcpProbeIssue>[0]): void {
-  const probeIssue = resolveMcpProbeIssue(params);
-  if (probeIssue) {
-    fail(probeIssue);
-  }
-}
-
 async function probeMcpServersOrFail(params: {
   config: OpenClawConfig;
   servers: Record<string, Record<string, unknown>>;
@@ -738,7 +723,10 @@ async function probeMcpServersOrFail(params: {
   });
   try {
     const result = await readMcpProbeResult(runtime);
-    failOnMcpProbeIssues({ result, servers: params.servers, path: params.path });
+    const probeIssue = resolveMcpProbeIssue({ result, servers: params.servers, path: params.path });
+    if (probeIssue) {
+      fail(probeIssue);
+    }
     return result;
   } finally {
     await runtime.dispose();

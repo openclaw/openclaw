@@ -2,8 +2,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SessionEntry, SessionGoalStatus } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnv } from "../../test-utils/env.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { TemplateContext } from "../templating.js";
@@ -17,39 +15,9 @@ import { prepareReplyConversation } from "./prompt-session-context.js";
 
 const EMPTY_CFG = {} as OpenClawConfig;
 
-const { formattingHintCalls } = vi.hoisted(() => ({
-  formattingHintCalls: [] as Array<{ cfg: OpenClawConfig; accountId?: string | null }>,
-}));
-
-vi.mock("../../channels/plugins/registry-loaded.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../channels/plugins/registry-loaded.js")>()),
-  getLoadedChannelPluginById: (channelId: string) =>
-    channelId === "slack"
-      ? {
-          agentPrompt: {
-            inboundFormattingHints: (params: {
-              cfg: OpenClawConfig;
-              accountId?: string | null;
-            }) => {
-              formattingHintCalls.push(params);
-              return {
-                text_markup: "slack_mrkdwn",
-                rules: [
-                  "Use Slack mrkdwn, not standard Markdown.",
-                  "Bold uses *single asterisks*.",
-                  "Links use <url|label>.",
-                  "Code blocks use triple backticks without a language identifier.",
-                  "Do not use markdown headings or pipe tables.",
-                ],
-              };
-            },
-          },
-        }
-      : undefined,
-}));
-
-vi.mock("../../channels/registry.js", () => ({
-  normalizeAnyChannelId: (channelId?: string) => channelId?.trim().toLowerCase(),
+// Delivery formatting has its own reply-turn coverage; keep these tests on the metadata block.
+vi.mock("../../infra/outbound/delivery-format-prompt.js", () => ({
+  buildDeliveryFormatPrompt: () => undefined,
 }));
 
 function parseInboundMetaPayload(text: string): Record<string, unknown> {
@@ -150,100 +118,47 @@ function createChatWindowContext(params: {
 }
 
 describe("buildInboundMetaSystemPrompt", () => {
-  it("includes stable routing fields and omits chat ids", () => {
-    const prompt = buildInboundMetaSystemPrompt(
-      {
-        MessageSid: "123",
-        MessageSidFull: "123",
-        ReplyToId: "99",
-        OriginatingTo: "telegram:5494292670",
+  it.each(["direct", "group"] as const)(
+    "keeps $0 system metadata byte-stable as per-turn context changes",
+    (ChatType) => {
+      const context = {
         AccountId: " work ",
-        OriginatingChannel: "telegram",
-        Provider: "telegram",
-        Surface: "telegram",
-        ChatType: "direct",
-      } as TemplateContext,
-      EMPTY_CFG,
-    );
-
-    const payload = parseInboundMetaPayload(prompt);
-    expect(payload["schema"]).toBe("openclaw.inbound_meta.v2");
-    expect(payload["chat_id"]).toBeUndefined();
-    expect(payload["account_id"]).toBe("work");
-    expect(payload["channel"]).toBe("telegram");
-  });
-
-  it("keeps task-scoped chat ids out of the system prompt for cache stability", () => {
-    const first = buildInboundMetaSystemPrompt(
-      {
-        OriginatingTo: "paperclip:issue:c585d0cc",
         OriginatingChannel: "paperclip",
         Provider: "paperclip",
         Surface: "paperclip",
-        ChatType: "direct",
-        AccountId: "default",
-      } as TemplateContext,
-      EMPTY_CFG,
-    );
-    const second = buildInboundMetaSystemPrompt(
-      {
-        OriginatingTo: "paperclip:issue:ca527062",
-        OriginatingChannel: "paperclip",
-        Provider: "paperclip",
-        Surface: "paperclip",
-        ChatType: "direct",
-        AccountId: "default",
-      } as TemplateContext,
-      EMPTY_CFG,
-    );
-
-    expect(parseInboundMetaPayload(first)["chat_id"]).toBeUndefined();
-    expect(first).toBe(second);
-  });
-
-  it("does not include per-turn message identifiers (cache stability)", () => {
-    const prompt = buildInboundMetaSystemPrompt(
-      {
-        MessageSid: "123",
-        MessageSidFull: "123",
-        ReplyToId: "99",
-        SenderId: "289522496",
-        OriginatingTo: "telegram:5494292670",
-        OriginatingChannel: "telegram",
-        Provider: "telegram",
-        Surface: "telegram",
-        ChatType: "direct",
-      } as TemplateContext,
-      EMPTY_CFG,
-    );
-
-    const payload = parseInboundMetaPayload(prompt);
-    expect(payload["message_id"]).toBeUndefined();
-    expect(payload["message_id_full"]).toBeUndefined();
-    expect(payload["reply_to_id"]).toBeUndefined();
-    expect(payload["sender_id"]).toBeUndefined();
-  });
-
-  it("does not include per-turn flags in system metadata", () => {
-    const prompt = buildInboundMetaSystemPrompt(
-      {
-        ReplyToBody: "quoted",
-        ForwardedFrom: "sender",
-        ThreadStarterBody: "starter",
-        InboundHistory: [{ sender: "a", body: "b", timestamp: 1 }],
-        WasMentioned: true,
-        OriginatingTo: "telegram:-1001249586642",
-        OriginatingChannel: "telegram",
-        Provider: "telegram",
-        Surface: "telegram",
-        ChatType: "group",
-      } as TemplateContext,
-      EMPTY_CFG,
-    );
-
-    const payload = parseInboundMetaPayload(prompt);
-    expect(payload["flags"]).toBeUndefined();
-  });
+        ChatType,
+      } as TemplateContext;
+      const prompt = buildInboundMetaSystemPrompt(context, EMPTY_CFG);
+      expect(parseInboundMetaPayload(prompt)).toEqual({
+        schema: "openclaw.inbound_meta.v2",
+        account_id: "work",
+        channel: "paperclip",
+        provider: "paperclip",
+        surface: "paperclip",
+        chat_type: ChatType,
+      });
+      for (const SenderId of ["289522496", "   "]) {
+        expect(
+          buildInboundMetaSystemPrompt(
+            {
+              ...context,
+              MessageSid: "123",
+              MessageSidFull: "full-123",
+              ReplyToId: "99",
+              SenderId,
+              OriginatingTo: "paperclip:issue:c585d0cc",
+              ReplyToBody: "quoted",
+              ForwardedFrom: "sender",
+              ThreadStarterBody: "starter",
+              InboundHistory: [{ sender: "a", body: "b", timestamp: 1 }],
+              WasMentioned: true,
+            },
+            EMPTY_CFG,
+          ),
+        ).toBe(prompt);
+      }
+    },
+  );
 
   it("keeps bot usernames out and explains the mixed-trust message context", () => {
     const prompt = buildInboundMetaSystemPrompt(
@@ -281,90 +196,7 @@ describe("buildInboundMetaSystemPrompt", () => {
     expect(prompt).not.toContain("authoritative metadata");
   });
 
-  it("omits sender_id when blank", () => {
-    const prompt = buildInboundMetaSystemPrompt(
-      {
-        MessageSid: "458",
-        SenderId: "   ",
-        OriginatingTo: "telegram:-1001249586642",
-        OriginatingChannel: "telegram",
-        Provider: "telegram",
-        Surface: "telegram",
-        ChatType: "group",
-      } as TemplateContext,
-      EMPTY_CFG,
-    );
-
-    const payload = parseInboundMetaPayload(prompt);
-    expect(payload["sender_id"]).toBeUndefined();
-  });
-
-  it("includes Slack mrkdwn response format hints for Slack chats and threads cfg", () => {
-    formattingHintCalls.length = 0;
-    resetPluginRuntimeStateForTest();
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "slack-plugin",
-          source: "test",
-          plugin: {
-            id: "slack",
-            meta: {
-              id: "slack",
-              label: "Slack",
-              selectionLabel: "Slack",
-              docsPath: "/channels/slack",
-              blurb: "test stub",
-            },
-            capabilities: { chatTypes: ["channel"] },
-            config: { listAccountIds: () => [], resolveAccount: () => ({}) },
-            agentPrompt: {
-              inboundFormattingHints: () => ({
-                text_markup: "slack_mrkdwn",
-                rules: [
-                  "Use Slack mrkdwn, not standard Markdown.",
-                  "Bold uses *single asterisks*.",
-                  "Links use <url|label>.",
-                  "Code blocks use triple backticks without a language identifier.",
-                  "Do not use markdown headings or pipe tables.",
-                ],
-              }),
-            },
-          },
-        },
-      ]),
-    );
-
-    const cfg = {
-      channels: { slack: { botToken: "test-token-placeholder" } },
-    } as OpenClawConfig;
-    const prompt = buildInboundMetaSystemPrompt(
-      {
-        OriginatingTo: "channel:C123",
-        OriginatingChannel: "slack",
-        Provider: "slack",
-        Surface: "slack",
-        ChatType: "channel",
-        AccountId: " work ",
-      } as TemplateContext,
-      cfg,
-    );
-
-    const payload = parseInboundMetaPayload(prompt);
-    expect(payload["response_format"]).toEqual({
-      text_markup: "slack_mrkdwn",
-      rules: [
-        "Use Slack mrkdwn, not standard Markdown.",
-        "Bold uses *single asterisks*.",
-        "Links use <url|label>.",
-        "Code blocks use triple backticks without a language identifier.",
-        "Do not use markdown headings or pipe tables.",
-      ],
-    });
-    expect(formattingHintCalls).toEqual([{ cfg, accountId: "work" }]);
-  });
-
-  it("uses one prepared conversation for system-event metadata and response formatting", () => {
+  it("uses one prepared conversation for system-event metadata", () => {
     const conversation = prepareReplyConversation({
       ctx: { InternalTurnSource: "heartbeat" },
       sessionEntry: {
@@ -386,24 +218,7 @@ describe("buildInboundMetaSystemPrompt", () => {
       surface: "slack",
       chat_type: "channel",
       account_id: "work",
-      response_format: { text_markup: "slack_mrkdwn" },
     });
-  });
-
-  it("omits response format hints when the channel plugin has no formatting hook", () => {
-    const prompt = buildInboundMetaSystemPrompt(
-      {
-        OriginatingTo: "telegram:123",
-        OriginatingChannel: "telegram",
-        Provider: "telegram",
-        Surface: "telegram",
-        ChatType: "direct",
-      } as TemplateContext,
-      EMPTY_CFG,
-    );
-
-    const payload = parseInboundMetaPayload(prompt);
-    expect(payload["response_format"]).toBeUndefined();
   });
 });
 
@@ -919,49 +734,24 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text.trimEnd().endsWith("#34974:")).toBe(true);
   });
 
-  it("includes sender_id in conversation info", () => {
+  it.each([
+    [{ SenderId: "289522496" }, { id: "289522496" }],
+    [{ SenderId: "  289522496  " }, { id: "289522496" }],
+    [{ SenderId: " user@example.com " }, { id: "user@example.com" }],
+    [{ SenderE164: "+15551234567" }, { e164: "+15551234567" }],
+    [{ SenderId: "15551234567", SenderE164: "+1 (555) 123-4567" }, { id: "15551234567" }],
+    [
+      { SenderId: "15550001111", SenderE164: "+15551234567" },
+      { id: "15550001111", e164: "+15551234567" },
+    ],
+  ])("normalizes conversation sender identity %j", (identity, expected) => {
     const text = buildInboundUserContextPrefix({
       ChatType: "group",
       MessageSid: "msg-456",
-      SenderId: "289522496",
+      ...identity,
     } as TemplateContext);
 
-    const conversationInfo = parseConversationInfoPayload(text);
-    expect(conversationInfo["sender"]).toEqual({ id: "289522496" });
-  });
-
-  it("includes phone-only sender identity in conversation info", () => {
-    const text = buildInboundUserContextPrefix({
-      ChatType: "group",
-      MessageSid: "msg-456",
-      SenderE164: "+15551234567",
-    } as TemplateContext);
-
-    const conversationInfo = parseConversationInfoPayload(text);
-    expect(conversationInfo["sender"]).toEqual({ e164: "+15551234567" });
-  });
-
-  it("omits e164 when it repeats the sender id digits", () => {
-    const text = buildInboundUserContextPrefix({
-      ChatType: "group",
-      SenderId: "15551234567",
-      SenderE164: "+1 (555) 123-4567",
-    } as TemplateContext);
-
-    expect(parseConversationInfoPayload(text)["sender"]).toEqual({ id: "15551234567" });
-  });
-
-  it("keeps e164 when it differs from the sender id digits", () => {
-    const text = buildInboundUserContextPrefix({
-      ChatType: "group",
-      SenderId: "15550001111",
-      SenderE164: "+15551234567",
-    } as TemplateContext);
-
-    expect(parseConversationInfoPayload(text)["sender"]).toEqual({
-      id: "15550001111",
-      e164: "+15551234567",
-    });
+    expect(parseConversationInfoPayload(text)["sender"]).toEqual(expected);
   });
 
   it("includes dynamic per-turn flags in conversation info", () => {
@@ -1002,27 +792,6 @@ describe("buildInboundUserContextPrefix", () => {
     const conversationInfo = parseConversationInfoPayload(text);
     expect(conversationInfo["explicitly_mentioned_bot"]).toBe(true);
     expect(text).not.toContain("SirPinchALotBot");
-  });
-
-  it("trims sender_id in conversation info", () => {
-    const text = buildInboundUserContextPrefix({
-      ChatType: "group",
-      MessageSid: "msg-457",
-      SenderId: "  289522496  ",
-    } as TemplateContext);
-
-    const conversationInfo = parseConversationInfoPayload(text);
-    expect(conversationInfo["sender"]).toEqual({ id: "289522496" });
-  });
-
-  it("falls back to SenderId when sender phone is missing", () => {
-    const text = buildInboundUserContextPrefix({
-      ChatType: "group",
-      SenderId: " user@example.com ",
-    } as TemplateContext);
-
-    const conversationInfo = parseConversationInfoPayload(text);
-    expect(conversationInfo["sender"]).toEqual({ id: "user@example.com" });
   });
 
   it("strips null bytes from serialized untrusted metadata blocks", () => {

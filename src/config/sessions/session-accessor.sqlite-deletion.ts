@@ -24,8 +24,11 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { createSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import {
+  createSessionRepositoryWorkspaceStore,
+  findSessionRepositoryWorkspaces,
+} from "../../state/session-repository-workspaces.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import {
@@ -69,15 +72,24 @@ type PreparedSessionWrite<T> = {
 
 /** Keep ordinary updates serialized; release the writer for preparation or source custody. */
 export async function runPreparedSqliteSessionWrite<T>(
-  scope: ResolvedSqliteReadScope,
-  prepare: () => Promise<PreparedSessionWrite<T>>,
+  initialScope: ResolvedSqliteReadScope,
+  prepare: (scope: ResolvedSqliteReadScope) => Promise<PreparedSessionWrite<T>>,
   operation: SqliteSessionWriteOperation,
   withCommit?: SessionEntryCreateWithTranscriptOptions["withCommit"],
-): Promise<{ deletedEntries: number; result: T }> {
+  prepareScope?: () => Promise<ResolvedSqliteReadScope>,
+): Promise<{ deletedEntries: number; result: Awaited<T>; scope: ResolvedSqliteReadScope }> {
+  let scope = initialScope;
   const prepared = await runExclusiveSqliteSessionWrite(
     scope,
     async () => {
-      const write = await prepare();
+      if (prepareScope) {
+        const preparedScope = await prepareScope();
+        if (preparedScope.path !== scope.path) {
+          throw new Error("Session write preparation changed its reserved database path");
+        }
+        scope = preparedScope;
+      }
+      const write = await prepare(scope);
       return write.deletedEntries.length || write.beforeCommit || withCommit
         ? { write }
         : { result: await write.commit() };
@@ -85,7 +97,7 @@ export async function runPreparedSqliteSessionWrite<T>(
     operation,
   );
   if (!prepared.write) {
-    return { deletedEntries: 0, result: prepared.result };
+    return { deletedEntries: 0, result: prepared.result, scope };
   }
   const write = prepared.write;
   const commit = async (assertCurrent?: () => void) => {
@@ -109,7 +121,7 @@ export async function runPreparedSqliteSessionWrite<T>(
     write.deletedEntries.length || write.beforeCommit
       ? await withSqliteSessionDeletions(scope, write.deletedEntries, commit)
       : await commit();
-  return { deletedEntries: write.deletedEntries.length, result };
+  return { deletedEntries: write.deletedEntries.length, result, scope };
 }
 
 /** Prepare owner leases before entering a physical writer or changing any transcript state. */
@@ -185,13 +197,10 @@ async function withSqliteSessionMutations<T>(
     : captureAgentHarnessSessionDeletions();
   const repositories = options.contextReset
     ? undefined
-    : createSessionRepositoryWorkspaceStore({
-        database: openOpenClawStateDatabase({ env: scope.env }),
-      });
-  const repositoryWorkspaces = (options.contextReset ? [] : targets).flatMap((target) => {
-    const workspace = repositories?.find(target);
-    return workspace ? [workspace] : [];
-  });
+    : createSessionRepositoryWorkspaceStore({ path: resolveOpenClawStateSqlitePath(scope.env) });
+  const repositoryWorkspaces = repositories
+    ? await findSessionRepositoryWorkspaces(targets, { path: repositories.path, env: scope.env })
+    : [];
   const invoke = async (
     prepared: ReadonlyMap<string, readonly PreparedAgentHarnessSessionDeletion[]>,
   ) => {

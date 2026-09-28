@@ -126,14 +126,9 @@ describe("committed session mutation authorization", () => {
           owner.db.exec("COMMIT");
         });
 
-        // The target remains valid; changed policy requires admission of the now-invalid sibling.
+        // A policy change never makes this valid target depend on an invalid sibling.
         inWriterTransaction(owner.db, () => {
-          expect(() => authorization.assertCurrent()).toThrow(
-            expect.objectContaining({
-              code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED",
-              message: expect.stringContaining("invalid persisted session row"),
-            }),
-          );
+          expect(() => authorization.assertCurrent()).not.toThrow();
         });
         owner.db
           .prepare("UPDATE session_nodes SET parent_session_key = NULL WHERE session_key = ?")

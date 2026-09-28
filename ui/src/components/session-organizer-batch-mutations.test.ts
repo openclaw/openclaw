@@ -28,6 +28,7 @@ import type {
   SidebarRecentSession,
   SidebarSessionMutationScope,
 } from "./app-sidebar-session-types.ts";
+import { sessionMenuReasons } from "./session-menu-access.ts";
 import { patchSessionRows } from "./session-organizer-batch-mutations.ts";
 import type { SessionOrganizerControllerHost } from "./session-organizer-controller.ts";
 import {
@@ -422,6 +423,49 @@ describe("patchSessionRows", () => {
       harness.scope,
       "This action requires operator.write access.",
     );
+  });
+
+  it("keeps scoped organization owner-only with independent interaction grants", async () => {
+    const harness = createHarness({
+      scopes: [
+        "operator.read",
+        "operator.sessions.write",
+        "operator.questions",
+        "operator.approvals",
+        "operator.talk",
+      ],
+    });
+    const own = { ...sessionRow(0), sharingRole: "owner" as const };
+    const member = { ...sessionRow(1), sharingRole: "member" as const };
+    expect(
+      sessionMenuReasons({
+        snapshot: harness.scope.gateway.snapshot,
+        session: own,
+        batchRows: [own, member],
+      })["toggle-archived"],
+    ).toBe("Only the session owner can make this change.");
+    await expect(
+      patchSessionRows(harness.host, [own, member], { archived: true }, harness.scope, {
+        sessionScope: true,
+      }),
+    ).resolves.toBeNull();
+    expect(harness.request).not.toHaveBeenCalled();
+    expect(harness.reconcileMutation).not.toHaveBeenCalled();
+    expect(harness.publishSessionMutationError).toHaveBeenCalledWith(
+      harness.scope,
+      "Only the session owner can make this change.",
+    );
+
+    await expect(
+      patchSessionRows(harness.host, [own], { archived: true }, harness.scope, {
+        sessionScope: true,
+      }),
+    ).resolves.toEqual([own]);
+    expect(harness.request).toHaveBeenCalledOnce();
+    expect(harness.request.mock.calls[0]?.[1]).toMatchObject({
+      targets: [{ key: own.key }],
+      patch: { archived: true },
+    });
   });
 });
 

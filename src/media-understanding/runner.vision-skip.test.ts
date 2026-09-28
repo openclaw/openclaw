@@ -644,26 +644,6 @@ describe("runCapability image skip", () => {
     );
   });
 
-  it("keeps agents.defaults.imageModel available to exported auto image resolution", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          imageModel: { primary: "openrouter/google/gemini-2.5-flash" },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    await expect(
-      resolveAutoImageModel({
-        cfg,
-        activeModel: { provider: "openai", model: "gpt-4.1" },
-      }),
-    ).resolves.toEqual({
-      provider: "openrouter",
-      model: "google/gemini-2.5-flash",
-    });
-  });
-
   it("uses a valid imageModel fallback after a malformed primary", async () => {
     const cfg = {
       agents: {

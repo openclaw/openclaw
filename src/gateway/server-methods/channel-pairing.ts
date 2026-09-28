@@ -13,6 +13,7 @@ import {
   validateChannelsPairingDismissParams,
   validateChannelsPairingListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveChannelAccount } from "../../channels/account-resolution.js";
 import { resolveChannelDmPolicy } from "../../channels/plugins/dm-access.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { notifyPairingApproved } from "../../channels/plugins/pairing.js";
@@ -95,7 +96,7 @@ async function listPairingAccounts(params: {
       if (requestedAccount && accountId.toLowerCase() !== requestedAccount) {
         continue;
       }
-      const account = plugin.config.resolveAccount(params.cfg, accountId);
+      const account = await resolveChannelAccount({ plugin, cfg: params.cfg, accountId });
       const configured = plugin.config.isConfigured
         ? await plugin.config.isConfigured(account, params.cfg)
         : asRecord(account)?.configured !== false;

@@ -13,7 +13,6 @@ import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import type { RequestClient } from "./internal/discord.js";
 import { withDiscordRequestAuthority } from "./internal/request-authority.js";
 import { parseAndResolveChannelRecipient } from "./recipient-resolution.js";
-import type { DiscordReplyReference } from "./reply-reference.js";
 import type { sendMessageDiscord } from "./send.outbound.js";
 import { createDiscordSendResult } from "./send.receipt.js";
 import { buildDiscordSendError, createDiscordClient, resolveChannelId } from "./send.shared.js";
@@ -40,19 +39,6 @@ type VoiceMessageOpts = Pick<
   | "onPlatformSendDispatch"
   | "assertPlatformSendAuthorized"
 >;
-
-function toDiscordSendResult(
-  result: { id?: string | null; channel_id?: string | null },
-  fallbackChannelId: string,
-  reply?: DiscordReplyReference,
-): DiscordSendResult {
-  return createDiscordSendResult({
-    result,
-    fallbackChannelId,
-    kind: "voice",
-    reply,
-  });
-}
 
 async function withMaterializedVoiceMessageInput<T>(
   mediaUrl: string,
@@ -149,7 +135,12 @@ async function sendVoiceMessageDiscordInternal(
         direction: "outbound",
       });
 
-      return toDiscordSendResult(result, channelId, opts.reply);
+      return createDiscordSendResult({
+        result,
+        fallbackChannelId: channelId,
+        kind: "voice",
+        reply: opts.reply,
+      });
     } catch (err) {
       if (channelId && rest && token) {
         throw await buildDiscordSendError(err, {

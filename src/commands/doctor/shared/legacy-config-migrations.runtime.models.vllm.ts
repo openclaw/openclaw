@@ -89,8 +89,7 @@ function hasLegacyVllmQwenThinkingFormat(defaultModels: unknown): boolean {
 }
 
 function hasLegacyVllmQwenThinkingProviderParams(provider: unknown): boolean {
-  const params = getRecord(getRecord(provider)?.params);
-  return Boolean(params && getLegacyVllmQwenThinkingFormat(params));
+  return hasLegacyVllmQwenThinkingParams(getRecord(provider)?.params);
 }
 
 function hasLegacyVllmQwenThinkingModelParams(provider: unknown): boolean {
@@ -98,10 +97,7 @@ function hasLegacyVllmQwenThinkingModelParams(provider: unknown): boolean {
   if (!Array.isArray(models)) {
     return false;
   }
-  return models.some((model) => {
-    const params = getRecord(getRecord(model)?.params);
-    return Boolean(params && getLegacyVllmQwenThinkingFormat(params));
-  });
+  return models.some((model) => hasLegacyVllmQwenThinkingParams(getRecord(model)?.params));
 }
 
 function hasLegacyVllmQwenThinkingParams(params: unknown): boolean {

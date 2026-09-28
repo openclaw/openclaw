@@ -8,6 +8,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isCodexAppServerRequestTimeoutError, type CodexAppServerClient } from "./client.js";
+import { stringifyCodexPolicy } from "./config-policy-json.js";
 import type { CodexPluginDestructiveApprovalMode } from "./config.js";
 import { readCodexMcpToolConnectorId } from "./mcp-tool-metadata.js";
 import { buildCodexAppApprovalOverrides } from "./plugin-app-approval-overrides.js";
@@ -15,7 +16,6 @@ import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
   buildPluginAppPolicyContext,
   disableUnlistedCodexApps,
-  stringifyCodexPluginPolicy,
   type CodexAppPolicyContextEntry,
   type CodexPluginThreadConfig,
   type PluginAppPolicyContext,
@@ -562,7 +562,7 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
   const fingerprint = crypto
     .createHash("sha256")
     .update(
-      stringifyCodexPluginPolicy({
+      stringifyCodexPolicy({
         version: 1,
         namespace: CODEX_SCHEDULED_APP_AUTHORITY_NAMESPACE,
         authority: scheduled,
@@ -663,7 +663,7 @@ export function buildScheduledCodexAppAuthorityInputFingerprint(
   return crypto
     .createHash("sha256")
     .update(
-      stringifyCodexPluginPolicy({
+      stringifyCodexPolicy({
         version: 1,
         namespace: CODEX_SCHEDULED_APP_AUTHORITY_NAMESPACE,
         baseFingerprint,

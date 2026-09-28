@@ -339,7 +339,13 @@ exit 17
         BASELINE_VERSION,
       );
       const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
-      const functions = ["repair_2026_7_33_ai_runtime", "install_baseline", "start_gateway"]
+      const functions = [
+        "normalize_baseline_spec",
+        "normalize_baseline",
+        "repair_2026_7_33_ai_runtime",
+        "install_baseline",
+        "start_gateway",
+      ]
         .map((name) => {
           const start = source.indexOf(`${name}() {`);
           const end = source.indexOf("\n}\n", start);
@@ -391,7 +397,6 @@ source "$HELPER"
 source "$INSTANCE_HELPER"
 ${functions}
 source "$MISSING_LOAD_PATH"
-normalize_baseline() { baseline_spec="openclaw@$BASELINE_VERSION"; baseline_version="$BASELINE_VERSION"; baseline_version_expected=1; }
 package_root() { printf '%s/lib/node_modules/openclaw' "$npm_config_prefix"; }
 read_installed_version() { node -p 'require(process.env.npm_config_prefix+"/lib/node_modules/openclaw/package.json").version'; }
 openclaw_e2e_maybe_timeout() { shift; "$@"; }
@@ -402,6 +407,7 @@ check_gateway_probes() { test -n "$gateway_pid"; test -f "$READY"; }
 stop_gateway() { :; }
 phase() { shift; "$@"; }
 registry_before="$NPM_CONFIG_REGISTRY"
+normalize_baseline
 if [ "$STAGE" = install ]; then
   install_baseline
   test "$baseline_version" = "$BASELINE_VERSION"
@@ -442,6 +448,7 @@ node -e 'const assert=require("node:assert/strict"); for(const name of ["opencla
               MISSING_LOAD_PATH: resolve("scripts/e2e/lib/upgrade-survivor/missing-load-path.sh"),
               STAGE: stage,
               BASELINE_VERSION,
+              BASELINE_RAW: `openclaw@${BASELINE_VERSION}`,
               SCENARIO: "base",
               UPDATE_RESTART_MODE: "manual",
               COMMAND_TIMEOUT: "90s",

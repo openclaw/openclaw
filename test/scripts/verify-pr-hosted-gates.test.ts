@@ -278,7 +278,14 @@ describe("verify-pr-hosted-gates", () => {
   });
 
   it("derives hosted-gate applicability from declared workflow path filters", () => {
-    expect(notApplicableScheduledHostedWorkflows([".github/workflows/ci.yml"])).toEqual([]);
+    expect(notApplicableScheduledHostedWorkflows([".github/workflows/ci.yml"])).toEqual([
+      "Blacksmith Testbox",
+      "Blacksmith ARM Testbox",
+      "Blacksmith Build Artifacts Testbox",
+    ]);
+    expect(
+      notApplicableScheduledHostedWorkflows([".github/actions/setup-node-env/action.yml"]),
+    ).toEqual([]);
     expect(
       notApplicableScheduledHostedWorkflows(["test/e2e/qa-lab/runtime/script-evidence.ts"]),
     ).toEqual([

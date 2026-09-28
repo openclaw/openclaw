@@ -1,12 +1,10 @@
 import fs from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../agents/sessions/session-manager.js";
-import {
-  readSessionTranscriptHistoryEventCount,
-  readSessionTranscriptHistoryEventPage,
-} from "../config/sessions/session-accessor.sqlite-history-events.js";
+import { readSessionTranscriptHistoryEventPage } from "../config/sessions/session-accessor.sqlite-history-events.js";
 import {
   readSessionTranscriptHistoryEvents,
+  readSessionTranscriptHistoryEventCount,
   readSessionTranscriptHistoryEventById,
 } from "../config/sessions/session-accessor.sqlite-history.test-support.js";
 import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.test-support.js";

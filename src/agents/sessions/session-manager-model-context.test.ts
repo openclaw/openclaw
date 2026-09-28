@@ -34,16 +34,18 @@ it("reports context queue overload without losing context and recovers in admiss
     const expected = source.buildSessionContext();
     const release = createDeferredCore();
     const completed: number[] = [];
-    const spy = vi
-      .spyOn(WorkerTaskPool.prototype, "run")
-      .mockImplementationOnce(function (this: WorkerTaskPool<unknown, unknown>, input, options) {
-        spy.mockRestore();
-        // Hold this caller's first preparation while real pool admission fills the queue.
-        return this.run(async () => {
-          await release.promise;
-          return input;
-        }, options);
-      });
+    const spy = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementationOnce(function (
+      this: WorkerTaskPool<unknown, unknown>,
+      input,
+      options,
+    ) {
+      spy.mockRestore();
+      // Hold this caller's first preparation while real pool admission fills the queue.
+      return this.run(async () => {
+        await release.promise;
+        return input;
+      }, options);
+    });
     const accepted = Array.from({ length: 128 }, (_, index) =>
       SessionManager.openModelContextAsync(scope).then((context) => {
         completed.push(index);

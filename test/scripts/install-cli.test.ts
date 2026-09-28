@@ -1143,7 +1143,7 @@ fi
       const home = join(tmp, "home");
       const prefixInput = input === "literal tilde" ? "~/openclaw-local" : "openclaw-local";
       const prefix = join(input === "literal tilde" ? home : installRoot, "openclaw-local");
-      const nodeDir = join(prefix, "tools", "node-v24.19.0");
+      const nodeDir = join(prefix, "tools", "node-v24.21.0");
       const repoInput = input === "literal tilde" ? "~/openclaw-source" : "openclaw-source";
       const repo = join(input === "literal tilde" ? home : installRoot, "openclaw-source");
       mkdirSync(installRoot, { recursive: true });
@@ -1153,7 +1153,7 @@ fi
       mkdirSync(join(repo, "dist"), { recursive: true });
       mkdirSync(otherRoot, { recursive: true });
       symlinkSync(nodeExecutable, join(nodeDir, "bin", "node"));
-      symlinkSync("node-v24.19.0", join(prefix, "tools", "node"));
+      symlinkSync("node-v24.21.0", join(prefix, "tools", "node"));
       writeFileSync(
         join(nodeDir, "bin", "npm"),
         '#!/bin/bash\nif [[ "$1" == "--version" ]]; then printf "11.15.0\\n"; elif [[ "$1" == "config" ]]; then printf "null\\n"; fi\n',
@@ -1381,8 +1381,8 @@ fi
       expect(result.status).toBe(0);
       expect(result.stdout).not.toContain("Installing Node via apk");
       expect(() => readFileSync(apkLog, "utf8")).toThrow();
-      const nodeLink = join(prefix, "tools", "node-v24.19.0", "bin", "node");
-      const npmLink = join(prefix, "tools", "node-v24.19.0", "bin", "npm");
+      const nodeLink = join(prefix, "tools", "node-v24.21.0", "bin", "node");
+      const npmLink = join(prefix, "tools", "node-v24.21.0", "bin", "npm");
       expect(lstatSync(nodeLink).isSymbolicLink()).toBe(true);
       expect(readlinkSync(nodeLink)).toBe(fakeNode);
       expect(readlinkSync(npmLink)).toBe(fakeNpm);
@@ -1644,8 +1644,8 @@ fi
       );
 
       expect(result.status).toBe(0);
-      const nodeLink = join(prefix, "tools", "node-v24.19.0", "bin", "node");
-      const npmLink = join(prefix, "tools", "node-v24.19.0", "bin", "npm");
+      const nodeLink = join(prefix, "tools", "node-v24.21.0", "bin", "node");
+      const npmLink = join(prefix, "tools", "node-v24.21.0", "bin", "npm");
       expect(readFileSync(badNpmLog, "utf8")).toBe("--version\n");
       expect(readFileSync(goodNpmLog, "utf8")).toBe("--version\n");
       expect(readFileSync(goodNodeLog, "utf8")).toContain("npm --version");
@@ -1708,7 +1708,7 @@ fi
     }
     expect(readlinkSync(join(prefix, "tools", "node"))).toBe(oldRuntime);
     expect(readlinkSync(join(oldRuntime, "bin", "node"))).toBe(nodeExecutable);
-    expect(existsSync(join(prefix, "tools", "node-v24.19.0"))).toBe(false);
+    expect(existsSync(join(prefix, "tools", "node-v24.21.0"))).toBe(false);
   });
 
   it.each(["alias path", "empty entry"])(
@@ -1861,7 +1861,7 @@ fi
     (entry) => {
       const root = tempDirs.make("openclaw-install-cli-filtered-path-");
       const prefix = join(root, "prefix");
-      const managed = join(prefix, "tools", "node-v24.19.0", "bin");
+      const managed = join(prefix, "tools", "node-v24.21.0", "bin");
       const current = entry === "empty managed cwd" ? managed : join(root, "current");
       mkdirSync(managed, { recursive: true });
       mkdirSync(current, { recursive: true });

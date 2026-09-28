@@ -6,7 +6,6 @@ import type {
 import { describe, expect, it, vi } from "vitest";
 import type { EmbeddingProvider } from "./embeddings.js";
 import {
-  applyMemoryFallbackProviderState,
   resolveMemoryFallbackProviderRequest,
   resolveMemoryPrimaryProviderRequest,
   resolveMemoryProviderState,
@@ -89,32 +88,17 @@ describe("memory manager mistral provider wiring", () => {
   });
 
   it("stores mistral client after fallback activation", () => {
-    const openAiRuntime: EmbeddingProviderRuntime = {
-      id: "openai",
-      cacheKeyData: { provider: "openai", model: "text-embedding-3-small" },
-    };
     const mistralRuntime: EmbeddingProviderRuntime = {
       id: "mistral",
       cacheKeyData: { provider: "mistral", model: "mistral-embed" },
     };
     const mistralProvider = createProvider("mistral");
-    const current = resolveMemoryProviderState({
-      provider: createProvider("openai"),
+    const fallbackState = resolveMemoryProviderState({
+      provider: mistralProvider,
+      runtime: mistralRuntime,
       requestedProvider: "openai",
-      runtime: openAiRuntime,
-      fallbackFrom: undefined,
-      fallbackReason: undefined,
-      providerUnavailableReason: undefined,
-    });
-
-    const fallbackState = applyMemoryFallbackProviderState({
-      current,
       fallbackFrom: "openai",
-      reason: "forced test",
-      result: {
-        provider: mistralProvider,
-        runtime: mistralRuntime,
-      },
+      fallbackReason: "forced test",
     });
 
     expect(fallbackState.fallbackFrom).toBe("openai");
@@ -123,28 +107,21 @@ describe("memory manager mistral provider wiring", () => {
     expect(fallbackState.providerRuntime).toBe(mistralRuntime);
   });
 
-  it("clears provider unavailable reason after fallback activation", () => {
-    const fallbackState = applyMemoryFallbackProviderState({
-      current: resolveMemoryProviderState({
-        provider: null,
-        requestedProvider: "local",
-        fallbackFrom: undefined,
-        fallbackReason: undefined,
-        providerUnavailableReason: "Local embeddings degraded: worker crashed",
-        runtime: undefined,
-      }),
+  it("resolves a fallback provider as available", () => {
+    const fallbackState = resolveMemoryProviderState({
+      provider: createProvider("openai"),
+      requestedProvider: "local",
       fallbackFrom: "local",
-      reason: "worker crashed",
-      result: {
-        provider: createProvider("openai"),
-        runtime: {
-          id: "openai",
-          cacheKeyData: { provider: "openai", model: "text-embedding-3-small" },
-        },
-      },
+      fallbackReason: "worker crashed",
     });
 
     expect(fallbackState.providerUnavailableReason).toBeUndefined();
+    expect(fallbackState.lifecycle).toEqual({
+      mode: "fallback-active",
+      providerId: "openai",
+      fallbackFrom: "local",
+      reason: "worker crashed",
+    });
   });
 
   it.each([

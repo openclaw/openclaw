@@ -105,10 +105,6 @@ vi.mock("./listeners.js", () => ({
   registerDiscordListener: vi.fn(),
 }));
 
-vi.mock("./presence.js", () => ({
-  resolveDiscordPresenceUpdate: vi.fn(() => undefined),
-}));
-
 import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
 import { DISCORD_REST_TIMEOUT_MS } from "../proxy-request-client.js";
 import { registerDiscordListener } from "./listeners.js";
@@ -173,7 +169,6 @@ describe("createDiscordMonitorClient", () => {
     const gatewayPlugin = {
       id: "gateway",
       registerClient: vi.fn(),
-      registerRoutes: vi.fn(),
     } as Plugin;
 
     const result = await createDiscordMonitorClient({
@@ -266,7 +261,6 @@ describe("createDiscordMonitorClient", () => {
     const [options, handlers, plugins] = firstCreateClientCall(createClient);
     expect((options as { requestOptions?: unknown } | undefined)?.requestOptions).toEqual({
       timeout: DISCORD_REST_TIMEOUT_MS,
-      runtimeProfile: "persistent",
       maxQueueSize: 1000,
     });
     expect((options as { commandDeployHashStore?: unknown }).commandDeployHashStore).toBe(
@@ -304,7 +298,6 @@ describe("createDiscordMonitorClient", () => {
     const [options, handlers, plugins] = firstCreateClientCall(createClient);
     expect((options as { requestOptions?: unknown } | undefined)?.requestOptions).toEqual({
       timeout: DISCORD_REST_TIMEOUT_MS,
-      runtimeProfile: "persistent",
       maxQueueSize: 1000,
       fetch: restFetch,
     });

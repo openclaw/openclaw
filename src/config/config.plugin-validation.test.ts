@@ -1772,7 +1772,7 @@ describe("config plugin validation", () => {
         pluginMetadataSnapshot: {
           manifestRegistry: {
             plugins: [],
-            diagnostics: [],
+            diagnostics: [{ level: "info", message: "explicit plugin source selected" }],
           },
         },
       },

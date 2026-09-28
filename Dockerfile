@@ -78,12 +78,14 @@ COPY node-runtime-update.mjs ./
 COPY node-runtime-recovery.mjs ./
 COPY cli-root-options.mjs gateway-run-argv.mjs gateway-shutdown-budget.mjs ./
 COPY node-host-launcher.mjs ./
+COPY node-compile-cache.mjs ./
+COPY docker-entrypoint.mjs ./
 COPY openclaw.mjs ./
 COPY ui/package.json ./ui/package.json
 COPY patches ./patches
 COPY scripts/postinstall-bundled-plugins.mjs scripts/preinstall-package-manager-warning.mjs scripts/windows-cmd-helpers.mjs scripts/prepare-git-hooks.mjs scripts/check-install-dependency-ownership.mjs ./scripts/
-COPY scripts/lib/guard-inventory-utils.mjs ./scripts/lib/guard-inventory-utils.mjs
 COPY scripts/lib/package-dist-imports.mjs ./scripts/lib/package-dist-imports.mjs
+COPY scripts/lib/javascript-statements.mjs ./scripts/lib/javascript-statements.mjs
 COPY scripts/lib/package-lifecycle-marker.mjs ./scripts/lib/package-lifecycle-marker.mjs
 COPY scripts/lib/fs-safe-prebuild.mjs ./scripts/lib/fs-safe-prebuild.mjs
 COPY scripts/docker/verify-fs-safe-native.mjs ./scripts/docker/verify-fs-safe-native.mjs
@@ -109,6 +111,8 @@ FROM dependency-inputs AS build
 ARG OPENCLAW_DOCKER_BUILD_NODE_OPTIONS
 ARG OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB
 ARG OPENCLAW_DOCKER_BUILD_SKIP_DTS
+# Build checks inherit CI severity without changing the runtime image environment.
+ARG GITHUB_ACTIONS=false
 
 # Copy pinned Bun binary from the official image instead of fetching via curl.
 COPY --from=bun-binary /usr/local/bin/bun /usr/local/bin/bun
@@ -284,6 +288,8 @@ COPY --from=runtime-assets --chown=node:node /app/node-runtime-update.mjs .
 COPY --from=runtime-assets --chown=node:node /app/node-runtime-recovery.mjs .
 COPY --from=runtime-assets --chown=node:node /app/cli-root-options.mjs /app/gateway-run-argv.mjs /app/gateway-shutdown-budget.mjs ./
 COPY --from=runtime-assets --chown=node:node /app/node-host-launcher.mjs .
+COPY --from=runtime-assets --chown=node:node /app/node-compile-cache.mjs .
+COPY --from=runtime-assets --chown=node:node /app/docker-entrypoint.mjs .
 COPY --from=runtime-assets --chown=node:node /app/openclaw.mjs .
 COPY --from=runtime-assets --chown=node:node /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} ./${OPENCLAW_BUNDLED_PLUGIN_DIR}
 COPY --from=runtime-assets --chown=node:node /app/skills ./skills
@@ -449,5 +455,5 @@ RUN COREPACK_ENABLE_NETWORK=0 PNPM_CONFIG_OFFLINE=true pnpm --version
 # For external access from host/ingress, override bind to "lan" and set auth.
 HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
   CMD ["node", "dist/docker-healthcheck.js"]
-ENTRYPOINT ["tini", "-s", "--"]
+ENTRYPOINT ["tini", "-s", "--", "node", "/app/docker-entrypoint.mjs"]
 CMD ["node", "openclaw.mjs", "gateway"]

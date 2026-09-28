@@ -582,6 +582,35 @@ describe("conversation-owned temporary environments", () => {
     expect(service.get(created.attachment.environmentId)?.state).toBe("destroyed");
   });
 
+  it("retires prepared attachment authority before reset cleanup awaits inventory readiness", async () => {
+    const service = support.createService(support.createProvider());
+    const created = await service.createSessionAttachment(request, authorize);
+    const captured = service.captureSessionAttachment(created.attachment);
+    service.start();
+    await service.reconcileOnce();
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const ready = support.testState.store.ready.bind(support.testState.store);
+    vi.spyOn(support.testState.store, "ready").mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      await ready();
+    });
+    try {
+      replaceSessionEntrySync(scope(), {
+        sessionId: identity.sessionId,
+        lifecycleRevision: "reset-incarnation",
+        updatedAt: 2,
+      });
+      await entered.promise;
+      expect(() => captured.assertCurrent()).toThrow("no longer current");
+      expect(() => service.captureSessionAttachment(created.attachment)).toThrow();
+    } finally {
+      release.resolve();
+      await service.stop();
+    }
+  });
+
   it("closes authorization before waiting for provider teardown and requires a fresh key for a replacement", async () => {
     const stopped = createDeferredCore();
     const destroy = vi.fn(async () => await stopped.promise);

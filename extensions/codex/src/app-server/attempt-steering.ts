@@ -7,6 +7,7 @@ import {
   type AgentMessage,
   type queueAgentHarnessMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   isCodexAppServerIndeterminateRequestCancellationError,
   isCodexAppServerIndeterminateTransportError,
@@ -335,19 +336,14 @@ export function createCodexSteeringQueue(params: {
     options?: CodexSteeringQueueOptions,
     assertCurrent: () => void = () => {},
   ): { item: PendingSteerMessage; delivery: Promise<void> } => {
-    let resolveDelivery!: () => void;
-    let rejectDelivery!: (error: unknown) => void;
-    const delivery = new Promise<void>((resolve, reject) => {
-      resolveDelivery = resolve;
-      rejectDelivery = reject;
-    });
+    const { promise: delivery, resolve, reject } = createDeferred<void>();
     const item = {
       ...options,
       assertCurrent,
       acceptance: "open" as const,
       text,
-      resolve: resolveDelivery,
-      reject: rejectDelivery,
+      resolve,
+      reject,
       settled: false,
     };
     pendingMessages.add(item);

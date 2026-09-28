@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { statSync, type Stats } from "node:fs";
+import { lstatSync, realpathSync, statSync, type Stats } from "node:fs";
 import path from "node:path";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { formatCliJsonFailure } from "../cli/failure-output.js";
@@ -14,6 +14,11 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import type { UpdateDoctorWriteAuthority } from "../infra/update-doctor-result.js";
 import { POST_CORE_UPDATE_ENV } from "../infra/update-post-core-context.js";
+import {
+  readUpdateRunDriver,
+  sameUpdateRunDriver,
+  type UpdateRunDriver,
+} from "../infra/update-run-driver.js";
 import { UpdateRunRecordSchema } from "../infra/update-run-schema.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
@@ -105,6 +110,7 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
   runtime?: RuntimeEnv;
   json?: boolean;
   postCoreSchemaRepair?: UpdateDoctorWriteAuthority["postCoreSchemaRepair"];
+  onVerifiedBackup?: (snapshots: readonly BackupSqliteSnapshotFact[]) => void;
 }): Promise<DoctorDatabasePreflight | undefined> {
   if (process.env.OPENCLAW_UPDATE_IN_PROGRESS !== "1") {
     return undefined;
@@ -249,6 +255,7 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
       (options.runtime ?? defaultRuntime).log(
         `Verified agent-schema recovery backup retained at ${backup.archivePath}.`,
       );
+      options.onVerifiedBackup?.(requiredSnapshots);
       return schemas;
     }
     // 2026.9.2 invokes this Doctor before discarding its package rollback.
@@ -308,9 +315,11 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
 
 /** Complete a private CLI validation before bootstrap can reach any live writer. */
 export async function preflightUpdateDoctorCli(options: { json?: boolean }) {
+  // Pin the invoking parent before schema admission can yield or reparent us.
+  const parent = readUpdateRunDriver(process.ppid);
   const schemas = await guardUpdateDoctorSchemaUpgrade(options);
   if (schemas?.updateSchemaRehearsal) {
-    await rehearseDeferredUpdateDoctorSchema(schemas);
+    await rehearseDeferredUpdateDoctorSchemaForParent(schemas, defaultRuntime, parent);
     // The existing one-shot owner joins cleanup and drains the warning before exit.
     exitCliAfterOutput(defaultRuntime, 0);
   }
@@ -318,14 +327,36 @@ export async function preflightUpdateDoctorCli(options: { json?: boolean }) {
 }
 
 /** The shipped package validator may still roll back; it must never reach live Doctor writers. */
-export async function rehearseDeferredUpdateDoctorSchema(
+export function rehearseDeferredUpdateDoctorSchema(
   schemas: DoctorDatabasePreflight,
   runtime: RuntimeEnv = defaultRuntime,
+): Promise<void> {
+  return rehearseDeferredUpdateDoctorSchemaForParent(
+    schemas,
+    runtime,
+    readUpdateRunDriver(process.ppid),
+  );
+}
+
+async function rehearseDeferredUpdateDoctorSchemaForParent(
+  schemas: DoctorDatabasePreflight,
+  runtime: RuntimeEnv,
+  parent: UpdateRunDriver | undefined,
 ): Promise<void> {
   const selected = schemas.updateSchemaRehearsal;
   if (!selected) {
     throw new Error("Missing legacy update schema rehearsal admission.");
   }
+  if (!parent) {
+    throw new Error("The schema rehearsal parent identity is unavailable.");
+  }
+  const assertParent = () => {
+    const current = readUpdateRunDriver(process.ppid);
+    if (!current || !sameUpdateRunDriver(current, parent)) {
+      throw new Error("The schema rehearsal parent identity changed.");
+    }
+  };
+  assertParent();
   const [
     { createConfigIO },
     { resolveOpenClawPackageRoot },
@@ -360,6 +391,7 @@ export async function rehearseDeferredUpdateDoctorSchema(
       cause: new Error("The shipped package-validation handoff could not be verified."),
     });
   }
+  assertParent();
   const entry = await resolveGatewayInstallEntrypoint(root);
   if (!entry) {
     throw new Error("Candidate Doctor entrypoint is unavailable for private schema validation.");
@@ -368,14 +400,67 @@ export async function rehearseDeferredUpdateDoctorSchema(
     observe: false,
     pluginValidation: "core-only",
   }).readConfigFileSnapshot();
+  assertParent();
   const rehearsal = await prepareUpdateCandidateRehearsal({
     candidateRoot: root,
     config: snapshot.sourceConfig ?? snapshot.config,
     stateDir: resolveStateDir(),
   });
+  // Capture all producer-owned roots before an awaited inventory can retarget them.
+  const cleanupRoots = new Map(
+    rehearsal.cleanupDirectories.map((directory) => {
+      const identity = lstatSync(directory);
+      if (
+        !identity.isDirectory() ||
+        identity.isSymbolicLink() ||
+        realpathSync(directory) !== directory
+      ) {
+        throw new Error(`Private Doctor cleanup root is not physical; retained ${directory}.`);
+      }
+      return [directory, identity] as const;
+    }),
+  );
+  const assertCleanupDirectory = (directory: string) => {
+    const original = cleanupRoots.get(directory);
+    const current = lstatSync(directory);
+    if (
+      !original ||
+      !sameSnapshotFile(original, current) ||
+      !current.isDirectory() ||
+      current.isSymbolicLink() ||
+      current.uid !== original.uid ||
+      realpathSync(directory) !== directory
+    ) {
+      throw new Error(`Private Doctor cleanup identity changed; inspect ${directory}.`);
+    }
+  };
+  let failure: { error: unknown } | undefined;
   let settled = false;
+  let writerStarted = false;
+  let resourceWarnings: import("../plugins/doctor-contract-module.js").PluginDoctorMigrationBackupWarning[] =
+    [];
   try {
     const env = { ...rehearsal.env, OPENCLAW_UPDATE_IN_PROGRESS: "0" };
+    const { inspectPreparedDoctorRehearsal } =
+      await import("./doctor-update-rehearsal-inventory.js");
+    const admitted = await inspectPreparedDoctorRehearsal({
+      stateDir: rehearsal.stateDir,
+      pluginCodeLinks: rehearsal.pluginCodeLinks,
+      env,
+      assertCurrent: assertParent,
+    });
+    const current = await readDrivingUpdater();
+    if (
+      current?.runId !== selected.runId ||
+      !current.earlyDoctorRunning ||
+      current.postCoreStarted
+    ) {
+      throw new Error("The schema rehearsal updater changed before Doctor launch.");
+    }
+    resourceWarnings = admitted.fact.warnings;
+    runtime.log(JSON.stringify(admitted.fact));
+    admitted.assertPrepared();
+    writerStarted = true;
     const result = await runUtf8CommandWithTimeout(
       [
         process.execPath,
@@ -413,10 +498,27 @@ export async function rehearseDeferredUpdateDoctorSchema(
         `Private Doctor schema validation failed (${result.termination}): ${redactSupportString(result.stderr, { env, stateDir: rehearsal.stateDir }, { maxLength: 2000 })}`,
       );
     }
-  } finally {
-    if (settled) {
-      await rehearsal.cleanup();
+  } catch (error) {
+    failure = { error };
+  }
+  if (settled || !writerStarted) {
+    try {
+      // Refuse the whole cleanup if ownership was already lost; the producer
+      // rechecks each root again immediately before its individual removal.
+      for (const directory of cleanupRoots.keys()) {
+        assertCleanupDirectory(directory);
+      }
+      await rehearsal.cleanup(assertCleanupDirectory);
+    } catch (cleanupError) {
+      if (failure) {
+        runtime.error(`Warning: Private Doctor cleanup was not completed: ${String(cleanupError)}`);
+      } else {
+        throw cleanupError;
+      }
     }
+  }
+  if (failure) {
+    throw failure.error;
   }
   const warning = `Validated schema repair on private copies for OpenClaw ${selected.updaterVersion}; live agent databases are unchanged. Repair is deferred to the fresh post-core updater.`;
   const { UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV, writeUpdatePostInstallDoctorResult } =
@@ -425,8 +527,15 @@ export async function rehearseDeferredUpdateDoctorSchema(
   if (resultPath) {
     await writeUpdatePostInstallDoctorResult({
       resultPath,
-      result: { status: "ok", configHash: "unchanged", warnings: [warning] },
+      result: {
+        status: "ok",
+        configHash: "unchanged",
+        warnings: [warning, ...resourceWarnings.map((resourceWarning) => resourceWarning.message)],
+      },
     });
+  }
+  for (const resourceWarning of resourceWarnings) {
+    runtime.error(`Warning: ${resourceWarning.message}`);
   }
   runtime.log(warning);
 }

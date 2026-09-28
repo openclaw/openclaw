@@ -125,6 +125,9 @@ function setScheduleAtMs(schedule: Record<string, unknown>, value: unknown): voi
   const atMs = typeof value === "number" ? value : Number(value);
   // Invalid/out-of-range timestamps stay raw so cron gateway validation reports the user error.
   schedule.at = Number.isFinite(atMs) ? (timestampMsToIsoString(Math.floor(atMs)) ?? value) : value;
+  if (!isCronScheduleKind(schedule.kind)) {
+    schedule.kind = "at";
+  }
 }
 
 function canonicalizeCronToolSchedule(value: Record<string, unknown>): void {
@@ -134,9 +137,6 @@ function canonicalizeCronToolSchedule(value: Record<string, unknown>): void {
   if (schedule.atMs !== undefined) {
     setScheduleAtMs(schedule, schedule.atMs);
     delete schedule.atMs;
-    if (!isCronScheduleKind(schedule.kind)) {
-      schedule.kind = "at";
-    }
   }
   if (schedule.everyMs === undefined && schedule.every !== undefined) {
     schedule.everyMs = schedule.every;
@@ -169,9 +169,6 @@ function canonicalizeCronToolSchedule(value: Record<string, unknown>): void {
   if (value.atMs !== undefined) {
     setScheduleAtMs(schedule, value.atMs);
     delete value.atMs;
-    if (!isCronScheduleKind(schedule.kind)) {
-      schedule.kind = "at";
-    }
     hasSchedule = true;
   }
 

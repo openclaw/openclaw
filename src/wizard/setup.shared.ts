@@ -1,11 +1,14 @@
 // Shared setup-wizard steps used by the classic wizard and the bootstrap onboarding flow.
 import type { GatewayAuthChoice, OnboardOptions } from "../commands/onboard-types.js";
+import { setConfigValueAtPath } from "../config/config-paths.js";
 import { createConfigIO, resolveGatewayPort } from "../config/config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
 import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { applyMergePatch, createMergePatch } from "../config/merge-patch.js";
+import { isMergePatchObjectKeyAllowed } from "../config/patch-replace-paths.js";
 import type { ConfigWriteAfterWrite } from "../config/runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import { isPlainObject } from "../infra/plain-object.js";
 import {
   transformConfigWithPendingPluginInstalls,
   stripPendingPluginInstallRecords,
@@ -85,6 +88,33 @@ export function formatQuickstartGatewaySummary(
   ].join("\n");
 }
 
+function collectChangedWizardNullPaths(
+  base: unknown,
+  target: unknown,
+  path: string[] = [],
+  paths: string[][] = [],
+): string[][] {
+  if (!isPlainObject(target)) {
+    return paths;
+  }
+  const baseRecord = isPlainObject(base) ? base : {};
+  const parentPath = path.length > 0 ? path.join(".") : undefined;
+  for (const [key, targetValue] of Object.entries(target)) {
+    if (!isMergePatchObjectKeyAllowed(key, parentPath)) {
+      continue;
+    }
+    const childPath = [...path, key];
+    if (targetValue === null) {
+      if (baseRecord[key] !== null) {
+        paths.push(childPath);
+      }
+      continue;
+    }
+    collectChangedWizardNullPaths(baseRecord[key], targetValue, childPath, paths);
+  }
+  return paths;
+}
+
 export type WizardConfigWriteOptions = {
   allowConfigSizeDrop?: boolean;
   /** Reject the write if config changed after the caller's verified snapshot. */
@@ -107,6 +137,18 @@ export async function writeWizardConfigFile(
   config: OpenClawConfig,
   opts: WizardConfigWriteOptions = {},
 ) {
+  const explicitNullPaths = opts.mergeBase
+    ? collectChangedWizardNullPaths(opts.mergeBase, config)
+    : [];
+  const explicitSetValueSource =
+    explicitNullPaths.length > 0
+      ? structuredClone(opts.writeOptions?.explicitSetValueSource ?? config)
+      : undefined;
+  if (explicitSetValueSource) {
+    for (const path of explicitNullPaths) {
+      setConfigValueAtPath(explicitSetValueSource, path, null);
+    }
+  }
   return await transformConfigWithPendingPluginInstalls({
     ...(opts.baseHash !== undefined ? { baseHash: opts.baseHash } : {}),
     // Caller-owned snapshots are one-shot CAS preconditions, not retry baselines.
@@ -114,6 +156,15 @@ export async function writeWizardConfigFile(
     ...(opts.afterWrite ? { afterWrite: opts.afterWrite } : {}),
     writeOptions: {
       ...opts.writeOptions,
+      ...(explicitNullPaths.length > 0
+        ? {
+            explicitSetPaths: [
+              ...(opts.writeOptions?.explicitSetPaths ?? []),
+              ...explicitNullPaths,
+            ],
+            explicitSetValueSource,
+          }
+        : {}),
       ...(opts.allowConfigSizeDrop !== undefined
         ? { allowConfigSizeDrop: opts.allowConfigSizeDrop }
         : {}),
@@ -124,6 +175,9 @@ export async function writeWizardConfigFile(
       const nextConfig = opts.mergeBase
         ? (applyMergePatch(current, createMergePatch(opts.mergeBase, config)) as OpenClawConfig)
         : config;
+      for (const path of explicitNullPaths) {
+        setConfigValueAtPath(nextConfig, path, null);
+      }
       opts.onPreparedCommit?.(context.snapshot, nextConfig);
       return { nextConfig };
     },

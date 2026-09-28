@@ -421,7 +421,8 @@ describe("skill upload transaction kernels", () => {
         },
         options,
       );
-      expect(claimed.archive_blob).toEqual(new Uint8Array(archive));
+      expect(claimed.archive_blob.constructor).toBe(Uint8Array);
+      expect(Buffer.compare(claimed.archive_blob, archive)).toBe(0);
       expect(archiveReads).toEqual([{ bytes: archive.length, inTransaction: true }]);
       const copiedBytes = bufferFrom.mock.calls.reduce((total, [value]) => {
         const input: unknown = value;

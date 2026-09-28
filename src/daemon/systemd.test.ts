@@ -6,6 +6,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { err as resultErr, ok } from "@openclaw/normalization-core/result";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildGatewayInstallPlan } from "../commands/daemon-install-helpers.js";
 import type { ExecResult } from "./exec-file.js";
 import {
@@ -102,17 +103,14 @@ vi.mock("./exec-file.js", () => {
   };
 });
 
-import { splitArgsPreservingQuotes } from "./arg-split.js";
 import * as systemdExec from "./systemd-exec.js";
 import { resolveSystemdUnitPath } from "./systemd-service-files.js";
-import { parseSystemdEnvAssignments, parseSystemdExecStart } from "./systemd-unit.js";
 import { hasSudoToRootSystemdUserManagerMismatch } from "./systemd-user-transport.js";
 import {
   findInstalledSystemdGatewayScope,
   findSystemdGatewayInstallation,
   formatDuelingScopesWarning,
   installSystemdService,
-  isNonFatalSystemdInstallProbeError,
   isSystemdServiceEnabled,
   isSystemdUnitActive,
   isSystemdUserServiceAvailable,
@@ -420,6 +418,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("systemd availability", () => {
   beforeEach(() => {
@@ -872,10 +871,23 @@ describe("system-scope gateway unit detection (openclaw#87577)", () => {
     execFileMock.mockReset();
   });
 
-  function mockUnitFileLayout(layout: { user?: boolean; system?: string | false }) {
+  function mockUnitFileLayout(layout: {
+    user?: boolean | string | string[];
+    system?: string | false;
+  }) {
     vi.spyOn(fs, "access").mockImplementation(async (pathArg) => {
       const p = pathLikeToString(pathArg);
-      if (layout.user && p.includes("/.config/systemd/user/")) {
+      const userOk = (() => {
+        if (!layout.user) {
+          return false;
+        }
+        if (layout.user === true) {
+          return p.includes("/.config/systemd/user/");
+        }
+        const names = Array.isArray(layout.user) ? layout.user : [layout.user];
+        return names.some((name) => p.includes("/.config/systemd/user/") && p.endsWith(`/${name}`));
+      })();
+      if (userOk) {
         return undefined;
       }
       if (typeof layout.system === "string" && p === layout.system) {
@@ -898,25 +910,6 @@ describe("system-scope gateway unit detection (openclaw#87577)", () => {
     expect(result?.scope).toBe("user");
     expect(result?.unitName).toBe(GATEWAY_SERVICE);
     expect(result?.unitPath).toContain("/.config/systemd/user/openclaw-gateway.service");
-  });
-
-  it("findSystemdGatewayInstallation reports the dueling state when both units exist", async () => {
-    mockUnitFileLayout({
-      user: true,
-      system: "/etc/systemd/system/openclaw-gateway.service",
-    });
-    const installation = await findSystemdGatewayInstallation({ HOME: TEST_MANAGED_HOME });
-    expect(installation.kind).toBe("dueling");
-    if (installation.kind !== "dueling") {
-      throw new Error("expected dueling installation");
-    }
-    expect(installation.user.scope).toBe("user");
-    expect(installation.user.unitPath).toContain("/.config/systemd/user/openclaw-gateway.service");
-    expect(installation.system).toEqual({
-      scope: "system",
-      unitName: GATEWAY_SERVICE,
-      unitPath: "/etc/systemd/system/openclaw-gateway.service",
-    });
   });
 
   it("findSystemdGatewayInstallation reports user-only", async () => {
@@ -957,13 +950,23 @@ describe("system-scope gateway unit detection (openclaw#87577)", () => {
     expect(installation.kind).toBe("none");
   });
 
-  it("formatDuelingScopesWarning renders remediation only for the dueling state", async () => {
-    mockUnitFileLayout({
-      user: true,
-      system: "/etc/systemd/system/openclaw-gateway.service",
-    });
-    const installation = await findSystemdGatewayInstallation({ HOME: TEST_MANAGED_HOME });
-    const warning = formatDuelingScopesWarning(installation, 18789);
+  it("formatDuelingScopesWarning renders remediation only for the dueling state", () => {
+    const warning = formatDuelingScopesWarning(
+      {
+        kind: "dueling",
+        user: {
+          scope: "user",
+          unitName: GATEWAY_SERVICE,
+          unitPath: `${TEST_MANAGED_HOME}/.config/systemd/user/openclaw-gateway.service`,
+        },
+        system: {
+          scope: "system",
+          unitName: GATEWAY_SERVICE,
+          unitPath: "/etc/systemd/system/openclaw-gateway.service",
+        },
+      },
+      18789,
+    );
     expect(warning).toContain("/.config/systemd/user/openclaw-gateway.service");
     expect(warning).toContain("/etc/systemd/system/openclaw-gateway.service");
     expect(warning).toContain("18789");
@@ -1014,25 +1017,6 @@ describe("system-scope gateway unit detection (openclaw#87577)", () => {
     findSystemGatewayServicesMock.mockResolvedValueOnce([]);
     const result = await findInstalledSystemdGatewayScope({ HOME: TEST_MANAGED_HOME });
     expect(result).toBeNull();
-  });
-
-  it("findInstalledSystemdGatewayScope falls back to marker-owned system unit with custom name", async () => {
-    mockUnitFileLayout({ system: false });
-    findSystemGatewayServicesMock.mockResolvedValueOnce([
-      {
-        platform: "linux",
-        label: "openclaw.service",
-        detail: "unit: /etc/systemd/system/openclaw.service",
-        scope: "system",
-        marker: "openclaw",
-      },
-    ]);
-    const result = await findInstalledSystemdGatewayScope({ HOME: TEST_MANAGED_HOME });
-    expect(result).toEqual({
-      scope: "system",
-      unitName: "openclaw.service",
-      unitPath: "/etc/systemd/system/openclaw.service",
-    });
   });
 
   it("findInstalledSystemdGatewayScope ignores legacy clawdbot system units in the marker fallback", async () => {
@@ -1211,32 +1195,6 @@ describe("system-scope gateway unit detection (openclaw#87577)", () => {
       /sudo systemctl stop openclaw-gateway\.service/,
     );
     expect(execFileMock).not.toHaveBeenCalled();
-  });
-});
-
-describe("isNonFatalSystemdInstallProbeError", () => {
-  it("matches wrapper-only WSL install probe failures", () => {
-    expect(
-      isNonFatalSystemdInstallProbeError(
-        new Error("Command failed: systemctl --user is-enabled openclaw-gateway.service"),
-      ),
-    ).toBe(true);
-  });
-
-  it("matches bus-unavailable install probe failures", () => {
-    expect(
-      isNonFatalSystemdInstallProbeError(
-        new Error("systemctl is-enabled unavailable: Failed to connect to bus"),
-      ),
-    ).toBe(true);
-  });
-
-  it("does not match real infrastructure failures", () => {
-    expect(
-      isNonFatalSystemdInstallProbeError(
-        new Error("systemctl is-enabled unavailable: read-only file system"),
-      ),
-    ).toBe(false);
   });
 });
 
@@ -1617,71 +1575,6 @@ describe("resolveSystemdUnitPath", () => {
   });
 });
 
-describe("splitArgsPreservingQuotes", () => {
-  it("splits on whitespace outside quotes", () => {
-    expect(splitArgsPreservingQuotes('/usr/bin/openclaw gateway start --name "My Bot"')).toEqual([
-      "/usr/bin/openclaw",
-      "gateway",
-      "start",
-      "--name",
-      "My Bot",
-    ]);
-  });
-
-  it("supports systemd-style backslash escaping", () => {
-    expect(
-      splitArgsPreservingQuotes('openclaw --name "My \\"Bot\\"" --foo bar', {
-        escapeMode: "backslash",
-      }),
-    ).toEqual(["openclaw", "--name", 'My "Bot"', "--foo", "bar"]);
-  });
-
-  it("supports schtasks-style escaped quotes while preserving other backslashes", () => {
-    expect(
-      splitArgsPreservingQuotes('openclaw --path "C:\\\\Program Files\\\\OpenClaw"', {
-        escapeMode: "backslash-quote-only",
-      }),
-    ).toEqual(["openclaw", "--path", "C:\\\\Program Files\\\\OpenClaw"]);
-
-    expect(
-      splitArgsPreservingQuotes('openclaw --label "My \\"Quoted\\" Name"', {
-        escapeMode: "backslash-quote-only",
-      }),
-    ).toEqual(["openclaw", "--label", 'My "Quoted" Name']);
-  });
-});
-
-describe("parseSystemdEnvAssignments", () => {
-  it("parses single-quoted whole assignments", () => {
-    expect(
-      parseSystemdEnvAssignments("'OPENCLAW_GATEWAY_TOKEN=single quoted token' FOO=bar"),
-    ).toEqual([
-      { key: "OPENCLAW_GATEWAY_TOKEN", value: "single quoted token" },
-      { key: "FOO", value: "bar" },
-    ]);
-  });
-
-  it("keeps apostrophes inside unquoted assignment values literal", () => {
-    expect(parseSystemdEnvAssignments("FOO=can't OPENCLAW_GATEWAY_TOKEN=token")).toEqual([
-      { key: "FOO", value: "can't" },
-      { key: "OPENCLAW_GATEWAY_TOKEN", value: "token" },
-    ]);
-  });
-});
-
-describe("parseSystemdExecStart", () => {
-  it("preserves quoted arguments", () => {
-    const execStart = '/usr/bin/openclaw gateway start --name "My Bot"';
-    expect(parseSystemdExecStart(execStart)).toEqual([
-      "/usr/bin/openclaw",
-      "gateway",
-      "start",
-      "--name",
-      "My Bot",
-    ]);
-  });
-});
-
 describe("readSystemdServiceExecStart", () => {
   it.each([
     "none",
@@ -1846,6 +1739,25 @@ describe("readSystemdServiceExecStart", () => {
     await expect(
       readSystemdServiceExecStart({ HOME: TEST_SERVICE_HOME }, { requireEffective: true }),
     ).rejects.toThrow(`${TEST_SERVICE_HOME}/.config/systemd/user/${GATEWAY_SERVICE}`);
+  });
+
+  it("inspects the discovered legacy user unit when the canonical file is absent", async () => {
+    const home = tempDirs.make("openclaw-legacy-inspect-");
+    const env = { HOME: home, OPENCLAW_PROFILE: "lisa" };
+    const unitPath = path.join(home, ".config", "systemd", "user", "openclaw-lisa.service");
+    await fs.mkdir(path.dirname(unitPath), { recursive: true, mode: 0o755 });
+    await fs.writeFile(
+      unitPath,
+      "[Service]\nExecStart=/usr/bin/openclaw gateway run --port 18790\n",
+      { encoding: "utf8", mode: 0o644 },
+    );
+    execFileMock.mockImplementation((_command, _args, _options, callback) => {
+      callback(createExecFileError("Call failed: Unit openclaw-lisa.service not found."), "", "");
+    });
+    await expect(readSystemdServiceExecStart(env)).resolves.toMatchObject({
+      programArguments: ["/usr/bin/openclaw", "gateway", "run", "--port", "18790"],
+      sourcePath: unitPath,
+    });
   });
 
   it.each([false, true])(
@@ -4275,6 +4187,33 @@ describe("uninstallUserSystemdGatewayUnit", () => {
     },
   );
 
+  it("disables and removes the discovered legacy user unit", async () => {
+    const tempHomeRoot = tempDirs.make("openclaw-legacy-user-unit-");
+    const home = path.join(tempHomeRoot, "home");
+    const env = { HOME: home, OPENCLAW_PROFILE: "lisa" };
+    const unitPath = path.join(home, ".config", "systemd", "user", "openclaw-lisa.service");
+    await fs.mkdir(path.dirname(unitPath), { recursive: true, mode: 0o755 });
+    await fs.writeFile(unitPath, "[Unit]\nDescription=OpenClaw Gateway (profile: lisa)\n", {
+      encoding: "utf8",
+      mode: 0o644,
+    });
+    execFileMock
+      .mockImplementationOnce(systemctlVersionResult())
+      .mockImplementationOnce(systemctlUserSuccess("disable", "--now", "openclaw-lisa.service"))
+      .mockImplementationOnce(systemctlUserSuccess("daemon-reload"));
+
+    const { stdout } = createWritableStreamMock();
+    const result = await uninstallUserSystemdGatewayUnit({ env, stdout });
+
+    expect(result).toMatchObject({
+      unitName: "openclaw-lisa.service",
+      unitPath,
+      removed: true,
+      disabled: true,
+    });
+    await expect(fs.access(unitPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("surfaces daemon-reload failure after removing the disabled unit", async () => {
     await withUserUnitFixture(async ({ env, unitPath }) => {
       await fs.writeFile(unitPath, "[Unit]\nDescription=OpenClaw Gateway\n", {
@@ -4330,6 +4269,30 @@ describe("systemd service control", () => {
       }),
     ).rejects.toThrow("same-name system ownership");
 
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("checks system ownership for the selected legacy user unit", async () => {
+    vi.spyOn(fs, "access").mockImplementation(async (target) => {
+      const p = pathLikeToString(target);
+      if (p.includes("/.config/systemd/user/") && p.endsWith("/openclaw-lisa.service")) {
+        return;
+      }
+      throw Object.assign(new Error("missing"), { code: "ENOENT" });
+    });
+    assertNoSystemSystemdOwnershipMock.mockRejectedValueOnce(
+      new Error("same-name system ownership"),
+    );
+    execFileMock.mockImplementationOnce(execFileSuccess());
+
+    await expect(
+      startSystemdService({
+        stdout: createWritableStreamMock().stdout,
+        env: { HOME: TEST_MANAGED_HOME, OPENCLAW_PROFILE: "lisa" },
+      }),
+    ).rejects.toThrow("same-name system ownership");
+
+    expect(assertNoSystemSystemdOwnershipMock).toHaveBeenCalledWith("openclaw-lisa.service");
     expect(execFileMock).toHaveBeenCalledTimes(1);
   });
 

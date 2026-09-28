@@ -750,20 +750,16 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         throw new Error(`iMessage ${action} requires address or participant.`);
       }
       const resolvedChatGuid = await chatGuid();
-      if (action === "addParticipant") {
-        await runtime.addParticipant({
-          chatGuid: resolvedChatGuid,
-          address,
-          options: { ...opts, chatGuid: resolvedChatGuid },
-        });
-        return jsonResult({ ok: true, added: address, chatGuid: resolvedChatGuid });
-      }
-      await runtime.removeParticipant({
+      await runtime[action]({
         chatGuid: resolvedChatGuid,
         address,
         options: { ...opts, chatGuid: resolvedChatGuid },
       });
-      return jsonResult({ ok: true, removed: address, chatGuid: resolvedChatGuid });
+      return jsonResult({
+        ok: true,
+        [action === "addParticipant" ? "added" : "removed"]: address,
+        chatGuid: resolvedChatGuid,
+      });
     }
 
     if (action === "leaveGroup") {

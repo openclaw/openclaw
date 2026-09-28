@@ -17,14 +17,15 @@ import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest"
 import { createSlackSendTestClient } from "./blocks.test-helpers.js";
 import * as clientDelivery from "./client-delivery.js";
 import { slackOutbound } from "./outbound-adapter.js";
-import { sendMessageSlack } from "./send.js";
 import { clearSlackThreadParticipationCache } from "./sent-thread-cache.js";
 
 const sendMessageSlackMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./send.runtime.js", () => ({
+vi.mock("./send.js", () => ({
   sendMessageSlack: sendMessageSlackMock,
 }));
+
+const { sendMessageSlack } = await vi.importActual<typeof import("./send.js")>("./send.js");
 
 const cfg: OpenClawConfig = {
   channels: {

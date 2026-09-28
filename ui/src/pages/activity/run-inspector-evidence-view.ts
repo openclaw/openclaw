@@ -88,18 +88,6 @@ export function renderRunInspectorRemediation(
   `;
 }
 
-function receiptInspectorHref(
-  selector: RunInspectorSelector,
-  selectorId: string,
-  decisionCursor: string | undefined,
-  basePath: string,
-): string {
-  return activityRunInspectorSelectorHref(selector, basePath, {
-    id: selectorId,
-    decisionCursor,
-  });
-}
-
 function decisionOutcomeLabel(outcome: DecisionReceiptDisplayV1["decision"]["outcome"]): string {
   return t(
     `activity.runInspector.decisions.outcomes.${outcome === "not-applicable" ? "notApplicable" : outcome}`,
@@ -265,12 +253,10 @@ export function renderRunInspectorDecisions(
                 const selected = selectedReceipt?.selectorId === receipt.selectorId;
                 return html`<li>
                   <a
-                    href=${receiptInspectorHref(
-                      selector,
-                      receipt.selectorId,
-                      state.receiptPageCursors.get(receipt.selectorId),
-                      basePath,
-                    )}
+                    href=${activityRunInspectorSelectorHref(selector, basePath, {
+                      id: receipt.selectorId,
+                      decisionCursor: state.receiptPageCursors.get(receipt.selectorId),
+                    })}
                     aria-current=${selected ? "true" : nothing}
                     aria-label=${t("activity.runInspector.decisions.inspectLabel", {
                       summary:

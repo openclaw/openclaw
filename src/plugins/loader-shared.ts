@@ -315,6 +315,7 @@ function createManifestPluginRecord(params: {
     contracts: manifestRecord.contracts,
     dashboard: manifestRecord.dashboard,
     controlUi: manifestRecord.controlUi,
+    uiCapabilities: manifestRecord.uiCapabilities,
     mcpServers: manifestRecord.mcpServers,
   });
   if (!params.shouldLoadModules) {
@@ -422,14 +423,26 @@ export function maybeThrowOnPluginLoadError(
   registry: PluginRegistry,
   throwOnLoadError: boolean | undefined,
   retained?: ReadonlyMap<string, PluginRecord>,
+  previousRegistry?: PluginRegistry,
+  replacedIds?: ReadonlySet<string>,
 ): void {
   if (!throwOnLoadError) {
     return;
   }
   // Startup diagnostics remain visible; only newly evaluated failures reject a replacement.
-  const failedPlugins = registry.plugins.filter(
-    (entry) => entry.status === "error" && retained?.get(entry.id) !== entry,
-  );
+  const failedPlugins = registry.plugins.filter((entry) => {
+    if (entry.status !== "error" || retained?.get(entry.id) === entry) {
+      return false;
+    }
+    const previous = previousRegistry?.plugins.find((record) => record.id === entry.id);
+    return (
+      replacedIds?.has(entry.id) ||
+      previous?.status !== "error" ||
+      previous.source !== entry.source ||
+      previous.failurePhase !== entry.failurePhase ||
+      previous.error !== entry.error
+    );
+  });
   if (failedPlugins.length > 0) {
     throw new PluginLoadFailureError(registry, failedPlugins);
   }

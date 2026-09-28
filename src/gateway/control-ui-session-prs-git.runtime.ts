@@ -1,5 +1,5 @@
-import fs from "node:fs/promises";
 import nodePath from "node:path";
+import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { runGit } from "../agents/worktrees/git.js";
 import type { GitReadOperations } from "../infra/git-read-operations.js";
 import {
@@ -45,23 +45,15 @@ const MAX_UNTRACKED_STAT_FILES = 100;
 // stats are an approximation, not a patch surface.
 const MAX_UNTRACKED_STAT_BYTES = 512 * 1024;
 
-/**
- * Line count for one untracked file, computed in-process: this runs on the
- * chat view's poll, so it must not spawn one git subprocess per path. lstat
- * gates on regular files so FIFOs/sockets can never block the RPC and symlinks
- * never resolve outside the checkout; only a line count is exposed, so
- * sessions-diff's hardlink content guard is unnecessary here.
- */
+/** Count lines without a subprocess per file; hardlinked content only exposes a count. */
 async function untrackedFileAdditions(root: string, filePath: string): Promise<number> {
   try {
-    const abs = nodePath.resolve(root, filePath);
-    const info = await fs.lstat(abs);
-    if (!info.isFile() || info.size === 0 || info.size > MAX_UNTRACKED_STAT_BYTES) {
-      return 0;
-    }
-    const body = await fs.readFile(abs);
+    const { buffer: body } = await readRegularFile({
+      filePath: nodePath.resolve(root, filePath),
+      maxBytes: MAX_UNTRACKED_STAT_BYTES,
+    });
     // Binary files count 0 lines, mirroring git's shortstat behavior.
-    if (body.subarray(0, 8192).includes(0)) {
+    if (body.length === 0 || body.subarray(0, 8192).includes(0)) {
       return 0;
     }
     let lines = 0;

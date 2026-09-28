@@ -525,7 +525,7 @@ export async function resolveIMessageInboundDecision(params: {
   const groupAllowFromForAccess = isGroup
     ? groupAllowFromWithLegacyChatTargets
     : params.groupAllowFrom;
-  const { route, bindingResolution } = resolveIMessageConversationRoute({
+  const { route, bindingResolution } = await resolveIMessageConversationRoute({
     cfg: params.cfg,
     accountId: params.accountId,
     isGroup,

@@ -3,8 +3,8 @@ import { appendFileSync, createWriteStream, existsSync, mkdirSync } from "node:f
 import { dirname, join } from "node:path";
 import { runReleaseAgentTurn } from "./agent.ts";
 import type {
-  AgentTurnResult,
   CommandOptions,
+  CommandResult,
   GatewayHandle,
   LaneState,
   ProviderConfig,
@@ -756,19 +756,16 @@ export async function runInstalledAgentTurn(params: {
   env: NodeJS.ProcessEnv;
   label: string;
   logPath: string;
-}): Promise<AgentTurnResult> {
-  return runReleaseAgentTurn(
-    params,
-    (args, timeoutMs) =>
-      runInstalledCli({
-        cliPath: params.cliPath,
-        args,
-        cwd: params.cwd,
-        env: params.env,
-        logPath: params.logPath,
-        timeoutMs,
-      }),
-    "installed agent turn",
+}): Promise<CommandResult> {
+  return runReleaseAgentTurn(params, (args, timeoutMs) =>
+    runInstalledCli({
+      cliPath: params.cliPath,
+      args,
+      cwd: params.cwd,
+      env: params.env,
+      logPath: params.logPath,
+      timeoutMs,
+    }),
   );
 }
 

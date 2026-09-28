@@ -397,14 +397,12 @@ module.exports = { stateMigrations: [{
     if (inventory !== "readable") {
       expect(result.stepReceipts).toContainEqual(expect.objectContaining({ outcome: "refused" }));
       const blocker = result.stepReceipts.findIndex((receipt) => receipt.outcome === "refused");
+      // Agent history now needs the artifact-preserving snapshot before plugin inventory does.
       expect(result.stepReceipts[blocker]).toMatchObject({
-        id:
-          inventory === "staging-unavailable"
-            ? "plugin-migration-preparation"
-            : "plugin-doctor-state",
+        id: inventory === "staging-unavailable" ? "agent-migration-targets" : "plugin-doctor-state",
         refusal: {
           code:
-            inventory === "staging-unavailable" ? "plugin-inventory-unavailable" : "step-refused",
+            inventory === "staging-unavailable" ? "agent-target-discovery-failed" : "step-refused",
         },
       });
       expect(result.stepReceipts.slice(blocker + 1)).toEqual(

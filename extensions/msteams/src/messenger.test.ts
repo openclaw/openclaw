@@ -29,8 +29,8 @@ import {
   renderReplyPayloadsToMessages,
   sendMSTeamsMessages,
 } from "./messenger.js";
+import { createMockApp } from "./messenger.test-helpers.js";
 import { setMSTeamsRuntime } from "./runtime.js";
-import type { MSTeamsApp } from "./sdk.js";
 
 const chunkMarkdownText = (text: string, limit: number) => {
   if (!text) {
@@ -97,71 +97,6 @@ function requireAiGeneratedEntity(entities: unknown): Record<string, unknown> {
     throw new Error("expected Teams AI-generated entity");
   }
   return entity;
-}
-
-type MockAppOptions = {
-  createFn?: (activity: unknown) => Promise<unknown>;
-  onClientCreated?: (serviceUrl: string, conversationId: string) => void;
-  onReference?: (ref: unknown) => void;
-};
-
-function createMockApp(opts?: MockAppOptions): MSTeamsApp {
-  const createFn =
-    opts?.createFn ??
-    (async (activity: unknown) => {
-      const text = (activity as Record<string, unknown>)?.text;
-      return { id: typeof text === "string" ? `id:${text}` : "created" };
-    });
-  const apiServiceUrl = "https://smba.trafficmanager.net/amer";
-  return {
-    client: { request: vi.fn() },
-    tokenManager: {
-      getBotToken: async () => ({ toString: () => "bot-token" }),
-      getGraphToken: async () => ({ toString: () => "graph-token" }),
-    },
-    send: async (conversationId: string, activity: unknown) => {
-      opts?.onClientCreated?.("", conversationId);
-      return await createFn(activity);
-    },
-    activitySender: {
-      send: async (
-        activity: unknown,
-        ref: { serviceUrl?: string; conversation?: { id?: string } },
-      ) => {
-        opts?.onReference?.(ref);
-        opts?.onClientCreated?.(ref.serviceUrl ?? "", ref.conversation?.id ?? "");
-        return await createFn(activity);
-      },
-    },
-    // Mirror the SDK's `app.reply` which internally calls
-    // `app.send(toThreadedConversationId(channelId, msgId), activity)`. The
-    // test capture sees the threaded conversationId so existing assertions
-    // continue to work after we switched messenger.ts from manual URL
-    // construction to `app.reply`.
-    reply: async (conversationId: string, messageId: string, activity: unknown) => {
-      const threaded = `${conversationId};messageid=${messageId}`;
-      opts?.onClientCreated?.("", threaded);
-      return await createFn(activity);
-    },
-    api: {
-      serviceUrl: apiServiceUrl,
-      conversations: {
-        activities: (conversationId: string) => {
-          opts?.onClientCreated?.(apiServiceUrl, conversationId);
-          return {
-            create: async (activity: unknown) => {
-              opts?.onReference?.({ serviceUrl: apiServiceUrl, ...(activity as object) });
-              return createFn(activity);
-            },
-            update: async (_id: string, activity: unknown) => ({
-              id: (activity as Record<string, unknown>)?.id ?? "updated",
-            }),
-            delete: async () => {},
-          };
-        },
-      },
-    },
-  } as unknown as MSTeamsApp;
 }
 
 async function buildActivity(

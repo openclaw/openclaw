@@ -1,4 +1,5 @@
 import type { Part } from "@google/genai";
+import { isImageWithMediaPayload } from "../media-payload.js";
 import type { ProviderContext, ProviderModel, VideoContent } from "../provider-types.js";
 import {
   coerceTransportToolCallArguments,
@@ -7,11 +8,7 @@ import {
 import type { Tool } from "../types.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
-import {
-  describeToolResultMediaPlaceholder,
-  extractToolResultText,
-  isImageWithMediaPayload,
-} from "./tool-result-text.js";
+import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
 
 type GoogleContentPart = Part & Record<string, unknown>;
 type GoogleContent = { role: string; parts: GoogleContentPart[] };

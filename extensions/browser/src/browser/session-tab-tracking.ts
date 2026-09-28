@@ -19,7 +19,6 @@ import {
   activeDurableStorageKeys,
   deleteVolatileSessionTab,
   forgetColdNativeActivity,
-  normalizeBrowserSessionKey,
   readColdNativeActivity,
   rememberColdNativeActivity,
   type SessionTabInteractionIdentity as InteractionIdentity,
@@ -63,14 +62,12 @@ export type DurableTab = BrowserSessionTabRecord & {
 
 type DurableOwnership = Extract<BrowserTabOwnership, { status: "durable" }>;
 
-function normalizeProfile(value?: string): string | undefined {
-  return normalizeOptionalLowercaseString(value);
-}
-
 function normalizeProfileAliases(values?: Array<string | undefined>): string[] {
   return [
     ...new Set(
-      (values ?? []).map(normalizeProfile).filter((value): value is string => Boolean(value)),
+      (values ?? [])
+        .map(normalizeOptionalLowercaseString)
+        .filter((value): value is string => Boolean(value)),
     ),
   ].toSorted(compareBrowserSessionTabProfileAliases);
 }
@@ -81,11 +78,12 @@ function resolveInteractionIdentity(params: SessionTabParams): InteractionIdenti
   if (!sessionKey || !targetId) {
     return undefined;
   }
+  const profile = normalizeOptionalLowercaseString(params.profile);
   return {
-    sessionKey: normalizeBrowserSessionKey(sessionKey) ?? "",
+    sessionKey: normalizeOptionalLowercaseString(sessionKey) ?? "",
     targetId,
     route: params.route ?? { kind: "browser-control" },
-    ...(normalizeProfile(params.profile) ? { profile: normalizeProfile(params.profile) } : {}),
+    ...(profile ? { profile } : {}),
   };
 }
 
@@ -385,13 +383,7 @@ export function untrackSessionBrowserTab(params: SessionTabParams): void {
     return;
   }
   const volatile = resolveVolatile(identity);
-  if (isVolatileRoute(identity.route)) {
-    if (volatile) {
-      deleteVolatileSessionTab(identity.sessionKey, volatile.tabKey);
-    }
-    return;
-  }
-  if (!getOptionalBrowserSessionTabStore()) {
+  if (isVolatileRoute(identity.route) || !getOptionalBrowserSessionTabStore()) {
     if (volatile) {
       deleteVolatileSessionTab(identity.sessionKey, volatile.tabKey);
     }

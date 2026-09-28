@@ -48,7 +48,15 @@ function expectedHarnessSparseCheckoutArgs(linux: boolean) {
     "/scripts/ios-screenshot-evidence.mjs",
     "/scripts/lib/direct-run.mjs",
     ...(linux
-      ? ["/scripts/lib/release-upgrade-baseline.mjs", "/scripts/lib/release-version.mjs"]
+      ? [
+          "/scripts/lib/release-upgrade-baseline.mjs",
+          "/scripts/lib/release-version.mjs",
+          "/scripts/ci-npm-lock-admission.mjs",
+          "/scripts/generate-npm-package-lock.mjs",
+          "/scripts/generate-npm-package-lock.mts",
+          "/scripts/changed-lanes.mts",
+          "/scripts/lib/merge-head-diff-base.mjs",
+        ]
       : ["/scripts/lib/swift-toolchain.sh"]),
   ];
 }

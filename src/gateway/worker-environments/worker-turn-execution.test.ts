@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
@@ -12,6 +13,7 @@ import {
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { setActiveNodeContext } from "../../infra/active-node-context.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import {
   completeWorkerLaunchDescriptor,
   type WorkerLaunchPlan,
@@ -141,39 +143,15 @@ describe("worker turn execution", () => {
       const hydration = vi
         .spyOn(SessionManager, "openAsync")
         .mockImplementationOnce(async (...args) => {
-          const native = requireNodeSqlite();
-          const probes =
-            change === "current"
-              ? [
-                  vi.spyOn(native.DatabaseSync.prototype, "prepare"),
-                  vi.spyOn(native.DatabaseSync.prototype, "exec"),
-                  ...(["get", "all", "run", "iterate"] as const).map((method) =>
-                    vi.spyOn(native.StatementSync.prototype, method),
-                  ),
-                ]
-              : [];
+          requireNodeSqlite();
+          const probes = change === "current" ? observeMainThreadSql() : undefined;
           let manager: SessionManager;
           try {
-            if (probes.length) {
-              // Calibrate every statement method without starting session work.
-              const calibration = new native.DatabaseSync(":memory:");
-              try {
-                calibration.exec("CREATE TABLE calibration (value INTEGER)");
-                calibration.prepare("INSERT INTO calibration VALUES (?)").run(1);
-                const read = calibration.prepare("SELECT value FROM calibration");
-                read.get();
-                read.all();
-                expect([...read.iterate()]).toHaveLength(1);
-                expect(probes.every((probe) => probe.mock.calls.length > 0)).toBe(true);
-              } finally {
-                calibration.close();
-              }
-              probes.forEach((probe) => probe.mockClear());
-            }
+            probes?.calibrate();
             manager = await open(...args);
-            expect(probes.map((probe) => probe.mock.calls.length)).toEqual(probes.map(() => 0));
+            probes?.expectIdle();
           } finally {
-            probes.forEach((probe) => probe.mockRestore());
+            probes?.restore();
           }
           expect(manager.getPersistedEntries()).toEqual(before);
           entered.resolve();
@@ -227,9 +205,7 @@ describe("worker turn execution", () => {
         expect(acquireTurnCredential).not.toHaveBeenCalled();
         const placement = placements.get(SESSION_ID);
         const claim = placement && projectWorkerSessionTurnClaim(placement);
-        if (!claim) {
-          throw new Error("expected admitted worker claim");
-        }
+        assert(claim, "expected admitted worker claim");
         if (change === "cancel") {
           abort.abort(new Error("fixture cancelled"));
         } else if (change === "run") {
@@ -314,9 +290,7 @@ describe("worker turn execution", () => {
       stop: vi.fn(),
       quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
       reconcileWorkspace: async (request) => {
-        if (request.source.kind !== "local") {
-          throw new Error("expected local workspace");
-        }
+        assert(request.source.kind === "local", "expected local workspace");
         request.source.journal.commit(MANIFEST_REF);
         return {
           manifestRef: MANIFEST_REF,
@@ -431,9 +405,7 @@ describe("worker turn execution", () => {
         expect(measure).not.toHaveBeenCalled();
         const placement = placements.get(SESSION_ID);
         const claim = placement && projectWorkerSessionTurnClaim(placement);
-        if (!claim) {
-          throw new Error("expected admitted worker claim");
-        }
+        assert(claim, "expected admitted worker claim");
         if (change === "cancel") {
           abort.abort(new Error("cancel during node context preparation"));
         } else if (change === "claim") {

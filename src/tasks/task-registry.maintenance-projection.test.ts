@@ -20,6 +20,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { holdStateDatabaseCoordinator } from "../test-utils/state-database-contention.js";
 import { getDetachedTaskLifecycleRuntime } from "./detached-task-runtime.js";
+import { getTaskExecutionObservation } from "./task-execution-observation.js";
 import { createRunningTaskRunCoreWithReceiptAsync } from "./task-executor-create.async.js";
 import { readResidentTaskFlow } from "./task-flow-registry.js";
 import { loadTaskFlowRegistryStateFromSqliteReadOnly } from "./task-flow-registry.store.sqlite.js";
@@ -41,6 +42,7 @@ import {
   createTaskFixture,
   reloadTaskRegistryFromStoreAsync,
 } from "./task-registry.test-support.js";
+import { bindTaskRunOwner } from "./task-run-owner.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
   resetTaskFlowRegistryForTests,
@@ -72,6 +74,44 @@ afterEach(async () => {
 });
 
 describe("task maintenance session metadata", () => {
+  it("retains a CLI task until its live run owner releases it", async () => {
+    await withMaintenanceState("openclaw-task-maintenance-run-owner-", async () => {
+      resetTaskRegistryForTests({ persist: false });
+      configureTaskRegistryMaintenance({ runtimeAuthoritative: true });
+      const task = createTaskFixture("cli", {
+        runId: "retained-native-command",
+        task: "Background command after its foreground turn",
+        notifyPolicy: "silent",
+        lastEventAt: Date.now() - 40 * 60_000,
+      });
+      const release = bindTaskRunOwner(task, async () => ({
+        ok: false,
+        error: "No cancellation requested in this scenario.",
+      }));
+      try {
+        expect(reconcileInspectableTasks()).toContainEqual(
+          expect.objectContaining({ taskId: task.taskId, status: "running" }),
+        );
+        expect(getTaskExecutionObservation(task)).toEqual({ state: "running" });
+        expect(getTaskExecutionObservation({ ...task, runId: "replacement-command" })).toEqual({
+          state: "unknown",
+        });
+        expect((await runTaskRegistryMaintenance()).reconciled).toBe(0);
+        expect(getTaskById(task.taskId)?.status).toBe("running");
+
+        release();
+        expect(getTaskExecutionObservation(task)).toEqual({ state: "unknown" });
+        expect((await runTaskRegistryMaintenance()).reconciled).toBe(1);
+        expect(getTaskById(task.taskId)).toMatchObject({
+          status: "lost",
+          error: "backing session missing",
+        });
+      } finally {
+        release();
+      }
+    });
+  });
+
   it.each(["publication", "coordinator hold"] as const)(
     "retains task payloads without synchronous refreshes during %s",
     async (boundary) => {

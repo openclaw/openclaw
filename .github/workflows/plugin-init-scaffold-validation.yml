@@ -1,10 +1,12 @@
 name: Plugin Init Scaffold Validation
 
 on:
+  schedule:
+    - cron: "23 * * * *"
   workflow_dispatch:
   push:
     branches: [main]
-    paths:
+    paths: &validation_paths
       - ".github/workflows/plugin-init-scaffold-validation.yml"
       - "package.json"
       - "pnpm-lock.yaml"
@@ -13,19 +15,26 @@ on:
       - "src/cli/plugins-authoring-command.test.ts"
       - "src/cli/plugins-cli.ts"
       - "src/plugin-sdk/**"
+      - ".github/actions/detect-scheduled-changes/**"
+      - ".github/actions/setup-node-env/**"
+      - ".github/actions/setup-pnpm-store-cache/**"
+      - "scripts/test-projects*"
+      - "scripts/run-vitest*"
+      - "scripts/lib/**"
+      - "test/vitest/**"
+      - "vitest*.ts"
+      - "tsconfig*.json"
+      - "node-version.mjs"
+      - ".npmrc"
+      - "pnpm-workspace.yaml"
+      - "patches/**"
+      - "src/cli/plugins-*.ts"
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review]
-    paths:
-      - ".github/workflows/plugin-init-scaffold-validation.yml"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - "scripts/validate-plugin-init-provider-scaffold.ts"
-      - "src/cli/plugins-authoring-command.ts"
-      - "src/cli/plugins-authoring-command.test.ts"
-      - "src/cli/plugins-cli.ts"
-      - "src/plugin-sdk/**"
+    paths: *validation_paths
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -34,13 +43,54 @@ concurrency:
   group: >-
     ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && github.event.action != 'converted_to_draft'
       && format('{0}-passive-draft-{1}', github.workflow, github.run_id)
+      || ((github.event_name == 'push' || github.event_name == 'schedule') && format('{0}-{1}-{2}', github.workflow, github.event_name, github.ref))
       || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && github.event.pull_request.number || github.ref) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  scope:
+    if: github.event_name == 'schedule' && github.repository == 'openclaw/openclaw'
+    runs-on: ubuntu-24.04
+    outputs:
+      changed: ${{ steps.scope.outputs.changed }}
+    steps:
+      - name: Checkout scheduled admission
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/actions/detect-scheduled-changes
+          persist-credentials: false
+      - name: Detect scheduled input changes
+        id: scope
+        uses: ./.github/actions/detect-scheduled-changes
+        with:
+          proof-jobs: |
+            Validate provider scaffold
+          # Reuse is stricter than event admission: include transitive source and tool inputs.
+          paths: |
+            .github/workflows/plugin-init-scaffold-validation.yml
+            .github/actions/detect-scheduled-changes/**
+            .github/actions/setup-node-env/**
+            .github/actions/setup-pnpm-store-cache/**
+            .npmrc
+            .pnpmfile.*
+            pnpmfile.cjs
+            node-version.mjs
+            package.json
+            **/package.json
+            pnpm-lock.yaml
+            pnpm-workspace.yaml
+            patches/**
+            scripts/**
+            test/**
+            vitest*.ts
+            tsconfig*.json
+            src/**
+            packages/**
+
   validate-provider-scaffold:
+    needs: scope
     name: Validate provider scaffold
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    if: ${{ !cancelled() && (github.event_name != 'schedule' || needs.scope.outputs.changed == 'true') && (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true') && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 30
     steps:

@@ -111,9 +111,8 @@ async function createCursorSession(initialEvents?: unknown[]) {
       }),
     ]) as Parameters<typeof replaceTranscriptEvents>[1],
   );
-  const context = createDirectChatContext({
-    getRuntimeConfig: () => ({ session: { store: storePath } }),
-  });
+  const config = { session: { store: storePath } };
+  const context = createDirectChatContext({ getRuntimeConfig: () => config });
   await initializeSessionReadContext(context);
   return { context, storePath };
 }

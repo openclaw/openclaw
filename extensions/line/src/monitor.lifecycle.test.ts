@@ -18,7 +18,6 @@ type LineBotOptions = Parameters<typeof import("./bot.js").createLineBot>[0];
 
 const {
   createLineBotMock,
-  createLineNodeWebhookHandlerMock,
   registerWebhookTargetWithPluginRouteMock,
   runDetachedWebhookWorkMock,
   unregisterHttpMock,
@@ -28,16 +27,12 @@ const {
     handleWebhook: vi.fn<LineHandleWebhook>().mockResolvedValue("durable"),
     stop: vi.fn(),
   })),
-  createLineNodeWebhookHandlerMock: vi.fn<() => LineNodeWebhookHandler>(() =>
-    vi.fn<LineNodeWebhookHandler>(async () => {}),
-  ),
   registerWebhookTargetWithPluginRouteMock: vi.fn(),
   runDetachedWebhookWorkMock: vi.fn(),
   unregisterHttpMock: vi.fn(),
 }));
 
 let monitorLineProvider: typeof import("./monitor.js").monitorLineProvider;
-let innerLineWebhookHandlerMock: ReturnType<typeof vi.fn<LineNodeWebhookHandler>>;
 
 type RegisteredRoute = {
   accountId?: string;
@@ -119,14 +114,6 @@ vi.mock("openclaw/plugin-sdk/webhook-request-guards", async () => {
   };
 });
 
-vi.mock("./webhook-node.js", async () => {
-  const actual = await vi.importActual<typeof import("./webhook-node.js")>("./webhook-node.js");
-  return {
-    ...actual,
-    createLineNodeWebhookHandler: createLineNodeWebhookHandlerMock,
-  };
-});
-
 vi.mock("./auto-reply-delivery.js", () => ({
   deliverLineAutoReply: vi.fn(),
 }));
@@ -160,7 +147,6 @@ describe("monitorLineProvider lifecycle", () => {
     vi.doUnmock("openclaw/plugin-sdk/runtime-env");
     vi.doUnmock("openclaw/plugin-sdk/webhook-ingress");
     vi.doUnmock("openclaw/plugin-sdk/webhook-request-guards");
-    vi.doUnmock("./webhook-node.js");
     vi.doUnmock("./auto-reply-delivery.js");
     vi.doUnmock("./markdown-to-line.js");
     vi.doUnmock("./send.js");
@@ -178,10 +164,6 @@ describe("monitorLineProvider lifecycle", () => {
     // Clear call history only; the implementation was wired to the actual
     // helper once in the module mock factory.
     runDetachedWebhookWorkMock.mockClear();
-    innerLineWebhookHandlerMock = vi.fn<LineNodeWebhookHandler>(async () => {});
-    createLineNodeWebhookHandlerMock
-      .mockReset()
-      .mockImplementation(() => innerLineWebhookHandlerMock);
     unregisterHttpMock.mockReset();
     registerWebhookTargetWithPluginRouteMock.mockReset().mockImplementation((params) => {
       const withLeadingSlash = params.target.path.startsWith("/")
@@ -258,26 +240,52 @@ describe("monitorLineProvider lifecycle", () => {
     );
   });
 
-  it("registers an account target without replacing existing route ownership", async () => {
-    const monitor = await monitorLineProvider({
-      channelAccessToken: "token",
-      channelSecret: "secret", // pragma: allowlist secret
-      accountId: "work",
-      config: {} as OpenClawConfig,
-      runtime: {} as RuntimeEnv,
-    });
+  it.each([
+    { name: "default", webhookPath: undefined, expectedPath: "/line/webhook" },
+    { name: "empty", webhookPath: "", expectedPath: "/line/webhook" },
+    { name: "no leading slash", webhookPath: "hooks/line", expectedPath: "/hooks/line" },
+    { name: "trailing slash", webhookPath: "/hooks/line/", expectedPath: "/hooks/line" },
+    { name: "whitespace", webhookPath: "  /hooks/line  ", expectedPath: "/hooks/line" },
+  ])(
+    "registers the $name path without replacing route ownership",
+    async ({ webhookPath, expectedPath }) => {
+      const monitor = await monitorLineProvider({
+        channelAccessToken: "token",
+        channelSecret: "secret", // pragma: allowlist secret
+        accountId: "work",
+        config: {} as OpenClawConfig,
+        runtime: {} as RuntimeEnv,
+        webhookPath,
+      });
 
-    const registration = requireWebhookRegistration();
-    expect(registration.target.accountId).toBe("work");
-    expect(registration.target.path).toBe("/line/webhook");
-    expect(registration.route.accountId).toBe("work");
-    expect(registration.route.auth).toBe("plugin");
-    expect(registration.route.pluginId).toBe("line");
-    expect(registration.route.source).toBe("line-webhook");
-    expect(registration.route.throwOnFailure).toBe(true);
-    expect(registration.route).not.toHaveProperty("path");
-    expect(registration.route).not.toHaveProperty("replaceExisting");
-    await monitor.stop();
+      try {
+        const registration = requireWebhookRegistration();
+        expect(registration.target.accountId).toBe("work");
+        expect(registration.target.path).toBe(expectedPath);
+        expect(registration.route.accountId).toBe("work");
+        expect(registration.route.auth).toBe("plugin");
+        expect(registration.route.pluginId).toBe("line");
+        expect(registration.route.source).toBe("line-webhook");
+        expect(registration.route.throwOnFailure).toBe(true);
+        expect(registration.route).not.toHaveProperty("path");
+        expect(registration.route).not.toHaveProperty("replaceExisting");
+      } finally {
+        await monitor.stop();
+      }
+    },
+  );
+
+  it("rejects a blank channel secret before creating a bot or registering a route", async () => {
+    await expect(
+      monitorLineProvider({
+        channelAccessToken: "token",
+        channelSecret: "  ",
+        config: {} as OpenClawConfig,
+        runtime: {} as RuntimeEnv,
+      }),
+    ).rejects.toThrow(/non-empty channel secret/);
+    expect(createLineBotMock).not.toHaveBeenCalled();
+    expect(registerWebhookTargetWithPluginRouteMock).not.toHaveBeenCalled();
   });
 
   it("stops immediately when signal is already aborted", async () => {

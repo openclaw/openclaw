@@ -69,6 +69,8 @@ import { createTaskMaintenanceScheduler } from "./task-registry-maintenance-sche
 import {
   createBackingSessionLookupContext,
   findTaskSessionEntry,
+  hasActiveCliRun,
+  hasCliRunIdentity,
   prepareBackingSessionFacts,
   observeBackingSessionFacts,
   resolveSessionChatType,
@@ -271,21 +273,6 @@ function resolveDurableCronTaskRecovery(
     ...(row.terminalSummary !== undefined ? { terminalSummary: row.terminalSummary } : {}),
     ...(row.detail !== undefined ? { detail: row.detail } : {}),
   };
-}
-
-function hasActiveCliRun(task: TaskRecord): boolean {
-  const candidateRunIds = [task.sourceId, task.runId];
-  for (const candidate of candidateRunIds) {
-    const runId = candidate?.trim();
-    if (runId && getAgentRunContext(runId)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function hasCliRunIdentity(task: TaskRecord): boolean {
-  return [task.sourceId, task.runId].some((candidate) => Boolean(candidate?.trim()));
 }
 
 function hasBackingSession(task: TaskRecord, context: BackingSessionLookupContext): boolean {

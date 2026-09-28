@@ -108,6 +108,54 @@ describe("scripts/test-group-report grouping", () => {
 });
 
 describe("scripts/test-group-report aggregation", () => {
+  it.each([false, true])("reports measured duration limits in Actions mode %s", (actions) => {
+    const root = cliTempDirs.make("openclaw-test-duration-limit-");
+    const input = path.join(root, "input.json");
+    const output = path.join(root, "output.json");
+    const summary = path.join(root, "summary.md");
+    fs.writeFileSync(
+      input,
+      JSON.stringify({
+        testResults: [
+          {
+            name: path.join(process.cwd(), "src", "slow.test.ts"),
+            startTime: 0,
+            endTime: 20,
+            assertionResults: [{ duration: 20, fullName: "slow fixture", status: "passed" }],
+          },
+        ],
+      }),
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        ...resolveRuntimeWorkerArgv(reportUrl, process.execPath),
+        "--report",
+        input,
+        "--output",
+        output,
+        "--max-test-ms",
+        "10",
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          CI: "1",
+          GITHUB_ACTIONS: actions ? "true" : "",
+          GITHUB_STEP_SUMMARY: summary,
+        },
+      },
+    );
+    expect(result.status, result.stderr).toBe(actions ? 0 : 1);
+    expect(result.stderr).toContain("slow fixture: 20.0ms exceeds 10.0ms");
+    expect(JSON.parse(fs.readFileSync(output, "utf8")).slowTests).toHaveLength(1);
+    if (actions) {
+      expect(result.stderr).toContain("::warning file=src/slow.test.ts,line=1,col=0");
+      expect(fs.readFileSync(summary, "utf8")).toContain("Test duration budget");
+    }
+  });
+
   it("profiles a selected test through the real Node wrapper", async () => {
     const root = cliTempDirs.make("openclaw-test-group-report-cli-");
     const output = path.join(root, "group-report.json");

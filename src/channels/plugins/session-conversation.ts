@@ -14,10 +14,10 @@ import {
   parseRawSessionConversationRef,
   parseThreadSessionSuffix,
   type ParsedThreadSessionSuffix,
-  type RawSessionConversationRef,
 } from "../../sessions/session-key-utils.js";
 import { normalizeChatChannelId } from "../registry.js";
 import { getLoadedChannelPlugin, normalizeChannelId as normalizeAnyChannelId } from "./registry.js";
+import type { ChannelMessagingAdapter } from "./types.core.js";
 
 /**
  * Normalized conversation id details for one channel raw id.
@@ -43,23 +43,11 @@ type ResolvedSessionConversationRef = {
   parentConversationCandidates: string[];
 };
 
-type SessionConversationHookResult = {
-  id: string;
-  threadId?: string | null;
-  baseConversationId?: string | null;
-  parentConversationCandidates?: string[];
-};
+type SessionConversationHookResult = ReturnType<
+  NonNullable<ChannelMessagingAdapter["resolveSessionConversation"]>
+>;
 
-type SessionConversationResolverParams = {
-  kind: "group" | "channel";
-  rawId: string;
-};
-
-type BundledSessionKeyModule = {
-  resolveSessionConversation?: (
-    params: SessionConversationResolverParams,
-  ) => SessionConversationHookResult | null;
-};
+type BundledSessionKeyModule = Pick<ChannelMessagingAdapter, "resolveSessionConversation">;
 
 const SESSION_KEY_API_ARTIFACT_BASENAME = "session-key-api.js";
 type SessionConversationResolutionOptions = {
@@ -184,11 +172,8 @@ function isBundledSessionConversationFallbackDisabled(channel: string): boolean 
   return Boolean(entry) && typeof entry === "object" && entry.enabled === false;
 }
 
-function shouldProbeBundledSessionConversationFallback(rawId: string): boolean {
-  return rawId.includes(":");
-}
-
-function resolveSessionConversationResolution(params: {
+/** Resolves one raw channel conversation id into base/thread conversation metadata. */
+export function resolveSessionConversation(params: {
   channel: string;
   kind: "group" | "channel";
   rawId: string;
@@ -208,9 +193,7 @@ function resolveSessionConversationResolution(params: {
     }),
   );
   const shouldTryBundledFallback =
-    params.bundledFallback !== false &&
-    !channelPlugin &&
-    shouldProbeBundledSessionConversationFallback(rawId);
+    params.bundledFallback !== false && !channelPlugin && rawId.includes(":");
   // Loaded plugins own their grammar even when they omit messaging. Only absent
   // registrations may borrow a pre-bootstrap artifact before generic parsing.
   const resolved =
@@ -242,22 +225,6 @@ function resolveSessionConversationResolution(params: {
   return resolved;
 }
 
-/**
- * Resolves one raw channel conversation id into base/thread conversation metadata.
- */
-export function resolveSessionConversation(params: {
-  channel: string;
-  kind: "group" | "channel";
-  rawId: string;
-  bundledFallback?: boolean;
-}): ResolvedSessionConversation | null {
-  return resolveSessionConversationResolution(params);
-}
-
-function buildBaseSessionKey(raw: RawSessionConversationRef, id: string): string {
-  return `${raw.prefix}:${id}`;
-}
-
 export function resolveSessionConversationRef(
   sessionKey: string | undefined | null,
   opts: SessionConversationResolutionOptions = {},
@@ -281,7 +248,7 @@ export function resolveSessionConversationRef(
     rawId: raw.rawId,
     id: resolved.id,
     threadId: resolved.threadId,
-    baseSessionKey: buildBaseSessionKey(raw, resolved.id),
+    baseSessionKey: `${raw.prefix}:${resolved.id}`,
     baseConversationId: resolved.baseConversationId,
     parentConversationCandidates: resolved.parentConversationCandidates,
   };

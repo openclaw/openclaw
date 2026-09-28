@@ -23,7 +23,7 @@ import {
   toggleSidebarPanelExpanded,
   closeSlot,
   fitSidebarLayout,
-  isSidebarRegionCollapsed,
+  SIDEBAR_NARROW_BREAKPOINT_PX,
   openSlot,
   reorderPanel,
   sidebarDock,
@@ -186,7 +186,7 @@ export function renderSidebarRegion(params: {
   }
   const availableWidth =
     params.availableWidth > 0 ? params.availableWidth : Number.POSITIVE_INFINITY;
-  const collapsed = params.narrow || isSidebarRegionCollapsed(params.layout, availableWidth);
+  const collapsed = params.narrow || availableWidth < SIDEBAR_NARROW_BREAKPOINT_PX;
   const main = sidebarMainPanel(params.layout);
   const chatMain = !main || main.slot === "conversation";
   const column = params.layout.columns[0];
@@ -247,12 +247,9 @@ export function resolveSidebarLayoutForBoard(params: {
   let layout = params.layout;
   if (!params.board.available) {
     layout = closeSlot(layout, "dashboard");
-    return fitSidebarLayout(layout, params.paneWidth) ?? layout;
+  } else if (params.board.face === "dashboard" && layout.columns.length === 0) {
+    layout = openSlot(layout, "dashboard");
   }
-  if (params.board.face !== "dashboard" || layout.columns.length > 0) {
-    return fitSidebarLayout(layout, params.paneWidth) ?? layout;
-  }
-  layout = openSlot(layout, "dashboard");
   return fitSidebarLayout(layout, params.paneWidth) ?? layout;
 }
 

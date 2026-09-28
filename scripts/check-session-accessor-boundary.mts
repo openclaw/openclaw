@@ -2,7 +2,7 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
 import { z } from "zod";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
@@ -199,7 +199,6 @@ export const migratedSessionAccessorWriteFiles = new Set([
   "src/auto-reply/reply/agent-runner-cli-dispatch.ts",
   "src/auto-reply/reply/agent-runner-execution.ts",
   "src/auto-reply/reply/agent-runner-memory.ts",
-  "src/auto-reply/reply/agent-runner-session-reset.ts",
   "src/auto-reply/reply/agent-runner.ts",
   "src/auto-reply/reply/body.ts",
   "src/auto-reply/reply/commands-acp/lifecycle.ts",
@@ -323,19 +322,17 @@ function bindingName(node: ts.BindingElement) {
   if (node.propertyName && ts.isIdentifier(node.propertyName)) {
     return node.propertyName.text;
   }
-  if (ts.isIdentifier(node.name)) {
+  if (node.name && ts.isIdentifier(node.name)) {
     return node.name.text;
   }
   return null;
 }
 
 function findNamedBoundaryViolations(
-  content: string,
-  fileName: string,
+  sourceFile: ts.SourceFile,
   legacyNames: ReadonlySet<string>,
   subject: string,
 ) {
-  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
   const violations: BoundaryViolation[] = [];
   const addViolation = (node: ts.Node, action: string, name: string) => {
     violations.push({
@@ -387,7 +384,7 @@ function findNamedBoundaryViolations(
       }
     }
 
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
 
   visit(sourceFile);
@@ -395,24 +392,18 @@ function findNamedBoundaryViolations(
 }
 
 function findNamedSessionStoreViolations(
-  content: string,
-  fileName: string,
+  sourceFile: ts.SourceFile,
   legacyNames: ReadonlySet<string>,
   legacyKind: string,
 ) {
-  return findNamedBoundaryViolations(
-    content,
-    fileName,
-    legacyNames,
-    `legacy session store ${legacyKind}`,
-  );
+  return findNamedBoundaryViolations(sourceFile, legacyNames, `legacy session store ${legacyKind}`);
 }
 
 export function collectSessionStoreRuntimeFileBackedCompatExports(
-  content: string,
-  fileName = "source.ts",
+  _content: string,
+  _fileName: string,
+  sourceFile: ts.SourceFile,
 ) {
-  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
   const exports = new Map<string, { line: number; sourceName: string }>();
 
   const rememberExport = (node: ts.Node, exportedName: string, sourceName = exportedName) => {
@@ -427,8 +418,8 @@ export function collectSessionStoreRuntimeFileBackedCompatExports(
 
   for (const statement of sourceFile.statements) {
     const isExported =
-      ts.canHaveModifiers(statement) &&
-      ts.getModifiers(statement)?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword);
+      (ts.isVariableStatement(statement) || ts.isFunctionDeclaration(statement)) &&
+      statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword);
     if (isExported && ts.isVariableStatement(statement)) {
       for (const declaration of statement.declarationList.declarations) {
         if (ts.isIdentifier(declaration.name)) {
@@ -461,9 +452,10 @@ export function collectSessionStoreRuntimeFileBackedCompatExports(
 
 export function findSessionStoreRuntimeFileBackedCompatExportViolations(
   content: string,
-  fileName = "source.ts",
+  fileName: string,
+  sourceFile: ts.SourceFile,
 ) {
-  const exports = collectSessionStoreRuntimeFileBackedCompatExports(content, fileName);
+  const exports = collectSessionStoreRuntimeFileBackedCompatExports(content, fileName, sourceFile);
   const violations: BoundaryViolation[] = [];
   for (const [exportedName, exported] of exports) {
     if (
@@ -479,26 +471,35 @@ export function findSessionStoreRuntimeFileBackedCompatExportViolations(
   return violations;
 }
 
-export function findSessionAccessorBoundaryViolations(content: string, fileName = "source.ts") {
+export function findSessionAccessorBoundaryViolations(
+  _content: string,
+  fileName: string,
+  sourceFile: ts.SourceFile,
+) {
   const legacyNames = legacyNamesForFile(fileName);
   const legacyKind = legacyNames === legacyWholeStoreAccessNames ? "access" : "reader";
-  return findNamedSessionStoreViolations(content, fileName, legacyNames, legacyKind);
+  return findNamedSessionStoreViolations(sourceFile, legacyNames, legacyKind);
 }
 
-export function findReadOnlySessionAccessorViolations(content: string, fileName = "source.ts") {
+export function findReadOnlySessionAccessorViolations(
+  _content: string,
+  _fileName: string,
+  sourceFile: ts.SourceFile,
+) {
   return findNamedBoundaryViolations(
-    content,
-    fileName,
+    sourceFile,
     materializingSessionEntryAccessorNames,
     "materializing session entry accessor",
   );
 }
 
-export function findEmbeddedAgentSessionTargetViolations(content: string, fileName = "source.ts") {
-  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
+export function findEmbeddedAgentSessionTargetViolations(
+  _content: string,
+  _fileName: string,
+  sourceFile: ts.SourceFile,
+) {
   const violations = findNamedBoundaryViolations(
-    content,
-    fileName,
+    sourceFile,
     embeddedAgentSessionFileRuntimeNames,
     "legacy embedded-agent session file resolver",
   );
@@ -520,6 +521,7 @@ export function findEmbeddedAgentSessionTargetViolations(content: string, fileNa
         recordDeprecatedSessionFile(property.name);
       } else if (
         ts.isShorthandPropertyAssignment(property) &&
+        ts.isIdentifier(property.name) &&
         property.name.text === "sessionFile"
       ) {
         recordDeprecatedSessionFile(property.name);
@@ -536,7 +538,7 @@ export function findEmbeddedAgentSessionTargetViolations(content: string, fileNa
       }
       return;
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
 
   visit(sourceFile);
@@ -544,26 +546,30 @@ export function findEmbeddedAgentSessionTargetViolations(content: string, fileNa
 }
 
 export function findSessionAccessorWriteBoundaryViolations(
-  content: string,
-  fileName = "source.ts",
+  _content: string,
+  _fileName: string,
+  sourceFile: ts.SourceFile,
 ) {
-  return findNamedSessionStoreViolations(content, fileName, legacyWriterNames, "writer");
+  return findNamedSessionStoreViolations(sourceFile, legacyWriterNames, "writer");
 }
 
-export function findTranscriptWriterBoundaryViolations(content: string, fileName = "source.ts") {
+export function findTranscriptWriterBoundaryViolations(
+  _content: string,
+  _fileName: string,
+  sourceFile: ts.SourceFile,
+) {
   return findNamedBoundaryViolations(
-    content,
-    fileName,
+    sourceFile,
     legacyTranscriptWriterNames,
     "legacy transcript writer",
   );
 }
 
 export function findGatewaySessionCreateLifecycleViolations(
-  content: string,
-  fileName = "source.ts",
+  _content: string,
+  _fileName: string,
+  sourceFile: ts.SourceFile,
 ) {
-  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
   const violations: BoundaryViolation[] = [];
 
   const visitCreateHandler = (node: ts.Node) => {
@@ -576,19 +582,19 @@ export function findGatewaySessionCreateLifecycleViolations(
         });
       }
     }
-    ts.forEachChild(node, visitCreateHandler);
+    node.forEachChild(visitCreateHandler);
   };
 
   const visit = (node: ts.Node) => {
     if (
       ts.isPropertyAssignment(node) &&
-      ts.isStringLiteralLike(node.name) &&
+      ts.isStringLiteralLikeNode(node.name) &&
       node.name.text === "sessions.create"
     ) {
       visitCreateHandler(node.initializer);
       return;
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
 
   visit(sourceFile);
@@ -596,24 +602,24 @@ export function findGatewaySessionCreateLifecycleViolations(
 }
 
 export function findSessionCompactManualTrimBoundaryViolations(
-  content: string,
-  fileName = "source.ts",
+  _content: string,
+  _fileName: string,
+  sourceFile: ts.SourceFile,
 ) {
   return findNamedSessionStoreViolations(
-    content,
-    fileName,
+    sourceFile,
     legacyManualCompactTrimNames,
     "manual compact trim",
   );
 }
 
 export function findSessionLifecycleCleanupBoundaryViolations(
-  content: string,
-  fileName = "source.ts",
+  _content: string,
+  _fileName: string,
+  sourceFile: ts.SourceFile,
 ) {
   return findNamedSessionStoreViolations(
-    content,
-    fileName,
+    sourceFile,
     legacyLifecycleCleanupNames,
     "lifecycle cleanup",
   );
@@ -685,10 +691,10 @@ function collectTopLevelFunctionBodies(sourceFile: ts.SourceFile) {
 }
 
 export function findMemoryHostSessionCorpusBoundaryViolations(
-  content: string,
-  fileName = "source.ts",
+  _content: string,
+  _fileName: string,
+  sourceFile: ts.SourceFile,
 ) {
-  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
   const functionBodies = collectTopLevelFunctionBodies(sourceFile);
   const visitedFunctions = new Set<string>();
   const violationKeys = new Set<string>();
@@ -714,7 +720,7 @@ export function findMemoryHostSessionCorpusBoundaryViolations(
         }
       }
     }
-    ts.forEachChild(node, visitCorpusBody);
+    node.forEachChild(visitCorpusBody);
   };
 
   for (const name of memoryHostSessionCorpusFunctionNames) {
@@ -941,14 +947,12 @@ export async function main() {
       })),
     );
   }
-  const sessionStoreRuntimePath = path.join(repoRoot, "src/plugin-sdk/session-store-runtime.ts");
   violations.push(
-    ...findSessionStoreRuntimeFileBackedCompatExportViolations(
-      await fs.readFile(sessionStoreRuntimePath, "utf8"),
-      sessionStoreRuntimePath,
-    ).map((violation) =>
-      Object.assign({ path: "src/plugin-sdk/session-store-runtime.ts" }, violation),
-    ),
+    ...(await collectFileViolations({
+      repoRoot,
+      sourceRoots: resolveSourceRoots(repoRoot, ["src/plugin-sdk/session-store-runtime.ts"]),
+      findViolations: findSessionStoreRuntimeFileBackedCompatExportViolations,
+    })),
   );
 
   const baselineCounts = await readSessionAccessorDebtBaseline(repoRoot);
@@ -956,7 +960,8 @@ export async function main() {
     console.error(
       `Missing ${sessionAccessorDebtBaselineRelativePath}; run \`${debtBaselineRegenCommand}\` and commit it.`,
     );
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
   const debt = compareSessionAccessorDebt(
     await collectSessionAccessorDebtCounts(repoRoot),
@@ -995,7 +1000,7 @@ export async function main() {
       console.error(line);
     }
   }
-  process.exit(1);
+  process.exitCode = 1;
 }
 
 runAsScript(import.meta.url, main);

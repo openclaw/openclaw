@@ -4,7 +4,6 @@ import {
   formatErrorMessage,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   CodexAppServerUnsafeSubscriptionError,
@@ -22,6 +21,7 @@ import {
 import {
   assertCodexThreadForkResponse,
   assertCodexThreadStartResponse,
+  readSupervisionResponseThreadId,
 } from "./protocol-validators.js";
 import type {
   CodexDynamicToolSpec,
@@ -66,8 +66,10 @@ type PendingSupervisionMaterializationParams = {
   dynamicTools: CodexDynamicToolSpec[];
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
+  skillsInstructions?: string;
   config?: JsonObject;
   shellEnvironment?: Readonly<Record<string, string>>;
+  shellPathPrepend?: readonly string[];
   disableLoginShell?: boolean;
   nativeCodeModeEnabled?: boolean;
   nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
@@ -234,6 +236,7 @@ export async function materializePendingSupervisionBranch(
       dynamicTools: params.dynamicTools,
       appServer: params.appServer,
       developerInstructions: params.developerInstructions,
+      skillsInstructions: params.skillsInstructions,
       config: params.config,
       nativeCodeModeEnabled: params.nativeCodeModeEnabled,
       nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
@@ -246,6 +249,7 @@ export async function materializePendingSupervisionBranch(
       restrictedToolSurfaceInheritedMcpServerNames:
         params.restrictedToolSurfaceInheritedMcpServerNames,
       shellEnvironment: params.shellEnvironment,
+      shellPathPrepend: params.shellPathPrepend,
       disableLoginShell: params.disableLoginShell,
     });
     assertExactSupervisionModelSelection(startParams, {
@@ -481,6 +485,7 @@ function buildPendingSupervisionProbeForkParams(
     restrictedToolSurfaceInheritedMcpServerNames:
       params.restrictedToolSurfaceInheritedMcpServerNames,
     shellEnvironment: params.shellEnvironment,
+    shellPathPrepend: params.shellPathPrepend,
     disableLoginShell: params.disableLoginShell,
   });
   return {
@@ -616,11 +621,6 @@ function requireDistinctSupervisionThreadId(params: {
     );
   }
   return threadId;
-}
-
-function readSupervisionResponseThreadId(value: unknown): unknown {
-  const thread = isRecord(value) ? value.thread : undefined;
-  return isRecord(thread) ? thread.id : undefined;
 }
 
 async function recoverPendingSupervisionArtifacts(

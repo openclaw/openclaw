@@ -132,15 +132,14 @@ function createMemoryFallbackStateStore(): MemoryWikiSourceSyncStateStore {
       return cloneSourceSyncState(memorySourceSyncStateByVault.get(vaultRootKey) ?? EMPTY_STATE);
     },
     async write(vaultRoot, state) {
-      assertSourceSyncStateWithinLimit(state);
+      assertSourceSyncStateWithinLimit(Object.keys(state.entries).length);
       const vaultRootKey = resolveVaultRootKey(vaultRoot);
       memorySourceSyncStateByVault.set(vaultRootKey, cloneSourceSyncState(state));
     },
   };
 }
 
-function assertSourceSyncStateWithinLimit(state: MemoryWikiImportedSourceState): void {
-  const count = Object.keys(state.entries).length;
+function assertSourceSyncStateWithinLimit(count: number): void {
   if (count > MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES) {
     throw new Error(
       `Memory Wiki source sync state exceeds SQLite entry limit (${count}/${MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES})`,
@@ -156,12 +155,7 @@ export function assertMemoryWikiSourceSyncStateCapacity(params: {
   const retainedOtherGroupCount = Object.values(params.state.entries).filter(
     (entry) => entry.group !== params.group,
   ).length;
-  const projectedCount = retainedOtherGroupCount + params.incomingCount;
-  if (projectedCount > MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES) {
-    throw new Error(
-      `Memory Wiki source sync state exceeds SQLite entry limit (${projectedCount}/${MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES})`,
-    );
-  }
+  assertSourceSyncStateWithinLimit(retainedOtherGroupCount + params.incomingCount);
 }
 
 export function createMemoryWikiSourceSyncStateStore(
@@ -195,7 +189,7 @@ export function createMemoryWikiSourceSyncStateStore(
       return { version: 1, entries };
     },
     async write(vaultRoot, state, plan) {
-      assertSourceSyncStateWithinLimit(state);
+      assertSourceSyncStateWithinLimit(Object.keys(state.entries).length);
       const vaultRootKey = resolveVaultRootKey(vaultRoot);
       const store = openStore();
       if (plan) {

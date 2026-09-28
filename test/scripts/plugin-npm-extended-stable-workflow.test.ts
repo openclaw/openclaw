@@ -18,6 +18,7 @@ import { validateActiveExtendedStableLine } from "../../scripts/openclaw-npm-ext
 import { createStablePluginNpmBootstrapApproval } from "../../scripts/plugin-npm-bootstrap-approval.mjs";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
+import { evaluateWorkflowRunner } from "./ci-workflow.test-support.js";
 
 const workflowPath = ".github/workflows/plugin-npm-release.yml";
 const metaPackagePath = "extensions/meta/package.json";
@@ -221,11 +222,11 @@ describe("plugin npm extended-stable workflow", () => {
     ["beta publication", "beta", "beta", "full-release-validation", false],
     ["focused beta evidence", "beta", "latest", "authorized-beta-focused-v1", false],
     [
-      "waived stable publication",
+      "retired waiver cannot qualify stable publication",
       "beta",
       "latest",
       "full-release-validation",
-      true,
+      false,
       "Operator approved soak waiver",
     ],
     ["unwaived stable publication", "beta", "latest", "full-release-validation", false],
@@ -291,16 +292,9 @@ describe("plugin npm extended-stable workflow", () => {
   );
 
   it.skipIf(process.platform === "win32")(
-    "round-trips attested stable/full and waived beta bootstrap approvals and retains beta",
+    "round-trips attested stable/full bootstrap approvals and retains beta publication",
     () => {
-      for (const input of [
-        { releaseProfile: "stable" },
-        { releaseProfile: "full" },
-        {
-          releaseProfile: "beta",
-          stableSoakWaiver: 'Operator approved "stable" publication.\nSoak waived.',
-        },
-      ]) {
+      for (const input of [{ releaseProfile: "stable" }, { releaseProfile: "full" }]) {
         const result = runStableBootstrapAdmission({ input });
         expect(result.status, result.stderr).toBe(0);
       }
@@ -322,12 +316,37 @@ describe("plugin npm extended-stable workflow", () => {
       { approval: { releaseTag: "v2026.9.33" }, env: { PACKAGE_VERSION: "2026.9.33" } },
     ],
     ["profile", { approval: { releaseProfile: "beta" } }],
+    [
+      "retired waiver",
+      {
+        approval: {
+          releaseProfile: "beta",
+          stableSoakWaiver: "2026.9.3 approved",
+          stableSoakWaiverSource: "explicit",
+        },
+      },
+    ],
     ["empty waiver", { approval: { releaseProfile: "beta", stableSoakWaiver: "" } }],
-    ["blank waiver", { approval: { releaseProfile: "beta", stableSoakWaiver: " \n\t " } }],
+    [
+      "blank waiver",
+      {
+        approval: {
+          releaseProfile: "beta",
+          stableSoakWaiver: " \n\t ",
+          stableSoakWaiverSource: "explicit",
+        },
+      },
+    ],
     ["non-string waiver", { approval: { releaseProfile: "beta", stableSoakWaiver: true } }],
     [
       "unknown waived profile",
-      { approval: { releaseProfile: "unknown", stableSoakWaiver: "Approved" } },
+      {
+        approval: {
+          releaseProfile: "unknown",
+          stableSoakWaiver: "Approved",
+          stableSoakWaiverSource: "explicit",
+        },
+      },
     ],
     ["attestation", { attestationExit: 1 }],
     ["tag moved", { tagSha: "c".repeat(40) }],
@@ -990,7 +1009,7 @@ fs.appendFileSync(process.env.EVENTS, JSON.stringify({ command: "npm", args, byt
     expect(oidc?.if).toContain("inputs.trusted_publisher_preflight");
     expect(oidc?.if).toContain("has_selection == 'true'");
     expect(oidc?.environment).toBe("npm-release");
-    expect(oidc?.["runs-on"]).toBe("ubuntu-latest");
+    expect(evaluateWorkflowRunner(oidc?.["runs-on"])).toBe("ubuntu-latest");
     expect(oidc?.permissions).toEqual({ contents: "read", "id-token": "write" });
     expect(oidc?.strategy).toBeUndefined();
     expect(step(oidc, "Checkout trusted OIDC preflight tooling").with).toMatchObject({

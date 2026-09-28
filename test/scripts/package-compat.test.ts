@@ -409,16 +409,4 @@ ${fixtureCommand} plugins install fixture`,
       ["plugins", "install", "fixture", consent],
     ]);
   });
-
-  it.each([
-    ["2026.4.25", "1"],
-    ["2026.4.26", "0"],
-    ["2026.8.1", "0"],
-  ])("preserves legacy version CLI %s", (version, output) => {
-    const result = spawnSync(process.execPath, ["scripts/e2e/lib/package-compat.mjs", version], {
-      encoding: "utf8",
-    });
-    expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe(output);
-  });
 });

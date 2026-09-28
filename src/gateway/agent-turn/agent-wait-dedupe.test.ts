@@ -509,32 +509,35 @@ describe("agent.wait gateway dedupe observations", () => {
     }
   });
 
-  it("resolves concurrent waiters when the terminal dedupe entry lands", async () => {
-    const runId = "run-public-concurrent-waiters";
-    const dedupe = new Map<string, DedupeEntry>();
-    const first = waitThroughGateway({ runId, timeoutMs: 1_000 });
-    const second = waitThroughGateway({ runId, timeoutMs: 1_000 });
+  it.each([undefined, "agent", "chat"] as const)(
+    "resolves concurrent %s waiters when the terminal dedupe entry lands",
+    async (source) => {
+      const runId = `run-public-concurrent-waiters-${source ?? "untracked"}`;
+      const dedupe = new Map<string, DedupeEntry>();
+      const first = waitThroughGateway({ runId, timeoutMs: 1_000 }, source);
+      const second = waitThroughGateway({ runId, timeoutMs: 1_000 }, source);
 
-    await Promise.resolve();
-    completeRun(dedupe, runId);
-    await Promise.all([first.promise, second.promise]);
+      await Promise.resolve();
+      completeRun(dedupe, runId, source ?? "agent");
+      await Promise.all([first.promise, second.promise]);
 
-    const expected = {
-      runId,
-      status: "ok",
-      startedAt: 100,
-      endedAt: 200,
-      error: undefined,
-      stopReason: undefined,
-      livenessState: undefined,
-      yielded: undefined,
-      pendingError: undefined,
-      timeoutPhase: undefined,
-      providerStarted: undefined,
-    };
-    expect(first.respond).toHaveBeenCalledWith(true, expected);
-    expect(second.respond).toHaveBeenCalledWith(true, expected);
-  });
+      const expected = {
+        runId,
+        status: "ok",
+        startedAt: 100,
+        endedAt: 200,
+        error: undefined,
+        stopReason: undefined,
+        livenessState: undefined,
+        yielded: undefined,
+        pendingError: undefined,
+        timeoutPhase: undefined,
+        providerStarted: undefined,
+      };
+      expect(first.respond).toHaveBeenCalledWith(true, expected);
+      expect(second.respond).toHaveBeenCalledWith(true, expected);
+    },
+  );
 
   it("retires only its scope's observer without ending the shared run", async () => {
     const runId = "run-scope-observers";

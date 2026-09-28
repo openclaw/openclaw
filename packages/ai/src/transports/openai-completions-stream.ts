@@ -32,17 +32,16 @@ import {
 } from "./openai-completions-dsml.js";
 import { getCompat } from "./openai-transport-params.js";
 import {
-  createModelStreamCooperativeScheduler,
   isOpenAICompletionsThinkingEnabled,
   parseOpenAICompletionsUsage,
   readOpenAICompletionsContentDeltas,
   readOpenAICompletionsReasoningBatch,
-  throwIfModelStreamAborted,
   type MutableAssistantOutput,
   type OpenAICompletionsContentDelta as CompletionsReasoningDelta,
   type OpenAICompletionsTextSource,
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
+import { iterateModelStream, throwIfModelStreamAborted } from "./transport-stream-shared.js";
 
 type OpenAICompatibleChoice = ChatCompletionChunk["choices"][number] & {
   // Some compatible providers attach usage per choice instead of per chunk.
@@ -446,9 +445,6 @@ export async function processCompletionsStream(
       sealTextBeforeReasoning();
     }
   };
-  const cooperativeScheduler = directMode
-    ? undefined
-    : createModelStreamCooperativeScheduler(options?.signal);
   const guardedStream = withFirstStreamEventTimeout(responseStream as AsyncIterable<unknown>, {
     provider: model.provider,
     api: model.api,
@@ -459,13 +455,11 @@ export async function processCompletionsStream(
     onTimeout: options?.onFirstEventTimeout,
     hint: "The provider may be stalled while parsing the tool payload; retry with a smaller tool surface or enable OPENCLAW_DEBUG_MODEL_PAYLOAD=tools to inspect exposed tools.",
   });
-  for await (const rawChunk of guardedStream) {
+  const events = directMode ? guardedStream : iterateModelStream(guardedStream, options?.signal);
+  for await (const rawChunk of events) {
     throwIfModelStreamAborted(options?.signal);
     chunkPushedEvent = false;
     if (!rawChunk || typeof rawChunk !== "object") {
-      if (cooperativeScheduler) {
-        await cooperativeScheduler.afterEvent();
-      }
       continue;
     }
     // Hidden reasoning is still provider progress; keep the idle watchdog alive without exposing it.
@@ -488,9 +482,6 @@ export async function processCompletionsStream(
     const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
     if (!choice) {
       emitReasoningUsageActivity(hasReasoningUsageActivity);
-      if (cooperativeScheduler) {
-        await cooperativeScheduler.afterEvent();
-      }
       continue;
     }
     const choiceUsage = choice.usage;
@@ -513,9 +504,6 @@ export async function processCompletionsStream(
     const rawChoiceDelta = choice.delta ?? choice.message;
     if (!rawChoiceDelta) {
       emitReasoningUsageActivity(hasReasoningUsageActivity);
-      if (cooperativeScheduler) {
-        await cooperativeScheduler.afterEvent();
-      }
       continue;
     }
     for (const normalizedDelta of normalizeToolCallDeltas(rawChoiceDelta, choice.finish_reason)) {
@@ -653,9 +641,6 @@ export async function processCompletionsStream(
     }
     flushPendingPostToolCallDeltas();
     emitReasoningUsageActivity(hasReasoningUsageActivity);
-    if (cooperativeScheduler) {
-      await cooperativeScheduler.afterEvent();
-    }
   }
   // The SDK can end an aborted SSE iterator normally; cancellation must win
   // before buffered terminal markers can promote provisional tool calls.

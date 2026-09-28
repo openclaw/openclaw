@@ -88,6 +88,7 @@ export async function runCodexAppServerAttempt(
             turnRequest,
           );
           if ("result" in turnStart) {
+            connection.assertModelExecutionCurrent();
             return turnStart.result;
           }
           const activeTurn = activateCodexAttemptTurn(
@@ -139,6 +140,7 @@ export async function runCodexAppServerAttempt(
           ) {
             throw resources.state.executionDisconnectError;
           }
+          connection.assertModelExecutionCurrent();
           return finalizedResult;
         } finally {
           turnRuntime.deadlines.dispose();
@@ -156,5 +158,6 @@ export async function runCodexAppServerAttempt(
   } finally {
     // Preparation can fail before the active turn installs its terminal freeze.
     connection.cancellation.dispose();
+    connection.releaseModelExecution();
   }
 }

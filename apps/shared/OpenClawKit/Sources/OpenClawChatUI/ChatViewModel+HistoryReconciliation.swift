@@ -785,12 +785,13 @@ extension OpenClawChatViewModel {
 }
 
 extension OpenClawChatViewModel {
-    private func canApplyHistory(_ request: HistoryRequest) -> Bool {
+    func canApplyHistory(_ request: HistoryRequest) -> Bool {
         request.id >= self.latestAppliedHistoryRequestID &&
             self.isCurrentSession(request.session)
     }
 
     func advanceSessionGeneration() {
+        self.cancelHistoryInvalidationRefresh()
         self.sessionGeneration &+= 1
     }
 
@@ -800,6 +801,11 @@ extension OpenClawChatViewModel {
 
     func invalidateHistorySnapshots() {
         self.historyMutationGeneration &+= 1
+    }
+
+    func cancelHistoryInvalidationRefresh() {
+        self.historyInvalidationRefresh?.task.cancel()
+        self.historyInvalidationRefresh = nil
     }
 
     func beginHistoryRequest(
@@ -820,6 +826,9 @@ extension OpenClawChatViewModel {
 
     private func markHistoryRequestApplied(_ request: HistoryRequest) {
         self.latestAppliedHistoryRequestID = max(self.latestAppliedHistoryRequestID, request.id)
+        if let refresh = self.historyInvalidationRefresh, request.id >= refresh.requestID {
+            self.cancelHistoryInvalidationRefresh()
+        }
     }
 
     @discardableResult

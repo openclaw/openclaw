@@ -11,7 +11,7 @@ export type GoogleChatRuntimeEnv = {
   error?: (message: string) => void;
 };
 
-export type GoogleChatStatusSink = (patch: Partial<ChannelAccountSnapshot>) => void;
+type GoogleChatStatusSink = (patch: Partial<ChannelAccountSnapshot>) => void;
 
 export type GoogleChatMonitorOptions = {
   account: ResolvedGoogleChatAccount;

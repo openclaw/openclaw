@@ -459,10 +459,18 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
         }
       },
       sessionKey: "agent:main:main",
+      sessionTarget: {
+        agentId: "main",
+        sessionId: turnClaim.sessionId,
+        sessionKey: "agent:main:main",
+        storePath: path.join(stateDir, "agents", "main", "sessions", "sessions.json"),
+      },
       turnClaim,
     };
     let validations = 0;
     const capability: WorkerTurnExecutionIdentityCapability = {
+      sessionTarget: identity.sessionTarget,
+      receiptAuthority: identity.receiptAuthority,
       async run<T>(callback: (current: WorkerTurnExecutionIdentity) => Promise<T> | T) {
         validations += 1;
         return await callback(identity);

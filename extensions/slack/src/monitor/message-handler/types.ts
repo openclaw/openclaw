@@ -1,4 +1,3 @@
-// Slack type declarations define plugin contracts.
 import type { MessageMetadata } from "@slack/types";
 import type { FinalizedMsgContext, GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";

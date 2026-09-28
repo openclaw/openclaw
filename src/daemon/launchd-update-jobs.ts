@@ -34,30 +34,21 @@ type OpenClawUpdateLaunchdLabelCandidate = {
   requiresMetadata: boolean;
 };
 
-function normalizeOpenClawUpdateLaunchdLabel(label: unknown): string | null {
-  if (typeof label !== "string") {
-    return null;
-  }
-  const trimmed = label.trim();
-  if (trimmed.startsWith(OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIX)) {
-    return trimmed;
-  }
-  // Manual update jobs include a timestamp-like suffix and should be cleaned up
-  // without matching arbitrary ai.openclaw labels.
-  return MANUAL_UPDATE_LAUNCHD_LABEL_PATTERN.test(trimmed) ? trimmed : null;
-}
-
 function normalizeOpenClawUpdateLaunchdLabelCandidate(
   label: unknown,
 ): OpenClawUpdateLaunchdLabelCandidate | null {
-  const normalized = normalizeOpenClawUpdateLaunchdLabel(label);
-  if (normalized) {
-    return { label: normalized, requiresMetadata: false };
-  }
   if (typeof label !== "string") {
     return null;
   }
   const trimmed = label.trim();
+  // Manual update jobs include a timestamp-like suffix and should be cleaned up
+  // without matching arbitrary ai.openclaw labels.
+  if (
+    trimmed.startsWith(OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIX) ||
+    MANUAL_UPDATE_LAUNCHD_LABEL_PATTERN.test(trimmed)
+  ) {
+    return { label: trimmed, requiresMetadata: false };
+  }
   return OPENCLAW_PROFILE_UPDATE_LAUNCHD_LABEL_PATTERN.test(trimmed)
     ? { label: trimmed, requiresMetadata: true }
     : null;

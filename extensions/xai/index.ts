@@ -1,5 +1,4 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-// Xai plugin entrypoint registers its OpenClaw integration.
 import type {
   OpenClawPluginToolContext,
   ProviderFailoverErrorContext,
@@ -96,10 +95,6 @@ function classifyXaiFailoverReason({
   return undefined;
 }
 
-function hasResolvableXaiApiKey(config: unknown, auth?: XaiToolAuthContext): boolean {
-  return isXaiToolEnabled({ sourceConfig: config as never, auth });
-}
-
 function isCodeExecutionEnabled(config: unknown, auth?: XaiToolAuthContext): boolean {
   return resolveCodeExecutionEnabled({
     sourceConfig: config,
@@ -117,7 +112,7 @@ function isXSearchEnabled(config: unknown, auth?: XaiToolAuthContext): boolean {
   if (resolved?.enabled === false) {
     return false;
   }
-  return hasResolvableXaiApiKey(config, auth);
+  return isXaiToolEnabled({ sourceConfig: config as never, auth });
 }
 
 function shouldExposeXaiBilledTool(params: {

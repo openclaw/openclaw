@@ -48,7 +48,10 @@ vi.mock("../logging/console.js", async (importOriginal) => ({
   routeLogsToStderr() {},
 }));
 vi.mock("../infra/path-env.js", () => ({ ensureOpenClawCliOnPath() {} }));
-vi.mock("./dotenv.js", () => ({ loadCliDotEnv() {} }));
+vi.mock("./dotenv.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./dotenv.js")>()),
+  loadCliDotEnv() {},
+}));
 vi.mock("../config/io.js", () => ({ readBestEffortConfig: async () => ({}) }));
 vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({
   startProxy: async () => null,

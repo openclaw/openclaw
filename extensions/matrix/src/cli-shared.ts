@@ -278,22 +278,7 @@ export function sanitizeMatrixCliText(value: string): string {
       }
       continue;
     }
-    if (code === 0x9d) {
-      index++;
-      while (index < value.length) {
-        const current = value.charCodeAt(index);
-        if (current === 0x07 || current === 0x9c) {
-          break;
-        }
-        if (current === 0x1b && value[index + 1] === "\\") {
-          index++;
-          break;
-        }
-        index++;
-      }
-      continue;
-    }
-    if (code === 0x90 || code === 0x9e || code === 0x9f) {
+    if (code === 0x90 || code === 0x9d || code === 0x9e || code === 0x9f) {
       index++;
       while (index < value.length) {
         const current = value.charCodeAt(index);

@@ -11,11 +11,6 @@ import {
 } from "../../sessions/session-key-utils.js";
 import { getLoadedChannelPluginForRead } from "./registry-loaded.js";
 
-type SessionConversationHookResult = {
-  id: string;
-  threadId?: string | null;
-};
-
 function resolveLoadedSessionConversationThreadInfo(
   sessionKey: string | undefined | null,
 ): ParsedThreadSessionSuffix | null {
@@ -31,7 +26,7 @@ function resolveLoadedSessionConversationThreadInfo(
   const resolved = messaging?.resolveSessionConversation?.({
     kind: raw.kind,
     rawId,
-  }) as SessionConversationHookResult | null | undefined;
+  });
   if (!resolved?.id?.trim()) {
     return null;
   }

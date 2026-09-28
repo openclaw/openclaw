@@ -105,6 +105,14 @@ or model availability changes, including cooldown and blocked-state transitions.
 Usage timestamps, success history, and failure counters remain recorded without
 invalidating chat metadata or broadcasting a change to connected clients.
 
+Gateway model-auth status reads share provider preparation across clients for the
+same agent and published config/auth generation. Credential warning and expiry
+boundaries also invalidate preparation; explicit refresh bypasses it. Each reply
+still computes current expiry durations, reads auxiliary usage from its existing
+cache, and applies the requesting client's profile-identity visibility.
+File-backed external CLI bootstrap health stays with its reader's freshness
+lifecycle because external login can change without a Gateway publication.
+
 Repeated model resolution reuses persisted auth rows while the owning database's
 write generation and file identity remain unchanged. Committed auth writes and
 runtime snapshot reloads invalidate those rows immediately. Database, WAL, and

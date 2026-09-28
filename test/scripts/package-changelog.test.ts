@@ -2,7 +2,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderReleaseDocsMirror } from "../../scripts/lib/release-docs-mirror.mjs";
 import {
   extractCurrentPackageChangelog,
@@ -11,6 +11,7 @@ import {
   resolvePackageChangelogVersions,
   restorePackageChangelog,
 } from "../../scripts/package-changelog.mjs";
+import { withEnv } from "../../src/test-utils/env.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -290,7 +291,7 @@ Docs: https://docs.openclaw.ai
   );
 
   it.each(["", oversizedContributionRecord])(
-    "refuses oversized editorial notes even with a contribution record (%#)",
+    "blocks oversized editorial notes locally and warns in CI (%#)",
     (record) => {
       const source = changelog`
 # Changelog
@@ -299,9 +300,25 @@ ${"é".repeat(260_000)}
 ${record}
 `;
 
-      expect(() => extractCurrentPackageChangelog(source, "2026.5.28")).toThrow(
-        "exceeds the 512000 byte safety limit",
-      );
+      const output = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        withEnv({ GITHUB_ACTIONS: undefined, GITHUB_STEP_SUMMARY: undefined }, () => {
+          expect(() => extractCurrentPackageChangelog(source, "2026.5.28")).toThrow(
+            "exceeds the 512000 byte size limit",
+          );
+        });
+        output.mockClear();
+        withEnv({ GITHUB_ACTIONS: "true", GITHUB_STEP_SUMMARY: undefined }, () => {
+          expect(extractCurrentPackageChangelog(source, "2026.5.28")).toContain(
+            "é".repeat(260_000),
+          );
+        });
+        expect(output).toHaveBeenCalledWith(
+          expect.stringContaining("::warning file=CHANGELOG.md,"),
+        );
+      } finally {
+        output.mockRestore();
+      }
     },
   );
 

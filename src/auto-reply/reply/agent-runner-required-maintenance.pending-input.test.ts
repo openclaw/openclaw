@@ -271,6 +271,7 @@ describe("required maintenance with restart-safe admitted input", () => {
             cfg,
           });
           const restartSafeAdmission = resolveRestartSafeChatAdmission({
+            activeRunScopeKey: sessionKey,
             agentId: "main",
             cfg,
             clientRunId: runId,

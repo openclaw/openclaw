@@ -7,7 +7,7 @@ import {
   checkShellCompletionStatus,
   ensureCompletionCacheExists,
 } from "../../commands/doctor-completion.js";
-import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import { resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
 import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
@@ -44,8 +44,8 @@ import type {
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
 import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-maintenance.js";
 import {
-  assertGatewayServiceManagementAllowedForUpdate,
   gatewayServiceCommandUsesRoot,
+  readGatewayServiceStateForUpdate,
   resolveGatewayServiceManagementBlockMessageForUpdate,
   resolveUpdatedGatewayRestartPort,
 } from "./update-command-service-plan.js";
@@ -121,26 +121,17 @@ export async function tryInstallShellCompletion(opts: {
 
   try {
     const status = await checkShellCompletionStatus(CLI_NAME);
-    const generationOptions = { generationMode: "core-only" } as const;
-
     if (status.usesSlowPattern) {
       defaultRuntime.log(theme.muted("Upgrading shell completion to cached version..."));
-      if (!(await ensureCompletionCacheExists(CLI_NAME, generationOptions))) {
-        throw new Error("completion cache generation failed");
+    } else if (status.profileInstalled) {
+      if (status.cacheExists) {
+        return;
       }
-      await installCompletion(status.shell, true, CLI_NAME);
-      return;
-    }
-
-    if (status.profileInstalled && !status.cacheExists) {
       defaultRuntime.log(theme.muted("Regenerating shell completion cache..."));
-      if (!(await ensureCompletionCacheExists(CLI_NAME, generationOptions))) {
-        throw new Error("completion cache generation failed");
+    } else {
+      if (opts.skipPrompt) {
+        return;
       }
-      return;
-    }
-
-    if (!status.profileInstalled && !opts.skipPrompt) {
       defaultRuntime.log("");
       defaultRuntime.log(theme.heading("Shell completion"));
 
@@ -157,11 +148,12 @@ export async function tryInstallShellCompletion(opts: {
         );
         return;
       }
-
-      if (!(await ensureCompletionCacheExists(CLI_NAME, generationOptions))) {
-        throw new Error("completion cache generation failed");
-      }
-      await installCompletion(status.shell, false, CLI_NAME);
+    }
+    if (!(await ensureCompletionCacheExists(CLI_NAME, { generationMode: "core-only" }))) {
+      throw new Error("completion cache generation failed");
+    }
+    if (status.usesSlowPattern || !status.profileInstalled) {
+      await installCompletion(status.shell, status.usesSlowPattern, CLI_NAME);
     }
   } catch (err) {
     const message = formatErrorMessage(err);
@@ -472,13 +464,11 @@ export async function maybeRestartService(params: {
             if (verdict?.kind !== "owned") {
               throw err;
             }
-            const state = await readGatewayServiceState(resolveGatewayService(), {
-              env: activation.serviceEnv,
-              requireEffective: true,
-              requireLoadedCommand: true,
-              validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
-              timeoutMs: activation.timeoutMs,
-            });
+            const state = await readGatewayServiceStateForUpdate(
+              resolveGatewayService(),
+              activation.serviceEnv,
+              activation.timeoutMs,
+            );
             assertCurrent();
             await revalidateManagedGatewayServiceAfterUpdate({
               state,

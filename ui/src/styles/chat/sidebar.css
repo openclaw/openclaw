@@ -315,6 +315,10 @@
   opacity: 1;
 }
 
+.chat-workspace-rail__row-action {
+  padding: 0;
+}
+
 .chat-workspace-rail__row-action,
 .chat-workspace-rail__row-actions :where(.chat-copy-btn) {
   display: inline-grid;
@@ -576,6 +580,7 @@
   flex: 0 0 auto;
   width: 24px;
   height: 24px;
+  padding: 0;
   place-items: center;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
@@ -773,6 +778,12 @@
   &:has(.sidebar-file-toolbar) {
     padding-top: 0;
   }
+
+  &:has(.sidebar-pdf-preview) {
+    display: flex;
+    overflow: hidden;
+    padding: 0;
+  }
 }
 
 .chat-task-detail {
@@ -787,6 +798,10 @@
   display: grid;
   min-width: 0;
   gap: 5px;
+}
+
+.chat-task-detail__heading > .btn {
+  justify-self: start;
 }
 
 .chat-task-detail__heading .sidebar-title {
@@ -1449,12 +1464,50 @@ openclaw-session-discussion {
   width: 100%;
   min-height: 0;
 
-  &:has(.chat-html-preview:not([hidden])) {
+  &:has(.chat-html-preview:not([hidden])),
+  &:has(.sidebar-pdf-preview) {
     display: flex;
     flex-direction: column;
     height: 100%;
     min-width: 0;
   }
+}
+
+.sidebar-pdf-preview {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.sidebar-pdf-preview__surface {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.sidebar-pdf-preview__surface > .sidebar-attachment-preview__unavailable {
+  flex: 1;
+  padding: 16px;
+}
+
+.sidebar-pdf-preview__surface > .sidebar-attachment-preview__loading {
+  flex: 1;
+}
+
+.sidebar-pdf-preview__frame {
+  display: block;
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  background: var(--bg);
 }
 
 .sidebar-attachment-preview__markdown {

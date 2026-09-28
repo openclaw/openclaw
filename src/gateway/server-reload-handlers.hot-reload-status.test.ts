@@ -178,9 +178,9 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
         "committed runtime config reader",
       );
       gatewayContext.resolveGatewayContext = () => gatewayContext;
-      const capture = () =>
+      const capture = async () =>
         expectDefined(
-          captureGatewayOperatorRunAuthority({
+          await captureGatewayOperatorRunAuthority({
             client: createSyntheticPluginRuntimeClient({
               scopes: ["operator.write"],
               operatorRoleActor: { kind: "operator", profileId: profile.id },
@@ -189,8 +189,8 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
           }),
           "operator source",
         );
-      const original = capture();
-      let duringActivation: ReturnType<typeof capture> | undefined;
+      const original = await capture();
+      let duringActivation: Awaited<ReturnType<typeof capture>> | undefined;
       const candidate: OpenClawConfig = {
         ...initialConfig,
         gateway: {
@@ -206,7 +206,7 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
         setRuntimeConfigSnapshot(candidate);
         expect(original.authority.signal?.aborted).toBe(false);
         expect(() => original.authority.assertCurrent()).not.toThrow();
-        duringActivation = capture();
+        duringActivation = await capture();
         // An unrelated Gateway publication cannot turn this tentative policy into source loss.
         publishOperatorRoleConfigChange({});
         expect(duringActivation.authority.signal?.aborted).toBe(false);

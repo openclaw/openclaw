@@ -12,6 +12,7 @@ class EndFollowFixture extends LitElement {
   readonly transcript = new ChatTranscriptController(this, () => "end-follow-browser", {
     canFollowEnd: () => this.followEnabled,
   });
+  viewportHeight = 400;
   earlierRowHeight = 400;
   lastRowHeight = 900;
 
@@ -35,7 +36,7 @@ class EndFollowFixture extends LitElement {
     return html`
       <div
         class="chat-thread"
-        style="height: 400px; flex: none; padding: 0 0 60px; overflow-anchor: none"
+        style=${`height: ${this.viewportHeight}px; flex: none; padding: 0 0 60px; overflow-anchor: none`}
       >
         ${this.transcript.renderSession("agent:main:end-follow", (session) => {
           session.setContentReady(true);
@@ -156,6 +157,28 @@ it("does not yank a reader who left the end programmatically", async () => {
   };
   expect(Math.abs(geometry.displacement)).toBeLessThanOrEqual(1);
 });
+
+it.each([400, 380])(
+  "preserves native movement between the DOM commit and deferred end reconciliation (%ipx viewport)",
+  async (viewportHeight) => {
+    const { host, thread, distance } = await mountEndFollowFixture();
+    host.transcript.scrollToEnd();
+    await expect.poll(distance).toBe(0);
+    await settleFrames();
+
+    // Finish the DOM commit, but keep its end reconciliation queued for the frame.
+    await commitTask(host, () => {
+      host.viewportHeight = viewportHeight;
+    });
+    thread.scrollTop -= 8;
+    const movedPosition = thread.scrollTop;
+    expect(host.transcript.isMaintenanceScroll).toBe(false);
+    await settleFrames();
+
+    expect(thread.scrollTop).toBe(movedPosition);
+    expect(distance()).toBe(408 - viewportHeight);
+  },
+);
 
 it("keeps a reader observed at the end pinned when a row grows without a follow", async () => {
   const { host, thread, sizer, distance } = await mountEndFollowFixture();

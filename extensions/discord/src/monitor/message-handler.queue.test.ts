@@ -11,6 +11,8 @@ import {
   preflightDiscordMessageMock,
   processDiscordMessageMock,
 } from "./message-handler.module-test-helpers.js";
+import { createDiscordMessage } from "./message-handler.preflight.test-helpers.js";
+import type { DiscordMessagePreflightContext } from "./message-handler.preflight.types.js";
 import {
   createIngressLifecycle,
   createDiscordHandlerParams,
@@ -128,6 +130,65 @@ describe("createDiscordMessageHandler queue behavior", () => {
 
     expectStatusPatch(setStatus, { activeRuns: 0, busy: false });
   });
+
+  it.each(["message", "handler"] as const)(
+    "preserves prepared context and forwards %s cancellation through the run queue",
+    async (cancelSource) => {
+      preflightDiscordMessageMock.mockReset();
+      processDiscordMessageMock.mockReset();
+      const message = createDiscordMessage({
+        id: "m-1",
+        channelId: "ch-1",
+        content: "hello",
+        author: { id: "user-1", bot: false },
+        referencedMessage: createDiscordMessage({
+          id: "parent-1",
+          channelId: "ch-1",
+          content: "earlier",
+          author: { id: "user-2", bot: false },
+        }),
+      });
+      const data = { ...createMessageData(message.id), message };
+      const messageAbort = new AbortController();
+      const handlerAbort = new AbortController();
+      const context = {
+        ...createDiscordQueuePreflightContextForMessage(data),
+        data,
+        message,
+        buildContext: vi.fn(),
+        abortSignal: messageAbort.signal,
+      };
+      const started = createDeferred<DiscordMessagePreflightContext>();
+      const finish = createDeferred<void>();
+      preflightDiscordMessageMock.mockResolvedValue(context);
+      processDiscordMessageMock.mockImplementation(
+        async (received: DiscordMessagePreflightContext) => {
+          started.resolve(received);
+          await finish.promise;
+        },
+      );
+      const handler = createDiscordMessageHandler(
+        createDiscordHandlerParams({ abortSignal: handlerAbort.signal }),
+      );
+      try {
+        await handler(data as never, {} as never);
+        const received = await started.promise;
+        expect(received.message.content).toBe("hello");
+        expect(received.data.message.content).toBe("hello");
+        expect(received.message.referencedMessage?.content).toBe("earlier");
+        expect(received.runtime).toBe(context.runtime);
+        expect(received.buildContext).toBe(context.buildContext);
+        const signal = received.abortSignal;
+        expect(signal?.aborted).toBe(false);
+        const reason = new Error(`${cancelSource} cancelled`);
+        (cancelSource === "message" ? messageAbort : handlerAbort).abort(reason);
+        expect(signal?.reason).toBe(reason);
+      } finally {
+        finish.resolve();
+        await handler.deactivate();
+      }
+    },
+  );
 
   it("starts a second same-session event while the first run is active", async () => {
     preflightDiscordMessageMock.mockReset();

@@ -703,26 +703,10 @@ export function handlePageGatewayEvent(
     recordChatSendServerTiming(state, event.payload);
     return;
   }
-  if (event.event === "session.message") {
-    const scopedChange = handleSessionMessageEvent(
-      state,
-      event.payload,
-      isPresented,
-      sessionResult,
-    );
-    void resumeStoredChatOutboxes(state, event);
-    if (scopedChange) {
-      requestChatPageUpdate(state, "animation-frame");
-    }
-    return;
-  }
-  if (event.event === "sessions.changed") {
-    const scopedChange = handleSessionsChangedEvent(
-      state,
-      event.payload,
-      isPresented,
-      sessionResult,
-    );
+  if (event.event === "session.message" || event.event === "sessions.changed") {
+    const handle =
+      event.event === "session.message" ? handleSessionMessageEvent : handleSessionsChangedEvent;
+    const scopedChange = handle(state, event.payload, isPresented, sessionResult);
     void resumeStoredChatOutboxes(state, event);
     if (scopedChange) {
       requestChatPageUpdate(state, "animation-frame");

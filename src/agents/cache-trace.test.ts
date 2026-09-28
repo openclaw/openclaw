@@ -42,6 +42,25 @@ describe("createCacheTrace", () => {
     expect(trace).toBeNull();
   });
 
+  it.each(["dashboard", "subagent", "internal-session-effects"])(
+    "does not record Incognito %s prompts even when content tracing is enabled",
+    (surface) => {
+      const lines: string[] = [];
+      const trace = createCacheTrace({
+        env: { OPENCLAW_CACHE_TRACE: "1" },
+        sessionKey: `agent:main:${surface}:incognito-private`,
+        writer: {
+          filePath: "memory",
+          write: (line) => lines.push(line),
+          flush: async () => undefined,
+        },
+      });
+      trace?.recordStage("prompt:before", { prompt: "synthetic private prompt" });
+      expect(lines).toEqual([]);
+      expect(trace).toBeNull();
+    },
+  );
+
   it("uses the fixed cache trace path under the state directory", () => {
     const lines: string[] = [];
     const trace = createCacheTrace({

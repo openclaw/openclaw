@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { ok, type Result } from "@openclaw/normalization-core/result";
@@ -11,7 +10,6 @@ import {
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import {
-  openClawStateDatabaseCache,
   registerOpenClawStateDatabaseLifecycleListener,
   requireOpenClawStateDatabaseIdentity,
 } from "./openclaw-state-db-cache.js";
@@ -21,7 +19,6 @@ import {
 } from "./openclaw-state-db-readonly.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import {
   captureUserProfileAuthorityRead,
@@ -31,6 +28,9 @@ import {
   readUserProfileVersion,
 } from "./user-profile-events.js";
 import {
+  profileCatalogPath,
+  projectHasMultipleSessionSharingIdentities,
+  selectHasMultipleSessionSharingIdentities,
   selectUserProfileIdentityInDatabase,
   selectUserProfileDisplaysInDatabase,
   selectUserProfileReferenceInDatabase,
@@ -56,10 +56,14 @@ import type {
 } from "./user-profiles.types.js";
 
 export { projectUserProfileDisplay } from "./user-profiles-internal.js";
-export {
-  readCurrentUserProfileAliases,
-  hasMultipleSessionSharingIdentities,
-} from "./user-profile-identity.read.js";
+export { readCurrentUserProfileAliases } from "./user-profile-identity.read.js";
+
+export const hasMultipleSessionSharingIdentities = (options: OpenClawStateDatabaseOptions = {}) =>
+  readProfileCatalog(
+    options,
+    projectHasMultipleSessionSharingIdentities,
+    selectHasMultipleSessionSharingIdentities,
+  ) ?? false;
 
 /** Exact durable identity facts; never use display-reference prefix matching for authority. */
 export function readUserProfileIdentity(
@@ -171,8 +175,6 @@ function observeEmailBindings(): void {
     }
   });
 }
-const profileCatalogPath = (options: OpenClawStateDatabaseOptions) =>
-  path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));
 
 function readProfileCatalog<T>(
   options: OpenClawStateDatabaseOptions,
@@ -562,11 +564,6 @@ export async function prepareUserProfileIdentity(
     for (const publication of profileMutationPublications) {
       retainProfileMutationPublicationCatalog(publication, catalog, true);
     }
-    // Registration now sees prepared rows and never needs a cold host read.
-    const cached = openClawStateDatabaseCache.getCachedOpenClawStateDatabase(pathname);
-    if (cached) {
-      profileCatalogHandles.set(cached.db, catalog.rows);
-    }
   }
   observeProfileCatalogs(refreshObserver);
   const retained = catalog;
@@ -601,7 +598,12 @@ export async function prepareUserProfileIdentity(
       throw new UserProfileNotFoundError(profileId);
     }
   };
+  function readCurrentProfile(this: void, requiredEmailBindingIds?: readonly string[]) {
+    assertCurrent(requiredEmailBindingIds);
+    return { profileId, assignedRole: rows.get(profileId)?.role || null };
+  }
   return {
+    readCurrentProfile,
     get emailBindingIds() {
       assertCurrent();
       if (initial.some((binding) => binding.bindingId === null)) {
@@ -610,7 +612,7 @@ export async function prepareUserProfileIdentity(
       return ids;
     },
     readCurrentFacts(this: void, requiredEmailBindingIds) {
-      assertCurrent(requiredEmailBindingIds);
+      const profile = readCurrentProfile(requiredEmailBindingIds);
       const aliases = new Set([profileId]);
       for (const row of rows.values()) {
         if (row.merged_into === profileId) {
@@ -619,9 +621,9 @@ export async function prepareUserProfileIdentity(
       }
       return {
         profile: {
-          profileId,
+          profileId: profile.profileId,
           emails: [...(bindings.emailsByProfile.get(profileId) ?? [])].toSorted(),
-          assignedRole: rows.get(profileId)?.role || null,
+          assignedRole: profile.assignedRole,
         },
         aliases,
       };

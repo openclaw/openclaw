@@ -92,7 +92,10 @@ describe("shared GitHub publication requester authority", () => {
         label,
       ).rejects.toThrow(GitHubPublicationRequesterUnavailableError);
     }
-    const source = captureGatewayOperatorRunAuthority({ client: f.guestSource.client, context })!;
+    const source = (await captureGatewayOperatorRunAuthority({
+      client: f.guestSource.client,
+      context,
+    }))!;
     source.release();
     await expect(
       captureGitHubPublicationRequester(
@@ -121,7 +124,7 @@ describe("shared GitHub publication requester authority", () => {
       scopes: ["operator.admin"],
       ...f.guestSource.session,
     });
-    const source = captureGatewayOperatorRunAuthority({ client, context })!;
+    const source = (await captureGatewayOperatorRunAuthority({ client, context }))!;
     onTestFinished(source.release);
     const captured = await captureGitHubPublicationRequester(
       {

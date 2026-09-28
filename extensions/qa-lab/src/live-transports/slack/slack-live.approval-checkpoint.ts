@@ -4,14 +4,9 @@ import path from "node:path";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
-  formatApprovalResultValue,
-  readAcceptedApprovalRequestId,
-} from "../shared/live-approval-result.js";
-import {
   SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS,
   SLACK_QA_APPROVAL_CHECKPOINT_DEFAULT_TIMEOUT_MS,
   type SlackQaApprovalDecision,
-  type SlackQaApprovalScenarioRun,
   type SlackQaScenarioContext,
   type SlackApprovalCheckpointState,
   type SlackApprovalCheckpointAck,
@@ -121,65 +116,6 @@ export async function writeSlackApprovalCheckpoint(params: {
     checkpointPath,
     screenshotPath: ack.screenshotPath,
   };
-}
-
-export async function requestSlackApproval(params: {
-  approvalId: string;
-  channelId: string;
-  context: Omit<SlackQaScenarioContext, "sentTs">;
-  run: SlackQaApprovalScenarioRun;
-  sutAccountId: string;
-}) {
-  const commonParams = {
-    timeoutMs: SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS,
-    turnSourceAccountId: params.sutAccountId,
-    turnSourceChannel: "slack",
-    turnSourceTo: `channel:${params.channelId}`,
-    twoPhase: true,
-  };
-  if (params.run.approvalKind === "exec") {
-    const result = await params.context.gateway.call(
-      "exec.approval.request",
-      {
-        ...commonParams,
-        ask: "always",
-        command: `printf '%s\\n' '${params.run.token}'`,
-        host: "gateway",
-        id: params.approvalId,
-        security: "full",
-      },
-      {
-        expectFinal: false,
-        timeoutMs: SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
-      },
-    );
-    const acceptedId = readAcceptedApprovalRequestId(result);
-    if (acceptedId !== params.approvalId) {
-      throw new Error(
-        `accepted exec approval id was ${formatApprovalResultValue(
-          acceptedId,
-        )} instead of ${params.approvalId}`,
-      );
-    }
-    return acceptedId;
-  }
-  const result = await params.context.gateway.call(
-    "plugin.approval.request",
-    {
-      ...commonParams,
-      agentId: "qa",
-      description: `Slack plugin approval QA request ${params.run.token}`,
-      pluginId: "qa-slack-plugin",
-      severity: "warning",
-      title: `Slack plugin approval QA ${params.run.token}`,
-      toolName: "slack_qa_tool",
-    },
-    {
-      expectFinal: false,
-      timeoutMs: SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
-    },
-  );
-  return readAcceptedApprovalRequestId(result);
 }
 
 export async function waitForApprovalDecision(params: {

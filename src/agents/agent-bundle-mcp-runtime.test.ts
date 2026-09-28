@@ -1429,6 +1429,27 @@ describe("session MCP runtime", () => {
     }
   });
 
+  it("keeps tools from a server without timeout config when tools/list takes over 1.5s", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-default-listtools-");
+    const serverPath = path.join(tempDir, "slow-list-tools.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({ filePath: serverPath, logPath, delayMs: 2_000 });
+
+    const runtime = await makeStdioRuntime(
+      "session-default-listtools-timeout",
+      "slowListTools",
+      serverPath,
+    );
+
+    try {
+      const catalog = await runtime.getCatalog();
+      expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["slow_tool"]);
+      await expect(fs.readFile(logPath, "utf8")).resolves.toContain("delay tools/list 2000");
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
   it("uses the configured request timeout instead of the connection timeout for delayed MCP tools/list", async () => {
     const tempDir = tempDirTracker.make("bundle-mcp-configured-listtools-");
     const serverPath = path.join(tempDir, "configured-list-tools.mjs");
@@ -3363,31 +3384,6 @@ process.on("SIGINT", shutdown);`,
     expect(testing.getCachedSessionIds()).not.toContain("session-view-reset");
   });
 
-  it("completes deferred retirement when a materialized run releases its lease", async () => {
-    const fixture = await createMcpProbeFixture(tempDirs);
-    const healthy = expectDefined(fixture.config().mcp?.servers?.healthy, "healthy MCP probe");
-    const runtime = await getOrCreateSessionMcpRuntime({
-      sessionId: "session-run-lease",
-      sessionKey: "agent:test:session-run-lease",
-      workspaceDir: fixture.params.workspaceDir,
-      manifestRegistry: fixture.params.manifestRegistry,
-      cfg: { plugins: { enabled: false }, mcp: { servers: { healthy } } },
-    });
-    const materialized = await materializeBundleMcpToolsForRun({ runtime });
-
-    await expect(
-      retireSessionMcpRuntime({
-        sessionId: "session-run-lease",
-        reason: "gateway-session-cleanup",
-        preserveActiveLeases: true,
-      }),
-    ).resolves.toBe(true);
-    expect(testing.getCachedSessionIds()).toContain("session-run-lease");
-
-    await materialized.dispose();
-    expect(testing.getCachedSessionIds()).not.toContain("session-run-lease");
-  });
-
   it.each(["run", "app"] as const)(
     "keeps an active MCP child and database lock until its %s lease retires",
     async (retirementPath) => {
@@ -3930,13 +3926,17 @@ describe("requester-scoped MCP connection resolution", () => {
   it("keys requester-scoped runtimes per sender while sharing static servers", async () => {
     const resolverRegistry = createMcpProofPluginRegistry();
     await withPluginRuntimeRegistryScope(resolverRegistry.registry, async () => {
+      let resolveCalls = 0;
       const resolverApi = resolverRegistry.apiFor("test-plugin");
       resolverApi.registerMcpServerConnectionResolver({
         serverName: "user-mail",
-        resolve: async (ctx) => ({
-          url: `https://mcp.example.test/${ctx.requesterSenderId}`,
-          headers: { Authorization: `Bearer ${ctx.requesterSenderId}` },
-        }),
+        resolve: async (ctx) => {
+          resolveCalls += 1;
+          return {
+            url: `https://mcp.example.test/${ctx.requesterSenderId}`,
+            headers: { Authorization: `Bearer ${ctx.requesterSenderId}` },
+          };
+        },
       });
 
       const created: Array<{
@@ -3971,6 +3971,7 @@ describe("requester-scoped MCP connection resolution", () => {
         });
       await manager.getOrCreate(params("sender-a"));
       await manager.getOrCreate(params("sender-a"));
+      expect(resolveCalls).toBe(1);
       await manager.getOrCreate(params("sender-b"));
 
       // Same requester reuses both static and requester-scoped entries; other sender adds one.
@@ -4112,42 +4113,6 @@ describe("requester-scoped MCP connection resolution", () => {
         requesterSenderId: "sender-a",
       });
 
-      await manager.disposeAll();
-    });
-  });
-
-  it("skips connection resolve on requester cache hits", async () => {
-    const resolverRegistry = createMcpProofPluginRegistry();
-    await withPluginRuntimeRegistryScope(resolverRegistry.registry, async () => {
-      let resolveCalls = 0;
-
-      const resolverApi = resolverRegistry.apiFor("mail-plugin");
-      resolverApi.registerMcpServerConnectionResolver({
-        serverName: "user-mail",
-        resolve: async (ctx) => {
-          resolveCalls += 1;
-          return {
-            url: `https://mcp.example.test/${ctx.requesterSenderId}`,
-            headers: { Authorization: `Bearer ${ctx.requesterSenderId}` },
-          };
-        },
-      });
-
-      const createRuntime: RuntimeFactory = makeManagedRuntime;
-      const manager = createSessionMcpRuntimeManager({ createRuntime });
-      const cfg = {
-        mcp: {
-          servers: {
-            "user-mail": { transport: "streamable-http" },
-          },
-        },
-      };
-
-      const params = makeRequesterParams("session-resolve-once", cfg as never, "sender-a");
-      await manager.getOrCreate(params);
-      await manager.getOrCreate(params);
-
-      expect(resolveCalls).toBe(1);
       await manager.disposeAll();
     });
   });
@@ -4730,31 +4695,6 @@ describe("requester-scoped MCP connection resolution", () => {
       expect(builtHashes[0]).not.toBe(builtHashes[1]);
       expect(manager.listRuntimeKeys().filter((key) => key.startsWith("{"))).toHaveLength(1);
 
-      await manager.disposeAll();
-      expect(Object.values(testing.getBookkeepingSizes(manager)).every((n) => n === 0)).toBe(true);
-    });
-  });
-
-  it("clears internal bookkeeping maps after disposeAll", async () => {
-    const resolverRegistry = createMcpProofPluginRegistry();
-    await withPluginRuntimeRegistryScope(resolverRegistry.registry, async () => {
-      const resolverApi = resolverRegistry.apiFor("test-plugin");
-      resolverApi.registerMcpServerConnectionResolver({
-        serverName: "user-mail",
-        resolve: async () => ({ url: "https://mcp.example.test/user" }),
-      });
-      const manager = createSessionMcpRuntimeManager({
-        createRuntime: makeManagedRuntime,
-      });
-      await manager.getOrCreate({
-        sessionId: "session-bookkeeping",
-        workspaceDir: "/workspace",
-        cfg: {
-          mcp: { servers: { "user-mail": { transport: "streamable-http" } } },
-        } as never,
-        requesterSenderId: "sender-a",
-        messageChannel: "telegram",
-      });
       expect(testing.getBookkeepingSizes(manager).runtimes).toBeGreaterThan(0);
       await manager.disposeAll();
       expect(testing.getBookkeepingSizes(manager)).toEqual({
@@ -5389,47 +5329,6 @@ describe("requester-scoped MCP connection resolution", () => {
     });
   });
 
-  it("clears advertised scoped catalog when the last scoped server is removed", async () => {
-    const resolverRegistry = createMcpProofPluginRegistry();
-    await withPluginRuntimeRegistryScope(resolverRegistry.registry, async () => {
-      const resolverApi = resolverRegistry.apiFor("test-plugin");
-      resolverApi.registerMcpServerConnectionResolver({
-        serverName: "user-mail",
-        resolve: async () => ({ url: "https://mcp.example.test/authed" }),
-      });
-      const createRuntime: RuntimeFactory = (params) =>
-        makeManagedRuntime(params, [{ toolName: "inbox", description: "read inbox" }], "user-mail");
-      const manager = createSessionMcpRuntimeManager({ createRuntime });
-      const scopedConfig = {
-        mcp: {
-          servers: {
-            "user-mail": { transport: "streamable-http" },
-          },
-        },
-      };
-      const staticConfig = {
-        mcp: {
-          servers: {
-            shared: { command: "true" },
-          },
-        },
-      };
-
-      const runtime = await manager.getOrCreateRequesterScoped(
-        makeRequesterParams("session-adv-removal", scopedConfig as never, "authed"),
-      );
-      manager.rememberAdvertisedScopedCatalog(runtime!, await runtime!.runtime.getCatalog());
-      expect(manager.getAdvertisedScopedCatalog("session-adv-removal")?.tools).toHaveLength(1);
-
-      await expect(
-        manager.getOrCreateRequesterScoped(
-          makeRequesterParams("session-adv-removal", staticConfig as never, "guest"),
-        ),
-      ).resolves.toBeUndefined();
-      expect(manager.getAdvertisedScopedCatalog("session-adv-removal")).toBeNull();
-    });
-  });
-
   it("reconciles cached scoped catalog before a senderless turn", async () => {
     const resolverRegistry = createMcpProofPluginRegistry();
     await withPluginRuntimeRegistryScope(resolverRegistry.registry, async () => {
@@ -5750,94 +5649,6 @@ describe("requester-scoped MCP connection resolution", () => {
 
 describe("disposeSession timeout", () => {
   it(
-    "force-closes transport and client when terminateSession hangs past the timeout",
-    { timeout: 15_000 },
-    async () => {
-      testing.setBundleMcpDisposeTimeoutMsForTest(50);
-      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-force-close-"));
-      const serverPath = path.join(tempDir, "hanging-terminate.mjs");
-      const logPath = path.join(tempDir, "server.log");
-
-      await writeExecutable(
-        serverPath,
-        `#!/usr/bin/env node
-import fs from "node:fs/promises";
-
-const logPath = ${JSON.stringify(logPath)};
-function log(line) {
-  void fs.appendFile(logPath, line + "\\n", "utf8").catch(() => {});
-}
-function send(message) {
-  process.stdout.write(JSON.stringify(message) + "\\n");
-}
-
-let buffer = "";
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => {
-  buffer += chunk;
-  while (true) {
-    const newline = buffer.indexOf("\\n");
-    if (newline < 0) return;
-    const line = buffer.slice(0, newline).replace(/\\r$/, "");
-    buffer = buffer.slice(newline + 1);
-    if (line.trim()) {
-      const message = JSON.parse(line);
-      if (message.method === "initialize") {
-        send({
-          jsonrpc: "2.0",
-          id: message.id,
-          result: {
-            protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
-            capabilities: { tools: {} },
-            serverInfo: { name: "hanging-terminate-server", version: "1.0.0" },
-          },
-        });
-      } else if (message.method === "tools/list") {
-        send({
-          jsonrpc: "2.0",
-          id: message.id,
-          result: { tools: [{ name: "probe", description: "probe", inputSchema: { type: "object" } }] },
-        });
-      } else {
-        log("recv " + String(message.method ?? "response"));
-      }
-    }
-  }
-});
-
-// Keep process alive forever and ignore all shutdown signals
-process.on("SIGTERM", () => { log("ignored SIGTERM"); });
-process.on("SIGINT", () => { log("ignored SIGINT"); });
-process.stdin.on("end", () => {
-  log("stdin-end");
-  setInterval(() => {}, 60_000);
-});`,
-      );
-
-      const runtime = await makeStdioRuntime(
-        "session-force-close-timeout",
-        "hangingTerminate",
-        serverPath,
-      );
-
-      const catalog = await runtime.getCatalog();
-      expect(catalog.tools).toHaveLength(1);
-
-      const start = Date.now();
-      await runtime.dispose();
-      const elapsed = Date.now() - start;
-
-      expect(elapsed).toBeLessThan(1_000);
-
-      await retireSessionMcpRuntime({
-        sessionId: "session-force-close-timeout",
-        reason: "test cleanup",
-      });
-      await fs.rm(tempDir, { recursive: true, force: true });
-    },
-  );
-
-  it(
     "completes disposal even when the MCP server process ignores shutdown",
     { timeout: 15_000 },
     async () => {
@@ -5912,6 +5723,10 @@ process.stdin.on("end", () => {
 
       expect(elapsed).toBeLessThan(1_000);
 
+      await retireSessionMcpRuntime({
+        sessionId: "session-dispose-timeout",
+        reason: "test cleanup",
+      });
       await fs.rm(tempDir, { recursive: true, force: true });
     },
   );

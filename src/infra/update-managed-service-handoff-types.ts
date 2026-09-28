@@ -2,6 +2,12 @@ import type { TriageFailureContext } from "../commands/triage-prompt.js";
 import type { RespawnSupervisor } from "./supervisor-markers.js";
 import type { UpdateChannel } from "./update-channels.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
+import type { HandoffChild } from "./update-managed-service-handoff-control.js";
+import type { ManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-database.js";
+import type {
+  createManagedHandoffLeaseStore,
+  ManagedHandoffLease,
+} from "./update-managed-service-handoff-lease.js";
 import type { UpdateRequester } from "./update-requester-authority.js";
 import type {
   ForegroundUpdateOrigin,
@@ -21,6 +27,7 @@ export type ManagedServiceUpdateHandoffParams = {
   channel?: UpdateChannel;
   tag?: string;
   acceptCapabilities?: boolean;
+  admission?: "auto" | "installed";
   reapplyLocalOverrides?: boolean;
   meta: UpdateRestartSentinelMeta;
   requester?: UpdateRequester;
@@ -49,3 +56,29 @@ export type ManagedServiceUpdateHandoffResult = {
   | { status: "started"; handoffId: string; installRoot: string }
   | { status: "joined"; handoffId?: string }
 );
+
+export type ActiveManagedServiceUpdateHandoff = {
+  handoffId: string;
+  operatorRestartWarning?: string;
+  recoveryTimeoutMs: number;
+  parentExitTimeoutMs: number;
+  beforePark?: () => Promise<void>;
+  requesterAuthority?: ManagedServiceUpdateHandoffParams["requesterAuthority"];
+  releaseRequesterObserver?: () => void;
+  flight?: Promise<ManagedServiceUpdateHandoffResult>;
+  launcher?: HandoffChild;
+  closed?: Promise<void>;
+  leaseStore?: ReturnType<typeof createManagedHandoffLeaseStore>;
+  leaseDatabaseIdentity?: ManagedUpdateLeaseDatabaseIdentity;
+  launcherStartIdentity?: string | null;
+  helper?: ManagedHandoffLease;
+  claimed?: boolean;
+  transferred?: boolean;
+  cancelling?: boolean;
+  exited?: boolean;
+  settled?: boolean;
+  foregroundOrigin?: ForegroundUpdateOrigin;
+  parkReady?: true;
+  parkAdmitted?: true;
+  closeForStop?: () => void;
+};

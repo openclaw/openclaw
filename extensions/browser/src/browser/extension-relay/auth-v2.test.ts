@@ -12,8 +12,8 @@ import {
   parseExtensionRelayResource,
   parseRelayAuthHello,
   parseRelayAuthResponse,
-  parseStrictJsonObject,
 } from "./auth-v2.js";
+import { parseStrictJsonObject } from "./strict-json.js";
 
 const KEY = Array.from({ length: 32 }, (_, index) => index.toString(16).padStart(2, "0")).join("");
 const SOURCE = "127.0.0.1";

@@ -15,6 +15,7 @@ import {
   runLegacyPluginSourceCapturesHealth,
   runPluginRegistryHealth,
   runReleaseConfiguredPluginInstallsHealth,
+  runRetainedUpdateRuntimesHealth,
   runSandboxHealth,
   runSessionSnapshotsHealth,
   runSessionTranscriptHeadersHealth,
@@ -316,6 +317,12 @@ export function resolveInitialDoctorHealthContributions(params: {
       label: "Legacy plugin captures",
       updateWork: { kind: "startup" },
       run: runLegacyPluginSourceCapturesHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:retained-update-runtimes",
+      label: "Updater runtimes",
+      updateWork: { kind: "startup" },
+      run: runRetainedUpdateRuntimesHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:ui-protocol-freshness",

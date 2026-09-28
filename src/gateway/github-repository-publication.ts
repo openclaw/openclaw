@@ -12,7 +12,7 @@ import {
   encodeGitHubPublicationRequester,
   matchesGitHubPublicationRequester,
 } from "../state/github-publication-requester.js";
-import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.js";
+import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import { personalGitHubStatus, type PersonalGitHubAction } from "./github-personal-oauth.js";
 import {
   assertPersonalGitHubPublicationReplay,

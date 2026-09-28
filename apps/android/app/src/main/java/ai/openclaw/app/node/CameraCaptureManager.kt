@@ -41,6 +41,7 @@ import kotlinx.serialization.json.JsonObject
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.concurrent.Executor
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.math.roundToInt
@@ -128,9 +129,19 @@ class CameraCaptureManager(
 
   @Volatile private var lifecycleOwner: LifecycleOwner? = null
 
-  private companion object {
+  companion object {
     // ProcessCameraProvider is process-wide, including during runtime replacement.
-    val captureMutex = Mutex()
+    private val captureMutex = Mutex()
+
+    /** Interactive camera screens share exclusion without inheriting remote-node admission. */
+    internal fun tryAcquireCamera(): AutoCloseable? {
+      val owner = Any()
+      if (!captureMutex.tryLock(owner)) return null
+      val released = AtomicBoolean(false)
+      return AutoCloseable {
+        if (released.compareAndSet(false, true)) captureMutex.unlock(owner)
+      }
+    }
   }
 
   /** Supplies the foreground Activity lifecycle required by CameraX use-case binding. */
@@ -243,59 +254,65 @@ class CameraCaptureManager(
           provider.unbind(capture)
         }
       ensureCurrent()
-      val decoded =
-        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-          ?: throw IllegalStateException("UNAVAILABLE: failed to decode captured image")
-      val rotated = JpegSizeLimiter.normalizeOrientation(decoded, orientation)
-      val scaled =
-        if (maxWidth > 0 && rotated.width > maxWidth) {
-          val h =
-            (rotated.height.toDouble() * (maxWidth.toDouble() / rotated.width.toDouble()))
-              .toInt()
-              .coerceAtLeast(1)
-          val s = rotated.scale(maxWidth, h)
-          if (s !== rotated) rotated.recycle()
-          s
-        } else {
-          rotated
-        }
+      // Keep the capture lease until structured pixel work and its bitmap cleanup finish.
+      val payload =
+        withContext(Dispatchers.Default) {
+          val decoded =
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+              ?: throw IllegalStateException("UNAVAILABLE: failed to decode captured image")
+          val rotated = JpegSizeLimiter.normalizeOrientation(decoded, orientation)
+          val scaled =
+            if (maxWidth > 0 && rotated.width > maxWidth) {
+              val h =
+                (rotated.height.toDouble() * (maxWidth.toDouble() / rotated.width.toDouble()))
+                  .toInt()
+                  .coerceAtLeast(1)
+              val s = rotated.scale(maxWidth, h)
+              if (s !== rotated) rotated.recycle()
+              s
+            } else {
+              rotated
+            }
 
-      try {
-        val maxPayloadBytes = 5 * 1024 * 1024
-        // Base64 inflates payloads by ~4/3; cap encoded bytes so the payload stays under 5MB (API limit).
-        val maxEncodedBytes = (maxPayloadBytes / 4) * 3
-        val result =
-          JpegSizeLimiter.compressToLimit(
-            initialWidth = scaled.width,
-            initialHeight = scaled.height,
-            startQuality = (quality * 100.0).roundToInt().coerceIn(10, 100),
-            minQuality = (quality * 100.0).roundToInt().coerceIn(10, 20),
-            maxBytes = maxEncodedBytes,
-            encode = { width, height, q ->
-              val bitmap =
-                if (width == scaled.width && height == scaled.height) {
-                  scaled
-                } else {
-                  scaled.scale(width, height)
-                }
-              val out = ByteArrayOutputStream()
-              if (!bitmap.compress(Bitmap.CompressFormat.JPEG, q, out)) {
-                if (bitmap !== scaled) bitmap.recycle()
-                throw IllegalStateException("UNAVAILABLE: failed to encode JPEG")
-              }
-              if (bitmap !== scaled) {
-                bitmap.recycle()
-              }
-              out.toByteArray()
-            },
-          )
-        val base64 = Base64.encodeToString(result.bytes, Base64.NO_WRAP)
-        Payload(
-          """{"format":"jpg","base64":"$base64","width":${result.width},"height":${result.height}}""",
-        )
-      } finally {
-        scaled.recycle()
-      }
+          try {
+            val maxPayloadBytes = 5 * 1024 * 1024
+            // Base64 inflates payloads by ~4/3; cap encoded bytes so the payload stays under 5MB (API limit).
+            val maxEncodedBytes = (maxPayloadBytes / 4) * 3
+            val result =
+              JpegSizeLimiter.compressToLimit(
+                initialWidth = scaled.width,
+                initialHeight = scaled.height,
+                startQuality = (quality * 100.0).roundToInt().coerceIn(10, 100),
+                minQuality = (quality * 100.0).roundToInt().coerceIn(10, 20),
+                maxBytes = maxEncodedBytes,
+                encode = { width, height, q ->
+                  val bitmap =
+                    if (width == scaled.width && height == scaled.height) {
+                      scaled
+                    } else {
+                      scaled.scale(width, height)
+                    }
+                  val out = ByteArrayOutputStream()
+                  if (!bitmap.compress(Bitmap.CompressFormat.JPEG, q, out)) {
+                    if (bitmap !== scaled) bitmap.recycle()
+                    throw IllegalStateException("UNAVAILABLE: failed to encode JPEG")
+                  }
+                  if (bitmap !== scaled) {
+                    bitmap.recycle()
+                  }
+                  out.toByteArray()
+                },
+              )
+            val base64 = Base64.encodeToString(result.bytes, Base64.NO_WRAP)
+            Payload(
+              """{"format":"jpg","base64":"$base64","width":${result.width},"height":${result.height}}""",
+            )
+          } finally {
+            scaled.recycle()
+          }
+        }
+      ensureCurrent()
+      payload
     }
 
   /** Records a short MP4 clip into a temporary cache file for the caller to encode/delete. */

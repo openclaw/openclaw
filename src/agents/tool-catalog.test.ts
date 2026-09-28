@@ -8,7 +8,11 @@ import {
   resolveCoreToolProfilePolicy,
   resolveCoreToolProfiles,
 } from "./tool-catalog.js";
-import { isToolAllowedByPolicies, isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import {
+  filterToolsByPolicy,
+  isToolAllowedByPolicies,
+  isToolAllowedByPolicyName,
+} from "./tool-policy-match.js";
 
 function requireCoreToolProfilePolicy(profile: Parameters<typeof resolveCoreToolProfilePolicy>[0]) {
   const policy = resolveCoreToolProfilePolicy(profile);
@@ -27,6 +31,15 @@ function requirePolicyAllow(profile: Parameters<typeof resolveCoreToolProfilePol
 }
 
 describe("tool-catalog", () => {
+  it("lists personal instructions only when the multi-user capability is enabled", () => {
+    const ids = (personalInstructionsEnabled?: boolean) =>
+      listCoreToolSections({ personalInstructionsEnabled }).flatMap((section) =>
+        section.tools.map((tool) => tool.id),
+      );
+    expect(ids()).not.toContain("personal_instructions");
+    expect(ids(false)).not.toContain("personal_instructions");
+    expect(ids(true)).toContain("personal_instructions");
+  });
   it("lists the setup helper once in Automation without adding restricted profile membership", () => {
     const sections = listCoreToolSections();
     expect(
@@ -72,15 +85,30 @@ describe("tool-catalog", () => {
     expect(ids({ swarmEnabled: true })).toContain("agents_wait");
   });
 
-  it("lists GitHub publication only with a prepared session capability", () => {
-    const ids = (config?: Parameters<typeof listCoreToolSections>[0]) =>
-      listCoreToolSections(config).flatMap((section) => section.tools.map((tool) => tool.id));
-
-    expect(ids()).not.toContain("github_publish");
-    expect(ids()).not.toContain("github_identity_status");
-    expect(ids({ githubPublicationAvailable: false })).toContain("github_identity_status");
-    expect(ids({ githubPublicationAvailable: true })).toContain("github_publish");
+  it("lets operators configure run-dependent tools without granting restricted profiles", () => {
+    const ids = listCoreToolSections().flatMap((section) => section.tools.map((tool) => tool.id));
+    expect(ids).toEqual(
+      expect.arrayContaining(["github_publish", "github_identity_status", "transcripts"]),
+    );
+    expect(resolveCoreToolProfiles("transcripts")).toEqual([]);
   });
+
+  it.each(["group:media", "group:openclaw"])(
+    "preserves saved %s grants and denies when listing transcripts",
+    (group) => {
+      const tools = [{ name: "transcripts" }, { name: "pdf" }];
+      expect(filterToolsByPolicy(tools, { allow: [group] })).toEqual([{ name: "pdf" }]);
+      expect(filterToolsByPolicy(tools, { allow: ["*"], deny: [group] })).toEqual([
+        { name: "transcripts" },
+      ]);
+      expect(filterToolsByPolicy(tools, { allow: ["transcripts"], deny: [group] })).toEqual([
+        { name: "transcripts" },
+      ]);
+      expect(filterToolsByPolicy(tools, { allow: ["*"], deny: ["transcripts"] })).toEqual([
+        { name: "pdf" },
+      ]);
+    },
+  );
 
   it("includes code execution, web tools, and progress_card in the coding profile policy", () => {
     const policy = requireCoreToolProfilePolicy("coding");
@@ -100,6 +128,7 @@ describe("tool-catalog", () => {
       "x_search",
       "memory_search",
       "memory_get",
+      "personal_instructions",
       "sessions",
       "sessions_list",
       "sessions_history",
@@ -144,6 +173,7 @@ describe("tool-catalog", () => {
     expect(requirePolicyAllow("messaging")).toEqual([
       "decision_evaluate",
       "secrets",
+      "personal_instructions",
       "sessions",
       "sessions_list",
       "sessions_history",

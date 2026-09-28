@@ -271,9 +271,9 @@ describe("createCopilotClientPool", () => {
     expect(sdkFactory.mock.calls.length).toBe(1);
   });
 
-  it("constructor failure is not cached", async () => {
+  it.each(["sync", "async"] as const)("%s constructor failure is not cached", async (mode) => {
     let attempt = 0;
-    const sdkFactory = async (clientOptions: CopilotClientOptions) => {
+    const createClient = (clientOptions: CopilotClientOptions) => {
       attempt += 1;
       if (attempt === 1) {
         throw new Error(`constructor failed for ${String(clientOptions.baseDirectory)}`);
@@ -287,9 +287,12 @@ describe("createCopilotClientPool", () => {
         disconnect: vi.fn(),
       } as unknown as CopilotClient;
     };
-    const pool = createCopilotClientPool({ sdkFactory });
+    const pool = createCopilotClientPool({
+      sdkFactory: mode === "sync" ? createClient : async (options) => createClient(options),
+    });
 
     await expect(pool.acquire(makeKey(), makeOptions())).rejects.toThrow("constructor failed for");
+    expect(pool.size()).toBe(0);
 
     const second = await pool.acquire(makeKey(), makeOptions());
 

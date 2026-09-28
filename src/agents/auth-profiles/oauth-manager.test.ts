@@ -19,6 +19,7 @@ import {
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { oidcIdentity } from "./credential-fixtures.test-support.js";
 import { testing as externalAuthTesting } from "./external-auth.test-support.js";
 import { createOAuthManager } from "./oauth-manager.js";
 import { isSettledOAuthRefreshFailure, OAuthManagerRefreshError } from "./oauth-refresh-failure.js";
@@ -440,6 +441,51 @@ describe("createOAuthManager", () => {
     });
   });
 
+  it.each(["subject-a", "subject-b"])(
+    "adopts a fresher OIDC credential at the same custom profile ID only for its subject (%s)",
+    async (mainSubject) => {
+      await withOAuthAgentDirs("oauth-manager-oidc-adopt-", async ({ mainAgentDir, agentDir }) => {
+        const profileId = "openai:custom";
+        const local = createCredential({
+          ...oidcIdentity(),
+          expires: Date.now() + 600_000,
+          access: "local-access",
+          refresh: "local-refresh",
+        });
+        const main = createCredential({
+          ...oidcIdentity({ sub: mainSubject }),
+          access: "main-access",
+          refresh: "main-refresh",
+          expires: local.expires + 600_000,
+        });
+        for (const [target, credential] of [
+          [agentDir, local],
+          [mainAgentDir, main],
+        ] as const) {
+          saveAuthProfileStore({ version: 1, profiles: { [profileId]: credential } }, target, {
+            filterExternalAuthProfiles: false,
+          });
+        }
+        const refreshCredential = vi.fn(async () => null);
+        const manager = createOAuthManager({
+          buildApiKey: async (_provider, credential) => credential.access,
+          canRefreshCredential: async () => true,
+          refreshCredential,
+          readBootstrapCredential: () => null,
+        });
+        const store = ensureAuthProfileStoreWithoutExternalProfiles(agentDir);
+        const result = await manager.resolveOAuthAccess({
+          store,
+          profileId,
+          credential: local,
+          agentDir,
+        });
+        expect(result?.apiKey).toBe(mainSubject === "subject-a" ? "main-access" : "local-access");
+        expect(refreshCredential).not.toHaveBeenCalled();
+      });
+    },
+  );
+
   it("refreshes with the adopted external oauth credential", async () => {
     await withOAuthAgentDirs("oauth-manager-refresh-", async ({ agentDir }) => {
       const profileId = "minimax-portal:default";
@@ -547,7 +593,10 @@ describe("createOAuthManager", () => {
     });
   });
 
-  it("does not overwrite a newer same-identity credential after a refresh race", async () => {
+  it.each([
+    { kind: "account", identity: { accountId: "acct-123" } },
+    { kind: "OIDC", identity: oidcIdentity() },
+  ])("preserves newer $kind identity after CAS", async ({ identity }) => {
     await withOAuthTempRoot("oauth-manager-cas-same-identity-", async (tempRoot) => {
       const agentDir = path.join(tempRoot, "agents", "main", "agent");
       await fs.mkdir(agentDir, { recursive: true });
@@ -556,7 +605,7 @@ describe("createOAuthManager", () => {
         access: "expired-access",
         refresh: "expired-refresh",
         expires: Date.now() - 60_000,
-        accountId: "acct-123",
+        ...identity,
       });
       saveAuthProfileStore(
         {
@@ -581,7 +630,7 @@ describe("createOAuthManager", () => {
                   access: "stale-race-access",
                   refresh: "consumed-race-refresh",
                   expires: Date.now() + 10 * 60_000,
-                  accountId: "acct-123",
+                  ...identity,
                 }),
               },
             },
@@ -614,12 +663,24 @@ describe("createOAuthManager", () => {
         type: "oauth",
         access: "stale-race-access",
         refresh: "consumed-race-refresh",
-        accountId: "acct-123",
+        ...identity,
       });
     });
   });
 
-  it("does not use a different-identity stored credential after a CAS race", async () => {
+  it.each([
+    {
+      kind: "account",
+      identity: { accountId: "acct-123" },
+      differentIdentity: { accountId: "acct-456" },
+    },
+    {
+      kind: "OIDC",
+      identity: oidcIdentity(),
+      differentIdentity: oidcIdentity({ sub: "subject-b" }),
+    },
+  ])("rejects changed $kind identity after CAS", async (row) => {
+    const { identity, differentIdentity } = row;
     await withOAuthTempRoot("oauth-manager-cas-different-identity-", async (tempRoot) => {
       const mainAgentDir = path.join(tempRoot, "agents", "main", "agent");
       const agentDir = path.join(tempRoot, "agents", "sub", "agent");
@@ -630,13 +691,13 @@ describe("createOAuthManager", () => {
         access: "expired-access",
         refresh: "expired-refresh",
         expires: Date.now() - 60_000,
-        accountId: "acct-123",
+        ...identity,
       });
       const relogged = createCredential({
         access: "relogged-access",
         refresh: "relogged-refresh",
         expires: Date.now() + 10 * 60_000,
-        accountId: "acct-456",
+        ...differentIdentity,
       });
       saveAuthProfileStore(
         {
@@ -689,7 +750,7 @@ describe("createOAuthManager", () => {
         type: "oauth",
         access: "relogged-access",
         refresh: "relogged-refresh",
-        accountId: "acct-456",
+        ...differentIdentity,
       });
     });
   });

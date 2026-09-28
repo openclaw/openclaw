@@ -372,45 +372,45 @@ describe("buildCodexMigrationProvider", () => {
   });
 
   it("discovers installed plugins from the API-key curated marketplace", async () => {
-    const fixture = await createCodexFixture();
-    appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
-      if (method === "plugin/installed") {
-        return {
-          marketplaces: [
-            {
-              name: "openai-api-curated",
-              path: path.join(
-                fixture.codexHome,
-                ".tmp/plugins/.agents/plugins/api_marketplace.json",
-              ),
-              interface: null,
-              plugins: [
-                pluginSummary("google-calendar@openai-api-curated", {
-                  name: "google-calendar",
-                  installed: true,
-                  enabled: true,
-                }),
-              ],
-            },
+    const { codexHome } = await createCodexFixture();
+    const marketplacePath = path.join(
+      codexHome,
+      ".tmp/plugins/.agents/plugins/api_marketplace.json",
+    );
+    appServerRequest
+      .mockResolvedValueOnce({
+        marketplaces: pluginList(
+          [
+            pluginSummary("google-calendar@openai-api-curated", {
+              name: "google-calendar",
+              installed: true,
+              enabled: true,
+            }),
           ],
-          marketplaceLoadErrors: [],
-        } satisfies v2.PluginInstalledResponse;
-      }
-      throw new Error(`unexpected request ${method}`);
+          { name: "openai-api-curated", path: marketplacePath },
+        ).marketplaces,
+        marketplaceLoadErrors: [],
+      })
+      .mockResolvedValueOnce(pluginRead("google-calendar"));
+
+    const source = await discoverCodexSource({
+      input: codexHome,
+      evaluatePluginMigrationEligibility: true,
     });
 
-    const source = await discoverCodexSource({ input: fixture.codexHome });
-
     expect(source.pluginDiscoveryError).toBeUndefined();
-    expect(source.plugins).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          pluginName: "google-calendar",
-          marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-          migratable: true,
-        }),
-      ]),
+    expectRecordFields(
+      source.plugins.find((plugin) => plugin.pluginName === "google-calendar"),
+      { marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME, migratable: true },
     );
+    expect(appServerRequest.mock.calls.map(([request]) => request.method)).toEqual([
+      "plugin/installed",
+      "plugin/read",
+    ]);
+    expect(mockCallArg(appServerRequest, 1).requestParams).toEqual({
+      marketplacePath,
+      pluginName: "google-calendar",
+    });
   });
 
   it("ignores unrelated marketplace errors when no curated plugins are installed", async () => {

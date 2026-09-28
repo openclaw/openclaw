@@ -170,40 +170,28 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   }
 
   if (status.config) {
-    const cliCfg = `${shortenHomePath(status.config.cli.path)}${status.config.cli.exists ? "" : " (missing)"}${status.config.cli.valid ? "" : " (invalid)"}`;
-    defaultRuntime.log(`${label("Config (cli):")} ${infoText(cliCfg)}`);
-    if (!status.config.cli.valid && status.config.cli.issues?.length) {
-      for (const issue of status.config.cli.issues.slice(0, 5)) {
-        defaultRuntime.error(
-          `${errorText("Config issue:")} ${formatConfigIssueLine(issue, "", { normalizeRoot: true })}`,
-        );
+    for (const [kind, config] of [
+      ["cli", status.config.cli],
+      ["service", status.config.daemon],
+    ] as const) {
+      if (!config) {
+        continue;
       }
-    }
-    if (status.config.cli.warnings?.length) {
-      defaultRuntime.error(warnText("Config warnings:"));
-      for (const warning of status.config.cli.warnings.slice(0, 5)) {
-        defaultRuntime.error(
-          warnText(formatConfigIssueLine(warning, "-", { normalizeRoot: true })),
-        );
-      }
-    }
-    if (status.config.daemon) {
-      const daemonCfg = `${shortenHomePath(status.config.daemon.path)}${status.config.daemon.exists ? "" : " (missing)"}${status.config.daemon.valid ? "" : " (invalid)"}`;
-      defaultRuntime.log(`${label("Config (service):")} ${infoText(daemonCfg)}`);
-      if (!status.config.daemon.valid && status.config.daemon.issues?.length) {
-        for (const issue of status.config.daemon.issues.slice(0, 5)) {
+      const configPath = `${shortenHomePath(config.path)}${config.exists ? "" : " (missing)"}${config.valid ? "" : " (invalid)"}`;
+      defaultRuntime.log(`${label(`Config (${kind}):`)} ${infoText(configPath)}`);
+      if (!config.valid && config.issues?.length) {
+        const issueLabel = kind === "cli" ? "Config issue:" : "Service config issue:";
+        for (const issue of config.issues.slice(0, 5)) {
           defaultRuntime.error(
-            `${errorText("Service config issue:")} ${formatConfigIssueLine(issue, "", { normalizeRoot: true })}`,
+            `${errorText(issueLabel)} ${formatConfigIssueLine(issue, "", { normalizeRoot: true })}`,
           );
         }
       }
-      if (status.config.daemon !== status.config.cli && status.config.daemon.warnings?.length) {
+      if (config.warnings?.length && (kind === "cli" || config !== status.config.cli)) {
         const warningsLabel =
-          status.config.daemon.path === status.config.cli.path
-            ? "Config warnings:"
-            : "Service config warnings:";
+          config.path === status.config.cli.path ? "Config warnings:" : "Service config warnings:";
         defaultRuntime.error(warnText(warningsLabel));
-        for (const warning of status.config.daemon.warnings.slice(0, 5)) {
+        for (const warning of config.warnings.slice(0, 5)) {
           defaultRuntime.error(
             warnText(formatConfigIssueLine(warning, "-", { normalizeRoot: true })),
           );
@@ -288,19 +276,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     serviceLoaded &&
     service.runtime?.status === "running"
   ) {
-    // The RPC probe failed while the service is loaded and running. Only the case where
-    // the gateway process is up and owns the listening port (health.healthy === true with
-    // no stale gateway PIDs, deep status only) is an unambiguous "not warm-up" signal, so it
-    // gets recovery guidance. `healthy` can also be set from bare reachability after
-    // ownership failed (see restart-health.ts), which can coexist with a non-empty
-    // staleGatewayPids; treat that combination as ambiguous rather than owns-port so it
-    // doesn't contradict the dedicated stale-PID diagnostic below. Every other
-    // health.healthy === false sub-case — a just-started gateway that has not bound the port
-    // yet, a foreign process holding the port, or a stale gateway PID — is either a normal
-    // warm-up window or is already covered by the dedicated stale-PID / port-not-listening /
-    // port-conflict diagnostics below, so it keeps the warm-up hint (as does unknown health
-    // from shallow status). A wedged gateway that owns the port is reported as healthy ===
-    // true with no stale gateway PIDs, so it is steered by the first branch.
+    // Port ownership proves the process is listening, not that startup completed.
     if (rpc.timedOut && rpc.gatewayReached) {
       defaultRuntime.log(
         warnText(
@@ -310,7 +286,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     } else if (status.health?.healthy === true && status.health.staleGatewayPids.length === 0) {
       defaultRuntime.log(
         warnText(
-          "Gateway process is running and owns the gateway port, so this is not a warm-up delay. Check the probe credentials/config, or restart the gateway and inspect its logs if it stays unresponsive.",
+          "Gateway process is running and owns the gateway port, but readiness is not yet confirmed. Warm-up is still possible. Try openclaw gateway status --deep again shortly; check the probe credentials/config and logs if it stays unresponsive.",
         ),
       );
     } else {

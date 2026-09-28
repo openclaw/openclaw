@@ -71,6 +71,26 @@ export const UserProfileSchema = closedObject({
 export const UsersListParamsSchema = closedObject({});
 export const UsersListResultSchema = closedObject({ profiles: Type.Array(UserProfileSchema) });
 
+// The profile and relative path are derived from the authenticated connection.
+export const UsersPersonalFileGetParamsSchema = closedObject({ agentId: NonEmptyString });
+export const UsersPersonalFileSetParamsSchema = closedObject({
+  agentId: NonEmptyString,
+  content: Type.String({ maxLength: 4_000 }),
+  expectedHash: Type.Union([Type.String({ pattern: "^[a-f0-9]{64}$" }), Type.Null()]),
+});
+export const UsersPersonalFileGetResultSchema = closedObject({
+  agentId: NonEmptyString,
+  profileId: UserProfileIdSchema,
+  content: Type.String(),
+  hash: Type.Union([Type.String({ pattern: "^[a-f0-9]{64}$" }), Type.Null()]),
+  missing: Type.Boolean(),
+});
+export const UsersPersonalFileSetResultSchema = UsersPersonalFileGetResultSchema;
+export type UsersPersonalFileGetParams = Static<typeof UsersPersonalFileGetParamsSchema>;
+export type UsersPersonalFileSetParams = Static<typeof UsersPersonalFileSetParamsSchema>;
+export type UsersPersonalFileGetResult = Static<typeof UsersPersonalFileGetResultSchema>;
+export type UsersPersonalFileSetResult = Static<typeof UsersPersonalFileSetResultSchema>;
+
 export const UsersSelfParamsSchema = closedObject({});
 export const UsersSelfResultSchema = closedObject({ profile: UserProfileSchema });
 

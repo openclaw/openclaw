@@ -281,15 +281,9 @@ function collectQaSuiteGatewayRuntimeOptions(
   let forwardHostHome = false;
   let preserveDebugArtifacts = false;
   for (const scenario of scenarios) {
-    if (scenario.gatewayRuntime?.allowUnhealthyStartup === true) {
-      allowUnhealthyStartup = true;
-    }
-    if (scenario.gatewayRuntime?.forwardHostHome === true) {
-      forwardHostHome = true;
-    }
-    if (scenario.gatewayRuntime?.preserveDebugArtifacts === true) {
-      preserveDebugArtifacts = true;
-    }
+    allowUnhealthyStartup ||= scenario.gatewayRuntime?.allowUnhealthyStartup === true;
+    forwardHostHome ||= scenario.gatewayRuntime?.forwardHostHome === true;
+    preserveDebugArtifacts ||= scenario.gatewayRuntime?.preserveDebugArtifacts === true;
   }
   return allowUnhealthyStartup || forwardHostHome || preserveDebugArtifacts
     ? {
@@ -411,15 +405,9 @@ function resolveQaSuiteWorkerStartStaggerMs(
   if (concurrency <= 1) {
     return 0;
   }
-  const raw = env.OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS;
-  if (raw === undefined) {
-    return defaultStaggerMs;
-  }
-  const parsed = parseStrictNonNegativeInteger(raw);
-  if (parsed === undefined) {
-    return defaultStaggerMs;
-  }
-  return parsed;
+  return (
+    parseStrictNonNegativeInteger(env.OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS) ?? defaultStaggerMs
+  );
 }
 
 async function mapQaSuiteWithConcurrency<T, U>(

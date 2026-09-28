@@ -129,12 +129,6 @@ function shellArgument(value: string): string {
   return /^[A-Za-z0-9_./:@+-]+$/.test(value) ? value : `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
-function scopeParams(scope: SessionDiffScope): SessionDiffScope {
-  return scope.scope === "commit"
-    ? { scope: "commit", commit: scope.commit }
-    : { scope: scope.scope };
-}
-
 function taskResult(result: SessionsDiffResult): SessionDiffTaskResult {
   return {
     result,
@@ -376,7 +370,7 @@ class SessionDiffPanel extends OpenClawLightDomElement {
     const scope = this.scope;
     let freshResult: SessionsDiffResult;
     try {
-      freshResult = await loader(scopeParams(scope));
+      freshResult = await loader(scope);
     } catch {
       return;
     }

@@ -1934,6 +1934,8 @@ internal class FullMessageGateway : AutoCloseable {
   val operatorConnection = AtomicInteger()
   val fullReads = CopyOnWriteArrayList<FullMessageRead>()
   val historyReads = MutableStateFlow<List<Pair<Int, String>>>(emptyList())
+  val historyAgentReads = MutableStateFlow<List<Pair<String, String>>>(emptyList())
+  val historyRetryableRefusals = AtomicInteger()
   val speechReads = MutableStateFlow<List<String>>(emptyList())
   val heldResponses = MutableStateFlow<List<() -> Unit>>(emptyList())
 
@@ -2048,6 +2050,7 @@ internal class FullMessageGateway : AutoCloseable {
         fun reject(
           code: String,
           message: String,
+          retryable: Boolean = false,
         ) {
           webSocket.send(
             buildJsonObject {
@@ -2059,6 +2062,10 @@ internal class FullMessageGateway : AutoCloseable {
                 buildJsonObject {
                   put("code", JsonPrimitive(code))
                   put("message", JsonPrimitive(message))
+                  if (retryable) {
+                    put("retryable", JsonPrimitive(true))
+                    put("details", buildJsonObject { put("method", JsonPrimitive("chat.history")) })
+                  }
                 },
               )
             }.toString(),
@@ -2085,6 +2092,11 @@ internal class FullMessageGateway : AutoCloseable {
 
             "chat.history" -> {
               historyReads.update { it + (connection to session) }
+              historyAgentReads.update { it + (session to params["agentId"]?.jsonPrimitive?.content.orEmpty()) }
+              if (historyRetryableRefusals.getAndUpdate { (it - 1).coerceAtLeast(0) } > 0) {
+                reject("UNAVAILABLE", "Synthetic history worker refusal", retryable = true)
+                return
+              }
               buildJsonObject {
                 put("sessionId", JsonPrimitive("transcript-$session"))
                 put(

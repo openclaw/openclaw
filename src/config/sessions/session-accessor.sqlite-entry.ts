@@ -4,17 +4,9 @@ import {
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
-import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
-import {
-  createOpenClawAgentDatabaseClaim,
-  isOpenClawAgentDatabasePathCurrent,
-  readOpenClawAgentDatabaseIdentity,
-  type OpenClawAgentDatabaseClaim,
-} from "../../state/openclaw-agent-db-identity.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
-  borrowOpenClawAgentDatabase,
   getOpenClawAgentDatabaseIfOpen,
   isIncognitoOpenClawAgentSqlitePath,
   openOpenClawAgentDatabase,
@@ -55,7 +47,10 @@ import {
   readLifecycleTargetSnapshot,
   readSessionEntrySelectionSnapshot,
 } from "./session-accessor.sqlite-entry-store.js";
-import { resolveSessionEntry } from "./session-accessor.sqlite-exact-read.js";
+import {
+  assertCapturedSessionEntryReadSource,
+  resolveSessionEntry,
+} from "./session-accessor.sqlite-exact-read.js";
 import { listTranscriptInstancesFromDatabase } from "./session-accessor.sqlite-history.js";
 import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
@@ -91,6 +86,7 @@ import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 import { mergeSessionEntry, mergeSessionEntryPreserveActivity } from "./types.js";
 
+export { loadSessionEntryForAdmission } from "./session-accessor.sqlite-entry-admission.js";
 export { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
 export { listSessionEntriesReadOnly } from "./session-accessor.sqlite-entry-list.read.js";
 export {
@@ -123,28 +119,12 @@ export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | unde
   return resolveSessionEntry(scope).existing;
 }
 
-/** Admission retains the exact owner that supplied its row across asynchronous policy work. */
-export function loadSessionEntryForAdmission(scope: SessionAccessScope): {
-  entry: SessionEntry | undefined;
-  databaseClaim: OpenClawAgentDatabaseClaim;
-} {
-  const resolved = resolveSqliteScope(scope);
-  const options = toDatabaseOptions(resolved);
-  const database = openOpenClawAgentDatabase(options);
-  const borrowed = borrowOpenClawAgentDatabase(options);
-  const databaseClaim = createOpenClawAgentDatabaseClaim(database, borrowed.release);
-  try {
-    return { entry: readSessionEntryRow(database, resolved.sessionKey)?.entry, databaseClaim };
-  } catch (error) {
-    databaseClaim.release();
-    throw error;
-  }
-}
-
 /** Loads one session entry without opening its agent database writable. */
 export function loadSessionEntryReadOnly(scope: SessionEntryReadScope): SessionEntry | undefined {
   return resolveSessionEntry(scope, { readOnly: true, projection: scope.projection }).existing;
 }
+
+export { loadSessionEntryReadOnlyResultInScope } from "./session-accessor.sqlite-exact-read.js";
 
 /** Private prepared reads must reject a different physical owner at the captured path. */
 export function loadSessionEntryReadOnlyInScope(
@@ -474,25 +454,10 @@ async function patchSqliteSessionEntrySnapshot(
     if (!captured) {
       return;
     }
-    if (typeof captured.databaseIdentity === "string") {
-      assertExistingDatabaseIdentity(databasePath, `file:${captured.databaseIdentity}`);
-    }
-    const current = database ?? getOpenClawAgentDatabaseIfOpen(databaseOptions);
-    if (!current) {
-      if (typeof captured.databaseIdentity === "symbol") {
-        throw new Error("Captured session database is no longer open");
-      }
-      return;
-    }
-    const physical = readOpenClawAgentDatabaseIdentity(current);
-    if (
-      current.agentId !== captured.agentId ||
-      physical.identity !== captured.databaseIdentity ||
-      physical.birthtime !== captured.databaseBirthtime ||
-      !isOpenClawAgentDatabasePathCurrent(current)
-    ) {
-      throw new Error("Captured session database changed before update");
-    }
+    assertCapturedSessionEntryReadSource(
+      captured,
+      database ?? getOpenClawAgentDatabaseIfOpen(databaseOptions),
+    );
   };
   const assertCurrent = captured ? () => assertCapturedSource() : undefined;
   const withDatabase = <T>(operation: () => T | Promise<T>) => {

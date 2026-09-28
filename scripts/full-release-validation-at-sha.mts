@@ -1001,6 +1001,7 @@ function resolveDispatchSelection(workflowSha: string, overrides: Record<string,
     validation_purpose,
     publication_selection_json,
     extension_test_exclude_patterns_json,
+    known_flaky_jobs_json,
     ...wireOverrides
   } = overrides;
   const laneInputs =
@@ -1010,6 +1011,10 @@ function resolveDispatchSelection(workflowSha: string, overrides: Record<string,
   requireDispatch(
     laneInputs === undefined || workflow.env.FULL_RELEASE_LANE_INPUTS_CONTRACT === "1",
     `Tooling SHA ${workflowSha} does not support packed lane inputs; no remote refs or run were created. Keep the frozen Tooling SHA.`,
+  );
+  requireDispatch(
+    known_flaky_jobs_json === undefined,
+    "Automatic test retries are disabled; remove known_flaky_jobs_json and diagnose the failed job.",
   );
   const intent = normalizePublicationIntent(validation_purpose, publication_selection_json);
   requireDispatch(

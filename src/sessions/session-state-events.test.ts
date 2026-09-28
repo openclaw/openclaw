@@ -19,6 +19,7 @@ import {
   getOpenClawStateRuntimeSchema,
   STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
 } from "../state/openclaw-state-schema-compatibility.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { recordSessionCreated } from "./session-created.js";
 import {
   acknowledgeSessionStateNotices,
@@ -33,7 +34,6 @@ import {
   recordSessionHumanDirectMessage,
   recordSessionStateEvent,
   recordSubagentSpawned,
-  recordSubagentTerminalState,
   registerMainSessionGroupWatch,
   registerSessionStateWatch,
   sweepSessionStateWatchNotices,
@@ -48,6 +48,7 @@ import {
   seedChild,
   watcher,
 } from "./session-state-events.test-support.js";
+import { recordSubagentTerminalState } from "./subagent-terminal-state.js";
 
 const SESSION_STATE_MAX_ROWS = 50_000;
 const SESSION_STATE_RETENTION_MS = 30 * 24 * 60 * 60_000;
@@ -903,24 +904,35 @@ describe("session state events", () => {
       requesterSessionKey: watcher,
       agentId: "main",
     });
-    recordSubagentTerminalState({
-      childSessionKey: child,
-      runId: "run-child",
-      requesterSessionKey: watcher,
-      outcomeStatus: "ok",
-    });
-    recordSubagentTerminalState({
-      childSessionKey: child,
-      runId: "run-child",
-      requesterSessionKey: watcher,
-      outcomeStatus: "ok",
-    });
-    recordSubagentTerminalState({
-      childSessionKey: child,
-      runId: "run-child-cancelled",
-      requesterSessionKey: watcher,
-      outcomeStatus: "cancelled",
-    });
+    const terminalContext = captureOpenClawStateWorkerContext(database);
+    const assertTerminalCurrent = () => terminalContext.admission.assertCurrent();
+    await recordSubagentTerminalState(
+      {
+        childSessionKey: child,
+        runId: "run-child",
+        requesterSessionKey: watcher,
+        outcomeStatus: "ok",
+      },
+      assertTerminalCurrent,
+    );
+    await recordSubagentTerminalState(
+      {
+        childSessionKey: child,
+        runId: "run-child",
+        requesterSessionKey: watcher,
+        outcomeStatus: "ok",
+      },
+      assertTerminalCurrent,
+    );
+    await recordSubagentTerminalState(
+      {
+        childSessionKey: child,
+        runId: "run-child-cancelled",
+        requesterSessionKey: watcher,
+        outcomeStatus: "cancelled",
+      },
+      assertTerminalCurrent,
+    );
     await recordSessionGoalChanged({
       sessionKey: child,
       entry: {

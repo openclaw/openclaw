@@ -30,20 +30,23 @@ type SlackScenarioObservationContext = {
   sutIdentity: SlackAuthIdentity;
 };
 
-function recordSlackScenarioMessages(
-  params: SlackScenarioObservationContext & { messages: SlackMessage[] },
+function recordSlackScenarioMessage(
+  params: SlackScenarioObservationContext,
+  message: SlackMessage,
+  observedKeys?: Set<string>,
 ) {
-  let matchedMessage: SlackMessage | undefined;
-  for (const message of params.messages) {
-    const text = message.text ?? "";
-    if (
-      !message.ts ||
-      message.ts === params.sentTs ||
-      !isSutSlackMessage(message, params.sutIdentity)
-    ) {
-      continue;
-    }
-    const matchedScenario = text.includes(params.matchText);
+  if (
+    !message.ts ||
+    message.ts === params.sentTs ||
+    !isSutSlackMessage(message, params.sutIdentity)
+  ) {
+    return undefined;
+  }
+  const text = message.text ?? "";
+  const matchedScenario = text.includes(params.matchText);
+  const observedKey = `${params.channelId}:${message.ts}`;
+  if (!observedKeys?.has(observedKey)) {
+    observedKeys?.add(observedKey);
     params.observedMessages.push({
       actionValues: collectSlackActionValues(message.blocks),
       blockText: collectSlackBlockText(message.blocks),
@@ -57,9 +60,17 @@ function recordSlackScenarioMessages(
       ts: message.ts,
       userId: message.user,
     });
-    if (matchedScenario && !matchedMessage) {
-      matchedMessage = message;
-    }
+  }
+  return matchedScenario ? message : undefined;
+}
+
+function recordSlackScenarioMessages(
+  params: SlackScenarioObservationContext & { messages: SlackMessage[] },
+) {
+  let matchedMessage: SlackMessage | undefined;
+  for (const message of params.messages) {
+    const match = recordSlackScenarioMessage(params, message);
+    matchedMessage ??= match;
   }
   return matchedMessage;
 }
@@ -158,17 +169,9 @@ export async function observeSlackScenarioMessages(
   }
 }
 
-export async function waitForSlackNoReply(params: {
-  channelId: string;
-  client: WebClient;
-  matchText: string;
-  observedMessages: SlackObservedMessage[];
-  observationScenarioId: string;
-  observationScenarioTitle: string;
-  sentTs: string;
-  sutIdentity: SlackAuthIdentity;
-  timeoutMs: number;
-}) {
+export async function waitForSlackNoReply(
+  params: SlackScenarioObservationContext & { client: WebClient; timeoutMs: number },
+) {
   const startedAt = Date.now();
   const observedKeys = new Set(
     params.observedMessages
@@ -183,33 +186,7 @@ export async function waitForSlackNoReply(params: {
       oldestTs: params.sentTs,
     });
     for (const message of messages) {
-      const text = message.text ?? "";
-      if (
-        !message.ts ||
-        message.ts === params.sentTs ||
-        !isSutSlackMessage(message, params.sutIdentity)
-      ) {
-        continue;
-      }
-      const matchedScenario = text.includes(params.matchText);
-      const observedKey = `${params.channelId}:${message.ts}`;
-      if (!observedKeys.has(observedKey)) {
-        observedKeys.add(observedKey);
-        params.observedMessages.push({
-          actionValues: collectSlackActionValues(message.blocks),
-          blockText: collectSlackBlockText(message.blocks),
-          botId: message.bot_id,
-          channelId: params.channelId,
-          matchedScenario,
-          scenarioId: params.observationScenarioId,
-          scenarioTitle: params.observationScenarioTitle,
-          text,
-          threadTs: message.thread_ts,
-          ts: message.ts,
-          userId: message.user,
-        });
-      }
-      if (matchedScenario) {
+      if (recordSlackScenarioMessage(params, message, observedKeys)) {
         throw new Error("unexpected Slack SUT reply observed");
       }
     }

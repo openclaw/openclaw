@@ -6,6 +6,7 @@ import {
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import { getChildLogger } from "../../logging/logger.js";
+import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
 import { retainLegacyAcpMigrationSourcesForEntry } from "./session-accessor.sqlite-acp-provenance.js";
@@ -495,6 +496,14 @@ export function writeSessionEntry(
   // ordinary writes cannot restamp a logical node's creator.
   if (!options.allowStoredAliases || canonicalPreviousEntry?.sandbox === "required") {
     normalizedEntry = preserveCreationStamp(normalizedEntry, canonicalPreviousEntry);
+  }
+  if (isIncognitoSessionKey(sessionKey) && normalizedEntry.createdAt === undefined) {
+    // Pin timestamp-less creation once at the writer, never independently in
+    // each Gateway observer. Existing legacy rows retain their known age.
+    normalizedEntry = {
+      ...normalizedEntry,
+      createdAt: canonicalPreviousEntry?.updatedAt ?? Date.now(),
+    };
   }
   // Personal choices follow the logical node through reset and relocation. A
   // fork has a different key; stale entry writers cannot replace committed choices.

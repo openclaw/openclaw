@@ -1,19 +1,23 @@
 import {
+  captureBrowserScreenshot,
+  fetchBrowserScreenshotDataUrl,
+  isBrowserEvaluateDisabledError,
   isBrowserNavigationBlockedError,
   listBrowserTabs,
+  readBrowserPageMetrics,
+  type BrowserPageMetrics,
   type BrowserPanelTab,
   type BrowserRequestClient,
 } from "./browser-client.ts";
 import type { BrowserPanelNativeController } from "./browser-panel-native-controller.ts";
-import {
-  captureBrowserPanelOwnedView,
-  type BrowserPanelControllerHost,
-  type BrowserPanelOperationOwnership,
-  type BrowserPanelSnapshotOutcome,
+import type {
+  BrowserPanelControllerHost,
+  BrowserPanelOperationOwnership,
+  BrowserPanelSnapshotOutcome,
 } from "./browser-panel-operation-ownership.ts";
 import type { BrowserPanelStream } from "./browser-panel-stream.ts";
-import type { BrowserPanelView } from "./browser-panel-surface.ts";
-import type { BrowserPanelViewportController } from "./browser-panel-viewport-controller.ts";
+import { loadBrowserPanelImage, type BrowserPanelView } from "./browser-panel-surface.ts";
+import type { BrowserRoute } from "./browser-target.ts";
 
 type BrowserPanelSnapshotState = {
   running: boolean | null;
@@ -56,10 +60,7 @@ interface BrowserPanelSnapshotHost extends BrowserPanelSnapshotState {
 
 /** Coordinates remote tab snapshots and their owned page images and input metrics. */
 export class BrowserPanelSnapshotController {
-  constructor(
-    private readonly controller: BrowserPanelSnapshotHost,
-    private readonly viewport: BrowserPanelViewportController,
-  ) {}
+  constructor(private readonly controller: BrowserPanelSnapshotHost) {}
 
   async listTabs(client: BrowserRequestClient) {
     const snapshot = await listBrowserTabs(client);
@@ -171,7 +172,6 @@ export class BrowserPanelSnapshotController {
       );
       this.controller.setState("view", view);
       stream.releaseReplacedView();
-      this.viewport.captured(metrics);
       if (view.url) {
         this.controller.syncUrlDraft(view.url);
       }
@@ -202,4 +202,76 @@ export class BrowserPanelSnapshotController {
       }
     }
   }
+}
+
+/** A stale gateway must not disable evaluation on the replacement browser. */
+async function readBrowserPanelOwnedMetrics(
+  client: BrowserRequestClient,
+  targetId: string,
+  evaluateUnavailable: boolean,
+  current: () => boolean,
+  markEvaluateUnavailable: () => void,
+): Promise<BrowserPageMetrics | null> {
+  if (evaluateUnavailable || !current()) {
+    return null;
+  }
+  try {
+    return await readBrowserPageMetrics(client, targetId);
+  } catch (error) {
+    if (current() && isBrowserNavigationBlockedError(error)) {
+      throw error;
+    }
+    if (current() && isBrowserEvaluateDisabledError(error)) {
+      markEvaluateUnavailable();
+    }
+    return null;
+  }
+}
+
+async function captureBrowserPanelOwnedView(params: {
+  client: BrowserRequestClient;
+  targetId: string;
+  route?: BrowserRoute;
+  host: Pick<BrowserPanelControllerHost, "resourceBasePath" | "authToken">;
+  isEvaluateUnavailable: () => boolean;
+  current: () => boolean;
+  markEvaluateUnavailable: () => void;
+}): Promise<BrowserPanelView | null> {
+  const shot = await captureBrowserScreenshot(params.client, params.targetId);
+  if (!params.current()) {
+    return null;
+  }
+  // Media transfer and page geometry are independent once the screenshot exists.
+  const [dataUrl, observedMetrics] = await Promise.all([
+    fetchBrowserScreenshotDataUrl({
+      resourceBasePath: params.host.resourceBasePath,
+      authToken: params.host.authToken,
+      path: shot.path,
+    }),
+    readBrowserPanelOwnedMetrics(
+      params.client,
+      params.targetId,
+      params.isEvaluateUnavailable(),
+      params.current,
+      params.markEvaluateUnavailable,
+    ),
+  ]);
+  if (!params.current()) {
+    return null;
+  }
+  const image = await loadBrowserPanelImage(dataUrl);
+  if (!params.current()) {
+    return null;
+  }
+  // A navigation between screenshot and evaluation changes the coordinate document.
+  const metrics =
+    shot.url && observedMetrics?.url && shot.url !== observedMetrics.url ? null : observedMetrics;
+  return {
+    targetId: params.targetId,
+    dataUrl,
+    image,
+    url: shot.url,
+    metrics,
+    ...(params.route ? { browserTab: { ...params.route, targetId: params.targetId } } : {}),
+  };
 }

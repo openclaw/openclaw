@@ -17,6 +17,8 @@ export const enum CommandLane {
   Nested = "nested",
 }
 
+export const SUBAGENT_LANE_PREFIX = `${CommandLane.Subagent}:`;
+
 // Keep the exported diagnostics inventory closed so per-session lanes cannot
 // turn a saturation snapshot into an unbounded payload.
 export const STATIC_COMMAND_LANES = [

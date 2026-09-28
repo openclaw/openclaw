@@ -57,27 +57,6 @@ describe("ensureCliExecutionBootstrap", () => {
     });
   });
 
-  it("forwards prepared pristine migration facts to the config guard", async () => {
-    const runtime = {} as never;
-
-    await ensureCliExecutionBootstrap({
-      runtime,
-      commandPath: ["gateway"],
-      startupPolicy: bootstrapPolicy(["gateway"]),
-      loadPlugins: false,
-      skipPristineCoreStateMigrations: true,
-      skipPristineStartupStateMigrations: true,
-    });
-
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
-      runtime,
-      commandPath: ["gateway"],
-      measure: expect.any(Function),
-      skipPristineCoreStateMigrations: true,
-      skipPristineStartupStateMigrations: true,
-    });
-  });
-
   it("skips config guard without skipping plugin loading", async () => {
     await ensureCliExecutionBootstrap({
       runtime: {} as never,

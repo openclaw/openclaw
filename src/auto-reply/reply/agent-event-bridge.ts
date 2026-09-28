@@ -47,14 +47,16 @@ export function createAgentEventDeliveryStartOrder(options?: {
   };
 }
 
-export function createAgentEventBridge<T>(params: {
+export type AgentEventBridgeParams<T> = {
   runId: string;
   suppressed?: boolean;
   read: (evt: AgentEventPayload) => T | undefined;
   deliver?: (payload: T) => Promise<unknown>;
   startOrder?: AgentEventDeliveryStartOrder;
   waitForEarlierDeliveries?: (payload: T) => boolean;
-}) {
+};
+
+export function createAgentEventBridge<T>(params: AgentEventBridgeParams<T>) {
   const deliver = params.deliver;
   if (!deliver) {
     return {

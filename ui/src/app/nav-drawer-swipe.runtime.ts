@@ -1,11 +1,10 @@
 import { isMobileNavLayout } from "./mobile-nav-layout.ts";
+import { navDrawerFocusableElements } from "./navigation-surface.ts";
 
 const MIN_OPEN_DISTANCE_PX = 44;
 const OPEN_RATIO = 0.15;
 const LOCK_DISTANCE_PX = 7;
 const DIRECTION_RATIO = 1.25;
-const FOCUSABLE_SELECTOR =
-  "a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
 
 type Swipe = {
   identifier: number;
@@ -72,21 +71,14 @@ export class NavDrawerSwipeOwner {
       }
       this.reset();
       const drawer = this.host.querySelector<HTMLElement>(".shell-nav");
-      (this.focusable()[0] ?? drawer)?.focus({ preventScroll: true });
+      if (drawer) {
+        (navDrawerFocusableElements(drawer)[0] ?? drawer).focus({ preventScroll: true });
+      }
     });
   }
 
   closed(): void {
     this.reset();
-  }
-
-  private focusable(): HTMLElement[] {
-    const drawer = this.host.querySelector<HTMLElement>(".shell-nav");
-    return drawer
-      ? [...drawer.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)].filter((candidate) =>
-          candidate.checkVisibility(),
-        )
-      : [];
   }
 
   private paint(swipe: Swipe, deltaX: number): void {

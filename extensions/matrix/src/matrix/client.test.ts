@@ -20,7 +20,7 @@ vi.mock("./credentials-read.js", () => ({
   credentialsMatchConfig: vi.fn(() => false),
 }));
 
-vi.mock("./credentials-write.runtime.js", () => ({
+vi.mock("./credentials.js", () => ({
   saveBackfilledMatrixDeviceId: saveBackfilledMatrixDeviceIdMock,
   saveMatrixCredentials: saveMatrixCredentialsMock,
   touchMatrixCredentials: touchMatrixCredentialsMock,
@@ -34,7 +34,7 @@ vi.mock("./client/storage.js", async () => {
   };
 });
 
-vi.mock("./client/config-secret-input.runtime.js", () => ({
+vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
   resolveConfiguredSecretInputString: resolveConfiguredSecretInputStringMock,
 }));
 

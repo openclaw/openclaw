@@ -122,8 +122,7 @@ export function readSessionRowFacts(params: {
   };
 }
 
-/** Selection can check board membership without materializing placement or display fields. */
-export function readSessionRowHasBoard(target: {
+function readSessionRowHasBoard(target: {
   key: string;
   storeTarget: GatewayStoredSessionTarget["storeTarget"];
 }) {

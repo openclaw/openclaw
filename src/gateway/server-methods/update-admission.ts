@@ -93,6 +93,9 @@ export function recordHandoffFailure(
     failureFacts,
   };
   try {
+    if (error instanceof UpdatePreMutationError) {
+      recordUpdateRunPhase(runId, "requested", { origin: { nextAction: error.message } });
+    }
     recordUpdateRunStep(runId, { step: step.name, status: "failed", reason });
   } catch {
     warn("Update failure state could not be recorded; preserving the original error.");

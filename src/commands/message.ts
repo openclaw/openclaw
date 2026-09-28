@@ -70,7 +70,7 @@ export async function messageCommand(
     targets: opts.targets,
     accountId: opts.accountId,
   });
-  const explicitAccountId = validateExplicitMessageAccountSelection({
+  const explicitAccountId = await validateExplicitMessageAccountSelection({
     cfg: loadedRaw,
     channel: scope.channel,
     accountId: opts.accountId,
@@ -84,7 +84,7 @@ export async function messageCommand(
   // command runs, so the operation-local plan sees the canonical registry.
   const broadcastAccountPlan =
     normalizedActionInput === "broadcast" && !scope.channel && explicitAccountId
-      ? resolveMessageBroadcastAccountPlan({
+      ? await resolveMessageBroadcastAccountPlan({
           cfg: loadedRaw,
           accountId: explicitAccountId,
         })

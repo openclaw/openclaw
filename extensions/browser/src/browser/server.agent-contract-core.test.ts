@@ -188,7 +188,9 @@ describe("browser control server", () => {
 
       expect(response.status).toBe(501);
       expect(response.body.code).toBe("ACT_EXISTING_SESSION_UNSUPPORTED");
-      expect(response.body.error).toContain("batch");
+      expect(response.body.error).toBe(
+        "existing-session batch is not supported yet; send actions individually.",
+      );
     },
     slowTimeoutMs,
   );

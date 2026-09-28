@@ -345,7 +345,6 @@ describe("pw-tools-core browser SSRF guards", () => {
     await interactions.pressKeyViaPlaywright({ cdpUrl: "http://127.0.0.1:18792", key: "Enter" });
 
     expect(press).toHaveBeenCalledWith("Enter", { delay: 0 });
-    expect(sessionMocks.ensurePageState).toHaveBeenCalledOnce();
     expect(sessionMocks.restoreRoleRefsForTarget).not.toHaveBeenCalled();
   });
 

@@ -1,8 +1,13 @@
 import fsSync from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
+import {
+  assertDirectoryIdentitySync,
+  buildRandomTempFilePath,
+  readDirectoryIdentity,
+  sameFileIdentity,
+} from "@openclaw/fs-safe/advanced";
 import { syncDirectoryBestEffort } from "../infra/directory-durability.js";
-import { buildRandomTempFilePath } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root } from "../infra/fs-safe.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import {
@@ -33,32 +38,19 @@ const exitCleanups = resolveGlobalSingleton(Symbol.for("openclaw.readMediaExitCl
 function isUnownedMediaPath(error: unknown): boolean {
   return (
     (error instanceof FsSafeError &&
-      ["not-found", "path-mismatch", "symlink", "hardlink"].includes(error.code)) ||
+      ["not-found", "not-file", "path-mismatch", "symlink", "hardlink"].includes(error.code)) ||
     (error instanceof Error && "code" in error && error.code === "ENOENT")
   );
 }
 
-function captureDirectoryGuard(dir: string): (handle?: FileHandle) => void {
-  const expected = fsSync.lstatSync(dir, { bigint: true });
-  const realPath = fsSync.realpathSync.native(dir);
-  const assertDirectory = (handle?: FileHandle) => {
-    const current = fsSync.lstatSync(dir, { bigint: true });
-    const opened = handle ? fsSync.fstatSync(handle.fd, { bigint: true }) : current;
-    if (
-      !current.isDirectory() ||
-      current.isSymbolicLink() ||
-      current.dev !== expected.dev ||
-      current.ino !== expected.ino ||
-      opened.dev !== expected.dev ||
-      opened.ino !== expected.ino ||
-      fsSync.realpathSync.native(dir) !== realPath ||
-      (process.platform === "win32" && (current.dev === 0n || current.ino === 0n))
-    ) {
+async function captureDirectoryGuard(dir: string): Promise<(handle?: FileHandle) => void> {
+  const expected = await readDirectoryIdentity(dir);
+  return (handle) => {
+    assertDirectoryIdentitySync(dir, expected);
+    if (handle && !sameFileIdentity(fsSync.fstatSync(handle.fd, { bigint: true }), expected)) {
       throw new FsSafeError("path-mismatch", "Media output directory identity changed");
     }
   };
-  assertDirectory();
-  return assertDirectory;
 }
 
 /** Keeps a read's original file descriptor until its enclosing host accepts the result. */
@@ -70,9 +62,9 @@ export async function writeReadScopeMedia<T extends { id: string }>(params: {
   write: (handle: FileHandle) => Promise<T>;
 }): Promise<T> {
   params.scope.assertCurrent();
-  const assertRequestedDirectory = captureDirectoryGuard(params.dir);
+  const assertRequestedDirectory = await captureDirectoryGuard(params.dir);
   const mediaRoot = await root(params.dir);
-  const assertMediaDirectory = captureDirectoryGuard(mediaRoot.rootReal);
+  const assertMediaDirectory = await captureDirectoryGuard(mediaRoot.rootReal);
   if (process.platform !== "win32") {
     const directory = await fs.open(
       mediaRoot.rootReal,

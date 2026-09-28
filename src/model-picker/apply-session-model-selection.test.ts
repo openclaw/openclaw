@@ -54,7 +54,7 @@ vi.mock("../gateway/session-worker-placement-context.js", factories.placementCon
 vi.mock("../gateway/worker-environments/placement-session-runtime.js", factories.placementRuntime);
 
 import {
-  applySessionModelSelection,
+  applySessionModelSelectionInternal as applySessionModelSelection,
   type ApplySessionModelSelectionParams,
 } from "./apply-session-model-selection.js";
 

@@ -60,7 +60,9 @@ describe.each(Object.entries(serializers))("%s", (_name, serialize) => {
       valid: "emoji 🙈 ok",
     };
 
-    expect(serialize(value)).toContain("\\ud83d");
+    expect(serialize(value)).toBe(
+      '{"high":"left\\ud83dright","key\\ud83d":"name","low":"left\\udc00right","valid":"emoji 🙈 ok"}',
+    );
     expect(serialize(value, sanitizeSurrogates)).toBe(
       '{"high":"leftright","key":"name","low":"leftright","valid":"emoji 🙈 ok"}',
     );

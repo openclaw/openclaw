@@ -25,9 +25,11 @@ export async function resolvePluginBatchReload(): Promise<PluginInstallBatchRelo
             "Gateway did not confirm the plugin batch runtime generation. Inspect plugin status before retrying.",
           );
         }
-        return result.warnings?.length
-          ? { ...result.runtime, warnings: result.warnings }
-          : result.runtime;
+        return {
+          ...result.runtime,
+          ...(result.restartRequired ? { restartRequired: true } : {}),
+          ...(result.warnings?.length ? { warnings: result.warnings } : {}),
+        };
       }
     : undefined;
 }

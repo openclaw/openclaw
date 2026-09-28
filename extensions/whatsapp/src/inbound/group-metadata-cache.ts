@@ -1,5 +1,6 @@
 // Whatsapp plugin module owns group metadata caching and hydration.
 import type { AnyMessageContent, BaileysEventMap, GroupMetadata, WASocket } from "baileys";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -65,13 +66,7 @@ function rememberGroupMetadataCacheEntry<T extends WhatsAppGroupMetadataCacheEnt
   }
   cache.set(jid, entry);
 
-  while (cache.size > WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES) {
-    const oldest = cache.keys().next();
-    if (oldest.done) {
-      break;
-    }
-    cache.delete(oldest.value);
-  }
+  pruneMapToMaxSize(cache, WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES);
 }
 
 function readGroupMetadataCacheEntry<T extends WhatsAppGroupMetadataCacheEntry>(

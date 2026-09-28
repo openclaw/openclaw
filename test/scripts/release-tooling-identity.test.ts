@@ -16,6 +16,7 @@ import {
   validateReleasePublishParentRun,
   validateReleaseToolingIdentity,
   verifyReleaseToolingIdentity,
+  verifyReleaseWorkflowRun,
 } from "../../scripts/release-tooling-identity.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -375,6 +376,12 @@ describe("release tooling identity", () => {
 
   it.each([
     ["active", "in_progress", null, true],
+    ["active", "waiting", null, true],
+    ["active", "queued", null, true],
+    ["active", "requested", null, true],
+    ["active", "pending", null, true],
+    ["active", "waiting", "success", false],
+    ["active", "in_progress", undefined, false],
     ["active", "completed", "success", false],
     ["active-or-failure", "in_progress", null, true],
     ["active-or-failure", "completed", "failure", true],
@@ -416,6 +423,50 @@ describe("release tooling identity", () => {
         expect(validate).not.toThrow();
       } else {
         expect(validate).toThrow(`state is not allowed by ${releasePublishParentStatePolicy}`);
+      }
+    },
+  );
+
+  it.each([
+    ["active", "in_progress", null, true],
+    ["active", "waiting", null, true],
+    ["active", "queued", null, true],
+    ["active", "requested", null, true],
+    ["active", "pending", null, true],
+    ["active", "completed", "success", false],
+    ["active", "waiting", "success", false],
+    ["active", "in_progress", undefined, false],
+    ["success", "completed", "success", true],
+    ["success", "waiting", null, false],
+    ["success", "completed", "failure", false],
+  ] as const)(
+    "enforces writer state policy %s for %s/%s",
+    (runStatePolicy, status, conclusion, accepted) => {
+      const verify = () =>
+        verifyReleaseWorkflowRun({
+          ...protectedIdentity(),
+          runId: RUN_ID,
+          runAttempt: "1",
+          workflowPath: ".github/workflows/openclaw-release-publish.yml",
+          workflowEvent: "workflow_dispatch",
+          runStatePolicy,
+          runGh: () =>
+            JSON.stringify({
+              id: Number(RUN_ID),
+              run_attempt: 1,
+              repository: { full_name: "openclaw/openclaw" },
+              path: `.github/workflows/openclaw-release-publish.yml@${FULL_REF}`,
+              event: "workflow_dispatch",
+              head_branch: REF,
+              head_sha: SHA,
+              status,
+              conclusion,
+            }),
+        });
+      if (accepted) {
+        expect(verify()).toMatchObject({ status, conclusion });
+      } else {
+        expect(verify).toThrow("does not match the authorized workflow identity");
       }
     },
   );

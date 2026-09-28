@@ -63,6 +63,70 @@ const run = LedgerRecordSchema.parse({
 });
 
 describe("update run wire contract", () => {
+  it.each(["candidate", "installed"] as const)(
+    "carries %s admission through lookup, history, and status responses",
+    (owner) => {
+      const checks = [{ name: "config", status: "warn", detail: "Missing custom path." }];
+      const admission =
+        owner === "candidate"
+          ? { owner, protocol: 1, candidateVersion: "2026.9.5", checks }
+          : { owner, fallbackReason: "update-admission-unsupported-target" };
+      const candidateAdmission =
+        owner === "candidate"
+          ? {
+              protocol: 1,
+              verdict: "admit",
+              reasons: [],
+              warnings: [{ code: "missing-load-path", message: "Missing custom path." }],
+              facts: {
+                candidateVersion: "2026.9.5",
+                installedVersion: "2026.9.4",
+                nodeEngines: ">=24.16.0",
+                checks,
+              },
+            }
+          : undefined;
+      const record = LedgerRecordSchema.parse({
+        ...run,
+        admission,
+        origin: { ...run.origin, admission, candidateAdmission },
+      });
+      expect(record.admission).toEqual(admission);
+      expect(record.origin.candidateAdmission).toEqual(candidateAdmission);
+      expect(validateUpdateRunRecord(record)).toBe(true);
+      expect(validateUpdateRunsGetResult({ run: record })).toBe(true);
+      expect(validateUpdateRunsListResult({ runs: [record] })).toBe(true);
+      expect(
+        validateUpdateStatusResult({ sentinel: null, updateAvailable: null, lastRun: record }),
+      ).toBe(true);
+    },
+  );
+
+  it("rejects non-string candidate Node engine facts", () => {
+    const record = {
+      ...run,
+      origin: {
+        ...run.origin,
+        candidateAdmission: {
+          protocol: 1,
+          verdict: "admit",
+          reasons: [],
+          warnings: [],
+          facts: {
+            candidateVersion: "2026.9.5",
+            installedVersion: "2026.9.4",
+            nodeEngines: 24,
+            checks: [],
+          },
+        },
+      },
+    };
+    expect(validateUpdateRunRecord(record)).toBe(false);
+    expect(
+      validateUpdateStatusResult({ sentinel: null, updateAvailable: null, lastRun: record }),
+    ).toBe(false);
+  });
+
   it.each([
     undefined,
     {
@@ -242,6 +306,24 @@ describe("update run wire contract", () => {
     ["unknown phase", { phase: "complete" }],
     ["unknown status", { status: "ok" }],
     ["unknown trigger", { trigger: "web" }],
+    ["unknown admission owner", { admission: { owner: "other" } }],
+    [
+      "unsupported admission protocol",
+      { origin: { admission: { owner: "candidate", protocol: 2 } } },
+    ],
+    [
+      "unknown admission check status",
+      { admission: { owner: "candidate", checks: [{ name: "config", status: "passed" }] } },
+    ],
+    [
+      "oversized admission checks",
+      {
+        admission: {
+          owner: "candidate",
+          checks: Array.from({ length: 33 }, () => ({ name: "config", status: "ok" })),
+        },
+      },
+    ],
     ["negative timestamp", { updatedAtMs: -1 }],
     ["unsafe timestamp", { updatedAtMs: Number.MAX_SAFE_INTEGER + 1 }],
     ["oversized text", { reason: "x".repeat(1025) }],

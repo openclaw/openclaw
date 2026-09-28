@@ -1,18 +1,13 @@
 // Status, health, sessions, and task/flow command registration.
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
-import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { setVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { ExpectedCliError } from "../failure-output.js";
-import { formatHelpExamples } from "../help-format.js";
+import { formatDocsHelp, formatHelpExamples } from "../help-format.js";
 import { registerTasksCommand } from "./register.tasks.js";
-
-function resolveVerbose(opts: { verbose?: boolean; debug?: boolean }): boolean {
-  return Boolean(opts.verbose || opts.debug);
-}
 
 type SessionsListCliOptions = {
   json?: boolean;
@@ -201,7 +196,7 @@ async function runWithVerboseAndTimeout(
   opts: { verbose?: boolean; debug?: boolean; timeout?: unknown },
   action: (params: { verbose: boolean; timeoutMs: number | undefined }) => Promise<void>,
 ): Promise<void> {
-  const verbose = resolveVerbose(opts);
+  const verbose = Boolean(opts.verbose || opts.debug);
   setVerbose(verbose);
   await runCommandWithRuntime(defaultRuntime, async () => {
     const timeoutMs = parseStrictPositiveInteger(opts.timeout);
@@ -240,11 +235,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           ["openclaw status --deep --timeout 5000", "Tighten probe timeout."],
         ])}`,
     )
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/status", "docs.openclaw.ai/cli/status")}\n`,
-    )
+    .addHelpText("after", () => formatDocsHelp("/cli/status"))
     .action(async (opts) => {
       await runWithVerboseAndTimeout(opts, async ({ verbose, timeoutMs }) => {
         const { statusCommand } = await import("../../commands/status.js");
@@ -270,11 +261,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--timeout <ms>", "Connection timeout in milliseconds")
     .option("--verbose", "Verbose logging", false)
     .option("--debug", "Alias for --verbose", false)
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/health", "docs.openclaw.ai/cli/health")}\n`,
-    )
+    .addHelpText("after", () => formatDocsHelp("/cli/health"))
     .action(async (opts) => {
       await runWithVerboseAndTimeout(opts, async ({ verbose, timeoutMs }) => {
         const { healthCommand } = await import("../../commands/health.js");
@@ -307,11 +294,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           "Shows token usage per session when the agent reports it; set the model entry's contextTokens to cap the window and show %.",
         )}`,
     )
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/sessions", "docs.openclaw.ai/cli/sessions")}\n`,
-    )
+    .addHelpText("after", () => formatDocsHelp("/cli/sessions"))
     .action(async (opts) => {
       await runSessionsListCli(opts as SessionsListCliOptions);
     });
@@ -491,19 +474,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         )}`,
     )
     .action(async (key: string, opts, command) => {
-      // Sibling `sessions` subcommands inherit parent options (see list/cleanup
-      // above): `--agent`/`--json` may be supplied on the parent `sessions`
-      // command, e.g. `openclaw sessions --agent work compact <key>`. Merge those
-      // so a parent `--agent` is not silently dropped and the wrong agent's
-      // session compacted.
-      //
-      // The parent also defines list-only options (`--store`/`--all-agents`/
-      // `--active`/`--limit`). `compact` mutates the single session the gateway
-      // resolves from <key> + --agent, so it cannot honor a parent `--store`
-      // (the gateway picks the store) and the rest are meaningless here.
-      // Silently dropping `--store` is the dangerous case — the user could
-      // believe they targeted one store while the gateway compacts another — so
-      // reject any unsupported inherited option instead of ignoring it.
+      // Preserve parent agent/JSON options, but reject selectors the Gateway cannot honor.
       const parentOpts = command.parent?.opts() as SessionsListCliOptions | undefined;
       rejectUnsupportedSessionsParentOptions(
         "compact",

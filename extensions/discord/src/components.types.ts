@@ -156,20 +156,9 @@ export type DiscordComponentEntry = {
   expiresAt?: number;
 };
 
-export type DiscordModalFieldDefinition = {
+export type DiscordModalFieldDefinition = Omit<DiscordModalFieldSpec, "name"> & {
   id: string;
   name: string;
-  label: string;
-  type: DiscordComponentModalFieldType;
-  description?: string;
-  placeholder?: string;
-  required?: boolean;
-  options?: DiscordComponentSelectOption[];
-  minValues?: number;
-  maxValues?: number;
-  minLength?: number;
-  maxLength?: number;
-  style?: "short" | "paragraph";
 };
 
 export type DiscordModalEntry = {

@@ -10,6 +10,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { QaSuiteInfraError, QaSuiteScenarioSkipError } from "./errors.js";
+import { resolveQaLiveTurnTimeoutMs as liveTurnTimeoutMs } from "./live-timeout.js";
 import {
   qaMockRequestCursorUrl,
   qaMockRequestsAfterUrl,
@@ -19,23 +20,10 @@ import {
   type QaRuntimeToolCoverageMetadata,
   readRuntimeToolCoverageMetadata,
 } from "./runtime-tool-metadata.js";
-import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
-type QaRuntimeToolFixtureConfig = Record<string, unknown> & {
-  toolName?: unknown;
-  happyPrompt?: unknown;
-  failurePrompt?: unknown;
-  promptSnippet?: unknown;
-  failurePromptSnippet?: unknown;
-  happyPathOutputRequired?: unknown;
-  ensureImageGeneration?: unknown;
-  expectedAvailable?: unknown;
-  toolCoverage?: unknown;
-  knownBroken?: unknown;
-  knownHarnessGap?: unknown;
-};
+type QaRuntimeToolFixtureConfig = Record<string, unknown>;
 
 type QaRuntimeToolFixtureRequest = {
   body?: unknown;
@@ -60,7 +48,6 @@ type QaRuntimeToolFixtureTranscriptToolResult = {
   text: string;
   failure: boolean;
   hardFailure: boolean;
-  structuredFailure: boolean;
 };
 
 const RUNTIME_PARITY_SESSION_KEY_DETAIL_PREFIX = "RUNTIME_PARITY_SESSION_KEY=";
@@ -115,20 +102,8 @@ type QaRuntimeToolFixtureDeps = {
   ensureImageGenerationConfigured: (env: QaSuiteRuntimeEnv) => Promise<unknown>;
 };
 
-function isKnownBroken(raw: unknown): raw is Record<string, unknown> {
-  return isRecord(raw);
-}
-
-function isKnownHarnessGap(raw: unknown): raw is Record<string, unknown> {
-  return isRecord(raw);
-}
-
-function isQaRuntimeToolFixtureRequest(raw: unknown): raw is QaRuntimeToolFixtureRequest {
-  return isRecord(raw);
-}
-
 function readQaRuntimeToolFixtureRequests(raw: unknown): QaRuntimeToolFixtureRequest[] {
-  return Array.isArray(raw) ? raw.filter(isQaRuntimeToolFixtureRequest) : [];
+  return Array.isArray(raw) ? raw.filter(isRecord) : [];
 }
 
 function formatPlannedToolArgs(rawArgs: unknown) {
@@ -162,10 +137,10 @@ function requestHasHappyPathFailureToolOutput(request: QaRuntimeToolFixtureReque
 function requestHasFailureLikeToolOutput(request: QaRuntimeToolFixtureRequest) {
   return (
     typeof request.toolOutput === "string" &&
-    isFailureLikeToolResult({
+    classifyToolResultFailure({
       text: request.toolOutput,
       isError: request.toolOutputStructuredError,
-    })
+    }).failure
   );
 }
 
@@ -394,10 +369,6 @@ async function formatRuntimePatchMutationDiagnostics(params: {
   ].join("; ");
 }
 
-function normalizeToolCallId(value: unknown) {
-  return normalizeOptionalString(value);
-}
-
 function stringifyTranscriptToolResult(value: unknown): string {
   if (typeof value === "string") {
     return value.trim();
@@ -463,9 +434,9 @@ function extractTranscriptToolCalls(
       }
       calls.push({
         id:
-          normalizeToolCallId(block.id) ??
-          normalizeToolCallId(block.toolCallId) ??
-          normalizeToolCallId(block.toolUseId),
+          normalizeOptionalString(block.id) ??
+          normalizeOptionalString(block.toolCallId) ??
+          normalizeOptionalString(block.toolUseId),
         tool,
         // OpenClaw mirrors provider arguments separately; a placeholder input
         // can be empty even though arguments contains the executed patch.
@@ -489,9 +460,9 @@ function extractTranscriptToolCalls(
     }
     calls.push({
       id:
-        normalizeToolCallId(call.id) ??
-        normalizeToolCallId(call.toolCallId) ??
-        normalizeToolCallId(call.toolUseId),
+        normalizeOptionalString(call.id) ??
+        normalizeOptionalString(call.toolCallId) ??
+        normalizeOptionalString(call.toolUseId),
       tool,
       args:
         call.arguments ?? functionRecord?.arguments ?? call.input ?? functionRecord?.input ?? null,
@@ -500,54 +471,31 @@ function extractTranscriptToolCalls(
   return calls;
 }
 
-function readBooleanTrue(value: unknown) {
-  return value === true;
-}
-
 const FAILURE_LIKE_TOOL_RESULT_RE =
   /\b(?:denied|enoent|error|exception|fail(?:ed|ure)?|forbidden|invalid|missing|not found|permission|reject(?:ed|ion)?)\b/iu;
 
 const REQUIRED_FIELD_TOOL_RESULT_RE =
   /(?:^|[\n:,({[]\s*)["']?[A-Z_][A-Z0-9_.[\]-]*["']?\s+(?:is\s+)?required\b/iu;
 
-function isFailureLikeToolResult(params: {
+function classifyToolResultFailure(params: {
   type?: string;
   text: string;
   isError?: unknown;
   is_error?: unknown;
 }) {
-  return (
-    isStructuredFailureToolResult(params) ||
+  const structuredFailure =
+    params.type === "tool_result_error" || params.isError === true || params.is_error === true;
+  const hardFailure =
+    structuredFailure ||
     isHardFailureToolOutputText(params.text) ||
-    isWorkspaceBoundaryFailureToolOutput(params.text) ||
-    FAILURE_LIKE_TOOL_RESULT_RE.test(params.text) ||
-    REQUIRED_FIELD_TOOL_RESULT_RE.test(params.text)
-  );
-}
-
-function isHardFailureToolResult(params: {
-  type?: string;
-  text: string;
-  isError?: unknown;
-  is_error?: unknown;
-}) {
-  return (
-    isStructuredFailureToolResult(params) ||
-    isHardFailureToolOutputText(params.text) ||
-    isWorkspaceBoundaryFailureToolOutput(params.text)
-  );
-}
-
-function isStructuredFailureToolResult(params: {
-  type?: string;
-  isError?: unknown;
-  is_error?: unknown;
-}) {
-  return (
-    params.type === "tool_result_error" ||
-    readBooleanTrue(params.isError) ||
-    readBooleanTrue(params.is_error)
-  );
+    isWorkspaceBoundaryFailureToolOutput(params.text);
+  return {
+    hardFailure,
+    failure:
+      hardFailure ||
+      FAILURE_LIKE_TOOL_RESULT_RE.test(params.text) ||
+      REQUIRED_FIELD_TOOL_RESULT_RE.test(params.text),
+  };
 }
 
 function extractTranscriptToolResults(
@@ -561,25 +509,15 @@ function extractTranscriptToolResults(
     normalizeOptionalString(message.tool);
   if ((message.role === "tool" || message.role === "toolResult") && message.content !== undefined) {
     const text = extractTranscriptText(message.content);
-    const structuredFailure = isStructuredFailureToolResult({
-      isError: message.isError,
-      is_error: message.is_error,
-    });
     results.push({
       id:
-        normalizeToolCallId(message.tool_call_id) ??
-        normalizeToolCallId(message.toolCallId) ??
-        normalizeToolCallId(message.toolUseId) ??
-        normalizeToolCallId(message.id),
+        normalizeOptionalString(message.tool_call_id) ??
+        normalizeOptionalString(message.toolCallId) ??
+        normalizeOptionalString(message.toolUseId) ??
+        normalizeOptionalString(message.id),
       ...(tool ? { tool } : {}),
       text,
-      hardFailure: isHardFailureToolResult({
-        text,
-        isError: message.isError,
-        is_error: message.is_error,
-      }),
-      structuredFailure,
-      failure: isFailureLikeToolResult({
+      ...classifyToolResultFailure({
         text,
         isError: message.isError,
         is_error: message.is_error,
@@ -602,11 +540,6 @@ function extractTranscriptToolResults(
     const text = stringifyTranscriptToolResult(
       block.content ?? block.text ?? block.result ?? block.error ?? block.message,
     );
-    const structuredFailure = isStructuredFailureToolResult({
-      type,
-      isError: block.isError,
-      is_error: block.is_error,
-    });
     const blockTool =
       normalizeOptionalString(block.toolName) ??
       normalizeOptionalString(block.tool_name) ??
@@ -614,21 +547,14 @@ function extractTranscriptToolResults(
       normalizeOptionalString(block.tool);
     results.push({
       id:
-        normalizeToolCallId(block.tool_use_id) ??
-        normalizeToolCallId(block.toolUseId) ??
-        normalizeToolCallId(block.tool_call_id) ??
-        normalizeToolCallId(block.toolCallId) ??
-        normalizeToolCallId(block.id),
+        normalizeOptionalString(block.tool_use_id) ??
+        normalizeOptionalString(block.toolUseId) ??
+        normalizeOptionalString(block.tool_call_id) ??
+        normalizeOptionalString(block.toolCallId) ??
+        normalizeOptionalString(block.id),
       ...(blockTool ? { tool: blockTool } : {}),
       text,
-      hardFailure: isHardFailureToolResult({
-        type,
-        text,
-        isError: block.isError,
-        is_error: block.is_error,
-      }),
-      structuredFailure,
-      failure: isFailureLikeToolResult({
+      ...classifyToolResultFailure({
         type,
         text,
         isError: block.isError,
@@ -805,7 +731,7 @@ function formatKnownBrokenDetails(
   tools: Set<string>,
   config: QaRuntimeToolFixtureConfig,
 ) {
-  const knownBroken = isKnownBroken(config.knownBroken) ? config.knownBroken : {};
+  const knownBroken = isRecord(config.knownBroken) ? config.knownBroken : {};
   const issue = normalizeOptionalString(knownBroken.issue) ?? "";
   const reason = normalizeOptionalString(knownBroken.reason) ?? "known broken runtime tool fixture";
   return [
@@ -878,7 +804,7 @@ function plannedRequestHasPrompt(request: QaRuntimeToolFixtureRequest) {
 }
 
 function formatKnownHarnessGapDetails(toolName: string, config: QaRuntimeToolFixtureConfig) {
-  const knownHarnessGap = isKnownHarnessGap(config.knownHarnessGap) ? config.knownHarnessGap : {};
+  const knownHarnessGap = isRecord(config.knownHarnessGap) ? config.knownHarnessGap : {};
   const issue = normalizeOptionalString(knownHarnessGap.issue) ?? "";
   const reason = normalizeOptionalString(knownHarnessGap.reason) ?? "known QA harness gap";
   return [`known-harness-gap ${toolName}: ${reason}`, issue ? `tracking: ${issue}` : undefined]
@@ -921,6 +847,12 @@ export async function runRuntimeToolFixture(
     throw new QaSuiteScenarioSkipError(withSessionDetails(details));
   };
   const fixtureError = (error: unknown) => runtimeToolFixtureError(error, ...sessionKeys);
+  const failFixture: (details: string) => never = (details) => {
+    if (isRecord(config.knownHarnessGap)) {
+      skipFixture(formatKnownHarnessGapDetails(toolName, config));
+    }
+    throw fixtureError(new Error(details));
+  };
   const runFixtureOperation = async <T>(operation: () => Promise<T>): Promise<T> => {
     try {
       return await operation();
@@ -945,16 +877,11 @@ export async function runRuntimeToolFixture(
     if (!expectedAvailable) {
       skipFixture(formatExpectedUnavailableDetails(toolName, tools));
     }
-    if (isKnownBroken(config.knownBroken)) {
+    if (isRecord(config.knownBroken)) {
       skipFixture(formatKnownBrokenDetails(toolName, tools, config));
     }
-    if (isKnownHarnessGap(config.knownHarnessGap)) {
-      skipFixture(formatKnownHarnessGapDetails(toolName, config));
-    }
-    throw fixtureError(
-      new Error(
-        `${toolName} not present in effective tools. Available tools: ${[...tools].toSorted().join(", ")}`,
-      ),
+    failFixture(
+      `${toolName} not present in effective tools. Available tools: ${[...tools].toSorted().join(", ")}`,
     );
   }
 
@@ -975,7 +902,7 @@ export async function runRuntimeToolFixture(
     metadata.required &&
     (!env.mock || toolName !== "apply_patch") &&
     (!dynamicExposureIntentionallyExcluded || requireNativePatchTranscriptEvidence) &&
-    !isKnownHarnessGap(config.knownHarnessGap);
+    !isRecord(config.knownHarnessGap);
   const mockBaseUrl = env.mock?.baseUrl;
   const requestCursorBefore = mockBaseUrl
     ? await runFixtureOperation(async () =>
@@ -1075,25 +1002,15 @@ export async function runRuntimeToolFixture(
           `${toolName} live provider report-only: a planned call without a linked successful result is not product execution evidence`,
         );
       } else {
-        if (isKnownHarnessGap(config.knownHarnessGap)) {
-          skipFixture(formatKnownHarnessGapDetails(toolName, config));
-        }
-        throw fixtureError(
-          new Error(
-            happyRequest.plannedRequest
-              ? `expected live happy-path tool output for ${toolName}`
-              : `expected live happy-path tool call for ${toolName}`,
-          ),
+        failFixture(
+          happyRequest.plannedRequest
+            ? `expected live happy-path tool output for ${toolName}`
+            : `expected live happy-path tool call for ${toolName}`,
         );
       }
     }
     if (happyRequest.outputRequest?.hardFailure) {
-      if (isKnownHarnessGap(config.knownHarnessGap)) {
-        skipFixture(formatKnownHarnessGapDetails(toolName, config));
-      }
-      throw fixtureError(
-        new Error(`expected live happy-path successful tool output for ${toolName}`),
-      );
+      failFixture(`expected live happy-path successful tool output for ${toolName}`);
     }
     if (
       toolName === "apply_patch" &&
@@ -1118,24 +1035,14 @@ export async function runRuntimeToolFixture(
       }),
     );
     if (!failureRequest.outputRequest) {
-      if (isKnownHarnessGap(config.knownHarnessGap)) {
-        skipFixture(formatKnownHarnessGapDetails(toolName, config));
-      }
-      throw fixtureError(
-        new Error(
-          failureRequest.plannedRequest
-            ? `expected live failure-path tool output for ${toolName}`
-            : `expected live failure-path tool call for ${toolName}`,
-        ),
+      failFixture(
+        failureRequest.plannedRequest
+          ? `expected live failure-path tool output for ${toolName}`
+          : `expected live failure-path tool call for ${toolName}`,
       );
     }
     if (!failureRequest.failureOutputRequest) {
-      if (isKnownHarnessGap(config.knownHarnessGap)) {
-        skipFixture(formatKnownHarnessGapDetails(toolName, config));
-      }
-      throw fixtureError(
-        new Error(`expected live failure-path tool failure output for ${toolName}`),
-      );
+      failFixture(`expected live failure-path tool failure output for ${toolName}`);
     }
     if (
       toolName === "apply_patch" &&
@@ -1243,24 +1150,14 @@ export async function runRuntimeToolFixture(
         }),
       );
     }
-    if (isKnownHarnessGap(config.knownHarnessGap)) {
-      skipFixture(formatKnownHarnessGapDetails(toolName, config));
-    }
-    throw fixtureError(
-      new Error(
-        happyPlannedRequest
-          ? `expected mock happy-path tool output for ${toolName}`
-          : `expected mock happy-path request for ${toolName}`,
-      ),
+    failFixture(
+      happyPlannedRequest
+        ? `expected mock happy-path tool output for ${toolName}`
+        : `expected mock happy-path request for ${toolName}`,
     );
   }
   if (happyRequest && requestHasHappyPathFailureToolOutput(happyRequest.outputRequest)) {
-    if (isKnownHarnessGap(config.knownHarnessGap)) {
-      skipFixture(formatKnownHarnessGapDetails(toolName, config));
-    }
-    throw fixtureError(
-      new Error(`expected mock happy-path successful tool output for ${toolName}`),
-    );
+    failFixture(`expected mock happy-path successful tool output for ${toolName}`);
   }
   if (
     toolName === "apply_patch" &&
@@ -1288,19 +1185,14 @@ export async function runRuntimeToolFixture(
         }),
       );
     }
-    if (isKnownHarnessGap(config.knownHarnessGap)) {
-      skipFixture(formatKnownHarnessGapDetails(toolName, config));
-    }
-    throw fixtureError(
-      new Error(
-        failurePlannedRequest
-          ? `expected mock failure-path tool output for ${toolName}`
-          : `expected mock failure-path request for ${toolName}`,
-      ),
+    failFixture(
+      failurePlannedRequest
+        ? `expected mock failure-path tool output for ${toolName}`
+        : `expected mock failure-path request for ${toolName}`,
     );
   }
   if (!requestHasFailureLikeToolOutput(failureRequest.outputRequest)) {
-    if (isKnownHarnessGap(config.knownHarnessGap)) {
+    if (isRecord(config.knownHarnessGap)) {
       skipFixture(formatKnownHarnessGapDetails(toolName, config));
     }
     const patchFailureDiagnostics =

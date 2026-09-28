@@ -1,6 +1,11 @@
 /* oxlint-disable unicorn/no-array-fill-with-reference-type -- CanvasRenderingContext2D.fill is not Array.fill. */
 // Canvas-only rendering for the canonical 120x120 Clawd vector.
-import type { MascotPalette, MascotPose } from "./mascot-pose.ts";
+import {
+  clampMascotValue as clamp,
+  mascotBell as bell,
+  type MascotPalette,
+  type MascotPose,
+} from "./mascot-pose.ts";
 
 const ART_SIZE = 120;
 const TAU = Math.PI * 2;
@@ -102,16 +107,6 @@ function gradient(ctx: CanvasRenderingContext2D, shape: Shape, palette: MascotPa
 
 function radians(degrees: number): number {
   return (degrees * Math.PI) / 180;
-}
-
-function easeInOut(value: number): number {
-  const t = clamp(value, 0, 1);
-  return t * t * (3 - 2 * t);
-}
-
-function bell(value: number): number {
-  const t = clamp(value, 0, 1);
-  return easeInOut(t < 0.5 ? t * 2 : (1 - t) * 2);
 }
 
 function rotated(
@@ -411,10 +406,6 @@ function drawEffect(ctx: CanvasRenderingContext2D, pose: MascotPose, palette: Ma
       ctx.restore();
     }
   }
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), max);
 }
 
 /** Draw one pose. Whole-body float is applied by the host to avoid canvas clipping. */

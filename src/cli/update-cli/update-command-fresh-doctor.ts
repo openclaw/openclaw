@@ -70,47 +70,22 @@ import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-err
 import {
   disableUpdatedPackageCompileCacheEnv,
   stripGatewayServiceMarkerEnv,
+  withUpdateEnv,
 } from "./update-command-service-env.js";
 import { captureUpdateFinalizationDoctorOutput } from "./update-finalization-output.js";
 
 type UpdateDoctorPhase = "pre-plugin" | "post-plugin";
 
 export async function withPrePluginUpdateDoctorEnv<T>(run: () => Promise<T>): Promise<T> {
-  const previousValues = [
-    "OPENCLAW_UPDATE_IN_PROGRESS",
-    UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV,
-    UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
-    UPDATE_POST_CORE_CONVERGENCE_ENV,
-  ].map((key) => [key, process.env[key]] as const);
-  process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
-  process.env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV] = "1";
-  process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV] = "1";
-  delete process.env[UPDATE_POST_CORE_CONVERGENCE_ENV];
-  try {
-    return await run();
-  } finally {
-    for (const [key, value] of previousValues) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  }
-}
-
-async function withNormalConfigValidation<T>(run: () => Promise<T>): Promise<T> {
-  const previousUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-  process.env.OPENCLAW_UPDATE_IN_PROGRESS = "0";
-  try {
-    return await run();
-  } finally {
-    if (previousUpdateInProgress === undefined) {
-      delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-    } else {
-      process.env.OPENCLAW_UPDATE_IN_PROGRESS = previousUpdateInProgress;
-    }
-  }
+  return await withUpdateEnv(
+    {
+      OPENCLAW_UPDATE_IN_PROGRESS: "1",
+      [UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV]: "1",
+      [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
+      [UPDATE_POST_CORE_CONVERGENCE_ENV]: undefined,
+    },
+    run,
+  );
 }
 
 function createPostPluginDoctorExecutionFailure(
@@ -557,7 +532,7 @@ export async function completePostCorePluginUpdate(params: {
   assertCurrent();
   // The target owns state writes and its version stamp. Read context without
   // migrating target stores or warning about this parent's expected version skew.
-  const configSnapshot = await withNormalConfigValidation(() =>
+  const configSnapshot = await withUpdateEnv({ OPENCLAW_UPDATE_IN_PROGRESS: "0" }, () =>
     readConfigFileSnapshot({ observe: false, suppressFutureVersionWarning: true }),
   );
   assertCurrent();

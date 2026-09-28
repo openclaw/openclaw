@@ -25,6 +25,7 @@ import {
   mergeUsageIntoAccumulator,
 } from "../../agents/embedded-agent-runner/usage-accumulator.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
+import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
@@ -100,6 +101,8 @@ type PrepareWorkerAgentRuntimeIdentityParams = Omit<
   runtimeInstanceId: string;
   turn: SessionPlacementTurnParams;
   placements: WorkerSessionPlacementStore;
+  sessionTarget: BoundAgentRunSessionTarget;
+  assertSourceCurrent: () => void;
 };
 
 export async function prepareWorkerAgentRuntimeIdentity(
@@ -112,31 +115,43 @@ export async function prepareWorkerAgentRuntimeIdentity(
     admittedRunContext: params.turn.admittedRunContext,
     preparedRunAdmission: params.turn.preparedRunAdmission,
   });
-  const assertActive = resolveAdmittedRunActiveAssertion(
+  const assertAdmittedActive = resolveAdmittedRunActiveAssertion(
     admittedRunContext,
     params.turn.abortSignal,
   );
-  if (!assertActive) {
+  if (!assertAdmittedActive) {
     throw new Error("Worker turn has no active admitted execution authority");
   }
-  assertActive();
-  const runtimeIdentity = buildWorkerAgentRuntimeIdentity({ ...params, admittedRunContext });
+  const assertActive = () => {
+    params.assertSourceCurrent();
+    assertAdmittedActive();
+  };
+  assertAdmittedActive();
   // Stop closes the operational run before its placement claim finishes draining.
   // Worker tools must retain both owners even when audit collection is disabled.
-  const takeFinishingOutcome = bindWorkerTurnOwner(
+  const { capability, takeFinishingOutcome } = await bindWorkerTurnOwner(
     params.placements,
     params.turnClaim,
-    runtimeIdentity.executionIdentityToken,
+    admittedRunContext.executionIdentityToken,
     admittedRunContext.operationalRunInstance,
-    { agentId: params.agentId, sessionKey: params.sessionKey },
+    params.sessionTarget,
     assertActive,
     params.turn.prepareAssistantTranscriptMessage,
     readAdmittedRunOperatorAuthority(admittedRunContext),
   );
+  capability.receiptAuthority();
+  const runtimeIdentity = await capability.run((owner) => ({
+    ...buildWorkerAgentRuntimeIdentity({
+      ...params,
+      admittedRunContext,
+      turnClaim: owner.turnClaim,
+    }),
+    approvalAuthority: owner.delegatedAuthority,
+  }));
   return {
     operationalRunInstance: admittedRunContext.operationalRunInstance,
     runtimeIdentity,
-    assertActive,
+    assertActive: capability.receiptAuthority,
     takeFinishingOutcome,
   };
 }

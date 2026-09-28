@@ -7,7 +7,6 @@ import {
   stripAssistantInternalScaffolding,
   stripToolCallXmlTags,
 } from "./assistant-visible-text.js";
-import { stripDowngradedToolCallText } from "./downgraded-tool-call-text.js";
 import { stripModelSpecialTokens } from "./model-special-tokens.js";
 
 describe("stripAssistantInternalScaffolding", () => {
@@ -542,7 +541,7 @@ describe("stripAssistantInternalScaffolding", () => {
       );
     });
 
-    it("preserves special-token-like syntax inside code blocks", () => {
+    it("preserves ordinary HTML", () => {
       expectVisibleText("Use <div>hello</div> in HTML", "Use <div>hello</div> in HTML");
     });
 
@@ -804,13 +803,19 @@ describe("sanitizeAssistantVisibleText", () => {
     );
   });
 
-  it("preserves fenced log lines quoting tool markers through delivery", () => {
+  it.each([
+    { name: "Tool Result", lines: ["[Tool Result for ID abc]", "stdout: hello"] },
+    {
+      name: "Tool Call and Arguments",
+      lines: ["[Tool Call: bash (ID: 7)]", 'Arguments: {"cmd":"ls"}'],
+    },
+    { name: "Historical context", lines: ["[Historical context: earlier run]", "stdout: hello"] },
+  ])("preserves fenced log lines quoting $name through delivery", ({ lines }) => {
     const input = [
       "Log format explainer:",
       "",
       "```text",
-      "[Tool Result for ID abc]",
-      "stdout: hello",
+      ...lines,
       "```",
       "",
       "Then we continue the answer with important details.",
@@ -830,6 +835,26 @@ describe("sanitizeAssistantVisibleText", () => {
     ].join("\n");
 
     expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
+  it.each([
+    {
+      name: "Tool Result",
+      input: ["[Tool Result for ID abc]", "stdout: hello"].join("\n"),
+      expected: "",
+    },
+    {
+      name: "Tool Call and Arguments",
+      input: ["[Tool Call: read (ID: toolu_1)]", 'Arguments: {"path":"/tmp/x"}'].join("\n"),
+      expected: "",
+    },
+    {
+      name: "Historical context",
+      input: "[Historical context: earlier run]\nVisible answer",
+      expected: "Visible answer",
+    },
+  ])("strips downgraded $name markers through delivery", ({ input, expected }) => {
+    expect(sanitizeAssistantVisibleText(input)).toBe(expected);
   });
 
   it("strips minimax, tool XML, downgraded tool markers, and think tags in one pass", () => {
@@ -994,9 +1019,7 @@ describe("sanitizeAssistantVisibleTextWithProfile", () => {
       "Visible answer",
     ].join("\n");
 
-    expect(sanitizeAssistantVisibleTextWithProfile(input, "internal-scaffolding")).toContain(
-      "[Tool Call: read (ID: toolu_1)]",
-    );
+    expect(sanitizeAssistantVisibleTextWithProfile(input, "internal-scaffolding")).toBe(input);
   });
 
   it("uses the tool-progress profile to strip scaffolding while preserving progress lines", () => {
@@ -1009,71 +1032,6 @@ describe("sanitizeAssistantVisibleTextWithProfile", () => {
     expect(sanitizeAssistantVisibleTextWithProfile(input, "tool-progress")).toBe(
       "🛠️ run git status",
     );
-  });
-});
-
-describe("stripDowngradedToolCallText", () => {
-  it("preserves fenced log lines that quote [Tool Result for ID ...]", () => {
-    const input = [
-      "Log format explainer:",
-      "",
-      "```text",
-      "[Tool Result for ID abc]",
-      "stdout: hello",
-      "```",
-      "",
-      "Then we continue the answer with important details.",
-    ].join("\n");
-
-    expect(stripDowngradedToolCallText(input)).toBe(input);
-  });
-
-  it("preserves fenced log lines that quote [Tool Call: ...] and Arguments", () => {
-    const input = [
-      "Log format explainer:",
-      "",
-      "```text",
-      "[Tool Call: bash (ID: 7)]",
-      'Arguments: {"cmd":"ls"}',
-      "```",
-      "",
-      "Then we continue the answer with important details.",
-    ].join("\n");
-
-    expect(stripDowngradedToolCallText(input)).toBe(input);
-  });
-
-  it("preserves fenced log lines that quote [Historical context: ...]", () => {
-    const input = [
-      "Log format explainer:",
-      "",
-      "```text",
-      "[Historical context: earlier run]",
-      "stdout: hello",
-      "```",
-      "",
-      "Then we continue the answer with important details.",
-    ].join("\n");
-
-    expect(stripDowngradedToolCallText(input)).toBe(input);
-  });
-
-  it("strips real [Tool Result for ID ...] blocks outside code", () => {
-    const input = ["[Tool Result for ID abc]", "stdout: hello"].join("\n");
-
-    expect(stripDowngradedToolCallText(input)).toBe("");
-  });
-
-  it("strips real [Tool Call: ...] blocks outside code", () => {
-    const input = ["[Tool Call: read (ID: toolu_1)]", 'Arguments: {"path":"/tmp/x"}'].join("\n");
-
-    expect(stripDowngradedToolCallText(input)).toBe("");
-  });
-
-  it("strips real [Historical context: ...] markers outside code", () => {
-    const input = "[Historical context: earlier run]\nVisible answer";
-
-    expect(stripDowngradedToolCallText(input)).toBe("Visible answer");
   });
 });
 

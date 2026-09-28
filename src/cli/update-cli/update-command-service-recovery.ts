@@ -2,11 +2,7 @@ import { Writable } from "node:stream";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
-import {
-  readGatewayServiceState,
-  resolveGatewayService,
-  type GatewayService,
-} from "../../daemon/service.js";
+import { resolveGatewayService, type GatewayService } from "../../daemon/service.js";
 import { getUpdateRun, recordUpdateRunRepairAttempt } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
@@ -41,7 +37,7 @@ import {
   type PreManagedServiceStop,
 } from "./update-command-service-maintenance.js";
 import {
-  assertGatewayServiceManagementAllowedForUpdate,
+  readGatewayServiceStateForUpdate,
   resolveUpdatedGatewayRestartPort,
 } from "./update-command-service-plan.js";
 
@@ -147,16 +143,16 @@ function formatPostUpdateGatewayRecoveryLine(platform: NodeJS.Platform): string 
   const restartCommand = formatCliCommand("openclaw gateway restart");
   const installCommand = formatCliCommand("openclaw gateway install --force");
   const statusCommand = formatCliCommand("openclaw gateway status --deep");
-  if (platform === "darwin") {
-    return `Recovery: run \`${restartCommand}\`; if the LaunchAgent is installed but not loaded, run \`${installCommand}\` from the logged-in macOS user session, then rerun \`${statusCommand}\`.`;
-  }
-  if (platform === "linux") {
-    return `Recovery: run \`${restartCommand}\`; if the systemd user service is missing, stale, or not active, run \`${installCommand}\` from the same user account, then rerun \`${statusCommand}\`.`;
-  }
-  if (platform === "win32") {
-    return `Recovery: run \`${restartCommand}\`; if the gateway Scheduled Task or Windows login item is missing, stale, or not running, run \`${installCommand}\` from the same user account, then rerun \`${statusCommand}\`.`;
-  }
-  return `Recovery: run \`${restartCommand}\`; if the local service manager reports the gateway service is missing, stale, or not running, run \`${installCommand}\` from the same user account, then rerun \`${statusCommand}\`.`;
+  const condition =
+    platform === "darwin"
+      ? "LaunchAgent is installed but not loaded"
+      : platform === "linux"
+        ? "systemd user service is missing, stale, or not active"
+        : platform === "win32"
+          ? "gateway Scheduled Task or Windows login item is missing, stale, or not running"
+          : "local service manager reports the gateway service is missing, stale, or not running";
+  const session = platform === "darwin" ? "logged-in macOS user session" : "same user account";
+  return `Recovery: run \`${restartCommand}\`; if the ${condition}, run \`${installCommand}\` from the ${session}, then rerun \`${statusCommand}\`.`;
 }
 
 export function formatPostUpdateGatewayRecoveryInstructions(
@@ -246,13 +242,7 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
     > = original?.service ?? before;
     const readCurrentService = async () => {
       assertCurrent();
-      const state = await readGatewayServiceState(service, {
-        env: serviceEnv,
-        requireEffective: true,
-        requireLoadedCommand: true,
-        validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
-        timeoutMs: params.timeoutMs,
-      });
+      const state = await readGatewayServiceStateForUpdate(service, serviceEnv, params.timeoutMs);
       assertCurrent();
       const inspection = await revalidateManagedGatewayServiceAfterUpdate({
         state,
@@ -349,8 +339,6 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       if (!ready) {
         throw new Error("Original service independent readiness was not verified.");
       }
-    }
-    if (original) {
       try {
         // Settle A's native restoration independently of B's failed activation.
         await before.windowsTaskAutoStartRecovery?.complete(true);
@@ -421,6 +409,15 @@ export async function compensateOriginalManagedService(
           invocationCwd: params.invocationCwd,
         });
   assertCurrent();
+  const healthy = service === "healthy";
+  const summary = [
+    healthy
+      ? `Original managed service ${original.version} is healthy. Requested package activation was not verified; package and state were retained.`
+      : "Original managed service compensation was not verified; package and current state were retained.",
+    original.packageFingerprintWarning,
+  ]
+    .filter(Boolean)
+    .join("\n");
   return {
     result: {
       ...result,
@@ -439,28 +436,12 @@ export async function compensateOriginalManagedService(
           command: "openclaw gateway restart --preserve-definition",
           cwd: original.root,
           durationMs: 0,
-          exitCode: service === "healthy" ? 0 : 1,
-          ...(service === "healthy"
-            ? {
-                stdoutTail: [
-                  `Original managed service ${original.version} is healthy. Requested package activation was not verified; package and state were retained.`,
-                  original.packageFingerprintWarning,
-                ]
-                  .filter(Boolean)
-                  .join("\n"),
-              }
-            : {
-                stderrTail: [
-                  "Original managed service compensation was not verified; package and current state were retained.",
-                  original.packageFingerprintWarning,
-                ]
-                  .filter(Boolean)
-                  .join("\n"),
-              }),
+          exitCode: healthy ? 0 : 1,
+          ...(healthy ? { stdoutTail: summary } : { stderrTail: summary }),
         },
       ],
     },
     rolledBack: false,
-    originalServiceRecovery: service === "healthy" ? "healthy" : "failed",
+    originalServiceRecovery: healthy ? "healthy" : "failed",
   };
 }

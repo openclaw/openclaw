@@ -151,22 +151,18 @@ export function streamCausalInterval(
       end: boundaryIndex,
     };
   }
-  if (afterBoundaryIndex >= 0) {
+  const startIndex =
+    afterBoundaryIndex >= 0
+      ? afterBoundaryIndex
+      : part.runId
+        ? messages.findIndex((message) => userTurnRunId(message) === part.runId)
+        : -1;
+  if (startIndex >= 0) {
     const end = messages.findIndex(
       (message, index) =>
-        index > afterBoundaryIndex && readSessionMessageIdentity(message)?.role === "user",
+        index > startIndex && readSessionMessageIdentity(message)?.role === "user",
     );
-    return { start: afterBoundaryIndex + 1, end: end >= 0 ? end : messages.length };
-  }
-  const runUserIndex = part.runId
-    ? messages.findIndex((message) => userTurnRunId(message) === part.runId)
-    : -1;
-  if (runUserIndex >= 0) {
-    const end = messages.findIndex(
-      (message, index) =>
-        index > runUserIndex && readSessionMessageIdentity(message)?.role === "user",
-    );
-    return { start: runUserIndex + 1, end: end >= 0 ? end : messages.length };
+    return { start: startIndex + 1, end: end >= 0 ? end : messages.length };
   }
   const end = messages.length;
   return { start: lastUserMessageIndex(messages, end) + 1, end };
@@ -541,13 +537,7 @@ export function rolloverChatStream(
     return;
   }
   let segments = host.chatStreamSegments ?? [];
-  let previousBoundaryRunId: string | undefined;
-  for (let index = segments.length - 1; index >= 0; index -= 1) {
-    previousBoundaryRunId = normalizeOptionalString(segments[index]?.boundaryRunId);
-    if (previousBoundaryRunId) {
-      break;
-    }
-  }
+  const previousBoundaryRunId = latestStreamBoundaryRunId(host);
   const hasStream = typeof host.chatStream === "string";
   const hasStreamText = hasStream && Boolean(host.chatStream?.trim());
   const streamBoundaryRunId = options.boundaryRunId

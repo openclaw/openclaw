@@ -41,18 +41,6 @@ const memoryPresenceModuleLoader = createLazyImportLoader(async () => {
   }>({ dirName: "memory-core", artifactBasename: "status-api.js" });
 });
 
-function loadGatewayProbeModule() {
-  return gatewayProbeModuleLoader.load();
-}
-
-function loadProbeGatewayModule() {
-  return probeGatewayModuleLoader.load();
-}
-
-function loadGatewayCallModule() {
-  return gatewayCallModuleLoader.load();
-}
-
 async function hasBuiltInMemoryState(databasePath: string): Promise<boolean> {
   if (!existsSync(databasePath)) {
     return false;
@@ -143,7 +131,8 @@ async function applyLocalStatusRpcFallback(params: {
     return params.gatewayProbe;
   }
   // The fallback uses the gateway status RPC because it can succeed after probe handshake ambiguity.
-  const status = await loadGatewayCallModule()
+  const status = await gatewayCallModuleLoader
+    .load()
     .then(({ callGateway }) => {
       const timeoutMs = Math.min(2000, resolveStatusGatewayProbeTimeoutMs(params));
       if (timeoutMs === 0) {
@@ -223,9 +212,11 @@ export async function resolveGatewayProbeSnapshot(params: {
     params.opts.skipProbe !== true &&
     (!remoteUrlMissing || params.opts.probeWhenRemoteUrlMissing === true);
   const gatewayProbeAuthResolution = shouldResolveAuth
-    ? await loadGatewayProbeModule().then(({ resolveGatewayProbeAuthResolution }) =>
-        resolveGatewayProbeAuthResolution(params.cfg, params.env),
-      )
+    ? await gatewayProbeModuleLoader
+        .load()
+        .then(({ resolveGatewayProbeAuthResolution }) =>
+          resolveGatewayProbeAuthResolution(params.cfg, params.env),
+        )
     : { auth: {}, warning: undefined };
   let gatewayProbeAuthWarning = gatewayProbeAuthResolution.warning;
   const remainingTimeoutMs = () => resolveStatusGatewayProbeTimeoutMs(params.opts);
@@ -270,7 +261,8 @@ export async function resolveGatewayProbeSnapshot(params: {
     (readiness && !canDiagnose) || (shouldProbe && remainingTimeoutMs() === 0)
       ? unavailableProbe()
       : shouldProbe
-        ? await loadProbeGatewayModule()
+        ? await probeGatewayModuleLoader
+            .load()
             .then(({ probeGateway }) => {
               const timeoutMs = remainingTimeoutMs();
               return timeoutMs === 0

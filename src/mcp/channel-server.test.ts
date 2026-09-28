@@ -46,15 +46,12 @@ async function connectMcpWithoutGateway(params?: { claudeChannelMode?: "auto" | 
 function attachReadyGateway(
   bridge: OpenClawChannelBridge,
   gatewayRequest: ReturnType<typeof vi.fn>,
-  supportsExactMessageLookup = true,
 ) {
   const bridgeInternals = bridge as unknown as {
     gateway: { request: typeof gatewayRequest; stopAndWait: () => Promise<void> };
     readySettled: boolean;
     resolveReady: () => void;
-    supportsExactMessageLookup: boolean;
   };
-  bridgeInternals.supportsExactMessageLookup = supportsExactMessageLookup;
   bridgeInternals.gateway = {
     request: gatewayRequest,
     stopAndWait: async () => {},
@@ -234,7 +231,6 @@ describe("openclaw channel mcp server", () => {
             arguments: {
               session_key: "agent:main:main",
               message_id: "msg-canonical-media",
-              limit: 1,
             },
           })) as {
             structuredContent?: { attachments?: unknown[] };
@@ -253,44 +249,6 @@ describe("openclaw channel mcp server", () => {
               },
             },
           ]);
-          expect(gatewayRequest).toHaveBeenCalledTimes(1);
-        } finally {
-          await mcp.close();
-        }
-      });
-
-      test("falls back to recent history when an older Gateway lacks exact message lookup", async () => {
-        const mcp = await connectMcpWithoutGateway({ claudeChannelMode: "off" });
-        try {
-          const gatewayRequest = vi.fn(async (method: string, params: Record<string, unknown>) => {
-            if (method === "sessions.get") {
-              expect(params).toEqual({ key: "agent:main:main", limit: 1 });
-              return {
-                messages: [
-                  {
-                    id: "msg-legacy",
-                    role: "user",
-                    content: [{ type: "image", source: { type: "url", url: "media://photo" } }],
-                  },
-                ],
-              };
-            }
-            throw new Error(`unexpected gateway method ${method}`);
-          });
-          attachReadyGateway(mcp.bridge, gatewayRequest, false);
-
-          const result = (await mcp.client.callTool({
-            name: "attachments_fetch",
-            arguments: {
-              session_key: "agent:main:main",
-              message_id: "msg-legacy",
-              limit: 1,
-            },
-          })) as {
-            structuredContent?: { attachments?: unknown[] };
-          };
-
-          expect(result.structuredContent?.attachments).toHaveLength(1);
           expect(gatewayRequest).toHaveBeenCalledTimes(1);
         } finally {
           await mcp.close();

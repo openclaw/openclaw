@@ -621,29 +621,6 @@ describe("flushPendingToolResultsAfterIdle", () => {
     );
   });
 
-  it("flushes pending tool call after timeout when idle never resolves", async () => {
-    const sm = guardSessionManager(SessionManager.inMemory());
-    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
-    vi.useFakeTimers();
-
-    appendMessage(idleToolCall("call_orphan_1"));
-    const flushPromise = flushPendingToolResultsAfterIdle({
-      agent: { waitForIdle: () => new Promise<void>(() => {}) },
-      sessionManager: sm,
-      timeoutMs: 30,
-    });
-    await vi.advanceTimersByTimeAsync(30);
-    await flushPromise;
-
-    const messages = getMessages(sm);
-    expect(messages.length).toBe(2);
-    expect(expectDefined(messages[1], "messages[1] test invariant").role).toBe("toolResult");
-    expect((messages[1] as { isError?: boolean }).isError).toBe(true);
-    expect((messages[1] as { content?: Array<{ text?: string }> }).content?.[0]?.text).toContain(
-      "missing tool result",
-    );
-  });
-
   it("flushes pending on cleanup timeout instead of leaving orphaned tool calls", async () => {
     const sm = guardSessionManager(SessionManager.inMemory());
     const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
@@ -662,6 +639,9 @@ describe("flushPendingToolResultsAfterIdle", () => {
     expect(messages.map((message) => message.role)).toEqual(["assistant", "toolResult"]);
     expect((messages[1] as { toolCallId?: string }).toolCallId).toBe("call_orphan_2");
     expect((messages[1] as { isError?: boolean }).isError).toBe(true);
+    expect((messages[1] as { content?: Array<{ text?: string }> }).content?.[0]?.text).toContain(
+      "missing tool result",
+    );
 
     appendMessage({
       role: "user",

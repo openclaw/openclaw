@@ -7,6 +7,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { pluginPathFailureDiagnostic } from "./discovery-availability.js";
 import { discoverConfiguredPluginLoadPaths } from "./discovery.js";
+import { getPersistedInstalledPluginIndexCacheEntry } from "./installed-plugin-index-record-state.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 import {
@@ -53,9 +54,27 @@ it("retains discovery's preserve disposition when the installed index is reopene
         Object.assign(new Error("Filesystem device error"), { code: "EIO" }),
       ),
       { level: "warn", message: "Existing diagnostics retain an absent disposition." },
+      {
+        level: "info",
+        code: "explicit-config-plugin-selection",
+        pluginId: "selected",
+        message: "explicit override",
+      },
     ],
   };
   await writePersistedInstalledPluginIndex(index, { env, stateDir });
+  const stored = getPersistedInstalledPluginIndexCacheEntry({ env, stateDir });
+  expect(stored.state).toMatchObject({
+    status: "present",
+    value: {
+      index: {
+        version: 1,
+        diagnostics: expect.arrayContaining([
+          expect.objectContaining({ level: "warn", code: "explicit-config-plugin-selection" }),
+        ]),
+      },
+    },
+  });
   clearPluginMetadataLifecycleCaches();
   await closeOpenClawStateDatabaseAsync();
 

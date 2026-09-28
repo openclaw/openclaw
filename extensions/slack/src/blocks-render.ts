@@ -10,7 +10,6 @@ import type {
   MessagePresentation,
   MessagePresentationAction,
   MessagePresentationButtonsBlock,
-  MessagePresentationChartBlock,
   MessagePresentationSelectBlock,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import {
@@ -69,37 +68,19 @@ export type SlackBlockRenderOptions = {
   selectIndexOffset?: number;
 };
 
-function buildSlackReplyButtonActionId(buttonIndex: number, choiceIndex: number): string {
-  return `${SLACK_REPLY_BUTTON_ACTION_ID}:${String(buttonIndex)}:${String(choiceIndex + 1)}`;
-}
+const SLACK_BUTTON_ACTION_IDS = {
+  approval: SLACK_APPROVAL_BUTTON_ACTION_ID,
+  callback: SLACK_CALLBACK_BUTTON_ACTION_ID,
+  link: SLACK_REPLY_LINK_ACTION_ID,
+  question: SLACK_QUESTION_BUTTON_ACTION_ID,
+  reply: SLACK_REPLY_BUTTON_ACTION_ID,
+} as const;
 
-function buildSlackReplyLinkActionId(buttonIndex: number, choiceIndex: number): string {
-  return `${SLACK_REPLY_LINK_ACTION_ID}:${String(buttonIndex)}:${String(choiceIndex + 1)}`;
-}
-
-function buildSlackReplySelectActionId(selectIndex: number): string {
-  return `${SLACK_REPLY_SELECT_ACTION_ID}:${String(selectIndex)}`;
-}
-
-function buildSlackApprovalButtonActionId(buttonIndex: number, choiceIndex: number): string {
-  return `${SLACK_APPROVAL_BUTTON_ACTION_ID}:${String(buttonIndex)}:${String(choiceIndex + 1)}`;
-}
-
-function buildSlackApprovalSelectActionId(selectIndex: number): string {
-  return `${SLACK_APPROVAL_SELECT_ACTION_ID}:${String(selectIndex)}`;
-}
-
-function buildSlackCallbackButtonActionId(buttonIndex: number, choiceIndex: number): string {
-  return `${SLACK_CALLBACK_BUTTON_ACTION_ID}:${String(buttonIndex)}:${String(choiceIndex + 1)}`;
-}
-
-function buildSlackCallbackSelectActionId(selectIndex: number): string {
-  return `${SLACK_CALLBACK_SELECT_ACTION_ID}:${String(selectIndex)}`;
-}
-
-function buildSlackQuestionButtonActionId(buttonIndex: number, choiceIndex: number): string {
-  return `${SLACK_QUESTION_BUTTON_ACTION_ID}:${String(buttonIndex)}:${String(choiceIndex + 1)}`;
-}
+const SLACK_SELECT_ACTION_IDS = {
+  approval: SLACK_APPROVAL_SELECT_ACTION_ID,
+  callback: SLACK_CALLBACK_SELECT_ACTION_ID,
+  reply: SLACK_REPLY_SELECT_ACTION_ID,
+} as const;
 
 function resolveSlackButtonStyle(
   style: "primary" | "secondary" | "success" | "danger" | undefined,
@@ -340,7 +321,7 @@ export function buildSlackPresentationBlocks(
     if (block.type === "chart") {
       const rendered =
         dataVisualizationCount < SLACK_DATA_VISUALIZATION_BLOCKS_MAX
-          ? buildSlackPresentationChartBlock(block)
+          ? buildSlackDataVisualizationBlock(block)
           : undefined;
       if (rendered) {
         dataVisualizationCount += 1;
@@ -380,12 +361,6 @@ export function buildSlackPresentationBlocks(
   return blocks;
 }
 
-function buildSlackPresentationChartBlock(
-  block: MessagePresentationChartBlock,
-): SlackBlock | undefined {
-  return buildSlackDataVisualizationBlock(block);
-}
-
 function buildSlackPresentationButtonBlock(
   block: MessagePresentationButtonsBlock,
   buttonIndex: number,
@@ -407,16 +382,7 @@ function buildSlackPresentationButtonBlock(
         {
           type: "button" as const,
           // Slack emits block_actions even for URL buttons; link-only actions must be ignored.
-          action_id:
-            target.kind === "link"
-              ? buildSlackReplyLinkActionId(buttonIndex, choiceIndex)
-              : target.kind === "approval"
-                ? buildSlackApprovalButtonActionId(buttonIndex, choiceIndex)
-                : target.kind === "callback"
-                  ? buildSlackCallbackButtonActionId(buttonIndex, choiceIndex)
-                  : target.kind === "question"
-                    ? buildSlackQuestionButtonActionId(buttonIndex, choiceIndex)
-                    : buildSlackReplyButtonActionId(buttonIndex, choiceIndex),
+          action_id: `${SLACK_BUTTON_ACTION_IDS[target.kind]}:${buttonIndex}:${choiceIndex + 1}`,
           text: {
             type: "plain_text" as const,
             text: truncateSlackText(button.label, SLACK_ACTION_LABEL_MAX),
@@ -552,12 +518,7 @@ function buildSlackPresentationSelectBlock(
         elements: [
           {
             type: "static_select",
-            action_id:
-              options[0]?.kind === "approval"
-                ? buildSlackApprovalSelectActionId(selectIndex)
-                : options[0]?.kind === "callback"
-                  ? buildSlackCallbackSelectActionId(selectIndex)
-                  : buildSlackReplySelectActionId(selectIndex),
+            action_id: `${SLACK_SELECT_ACTION_IDS[options[0]!.kind]}:${selectIndex}`,
             placeholder: {
               type: "plain_text",
               text: truncateSlackText(

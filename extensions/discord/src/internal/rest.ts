@@ -9,7 +9,7 @@ import {
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { getDiscordEndpointRuntime, type DiscordEndpointRuntime } from "../endpoint-runtime.js";
 import { captureDiscordRequestAuthority } from "./request-authority.js";
-import { serializeRequestBody } from "./rest-body.js";
+import { serializeRequestBody, type RequestData } from "./rest-body.js";
 import {
   DiscordError,
   RateLimitError,
@@ -27,7 +27,6 @@ import { isDiscordRateLimitBody } from "./schemas.js";
 
 export { DiscordError, isUnknownDiscordVoiceStateError, RateLimitError } from "./rest-errors.js";
 
-type RuntimeProfile = "serverless" | "persistent";
 type RequestPriority = RestRequestPriority;
 type RequestSchedulerOptions = {
   lanes?: Partial<
@@ -48,7 +47,6 @@ export type RequestClientOptions = {
   timeout?: number;
   queueRequests?: boolean;
   maxQueueSize?: number;
-  runtimeProfile?: RuntimeProfile;
   scheduler?: RequestSchedulerOptions;
   fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 };
@@ -58,23 +56,6 @@ type NormalizedRequestClientOptions = RequestClientOptions & {
   apiVersion: number;
   maxQueueSize: number;
   timeout: number;
-};
-
-export type RequestData = {
-  body?: unknown;
-  multipartStyle?: "message" | "form";
-  rawBody?: boolean;
-  headers?: Record<string, string>;
-};
-
-type QueuedRequest = {
-  method: string;
-  path: string;
-  data?: RequestData;
-  query?: RequestQuery;
-  resolve: (value?: unknown) => void;
-  reject: (reason?: unknown) => void;
-  routeKey: string;
 };
 
 type RequestDispatchData = {
@@ -90,7 +71,6 @@ const defaultOptions = {
   timeout: 15_000,
   queueRequests: true,
   maxQueueSize: 1000,
-  runtimeProfile: "persistent" as RuntimeProfile,
 };
 
 const DEFAULT_MAX_CONCURRENT_WORKERS = 4;
@@ -207,30 +187,30 @@ export class RequestClient {
     );
   }
 
-  async get(path: string, query?: QueuedRequest["query"]): Promise<unknown> {
+  async get(path: string, query?: RequestQuery): Promise<unknown> {
     return await this.request("GET", path, { query });
   }
 
-  async post(path: string, data?: RequestData, query?: QueuedRequest["query"]): Promise<unknown> {
+  async post(path: string, data?: RequestData, query?: RequestQuery): Promise<unknown> {
     return await this.request("POST", path, { data, query });
   }
 
-  async patch(path: string, data?: RequestData, query?: QueuedRequest["query"]): Promise<unknown> {
+  async patch(path: string, data?: RequestData, query?: RequestQuery): Promise<unknown> {
     return await this.request("PATCH", path, { data, query });
   }
 
-  async put(path: string, data?: RequestData, query?: QueuedRequest["query"]): Promise<unknown> {
+  async put(path: string, data?: RequestData, query?: RequestQuery): Promise<unknown> {
     return await this.request("PUT", path, { data, query });
   }
 
-  async delete(path: string, data?: RequestData, query?: QueuedRequest["query"]): Promise<unknown> {
+  async delete(path: string, data?: RequestData, query?: RequestQuery): Promise<unknown> {
     return await this.request("DELETE", path, { data, query });
   }
 
   protected async request(
     method: string,
     path: string,
-    params: { data?: RequestData; query?: QueuedRequest["query"] },
+    params: { data?: RequestData; query?: RequestQuery },
   ): Promise<unknown> {
     const routeKey = createRouteKey(method, path);
     // A shared scheduler can drain under another caller's async context. Capture
@@ -259,7 +239,7 @@ export class RequestClient {
   protected async executeRequest(
     method: string,
     path: string,
-    params: { data?: RequestData; query?: QueuedRequest["query"] },
+    params: { data?: RequestData; query?: RequestQuery },
     routeKey = createRouteKey(method, path),
     assertCurrent?: () => void,
   ): Promise<unknown> {

@@ -16,6 +16,7 @@ import {
 } from "./chat-message-recovery.ts";
 import { resetWorkingProgress } from "./chat-progress.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
+import type { ChatInputOrderState } from "./chat-thread-inputs.ts";
 import { readChatThreadMessageIdentity, sanitizeStreamText } from "./chat-thread-items.ts";
 import { getOrCreateSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 
@@ -30,6 +31,7 @@ export { agentRunFrameGroups, coalesceAgentRunFrames } from "./chat-agent-run-gr
 
 type CachedChatItems = {
   input: BuildChatItemsProps | null;
+  inputOrder: ChatInputOrderState;
   items: ReturnType<typeof buildChatItems>;
   liveStream: {
     index: number;
@@ -323,6 +325,7 @@ export function buildCachedChatItems(
   }
   const cached = getOrCreateSessionCacheValue(paneCache, input.sessionKey, () => ({
     input: null,
+    inputOrder: { keys: [] },
     items: [],
     liveStream: null,
   }));
@@ -337,7 +340,10 @@ export function buildCachedChatItems(
       return cached.items;
     }
   }
-  const items = stabilizeChatItems(cached.items, buildChatItems(input));
+  if (cached.input?.initialTurnId !== input.initialTurnId) {
+    cached.inputOrder.keys = [];
+  }
+  const items = stabilizeChatItems(cached.items, buildChatItems(input, cached.inputOrder));
   cached.input = input;
   cached.items = items;
   const liveStreamIndex = items.findIndex((item) => item.kind === "stream" && item.isStreaming);

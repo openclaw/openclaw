@@ -159,6 +159,7 @@ export async function handleDirectiveOnly(
     provider,
     agentId: activeAgentId,
     modelPolicy: params.modelPolicy,
+    operatorAuthority: params.operatorAuthority,
     requesterProfileId: params.ctx ? readSessionInputProfileId(params.ctx) : undefined,
   });
   if (modelResolution.errorText) {
@@ -189,7 +190,8 @@ export async function handleDirectiveOnly(
   }
   thinkingCatalog = preparedModel?.catalog ?? thinkingCatalog;
   const modelRuntimeResolution = preparedModel?.runtime ?? { kind: "unchanged" as const };
-  const validateRuntimeSelection = preparedModel?.validateRuntimeSelection;
+  const validateSelection = () =>
+    modelResolution.validateModelSelection?.() ?? preparedModel?.validateRuntimeSelection?.();
   const prospectiveSessionEntry = { ...sessionEntry };
   applyModelRuntimeDirective(prospectiveSessionEntry, modelRuntimeResolution);
   const selectedCatalogEntry = findSelectedCatalogEntry({
@@ -455,8 +457,7 @@ export async function handleDirectiveOnly(
     directives.reasoningLevel !== prevReasoningLevel;
   // Validated, authorized directives have already named every field they can mutate.
   if (touchedSessionFields.length > 0) {
-    const authProfileError =
-      modelResolution.validateAuthProfileSelection?.() ?? validateRuntimeSelection?.();
+    const authProfileError = validateSelection();
     if (authProfileError) {
       return rejectModelTransaction(authProfileError);
     }
@@ -499,8 +500,7 @@ export async function handleDirectiveOnly(
         reassertLiveModelSwitchPending:
           modelSelectionUpdated && sessionEntry.liveModelSwitchPending === true,
         touchedFields: touchedSessionFields,
-        validateCommit: () =>
-          modelResolution.validateAuthProfileSelection?.() ?? validateRuntimeSelection?.(),
+        validateCommit: validateSelection,
       });
       if (persistence.status !== "applied") {
         const errorText =
@@ -519,6 +519,10 @@ export async function handleDirectiveOnly(
       params.canPersistStickyModelSelection === true &&
       params.stickyModelSelectionTarget
     ) {
+      const modelError = modelResolution.validateModelSelection?.();
+      if (modelError) {
+        return rejectModelTransaction(modelError);
+      }
       configuredDefaultUpdate = persistStickyModelSelectionBestEffort({
         agentId: activeAgentId,
         model: `${modelSelection.provider}/${modelSelection.model}`,

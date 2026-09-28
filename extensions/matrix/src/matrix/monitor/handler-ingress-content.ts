@@ -1,4 +1,4 @@
-import { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
+import { logInboundDrop, resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { formatAudioTranscriptForAgent } from "openclaw/plugin-sdk/media-understanding-runtime";
 import { buildInboundHistoryFromEntries } from "openclaw/plugin-sdk/reply-history";
@@ -24,11 +24,10 @@ import { resolveMentions, stripMatrixMentionPrefix } from "./mentions.js";
 import {
   isMatrixAudioContent,
   resolveMatrixPreflightAudioTranscript,
-  sendMatrixPreflightAudioTranscriptEcho,
+  matrixPreflightAudio,
 } from "./preflight-audio.js";
 import { createRoomHistoryTracker, type HistoryEntry } from "./room-history.js";
 import { resolveMatrixInboundRoute } from "./route.js";
-import { logInboundDrop } from "./runtime-api.js";
 import type { MatrixRawEvent } from "./types.js";
 
 export async function resolveMatrixIngressContent(config: {
@@ -343,7 +342,7 @@ export async function resolveMatrixIngressContent(config: {
     return undefined;
   }
   if (preflightAudioTranscript) {
-    await sendMatrixPreflightAudioTranscriptEcho({
+    await matrixPreflightAudio.send({
       transcript: preflightAudioTranscript,
       cfg,
       accountId,

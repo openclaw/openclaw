@@ -39,6 +39,7 @@ export function writeSessionSqliteMigrationFailureReports(
       : manifest.targets
     : [];
   const payload = {
+    failedAt: manifest?.failedAt,
     generatedAt: new Date().toISOString(),
     manifestPath: sanitizeFailureReportText(shortenFailureReportPath(manifestPath)),
     reason: params.reason,
@@ -126,6 +127,7 @@ export function createSessionSqliteMigrationFailureIssue(
   const reportBody =
     persistedBody ??
     renderFailureMarkdown({
+      failedAt: manifest.failedAt,
       generatedAt: new Date().toISOString(),
       manifestPath: sanitizeFailureReportText(shortenFailureReportPath(manifestPath)),
       reason: "session SQLite migration failed",
@@ -238,6 +240,7 @@ function resolveFailureReportPaths(manifestPath: string): {
 }
 
 function renderFailureMarkdown(payload: {
+  failedAt?: string;
   generatedAt: string;
   manifestPath: string;
   reason: string;
@@ -260,6 +263,7 @@ function renderFailureMarkdown(payload: {
     "# Session SQLite Migration Failure",
     "",
     `- Run: ${payload.runId}`,
+    `- Failed: ${payload.failedAt ?? "not recorded"}`,
     `- Generated: ${payload.generatedAt}`,
     `- OpenClaw version: ${payload.version}`,
     `- Reason: ${sanitizeFailureReportText(payload.reason)}`,

@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { reportLimitViolations } from "./lib/check-limits.mts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
 
 function isMetricsRecord(value: unknown): value is Record<string, unknown> {
@@ -497,14 +498,13 @@ function readControlUiStartupBudgetBaseline(baselinePath: string): ControlUiStar
       typeof startupJsGzipBytes !== "number" ||
       !Number.isSafeInteger(startupJsGzipBytes) ||
       startupJsGzipBytes < 0 ||
-      startupJsGzipBytes > CONTROL_UI_PERFORMANCE_BUDGETS.startupJsGzipBytes ||
       typeof reason !== "string" ||
       reason.trim().length === 0 ||
       typeof updatedAt !== "string" ||
       !isIsoDate(updatedAt)
     ) {
       throw new Error(
-        `expected startupJsGzipBytes at most ${CONTROL_UI_PERFORMANCE_BUDGETS.startupJsGzipBytes}, non-empty reason, and YYYY-MM-DD updatedAt`,
+        "expected non-negative integer startupJsGzipBytes, non-empty reason, and YYYY-MM-DD updatedAt",
       );
     }
     return { startupJsGzipBytes, reason, updatedAt };
@@ -663,8 +663,32 @@ function main(argv: string[] = process.argv.slice(2)): void {
   } else {
     process.stdout.write(`${result.report}\n`);
   }
-  if (!reportOnly && result.violations.length > 0) {
-    process.exitCode = 1;
+  if (!reportOnly) {
+    const artifactContractMetrics = new Set([
+      "isolated Mermaid JS assets",
+      "startup Mermaid JS assets",
+      "locale catalog base JS assets per locale",
+      "locale config-hint JS assets per locale",
+      "startup locale catalog JS assets",
+    ]);
+    const limitsFailed = reportLimitViolations(
+      result.violations
+        .filter((violation) => !artifactContractMetrics.has(violation.metric))
+        .map((violation) => ({
+          file:
+            violation.metric === "startup JS gzip baseline"
+              ? "config/control-ui-startup-budget-baseline.json"
+              : "scripts/check-control-ui-performance.mts",
+          title: "Control UI asset budget",
+          message: formatViolation(violation),
+        })),
+    );
+    if (
+      limitsFailed ||
+      result.violations.some((violation) => artifactContractMetrics.has(violation.metric))
+    ) {
+      process.exitCode = 1;
+    }
   }
 }
 

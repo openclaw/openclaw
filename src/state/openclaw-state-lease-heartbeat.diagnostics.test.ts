@@ -12,6 +12,7 @@ const fixture = vi.hoisted(() => ({
 vi.mock("node:worker_threads", async () => {
   const { EventEmitter } = await import("node:events");
   return {
+    isMainThread: false,
     get workerData() {
       return fixture.data;
     },

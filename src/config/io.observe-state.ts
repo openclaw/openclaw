@@ -12,7 +12,7 @@ import {
   parseConfigJson5,
   resolveGatewayMode,
 } from "./io.read-helpers.js";
-import type { NormalizedConfigIoDeps } from "./io.types.js";
+import type { NormalizedConfigIoDeps } from "./io.read.types.js";
 import { resolveConfigStatMetadata } from "./io.write-safety.js";
 
 type ConfigFingerprintDeps = Pick<NormalizedConfigIoDeps, "fs" | "json5">;

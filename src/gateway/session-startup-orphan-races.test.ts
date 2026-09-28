@@ -14,23 +14,29 @@ import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import * as sessionRunError from "../sessions/session-run-error.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { runStartupSessionMigration } from "./server-startup-session-migration.js";
 
-const roots = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
-  vi.restoreAllMocks();
-  clearAgentRunContext("startup-race-owner");
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+const roots = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    clearAgentRunContext("startup-race-owner");
+    await closeOpenClawAgentDatabasesAsync();
+    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  });
 });
 
 it.each([
@@ -168,8 +174,10 @@ it.each([
           });
         } finally {
           admission?.release();
+          await closeOpenClawAgentDatabasesAsync(stateDir);
           closeOpenClawAgentDatabasesForTest();
           await lock.release();
+          await closeOpenClawStateDatabaseAsync();
           closeOpenClawStateDatabaseForTest();
         }
       },
@@ -269,8 +277,10 @@ it.each(["owner", "settlement", "receipt"] as const)(
             expect(await receipts()).toHaveLength(1);
           });
         } finally {
+          await closeOpenClawAgentDatabasesAsync(stateDir);
           closeOpenClawAgentDatabasesForTest();
           await lock.release();
+          await closeOpenClawStateDatabaseAsync();
           closeOpenClawStateDatabaseForTest();
         }
       },

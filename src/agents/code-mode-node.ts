@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -39,9 +40,38 @@ type NodePool = {
 type NodeInput = CodeModeExecutorStartInput | CodeModeExecutorResumeInput;
 type NodeWorkerInput = NodeInput & { progress: SharedArrayBuffer; inlineHost: boolean };
 const retiringPools = new Set<NodePool>();
-let idle: { owner: NodePool; timer: NodeJS.Timeout } | undefined;
+const idlePools = new Map<NodePool, NodeJS.Timeout>();
+const MAX_IDLE_POOLS = 4;
+const memoryPressure = channel("openclaw.memory.critical");
+
+function removeIdlePool(owner: NodePool): void {
+  clearTimeout(idlePools.get(owner));
+  idlePools.delete(owner);
+  if (!idlePools.size) {
+    memoryPressure.unsubscribe(retireIdlePools);
+  }
+}
+
+function retireIdlePool(owner: NodePool): void {
+  if (!idlePools.has(owner)) {
+    return;
+  }
+  void runBestEffortCleanup({
+    cleanup: () => closePool(owner),
+    onError: (error) =>
+      process.emitWarning(`Code Mode worker retirement failed: ${formatErrorMessage(error)}`),
+  });
+}
+
+function retireIdlePools(): void {
+  // Suspended continuations also have idle task slots, but only completed cells are warm.
+  for (const owner of idlePools.keys()) {
+    retireIdlePool(owner);
+  }
+}
 
 async function closePool(owner: NodePool): Promise<void> {
+  removeIdlePool(owner);
   // Native slots retain custody until exit; keep their owner through pending or failed cleanup.
   retiringPools.add(owner);
   await owner.tasks.close();
@@ -49,24 +79,30 @@ async function closePool(owner: NodePool): Promise<void> {
 }
 
 async function takePool(memoryLimitBytes: number, signal: AbortSignal): Promise<NodePool> {
-  signal.throwIfAborted();
-  await Promise.all([...retiringPools].map(closePool));
-  signal.throwIfAborted();
-  const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.codeModeNode);
-  const previous = idle;
-  idle = undefined;
-  if (previous) {
-    clearTimeout(previous.timer);
-    const owner = previous.owner;
+  let workerUrl: URL;
+  for (;;) {
+    signal.throwIfAborted();
+    workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.codeModeNode);
+    const retiring = new Set([
+      ...retiringPools,
+      ...[...idlePools.keys()].filter(
+        (owner) => owner.url !== workerUrl.href || owner.tasks.isClosed,
+      ),
+    ]);
+    if (!retiring.size) {
+      break;
+    }
+    await Promise.all([...retiring].map(closePool));
+  }
+  for (const owner of idlePools.keys()) {
     if (
       owner.memoryLimitBytes === memoryLimitBytes &&
       owner.url === workerUrl.href &&
       !owner.tasks.isClosed
     ) {
+      removeIdlePool(owner);
       return owner;
     }
-    await closePool(owner);
-    signal.throwIfAborted();
   }
   const owner: NodePool = {
     url: workerUrl.href,
@@ -94,23 +130,20 @@ async function takePool(memoryLimitBytes: number, signal: AbortSignal): Promise<
 }
 
 async function releasePool(owner: NodePool): Promise<void> {
-  if (idle || owner.tasks.isClosed) {
+  if (
+    idlePools.size >= MAX_IDLE_POOLS ||
+    owner.tasks.isClosed ||
+    owner.url !== resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.codeModeNode).href
+  ) {
     await closePool(owner);
     return;
   }
-  const timer = setTimeout(() => {
-    if (idle?.owner !== owner) {
-      return;
-    }
-    idle = undefined;
-    void runBestEffortCleanup({
-      cleanup: () => closePool(owner),
-      onError: (error) =>
-        process.emitWarning(`Code Mode worker retirement failed: ${formatErrorMessage(error)}`),
-    });
-  }, 60_000);
+  const timer = setTimeout(() => retireIdlePool(owner), 5 * 60_000);
   timer.unref();
-  idle = { owner, timer };
+  idlePools.set(owner, timer);
+  if (idlePools.size === 1) {
+    memoryPressure.subscribe(retireIdlePools);
+  }
 }
 
 function failure(

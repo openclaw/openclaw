@@ -53,6 +53,7 @@ import {
   setupWorkerTurnLauncherTest,
 } from "./worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
+import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
 import { reconcileWorkspaceAfterTurn } from "./workspace-result-finalize.js";
 import { requireWorkspaceResultGit } from "./workspace-result-git.js";
 import {
@@ -261,8 +262,8 @@ describe("repository workspace result ownership", () => {
       workspaceOperations,
       runReclaimBarrier: async ({ begin, reclaim }) =>
         await reclaim(await resolveWorkspace(), begin()),
-      resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
-      reportWorkspaceResultConflict: async () => {},
+      withPreparedRecovery: createWorkerWorkspaceRecoveryFixture({ resolveWorkspace })
+        .withPreparedRecovery,
     });
     return {
       remote,
@@ -347,9 +348,7 @@ describe("repository workspace result ownership", () => {
           environments: f.environments,
           failure: createPlacementFailureActions({ placements, environments: f.environments }),
           workspaceOperations: f.workspaceOperations,
-          resolveWorkspace: f.resolveWorkspace,
-          resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
-          reportWorkspaceResultConflict: async () => {},
+          ...createWorkerWorkspaceRecoveryFixture({ resolveWorkspace: f.resolveWorkspace }),
         },
         false,
       );
@@ -658,13 +657,13 @@ describe("repository workspace result ownership", () => {
           environments,
           failure: createPlacementFailureActions({ placements: restarted, environments }),
           workspaceOperations: f.workspaceOperations,
-          resolveWorkspace: async () =>
-            materialized
-              ? { kind: "local", path: destination }
-              : { kind: "repository", repository: f.store.get(f.repository.workspaceId)! },
-          resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
-          reportWorkspaceResultConflict: async () => {},
-          reportWorkspaceResultRecoveryFailure,
+          ...createWorkerWorkspaceRecoveryFixture({
+            resolveWorkspace: async () =>
+              materialized
+                ? { kind: "local", path: destination }
+                : { kind: "repository", repository: f.store.get(f.repository.workspaceId)! },
+            reportFailure: reportWorkspaceResultRecoveryFailure,
+          }),
         },
         true,
       );

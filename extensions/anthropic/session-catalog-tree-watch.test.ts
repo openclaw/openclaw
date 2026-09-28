@@ -63,8 +63,8 @@ describe("Claude project directory watch", () => {
       );
       try {
         // fs.watch returns before its FSEvents stream is live. Keep emitting a
-        // fixture-only probe until the parent actually observes it, then create
-        // the directory whose one-shot birth event must not be lost.
+        // fixture-only probe until the parent actually observes it before
+        // creating the child directory used by the product watcher.
         const probe = path.join(root, ".watch-ready");
         await vi.waitFor(
           async () => {
@@ -74,10 +74,14 @@ describe("Claude project directory watch", () => {
           { timeout: 2_000, interval: 25 },
         );
         await promises.mkdir(path.join(root, "existing"));
-        await vi.waitFor(() => expect(reported).toContain(`${path.basename(root)}/existing`), {
-          timeout: 2_000,
-          interval: 25,
-        });
+        const childProbe = path.join(root, ".watch-child-ready");
+        await vi.waitFor(
+          async () => {
+            await promises.appendFile(childProbe, ".");
+            expect(reported).toContain(`${path.basename(root)}/.watch-child-ready`);
+          },
+          { timeout: 2_000, interval: 25 },
+        );
       } finally {
         parentWatch.close();
       }

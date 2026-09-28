@@ -1,6 +1,10 @@
 // Check Dynamic Import Warts tests cover check dynamic import warts script behavior.
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { findDynamicImportAdvisories } from "../../scripts/check-dynamic-import-warts.mts";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
+
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 
 describe("check-dynamic-import-warts", () => {
   it.each([
@@ -55,7 +59,9 @@ describe("check-dynamic-import-warts", () => {
       expectedMessage: 'repeated direct dynamic import of "./runtime.js" (2 callsites: 3, 6)',
     },
   ])("$title", ({ source, expectedLine, expectedMessage }) => {
-    expect(findDynamicImportAdvisories(source)).toEqual([
+    expect(
+      findDynamicImportAdvisories(source, "file.ts", parser.parseSourceFile("file.ts", source)),
+    ).toEqual([
       {
         line: expectedLine,
         reason: expectedMessage,
@@ -127,7 +133,9 @@ describe("check-dynamic-import-warts", () => {
     `,
     },
   ])("$title", ({ source }) => {
-    expect(findDynamicImportAdvisories(source)).toStrictEqual([]);
+    expect(
+      findDynamicImportAdvisories(source, "file.ts", parser.parseSourceFile("file.ts", source)),
+    ).toStrictEqual([]);
   });
 
   it("flags direct dynamic imports inside execute paths", () => {
@@ -140,7 +148,9 @@ describe("check-dynamic-import-warts", () => {
         };
       }
     `;
-    expect(findDynamicImportAdvisories(source)).toEqual([
+    expect(
+      findDynamicImportAdvisories(source, "file.ts", parser.parseSourceFile("file.ts", source)),
+    ).toEqual([
       {
         line: 5,
         reason:

@@ -26,6 +26,38 @@ vi.mock("../session-utils.js", async () => {
 });
 
 describe("chat.abort authorization", () => {
+  it("cancels the admitted worker session after the selected store changes", async () => {
+    const cancel = vi.fn(() => ["worker-run"]);
+    const context = createChatAbortContext({
+      workerEnvironmentService: createWorkerInferenceCancellationService(
+        "original-worker-session",
+        ["worker-run"],
+        cancel,
+        {
+          agentId: "main",
+          sessionId: "original-worker-session",
+          sessionKey: "agent:main:main",
+          storePath: "/original-worker-store/sessions.json",
+        },
+      ),
+    });
+    const respond = await invokeAbort({
+      context,
+      runId: "worker-run",
+      connId: "conn-admin",
+      deviceId: "dev-admin",
+      scopes: ["operator.admin"],
+    });
+    expectAbortPayload(requireLastRespondCall(respond)[1], {
+      aborted: true,
+      runIds: ["worker-run"],
+    });
+    expect(cancel).toHaveBeenCalledWith({
+      sessionId: "original-worker-session",
+      runId: "worker-run",
+    });
+  });
+
   it("rejects non-admin worker-only inference aborts", async () => {
     const cancelInferenceForSession = vi.fn(() => ["worker-run"]);
     const context = createChatAbortContext({
@@ -308,37 +340,6 @@ describe("chat.abort authorization", () => {
 });
 
 describe("chat.abort queued-turn contract", () => {
-  it("excludes only the replacement run from internal session cleanup", async () => {
-    const oldRun = createActiveRun("main", {
-      owner: { connId: "conn-owner", deviceId: "dev-owner" },
-    });
-    const replacementRun = createActiveRun("main", {
-      owner: { connId: "conn-owner", deviceId: "dev-owner" },
-    });
-    const context = createChatAbortContext({
-      chatAbortControllers: new Map([
-        ["run-old", oldRun],
-        ["run-replacement", replacementRun],
-      ]),
-    });
-
-    const respond = await invokeAbort({
-      context,
-      connId: "conn-owner",
-      deviceId: "dev-owner",
-      excludeRunIds: new Set(["run-replacement"]),
-    });
-
-    expect(requireLastRespondCall(respond)[0]).toBe(true);
-    expectAbortPayload(requireLastRespondCall(respond)[1], {
-      aborted: true,
-      runIds: ["run-old"],
-    });
-    expect(oldRun.controller.signal.aborted).toBe(true);
-    expect(replacementRun.controller.signal.aborted).toBe(false);
-    expect(context.chatAbortControllers.has("run-replacement")).toBe(true);
-  });
-
   it("cancels queued turns before session cleanup and the active run", async () => {
     const order: string[] = [];
     const queuedController = new AbortController();

@@ -45,7 +45,10 @@ export async function createUpdateCommandTransportFixture(transport: {
     if (typeof options === "number" || !options.beforeInput) {
       return transport.run(argv, options);
     }
-    const child = spawnChild(process.execPath, ["-e", "process.stdin.resume()"], {
+    // Admission needs a fresh live PID and joined exit, not a Node runtime boot.
+    const executable = hostPlatform === "win32" ? process.execPath : "cat";
+    const args = hostPlatform === "win32" ? ["-e", "process.stdin.resume()"] : [];
+    const child = spawnChild(executable, args, {
       stdio: ["pipe", "ignore", "ignore"],
       cwd: transport.hostCwd,
       env: transport.hostEnv,

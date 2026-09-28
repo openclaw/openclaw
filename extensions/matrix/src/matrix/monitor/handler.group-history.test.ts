@@ -736,7 +736,13 @@ describe("matrix group chat history — scenario 2: race condition safety", () =
           }
           return "@bot:example.org";
         },
-        getEvent: async () => ({ sender: "@bot:example.org" }),
+        getEvent: async (_roomId, eventId) =>
+          createMatrixTextMessageEvent({
+            eventId,
+            sender: "@bot:example.org",
+            body: "Bot response",
+            originServerTs: 0,
+          }),
       },
     });
 

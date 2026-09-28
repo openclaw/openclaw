@@ -1612,7 +1612,7 @@ describe("config cli", () => {
 
       await expect(runConfigCommand(["config", "validate"])).rejects.toThrow(ExitError);
 
-      expectErrorIncludes("config is invalid");
+      expectErrorIncludes("Config needs correction:");
       expectErrorIncludes("agents.defaults.unknownOption");
       expect(mockLog).not.toHaveBeenCalled();
     });

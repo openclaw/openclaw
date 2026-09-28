@@ -27,7 +27,6 @@ import { withAgentQuestionAnswerAuthority } from "../harness/host-private-capabi
 import { runStructuredInput } from "../harness/structured-input-execution.js";
 import { compileStructuredInputQuestions } from "../harness/structured-input.js";
 import { resolveExecToolConfig } from "../lazy-exec-tool.js";
-import { resolveReplyExpectation } from "../reply-completion.js";
 import { recordAgentCleanupFailure } from "../run-cleanup-timeout.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import {
@@ -41,7 +40,7 @@ import {
 } from "./cli-native-tool-approval.js";
 import { createCliAbortError } from "./execute-node-claude.js";
 import { createCliPluginWatchdog, type CliWatchdogClock } from "./execute-plugin-watchdog.js";
-import { createCliRunCurrentAssertion } from "./execution-target.js";
+import { attachCliReplyBackend, createCliRunCurrentAssertion } from "./execution-target.js";
 import { createCliFailoverError as failover } from "./exit-error.js";
 import * as noOutputPolicy from "./no-output-timeout-policy.js";
 import { normalizeCliToolName } from "./tool-policy.js";
@@ -521,21 +520,10 @@ export async function executePluginOwnedProcess(params: {
     watchdog.reset(),
   );
 
-  const replyBackendHandle = run.replyOperation
-    ? {
-        kind: "cli" as const,
-        runId: run.runId,
-        toolAuthorityFingerprint: run.toolAuthorityFingerprint,
-        terminalReplyExpectation: resolveReplyExpectation(run),
-        cancel: () => {
-          termination.reason = "manual-cancel";
-          controller.abort(createCliAbortError());
-        },
-      }
-    : undefined;
-  if (replyBackendHandle) {
-    run.replyOperation?.attachBackend(replyBackendHandle);
-  }
+  const detachReplyBackend = attachCliReplyBackend(run, () => {
+    termination.reason = "manual-cancel";
+    controller.abort(createCliAbortError());
+  });
 
   let iterator: AsyncIterator<Record<string, unknown>> | undefined;
   let liveSession: ReturnType<typeof createCliLiveSessionCapability> | undefined;
@@ -679,9 +667,7 @@ export async function executePluginOwnedProcess(params: {
     if (!controller.signal.aborted) {
       controller.abort(new Error("CLI plugin runtime turn is no longer active."));
     }
-    if (replyBackendHandle) {
-      run.replyOperation?.detachBackend(replyBackendHandle);
-    }
+    detachReplyBackend?.();
     await closePluginIterator(iterator);
   }
 

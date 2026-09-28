@@ -1,6 +1,6 @@
+import { SsrFBlockedError } from "openclaw/plugin-sdk/security-runtime";
 // Browser tests cover pw tools core.interactions.batch plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import {
   BrowserObservedDialogBlockedError,
   isBrowserObservedDialogBlockedError,

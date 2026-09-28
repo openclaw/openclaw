@@ -1,7 +1,7 @@
 // Command path policy tests cover allowed CLI command path shapes and lazy imports.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
-import type { CliCommandCatalogEntry, CliCommandPathPolicy } from "./command-catalog.js";
+import type { CliCommandCatalogEntry, CliCommandPathPolicy } from "./command-catalog-types.js";
 import {
   resolveCliCommandPathPolicy,
   resolveCliNetworkProxyPolicy,

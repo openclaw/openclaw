@@ -126,7 +126,6 @@ export async function finishGatewayStartup(params: {
     controlUiBasePath,
     controlUiRootLifecycle,
     sidecarStartup,
-    workerLiveEvents,
     startEarlyRuntime,
     cfgAtStart,
     preauthConnectionBudget,
@@ -586,7 +585,6 @@ export async function finishGatewayStartup(params: {
       browserAuthRateLimiter.updateConfig({ ...rateLimit, exemptLoopback: false });
       nodeReapprovalCoordinator.updateConfig(rateLimit);
       terminalLaunchPolicy.commitConfig();
-      workerLiveEvents?.rebindAll(nextConfig);
       workerEnvironmentService?.schedulePreparedRefill();
     },
     acceptTerminalConfig: terminalLaunchPolicy.acceptConfig,

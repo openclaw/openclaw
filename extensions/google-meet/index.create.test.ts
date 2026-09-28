@@ -41,8 +41,8 @@ const voiceCallMocks = vi.hoisted(() => ({
     dtmfSent: true,
     introSent: true,
   })),
-  endMeetVoiceCallGatewayCall: vi.fn(async () => {}),
-  speakMeetViaVoiceCallGateway: vi.fn(async () => {}),
+  endMeetingVoiceCallGatewayCall: vi.fn(async () => {}),
+  speakMeetingViaVoiceCallGateway: vi.fn(async () => {}),
 }));
 
 const fetchGuardMocks = vi.hoisted(() => ({
@@ -71,9 +71,16 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
 vi.mock("./src/voice-call-gateway.js", () => ({
   createVoiceCallGateway: voiceCallMocks.createVoiceCallGateway,
   joinMeetViaVoiceCallGateway: voiceCallMocks.joinMeetViaVoiceCallGateway,
-  endMeetVoiceCallGatewayCall: voiceCallMocks.endMeetVoiceCallGatewayCall,
-  speakMeetViaVoiceCallGateway: voiceCallMocks.speakMeetViaVoiceCallGateway,
 }));
+
+vi.mock("openclaw/plugin-sdk/meeting-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/meeting-runtime")>();
+  return {
+    ...actual,
+    endMeetingVoiceCallGatewayCall: voiceCallMocks.endMeetingVoiceCallGatewayCall,
+    speakMeetingViaVoiceCallGateway: voiceCallMocks.speakMeetingViaVoiceCallGateway,
+  };
+});
 
 function setup(
   config?: Parameters<typeof setupGoogleMeetPlugin>[1],
@@ -326,6 +333,7 @@ describe("google-meet create flow", () => {
 
   afterAll(() => {
     vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+    vi.doUnmock("openclaw/plugin-sdk/meeting-runtime");
     vi.doUnmock("./src/voice-call-gateway.js");
     vi.resetModules();
   });

@@ -84,8 +84,8 @@ vi.mock("../agents/command/delivery.runtime.js", () => ({
 
 vi.mock("../agents/command/attempt-execution.runtime.js", async () => {
   const { buildAcpResult, resolveAcpLifecycleEndFields } = await vi.importActual<
-    typeof import("../agents/command/attempt-execution.js")
-  >("../agents/command/attempt-execution.js");
+    typeof import("../agents/command/acp-lifecycle.js")
+  >("../agents/command/acp-lifecycle.js");
   const createAcpVisibleTextAccumulator = () => {
     let text = "";
     let silent = false;

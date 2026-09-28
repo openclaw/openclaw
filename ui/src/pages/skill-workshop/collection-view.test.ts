@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { computeSkillWorkshopDiff } from "../../lib/skill-workshop/diff.ts";
-import { createSkillWorkshopState, skillWorkshopRouteData } from "./proposals.ts";
+import { createSkillWorkshopState } from "./proposals.ts";
 import {
   createContext,
   type SkillWorkshopPageTestElement,
@@ -8,6 +8,7 @@ import {
 import "./skill-workshop-page.ts";
 
 afterEach(() => {
+  vi.useRealTimers();
   document.body.replaceChildren();
   localStorage.removeItem("openclaw:control-ui:skill-workshop-mode:v1");
 });
@@ -50,6 +51,8 @@ describe("Workshop installed comparisons", () => {
       name: "early and late edits",
     },
   ])("opens the complete differing saved comparison for a $name", async ({ previous, current }) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-22T10:00:00.000Z"));
     localStorage.setItem("openclaw:control-ui:skill-workshop-mode:v1", "skills");
     const state = createSkillWorkshopState();
     state.skillWorkshopAgentId = "research";
@@ -98,15 +101,15 @@ describe("Workshop installed comparisons", () => {
     const page = document.createElement(
       "openclaw-skill-workshop-page",
     ) as SkillWorkshopPageTestElement;
-    page.data = skillWorkshopRouteData(state);
+    page.state = state;
     page.context = createContext(vi.fn());
     document.body.append(page);
     await page.updateComplete;
 
     const reader = page.querySelector(".sw-collection__reader");
     expect(page.querySelector(".sw-installed-skill__name")?.textContent).toBe("release-review");
-    expect(page.querySelector(".sw-installed-skill__change")?.textContent).toContain(
-      "Changed since",
+    expect(page.querySelector(".sw-installed-skill__change")?.textContent?.trim()).toBe(
+      "Changes since 37d ago",
     );
     const versions = reader?.querySelectorAll("details");
     expect(versions?.[0]?.open).toBe(false);

@@ -3,8 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -29,8 +30,9 @@ import {
   resolvePendingSkillProposal as resolvePendingSkillProposalImpl,
   reviseSkillProposal as reviseSkillProposalImpl,
 } from "./service.js";
+import { createSkillProposalRollback } from "./service.test-support.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
-import { writeSkillProposalRollback } from "./store-sqlite-rollback.js";
+import { writeSkillProposalRollback } from "./store-rollback.js";
 import {
   hashSkillProposalContent,
   readSkillProposalManifest,
@@ -38,7 +40,6 @@ import {
   resolveSkillProposalTarget,
 } from "./store.js";
 import { withSkillCollectionLock } from "./target-lock.js";
-import { SKILL_WORKSHOP_ROLLBACK_SCHEMA, type SkillProposalRollback } from "./types.js";
 import { listWritableWorkshopSkillSummaries } from "./workspace-skill-read.js";
 
 const tempDirs = createTrackedTempDirs();
@@ -127,7 +128,7 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath(testEnv));
+  await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(testEnv));
   vi.unstubAllEnvs();
   await stateDirs.cleanup();
 });
@@ -158,29 +159,6 @@ async function createOwnedSkill(params: {
     expectedRevisionHash: proposal.revisionHash,
   });
   return proposal.record.target.skillDir;
-}
-
-function createSkillProposalRollback(params: {
-  proposalId: string;
-  targetSkillFile: string;
-  action: "create" | "update";
-  previousContent?: string;
-  supportFiles?: SkillProposalRollback["supportFiles"];
-}): SkillProposalRollback {
-  return {
-    schema: SKILL_WORKSHOP_ROLLBACK_SCHEMA,
-    proposalId: params.proposalId,
-    writtenAt: new Date().toISOString(),
-    targetSkillFile: params.targetSkillFile,
-    action: params.action,
-    ...(params.previousContent !== undefined
-      ? {
-          previousContent: params.previousContent,
-          previousContentHash: hashSkillProposalContent(params.previousContent),
-        }
-      : {}),
-    ...(params.supportFiles ? { supportFiles: params.supportFiles } : {}),
-  };
 }
 
 describe("skill workshop proposals", () => {
@@ -897,13 +875,7 @@ describe("skill workshop proposals", () => {
     );
   });
 
-  it("rejects and quarantines proposals without touching active skills", async (ctx) => {
-    // Manifest order follows updatedAt, so each terminal mutation needs a distinct timestamp.
-    vi.useFakeTimers({ toFake: ["Date"] });
-    ctx.onTestFinished(() => {
-      vi.useRealTimers();
-    });
-    vi.setSystemTime(new Date("2026-08-30T00:00:00.000Z"));
+  it("rejects and quarantines proposals without touching active skills", async () => {
     const workspaceDir = await makeWorkspace();
     const rejected = await proposeCreateSkill({
       workspaceDir,
@@ -929,13 +901,11 @@ describe("skill workshop proposals", () => {
       proposalId: rejected.record.id,
       reason: "not useful",
     });
-    vi.setSystemTime(new Date("2026-08-30T00:00:01.000Z"));
     await quarantineSkillProposal({
       workspaceDir,
       proposalId: quarantined.record.id,
       reason: "needs review",
     });
-    vi.setSystemTime(new Date("2026-08-30T00:00:02.000Z"));
     await applySkillProposal({
       workspaceDir,
       proposalId: applied.record.id,
@@ -1032,6 +1002,7 @@ describe("skill workshop proposals", () => {
       "utf8",
     );
 
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const manifest = await listSkillProposals();
     expect(manifest.proposals).toEqual(
@@ -1067,6 +1038,7 @@ describe("skill workshop proposals", () => {
     await fs.mkdir(path.dirname(supportFile), { recursive: true });
     await fs.writeFile(supportFile, "Partial support.\n", "utf8");
 
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     let releaseLock: (() => void) | undefined;
     let markAcquired: (() => void) | undefined;
@@ -1138,6 +1110,7 @@ describe("skill workshop proposals", () => {
       "utf8",
     );
 
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await expect(listSkillProposals()).resolves.toMatchObject({
       proposals: [expect.objectContaining({ id: proposal.record.id, status: "pending" })],
@@ -1163,6 +1136,7 @@ describe("skill workshop proposals", () => {
     await fs.mkdir(proposal.record.target.skillDir, { recursive: true });
     await fs.writeFile(proposal.record.target.skillFile, "# External change\n", "utf8");
 
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await expect(listSkillProposals()).resolves.toMatchObject({
       proposals: [expect.objectContaining({ id: proposal.record.id, status: "pending" })],
@@ -1213,6 +1187,7 @@ describe("skill workshop proposals", () => {
     await fs.writeFile(path.join(skillDir, "references", "proof.md"), "New support.\n", "utf8");
     await fs.writeFile(skillFile, stripProposalFrontmatterForSkill(proposal.content), "utf8");
 
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await expect(listSkillProposals()).resolves.toMatchObject({
       proposals: expect.arrayContaining([
@@ -1259,6 +1234,7 @@ describe("skill workshop proposals", () => {
     });
     await fs.writeFile(skillFile, stripProposalFrontmatterForSkill(proposal.content), "utf8");
 
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await expect(listSkillProposals()).resolves.toMatchObject({
       proposals: expect.arrayContaining([
@@ -1300,6 +1276,7 @@ describe("skill workshop proposals", () => {
       "utf8",
     );
 
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await expect(
       inspectSkillProposal(proposal.record.id, { agentId: "other" }),
@@ -1379,6 +1356,7 @@ describe("skill workshop proposals", () => {
     await expect(fs.readFile(supportFile, "utf8")).resolves.toBe("Partial support.\n");
 
     await fs.writeFile(draftFile, proposal.content);
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await expect(inspectSkillProposal(proposal.record.id)).resolves.toMatchObject({
       record: { status: "pending" },

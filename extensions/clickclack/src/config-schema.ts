@@ -70,6 +70,8 @@ const ClickClackConfigSchema = buildMultiAccountChannelSchema(
   { accountSchema: ClickClackAccountConfigSchema.partial() },
 );
 
+export type ClickClackConfigInput = z.input<typeof ClickClackConfigSchema>;
+
 /**
  * Config schema exported to core so `openclaw doctor` and config validation
  * understand both default and named ClickClack accounts.

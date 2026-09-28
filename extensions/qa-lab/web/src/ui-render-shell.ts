@@ -106,7 +106,7 @@ export function renderSidebar(state: UiState): string {
       : Boolean(selection?.scenarioIds.length);
 
   return `
-    <aside class="sidebar${state.sidebarCollapsed ? " is-collapsed" : ""}">
+    <aside class="sidebar${state.sidebarCollapsed ? " is-collapsed" : ""}"${state.sidebarCollapsed || state.activeTab === "evidence" ? " inert" : ""}>
       <div class="sidebar-panel-tabs">
         <button class="btn-sm btn-ghost sidebar-panel-tab${state.sidebarPanel === "scenarios" ? " active" : ""}" data-sidebar-panel="scenarios">Scenarios</button>
         <button class="btn-sm btn-ghost sidebar-panel-tab${state.sidebarPanel === "config" ? " active" : ""}" data-sidebar-panel="config">Config</button>

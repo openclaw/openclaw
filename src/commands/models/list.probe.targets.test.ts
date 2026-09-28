@@ -429,6 +429,7 @@ describe("buildProbeTargets reason codes", () => {
         reasonCode: "no_model",
       }),
     );
+    expect(plan.results[0]).not.toHaveProperty("boundValue");
   });
 
   it.each([

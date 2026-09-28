@@ -184,11 +184,6 @@ function renderChecks(
   `;
 }
 
-// Matches GitHub's own diff-stat rendering ("+2,819") in the viewer's locale.
-function formatDiffCount(value: number): string {
-  return value.toLocaleString();
-}
-
 function renderDiffStats(
   item: { additions?: number; deletions?: number },
   onOpenSessionDiff?: () => void,
@@ -197,10 +192,10 @@ function renderDiffStats(
     return nothing;
   }
   const additions = html`<span class="chat-pr__additions"
-    >+${formatDiffCount(item.additions ?? 0)}</span
+    >+${(item.additions ?? 0).toLocaleString()}</span
   >`;
   const deletions = html`<span class="chat-pr__deletions"
-    >−${formatDiffCount(item.deletions ?? 0)}</span
+    >−${(item.deletions ?? 0).toLocaleString()}</span
   >`;
   if (onOpenSessionDiff) {
     return html`

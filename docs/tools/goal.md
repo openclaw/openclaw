@@ -194,7 +194,8 @@ the objective as a normal chat draft. Complete pasted commands such as
 
 Starting a Goal saves the Goal, its user turn, and the run admission together
 before acknowledging Send. A failed admission leaves the draft intact and
-does not create a Goal. Start and Resume require the built-in OpenClaw runtime
+does not create a Goal. A failed older chat send stays separate from a newly opened
+Goal draft instead of filling its empty objective. Start and Resume require the built-in OpenClaw runtime
 and an idle local session with recoverable history. They are unavailable for
 native Codex and other external runtimes, and are not queued or steered into
 another run. The UI reports unsupported or busy sessions rather than creating
@@ -235,7 +236,9 @@ recovery notice, even if the goal changed or was cleared. This retries the saved
 unchanged to reconcile it with the Gateway receipt. The original request stays
 in this browser tab across reconnects and reloads; it is never retried
 automatically. The UI does not send goal controls if the connection has no
-account-scoped recovery identity. Incognito requests stay in memory only. A successful replay
+account-scoped recovery identity or the recovery request cannot be saved; it
+immediately shows an error explaining why the action was not sent.
+Incognito requests stay in memory only. A successful replay
 refreshes the current state instead of restoring an old Goal snapshot or
 starting another continuation. Dismissing an error or cancelling an editor
 does not cancel a mutation already sent to the Gateway. After 24 hours, the saved

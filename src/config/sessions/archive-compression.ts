@@ -4,6 +4,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { walkDirectorySync } from "@openclaw/fs-safe/walk";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 
@@ -109,17 +110,10 @@ function sweepMaterializedArchiveCache(cacheDir: string): void {
     return;
   }
   lastMaterializedArchiveCacheSweepMs = now;
-  let entries: string[];
-  try {
-    entries = fs.readdirSync(cacheDir);
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    const entryPath = path.join(cacheDir, entry);
+  for (const entry of walkDirectorySync(cacheDir, { maxDepth: 1, symlinks: "include" }).entries) {
     try {
-      if (now - fs.statSync(entryPath).mtimeMs > MATERIALIZED_ARCHIVE_CACHE_TTL_MS) {
-        fs.rmSync(entryPath, { force: true });
+      if (now - fs.statSync(entry.path).mtimeMs > MATERIALIZED_ARCHIVE_CACHE_TTL_MS) {
+        fs.rmSync(entry.path, { force: true });
       }
     } catch {
       // Another sweep may have removed it first; nothing to do.
@@ -135,16 +129,14 @@ function removeMaterializedArchiveCacheEntries(
   pathKey: string,
   keepName?: string,
 ): void {
-  let entries: string[];
-  try {
-    entries = fs.readdirSync(cacheDir);
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    if (!entry.startsWith(`${pathKey}-`) || entry === keepName || entry.endsWith(".tmp")) {
+  for (const entry of walkDirectorySync(cacheDir, { maxDepth: 1, symlinks: "include" }).entries) {
+    if (
+      !entry.name.startsWith(`${pathKey}-`) ||
+      entry.name === keepName ||
+      entry.name.endsWith(".tmp")
+    ) {
       continue;
     }
-    fs.rmSync(path.join(cacheDir, entry), { force: true });
+    fs.rmSync(entry.path, { force: true });
   }
 }

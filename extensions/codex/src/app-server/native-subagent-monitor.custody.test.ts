@@ -6,10 +6,12 @@ import {
   createClient,
   createRecordedRuntime,
   createRuntime,
+  createTaskScope,
   childTurnCompletedNotification,
   directSpawnItem,
   nativeCompletionNotification,
   nativeHistoryOwner,
+  notifyChildStarted,
   registerParent,
   successfulSendInputOutput,
   taskRecord,
@@ -60,23 +62,182 @@ function createCustody() {
 afterEach(() => vi.useRealTimers());
 
 describe("native assignment completion custody", () => {
+  it.each([
+    "ready",
+    "dispose",
+    "retire",
+    "replace",
+    "revoked",
+    "caller-revoked",
+    "reject",
+    "overlap-reject",
+    "pending-reject",
+  ] as const)(
+    "keeps pending capture outside native admission and settles on %s",
+    async (ending) => {
+      const client = createClient();
+      const runtime = createRuntime();
+      const source = createCustody();
+      const replacement = createCustody();
+      const capture = createDeferred<AgentHarnessCompletionCustody | undefined>();
+      const nextCapture = createDeferred<AgentHarnessCompletionCustody | undefined>();
+      runtime.captureAgentHarnessCompletionCustody
+        .mockImplementationOnce(() => capture.promise)
+        .mockImplementationOnce(async () =>
+          ending === "pending-reject" ? nextCapture.promise : replacement.root,
+        );
+      const claimChildThread = vi.fn(async () => undefined);
+      const claimDirectChild = vi.fn(() => vi.fn());
+      const monitor = new CodexNativeSubagentMonitor(client.client, runtime, {
+        recoveryPollDelaysMs: [],
+        claimChildThread,
+      });
+      let current = true;
+      const modelSource = { sourceIdentity: {}, assertCurrent: vi.fn(), release: vi.fn() };
+      const registration = {
+        modelSource,
+        parentThreadId: "parent-thread",
+        requesterSessionKey: "agent:main:original",
+        taskRuntimeScope: createTaskScope("agent:main:original"),
+        agentId: "main",
+        claimDirectChild,
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("Caller registration is no longer current");
+          }
+        },
+      };
+      const pending = monitor.registerParent(registration);
+      const failure = new Error("capture failed");
+      const captureFailed =
+        ending === "reject" || ending === "overlap-reject" || ending === "pending-reject";
+      const rejected =
+        ending === "ready"
+          ? undefined
+          : expect(pending).rejects.toThrow(
+              captureFailed ? failure : "registration is no longer current",
+            );
+      let pendingSuccessor: ReturnType<typeof registerParent> | undefined;
+      try {
+        await notifyChildStarted(client, "parent-thread", "early-child");
+        await client.notify({
+          method: "item/completed",
+          params: {
+            threadId: "parent-thread",
+            turnId: "parent-turn",
+            item: directSpawnItem("v2", "parent-thread", "early-child"),
+          },
+        });
+        expect(claimChildThread).not.toHaveBeenCalled();
+        expect(claimDirectChild).not.toHaveBeenCalled();
+        expect(runtime.createAgentHarnessTaskRuntime).not.toHaveBeenCalled();
+        expect(runtime.createRunningTaskRun).not.toHaveBeenCalled();
+        await expect(registerParent(monitor, "parent-thread", "agent:main:other")).rejects.toThrow(
+          "already bound to another session",
+        );
+        expect(runtime.captureAgentHarnessCompletionCustody).toHaveBeenCalledOnce();
+        // Caller mutation during capture cannot change the captured registration.
+        registration.requesterSessionKey = "agent:main:mutated";
+        registration.taskRuntimeScope = createTaskScope("agent:main:mutated");
+        let successor: Awaited<ReturnType<typeof registerParent>> | undefined;
+        if (ending === "overlap-reject") {
+          successor = await registerParent(monitor, "parent-thread", "agent:main:original");
+        } else if (ending === "pending-reject") {
+          pendingSuccessor = registerParent(monitor, "parent-thread", "agent:main:original");
+        } else if (ending === "caller-revoked") {
+          current = false;
+        } else if (ending === "dispose") {
+          monitor.dispose();
+        } else if (ending === "retire" || ending === "replace") {
+          monitor.retireParent("parent-thread");
+          if (ending === "replace") {
+            successor = await registerParent(monitor, "parent-thread", "agent:main:replacement");
+          }
+        }
+        if (captureFailed) {
+          source.root.release();
+          capture.reject(failure);
+        } else {
+          if (ending === "revoked") {
+            source.root.release();
+          }
+          capture.resolve(source.root);
+        }
+        if (ending === "ready") {
+          const owner = await pending;
+          expect(runtime.createAgentHarnessTaskRuntime).toHaveBeenCalledWith(
+            expect.objectContaining({
+              scope: expect.objectContaining({ requesterSessionKey: "agent:main:original" }),
+            }),
+          );
+          owner.bindTurn("parent-turn");
+          await client.notify({
+            method: "item/completed",
+            params: {
+              threadId: "parent-thread",
+              turnId: "parent-turn",
+              item: directSpawnItem("v2", "parent-thread", "child-thread"),
+            },
+          });
+          expect(claimDirectChild).toHaveBeenCalledExactlyOnceWith("child-thread");
+          expect(runtime.createRunningTaskRun).toHaveBeenCalledOnce();
+          await owner.unregister();
+        } else {
+          await rejected;
+          expect(source.live()).toHaveLength(0);
+          if (ending !== "replace" && ending !== "overlap-reject") {
+            expect(runtime.createAgentHarnessTaskRuntime).not.toHaveBeenCalled();
+          }
+          if (pendingSuccessor) {
+            nextCapture.resolve(replacement.root);
+            successor = await pendingSuccessor;
+          }
+          if (ending === "reject") {
+            successor = await registerParent(monitor, "parent-thread", "agent:main:replacement");
+          }
+          if (successor) {
+            successor.bindTurn("replacement-turn");
+            await notifyChildStarted(client);
+            expect(runtime.createRunningTaskRun).toHaveBeenCalledOnce();
+            expect(replacement.live()).toHaveLength(1);
+            await successor.unregister();
+          }
+        }
+      } finally {
+        monitor.dispose();
+        capture.resolve(source.root);
+        nextCapture.resolve(replacement.root);
+        await pending.catch(() => {});
+        await pendingSuccessor?.then(
+          (owner) => owner.unregister(),
+          () => {},
+        );
+        source.root.release();
+        replacement.root.release();
+      }
+      expect(source.live()).toHaveLength(0);
+      expect(replacement.live()).toHaveLength(0);
+      expect(modelSource.release).toHaveBeenCalledOnce();
+    },
+  );
+
   it("rechecks the cached runtime before registration and releases rejected custody", async () => {
     const runtime = createRuntime();
     const first = createCustody();
     const rejected = createCustody();
     runtime.captureAgentHarnessCompletionCustody
-      .mockReturnValueOnce(first.root)
-      .mockReturnValueOnce(rejected.root);
+      .mockResolvedValueOnce(first.root)
+      .mockResolvedValueOnce(rejected.root);
     const monitor = new CodexNativeSubagentMonitor(createClient() as never, runtime, {
       recoveryPollDelaysMs: [],
     });
     try {
-      const parent = registerParent(monitor);
+      const parent = await registerParent(monitor);
       const failure = new Error("captured task runtime retired");
       runtime.assertTaskAssignmentSupported.mockImplementationOnce(() => {
         throw failure;
       });
-      expect(() => registerParent(monitor)).toThrow(failure);
+      await expect(registerParent(monitor)).rejects.toThrow(failure);
       expect(runtime.createAgentHarnessTaskRuntime).toHaveBeenCalledOnce();
       expect(runtime.assertTaskAssignmentSupported).toHaveBeenCalledTimes(2);
       expect(runtime.createRunningTaskRun).not.toHaveBeenCalled();
@@ -99,8 +260,8 @@ describe("native assignment completion custody", () => {
       const first = createCustody();
       const second = createCustody();
       runtime.captureAgentHarnessCompletionCustody
-        .mockReturnValueOnce(first.root)
-        .mockReturnValueOnce(second.root);
+        .mockResolvedValueOnce(first.root)
+        .mockResolvedValueOnce(second.root);
       if (ending !== "delivered") {
         runtime.deliverAgentHarnessTaskCompletion.mockResolvedValue({
           delivered: false,
@@ -112,51 +273,63 @@ describe("native assignment completion custody", () => {
         completionDeliveryRetryDelaysMs: [1],
         completionDeliveryMaxRetries: 1,
       });
-      const owner = registerParent(monitor);
-      const other = registerParent(monitor);
-      other.bindTurn("other-turn");
-      // Native spawn evidence can arrive before the admitting turn/start response.
-      await client.notify({
-        method: "item/completed",
-        params: {
-          threadId: "parent-thread",
-          turnId: "parent-turn",
-          item: directSpawnItem("v2", "parent-thread", "child-thread"),
-        },
-      });
-      owner.bindTurn("parent-turn");
-      await owner.unregister();
-      expect(first.live()).toHaveLength(1);
-      await other.unregister();
-      expect(second.live()).toHaveLength(0);
-      await client.notify(nativeCompletionNotification({ agentPath: "/root/child-thread" }));
-      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledOnce();
-      expect(first.holds).toContain(
-        runtime.deliverAgentHarnessTaskCompletion.mock.calls[0]![0].completionCustody,
-      );
-      expect(first.executions.size).toBe(0);
-      if (ending === "closed") {
-        monitor.dispose();
+      try {
+        const owner = await registerParent(monitor);
+        const other = await registerParent(monitor);
+        other.bindTurn("other-turn");
+        // Native spawn evidence can arrive before the admitting turn/start response.
+        await client.notify({
+          method: "item/completed",
+          params: {
+            threadId: "parent-thread",
+            turnId: "parent-turn",
+            item: directSpawnItem("v2", "parent-thread", "child-thread"),
+          },
+        });
+        owner.bindTurn("parent-turn");
+        await owner.unregister();
         expect(first.live()).toHaveLength(1);
-        runtime.deliverAgentHarnessTaskCompletion.mockResolvedValue({
-          delivered: true,
-          path: "direct",
-        });
-        await vi.advanceTimersByTimeAsync(1);
-      } else if (ending === "retry") {
-        runtime.deliverAgentHarnessTaskCompletion.mockResolvedValue({
-          delivered: true,
-          path: "direct",
-        });
-        await vi.advanceTimersByTimeAsync(1);
-      } else if (ending === "exhausted") {
-        await vi.advanceTimersByTimeAsync(1);
-        expect(runtime.setDetachedTaskDeliveryStatusByRunId).toHaveBeenCalledWith(
-          expect.objectContaining({ deliveryStatus: "failed" }),
+        await other.unregister();
+        expect(second.live()).toHaveLength(0);
+        await client.notify(nativeCompletionNotification({ agentPath: "/root/child-thread" }));
+        expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledOnce();
+        expect(first.holds).toContain(
+          runtime.deliverAgentHarnessTaskCompletion.mock.calls[0]![0].completionCustody,
         );
+        expect(first.executions.size).toBe(0);
+        if (ending === "closed") {
+          monitor.dispose();
+          expect(first.live()).toHaveLength(1);
+          runtime.deliverAgentHarnessTaskCompletion.mockResolvedValue({
+            delivered: true,
+            path: "direct",
+          });
+          await vi.advanceTimersByTimeAsync(1);
+        } else if (ending === "retry") {
+          runtime.deliverAgentHarnessTaskCompletion.mockResolvedValue({
+            delivered: true,
+            path: "direct",
+          });
+          await vi.advanceTimersByTimeAsync(1);
+        } else if (ending === "exhausted") {
+          await vi.advanceTimersByTimeAsync(1);
+          expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(2);
+          expect(first.live()).toHaveLength(1);
+          // Exhausted delivery still owns the asynchronous failed-status settlement.
+          await vi.advanceTimersToNextTimerAsync();
+          await first.released;
+          expect(runtime.setDetachedTaskDeliveryStatusByRunId).toHaveBeenCalledWith(
+            expect.objectContaining({ deliveryStatus: "failed" }),
+          );
+          expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(2);
+        }
+        expect(first.live()).toHaveLength(0);
+      } finally {
+        monitor.retireParent("parent-thread");
+        monitor.dispose();
+        first.root.release();
+        second.root.release();
       }
-      expect(first.live()).toHaveLength(0);
-      monitor.dispose();
     },
   );
 
@@ -171,7 +344,7 @@ describe("native assignment completion custody", () => {
     });
     const runtime = createRecordedRuntime(new Map([[task.runId!, task]]));
     const source = createCustody();
-    runtime.captureAgentHarnessCompletionCustody.mockReturnValue(source.root);
+    runtime.captureAgentHarnessCompletionCustody.mockResolvedValue(source.root);
     const historyRead = createDeferred<CodexThreadReadResponse>();
     const delivered = createDeferred<void>();
     client.setThreadReadFactory("child-thread", () => historyRead.promise);
@@ -184,7 +357,12 @@ describe("native assignment completion custody", () => {
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
       recoveryPollDelaysMs: [],
     });
-    const parent = registerParent(monitor, "parent-thread", task.requesterSessionKey, history);
+    const parent = await registerParent(
+      monitor,
+      "parent-thread",
+      task.requesterSessionKey,
+      history,
+    );
     await parent.unregister();
     expect(source.live()).toHaveLength(1);
     historyRead.resolve(threadRead({ result: "recovered result" }));
@@ -198,13 +376,13 @@ describe("native assignment completion custody", () => {
     const client = createClient();
     const runtime = createRuntime();
     const source = createCustody();
-    runtime.captureAgentHarnessCompletionCustody.mockReturnValue(source.root);
+    runtime.captureAgentHarnessCompletionCustody.mockResolvedValue(source.root);
     const emit = vi.fn();
     runtime.createAgentHarnessTaskEventSink.mockReturnValue(emit);
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
       recoveryPollDelaysMs: [],
     });
-    const parent = registerParent(monitor);
+    const parent = await registerParent(monitor);
     parent.bindTurn("parent-turn");
     for (const child of ["child-thread", "other-child"]) {
       await client.notify({
@@ -244,8 +422,8 @@ describe("native assignment completion custody", () => {
     const retired = createCustody();
     const replacement = createCustody();
     runtime.captureAgentHarnessCompletionCustody
-      .mockReturnValueOnce(retired.root)
-      .mockReturnValueOnce(replacement.root);
+      .mockResolvedValueOnce(retired.root)
+      .mockResolvedValueOnce(replacement.root);
     const oldRead = createDeferred<CodexThreadReadResponse>();
     const nextRead = createDeferred<CodexThreadReadResponse>();
     const oldReadStarted = createDeferred<void>();
@@ -270,12 +448,22 @@ describe("native assignment completion custody", () => {
       recoveryPollDelaysMs: [],
     });
     try {
-      const parent = registerParent(monitor, "parent-thread", task.requesterSessionKey, history);
+      const parent = await registerParent(
+        monitor,
+        "parent-thread",
+        task.requesterSessionKey,
+        history,
+      );
       await oldReadStarted.promise;
       await parent.unregister();
       monitor.retireParent("parent-thread");
       expect(retired.live()).toHaveLength(0);
-      const next = registerParent(monitor, "parent-thread", task.requesterSessionKey, history);
+      const next = await registerParent(
+        monitor,
+        "parent-thread",
+        task.requesterSessionKey,
+        history,
+      );
       await nextReadStarted.promise;
       await next.unregister();
       expect(replacement.live()).toHaveLength(1);
@@ -309,13 +497,18 @@ describe("native assignment completion custody", () => {
       const task = taskRecord({ childThreadId: "child-thread", historyOwner: history });
       const runtime = createRecordedRuntime(new Map([[task.runId!, task]]));
       const source = createCustody();
-      runtime.captureAgentHarnessCompletionCustody.mockReturnValue(source.root);
+      runtime.captureAgentHarnessCompletionCustody.mockResolvedValue(source.root);
       const historyRead = createDeferred<CodexThreadReadResponse>();
       client.setThreadReadFactory("child-thread", () => historyRead.promise);
       const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
         recoveryPollDelaysMs: [],
       });
-      const parent = registerParent(monitor, "parent-thread", task.requesterSessionKey, history);
+      const parent = await registerParent(
+        monitor,
+        "parent-thread",
+        task.requesterSessionKey,
+        history,
+      );
       await parent.unregister();
       expect(source.live()).toHaveLength(1);
       expect(source.executions.size).toBe(1);
@@ -336,12 +529,12 @@ describe("native assignment completion custody", () => {
     const client = createClient();
     const runtime = createRuntime();
     const source = createCustody();
-    runtime.captureAgentHarnessCompletionCustody.mockReturnValue(source.root);
+    runtime.captureAgentHarnessCompletionCustody.mockResolvedValue(source.root);
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
       recoveryPollDelaysMs: [],
       hasObservationBacking: () => true,
     });
-    const parent = registerParent(monitor);
+    const parent = await registerParent(monitor);
     parent.bindTurn("parent-turn");
     await client.notify({
       method: "item/completed",
@@ -385,7 +578,7 @@ describe("native assignment completion custody", () => {
       historyOwner: { ...nativeHistoryOwner(), sessionId: "old-session" },
     });
     const runtime = createRecordedRuntime(new Map([[task.runId!, task]]));
-    runtime.captureAgentHarnessCompletionCustody.mockReturnValue(source.root);
+    runtime.captureAgentHarnessCompletionCustody.mockResolvedValue(source.root);
     const readStarted = createDeferred<void>();
     const historyRead = createDeferred<CodexThreadReadResponse>();
     client.setThreadReadFactory("foreign-child", () => {
@@ -396,7 +589,7 @@ describe("native assignment completion custody", () => {
       recoveryPollDelaysMs: [],
     });
     try {
-      const parent = registerParent(
+      const parent = await registerParent(
         monitor,
         "parent-thread",
         task.requesterSessionKey,

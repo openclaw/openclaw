@@ -316,7 +316,6 @@ function ensureProfileForProviderIdentity(params: {
         }),
       );
       options.mutation?.authority(row.id);
-      publishUserProfileAuthorityChange(db, row.id);
       options.mutation?.publish(row.id);
       publishUserProfilesChange(db, row.id);
       return toUserProfile(row);

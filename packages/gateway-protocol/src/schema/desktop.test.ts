@@ -8,6 +8,44 @@ import {
 } from "../index.js";
 
 describe("desktop protocol schemas", () => {
+  it("advertises optional receive-only PCM audio with a fixed format", () => {
+    const observed = {
+      transport: "rfb",
+      wsPath: "/desktop/observe",
+      expiresAtMs: 1,
+      control: false,
+    };
+    const audio = {
+      wsPath: "/desktop/audio",
+      encoding: "pcm-s16le",
+      sampleRate: 48000,
+      channels: 2,
+    };
+    expect(Value.Check(DesktopObserveResultSchema, observed)).toBe(true);
+    expect(Value.Check(DesktopObserveResultSchema, { ...observed, audio })).toBe(true);
+    expect(
+      Value.Check(DesktopObserveResultSchema, {
+        ...observed,
+        audioUnavailableReason: "setup-unavailable",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(DesktopObserveResultSchema, {
+        ...observed,
+        audioUnavailableReason: "native stderr /private/path",
+      }),
+    ).toBe(false);
+    for (const invalid of [
+      { encoding: "opus" },
+      { sampleRate: 24000 },
+      { channels: 1 },
+      { microphone: true },
+    ]) {
+      expect(
+        Value.Check(DesktopObserveResultSchema, { ...observed, audio: { ...audio, ...invalid } }),
+      ).toBe(false);
+    }
+  });
   it.each([DesktopObserveResultSchema, WorkerDesktopObserveResultSchema])(
     "keeps resize permission optional and boolean",
     (schema) => {

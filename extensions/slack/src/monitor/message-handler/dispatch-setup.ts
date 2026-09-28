@@ -14,19 +14,22 @@ import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
+import { resolveStorePath, updateLastRoute } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { reactSlackMessage, removeSlackReaction } from "../../actions.js";
 import { formatSlackError } from "../../errors.js";
 import { resolveSlackStreamingConfig } from "../../stream-mode.js";
 import { resolveSlackThreadTargets } from "../../threading.js";
 import { normalizeSlackAllowOwnerEntry } from "../allow-list.js";
-import { resolveStorePath, updateLastRoute } from "../config.runtime.js";
-import { createSlackReplyDeliveryPlan, sanitizeSlackMonitorReplyPayload } from "../replies.js";
+import {
+  createSlackReplyDeliveryPlan,
+  resolveSlackThreadTs,
+  sanitizeSlackMonitorReplyPayload,
+} from "../replies.js";
 import {
   isSlackStreamingEnabled,
   resolveSlackDisableBlockStreaming,
   resolveSlackNativeProgressTaskCards,
-  resolveSlackStreamingThreadHint,
   shouldUseStreaming,
 } from "./dispatch-helpers.js";
 import type { PreparedSlackMessage } from "./types.js";
@@ -268,11 +271,12 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
   const slackStreaming = resolveSlackStreamingConfig({ streaming: account.config.streaming });
   const streamThreadHint =
     forcedReplyThreadTs ??
-    resolveSlackStreamingThreadHint({
+    resolveSlackThreadTs({
       replyToMode: replyDeliveryMode,
       incomingThreadTs,
       messageTs,
       isThreadReply,
+      hasReplied: false,
     });
   const hookRunner = getGlobalHookRunner();
   const modifyingHooksRegistered =

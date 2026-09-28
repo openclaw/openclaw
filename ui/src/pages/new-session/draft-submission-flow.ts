@@ -501,6 +501,7 @@ export class DraftSubmissionFlow {
         ? readSessionMethodAccess(context.gateway.snapshot, {
             method: "sessions.create",
             params: createParams,
+            sessionScope: true,
           })
         : this.submissionAccess(placementCreateParams ?? createParams);
       if (!requestAccess.allowed) {

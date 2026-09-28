@@ -6,10 +6,10 @@ import {
   createMatrixQaE2eeCliOwnerClient,
   isMatrixQaCliBackupUsable,
   isMatrixQaCliOwnerSelfVerification,
-  parseMatrixQaCliJson,
   parseMatrixQaCliSasText,
   parseMatrixQaCliSummaryField,
   registerMatrixQaCliE2eeAccount,
+  runMatrixQaSetupCliJson,
   type MatrixQaCliBackupRestoreStatus,
   type MatrixQaCliVerificationStatus,
   writeMatrixQaCliOutputArtifacts,
@@ -64,26 +64,24 @@ export async function runMatrixQaE2eeCliSelfVerificationScenario(
       userId: cliDevice.userId,
     });
     try {
-      const restoreResult = await cli.run(
-        [
-          "matrix",
-          "verify",
-          "backup",
-          "restore",
-          "--account",
-          accountId,
-          "--recovery-key-stdin",
-          "--json",
-        ],
-        context.timeoutMs,
-        `${encodedRecoveryKey}\n`,
-      );
-      const restoreArtifacts = await writeMatrixQaCliOutputArtifacts({
-        label: "verify-backup-restore",
-        result: restoreResult,
-        rootDir: cli.rootDir,
-      });
-      const restored = parseMatrixQaCliJson(restoreResult) as MatrixQaCliBackupRestoreStatus;
+      const { artifacts: restoreArtifacts, payload: restoredPayload } =
+        await runMatrixQaSetupCliJson(
+          cli,
+          "verify-backup-restore",
+          [
+            "matrix",
+            "verify",
+            "backup",
+            "restore",
+            "--account",
+            accountId,
+            "--recovery-key-stdin",
+            "--json",
+          ],
+          context.timeoutMs,
+          `${encodedRecoveryKey}\n`,
+        );
+      const restored = restoredPayload as MatrixQaCliBackupRestoreStatus;
       if (
         restored.success !== true ||
         restored.backup?.decryptionKeyCached !== true ||
@@ -193,20 +191,16 @@ export async function runMatrixQaE2eeCliSelfVerificationScenario(
         });
         const cliVerificationId =
           completedCli.stdout.match(/^Verification id:\s*(\S+)/m)?.[1] ?? "interactive-cli";
-        const statusResult = await cli.run([
-          "matrix",
-          "verify",
-          "status",
-          "--account",
-          accountId,
-          "--json",
-        ]);
-        const statusArtifacts = await writeMatrixQaCliOutputArtifacts({
-          label: "verify-status",
-          result: statusResult,
-          rootDir: cli.rootDir,
-        });
-        const status = parseMatrixQaCliJson(statusResult) as MatrixQaCliVerificationStatus;
+        const { artifacts: statusArtifacts, payload: statusPayload } =
+          await runMatrixQaSetupCliJson(cli, "verify-status", [
+            "matrix",
+            "verify",
+            "status",
+            "--account",
+            accountId,
+            "--json",
+          ]);
+        const status = statusPayload as MatrixQaCliVerificationStatus;
         if (
           status.verified !== true ||
           status.crossSigningVerified !== true ||

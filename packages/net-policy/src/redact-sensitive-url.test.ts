@@ -152,43 +152,25 @@ describe("redactSensitiveUrl", () => {
   });
 
   it("fails closed when nested URL encoding exceeds the recursion bound", () => {
-    let nested = joinUrlParts(
-      "https://deep-user",
-      ":",
-      "deep-pass",
-      "@inner.example/?to",
-      "ken=",
-      "deep-token",
-    );
+    let nested = "https://inner.example/?keep=visible";
     for (let index = 0; index < 12; index += 1) {
       nested = `https://level-${index}.example/?next=${encodeURIComponent(nested)}`;
     }
     const redacted = redactSensitiveUrl(nested);
-    expect(redacted).not.toContain("deep-user");
-    expect(redacted).not.toContain("deep-pass");
-    expect(redacted).not.toContain("deep-token");
+    expect(new URL(redacted).hostname).toBe("level-11.example");
+    expect(redacted).not.toContain("inner.example");
     expect(redacted).toContain("***");
   });
 
   it("fails closed when one nested URL exceeds the percent-encoding bound", () => {
-    let nested = joinUrlParts(
-      "https://encoded-user",
-      ":",
-      "encoded-pass",
-      "@inner.example/?to",
-      "ken=",
-      "encoded-token",
-    );
+    let nested = "https://inner.example/?keep=visible";
     for (let index = 0; index < 20; index += 1) {
       nested = encodeURIComponent(nested);
     }
     const redacted = redactSensitiveUrl(
       `https://outer.example/?next=${encodeURIComponent(nested)}`,
     );
-    expect(redacted).not.toContain("encoded-user");
-    expect(redacted).not.toContain("encoded-pass");
-    expect(redacted).not.toContain("encoded-token");
-    expect(redacted).toContain("***");
+    expect(redacted).toBe("https://outer.example/?next=***");
   });
 
   it("preserves redaction for valid non-hierarchical URLs", () => {

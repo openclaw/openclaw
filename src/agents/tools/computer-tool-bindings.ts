@@ -26,7 +26,7 @@ import {
   type GatewayCallOptions,
 } from "./gateway.js";
 import { getInProcessGatewayToolContext } from "./in-process-gateway.js";
-import { listNodes, type NodeListNode } from "./nodes-utils.js";
+import { invokeAgentNodeCommand, listNodes, type NodeListNode } from "./nodes-utils.js";
 
 export type ComputerBinding = {
   host: ComputerHost;
@@ -60,30 +60,6 @@ async function resolveComputerNode(
 ): Promise<NodeListNode> {
   const nodes = await listNodes(gatewayOpts, signal);
   return resolveEligibleNodeFromList(nodes, query, isEligibleComputerNode, COMPUTER_NODE_MESSAGES);
-}
-
-async function invokeNodeCommand(params: {
-  gatewayOpts: GatewayCallOptions;
-  nodeId: string;
-  command: string;
-  commandParams: Record<string, unknown>;
-  timeoutMs?: number;
-  idempotencyKey?: string;
-  signal?: AbortSignal;
-}): Promise<unknown> {
-  const raw = await callGatewayTool<{ payload: unknown }>(
-    "node.invoke",
-    params.gatewayOpts,
-    {
-      nodeId: params.nodeId,
-      command: params.command,
-      params: params.commandParams,
-      timeoutMs: params.timeoutMs,
-      idempotencyKey: params.idempotencyKey ?? crypto.randomUUID(),
-    },
-    { signal: params.signal },
-  );
-  return raw && typeof raw === "object" && Object.hasOwn(raw, "payload") ? raw.payload : raw;
 }
 
 export async function resolveComputerBinding(params: {
@@ -271,6 +247,6 @@ export async function resolveComputerBinding(params: {
     gatewayOpts: params.gatewayOpts,
     capabilities: node.computerUse,
     invoke: (request) =>
-      invokeNodeCommand({ ...request, nodeId: node.nodeId, gatewayOpts: params.gatewayOpts }),
+      invokeAgentNodeCommand({ ...request, nodeId: node.nodeId, gatewayOpts: params.gatewayOpts }),
   };
 }

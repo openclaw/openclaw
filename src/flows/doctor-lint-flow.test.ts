@@ -208,10 +208,12 @@ describe("runDoctorLintChecks", () => {
   });
 
   it("skips default-disabled checks unless explicitly selected", async () => {
+    let detections = 0;
     const defaultDisabled = normalizeHealthCheck({
-      ...check("targeted", async () => [
-        { checkId: "targeted", severity: "warning" as const, message: "warn" },
-      ]),
+      ...check("targeted", async () => {
+        detections += 1;
+        return [{ checkId: "targeted", severity: "warning" as const, message: "warn" }];
+      }),
       defaultEnabled: false,
     });
 
@@ -224,6 +226,7 @@ describe("runDoctorLintChecks", () => {
       checksSkipped: 1,
       findings: [],
     });
+    expect(detections).toBe(0);
 
     await expect(
       runDoctorLintChecks(ctx, {
@@ -235,6 +238,7 @@ describe("runDoctorLintChecks", () => {
       checksSkipped: 0,
       findings: [expect.objectContaining({ checkId: "targeted" })],
     });
+    expect(detections).toBe(1);
   });
 
   it("runs default-disabled checks when all checks are requested", async () => {

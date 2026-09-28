@@ -87,6 +87,50 @@ describe("application gateway observer ownership", () => {
     vi.restoreAllMocks();
   });
 
+  it("retains each usage publication once until its connection retires", () => {
+    const { gateway, current } = createGatewayStore();
+    gateway.start();
+    current().opts.onHello?.(HELLO);
+    const observed = vi.fn();
+    const stop = gateway.subscribe(observed);
+    observed.mockClear();
+    const publish = (usageUpdatedAt: number, usageRefreshFailed = false, agentId = "main") =>
+      current().opts.onEvent?.({
+        type: "event",
+        event: "chat.metadata.changed",
+        payload: {
+          agentId,
+          usageUpdatedAt,
+          usageRefreshFailed,
+          modelCatalogChanged: false,
+          authChanged: false,
+        },
+      });
+    for (const usageUpdatedAt of [20, 20, 10]) {
+      publish(usageUpdatedAt);
+    }
+    expect(gateway.snapshot.usagePublications?.main?.usageUpdatedAt).toBe(20);
+    expect(observed).toHaveBeenCalledOnce();
+    publish(21, true);
+    expect(gateway.snapshot.usagePublications?.main).toMatchObject({
+      usageRefreshFailed: true,
+      committedAt: 20,
+    });
+    const failed = gateway.snapshot.usagePublications?.main;
+    publish(22, false, "other");
+    expect(gateway.snapshot.usagePublications?.main).toBe(failed);
+    publish(23);
+    expect(gateway.snapshot.usagePublications?.main?.usageRefreshFailed).toBeUndefined();
+    expect(failed).toMatchObject({ usageUpdatedAt: 21, usageRefreshFailed: true });
+    current().opts.onClose?.({ code: 1001, reason: "restart", willRetry: true });
+    expect(gateway.snapshot.usagePublications).toBeUndefined();
+    current().opts.onHello?.(HELLO);
+    publish(1);
+    expect(gateway.snapshot.usagePublications?.main?.usageUpdatedAt).toBe(1);
+    stop();
+    gateway.stop();
+  });
+
   it("invalidates palette automation reads before delivering owner events and reconnects", async () => {
     const { gateway, current } = createGatewayStore();
     gateway.start();
@@ -105,8 +149,8 @@ describe("application gateway observer ownership", () => {
     const count = () =>
       current().request.mock.calls.filter(([method]) => method === "cron.list").length;
     const [first, shared] = await Promise.all([load(), load()]);
-    expect(first.items).toEqual(shared.items);
-    expect(first.items).toContainEqual(expect.objectContaining({ label: "Automation" }));
+    expect(first).toEqual(shared);
+    expect(first).toContainEqual(expect.objectContaining({ label: "Automation" }));
     expect(count()).toBe(1);
     for (const event of ["cron", "config.changed"]) {
       let pending: ReturnType<typeof load> | undefined;

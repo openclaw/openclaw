@@ -269,6 +269,10 @@ it.each([
         key: "agent:main:terminal",
         sessionId: "terminal-session",
         kind: "direct",
+        createdAt: 50,
+        lastReadAt: 150,
+        lastActivityAt: 120,
+        unread: false,
         updatedAt: 100,
         status: "running",
         startedAt: 100,
@@ -283,15 +287,25 @@ it.each([
         seq: 1,
         ts: 200,
         stream: "lifecycle",
+        controlUiVisible: true,
         data: { phase: "end", startedAt: 100, endedAt: 200, aborted },
       },
     }),
   ).toMatchObject({
     status,
+    unread: true,
+    lastActivityAt: 200,
     hasActiveRun: true,
     endedAt: 200,
     runtimeMs: 100,
-    session: { status, hasActiveRun: true, endedAt: 200, runtimeMs: 100 },
+    session: {
+      status,
+      unread: true,
+      lastActivityAt: 200,
+      hasActiveRun: true,
+      endedAt: 200,
+      runtimeMs: 100,
+    },
   });
 });
 

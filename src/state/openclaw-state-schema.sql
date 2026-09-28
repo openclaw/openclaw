@@ -2690,6 +2690,21 @@ CREATE TABLE IF NOT EXISTS claw_mcp_server_refs (
   PRIMARY KEY (agent_id, name)
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS user_profile_identities (
+  provider TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  canonical_login TEXT,
+  created_at INTEGER NOT NULL,
+  authorization_id TEXT,
+  authorization_basis_json TEXT,
+  PRIMARY KEY (provider, subject)
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_user_profile_identities_profile_id
+  ON user_profile_identities(profile_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_profile_identities_authorization
+  ON user_profile_identities(authorization_id);
+
 CREATE TABLE IF NOT EXISTS outbound_media_provenance (
   realpath TEXT NOT NULL PRIMARY KEY,
   kind TEXT NOT NULL,

@@ -30,6 +30,7 @@ import { registerMatrixProgressCompletionTests } from "./handler.progress-comple
 import {
   createMatrixHandlerTestHarness,
   createMatrixReactionEvent,
+  createMatrixReactionTestHarness,
   createMatrixRoomMessageEvent,
   createMatrixTextMessageEvent,
 } from "./handler.test-helpers.js";
@@ -162,30 +163,6 @@ afterEach(() => {
   sessionBindingTesting.resetSessionBindingAdaptersForTests();
   vi.useRealTimers();
 });
-
-function createReactionHarness(params?: {
-  cfg?: unknown;
-  dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
-  allowFrom?: string[];
-  storeAllowFrom?: string[];
-  targetSender?: string;
-  isDirectMessage?: boolean;
-  senderName?: string;
-  client?: NonNullable<Parameters<typeof createMatrixHandlerTestHarness>[0]>["client"];
-}) {
-  return createMatrixHandlerTestHarness({
-    cfg: params?.cfg,
-    dmPolicy: params?.dmPolicy,
-    allowFrom: params?.allowFrom,
-    readAllowFromStore: vi.fn(async () => params?.storeAllowFrom ?? []),
-    client: {
-      getEvent: async () => ({ sender: params?.targetSender ?? "@bot:example.org" }),
-      ...params?.client,
-    },
-    isDirectMessage: params?.isDirectMessage,
-    getMemberDisplayName: async () => params?.senderName ?? "sender",
-  });
-}
 
 const requireRecord = createRequireRecord("object", "expected-label");
 
@@ -1918,7 +1895,7 @@ describe("matrix monitor handler pairing account scope", () => {
   });
 
   it("enqueues system events for reactions on bot-authored messages", async () => {
-    const { handler, resolveAgentRoute } = createReactionHarness();
+    const { handler, resolveAgentRoute } = createMatrixReactionTestHarness();
 
     await handler(
       "!room:example.org",
@@ -2000,7 +1977,7 @@ describe("matrix monitor handler pairing account scope", () => {
   });
 
   it("keeps threaded DM reaction notifications on the flat session when dm threadReplies is off", async () => {
-    const { handler } = createReactionHarness({
+    const { handler } = createMatrixReactionTestHarness({
       cfg: {
         channels: {
           matrix: {
@@ -2043,7 +2020,7 @@ describe("matrix monitor handler pairing account scope", () => {
   });
 
   it("routes thread-root reaction notifications to the thread session when threadReplies is always", async () => {
-    const { handler } = createReactionHarness({
+    const { handler } = createMatrixReactionTestHarness({
       cfg: {
         channels: {
           matrix: {
@@ -2080,7 +2057,7 @@ describe("matrix monitor handler pairing account scope", () => {
   });
 
   it("ignores reactions that do not target bot-authored messages", async () => {
-    const { handler, resolveAgentRoute } = createReactionHarness({
+    const { handler, resolveAgentRoute } = createMatrixReactionTestHarness({
       targetSender: "@other:example.org",
     });
 
@@ -2098,7 +2075,7 @@ describe("matrix monitor handler pairing account scope", () => {
   });
 
   it("does not create pairing requests for unauthorized dm reactions", async () => {
-    const { handler, upsertPairingRequest } = createReactionHarness({
+    const { handler, upsertPairingRequest } = createMatrixReactionTestHarness({
       dmPolicy: "pairing",
     });
 
@@ -2116,7 +2093,7 @@ describe("matrix monitor handler pairing account scope", () => {
   });
 
   it("honors account-scoped reaction notification overrides", async () => {
-    const { handler } = createReactionHarness({
+    const { handler } = createMatrixReactionTestHarness({
       cfg: {
         channels: {
           matrix: {

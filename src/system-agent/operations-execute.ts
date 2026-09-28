@@ -31,8 +31,6 @@ import {
 import type { SystemAgentOperation, SystemAgentOperationResult } from "./operations-parse.js";
 import { executePluginInstall } from "./plugin-install.js";
 
-const loadOverviewModule = async () => await import("./overview.js");
-
 // Plugin CLI commands also serve terminals; this operation boundary owns the
 // smaller model budget across every write, without changing human CLI output.
 function boundedPluginReadRuntime(runtime: RuntimeEnv): RuntimeEnv {
@@ -72,7 +70,7 @@ export async function executeSystemAgentOperation(
       if (opts.deps?.formatOverview) {
         runtime.log(opts.deps.formatOverview(overview));
       } else {
-        const { formatSystemAgentOverview } = await loadOverviewModule();
+        const { formatSystemAgentOverview } = await import("./overview.js");
         runtime.log(formatSystemAgentOverview(overview));
       }
       return { applied: false };
@@ -546,9 +544,8 @@ export async function executeSystemAgentOperation(
         },
       });
     case "doctor": {
-      const runDoctor =
-        opts.deps?.runDoctor ?? (await import("../commands/doctor.js")).doctorCommand;
-      await runDoctor(runtime, { nonInteractive: true });
+      const { runDoctorProcess } = await import("../commands/doctor.js");
+      await runDoctorProcess(runtime);
       return { applied: false };
     }
     case "doctor-fix":

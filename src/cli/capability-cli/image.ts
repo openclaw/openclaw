@@ -294,40 +294,30 @@ export function registerImageCapabilityCommands(capability: Command): void {
     .description("Image generation and description")
     .option("--agent <id>", "Agent whose model and auth state should be used");
 
-  addImageGenerationOptions(
-    image
-      .command("generate")
-      .description("Generate images")
-      .requiredOption("--prompt <text>", "Prompt text"),
-  ).action(async (opts, command) => {
-    await runCommandWithRuntime(defaultRuntime, async () => {
-      const result = await runImageGenerate({
-        capability: "image.generate",
-        prompt: String(opts.prompt),
-        ...resolveImageGenerationOptions(opts, command),
-      });
-      emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
-    });
-  });
-
-  addImageGenerationOptions(
-    image
-      .command("edit")
-      .description("Edit images with one or more input files")
-      .requiredOption("--file <path>", "Input file", collectOption)
-      .requiredOption("--prompt <text>", "Prompt text"),
-  ).action(async (opts, command) => {
-    await runCommandWithRuntime(defaultRuntime, async () => {
-      const files = Array.isArray(opts.file) ? (opts.file as string[]) : [String(opts.file)];
-      const result = await runImageGenerate({
-        capability: "image.edit",
-        prompt: String(opts.prompt),
-        file: files,
-        ...resolveImageGenerationOptions(opts, command),
-      });
-      emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
-    });
-  });
+  for (const [commandName, description] of [
+    ["generate", "Generate images"],
+    ["edit", "Edit images with one or more input files"],
+  ] as const) {
+    const generate = image.command(commandName).description(description);
+    if (commandName === "edit") {
+      generate.requiredOption("--file <path>", "Input file", collectOption);
+    }
+    addImageGenerationOptions(generate.requiredOption("--prompt <text>", "Prompt text")).action(
+      async (opts, command) => {
+        await runCommandWithRuntime(defaultRuntime, async () => {
+          const result = await runImageGenerate({
+            capability: `image.${commandName}`,
+            prompt: String(opts.prompt),
+            ...(commandName === "edit"
+              ? { file: Array.isArray(opts.file) ? (opts.file as string[]) : [String(opts.file)] }
+              : {}),
+            ...resolveImageGenerationOptions(opts, command),
+          });
+          emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
+        });
+      },
+    );
+  }
 
   for (const [commandName, description] of [
     ["describe", "Describe one image file"],

@@ -86,12 +86,12 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  OCM_VERSION: v0.2.33
-  OCM_LINUX_X64_SHA256: 06b0e46791e750eb044e4a898b6643ad5e7b20224fe0c64f160e35a42f08d00a
+  OCM_VERSION: v0.2.47
+  OCM_LINUX_X64_SHA256: 05e0bb598fe391c75fe7668e159d7eb09168b4298b5d8d0999786e79e97d0642
   KOVA_REPOSITORY: openclaw/Kova
-  KOVA_CANONICAL_CONFIG_REF: c2de7c24ea835ea054c416f8bf19d3cb22f104e9
-  KOVA_LEGACY_LIST_CONFIG_REF: c2de7c24ea835ea054c416f8bf19d3cb22f104e9
-  KOVA_TRUSTED_LIVE_REF: c2de7c24ea835ea054c416f8bf19d3cb22f104e9
+  KOVA_CANONICAL_CONFIG_REF: 14d7413dfc0f2b79c771dad83aca6d99413182bd
+  KOVA_LEGACY_LIST_CONFIG_REF: 14d7413dfc0f2b79c771dad83aca6d99413182bd
+  KOVA_TRUSTED_LIVE_REF: 14d7413dfc0f2b79c771dad83aca6d99413182bd
   PERFORMANCE_MODEL_ID: gpt-5.6-luna
   # Release matrices cold-build the candidate runtime before measurement.
   KOVA_SCENARIO_TIMEOUT_MS: ${{ inputs.profile == 'release' && '900000' || '300000' }}
@@ -100,7 +100,7 @@ jobs:
   resolve_target:
     name: Resolve target ref
     if: ${{ (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name == 'schedule' || inputs.mode != 'vitest-pair') }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 10
     outputs:
       checkout_ref: ${{ steps.resolve.outputs.checkout_ref }}
@@ -131,7 +131,7 @@ jobs:
       - name: Setup supported Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "24.19.0"
+          node-version: "24.21.0"
           package-manager-cache: false
 
       - name: Resolve OpenClaw target ref
@@ -270,7 +270,7 @@ jobs:
     if: ${{ github.event_name == 'schedule' || (inputs.mode != 'vitest-pair' && inputs.mode != 'gateway-concurrency') }}
     permissions:
       contents: read
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404') }}
     timeout-minutes: 240
     strategy:
       fail-fast: false
@@ -472,7 +472,7 @@ jobs:
             --max-time 180 \
             --retry 8 --retry-max-time 180 --retry-all-errors --retry-connrefused \
             -o "$ocm_archive" \
-            "https://github.com/shakkernerd/ocm/releases/download/${OCM_VERSION}/ocm-x86_64-unknown-linux-gnu.tar.gz"
+            "https://github.com/openclaw/ocm/releases/download/${OCM_VERSION}/ocm-x86_64-unknown-linux-gnu.tar.gz"
           echo "${OCM_LINUX_X64_SHA256}  ${ocm_archive}" | sha256sum -c -
           tar -xzf "$ocm_archive" -C "${RUNNER_TEMP}/ocm-install"
           install -m 0755 "${RUNNER_TEMP}/ocm-install/ocm" "$HOME/.local/bin/ocm"
@@ -766,6 +766,10 @@ jobs:
           if-no-files-found: error
           retention-days: ${{ matrix.deep_profile == 'true' && 14 || 30 }}
 
+      - name: Report Kova artifact transport retry
+        if: ${{ always() && steps.lane.outputs.run == 'true' && steps.upload_kova_artifacts.outcome == 'failure' }}
+        run: echo "::warning::Kova artifact upload failed; retrying artifact transport once."
+
       - name: Retry Kova artifact upload
         if: ${{ always() && steps.lane.outputs.run == 'true' && steps.upload_kova_artifacts.outcome == 'failure' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -783,7 +787,7 @@ jobs:
     name: OpenClaw source performance probes
     needs: resolve_target
     if: ${{ github.event_name == 'schedule' || (inputs.mode != 'vitest-pair' && inputs.mode != 'gateway-concurrency') }}
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404') }}
     timeout-minutes: 120
     env:
       PERFORMANCE_HELPER_DIR: ${{ github.workspace }}/.artifacts/performance-workflow
@@ -1118,6 +1122,10 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Report source performance artifact transport retry
+        if: ${{ always() && steps.upload_source_performance_artifacts.outcome == 'failure' }}
+        run: echo "::warning::Source performance artifact upload failed; retrying artifact transport once."
+
       - name: Retry source performance artifact upload
         if: ${{ always() && steps.upload_source_performance_artifacts.outcome == 'failure' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -1132,7 +1140,7 @@ jobs:
     name: Publish ${{ matrix.title }} report
     needs: [resolve_target, kova, source_performance]
     if: ${{ always() && (github.event_name == 'schedule' || (inputs.mode != 'vitest-pair' && inputs.mode != 'gateway-concurrency')) && needs.resolve_target.outputs.secret_eligible == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_reports == true)) && needs.resolve_target.result == 'success' && needs.kova.result != 'cancelled' && needs.source_performance.result != 'cancelled' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 30
     permissions:
       actions: read
@@ -1269,7 +1277,7 @@ jobs:
         if: steps.download.outcome == 'success'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "24.19.0"
+          node-version: "24.21.0"
           package-manager-cache: false
 
       - name: Prepare clawgrit report commit
@@ -1589,7 +1597,7 @@ jobs:
     name: Verify artifact-only report mode
     needs: [resolve_target, kova, publish]
     if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.mode != 'vitest-pair' && inputs.mode != 'gateway-concurrency' && inputs.publish_reports != true }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -1614,7 +1622,7 @@ jobs:
     name: Gateway concurrent sessions and turns
     needs: resolve_target
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'gateway-concurrency' }}
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404') }}
     timeout-minutes: 120
     permissions:
       contents: read
@@ -1764,7 +1772,7 @@ jobs:
   vitest_pair:
     name: Vitest paired benchmark
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'vitest-pair' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 180
     permissions:
       contents: read
@@ -1827,7 +1835,7 @@ jobs:
       - name: Set up benchmark Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24.19.0
+          node-version: 24.21.0
           check-latest: false
 
       - name: Install benchmark pnpm
@@ -1836,9 +1844,9 @@ jobs:
           set -euo pipefail
           pnpm_prefix="$RUNNER_TEMP/vitest-pair-pnpm"
           npm_config_cache="$RUNNER_TEMP/vitest-pair-npm-cache" \
-            npm install --global --prefix "$pnpm_prefix" pnpm@12.4.0
+            npm install --global --prefix "$pnpm_prefix" pnpm@12.4.2
           pnpm_bin="$pnpm_prefix/bin/pnpm"
-          [[ "$("$pnpm_bin" --version)" == "12.4.0" ]]
+          [[ "$("$pnpm_bin" --version)" == "12.4.2" ]]
           echo "VITEST_PAIR_PNPM_BIN=$pnpm_bin" >> "$GITHUB_ENV"
 
       - name: Run Vitest pair benchmark
@@ -1884,7 +1892,7 @@ jobs:
     name: Verify Vitest pair isolation
     needs: [resolve_target, kova, source_performance, publish, artifact_only_guard, vitest_pair]
     if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.mode == 'vitest-pair' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -1915,3 +1923,23 @@ jobs:
             echo "::error::vitest-pair benchmark did not succeed; got ${VITEST_PAIR_RESULT}. Inspect its uploaded terminal artifact."
             exit 1
           fi
+
+  seal_release_child_evidence:
+    name: Seal full release child evidence
+    needs:
+      - resolve_target
+      - kova
+      - source_performance
+      - publish
+      - artifact_only_guard
+      - gateway_concurrency
+      - vitest_pair
+      - vitest_pair_guard
+    if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') }}
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/full-release-child-evidence.yml
+    with:
+      role: productPerformance
+      target_sha: ${{ needs.resolve_target.outputs.tested_sha }}

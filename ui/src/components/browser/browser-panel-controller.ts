@@ -64,12 +64,12 @@ export class BrowserPanelController implements ReactiveController {
   readonly operations: BrowserPanelOperationOwnership;
   readonly pendingInput = new BrowserPanelPendingInput();
   readonly download = new BrowserPanelDownload(this);
-  private readonly input: BrowserPanelInputController;
+  readonly input: BrowserPanelInputController;
   readonly stream: BrowserPanelStream;
   private activeClient: GatewayBrowserClient | null = null;
   urlDraftEditing = false;
   private readonly viewport = new BrowserPanelViewportController(this);
-  private readonly snapshot = new BrowserPanelSnapshotController(this, this.viewport);
+  private readonly snapshot = new BrowserPanelSnapshotController(this);
 
   constructor(readonly host: BrowserPanelControllerHost) {
     this.operations = new BrowserPanelOperationOwnership(host);
@@ -111,6 +111,9 @@ export class BrowserPanelController implements ReactiveController {
       this.stream.close();
     }
     Object.assign(this, { [key]: value });
+    if (key === "view" && this.view) {
+      this.viewport.captured();
+    }
     this.host.requestUpdate();
     if (key === "activeTargetId" || key === "mode") {
       this.native.presentation.update();
@@ -296,12 +299,9 @@ export class BrowserPanelController implements ReactiveController {
     return this.viewport.observedViewportSize;
   }
 
-  scheduleViewportSync(): void {
-    this.viewport.schedule();
-  }
-
   handleViewportResize(width: number, height: number): void {
     this.viewport.resize(width, height);
+    this.stream.resize();
   }
 
   async startBrowserNow(): Promise<void> {
@@ -387,7 +387,7 @@ export class BrowserPanelController implements ReactiveController {
         const targetId = this.activeTargetId;
         await this.refreshView(targetId, invocation.epoch);
         if (!options.newTab && invocation.isCurrent() && this.view?.targetId === targetId) {
-          this.operations.markNavigationReconciled(client, targetId);
+          this.operations.forgetNavigation(client, targetId);
         }
       }
     } catch (error) {
@@ -402,7 +402,7 @@ export class BrowserPanelController implements ReactiveController {
             this.setState("view", null);
             await this.refreshView(targetId, invocation.epoch);
             if (invocation.isCurrent() && this.view?.targetId === targetId) {
-              this.operations.markNavigationReconciled(client, targetId);
+              this.operations.forgetNavigation(client, targetId);
             }
           }
           if (
@@ -503,7 +503,7 @@ export class BrowserPanelController implements ReactiveController {
         this.activeTargetId === selectedTargetId &&
         this.view?.targetId === selectedTargetId
       ) {
-        this.operations.markNavigationReconciled(actionClient, selectedTargetId);
+        this.operations.forgetNavigation(actionClient, selectedTargetId);
       }
     }, false);
     if (!selectionSucceeded && this.operations.isLive(epoch) && this.activeTargetId === targetId) {
@@ -647,10 +647,6 @@ export class BrowserPanelController implements ReactiveController {
     });
   }
 
-  setUrlDraftEditing(editing: boolean): void {
-    this.urlDraftEditing = editing;
-  }
-
   resetUrlDraftFromView(): void {
     this.setState(
       "urlDraft",
@@ -704,10 +700,6 @@ export class BrowserPanelController implements ReactiveController {
     }
   }
 
-  inspectHighlightRegion() {
-    return this.input.inspectHighlightRegion();
-  }
-
   handleStageClick(event: MouseEvent): void {
     if (!this.native.activeTab) {
       this.input.handleStageClick(event);
@@ -732,35 +724,11 @@ export class BrowserPanelController implements ReactiveController {
     }
   }
 
-  handleOverlayPointerDown(event: PointerEvent): void {
-    this.input.handleOverlayPointerDown(event);
-  }
-
   handleOverlayPointerMove(event: PointerEvent): void {
     if (this.native.activeTab && this.mode === "inspect") {
       this.native.inspect(event);
     } else {
       this.input.handleOverlayPointerMove(event);
     }
-  }
-
-  handleOverlayPointerUp(event: PointerEvent): void {
-    this.input.handleOverlayPointerUp(event);
-  }
-
-  undoStroke(): void {
-    this.input.undoStroke();
-  }
-
-  clearStrokes(): void {
-    this.input.clearStrokes();
-  }
-
-  async sendAnnotation(params: { element?: BrowserInspectedNode | null }): Promise<void> {
-    await this.input.sendAnnotation(params);
-  }
-
-  paintOverlay(): void {
-    this.input.paintOverlay();
   }
 }

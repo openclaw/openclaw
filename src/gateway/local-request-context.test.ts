@@ -143,8 +143,9 @@ describe("local gateway request context", () => {
   });
 
   it("binds typed agent turns to the embedded context", async () => {
+    const cfg = {};
     await withLocalGatewayRequestScope(
-      { deps: {} as CliDeps, getRuntimeConfig: () => ({}) },
+      { deps: {} as CliDeps, getRuntimeConfig: () => cfg },
       async () => {
         const context = getPluginRuntimeGatewayRequestScope()?.context;
         if (!context) {
@@ -428,8 +429,9 @@ describe("local gateway request context", () => {
 
 it("keeps standalone embedded RPC available inside its session admission", async () => {
   const { beginSessionWorkAdmission } = await import("../sessions/session-lifecycle-admission.js");
+  const cfg = { agents: { defaults: {} } };
   await withLocalGatewayRequestScope(
-    { deps: {} as CliDeps, getRuntimeConfig: () => ({ agents: { defaults: {} } }) },
+    { deps: {} as CliDeps, getRuntimeConfig: () => cfg },
     async () => {
       const before = await dispatchGatewayMethodInProcessRaw("agent.identity.get", {
         agentId: "main",

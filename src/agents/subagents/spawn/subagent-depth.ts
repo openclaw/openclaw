@@ -59,7 +59,7 @@ function resolveEntryForSessionKey(params: {
       }
     }
     const entry = params.store.getById(params.sessionKey);
-    if (entry || !params.cfg) {
+    if (entry || !params.cfg || params.store.authoritative) {
       return entry;
     }
   }

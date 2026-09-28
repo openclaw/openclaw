@@ -29,6 +29,7 @@ export function createConnectedContext(
   const baseContext = {
     runtimeConfig: { subscribe, state: {}, ensureLoaded: async () => undefined },
     gateway: {
+      connect: vi.fn(),
       get snapshot() {
         return snapshot;
       },
@@ -42,6 +43,7 @@ export function createConnectedContext(
         listeners.add(listener);
         return () => listeners.delete(listener);
       },
+      subscribeEvents: subscribe,
       updateSelfUser(patch: Partial<Omit<AuthenticatedUser, "id">>) {
         if (!snapshot.selfUser) {
           return;
@@ -89,6 +91,12 @@ export function createConnectedContext(
   };
   return {
     context,
+    emitHello(hello: ApplicationGatewaySnapshot["hello"]) {
+      snapshot = { ...snapshot, hello };
+      for (const listener of listeners) {
+        listener(snapshot);
+      }
+    },
     emitConnected(connected: boolean) {
       snapshot = { ...snapshot, phase: connected ? "connected" : "reconnecting" };
       for (const listener of listeners) {

@@ -560,6 +560,7 @@ describe("Beam session catalog", () => {
 
     try {
       expect((await postUpload(endpoint)).status).toBe(200);
+      expect((await catalog.list({ agentId: "main" }))[0]?.sessions).toHaveLength(1);
       await expect(catalog.archive?.({ ...params, hostId: "other-host" })).rejects.toThrow(
         "unknown Beam host: other-host",
       );

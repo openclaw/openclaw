@@ -4,9 +4,9 @@
  * through guarded host or sandbox filesystem operations.
  */
 import path from "node:path";
+import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "@openclaw/fs-safe/advanced";
 import { Type } from "typebox";
 import { createAbortError } from "../infra/abort-signal.js";
-import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-guards.js";
 import {
   type ApplyPatchContainmentSource,
   withApplyPatchContainmentHint,

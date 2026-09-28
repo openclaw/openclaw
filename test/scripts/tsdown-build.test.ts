@@ -142,7 +142,7 @@ describe("resolveTsdownBuildInvocation", () => {
 
   it("forwards explicit tsdown args after wrapper args are parsed", () => {
     const result = resolveTsdownBuildInvocation({
-      args: ["--format", "esm"],
+      args: ["--format", "esm", "--concurrency", "2"],
       platform: "linux",
       nodeExecPath: "/usr/bin/node",
       env: {},
@@ -151,7 +151,8 @@ describe("resolveTsdownBuildInvocation", () => {
 
     expect(result.args[0]).toBe("node_modules/tsdown/dist/run.mjs");
     expect(result.args).toEqual(expect.arrayContaining(["--config-loader", "unrun", "--no-clean"]));
-    expect(result.args.slice(-2)).toEqual(["--format", "esm"]);
+    expect(result.args.slice(-4)).toEqual(["--format", "esm", "--concurrency", "2"]);
+    expect(result.args.filter((arg) => arg === "--concurrency")).toHaveLength(1);
   });
 
   it("builds AI, packages, runtime, and bounded declarations sequentially", () => {
@@ -167,6 +168,8 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(results[0]?.args).toEqual(
       expect.arrayContaining(["--config", "tsdown.ai.config.ts", "--format", "esm"]),
     );
+    expect(results[1]?.args).toEqual(expect.arrayContaining(["--concurrency", "1"]));
+    expect(results[2]?.args).not.toContain("--concurrency");
     const filters = results.slice(1).map((result) => {
       const filterIndex = result.args.indexOf("--filter");
       return result.args[filterIndex + 1];
@@ -196,6 +199,9 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(results).toHaveLength(2);
     expect(results[0]?.args).toEqual(expect.arrayContaining(["--config", "tsdown.ai.config.ts"]));
     expect(results[1]?.args).not.toContain("--filter");
+    for (const result of results) {
+      expect(result.args).not.toContain("--concurrency");
+    }
   });
 
   it("serializes declaration graphs when --dts overrides the no-DTS environment", () => {
@@ -209,6 +215,7 @@ describe("resolveTsdownBuildInvocation", () => {
 
     expect(results).toHaveLength(3 + TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.length);
     expect(results[1]?.args).toEqual(expect.arrayContaining(["--filter", "openclaw-packages"]));
+    expect(results[1]?.args).toEqual(expect.arrayContaining(["--concurrency", "1"]));
     expect(results[2]?.args).toEqual(expect.arrayContaining(["--filter", "openclaw-unified"]));
     expect(results.at(-1)?.args).toEqual(
       expect.arrayContaining(["--filter", TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.at(-1)]),
@@ -688,6 +695,8 @@ describe("resolveTsdownBuildInvocation", () => {
         "--logLevel",
         "warn",
         "--no-clean",
+        "--concurrency",
+        "1",
       ],
       options: {
         stdio: ["ignore", "pipe", "pipe"],
@@ -1757,6 +1766,8 @@ describe("resolveTsdownBuildInvocation", () => {
         "--logLevel",
         "warn",
         "--no-clean",
+        "--concurrency",
+        "1",
       ],
       options: {
         stdio: ["ignore", "pipe", "pipe"],
@@ -2540,7 +2551,104 @@ describe("runTsdownBuildInvocation", () => {
       expect(result.status).toBe(0);
       expect(result.hasIneffectiveDynamicImport).toBe(true);
       expect(output.chunks.join("")).toContain("stdout-ok");
+      expect(output.chunks.join("")).not.toContain("[tsdown-build] child result");
     }));
+
+  it("reports a silent compiler failure without attributing it to cleanup", () =>
+    fixture.run(async () => {
+      const output = createWriteSink();
+      const result = await runTsdownBuildInvocation(
+        {
+          command: process.execPath,
+          args: ["-e", "process.exit(7)"],
+          options: { stdio: ["ignore", "pipe", "pipe"], shell: false, env: process.env },
+        },
+        { stderr: output.sink, env: { OPENCLAW_TSDOWN_HEARTBEAT_MS: "0" } },
+      );
+
+      expect(result).toMatchObject({ status: 7, signal: null, timedOut: false, error: null });
+      expect(output.chunks.join("")).toContain(
+        JSON.stringify({
+          status: 7,
+          signal: null,
+          parentSignal: null,
+          timedOut: false,
+          cleanup: "none",
+          observedProcessState: "dead",
+          observationScope: process.platform === "win32" ? "leader" : "process-group",
+          finalStatus: 7,
+        }),
+      );
+    }));
+
+  it.skipIf(process.platform === "win32")(
+    "reports cleanup rejecting a successful compiler with a remaining descendant",
+    () =>
+      fixture.run(async () => {
+        const rootDir = createTempDir("openclaw-tsdown-close-");
+        const childPidPath = path.join(rootDir, "child.pid");
+        const childScript = [
+          `require('node:fs').writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+          "setInterval(() => {}, 1000);",
+          "process.send('ready');",
+        ].join("");
+        const parentScript = [
+          `const child = require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });`,
+          // Readiness owns the race: the compiler exits only once its same-group
+          // descendant is running, without that descendant holding output pipes.
+          "child.once('message', () => { child.disconnect(); child.unref(); process.exit(0); });",
+        ].join("");
+        const output = createWriteSink();
+        const completion = runTsdownBuildInvocation(
+          {
+            command: process.execPath,
+            args: ["-e", parentScript],
+            options: { stdio: ["ignore", "pipe", "pipe"], shell: false, env: process.env },
+          },
+          {
+            stderr: output.sink,
+            env: { OPENCLAW_TSDOWN_HEARTBEAT_MS: "0", OPENCLAW_TSDOWN_TIMEOUT_MS: "5000" },
+          },
+        );
+        let childPid: number | undefined;
+        try {
+          childPid = await waitForPidFile(childPidPath, 2_000);
+          expect(await completion).toMatchObject({
+            status: 1,
+            signal: null,
+            timedOut: false,
+            error: null,
+          });
+          expect(output.chunks.join("")).toContain(
+            JSON.stringify({
+              status: 0,
+              signal: null,
+              parentSignal: null,
+              timedOut: false,
+              cleanup: "remaining-descendants",
+              observedProcessState: "dead",
+              observationScope: "process-group",
+              finalStatus: 1,
+            }),
+          );
+          await waitForDead(childPid, 2_000);
+        } finally {
+          await fixture.verifyCleanup(async () => {
+            try {
+              await completion;
+            } finally {
+              childPid ??= fs.existsSync(childPidPath)
+                ? Number(fs.readFileSync(childPidPath, "utf8"))
+                : undefined;
+              if (childPid !== undefined && isProcessAlive(childPid)) {
+                process.kill(childPid, "SIGKILL");
+                await waitForDead(childPid, 2_000);
+              }
+            }
+          });
+        }
+      }),
+  );
 
   it.for(["native declarations", "runtime JavaScript"])(
     "preserves successful %s when source syntax is invalid",
@@ -2587,7 +2695,7 @@ describe("runTsdownBuildInvocation", () => {
           'import { build } from "tsdown";',
           ...(native
             ? [
-                'const nativePackage = import.meta.resolve("typescript-native/package.json");',
+                'const nativePackage = import.meta.resolve("typescript/package.json");',
                 'const { default: getExePath } = await import(new URL("lib/getExePath.js", nativePackage).href);',
               ]
             : []),
@@ -2695,6 +2803,8 @@ describe("runTsdownBuildInvocation", () => {
       expect(result.status).toBeNull();
       expect(result.signal).toBe("SIGTERM");
       expect(output.chunks.join("")).toContain("timeout after 50ms");
+      expect(output.chunks.join("")).toContain('"status":null,"signal":"SIGTERM"');
+      expect(output.chunks.join("")).toContain('"cleanup":"timeout"');
     }));
 
   it.skipIf(process.platform === "win32")(

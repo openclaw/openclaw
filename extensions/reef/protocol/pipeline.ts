@@ -1,5 +1,5 @@
 import { sha256 } from "@noble/hashes/sha2.js";
-import { appendAudit, type AuditStore } from "./audit.js";
+import type { AuditStore } from "./audit.js";
 import { canonicalBytes } from "./canonical.js";
 import { deterministicChecks } from "./checks.js";
 import { fromBase64url, hex } from "./encoding.js";
@@ -12,7 +12,8 @@ import {
   validateMessageBody,
   type Envelope,
   type MessageBody,
-  type ReplayStore,
+  type OpenOptions,
+  type SealOptions,
 } from "./envelope.js";
 import {
   admitVerdict,
@@ -71,16 +72,7 @@ interface GuardedPipelineOptions {
   reviewGate?: ReviewGate;
 }
 
-export interface ComposeOutboundOptions extends GuardedPipelineOptions {
-  id: string;
-  from: string;
-  to: string;
-  body: MessageBody;
-  senderSigningSecretKey: string;
-  recipientEncryptionPublicKey: string;
-  ts?: number;
-  rng?: (length: number) => Uint8Array;
-}
+export interface ComposeOutboundOptions extends GuardedPipelineOptions, SealOptions {}
 
 export interface OutboundResult {
   envelope: Envelope;
@@ -118,7 +110,7 @@ export async function composeOutbound(options: ComposeOutboundOptions): Promise<
     proposalHash,
     options.policyVersion,
   );
-  await appendAudit(options.audit, "proposal", {
+  await options.audit.appendEvent("proposal", {
     id: options.id,
     from: options.from,
     to: options.to,
@@ -127,7 +119,7 @@ export async function composeOutbound(options: ComposeOutboundOptions): Promise<
     body: options.body,
   });
   if (!checks.allowed) {
-    await appendAudit(options.audit, "deterministic_verdict", {
+    await options.audit.appendEvent("deterministic_verdict", {
       id: options.id,
       approvalDigest,
       decision: "deny",
@@ -146,20 +138,13 @@ export async function composeOutbound(options: ComposeOutboundOptions): Promise<
     options.body.text,
   );
   const envelope = seal(options);
-  await appendAudit(options.audit, "envelope", { id: options.id, approvalDigest, envelope });
+  await options.audit.appendEvent("envelope", { id: options.id, approvalDigest, envelope });
   return { envelope, verdict };
 }
 
-export interface ComposeInboundOptions extends GuardedPipelineOptions {
+export interface ComposeInboundOptions extends GuardedPipelineOptions, OpenOptions {
   envelope: Envelope;
-  self: string;
-  recipientEncryptionSecretKey: string;
   recipientSigningSecretKey: string;
-  senderSigningPublicKey?: string;
-  replayStore: ReplayStore;
-  now?: number;
-  maxAgeSeconds?: number;
-  maxFutureSkewSeconds?: number;
 }
 
 export type InboundResult =
@@ -207,7 +192,7 @@ export async function composeInbound(options: ComposeInboundOptions): Promise<In
     const checks = deterministicChecks(opened.body.text);
     if (!checks.allowed) {
       await refreshClaim();
-      await appendAudit(options.audit, "deterministic_verdict", {
+      await options.audit.appendEvent("deterministic_verdict", {
         id: options.envelope.id,
         approvalDigest,
         decision: "deny",
@@ -290,7 +275,7 @@ export async function composeInbound(options: ComposeInboundOptions): Promise<In
       throw error;
     }
     await refreshClaim();
-    const inboxEntry = await appendAudit(options.audit, "inbox", {
+    const inboxEntry = await options.audit.appendEvent("inbox", {
       id: options.envelope.id,
       bodyHash: proposalHash,
       approvalDigest,
@@ -306,7 +291,7 @@ export async function composeInbound(options: ComposeInboundOptions): Promise<In
       },
       options.recipientSigningSecretKey,
     );
-    await appendAudit(options.audit, "receipt", {
+    await options.audit.appendEvent("receipt", {
       id: options.envelope.id,
       approvalDigest,
       receipt,
@@ -334,7 +319,7 @@ async function completeRejection(
   approvalDigest: string,
   category: string,
 ): Promise<SignedReceipt> {
-  const rejectionEntry = await appendAudit(options.audit, "inbox_rejected", {
+  const rejectionEntry = await options.audit.appendEvent("inbox_rejected", {
     id: options.envelope.id,
     bodyHash: proposalHash,
     approvalDigest,
@@ -351,7 +336,7 @@ async function completeRejection(
     },
     options.recipientSigningSecretKey,
   );
-  await appendAudit(options.audit, "receipt", { id: options.envelope.id, approvalDigest, receipt });
+  await options.audit.appendEvent("receipt", { id: options.envelope.id, approvalDigest, receipt });
   await options.replayStore.complete(peer, options.envelope.id, receipt);
   return receipt;
 }
@@ -413,7 +398,7 @@ async function classifyWithReview(
     options.guard.pinnedModel,
     request.policyVersion,
   );
-  await appendAudit(options.audit, "guard_verdict", {
+  await options.audit.appendEvent("guard_verdict", {
     id,
     from: source,
     to: destination,
@@ -497,7 +482,7 @@ async function classifyApprovedDelivery(
     approvalDigest: string;
   },
 ): Promise<Verdict> {
-  await appendAudit(options.audit, "review_approval", {
+  await options.audit.appendEvent("review_approval", {
     id: context.id,
     from: context.source,
     to: context.destination,
@@ -511,7 +496,7 @@ async function classifyApprovedDelivery(
     options.guard.pinnedModel,
     request.policyVersion,
   );
-  await appendAudit(options.audit, "guard_verdict", {
+  await options.audit.appendEvent("guard_verdict", {
     id: context.id,
     from: context.source,
     to: context.destination,

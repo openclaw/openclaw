@@ -4,7 +4,10 @@ import type {
   RuntimeConversationBindingRouteResult,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveAgentRoute, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
-import { getConversationSession } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  getConversationSession,
+  resolveStorePath,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveSlackReplyToMode } from "../../account-reply-mode.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import {
@@ -15,7 +18,6 @@ import { resolveSlackThreadContext } from "../../threading.js";
 import type { SlackMessageEvent } from "../../types.js";
 import { readSlackAssistantThreadContext } from "../assistant-thread-context.js";
 import type { SlackChannelConfigResolved } from "../channel-config.js";
-import { resolveStorePath } from "../config.runtime.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackEventScope } from "../event-scope.js";
 import { captureSlackSessionTargetGuard, getSlackSessionRuns } from "../session-run-targets.js";
@@ -46,17 +48,6 @@ type SlackRoutingContext = {
   threadKeys: ReturnType<typeof resolveThreadSessionKeys>;
   sessionKey: string;
 };
-
-function resolveSlackBaseConversationId(params: {
-  message: SlackMessageEvent;
-  isDirectMessage: boolean;
-  eventScope?: SlackEventScope;
-}): string {
-  const raw = params.isDirectMessage
-    ? `user:${params.message.user ?? "unknown"}`
-    : params.message.channel;
-  return qualifySlackConversationId(raw, params.eventScope);
-}
 
 function resolveSlackInitialAgentRoute(params: {
   ctx: SlackRoutingContextDeps;
@@ -170,11 +161,10 @@ export function resolveSlackRoutingContext(params: {
         ? threadTs
         : autoThreadId;
   const routedThreadId = canonicalThreadId ?? (isRoomish ? seededRoomThreadId : undefined);
-  const baseConversationId = resolveSlackBaseConversationId({
-    message,
-    isDirectMessage,
+  const baseConversationId = qualifySlackConversationId(
+    isDirectMessage ? `user:${message.user ?? "unknown"}` : message.channel,
     eventScope,
-  });
+  );
   const runtimeBindingThreadId =
     routedThreadId ?? (isDirectMessage && isThreadReply ? threadTs : undefined);
   const bindingRoute = resolveSlackConversationBindingRoute({

@@ -11,6 +11,7 @@ import type {
   WorkerProfile,
 } from "../../plugins/capability-provider.types.js";
 import type { DesktopObserveRequester } from "../desktop/observe-requester.js";
+import type { WorkerEnvironmentPreparation } from "./environment-record.js";
 import type {
   WorkerPlacementMoveSource,
   WorkerPlacementMoveTarget,
@@ -57,11 +58,14 @@ export type WorkerEnvironmentServiceRecord = {
   ownerEpoch: number;
   createdAtMs: number;
   idleSinceAtMs: number | null;
+  destroyRequestedAtMs: number | null;
   attachedSessionIds: readonly string[];
   desktopAvailable: boolean;
   desktopApps: readonly WorkerDesktopApp["id"][];
   tunnelStatus: WorkerTunnelStatus;
-  preparation?: { purpose: "reserve" | "build"; key: string } | null;
+  preparation?:
+    | (WorkerEnvironmentPreparation & { project?: { label?: string; baseCommit: string } })
+    | null;
   error?: string;
 };
 
@@ -82,6 +86,13 @@ export type WorkerDesktopLaunchResult = {
 
 /** Request-facing lifecycle methods, kept separate from persistence and provider internals. */
 export type WorkerEnvironmentServiceContract = {
+  /** Current explicit provider attestation, never the persisted legacy default. */
+  getDedicatedNodeLeaseSignal(environmentId: string): AbortSignal | undefined;
+  captureSessionAttachment(identity: WorkerEnvironmentSessionIdentity): {
+    binding: WorkerEnvironmentAttachment;
+    assertCurrent(): void;
+    touch(): Promise<void>;
+  };
   getSessionAttachment(sessionId: string): WorkerEnvironmentAttachment | undefined;
   findSessionAttachment(
     identity: Pick<WorkerEnvironmentSessionIdentity, "agentId" | "sessionKey">,
@@ -119,8 +130,16 @@ export type WorkerEnvironmentServiceContract = {
     environmentId: string;
     ownerEpoch: number;
     remotePort: number;
-  }): Promise<{ connect: () => Promise<import("node:stream").Duplex>; close: () => Promise<void> }>;
+  }): Promise<{
+    connect: (
+      assertCurrent?: () => void,
+      touch?: () => Promise<void>,
+    ) => Promise<import("node:stream").Duplex>;
+    close: () => Promise<void>;
+  }>;
   list(): WorkerEnvironmentServiceRecord[];
+  readPreparedPoolSummary(): { maxTotal: number; reservedEnvironmentIds: string[] };
+  readReadyWorkerTarget(profileId: string): number;
   get(environmentId: string): WorkerEnvironmentServiceRecord | undefined;
   inventoryVersion(): number;
   readMachineShape(

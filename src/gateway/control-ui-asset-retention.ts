@@ -3,11 +3,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, type Dirent, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isWithinDir } from "@openclaw/fs-safe/path";
 import { resolveStateDir } from "../config/paths.js";
 import { sha256File } from "../infra/directory-durability.js";
 import { isErrno } from "../infra/errors.js";
 import { copyFileHandle } from "../infra/file-descriptor.js";
-import { isWithinDir } from "../infra/path-safety.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseControlUiAssetManifest } from "./control-ui-asset-manifest-parse.js";
 import {

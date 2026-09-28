@@ -5,12 +5,18 @@ import {
   resolveInboundDebounceMs,
 } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { buildTelegramInboundDebounceKey } from "./bot-handlers.debounce-key.js";
 import {
-  buildTelegramInboundDebounceConversationKey,
-  buildTelegramInboundDebounceKey,
-} from "./bot-handlers.debounce-key.js";
+  buildSyntheticContext,
+  buildSyntheticTextMessage,
+  formatTelegramAmbientTranscriptBody,
+  latestPromptContextAmbientWatermark,
+  latestPromptContextMinTimestampMs,
+  promptContextBoundaryOptions,
+} from "./bot-handlers.message-context.js";
 import type { TelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
 import type {
   RegisterTelegramHandlerParams,
@@ -24,12 +30,12 @@ import type {
 import type { TelegramSpooledReplayDeferredParticipant } from "./bot-processing-outcome.js";
 import {
   buildTelegramThreadParams,
+  buildTelegramGroupPeerId,
   getTelegramTextParts,
   joinTelegramTextParts,
   type TelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
-import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
 
 type TelegramDebounceLane = "default" | "forward";
 
@@ -45,7 +51,7 @@ export type TelegramDebounceEntry = {
   threadSpec: TelegramThreadSpec;
   promptContextMinTimestampMs?: number;
   promptContextAmbientWatermark?: TelegramAmbientTranscriptWatermark;
-  dispatchDedupeClaims: TelegramMessageDispatchReplayClaim[];
+  dispatchDedupeClaims: ChannelReplayClaimHandle[];
   spooledReplayParticipant?: TelegramSpooledReplayDeferredParticipant;
   channelIngressResolvers: readonly TelegramChannelIngressResolver[];
 };
@@ -70,17 +76,11 @@ export function createTelegramInboundBuffers({
   message: TelegramMessagePipeline;
 }): TelegramInboundBuffers {
   const {
-    promptContextBoundaryOptions,
-    latestPromptContextMinTimestampMs,
-    latestPromptContextAmbientWatermark,
     mergeDispatchDedupeClaims,
     releaseDispatchDedupeClaims,
     buildFailedProcessingResult,
     settleSpooledReplayParticipants,
     spooledReplayOptions,
-    buildSyntheticTextMessage,
-    buildSyntheticContext,
-    formatTelegramAmbientTranscriptBody,
     processMessageWithReplyChain,
   } = message;
   const readConfig = createRuntimeConfigReader(cfg);
@@ -302,7 +302,7 @@ export function createTelegramInboundBuffers({
     if (!senderId) {
       return;
     }
-    const conversationKey = buildTelegramInboundDebounceConversationKey({ chatId, threadSpec });
+    const conversationKey = buildTelegramGroupPeerId(chatId, threadSpec);
     inboundDebouncer.cancelKey(
       buildTelegramInboundDebounceKey({ accountId, conversationKey, senderId }),
     );

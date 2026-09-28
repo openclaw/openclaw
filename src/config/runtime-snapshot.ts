@@ -23,7 +23,7 @@ import {
   type CapturedRuntimeConfigRead,
   getRuntimeConfigCapture,
 } from "./runtime-config-capture-state.js";
-import type { OpenClawConfig } from "./types.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 
 export type RuntimeConfigSnapshotRefreshOptions = {
   includeAuthStoreRefs?: boolean;
@@ -99,6 +99,7 @@ export type RuntimeConfigSnapshotRefreshHandler = {
 
 export type RuntimeConfigWriteNotification = {
   configPath: string;
+  snapshot: ConfigFileSnapshot;
   sourceConfig: OpenClawConfig;
   runtimeConfig: OpenClawConfig;
   persistedHash: string;
@@ -119,23 +120,6 @@ export type RuntimeConfigWritePreparedCandidate = {
   reapplyRuntimeOverlays?: (config: OpenClawConfig) => OpenClawConfig;
   reapplyCompareOverlays?: (config: OpenClawConfig) => OpenClawConfig;
 };
-
-export function projectRuntimeConfigWritePreparedCandidates(
-  preparedCandidates: ReadonlyMap<symbol, RuntimeConfigWritePreparedCandidate>,
-  runtimeConfig: OpenClawConfig,
-  sourceConfig: OpenClawConfig,
-): Map<symbol, RuntimeConfigWritePreparedCandidate> {
-  return new Map(
-    [...preparedCandidates].map(([ownerId, candidate]) => [
-      ownerId,
-      {
-        ...candidate,
-        runtimeConfig: candidate.reapplyRuntimeOverlays?.(runtimeConfig) ?? candidate.runtimeConfig,
-        compareConfig: candidate.reapplyCompareOverlays?.(sourceConfig) ?? candidate.compareConfig,
-      },
-    ]),
-  );
-}
 
 export type RuntimeConfigSnapshotMetadata = {
   revision: number;
@@ -404,44 +388,6 @@ export function resolveRuntimeConfigCacheKey(config: OpenClawConfig): string {
     return `runtime:${metadata.revision}:${metadata.fingerprint}`;
   }
   return `config:${hashRuntimeConfigValue(config)}`;
-}
-
-export function createRuntimeConfigWriteNotification(params: {
-  configPath: string;
-  sourceConfig: OpenClawConfig;
-  runtimeConfig: OpenClawConfig;
-  persistedHash: string;
-  writtenAtMs?: number;
-  afterWrite?: ConfigWriteAfterWrite;
-  runtimeRefresh?: RuntimeConfigSnapshotRefreshOptions;
-  preparedCandidate?: RuntimeConfigWritePreparedCandidate;
-  preparedCandidatesByOwner?: ReadonlyMap<symbol, RuntimeConfigWritePreparedCandidate>;
-}): RuntimeConfigWriteNotification {
-  const metadata =
-    params.runtimeConfig === runtimeConfigSnapshot && runtimeConfigSnapshotMetadata
-      ? runtimeConfigSnapshotMetadata
-      : {
-          revision: runtimeConfigSnapshotRevision,
-          fingerprint: hashRuntimeConfigValue(params.runtimeConfig),
-          sourceFingerprint: hashRuntimeConfigValue(params.sourceConfig),
-          updatedAtMs: Date.now(),
-        };
-  return {
-    configPath: params.configPath,
-    sourceConfig: params.sourceConfig,
-    runtimeConfig: params.runtimeConfig,
-    persistedHash: params.persistedHash,
-    revision: metadata.revision,
-    fingerprint: metadata.fingerprint,
-    sourceFingerprint: metadata.sourceFingerprint,
-    writtenAtMs: params.writtenAtMs ?? Date.now(),
-    afterWrite: params.afterWrite,
-    ...(params.runtimeRefresh ? { runtimeRefresh: params.runtimeRefresh } : {}),
-    ...(params.preparedCandidate ? { preparedCandidate: params.preparedCandidate } : {}),
-    ...(params.preparedCandidatesByOwner
-      ? { preparedCandidatesByOwner: params.preparedCandidatesByOwner }
-      : {}),
-  };
 }
 
 export function selectApplicableRuntimeConfig(params: {

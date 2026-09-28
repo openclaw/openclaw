@@ -27,7 +27,11 @@ import {
   type GatewayServiceCommandConfig,
   type GatewayServiceState,
 } from "../../daemon/service-types.js";
-import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import {
+  readGatewayServiceState,
+  resolveGatewayService,
+  type GatewayService,
+} from "../../daemon/service.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
@@ -267,6 +271,21 @@ export async function inspectManagedGatewayServiceBeforeUpdate(params: {
     : { kind: "unresolved", root, fingerprint };
 }
 
+/** Update ownership requires the effective loaded command and an admitted manager route. */
+export function readGatewayServiceStateForUpdate(
+  service: GatewayService,
+  env: NodeJS.ProcessEnv | undefined,
+  timeoutMs?: number,
+): Promise<GatewayServiceState> {
+  return readGatewayServiceState(service, {
+    env,
+    requireEffective: true,
+    requireLoadedCommand: true,
+    validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
+    timeoutMs,
+  });
+}
+
 /** Recorded launchers cannot select an update's package, Node, or state without live inspection. */
 export async function readManagedGatewayServiceForUpdate(
   env: NodeJS.ProcessEnv,
@@ -277,12 +296,7 @@ export async function readManagedGatewayServiceForUpdate(
     let service: ReturnType<typeof resolveGatewayService> | undefined;
     try {
       service = resolveGatewayService();
-      const state = await readGatewayServiceState(service, {
-        env,
-        requireEffective: true,
-        requireLoadedCommand: true,
-        validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
-      });
+      const state = await readGatewayServiceStateForUpdate(service, env);
       if (!state.command) {
         return null;
       }

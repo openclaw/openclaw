@@ -1,9 +1,6 @@
 /** Agent-runner execution loop, fallback handling, and user-facing failure mapping. */
 import crypto from "node:crypto";
-import {
-  hasNonEmptyString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import type {
   AdmittedRunContext,
@@ -11,10 +8,7 @@ import type {
 } from "../../agents/admitted-run-context.js";
 import { peekSessionMcpRuntime } from "../../agents/agent-bundle-mcp-manager-api.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
-import {
-  classifyFailoverReason,
-  isContextOverflowError,
-} from "../../agents/embedded-agent-helpers.js";
+import { classifyFailoverReason } from "../../agents/embedded-agent-helpers.js";
 import {
   createDeferredEmbeddedRunLifecycleManager,
   type DeferredEmbeddedRunLifecycleManager,
@@ -402,28 +396,6 @@ async function executeAgentTurnInternalLoop(
     }
   }
 
-  // If the run completed but with an embedded context overflow error that
-  // wasn't recovered from (e.g. compaction reset already attempted), surface
-  // the error to the user instead of silently returning an empty response.
-  // See #26905: Slack DM sessions silently swallowed messages when context
-  // overflow errors were returned as embedded error payloads.
-  const finalEmbeddedError = runResult?.meta?.error;
-  const hasPayloadText = runResult?.payloads?.some((p) => normalizeOptionalString(p.text));
-  if (finalEmbeddedError && !hasPayloadText) {
-    const errorMsg = finalEmbeddedError.message ?? "";
-    if (isContextOverflowError(errorMsg)) {
-      params.replyOperation?.fail("run_failed", finalEmbeddedError);
-      return {
-        kind: "final",
-        resolved: { provider: fallbackProvider, model: fallbackModel },
-        payload: markAgentRunFailureReplyPayload({
-          text: "⚠️ Context overflow — this conversation is too large for the model. Use /new to start a fresh session.",
-        }),
-        postCompactionModelFailure: fallbackCycleState.postCompactionModelAttempted || undefined,
-      };
-    }
-  }
-
   // Surface rate limit and overload errors that occur mid-turn (after tool
   // calls) instead of silently returning an empty response. See #36142.
   // Only applies when the assistant produced no valid (non-error) reply text,
@@ -443,7 +415,7 @@ async function executeAgentTurnInternalLoop(
       (p) => !p.isError && !p.isReasoning && hasOutboundReplyContent(p, { trimText: true }),
     );
     if (!hasNonErrorContent) {
-      const metaErrorMsg = finalEmbeddedError?.message ?? "";
+      const metaErrorMsg = runResult.meta?.error?.message ?? "";
       const rawErrorPayloadText =
         runResult.payloads?.find(
           (p) => p.isError && hasNonEmptyString(p.text) && !p.text.startsWith("⚠️"),

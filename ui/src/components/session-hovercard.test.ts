@@ -62,6 +62,32 @@ function attributionSummary(container: ParentNode): string {
 }
 
 describe("renderSessionHovercard", () => {
+  it.each([undefined, "Validation worker"])(
+    "shows the full failure above the notepad (child: %s)",
+    (childLabel) => {
+      const container = document.createElement("div");
+      const reason = "Validation failed.\n<worker> was unavailable; retry after reconnecting.";
+      const failed = row({ attention: { kind: "error", reason, childLabel } });
+      render(renderSessionHovercard({ row: failed, progressCard: progressCard() }), container);
+      const error = container.querySelector(".session-hovercard__error");
+      expect(error?.textContent).toContain(reason);
+      expect(error?.textContent).toContain(
+        childLabel ? "Child session Validation worker failed:" : "Run failed:",
+      );
+      expect(error?.querySelector("worker")).toBeNull();
+      expect(error?.querySelector("svg")).not.toBeNull();
+      expect(error?.nextElementSibling?.classList.contains("session-hovercard__notepad")).toBe(
+        true,
+      );
+
+      render(renderSessionHovercard({ row: failed }), container);
+      expect(container.querySelector(".session-hovercard__error")?.textContent).toContain(reason);
+      expect(container.querySelector(".session-hovercard__notepad")).toBeNull();
+      render(renderSessionHovercard({ row: row({ attention: { kind: "none" } }) }), container);
+      expect(container.querySelector(".session-hovercard__error")).toBeNull();
+    },
+  );
+
   it("puts channel identity before the title and keeps session contributors separate", () => {
     const container = document.createElement("div");
     render(

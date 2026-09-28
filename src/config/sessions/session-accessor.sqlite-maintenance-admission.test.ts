@@ -73,12 +73,11 @@ vi.mock("./session-accessor.sqlite-reclamation-commit.js", async (importOriginal
     _gate: SharedArrayBuffer,
     _database: unknown,
     assertCurrent: () => void,
-    run: (authorize: () => unknown[]) => Promise<T>,
+    run: (authorize: () => void) => Promise<T>,
   ) =>
     await run(() => {
       assertCurrent();
       storage.committed = true;
-      return [];
     }),
 }));
 vi.mock("./session-accessor.sqlite-reclamation-worker.js", async () => {

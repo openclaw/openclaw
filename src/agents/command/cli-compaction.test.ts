@@ -31,40 +31,12 @@ import {
   runCliTurnCompactionLifecycle,
   setCliCompactionTestDeps,
 } from "./cli-compaction.js";
-import { buildContextEngine } from "./cli-compaction.test-support.js";
+import {
+  buildContextEngine,
+  systemCompactionHost,
+  writeSessionFile,
+} from "./cli-compaction.test-support.js";
 import { recordCliCompactionInStore as recordCliCompactionInStoreImpl } from "./session-store.js";
-
-async function writeSessionFile(params: { sessionFile: string; sessionId: string }) {
-  // The lifecycle compacts canonical OpenClaw session JSONL, so tests write the
-  // same session/message envelope the real store appends.
-  await fs.mkdir(path.dirname(params.sessionFile), { recursive: true });
-  await fs.writeFile(
-    params.sessionFile,
-    [
-      JSON.stringify({
-        type: "session",
-        version: CURRENT_SESSION_VERSION,
-        id: params.sessionId,
-        timestamp: new Date(0).toISOString(),
-        cwd: path.dirname(params.sessionFile),
-      }),
-      JSON.stringify({
-        type: "message",
-        message: { role: "user", content: "old ask", timestamp: 1 },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "old answer" }],
-          timestamp: 2,
-        },
-      }),
-      "",
-    ].join("\n"),
-    "utf-8",
-  );
-}
 
 type CliCompactionTestDeps = Parameters<typeof setCliCompactionTestDeps>[0];
 type CliCompactionParams = Parameters<typeof runCliTurnCompactionLifecycle>[0];
@@ -186,7 +158,7 @@ async function prepareCompactionScenario(params: {
     maintenance,
     recordCliCompactionInStore,
     run: (overrides: Partial<CliCompactionParams> = {}) =>
-      runCliTurnCompactionLifecycle({ ...runParams, ...overrides }),
+      runCliTurnCompactionLifecycle({ ...runParams, ...overrides }, systemCompactionHost),
     sessionEntry,
     sessionId,
     sessionKey,
@@ -1525,19 +1497,22 @@ describe("runCliTurnCompactionLifecycle", () => {
       resolveLiveToolResultMaxChars: () => 20_000,
       recordCliCompactionInStore,
     });
-    const result = await runCliTurnCompactionLifecycle({
-      cfg: {} as OpenClawConfig,
-      sessionId,
-      sessionKey,
-      sessionEntry,
-      sessionStore,
-      storePath,
-      sessionAgentId: "main",
-      workspaceDir: tmpDir,
-      agentDir: tmpDir,
-      provider: "claude-cli",
-      model: "opus",
-    });
+    const result = await runCliTurnCompactionLifecycle(
+      {
+        cfg: {} as OpenClawConfig,
+        sessionId,
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        storePath,
+        sessionAgentId: "main",
+        workspaceDir: tmpDir,
+        agentDir: tmpDir,
+        provider: "claude-cli",
+        model: "opus",
+      },
+      systemCompactionHost,
+    );
 
     expect(result).toBe(sessionEntry);
     expect(compactCalls).toEqual([]);

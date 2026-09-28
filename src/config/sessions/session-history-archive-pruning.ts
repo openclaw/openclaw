@@ -18,7 +18,6 @@ import {
   readSqliteSessionArchivePruning,
   withSqliteSessionPageReclamation,
 } from "./session-accessor.sqlite-page-reclamation.js";
-import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import {
   observeSessionArchivePruning,
   timeArchivePruningAsync,
@@ -44,20 +43,6 @@ type OwnedArchivePruningParams = ArchivePruningParams & {
   assertCurrent: () => void;
   archives: SessionArchivePruningOperations;
 };
-
-function withArchivePruningWriter<T>(
-  params: OwnedArchivePruningParams,
-  run: () => Promise<T>,
-): Promise<T> {
-  return runExclusiveSqliteSessionWrite(
-    params.databaseOptions,
-    async () => {
-      params.assertCurrent();
-      return run();
-    },
-    "session.history.archive-prune",
-  );
-}
 
 export type SessionArchivePruningResult = {
   removedFiles: number;
@@ -144,7 +129,7 @@ async function pruneCanonicalSessionTranscriptArchivesToHighWater(
   let usage = await measure();
   let removedFiles = 0;
   while (usage.totalBytes > params.highWaterBytes) {
-    const removed = await withArchivePruningWriter(params, async () => {
+    const removed = await params.archives.withWriter(async () => {
       // A foreground writer may have freed space while this item waited for admission.
       usage = await measure();
       params.assertCurrent();
@@ -268,7 +253,7 @@ async function pruneSessionArchivesWithOwner(
     highWaterBytes: params.highWaterBytes,
     storePath: params.storePath,
     removeFile: (file) =>
-      withArchivePruningWriter(params, async () => {
+      params.archives.withWriter(async () => {
         const usage = await measure();
         params.assertCurrent();
         if (usage.totalBytes <= params.highWaterBytes) {

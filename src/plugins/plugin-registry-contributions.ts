@@ -28,6 +28,7 @@ import {
   type PluginRegistryIdNormalizerOptions,
 } from "./plugin-registry-id-normalizer.js";
 import {
+  canReusePluginRegistrySnapshot,
   loadPluginRegistrySnapshotWithMetadata,
   type LoadPluginRegistryParams,
   type PluginRegistrySnapshot,
@@ -93,19 +94,7 @@ function loadManifestContractRecords(
 ): readonly PluginManifestRecord[] {
   let records = params.manifestRecords;
   if (!records) {
-    const requiresExplicitRegistry =
-      params.index !== undefined ||
-      params.preferPersisted === false ||
-      params.allowCurrent === false ||
-      params.stateDir !== undefined ||
-      params.filePath !== undefined ||
-      params.pluginIndexFilePath !== undefined ||
-      params.installRecords !== undefined ||
-      params.candidates !== undefined ||
-      params.diagnostics !== undefined ||
-      params.discovery !== undefined ||
-      params.now !== undefined;
-    if (requiresExplicitRegistry) {
+    if (!canReusePluginRegistrySnapshot(params)) {
       return loadPluginManifestRegistryForPluginRegistry({
         ...params,
         pluginIds: params.onlyPluginIds,

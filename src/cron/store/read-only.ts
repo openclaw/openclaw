@@ -20,6 +20,7 @@ import {
   prepareStateDatabaseSourceExclusion,
 } from "../../infra/state-database-coordinator.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import type { PluginDoctorCronJob } from "../../plugins/doctor-contract-module.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import {
@@ -48,12 +49,32 @@ export async function loadCronJobsStoreWithConfigJobsReadOnly(
   storePath: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<LoadedCronStore> {
+  return (
+    (await readCronState({ storeKey: cronStoreKey(storePath), env })).loaded ??
+    emptyLoadedCronStore()
+  );
+}
+
+/** Doctor inventory includes raw definitions in every persisted partition. */
+export async function inspectCronJobsReadOnly(
+  env: NodeJS.ProcessEnv,
+): Promise<PluginDoctorCronJob[]> {
+  return (await readCronState({ env })).inventory ?? [];
+}
+
+async function readCronState({
+  storeKey,
+  env,
+}: {
+  storeKey?: string;
+  env: NodeJS.ProcessEnv;
+}): Promise<Extract<CronReadOnlyResult, { ok: true }>> {
   const statePath = resolveOpenClawStateSqlitePath(env);
   if (!fs.existsSync(statePath)) {
-    return emptyLoadedCronStore();
+    return { ok: true };
   }
-  const storeKey = cronStoreKey(storePath);
-  const preserveArtifacts = isArtifactPreservingStateRead();
+  // Doctor's all-partition inventory must not create WAL/SHM files beside the source.
+  const preserveArtifacts = storeKey === undefined || isArtifactPreservingStateRead();
   const assertExcluded = hasStateDatabaseSourceExclusion(statePath)
     ? prepareStateDatabaseSourceExclusion(statePath)
     : undefined;
@@ -128,7 +149,7 @@ export async function loadCronJobsStoreWithConfigJobsReadOnly(
   };
   const unregister = registerOpenClawStateDatabaseAsyncResource(resource);
   const run = async () => {
-    let loaded = emptyLoadedCronStore();
+    let loaded: Extract<CronReadOnlyResult, { ok: true }> = { ok: true };
     try {
       maintenance?.own(resource, "shared-resources", () => resource.close());
       // Only the native exclusion owner can prepare its already-drained source.
@@ -165,7 +186,7 @@ export async function loadCronJobsStoreWithConfigJobsReadOnly(
           signal: controller.signal,
           inputBytes:
             Buffer.byteLength(location) +
-            Buffer.byteLength(storeKey) +
+            Buffer.byteLength(storeKey ?? "") +
             Buffer.byteLength(stagingRoot ?? "") +
             Buffer.byteLength(coordinatorRuntime.directory) +
             environmentBytes,
@@ -174,7 +195,7 @@ export async function loadCronJobsStoreWithConfigJobsReadOnly(
       if (!result.ok) {
         throw restoreCronLoadError(result.error);
       }
-      loaded = result.loaded ?? loaded;
+      loaded = result;
     } finally {
       producerSettled.resolve();
       await cleanup();

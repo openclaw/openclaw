@@ -9,7 +9,10 @@ import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import * as commandRunner from "../../process/exec-runner.js";
 import * as commandSpawner from "../../process/exec-spawn.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { killPidIfAlive, waitForPidFile } from "../../test-utils/process-tree.js";
 import * as worktreeGit from "./git.js";
 import { provisionIncludedFiles, snapshotProvisionedFiles } from "./provisioned-files.js";
@@ -86,6 +89,7 @@ describe("ManagedWorktreeService provisioned state", () => {
   });
 
   afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
@@ -134,7 +138,7 @@ describe("ManagedWorktreeService provisioned state", () => {
         name: "dependencies",
         baseRef: "HEAD",
       });
-      expect(getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual(inspection.paths);
+      expect(await getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual(inspection.paths);
       expect(await fs.readFile(path.join(created.path, ".env.local"), "utf8")).toBe(
         "synthetic provisioned\n",
       );
@@ -254,7 +258,9 @@ describe("ManagedWorktreeService provisioned state", () => {
           name: "literal-batches",
           baseRef: "HEAD",
         });
-        expect(getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual(names.toSorted());
+        expect(await getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual(
+          names.toSorted(),
+        );
         await expect(fs.stat(path.join(created.path, "literalZ.local"))).rejects.toMatchObject({
           code: "ENOENT",
         });
@@ -417,21 +423,21 @@ describe("ManagedWorktreeService provisioned state", () => {
             },
           }),
         ).rejects.toThrow("authority changed");
-        expect(getRegistryWorktreeProvisionedChunk(env, oldChunk)).toEqual(oldBytes);
+        expect(await getRegistryWorktreeProvisionedChunk(env, oldChunk)).toEqual(oldBytes);
         expect(
           await snapshotProvisionedFiles(env, created.id, created.path, ledger, {
             assertCurrent: guard,
           }),
         ).toEqual(expected);
         expect(guard).toHaveBeenCalled();
-        expect(getRegistryWorktreeProvisionedChunk(env, oldChunk)).toBeUndefined();
+        expect(await getRegistryWorktreeProvisionedChunk(env, oldChunk)).toBeUndefined();
         expect(commands.mock.calls.length).toBe(0);
       } finally {
         commands.mockRestore();
       }
       const removed = await service.remove({ id: created.id, reason: "test" });
       expect(removed.removed).toBe(true);
-      expect(getRegistryWorktreeProvisionedState(env, created.id)).toEqual(expected);
+      expect(await getRegistryWorktreeProvisionedState(env, created.id)).toEqual(expected);
       const restored = await service.restore({ id: created.id });
       expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe(
         "preserved edit\n",

@@ -1,10 +1,7 @@
 // QA Lab Slack Web API and stored-message observations.
 import { isDeepStrictEqual } from "node:util";
-import {
-  asPlainRecord,
-  countSlackNativeDataBlocks,
-  instrumentSlackPostMessage,
-} from "./slack-live.config.js";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { countSlackNativeDataBlocks, instrumentSlackPostMessage } from "./slack-live.config.js";
 import {
   SLACK_QA_NATIVE_CHART,
   SLACK_QA_NATIVE_TABLE,
@@ -243,7 +240,7 @@ export function isExpectedSlackNativeChartMessage(
     return false;
   }
   return (message.blocks ?? []).some((value) => {
-    const block = asPlainRecord(value);
+    const block = asNonArrayRecord(value);
     return isDeepStrictEqual(
       { type: block.type, title: block.title, chart: block.chart },
       SLACK_QA_NATIVE_CHART,
@@ -339,7 +336,7 @@ export function isExpectedSlackNativeTableMessage(
     return false;
   }
   return (message.blocks ?? []).some((value) => {
-    const block = asPlainRecord(value);
+    const block = asNonArrayRecord(value);
     return isDeepStrictEqual(
       {
         type: block.type,

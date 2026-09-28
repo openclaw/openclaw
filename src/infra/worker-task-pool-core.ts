@@ -7,7 +7,7 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
-import { createCpuTrackedWorker } from "./worker-cpu.js";
+import { createCpuTrackedWorker, markWorkerRetirement } from "./worker-cpu.js";
 import {
   DEFAULT_WORKER_PENDING_BYTES,
   DEFAULT_WORKER_PENDING_TASKS,
@@ -109,12 +109,6 @@ class WorkerTaskPoolCore<Input, Output> {
   private rotation?: Promise<void>;
   private rotationFailed = false;
   private nextTaskId = 0;
-  // Idle retirement is armed from worker messages, outside any caller's turn.
-  // Bind the clock at construction so a process-wide pool cannot land that timer
-  // on a fake or stubbed setTimeout an unrelated test installed later; on the
-  // wrong clock the worker never retires and that test's timer count is off.
-  private readonly setTimeoutFn = setTimeout;
-  private readonly clearTimeoutFn = clearTimeout;
   private readonly retireIdleOnPressure = () => this.retirement.retireIdle(this.resourceClosures);
 
   constructor(
@@ -137,7 +131,6 @@ class WorkerTaskPoolCore<Input, Output> {
     this.retirement = createWorkerTaskPoolRetirement({
       slots: this.slots,
       options,
-      clearIdleTimer: (timer) => this.clearTimeoutFn(timer),
       runInContext: runInWorkerPoolContext,
       dispatch: () => this.dispatch(),
     });
@@ -260,7 +253,7 @@ class WorkerTaskPoolCore<Input, Output> {
     const slots = [...this.slots];
     const tasks = slots.flatMap((slot) => (slot.task ? [slot.task] : []));
     void Promise.allSettled(tasks.map((task) => task.promise))
-      .then(() => Promise.all(slots.map((slot) => this.retirement.retire(slot))))
+      .then(() => Promise.all(slots.map((slot) => this.retirement.retire(slot, "rotation"))))
       .then(() => this.retirement.joinArtifacts())
       .then(
         () => {
@@ -287,6 +280,9 @@ class WorkerTaskPoolCore<Input, Output> {
       this.finish(task, this.closedError);
     }
     for (const slot of this.slots) {
+      if (slot.worker) {
+        markWorkerRetirement(slot.worker, "closed");
+      }
       if (slot.task && !slot.task.owner) {
         this.finish(slot.task, this.closedError, undefined, true);
       }
@@ -351,7 +347,7 @@ class WorkerTaskPoolCore<Input, Output> {
         slot = { nativeSections: createWorkerNativeSectionState() };
         this.slots.add(slot);
       }
-      this.clearTimeoutFn(slot.idleTimer);
+      this.retirement.clearIdle(slot);
       const task = this.queue.shift()!;
       slot.task = task;
       this.activeTasks++;
@@ -630,6 +626,9 @@ class WorkerTaskPoolCore<Input, Output> {
       return;
     }
     if (task.slot) {
+      if (task.slot.worker) {
+        markWorkerRetirement(task.slot.worker, "cancelled");
+      }
       if (task.owner) {
         this.finish(task, error, undefined, true);
       } else {
@@ -645,6 +644,9 @@ class WorkerTaskPoolCore<Input, Output> {
   private fail(slot: Slot<Input, Output>, error: Error): void {
     if (slot.retiring) {
       return;
+    }
+    if (slot.worker) {
+      markWorkerRetirement(slot.worker, "failure");
     }
     if (slot.task?.owner) {
       if (slot.task.done) {
@@ -695,7 +697,7 @@ class WorkerTaskPoolCore<Input, Output> {
       if (retire) {
         // Keep input and capacity custody until execution stops, even if rejection is early.
         (slot.completions ??= []).push(complete);
-        void this.retirement.retire(slot).catch((failure: unknown) => {
+        void this.retirement.retire(slot, "failure").catch((failure: unknown) => {
           task.reject(
             error
               ? new AggregateError(
@@ -730,13 +732,7 @@ class WorkerTaskPoolCore<Input, Output> {
     if (slot.worker && !this.resourceClosures.get(slot.worker)?.pending) {
       slot.worker.unref();
     }
-    const idleMs = this.options.idleTimeoutMs ?? 60_000;
-    if (idleMs > 0) {
-      slot.idleTimer = runInWorkerPoolContext(() =>
-        this.setTimeoutFn(() => void this.retirement.retire(slot).catch(() => undefined), idleMs),
-      );
-      slot.idleTimer.unref();
-    }
+    this.retirement.idle(slot);
   }
 }
 

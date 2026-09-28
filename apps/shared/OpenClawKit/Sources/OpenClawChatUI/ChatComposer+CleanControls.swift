@@ -127,9 +127,11 @@ extension OpenClawChatComposer {
                 Divider()
             }
             Group {
-                self.modelMenuOption(
-                    self.viewModel.defaultModelLabel,
-                    selectionID: OpenClawChatViewModel.defaultModelSelectionID)
+                if self.viewModel.canSelectDefaultModel {
+                    self.modelMenuOption(
+                        self.viewModel.defaultModelLabel,
+                        selectionID: OpenClawChatViewModel.defaultModelSelectionID)
+                }
                 if !sections.pinned.isEmpty {
                     Section("Pinned") {
                         self.cleanInlineModelOptions(sections.pinned)

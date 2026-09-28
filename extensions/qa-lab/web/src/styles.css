@@ -475,29 +475,6 @@ select {
   margin-bottom: 4px;
 }
 
-.config-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.config-row label {
-  font-size: 13px;
-  color: var(--text-secondary);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.config-row input[type="checkbox"] {
-  width: 15px;
-  height: 15px;
-  margin: 0;
-  cursor: pointer;
-  accent-color: var(--accent);
-}
-
 .config-hint {
   font-size: 11px;
   color: var(--text-tertiary);
@@ -816,13 +793,6 @@ select {
   text-overflow: ellipsis;
 }
 
-.chat-sidebar-badge {
-  margin-left: auto;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--text-tertiary);
-}
-
 /* Chat main area (messages + composer) */
 .chat-main {
   flex: 1;
@@ -885,37 +855,6 @@ select {
     opacity: 0.3;
   }
 }
-
-.chat-thread-chips {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-left: auto;
-}
-
-.thread-chip {
-  padding: 3px 10px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 500;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: all 100ms ease;
-}
-
-.thread-chip:hover {
-  border-color: var(--border-strong);
-  color: var(--text);
-}
-
-.thread-chip.active {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
 .chat-messages {
   flex: 1;
   overflow-y: auto;
@@ -2323,31 +2262,11 @@ button.evidence-matrix-cell {
   flex-wrap: wrap;
 }
 
-.capture-summary-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin: 0 0 8px;
-}
-
 .capture-summary-card {
   border: 1px solid var(--border);
   background: var(--bg-surface);
   border-radius: 10px;
   padding: 10px 12px;
-}
-
-.capture-summary--compact .capture-summary-card {
-  padding: 8px 10px;
-}
-
-.capture-summary--compact .capture-summary-label {
-  margin-bottom: 4px;
-}
-
-.capture-summary--compact .capture-summary-value {
-  font-size: 13px;
 }
 
 .capture-summary-label {
@@ -2912,12 +2831,6 @@ button.evidence-matrix-cell {
   min-height: 22px;
 }
 
-.capture-chip-focus {
-  background: color-mix(in srgb, var(--accent) 14%, var(--bg-surface));
-  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
-  color: var(--accent);
-}
-
 .capture-chip-severity {
   background: color-mix(in srgb, var(--warning) 18%, var(--bg-surface));
   border-color: color-mix(in srgb, var(--warning) 28%, var(--border));
@@ -3308,12 +3221,6 @@ button.evidence-matrix-cell {
   align-items: center;
 }
 
-.capture-event-card-target {
-  font-size: 12px;
-  color: var(--text-secondary);
-  word-break: break-word;
-}
-
 .capture-event-card-preview {
   margin-top: 8px;
   padding: 8px 10px;
@@ -3347,10 +3254,6 @@ button.evidence-matrix-cell {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--success);
-}
-
-.capture-detail {
-  margin-top: 16px;
 }
 
 .capture-detail-card {
@@ -3544,15 +3447,6 @@ button.evidence-matrix-cell {
   border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
 }
 
-.capture-nav-button-pair {
-  border-color: color-mix(in srgb, var(--success) 34%, var(--border));
-  background: color-mix(in srgb, var(--success) 7%, var(--bg-surface));
-}
-
-.capture-nav-button-pair:hover {
-  background: color-mix(in srgb, var(--success) 12%, var(--bg-hover));
-}
-
 .capture-nav-label {
   font-size: 12px;
   font-weight: 700;
@@ -3588,14 +3482,6 @@ button.evidence-matrix-cell {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
-}
-
-.capture-detail-grid,
-.capture-detail-sections-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 12px;
-  margin-bottom: 12px;
 }
 
 .capture-kv-grid {

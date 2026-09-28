@@ -59,7 +59,6 @@ export { redactCdpUrl } from "./browser/cdp.helpers.js";
 export { DEFAULT_UPLOAD_DIR, resolveExistingPathsWithinRoot } from "./browser/paths.js";
 export { getBrowserProfileCapabilities } from "./browser/profile-capabilities.js";
 export {
-  isBrowserHostLocalRoute,
   isPersistentBrowserProfileMutation,
   normalizeBrowserRequestPath,
   resolveRequestedBrowserProfile,

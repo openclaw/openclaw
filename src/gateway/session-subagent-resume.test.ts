@@ -50,7 +50,7 @@ async function arrangePausedChild(childSessionKey = "agent:main:subagent:resume-
     sessionKey: parent,
     defaultSessionId: "resume-parent-session",
   });
-  registerSubagentRun({
+  await registerSubagentRun({
     runId: previousRunId,
     childSessionKey,
     requesterSessionKey: parent,
@@ -325,7 +325,8 @@ it("delivers a result once after the former synchronous wait window, through the
     endedAt: Date.now(),
     terminalReply: { disposition: "visible", text: "The resumed task is complete." },
   });
-  await vi.waitFor(() => expect(announce).toHaveBeenCalledTimes(1));
+  await fixture.settle();
+  expect(announce).toHaveBeenCalledTimes(1);
   expect(announce).toHaveBeenCalledWith(
     expect.objectContaining({
       childRunId: nextRunId,
@@ -338,7 +339,8 @@ it("delivers a result once after the former synchronous wait window, through the
     stream: "lifecycle",
     data: { phase: "end", endedAt: Date.now(), yielded: true },
   });
-  await vi.waitFor(() => expect(findTaskByRunId(previousRunId)?.status).toBe("succeeded"));
+  await fixture.settle();
+  expect(findTaskByRunId(previousRunId)?.status).toBe("succeeded");
   expect(subagentRuns.get(nextRunId)?.pauseReason).toBeUndefined();
   expect(announce).toHaveBeenCalledTimes(1);
 });

@@ -46,7 +46,10 @@ struct RootSidebar: View {
         .foregroundStyle(OpenClawSidebarPalette.text)
         .background(OpenClawSidebarPalette.background)
         .onChange(of: self.isDismissButtonEnabled) { _, isVisible in
-            if !isVisible { self.presentedAttention = nil }
+            if !isVisible {
+                self.presentedAttention = nil
+                self.isSearchFocused = false
+            }
         }
         .sheet(isPresented: self.$showsPagesEditor) {
             RootSidebarPagesEditor(

@@ -119,7 +119,9 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
   if (sandbox?.enabled) {
     assertSandboxCwd(requestedCwd, resolvedWorkspace);
   }
+  assertCurrent?.();
   await fs.mkdir(effectiveWorkspace, { recursive: true });
+  assertCurrent?.();
   return {
     effectiveCwd: sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace),
     effectiveFsWorkspaceOnly:

@@ -18,7 +18,7 @@ import {
   createDirectReplyTranscriptSentinelScanner,
   extractGatewayMessageText,
 } from "./gateway-log-sentinel.js";
-import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
+import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
 import type {
   QaRawSessionStoreEntry,
   QaSkillStatusEntry,
@@ -358,7 +358,7 @@ async function createSession(env: QaGatewayCallEnv, label: string, key?: string)
       ...(key ? { key } : {}),
     },
     {
-      timeoutMs: liveTurnTimeoutMs(env, 60_000),
+      timeoutMs: resolveQaLiveTurnTimeoutMs(env, 60_000),
     },
   )) as { key?: string };
   const sessionKey = created.key?.trim();
@@ -375,7 +375,7 @@ async function readEffectiveTools(env: QaGatewayCallEnv, sessionKey: string) {
       sessionKey,
     },
     {
-      timeoutMs: liveTurnTimeoutMs(env, 90_000),
+      timeoutMs: resolveQaLiveTurnTimeoutMs(env, 90_000),
     },
   )) as { groups?: Array<{ tools?: Array<{ id?: string }> }> };
   const ids = new Set<string>();
@@ -396,7 +396,7 @@ async function readSkillStatus(env: QaGatewayCallEnv, agentId = "qa") {
       agentId,
     },
     {
-      timeoutMs: liveTurnTimeoutMs(env, 45_000),
+      timeoutMs: resolveQaLiveTurnTimeoutMs(env, 45_000),
     },
   )) as { skills?: QaSkillStatusEntry[] };
   return payload.skills ?? [];

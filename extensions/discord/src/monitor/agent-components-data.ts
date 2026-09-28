@@ -113,22 +113,17 @@ export function resolveInteractionCustomId(
 }
 
 export function mapSelectValues(entry: DiscordComponentEntry, values: string[]): string[] {
-  if (entry.selectType === "string") {
-    return mapOptionLabels(entry.options, values);
+  switch (entry.selectType) {
+    case "string":
+      return mapOptionLabels(entry.options, values);
+    case "user":
+    case "role":
+    case "mentionable":
+    case "channel":
+      return values.map((value) => `${entry.selectType}:${value}`);
+    default:
+      return values;
   }
-  if (entry.selectType === "user") {
-    return values.map((value) => `user:${value}`);
-  }
-  if (entry.selectType === "role") {
-    return values.map((value) => `role:${value}`);
-  }
-  if (entry.selectType === "mentionable") {
-    return values.map((value) => `mentionable:${value}`);
-  }
-  if (entry.selectType === "channel") {
-    return values.map((value) => `channel:${value}`);
-  }
-  return values;
 }
 
 export function resolveModalFieldValues(
@@ -136,42 +131,28 @@ export function resolveModalFieldValues(
   interaction: ModalInteraction,
 ): string[] {
   const fields = interaction.fields;
-  const optionLabels = field.options?.map((option) => ({
-    value: option.value,
-    label: option.label,
-  }));
   const required = field.required === true;
   try {
     switch (field.type) {
       case "text": {
-        const value = required ? fields.getText(field.id, true) : fields.getText(field.id);
+        const value = fields.getText(field.id, required);
         return value ? [value] : [];
       }
       case "select":
       case "checkbox":
       case "radio": {
-        const values = required
-          ? fields.getStringSelect(field.id, true)
-          : (fields.getStringSelect(field.id) ?? []);
-        return mapOptionLabels(optionLabels, values);
+        return mapOptionLabels(field.options, fields.getStringSelect(field.id, required));
       }
       case "role-select": {
         try {
-          const roles = required
-            ? fields.getRoleSelect(field.id, true)
-            : (fields.getRoleSelect(field.id) ?? []);
+          const roles = fields.getRoleSelect(field.id, required);
           return roles.map((role) => role.name ?? role.id);
         } catch {
-          const values = required
-            ? fields.getStringSelect(field.id, true)
-            : (fields.getStringSelect(field.id) ?? []);
-          return values;
+          return fields.getStringSelect(field.id, required);
         }
       }
       case "user-select": {
-        const users = required
-          ? fields.getUserSelect(field.id, true)
-          : (fields.getUserSelect(field.id) ?? []);
+        const users = fields.getUserSelect(field.id, required);
         return users.map((user) => formatDiscordUserTag(user));
       }
       default:

@@ -6,14 +6,7 @@ import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { invalidateModelAuthStatusRequests } from "../../lib/model-auth-request-state.ts";
-import type { DefaultModelSelection } from "./data.ts";
-
-export type ModelBehaviorConfig = {
-  thinkingLevel: string | undefined;
-  thinkingOverridden: boolean;
-  fastMode: FastMode | undefined;
-  fastModeOverridden: boolean;
-};
+import type { DefaultModelSelection, ModelBehaviorConfig } from "./data.ts";
 
 export function modelDefaultsActions(
   getDefaults: () => DefaultModelSelection,
@@ -69,16 +62,12 @@ export function readModelBehaviorConfig(
  */
 export const DEFAULT_MODELS_REPLACE_PATHS = ["agents.defaults.model.fallbacks"];
 
-export function buildDefaultsPatch(params: {
-  primary: string;
-  fallbacks: readonly string[];
-  utilityModel: string | null;
-  decisionModel?: string | null;
-  thinkingLevel: string | undefined;
-  thinkingOverridden: boolean;
-  fastMode: FastMode | undefined;
-  fastModeOverridden: boolean;
-}) {
+export function buildDefaultsPatch(
+  params: Omit<DefaultModelSelection, "fallbacks"> &
+    ModelBehaviorConfig & {
+      fallbacks: readonly string[];
+    },
+) {
   return {
     agents: {
       defaults: {

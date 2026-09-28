@@ -2337,6 +2337,26 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatRunError).toEqual({ summary: "chat error", runId: "run-1" });
   });
 
+  it("keeps the current stream partial when a message-less error ends the run", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Partial answer before the failure",
+      chatStreamStartedAt: 9,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "error",
+      errorMessage: "provider disconnected",
+    };
+
+    expect(handleChatGatewayEvent(state, payload)).toBe("error");
+    expect(state.chatStream).toBeNull();
+    expect(state.chatMessages).toHaveLength(1);
+    expectTextChatMessage(state.chatMessages[0], "assistant", "Partial answer before the failure");
+  });
+
   it("preserves a legacy terminal message that completes streamed assistant content", () => {
     const state = createState({
       sessionKey: "main",

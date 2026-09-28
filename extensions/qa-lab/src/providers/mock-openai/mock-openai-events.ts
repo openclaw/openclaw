@@ -124,7 +124,7 @@ export function extractPlannedToolName(events: StreamEvent[]) {
     if (event.type !== "response.output_item.done") {
       continue;
     }
-    const item = event.item as { type?: unknown; name?: unknown };
+    const item = event.item;
     if (
       (item.type === "function_call" || item.type === "custom_tool_call") &&
       typeof item.name === "string"
@@ -143,7 +143,7 @@ export function extractPlannedToolIdentity(events: StreamEvent[]): {
     if (event.type !== "response.output_item.done") {
       continue;
     }
-    const item = event.item as { type?: unknown; id?: unknown; call_id?: unknown };
+    const item = event.item;
     if (
       (item.type === "function_call" || item.type === "custom_tool_call") &&
       typeof item.call_id === "string"
@@ -162,7 +162,7 @@ export function extractPlannedToolArgs(events: StreamEvent[]) {
     if (event.type !== "response.output_item.done") {
       continue;
     }
-    const item = event.item as { type?: unknown; arguments?: unknown; input?: unknown };
+    const item = event.item;
     if (item.type === "custom_tool_call") {
       return typeof item.input === "string" ? { input: item.input } : undefined;
     }

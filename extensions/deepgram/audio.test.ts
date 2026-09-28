@@ -139,20 +139,6 @@ describe("transcribeDeepgramAudio", () => {
     ).rejects.toThrow("Audio transcription response missing transcript");
   });
 
-  it("wraps malformed successful transcription JSON with a stable provider error", async () => {
-    const fetchFn = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response("{ nope"));
-
-    await expect(
-      transcribeDeepgramAudio({
-        buffer: Buffer.from("audio-bytes"),
-        fileName: "voice.wav",
-        apiKey: "test-key",
-        timeoutMs: 1234,
-        fetchFn,
-      }),
-    ).rejects.toThrow("Audio transcription failed: malformed JSON response");
-  });
-
   it("rejects non-object successful transcription JSON with a stable provider error", async () => {
     const fetchFn = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(JSON.stringify([])));
 

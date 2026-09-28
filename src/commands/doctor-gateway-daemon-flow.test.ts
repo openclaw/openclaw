@@ -18,6 +18,7 @@ const readPin = vi.hoisted(() => vi.fn());
 vi.mock("../daemon/runtime-pin-state.js", () => ({ readDaemonRuntimePinForInstall: readPin }));
 
 const service = vi.hoisted(() => ({
+  unsupportedReason: undefined as string | undefined,
   isLoaded: vi.fn(),
   readRuntime: vi.fn(),
   restart: vi.fn(),
@@ -190,6 +191,7 @@ describe("maybeRepairGatewayDaemon", () => {
     formatGatewayClosedDiagnostic.mockReset();
     formatGatewayClosedDiagnostic.mockReturnValue(undefined);
     findInstalledSystemdGatewayScope.mockReset().mockResolvedValue(null);
+    service.unsupportedReason = undefined;
     service.isLoaded.mockResolvedValue(true);
     service.readRuntime.mockResolvedValue({ status: "running" });
     service.readCommand.mockResolvedValue(null);
@@ -466,40 +468,49 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(note).toHaveBeenCalledWith("Gateway service not installed.", "Gateway");
   });
 
-  it("reports unknown service inspection without offering or executing repair", async () => {
-    setPlatform("linux");
-    service.isLoaded.mockRejectedValueOnce(
-      new Error("systemctl is-enabled unavailable: Failed to connect to bus: No medium found"),
-    );
-    renderSystemdUnavailableHints.mockReturnValueOnce(["restore the systemd user bus"]);
-    const prompter = createPrompter(() => true);
+  it.each([undefined, "External service manager owns this Gateway."])(
+    "reports unknown inspection without repair (%s)",
+    async (unsupportedReason) => {
+      setPlatform(unsupportedReason ? "freebsd" : "linux");
+      service.unsupportedReason = unsupportedReason;
+      service.isLoaded.mockRejectedValueOnce(
+        new Error("systemctl is-enabled unavailable: Failed to connect to bus: No medium found"),
+      );
+      renderSystemdUnavailableHints.mockReturnValueOnce(["restore the systemd user bus"]);
+      const prompter = createPrompter(() => true);
 
-    await maybeRepairGatewayDaemon({
-      cfg: { gateway: {} },
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      prompter,
-      options: { deep: false },
-      gatewayDetailsMessage: "details",
-      healthOk: false,
-    });
+      await maybeRepairGatewayDaemon({
+        cfg: { gateway: {} },
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        prompter,
+        options: { deep: false },
+        gatewayDetailsMessage: "details",
+        healthOk: false,
+      });
 
-    expect(renderSystemdUnavailableHints).toHaveBeenCalledWith({
-      wsl: false,
-      kind: "user_bus_unavailable",
-    });
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("Gateway service status could not be determined"),
-      "Gateway",
-    );
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("restore the systemd user bus"),
-      "Gateway",
-    );
-    expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
-    expect(service.install).not.toHaveBeenCalled();
-    expect(service.restart).not.toHaveBeenCalled();
-    expect(findSystemGatewayServices).not.toHaveBeenCalled();
-  });
+      if (unsupportedReason) {
+        expect(note).toHaveBeenCalledTimes(1);
+        expect(note).toHaveBeenCalledWith(unsupportedReason, "Gateway");
+      } else {
+        expect(renderSystemdUnavailableHints).toHaveBeenCalledWith({
+          wsl: false,
+          kind: "user_bus_unavailable",
+        });
+        expect(note).toHaveBeenCalledWith(
+          expect.stringContaining("Gateway service status could not be determined"),
+          "Gateway",
+        );
+        expect(note).toHaveBeenCalledWith(
+          expect.stringContaining("restore the systemd user bus"),
+          "Gateway",
+        );
+      }
+      expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
+      expect(service.install).not.toHaveBeenCalled();
+      expect(service.restart).not.toHaveBeenCalled();
+      expect(findSystemGatewayServices).not.toHaveBeenCalled();
+    },
+  );
 
   describe.each(["darwin", "linux", "win32"] as const)("%s remote health", (platform) => {
     it.each([

@@ -164,6 +164,19 @@ function getTaskRegistryRestoreState(admission: OpenClawStateDatabaseReadAdmissi
   return taskRegistryRestoreState;
 }
 
+/** A resident identity hint never opens storage or substitutes for prepared read authority. */
+export function isTaskRegistryResidentReady(): boolean {
+  if (taskRegistryRestoreState.status !== "ready") {
+    return false;
+  }
+  try {
+    taskRegistryRestoreState.admission.assertCurrent();
+    return isCurrentTaskRegistryDatabase(taskRegistryRestoreState.admission);
+  } catch {
+    return false;
+  }
+}
+
 /** Preserve recorded restore failures without starting storage work after admission closes. */
 export function assertTaskRegistryRestoreNotFailed(): void {
   const state = taskRegistryRestoreState;

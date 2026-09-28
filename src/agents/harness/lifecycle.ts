@@ -31,6 +31,7 @@ import {
 } from "../agent-run-terminal-outcome.js";
 import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/types.js";
 import { copyCoreTtsAttemptResultProvenance } from "../tools/tts-tool-result-provenance.js";
+import { subscribeAgentCommentaryDiagnostics } from "./commentary-diagnostics.js";
 import { recordAgentHarnessPreflightOwner } from "./errors.js";
 import { applyAgentHarnessResultClassification } from "./result-classification.js";
 import { EmptySettledTurnFinalizationError } from "./settled-turn-finalization-outcome.js";
@@ -325,6 +326,10 @@ export async function runAgentHarnessLifecycleAttempt(
   };
 
   emitAgentHarnessRunStarted(harness, params, activeHarnessTrace);
+  const unsubscribeCommentary = subscribeAgentCommentaryDiagnostics(
+    params.config,
+    agentHarnessDiagnosticBase(harness, params, activeHarnessTrace),
+  );
   try {
     phase = "prepare";
     assertAgentHarnessContextEngineSupport(harness, params);
@@ -369,6 +374,8 @@ export async function runAgentHarnessLifecycleAttempt(
     });
     emitAgentRunCompleted({ outcome: "error", error });
     throw error;
+  } finally {
+    unsubscribeCommentary();
   }
 
   emitAgentRunCompleted(agentRunCompletion(result));
@@ -397,6 +404,10 @@ export async function runAgentHarnessLifecycleFinalization(
       : undefined;
 
   emitAgentHarnessRunStarted(harness, params, activeHarnessTrace);
+  const unsubscribeCommentary = subscribeAgentCommentaryDiagnostics(
+    params.config,
+    agentHarnessDiagnosticBase(harness, params, activeHarnessTrace),
+  );
   if (agentRunTrace) {
     emitTrustedDiagnosticEvent({
       type: "run.started",
@@ -470,5 +481,7 @@ export async function runAgentHarnessLifecycleFinalization(
       );
     }
     throw error;
+  } finally {
+    unsubscribeCommentary();
   }
 }

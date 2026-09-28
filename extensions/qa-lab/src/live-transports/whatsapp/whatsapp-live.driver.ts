@@ -51,21 +51,9 @@ export async function waitForNoWhatsAppReply(
   await new Promise((resolve) => {
     setTimeout(resolve, params.windowMs);
   });
-  const noReplyTarget =
-    params.target === "group"
-      ? ({
-          groupJid: params.groupJid,
-          target: "group",
-        } satisfies WhatsAppQaNoReplyTarget)
-      : ({
-          target: "dm",
-        } satisfies WhatsAppQaNoReplyTarget);
   const unexpectedReply = findUnexpectedWhatsAppNoReplyMessage({
-    allowQuietWindowMessage: params.allowQuietWindowMessage,
+    ...params,
     messages: params.driver.getObservedMessages(),
-    observedAfter: params.observedAfter,
-    sutPhoneE164: params.sutPhoneE164,
-    ...noReplyTarget,
   });
   if (unexpectedReply) {
     throw new Error("unexpected WhatsApp reply observed in quiet scenario");
@@ -118,10 +106,9 @@ export async function waitForDistinctWhatsAppSutMessages(
   }
 
   while (matched.size < params.matchers.length) {
-    const next = await waitForWhatsAppScenarioSutMessage(context, {
+    const next = await waitForScenarioObservedMessage(context, {
       observedAfter: params.observedAfter,
       timeoutMs: params.timeoutMs,
-      targetKind: "group",
       match: (message) => {
         const key = messageKey(message);
         return (
@@ -136,34 +123,6 @@ export async function waitForDistinctWhatsAppSutMessages(
   return [...matched.entries()]
     .toSorted(([left], [right]) => left - right)
     .map(([, message]) => message);
-}
-
-export async function waitForWhatsAppScenarioSutMessage(
-  context: WhatsAppQaMessageScenarioContext,
-  params: {
-    diagnosticChecks?: Array<{
-      label: string;
-      match: (message: WhatsAppQaDriverObservedMessage) => boolean;
-    }>;
-    match: (message: WhatsAppQaDriverObservedMessage) => boolean;
-    observedAfter: Date;
-    targetKind: "dm" | "group";
-    timeoutMs?: number;
-  },
-) {
-  return await waitForScenarioObservedMessage(context, {
-    diagnosticChecks: params.diagnosticChecks,
-    observedAfter: params.observedAfter,
-    timeoutMs: params.timeoutMs,
-    expectedSender: (message) =>
-      isWhatsAppScenarioSutMessage(message, {
-        observedAfter: params.observedAfter,
-        sutPhoneE164: context.sutPhoneE164,
-        target: context.target,
-        targetKind: params.targetKind,
-      }),
-    match: params.match,
-  });
 }
 
 function findUnexpectedWhatsAppNoReplyMessage(

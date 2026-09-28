@@ -8,10 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { prepareModelCatalogAuthLabels } from "../../agents/model-catalog-auth-labels.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
-import {
-  setPreparedModelRuntimeAuthStore,
-  setPreparedModelRuntimeAuthLabels,
-} from "../../agents/prepared-model-runtime-auth.js";
+import { bindPreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type {
   ProviderDefaultThinkingPolicyContext,
@@ -175,10 +172,9 @@ vi.mock("../../agents/prepared-model-catalog.js", () => {
   }) => {
     const owner = createModelsTestOwner(params.config, entries, params);
     const store = readAuthProfileStoreForTest();
-    setPreparedModelRuntimeAuthStore(owner, store);
-    setPreparedModelRuntimeAuthLabels(
-      owner,
-      prepareModelCatalogAuthLabels({
+    bindPreparedModelRuntimeAuth(owner, {
+      store,
+      labels: prepareModelCatalogAuthLabels({
         config: params.config,
         agentDir: owner.agentDir,
         workspaceDir: owner.workspaceDir,
@@ -192,7 +188,7 @@ vi.mock("../../agents/prepared-model-catalog.js", () => {
           ...Object.keys(params.config.models?.providers ?? {}),
         ],
       }),
-    );
+    });
     return owner;
   };
   return {

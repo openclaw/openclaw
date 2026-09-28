@@ -1,18 +1,55 @@
+import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { capturePreparedModelRuntimeCatalog } from "./prepared-model-runtime.capture.js";
+import { isPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   normalizePreparedModelRuntimeInput,
+  ownerKey,
   preparedModelRuntimeConfigsMatch,
+  resolvePreparedModelRuntimeOwnerBySnapshot,
   resolvePublishedOwner,
 } from "./prepared-model-runtime.owner.js";
 import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import type {
+  PreparedModelCatalogRefreshOptions,
   PreparedModelRuntimeInput,
   PreparedModelRuntimeLease,
   PreparedModelRuntimeOwner,
   PreparedModelRuntimeReplacement,
   PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.types.js";
+
+export async function refreshPublishedModelRuntimeCatalog(
+  snapshot: PreparedModelRuntimeSnapshot,
+  owners: ReadonlyMap<string, PreparedModelRuntimeOwner>,
+  options: PreparedModelCatalogRefreshOptions,
+): Promise<ModelCatalogSnapshot | undefined> {
+  const owner = resolvePreparedModelRuntimeOwnerBySnapshot(snapshot);
+  if (!owner || owners.get(ownerKey(owner.input)) !== owner || !snapshot.loadFullModelCatalog) {
+    return undefined;
+  }
+  const currentCatalog = snapshot.readFullModelCatalog?.() ?? snapshot.modelCatalog;
+  const refresh = options.refresh === true || owner.catalogStale;
+  if (
+    !refresh &&
+    !options.providerIds &&
+    !options.changedOnly &&
+    isPreparedModelCatalogFull(currentCatalog)
+  ) {
+    return undefined;
+  }
+  const generation = owner.generation;
+  const catalog = await snapshot.loadFullModelCatalog({ ...options, refresh });
+  if (
+    owner.catalogStale &&
+    !catalog.pendingProviders?.length &&
+    owner.generation === generation &&
+    owners.get(ownerKey(owner.input)) === owner
+  ) {
+    owner.catalogStale = false;
+  }
+  return catalog;
+}
 
 export function retainPublishedModelRuntimeOwner(
   owner: PreparedModelRuntimeOwner,

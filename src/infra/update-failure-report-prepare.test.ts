@@ -21,6 +21,53 @@ function prepareDiagnosticReport(reason: string) {
 }
 
 describe("update report diagnostic command boundary", () => {
+  it.each(["installed", "candidate"])(
+    "retains sanitized rejected fields from %s admission",
+    async (owner) => {
+      const report = await prepareUpdateFailureReport(
+        {
+          attemptId: "invalid-config-report",
+          result: {
+            mode: "npm",
+            status: "error",
+            reason: "invalid-config",
+            durationMs: 0,
+            steps: [
+              {
+                name: "invalid-config",
+                command: "",
+                cwd: "",
+                durationMs: 0,
+                exitCode: 1,
+                failureFacts: [
+                  {
+                    check: owner === "candidate" ? "candidate-admission" : "invalid-config",
+                    code: "invalid-config",
+                    ...(owner === "candidate"
+                      ? {
+                          message:
+                            "Update refused: configuration is invalid.\n- gateway.port: Invalid configuration field\n- models.providers.private-tenant.apiKey: Invalid configuration field\nprivate rejected value",
+                        }
+                      : { affectedKey: "gateway.port", message: "Invalid configuration field" }),
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        context,
+      );
+      expect(report.body).toContain("gateway.*");
+      expect(report.body).toContain("Invalid configuration field");
+      expect(report.body).not.toContain("[redacted-diagnostic]");
+      expect(report.body).not.toContain("private-tenant");
+      expect(report.body).not.toContain("private rejected value");
+      if (owner === "candidate") {
+        expect(report.body).toContain("models.providers.*");
+      }
+    },
+  );
+
   it("preserves classified destination ownership and recovery without exposing usernames", async () => {
     const redaction = { env: { HOME: "/Users/Fixture Owner" }, stateDir: "/report-test-state" };
     const fact = createUpdateFailureFact(

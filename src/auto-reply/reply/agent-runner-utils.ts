@@ -33,7 +33,7 @@ import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import type { TemplateContext } from "../templating.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
-import { buildEmbeddedRunBaseParams as buildEmbeddedRunBaseParamsCore } from "./agent-runner-run-params.js";
+import { buildEmbeddedRunBaseParams } from "./agent-runner-run-params.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
@@ -54,15 +54,11 @@ type EmbeddedReplyRoute = Pick<
 
 /** Selects the freshest runtime config usable by queued reply execution. */
 export function resolveQueuedReplyRuntimeConfig(config: OpenClawConfig): OpenClawConfig {
-  const runtimeConfig =
-    typeof getRuntimeConfigSnapshot === "function" ? getRuntimeConfigSnapshot() : null;
-  const runtimeSourceConfig =
-    typeof getRuntimeConfigSourceSnapshot === "function" ? getRuntimeConfigSourceSnapshot() : null;
   return (
     selectApplicableRuntimeConfig({
       inputConfig: config,
-      runtimeConfig,
-      runtimeSourceConfig,
+      runtimeConfig: getRuntimeConfigSnapshot(),
+      runtimeSourceConfig: getRuntimeConfigSourceSnapshot(),
     }) ?? config
   );
 }
@@ -133,15 +129,8 @@ export function buildThreadingToolContext(params: {
     provider: sessionCtx.Provider,
   });
   const originTo = sessionCtx.OriginatingTo ?? sessionCtx.To;
-  if (!config) {
-    return {
-      currentMessageId,
-      currentSourceTurnId,
-      replyToMode: sessionCtx.ReplyToMode,
-    };
-  }
-  const rawProvider = normalizeOptionalLowercaseString(originProvider);
-  if (!rawProvider) {
+  const rawProvider = config ? normalizeOptionalLowercaseString(originProvider) : undefined;
+  if (!config || !rawProvider) {
     return {
       currentMessageId,
       currentSourceTurnId,
@@ -240,29 +229,13 @@ export function resolveRunFastModeForFallbackCandidate(params: {
     agentId: params.run.agentId,
     sessionEntry: params.sessionEntry,
   });
-  if (params.run.fastModeOverride) {
-    return {
-      fastMode: params.run.fastMode,
-      fastModeAutoOnSeconds: params.run.fastModeAutoOnSecondsOverride
-        ? params.run.fastModeAutoOnSeconds
-        : state.fastAutoOnSeconds,
-    };
-  }
   return {
-    fastMode: state.mode,
+    fastMode: params.run.fastModeOverride ? params.run.fastMode : state.mode,
     fastModeAutoOnSeconds: params.run.fastModeAutoOnSecondsOverride
       ? params.run.fastModeAutoOnSeconds
       : state.fastAutoOnSeconds,
   };
 }
-/** Builds base embedded run params with auth and provider runtime hints. */
-function buildEmbeddedRunBaseParams(params: Parameters<typeof buildEmbeddedRunBaseParamsCore>[0]) {
-  return buildEmbeddedRunBaseParamsCore({
-    ...params,
-    isReasoningTagProvider,
-  });
-}
-
 function buildEmbeddedContextFromTemplate(params: {
   run: FollowupRun["run"];
   replyRoute?: EmbeddedReplyRoute;
@@ -442,6 +415,7 @@ export async function buildEmbeddedRunExecutionParams(params: {
     promptCacheKey: params.promptCacheKey,
     authProfile,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
+    isReasoningTagProvider,
   });
   return {
     embeddedContext,

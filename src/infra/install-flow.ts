@@ -6,6 +6,7 @@ import { resolveUserPath } from "../utils.js";
 import {
   type ArchiveExtractLimits,
   type ArchiveLogger,
+  type ExtractArchiveOptions,
   extractArchive,
   resolvePackedRootDir,
 } from "./archive.js";
@@ -41,6 +42,7 @@ export async function resolveExistingInstallPath(
 
 export type ExtractedArchiveVerification<TFailure extends { ok: false; error: string }> = {
   limits: ArchiveExtractLimits;
+  entryFilter?: ExtractArchiveOptions["entryFilter"];
   verify: (extractDir: string) => Promise<TFailure | null>;
   onExtractionError: (error: unknown) => TFailure;
 };
@@ -70,10 +72,12 @@ export async function withExtractedArchiveRoot<
         extractArchive({
           archivePath: params.archivePath,
           destDir: extractDir,
+          stripComponents: 0,
           // fs-safe uses zero for an extraction without an elapsed deadline.
           timeoutMs: resolveInstallWorkTimeoutMs(params.workTimeoutMs, params.timeoutMs) ?? 0,
           logger: params.logger,
           limits: params.verification?.limits ?? params.limits,
+          entryFilter: params.verification?.entryFilter,
           durable: false,
         }),
       );

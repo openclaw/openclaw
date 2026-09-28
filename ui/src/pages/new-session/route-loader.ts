@@ -76,7 +76,10 @@ export async function load(
   }
   // ensureList is fail-closed: offline and request-error paths return cached
   // data or null, allowing the unresolved catalog page to mount and retry.
-  const loadedAgentsList = initialAgentsState.agentsList ?? (await context.agents.ensureList());
+  const loadedAgentsList =
+    !initialAgentsState.agentsList || initialAgentsState.agentsListCached
+      ? await context.agents.ensureList()
+      : initialAgentsState.agentsList;
   const gateway = context.gateway.snapshot;
   const agentsState = context.agents.state;
   if (
@@ -85,6 +88,7 @@ export async function load(
     gateway.client !== initialGateway.client ||
     !agentsState.connected ||
     agentsState.client !== gateway.client ||
+    agentsState.agentsListCached ||
     agentsState.agentsList !== loadedAgentsList
   ) {
     return unresolved();

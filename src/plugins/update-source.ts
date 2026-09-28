@@ -9,12 +9,11 @@ import {
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { unscopedPackageName } from "../infra/install-safe-path.js";
 import type { NpmSpecResolution } from "../infra/install-source-utils.js";
-import { loadNpmPackageVersions, resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
+import { resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
 import {
   compareOpenClawReleaseVersions,
   isExactSemverVersion,
   isPrereleaseResolutionAllowed,
-  isPrereleaseSemverVersion,
   parseRegistryNpmSpec,
 } from "../infra/npm-registry-spec.js";
 import {
@@ -31,6 +30,7 @@ import {
   resolveDefaultNpmSpec,
   resolveNpmInstallSpecsForUpdateChannel,
 } from "./install-channel-specs.js";
+import { resolveTrustedOfficialPrereleaseResolution } from "./install-npm-metadata.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 import type { OperatorManagedPluginUpdate } from "./installed-plugin-package-ownership.js";
 import { checkMinHostVersion } from "./min-host-version.js";
@@ -373,39 +373,17 @@ export async function resolveTrustedOfficialPrereleaseFallbackMetadataForUpdate(
   ) {
     return undefined;
   }
-  const versions = await loadNpmPackageVersions({
-    packageName: parsedSpec.name,
+  const fallback = await resolveTrustedOfficialPrereleaseResolution({
+    spec: parsedSpec,
+    resolvedPrereleaseVersion: params.metadata.version,
     timeoutMs: params.timeoutMs,
   });
-  const stableVersion = versions
-    ?.filter((value) => !isPrereleaseSemverVersion(value))
-    .toSorted(comparePackageUpdateVersions)
-    .at(-1);
-  if (stableVersion) {
-    const stableMetadata = await resolveNpmSpecMetadata({
-      spec: `${parsedSpec.name}@${stableVersion}`,
-      timeoutMs: params.timeoutMs,
-    });
-    return stableMetadata.ok ? { kind: "stable", metadata: stableMetadata.metadata } : undefined;
-  }
-
-  const prereleaseVersion = versions
-    ?.filter(isPrereleaseSemverVersion)
-    .toSorted(comparePackageUpdateVersions)
-    .at(-1);
-  if (!prereleaseVersion || !versions?.every(isPrereleaseSemverVersion)) {
+  if (!fallback) {
     return undefined;
   }
-  if (prereleaseVersion === params.metadata.version) {
-    return { kind: "prerelease-only", metadata: params.metadata };
-  }
-  const prereleaseMetadata = await resolveNpmSpecMetadata({
-    spec: `${parsedSpec.name}@${prereleaseVersion}`,
-    timeoutMs: params.timeoutMs,
-  });
-  return prereleaseMetadata.ok
-    ? { kind: "prerelease-only", metadata: prereleaseMetadata.metadata }
-    : undefined;
+  return fallback.kind === "allow-prerelease-only"
+    ? { kind: "prerelease-only", metadata: params.metadata }
+    : { kind: fallback.kind, metadata: fallback.resolution };
 }
 
 export function isNpmMetadataCompatibleWithCurrentHost(

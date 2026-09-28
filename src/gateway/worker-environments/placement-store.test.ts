@@ -430,13 +430,6 @@ describe("worker session placement store", () => {
         },
       }),
     ).toBe(false);
-    expect(
-      store.validateWorkerOwner({
-        sessionId: SESSION.sessionId,
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      }),
-    ).toBe(true);
     expect(() =>
       store.claimTurn({
         ...SESSION,
@@ -936,42 +929,6 @@ describe("worker session placement store", () => {
         expectedGeneration: active.generation,
       }),
     ).toThrow("pending cloud workspace result");
-  });
-
-  it("accepts a reconciled workspace for the exact idle active owner", () => {
-    const active = advanceToActive();
-    const manifestRef = `sha256:${"e".repeat(64)}`;
-
-    expect(
-      store.acceptIdleWorkspaceReconciliation({
-        sessionId: active.sessionId,
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-        expectedGeneration: active.generation,
-        manifestRef,
-      }),
-    ).toMatchObject({ state: "active", workspaceBaseManifestRef: manifestRef, turnClaim: null });
-
-    const claim = store.claimTurn({
-      ...SESSION,
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-      claimId: "worker-busy-claim",
-      runId: "worker-busy-run",
-    });
-    expect(() =>
-      store.acceptIdleWorkspaceReconciliation({
-        sessionId: active.sessionId,
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-        expectedGeneration: active.generation,
-        manifestRef,
-      }),
-    ).toThrow("Cannot accept stale idle worker workspace");
-    store.releaseTurn(claim);
   });
 
   it("persists a workspace rollback journal and clears it with manifest acceptance", () => {

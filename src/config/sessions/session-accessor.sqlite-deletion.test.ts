@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
@@ -623,6 +624,8 @@ describe("session deletion and native owner state", () => {
 
   it("publishes committed deletion when personal publication receipt cleanup fails", async () => {
     await seed();
+    const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
+    const file = statSync(target.path, { bigint: true });
     const owner = nativeOwner();
     const cleanupError = new Error("injected receipt cleanup failure");
     vi.spyOn(
@@ -640,7 +643,14 @@ describe("session deletion and native owner state", () => {
       expect(read()).toBeUndefined();
       expect(bindings.has(sessionKey)).toBe(false);
       expect(identityListener.mock.calls).toEqual([
-        [{ agentId: "main", kind: "delete", previous: { sessionId, sessionKeys: [sessionKey] } }],
+        [
+          {
+            agentId: "main",
+            databaseIdentity: `${file.dev}:${file.ino}`,
+            kind: "delete",
+            previous: { sessionId, sessionKeys: [sessionKey] },
+          },
+        ],
       ]);
     } finally {
       unsubscribe();

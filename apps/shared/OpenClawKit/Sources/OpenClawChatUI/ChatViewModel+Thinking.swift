@@ -371,10 +371,14 @@ extension OpenClawChatViewModel {
     func selectedModelChoice(
         for currentSession: OpenClawChatSessionEntry?) -> OpenClawChatModelChoice?
     {
-        if modelSelectionID != Self.defaultModelSelectionID {
-            return modelChoices.first(where: { $0.selectionID == self.modelSelectionID })
+        let selectionID = self.modelSelectionID
+        if selectionID != Self.defaultModelSelectionID {
+            return modelChoices.first(where: { $0.selectionID == selectionID })
         }
-
+        if self.modelSelectionPolicy?.restricted == true {
+            let defaults = self.modelPickerDefault
+            return self.modelChoice(modelID: defaults.model, provider: defaults.provider)
+        }
         return self.sessionModelChoice(for: currentSession)
     }
 

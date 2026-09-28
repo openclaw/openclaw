@@ -324,8 +324,11 @@ describe("session suggestion handlers", () => {
               client: { internal?: { senderAttribution?: { id?: string; name?: string } } };
               respond: RespondFn;
             }) => {
-              SessionManager.appendMessageToTranscript(
-                { ...transcriptScope, sessionKey, storePath: target.storePath },
+              SessionManager.open({
+                ...transcriptScope,
+                sessionKey,
+                storePath: target.storePath,
+              }).appendMessage(
                 buildPersistedUserTurnMessage({
                   text: params.message,
                   idempotencyKey: params.idempotencyKey,

@@ -9,7 +9,7 @@ import type { GatewayRequestContext, GatewayRequestHandlerOptions, RespondFn } f
 import { defineValidatedGatewayMethod } from "./validation.js";
 
 describe("typed gateway method validation", () => {
-  it("binds core method names to their schema-derived payloads", async () => {
+  it("binds schema-derived payloads without losing the admitted request authority", async () => {
     expectTypeOf<
       GatewayCoreRequestParams["conversations.list"]
     >().toEqualTypeOf<ConversationListParams>();
@@ -25,8 +25,10 @@ describe("typed gateway method validation", () => {
     const handler = defineValidatedGatewayMethod(
       "conversations.list",
       validateConversationListParams,
-      ({ params, respond: reply }) => {
+      (request) => {
+        const { params, respond: reply } = request;
         expectTypeOf(params).toEqualTypeOf<ConversationListParams>();
+        expect(request).toBe(options);
         reply(true, { agentId: params.agentId, limit: params.limit });
       },
     );

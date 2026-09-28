@@ -685,11 +685,6 @@ describe("msteamsPlugin message actions", () => {
       details: {
         ok: true,
         channel: "msteams",
-        messageId: "msg-upload-1",
-      },
-      contentDetails: {
-        ok: true,
-        channel: "msteams",
         action: "upload-file",
         messageId: "msg-upload-1",
         conversationId: "conv-upload-1",
@@ -1213,11 +1208,6 @@ describe("msteamsPlugin message actions", () => {
         ok: true,
         channel: "msteams",
         messageId: "msg-card-1",
-      },
-      contentDetails: {
-        ok: true,
-        channel: "msteams",
-        messageId: "msg-card-1",
         conversationId: "conv-card-1",
       },
     });
@@ -1263,11 +1253,6 @@ describe("msteamsPlugin message actions", () => {
         },
       },
       details: {
-        ok: true,
-        channel: "msteams",
-        messageId: "msg-card-select-1",
-      },
-      contentDetails: {
         ok: true,
         channel: "msteams",
         messageId: "msg-card-select-1",

@@ -54,6 +54,17 @@ describe("worker inference provider runtime", () => {
     expect(runtime.releaseRuntime).toHaveBeenCalledOnce();
   });
 
+  it("uses the admitted source when current config routes the session to another store", async () => {
+    const runtime = setup();
+    const changedConfig = { ...config, session: { store: "replacement-sessions.json" } };
+
+    await expect(
+      runtime.executor(params(request(), vi.fn(), changedConfig)),
+    ).resolves.toMatchObject({ type: "done" });
+    expect(runtime.scope.authProfile).toBe(PROFILE);
+    expect(runtime.stream).toHaveBeenCalledOnce();
+  });
+
   it("returns bounded, redacted model preparation guidance", async () => {
     const runtime = setup();
     const secret = `worker-preparation-secret-${"a".repeat(48)}`;

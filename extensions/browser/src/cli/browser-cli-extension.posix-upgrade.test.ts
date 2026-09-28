@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Command } from "commander";
+import * as runtimeConfigSnapshot from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "../../test-support.js";
 import {
@@ -13,7 +15,6 @@ import {
   useExtensionInstallFixture,
   writeChromePreferences,
 } from "../browser/extension-install.test-support.js";
-import * as core from "./core-api.js";
 
 const boundary = vi.hoisted(() => ({
   deps: undefined as ExtensionInstallDeps | undefined,
@@ -138,10 +139,10 @@ async function setup(
     status: async () => ({ ready: true, identity: { extensionVersion: "fixture" } }),
     close: async () => {},
   });
-  const config = vi.spyOn(core, "getRuntimeConfig").mockReturnValue(cfg);
-  const json = vi.spyOn(core.defaultRuntime, "writeJson").mockImplementation(capture.writeJson);
-  const error = vi.spyOn(core.defaultRuntime, "error").mockImplementation(capture.error);
-  const exit = vi.spyOn(core.defaultRuntime, "exit").mockImplementation(capture.exit);
+  const config = vi.spyOn(runtimeConfigSnapshot, "getRuntimeConfig").mockReturnValue(cfg);
+  const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(capture.writeJson);
+  const error = vi.spyOn(defaultRuntime, "error").mockImplementation(capture.error);
+  const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(capture.exit);
   const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
   async function run(action: string, profile?: string) {
     const program = new Command();

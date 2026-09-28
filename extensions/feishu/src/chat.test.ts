@@ -395,6 +395,21 @@ describe("registerFeishuChatTools", () => {
     expect(contactUserGetMock).not.toHaveBeenCalled();
   });
 
+  it("preserves an allowed metadata failure in the tool error envelope", async () => {
+    const [tool] = registerChatTool({ account: { allowFrom: ["*"] } });
+    const error = new Error("provider unavailable");
+    chatGetMock.mockRejectedValueOnce(error);
+
+    const result = await tool.execute("tc_allowed_metadata_failure", {
+      action: "info",
+      chat_id: "oc_other",
+    });
+
+    expect(result.details).toEqual({ error: '{"message":"provider unavailable"}' });
+    expect(result.content[0]?.text).toContain(error.message);
+    expect(chatGetMock).toHaveBeenCalledOnce();
+  });
+
   it("lets a direct operator read an unconfigured group", async () => {
     const [tool] = registerChatTool({
       account: { groupPolicy: "allowlist" },

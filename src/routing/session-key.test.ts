@@ -18,7 +18,6 @@ import {
   buildAgentPeerSessionKey,
   buildGroupHistoryKey,
   classifySessionKeyShape,
-  isValidAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
   resolveEventSessionKey,
@@ -99,10 +98,15 @@ describe("isUnscopedSessionKeySentinel", () => {
 });
 
 describe("agentSessionKeysMatchByRequestKey", () => {
-  it("matches canonical agent keys against their request-key aliases", () => {
-    expect(agentSessionKeysMatchByRequestKey("agent:main:main", "main")).toBe(true);
-    expect(agentSessionKeysMatchByRequestKey("agent:ops:incident-42", "incident-42")).toBe(true);
-    expect(agentSessionKeysMatchByRequestKey("agent:ops:incident-42", "main")).toBe(false);
+  it.each([
+    ["agent:main:main", "main", true],
+    ["agent:ops:incident-42", "incident-42", true],
+    ["incident-42", "agent:ops:incident-42", true],
+    ["agent:OPS:incident-42", "agent:ops:incident-42", true],
+    ["agent:ops:incident-42", "agent:research:incident-42", false],
+    ["agent:ops:incident-42", "main", false],
+  ] as const)("compares %s with %s without losing a qualified owner", (left, right, expected) => {
+    expect(agentSessionKeysMatchByRequestKey(left, right)).toBe(expected);
   });
 });
 
@@ -508,18 +512,5 @@ describe("resolveEventSessionKey", () => {
     expect(
       resolveEventSessionKey("agent:main:cron:backup:run:abc123", "primary", "per-sender"),
     ).toBe("agent:main:primary");
-  });
-});
-
-describe("isValidAgentId", () => {
-  it.each([
-    { input: "main", expected: true },
-    { input: "my-research_agent01", expected: true },
-    { input: "", expected: false },
-    { input: "Agent not found: xyz", expected: false },
-    { input: "../../../etc/passwd", expected: false },
-    { input: "a".repeat(65), expected: false },
-  ] as const)("validates agent id %j => $expected", ({ input, expected }) => {
-    expect(isValidAgentId(input)).toBe(expected);
   });
 });

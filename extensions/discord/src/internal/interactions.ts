@@ -2,12 +2,12 @@ import {
   ComponentType,
   InteractionResponseType,
   InteractionType,
+  type APIApplicationCommandAutocompleteInteraction,
   type APIApplicationCommandInteraction,
   type APIApplicationCommandInteractionDataOption,
   type APIChannel,
   type APIInteraction,
   type APIInteractionDataResolvedChannel,
-  type APIMessage,
   type APIMessageComponentInteraction,
   type APIModalSubmitInteraction,
   type APIUser,
@@ -39,23 +39,12 @@ import {
 
 type InteractionClient = StructureClient & {
   options: { clientId: string };
-  componentHandler: {
-    waitForMessageComponent(
-      message: Message,
-      timeoutMs: number,
-    ): Promise<
-      | { success: true; customId: string; message: Message; values?: string[] }
-      | { success: false; message: Message; reason: "timed out" }
-    >;
-  };
   fetchChannel(id: string): Promise<DiscordChannel>;
 };
 
 type Modal = {
   serialize: () => unknown;
 };
-
-type ComponentData = Record<string, unknown>;
 
 export type RawInteraction = APIInteraction & {
   token: string;
@@ -77,22 +66,6 @@ export type RawInteraction = APIInteraction & {
   };
   message?: unknown;
 };
-
-type CommandRawInteraction = APIApplicationCommandInteraction & RawInteraction;
-type MessageComponentRawInteraction = APIMessageComponentInteraction & RawInteraction;
-type ModalSubmitRawInteraction = APIModalSubmitInteraction & RawInteraction;
-
-function toCommandRawInteraction(rawData: RawInteraction): CommandRawInteraction {
-  return rawData as CommandRawInteraction;
-}
-
-function toMessageComponentRawInteraction(rawData: RawInteraction): MessageComponentRawInteraction {
-  return rawData as MessageComponentRawInteraction;
-}
-
-function toModalSubmitRawInteraction(rawData: RawInteraction): ModalSubmitRawInteraction {
-  return rawData as ModalSubmitRawInteraction;
-}
 
 function readInteractionUser(rawData: RawInteraction, client: InteractionClient): User | null {
   const directUser = "user" in rawData ? rawData.user : undefined;
@@ -241,22 +214,14 @@ class BaseInteraction {
   private async performReplyEdit(payload: MessagePayload): Promise<unknown> {
     const body = serializePayload(payload);
     const query = needsComponentsV2Query(body) ? { with_components: true } : undefined;
-    const result = query
-      ? await editWebhookMessage(
-          this.client.rest,
-          this.client.options.clientId,
-          this.token,
-          "@original",
-          { body },
-          query,
-        )
-      : await editWebhookMessage(
-          this.client.rest,
-          this.client.options.clientId,
-          this.token,
-          "@original",
-          { body },
-        );
+    const result = await editWebhookMessage(
+      this.client.rest,
+      this.client.options.clientId,
+      this.token,
+      "@original",
+      { body },
+      query,
+    );
     this.response.recordReplyEdit();
     return result;
   }
@@ -278,16 +243,6 @@ class BaseInteraction {
     return await this.enqueueResponse(() =>
       getWebhookMessage(this.client.rest, this.client.options.clientId, this.token, "@original"),
     );
-  }
-
-  async replyAndWaitForComponent(payload: MessagePayload, timeoutMs = 300_000) {
-    const result = await this.reply(payload);
-    const rawMessage = isRawMessage(result) ? result : await this.fetchReply();
-    if (!isRawMessage(rawMessage)) {
-      throw new Error("Discord interaction reply did not return a message");
-    }
-    const message = new Message(this.client, rawMessage as APIMessage);
-    return await this.client.componentHandler.waitForMessageComponent(message, timeoutMs);
   }
 
   async followUp(payload: MessagePayload): Promise<unknown> {
@@ -312,7 +267,8 @@ export class CommandInteraction extends BaseInteraction {
   readonly options: OptionsHandler;
   constructor(
     client: InteractionClient,
-    rawData: APIApplicationCommandInteraction & RawInteraction,
+    rawData: (APIApplicationCommandInteraction | APIApplicationCommandAutocompleteInteraction) &
+      RawInteraction,
   ) {
     super(client, rawData);
     this.options = new OptionsHandler(
@@ -382,16 +338,16 @@ export class ModalInteraction extends BaseInteraction {
 export function createInteraction(client: InteractionClient, rawData: RawInteraction) {
   assertDiscordInteractionPayload(rawData);
   if (rawData.type === InteractionType.ApplicationCommandAutocomplete) {
-    return new AutocompleteInteraction(client, toCommandRawInteraction(rawData));
+    return new AutocompleteInteraction(client, rawData);
   }
   if (rawData.type === InteractionType.ApplicationCommand) {
-    return new CommandInteraction(client, toCommandRawInteraction(rawData));
+    return new CommandInteraction(client, rawData);
   }
   if (rawData.type === InteractionType.ModalSubmit) {
-    return new ModalInteraction(client, toModalSubmitRawInteraction(rawData));
+    return new ModalInteraction(client, rawData);
   }
   if (rawData.type === InteractionType.MessageComponent) {
-    const componentRawData = toMessageComponentRawInteraction(rawData);
+    const componentRawData = rawData;
     switch (rawData.data?.component_type) {
       case ComponentType.Button:
         return new ButtonInteraction(client, componentRawData);
@@ -410,20 +366,4 @@ export function createInteraction(client: InteractionClient, rawData: RawInterac
     }
   }
   return new BaseInteraction(client, rawData);
-}
-
-export function parseComponentInteractionData(
-  component: { customIdParser: (id: string) => { data: ComponentData } },
-  customId: string,
-): ComponentData {
-  return component.customIdParser(customId).data;
-}
-
-function isRawMessage(value: unknown): value is { id: string; channel_id: string } {
-  return (
-    Boolean(value) &&
-    typeof value === "object" &&
-    typeof (value as { id?: unknown }).id === "string" &&
-    typeof (value as { channel_id?: unknown }).channel_id === "string"
-  );
 }

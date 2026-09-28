@@ -7,6 +7,7 @@ import { createPluginRecord } from "../plugins/loader-records.js";
 import type { WidgetPresenter } from "../plugins/plugin-registration.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import * as userProfileList from "../state/user-profile-list.js";
 import { withEnv } from "../test-utils/env.js";
 import { isToolWrappedWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { applyToolAvailabilityDescriptions } from "./agent-tools.deferred-followup.js";
@@ -108,6 +109,36 @@ describe("openclaw-tools progress_card gating", () => {
       emittedNames.filter((name) => resolveCoreToolFactoryFamily(name) !== "openclaw"),
     ).toEqual([]);
   });
+
+  it.each([false, true])(
+    "gates personal instructions on multiple people (%s) without general filesystem access",
+    (multipleProfiles) => {
+      const identityCount = vi
+        .spyOn(userProfileList, "hasMultipleSessionSharingIdentities")
+        .mockReturnValue(multipleProfiles);
+      const tools = createOpenClawCodingTools({
+        sessionKey: "agent:main:dashboard:project",
+        runSessionKey: "agent:main:dashboard:project",
+        cwd: "/project/worktree",
+        workspaceDir: "/project/worktree",
+        config: {
+          agents: { entries: { main: { default: true, workspace: "/agent/workspace" } } },
+          tools: { allow: ["personal_instructions"], fs: { workspaceOnly: true } },
+        },
+        disableMessageTool: true,
+        wrapBeforeToolCallHook: false,
+      });
+      expect(toolNames(tools).includes("personal_instructions")).toBe(multipleProfiles);
+      expect(toolNames(tools)).not.toContain("write");
+      expect(toolNames(tools)).not.toContain("exec");
+      expect(resolveCoreToolFactoryFamily("personal_instructions")).toBe("openclaw");
+      setEmbeddedMode(true);
+      expect(createFastToolNames({ agentSessionKey: "agent:main:main" })).not.toContain(
+        "personal_instructions",
+      );
+      identityCount.mockRestore();
+    },
+  );
 
   it("enables progress_card by default", () => {
     expectProgressCardEnabled({ config: {} as OpenClawConfig }, true);

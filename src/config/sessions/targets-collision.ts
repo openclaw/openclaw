@@ -2,11 +2,11 @@
 import path from "node:path";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { createOpenClawAgentDatabasePathMatcher } from "../../state/openclaw-agent-db-registry.js";
+import { createOpenClawAgentDatabasePathMatcher } from "../../state/openclaw-agent-db.paths.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import {
   readSessionStoreRegistryRows,
   resolveSqliteTargetFromSessionStorePath,
-  resolveUnsuffixedSqliteTargetFromSessionStorePath,
   type SessionStoreRegistryRead,
 } from "./session-sqlite-target.js";
 import type { SessionStoreReadCandidate } from "./session-store-read-candidates.js";

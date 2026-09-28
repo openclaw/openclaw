@@ -5,12 +5,12 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { readRegularFile, readRegularFileSync } from "@openclaw/fs-safe/advanced";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { IdentityConfig } from "../config/types.base.js";
-import { readRegularFile, readRegularFileSync } from "../infra/regular-file.js";
 import { DEFAULT_IDENTITY_FILENAME } from "./workspace.js";
 
 // IDENTITY.md may contain the supported 2 MiB avatar encoded as a roughly

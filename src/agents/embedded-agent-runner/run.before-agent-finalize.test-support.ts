@@ -1,21 +1,21 @@
 // Full-entry coverage for before_agent_finalize revision handling in embedded runs.
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   mockedGlobalHookRunner,
   mockedRunEmbeddedAttempt,
-  createOverflowRunParams,
   resetSharedRunIntegrationHarnessMocks,
   useOpenAIPlatformAuthFixture,
 } from "./run.overflow-compaction.harness.js";
-import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
+import {
+  createSharedRunIntegrationSession,
+  loadSharedRunIntegrationHarness,
+} from "./run.shared-integration-harness.test-support.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 const REASONING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 
-let state: OpenClawTestState;
+let session: Awaited<ReturnType<typeof createSharedRunIntegrationSession>>;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 
 function finalAnswerAttempt(
@@ -24,7 +24,7 @@ function finalAnswerAttempt(
 ): EmbeddedRunAttemptResult {
   // Finalize tests need a successful assistant turn with both surfaced text and
   // snapshot content so the runner can decide whether to request a revision.
-  return makeAttemptResult({
+  return session.makeAttemptResult({
     assistantTexts: [text],
     lastAssistant: {
       stopReason: "stop",
@@ -63,8 +63,7 @@ describe("runEmbeddedAgent before_agent_finalize", () => {
 
   beforeEach(async () => {
     resetSharedRunIntegrationHarnessMocks();
-    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
-    state = await createOpenClawTestState({ label: "run.before-agent-finalize" });
+    session = await createSharedRunIntegrationSession();
     useOpenAIPlatformAuthFixture();
     mockedGlobalHookRunner.hasHooks.mockImplementation(
       (hookName: string) => hookName === "before_agent_finalize",
@@ -72,7 +71,7 @@ describe("runEmbeddedAgent before_agent_finalize", () => {
   });
 
   afterEach(async () => {
-    await state?.cleanup();
+    await session?.cleanup();
   });
 
   it("turns a revise decision into one more hidden continuation", async () => {
@@ -88,7 +87,7 @@ describe("runEmbeddedAgent before_agent_finalize", () => {
       .mockResolvedValueOnce(finalAnswerAttempt("Revised answer."));
 
     await runEmbeddedAgent({
-      ...createOverflowRunParams(state),
+      ...session.runParams,
       provider: "openai",
       model: "gpt-5.5",
       runId: "run-before-finalize-revise",
@@ -104,7 +103,7 @@ describe("runEmbeddedAgent before_agent_finalize", () => {
   it("replaces an incomplete-turn continuation with a finalize revision", async () => {
     mockedRunEmbeddedAttempt
       .mockResolvedValueOnce(
-        makeAttemptResult({
+        session.makeAttemptResult({
           assistantTexts: [],
           lastAssistant: {
             role: "assistant",
@@ -129,7 +128,7 @@ describe("runEmbeddedAgent before_agent_finalize", () => {
       .mockResolvedValueOnce(finalAnswerAttempt("Revised recovered answer."));
 
     await runEmbeddedAgent({
-      ...createOverflowRunParams(state),
+      ...session.runParams,
       provider: "openai",
       model: "gpt-5.5",
       runId: "run-before-finalize-after-incomplete-turn",
@@ -159,7 +158,7 @@ describe("runEmbeddedAgent before_agent_finalize", () => {
     );
 
     await runEmbeddedAgent({
-      ...createOverflowRunParams(state),
+      ...session.runParams,
       provider: "openai",
       model: "gpt-5.5",
       runId: "run-before-finalize-timeout",

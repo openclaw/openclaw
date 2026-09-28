@@ -347,6 +347,99 @@ function startPointerDrag(params: {
   document.addEventListener("keydown", handleKeyDown, true);
 }
 
+function profileIdentity(profile: ProviderProfile, index: number): string {
+  return (
+    profile.email ||
+    profile.displayName ||
+    t("modelProviders.profiles.account", { number: String(index + 1) })
+  );
+}
+
+function renderProfileIdentity(profile: ProviderProfile, identity: string, showDetails: boolean) {
+  const meta = profileMeta(profile);
+  return html`
+    <span class="model-providers__profile-avatar" aria-hidden="true"
+      >${profileInitials(identity)}</span
+    >
+    <div class="model-providers__profile-copy">
+      <strong>${identity}</strong>
+      ${meta ? html`<span>${meta}</span>` : nothing}
+      ${
+        showDetails
+          ? html`<details>
+              <summary>${t("modelProviders.profiles.details")}</summary>
+              <div>${profile.profileId}</div>
+              ${profile.expiry ? html`<span>${t("modelProviders.expiresIn", { time: profile.expiry.label })}</span>` : nothing}
+            </details>`
+          : nothing
+      }
+    </div>
+  `;
+}
+
+export function renderProviderAccountSummary(
+  cards: ModelProviderCard[],
+  recovery?: {
+    authProvider: string;
+    disabled: boolean;
+    onUse: (profileId: string) => void;
+  },
+) {
+  const profiles = cards.flatMap((card) =>
+    card.profiles.map((profile) => ({
+      profile,
+      authRejected: card.catalogStatus === "auth-rejected",
+      // A display card can combine providers whose credentials are not interchangeable.
+      canUse:
+        card.profileProviderIds[profile.profileId] === recovery?.authProvider &&
+        (profile.source === "saved" || profile.source === "inherited"),
+    })),
+  );
+  const sources = [...new Set(cards.map(apiKeySource).filter(Boolean))];
+  return html`
+    <section
+      class="model-provider-login__accounts"
+      aria-label=${t("modelProviders.login.accounts")}
+    >
+      <h3>${t("modelProviders.login.accounts")}</h3>
+      ${
+        profiles.length
+          ? html`
+              <div role="list">
+                ${profiles.map(
+                  ({ profile, authRejected, canUse }, index) => html`
+                    <div
+                      class="model-provider-login__account"
+                      role="listitem"
+                      data-profile-id=${profile.profileId}
+                    >
+                      ${renderProfileIdentity(profile, profileIdentity(profile, index), false)}
+                      ${profileStatus(profile, authRejected)}
+                      ${
+                        canUse && recovery
+                          ? html`<button
+                              class="btn"
+                              data-models-use-account
+                              ?disabled=${recovery.disabled}
+                              @click=${() => recovery.onUse(profile.profileId)}
+                            >
+                              ${t("modelProviders.login.useAccount")}
+                            </button>`
+                          : nothing
+                      }
+                    </div>
+                  `,
+                )}
+              </div>
+            `
+          : nothing
+      }
+      ${sources.map((source) => html`<p class="muted">${source}</p>`)}
+      ${!profiles.length && !sources.length ? html`<p class="muted">${t("modelProviders.login.noAccounts")}</p>` : nothing}
+    </section>
+  `;
+}
+
 export function renderProviderProfiles(card: ModelProviderCard, props: ProviderProfilesViewProps) {
   if (card.profiles.length === 0) {
     return nothing;
@@ -354,12 +447,7 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
   const groups = profileGroups(card, props.profileOrders);
   // Account numbers follow the saved inventory, not the editable priority order.
   const identities = new Map(
-    card.profiles.map((profile, index) => [
-      profile.profileId,
-      profile.email ||
-        profile.displayName ||
-        t("modelProviders.profiles.account", { number: String(index + 1) }),
-    ]),
+    card.profiles.map((profile, index) => [profile.profileId, profileIdentity(profile, index)]),
   );
   const rows = groups.flatMap((group) => group.profiles.map((profile) => ({ group, profile })));
   const reorderOffered = groups.some(
@@ -428,7 +516,6 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
             const canMove = props.canMutate && !lock && complete && order.length > 1 && index >= 0;
             const showMoves = !lock && (complete || stored) && order.length > 1;
             const identity = identities.get(profile.profileId)!;
-            const meta = profileMeta(profile);
             const logoutProvider = logoutProviderForProfile(card, profile.profileId);
             const logoutLabel = t("modelProviders.logout.actionFor", { account: identity });
             const logoutBlocked = !props.canMutate
@@ -509,18 +596,7 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
                       : nothing
                   }
                 </span>
-                <span class="model-providers__profile-avatar" aria-hidden="true"
-                  >${profileInitials(identity)}</span
-                >
-                <div class="model-providers__profile-copy">
-                  <strong>${identity}</strong>
-                  ${meta ? html`<span>${meta}</span>` : nothing}
-                  <details>
-                    <summary>${t("modelProviders.profiles.details")}</summary>
-                    <div>${profile.profileId}</div>
-                    ${profile.expiry ? html`<span>${t("modelProviders.expiresIn", { time: profile.expiry.label })}</span>` : nothing}
-                  </details>
-                </div>
+                ${renderProfileIdentity(profile, identity, true)}
                 ${
                   provider === "openai" && profile.type !== "api_key"
                     ? html`<openclaw-model-account-usage

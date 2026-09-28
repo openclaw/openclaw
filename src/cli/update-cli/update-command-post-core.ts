@@ -5,11 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeTriageUpdateFailure } from "../../commands/triage-update.js";
 import { resolveStateDir } from "../../config/paths.js";
 import {
   createPluginInstallRecordMap,
+  parsePluginInstallRecordMap,
   serializePluginInstallRecordMap,
   setPluginInstallRecordMapEntry,
 } from "../../config/plugin-install-record-map.js";
@@ -53,10 +53,7 @@ import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.j
 import { runExec } from "../../process/exec.js";
 import { VERSION } from "../../version.js";
 import { readPackageVersion, resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
-import {
-  normalizePluginInstallRecordMap,
-  writePostCoreSourceConfigFile,
-} from "./update-command-config.js";
+import { writePostCoreSourceConfigFile } from "./update-command-config.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 import { isPackageManagerUpdateMode } from "./update-command-service-command.js";
 import {
@@ -181,7 +178,11 @@ export async function readPostCorePluginInstallRecordsFile(
     );
   }
   try {
-    return normalizePluginInstallRecordMap(parsed);
+    const records = parsePluginInstallRecordMap(parsed);
+    if (!records) {
+      throw new Error("Invalid plugin install record map");
+    }
+    return records;
   } catch (err) {
     throw new Error(
       `Invalid plugin install records in handoff file: ${filePath}. Run openclaw doctor to inspect and repair plugin installation state.`,
@@ -441,6 +442,7 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
       handoffEnv[CONTROL_PLANE_UPDATE_SENTINEL_META_ENV] = sentinelPath;
     }
     const child = spawn(nodeRunner, argv, {
+      cwd: params.root,
       stdio: childStdio,
       env: {
         ...handoffEnv,
@@ -606,15 +608,6 @@ export function shouldResumePostCoreUpdateInFreshProcess(params: {
   if (params.installKindChanged === true || isPackageManagerUpdateMode(result.mode)) {
     return true;
   }
-  if (result.mode !== "git") {
-    return false;
-  }
-  const beforeSha = normalizeOptionalString(result.before?.sha);
-  const afterSha = normalizeOptionalString(result.after?.sha);
-  if (beforeSha && afterSha && beforeSha !== afterSha) {
-    return true;
-  }
-  const beforeVersion = normalizeOptionalString(result.before?.version);
-  const afterVersion = normalizeOptionalString(result.after?.version);
-  return Boolean(beforeVersion && afterVersion && beforeVersion !== afterVersion);
+  // Successful Git activation replaces dist even when local commits leave HEAD unchanged.
+  return result.mode === "git";
 }

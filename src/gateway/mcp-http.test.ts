@@ -775,12 +775,12 @@ describe("MCP terminal process result delivery", () => {
   });
 
   it("keeps the notification when the response connection closes before its bytes finish", async () => {
-    vi.spyOn(ServerResponse.prototype, "end").mockImplementationOnce(
-      function (this: ServerResponse) {
-        this.destroy();
-        return this;
-      },
-    );
+    vi.spyOn(ServerResponse.prototype, "end").mockImplementationOnce(function (
+      this: ServerResponse,
+    ) {
+      this.destroy();
+      return this;
+    });
     const { runtime } = await startLoopbackServerForTest();
     await expect(sendMainSessionToolCall({ token: runtime.ownerToken })).rejects.toThrow();
     expect(peekSystemEventEntries(sessionKey).map((event) => event.text)).toEqual([

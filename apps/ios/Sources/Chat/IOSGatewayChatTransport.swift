@@ -655,7 +655,7 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
                     }
                     if let mapped = OpenClawChatGatewayPayloadCodec.event(from: evt) {
                         switch mapped {
-                        case .chatMetadataChanged, .seqGap, .routeChanged:
+                        case .chatMetadataChanged, .modelSelectionChanged, .seqGap, .routeChanged:
                             await self.sourceResourceLoader?.invalidate()
                         default:
                             break

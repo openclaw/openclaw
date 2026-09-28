@@ -14,7 +14,7 @@ import {
   formatCliProcessFailure,
   runCliProcessChild,
 } from "./cli-process-child.test-helpers.js";
-import { registerCoreCliByName } from "./program/command-registry.js";
+import { registerCoreCliByName } from "./program/command-registry-core.js";
 import { createProgramContext } from "./program/context.js";
 import { registerSubCliByName } from "./program/register.subclis.js";
 
@@ -202,11 +202,25 @@ describe("CLI help process exit", () => {
       args: ["--help"],
       config: { logging: { consoleStyle: "json", level: "silent" } },
       forbidTlsImport: true,
+      keepAlive: true,
+      env: { NODE_USE_SYSTEM_CA: "0" },
     });
 
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Usage: openclaw [options] [command]");
     expect(() => parseJsonLines(result.stdout)).toThrow();
+  });
+
+  it("exits after plugin-sensitive root help with a retained runtime handle", async () => {
+    const result = await runCliProcess({
+      args: ["--help"],
+      config: { plugins: { enabled: false } },
+      keepAlive: true,
+      env: { NODE_USE_SYSTEM_CA: "0" },
+    });
+
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Usage: openclaw [options] [command]");
   });
 
   // One lazy process is representative by design; the matrix below exercises
@@ -226,7 +240,8 @@ describe("CLI help process exit", () => {
       args: ["gateway", "--help"],
       entry: preparedCliEntry,
       config: { logging: { consoleStyle: "json", level: "silent" } },
-      env: { OPENCLAW_GATEWAY_STARTUP_TRACE: "1" },
+      env: { OPENCLAW_GATEWAY_STARTUP_TRACE: "1", NODE_USE_SYSTEM_CA: "0" },
+      keepAlive: true,
     });
 
     expect(parseJsonLines(result.stderr)).toEqual(

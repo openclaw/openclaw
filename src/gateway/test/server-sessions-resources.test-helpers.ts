@@ -12,6 +12,7 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "../../config/sessions/session-transcript-reconcile.js";
 import { isPathInside } from "../../infra/path-guards.js";
+import { getGatewayContextResolver } from "../../plugins/runtime/gateway-context-binding.js";
 import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
 import {
   collectActiveSessionWorkAdmissions,
@@ -30,9 +31,16 @@ import {
   closeOpenClawStateDatabaseByPathAsync,
   registerOpenClawStateDatabaseLifecycleListener,
 } from "../../state/openclaw-state-db.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { gatewayFixtureLifetime } from "../gateway-fixture-lifetime.test-support.js";
+import { getGatewayRecoveryRuntime } from "../server-recovery-runtime-context.js";
 import type { GatewayServerHarness } from "../server.e2e-ws-harness.js";
 import { removeSessionFixtureDirectory } from "../session-fixture-directory.test-support.js";
+import { disposeSessionReadContexts } from "../session-read-contexts.test-support.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { testState } from "../test-helpers.runtime-state.js";
 import { installGatewayTestHooks } from "../test-helpers.server.js";
 
@@ -40,8 +48,8 @@ const getGatewayServerHarnessModule = createLazyRuntimeModule(
   () => import("../server.e2e-ws-harness.js"),
 );
 
-/** Deselect before disposal so topology publication cannot reopen a fixture store. */
-export async function releaseGatewaySessionStoreFixture(dir: string) {
+/** Join accepted work while retaining the selected store and its database workers. */
+export async function settleGatewaySessionStoreFixture(dir: string) {
   // Transcript observers outlive session admission; join before config changes can
   // reopen the store. This also runs in suite teardown, outside expect.poll's test context.
   await vi.waitFor(() => expect(getActiveGatewayRootWorkCount({ excludeCurrent: true })).toBe(0), {
@@ -64,6 +72,21 @@ export async function releaseGatewaySessionStoreFixture(dir: string) {
   }
   // Participant persistence outlives request roots; retain selectors until its FIFO settles.
   await drainOpenClawAgentWriteQueuesForTest(ownsPath);
+  const runtime = getGatewayRecoveryRuntime();
+  const projection = getSessionRowProjection(runtime && getGatewayContextResolver(runtime)?.());
+  if (projection) {
+    await waitForSessionTranscriptIndexReconcilesInStateDir(root);
+    await drainOpenClawAgentWriteQueuesForTest(ownsPath);
+    // Suite Gateways keep this projection alive across stores. Settle its readers
+    // before unregistration invalidates their canonical admission.
+    await projection.ensureMaterialized();
+  }
+  return { root, ownsPath, projection };
+}
+
+/** Deselect before disposal so topology publication cannot reopen a fixture store. */
+export async function releaseGatewaySessionStoreFixture(dir: string) {
+  const { root, ownsPath, projection } = await settleGatewaySessionStoreFixture(dir);
   if (testState.sessionStorePath && ownsPath(testState.sessionStorePath)) {
     testState.sessionStorePath = undefined;
   }
@@ -73,13 +96,17 @@ export async function releaseGatewaySessionStoreFixture(dir: string) {
     delete session.store;
     setRuntimeConfigSnapshot({ ...cfg, session });
   }
-  await waitForSessionTranscriptIndexReconcilesInStateDir(root);
-  await drainOpenClawAgentWriteQueuesForTest(ownsPath);
+  if (!projection) {
+    await waitForSessionTranscriptIndexReconcilesInStateDir(root);
+    await drainOpenClawAgentWriteQueuesForTest(ownsPath);
+  }
   for (const database of listOpenClawRegisteredAgentDatabases()) {
     if (isPathInside(root, database.path)) {
       unregisterOpenClawAgentDatabase(database);
     }
   }
+  // Join topology publication before closing readers retained by the old store.
+  await projection?.ensureMaterialized();
   await closeOpenClawAgentDatabasesAsync(root);
 
   // Client identity fixtures use shared-state SQLite, even with legacy .json names.
@@ -164,5 +191,18 @@ export function installGatewaySessionsTestResources(
     }
     return sharedSessionStoreDir;
   };
-  return { requireHarness, requireSharedSessionStoreDir };
+  async function withSessionTestState<T>(
+    options: Parameters<typeof withOpenClawTestState>[0],
+    run: (state: OpenClawTestState) => Promise<T>,
+  ): Promise<T> {
+    return await withOpenClawTestState(options, (state) =>
+      runQaGatewayFixture(
+        () => run(state),
+        disposeSessionReadContexts,
+        // The suite projection also reads this state, but its store lives outside state.root.
+        () => releaseGatewaySessionStoreFixture(requireSharedSessionStoreDir()),
+      ),
+    );
+  }
+  return { requireHarness, requireSharedSessionStoreDir, withSessionTestState };
 }

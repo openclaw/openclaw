@@ -196,61 +196,72 @@ describe("TranscriptsStore", () => {
     },
   );
 
-  it.each([undefined, null, "invalid", "generated", "supplied"])(
-    "retains the admitted ID origin %s across updates, reopen, and Doctor restoration",
-    async (origin) => {
-      const { store } = createStore();
-      const target = {
-        ...session(),
+  it("retains admitted ID origins across updates, reopen, and Doctor restoration", async () => {
+    const { store } = createStore();
+    const cases = [undefined, null, "invalid", "generated", "supplied"].map((origin) => ({
+      origin,
+      target: {
+        ...session(`origin-${String(origin)}`),
         metadata: {
           agentId: "original",
           ...(origin === undefined ? {} : { sessionIdOrigin: origin }),
         },
-      };
+      },
+    }));
+    for (const { target } of cases) {
       await store.writeSession(target);
       await store.appendUtteranceForSession(target, { text: "Saved history" });
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
+    }
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    const canonical = new Map<string, TranscriptSessionDescriptor | undefined>();
+    const restoredState = tempDirs.make("transcript-origin-restore-");
+    fs.mkdirSync(path.join(restoredState, "transcripts", "2026-07-01"), { recursive: true });
+    for (const { origin, target } of cases) {
       for (const metadata of [undefined, { sessionIdOrigin: "generated", agentId: "updated" }]) {
         await store.writeSession({ ...target, metadata, stoppedAt: "2026-07-01T10:01:00.000Z" });
         const stored = await store.readSession(target.sessionId);
-        expect(stored?.metadata?.sessionIdOrigin).toEqual(origin);
-        expect(Object.hasOwn(stored?.metadata ?? {}, "sessionIdOrigin")).toBe(origin !== undefined);
-        expect(stored?.metadata?.agentId).toBe(metadata?.agentId);
-        expect(await store.readUtterancesForSession(target)).toMatchObject([
+        expect(stored?.metadata?.sessionIdOrigin, target.sessionId).toEqual(origin);
+        expect(Object.hasOwn(stored?.metadata ?? {}, "sessionIdOrigin"), target.sessionId).toBe(
+          origin !== undefined,
+        );
+        expect(stored?.metadata?.agentId, target.sessionId).toBe(metadata?.agentId);
+        expect(await store.readUtterancesForSession(target), target.sessionId).toMatchObject([
           { text: "Saved history" },
         ]);
       }
-      const canonical = await store.readSession(target.sessionId);
+      canonical.set(target.sessionId, await store.readSession(target.sessionId));
       const exported = await store.materializeSessionArtifacts(target, "all");
-      const restoredState = tempDirs.make("transcript-origin-restore-");
-      fs.mkdirSync(path.join(restoredState, "transcripts", "2026-07-01"), { recursive: true });
       fs.cpSync(
         exported.sessionDir,
         path.join(restoredState, "transcripts", "2026-07-01", target.sessionId),
         { recursive: true },
       );
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-      const { detectLegacyMeetingTranscripts, migrateLegacyMeetingTranscripts } =
-        await import("../infra/state-migrations.meeting-transcripts.js");
-      const env = { ...process.env, OPENCLAW_STATE_DIR: restoredState };
-      const migrated = await migrateLegacyMeetingTranscripts({
-        detected: detectLegacyMeetingTranscripts({
-          stateDir: restoredState,
-          doctorOnlyStateMigrations: true,
-        }),
+    }
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    const { detectLegacyMeetingTranscripts, migrateLegacyMeetingTranscripts } =
+      await import("../infra/state-migrations.meeting-transcripts.js");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: restoredState };
+    const migrated = await migrateLegacyMeetingTranscripts({
+      detected: detectLegacyMeetingTranscripts({
         stateDir: restoredState,
-        env,
-      });
-      expect(migrated.warnings).toEqual([]);
-      const restored = new TranscriptsStore(path.join(restoredState, "transcripts"), { env });
-      expect(await restored.readSession(target.sessionId)).toEqual(canonical);
-      expect(await restored.readUtterancesForSession(target)).toMatchObject([
+        doctorOnlyStateMigrations: true,
+      }),
+      stateDir: restoredState,
+      env,
+    });
+    expect(migrated.warnings).toEqual([]);
+    const restored = new TranscriptsStore(path.join(restoredState, "transcripts"), { env });
+    for (const { target } of cases) {
+      expect(await restored.readSession(target.sessionId), target.sessionId).toEqual(
+        canonical.get(target.sessionId),
+      );
+      expect(await restored.readUtterancesForSession(target), target.sessionId).toMatchObject([
         { text: "Saved history" },
       ]);
-    },
-  );
+    }
+  });
 
   it("encodes portable slugs for Windows-reserved and trailing-dot IDs", () => {
     expect(safeTranscriptPathSegment("CON")).toBe("%43%4F%4E");
@@ -674,6 +685,7 @@ describe("TranscriptsStore", () => {
       summarizeTranscripts({ session: target, utterances: [{ text: "recover me" }] }),
       target,
     );
+    await store.materializeSessionArtifacts(target, "all");
     openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } })
       .db.prepare(
         "UPDATE meeting_transcript_sessions SET export_manifest_json = '{}' WHERE session_id = ?",

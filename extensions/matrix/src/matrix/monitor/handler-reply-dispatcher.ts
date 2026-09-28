@@ -1,5 +1,7 @@
 import {
   createPreviewMessageReceipt,
+  createReplyPrefixOptions,
+  createTypingCallbacks,
   type MessageReceipt,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
@@ -7,6 +9,8 @@ import {
   getReplyPayloadTtsSupplement,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMatrixExtraContent } from "../../outbound.js";
 import type { CoreConfig, MatrixStreamingMode, ReplyToMode } from "../../types.js";
@@ -24,12 +28,6 @@ import {
   toMatrixPartialDeliveryError,
   type MatrixReplyDeliveryResult,
 } from "./replies.js";
-import {
-  createReplyPrefixOptions,
-  createTypingCallbacks,
-  type ReplyPayload,
-  type RuntimeEnv,
-} from "./runtime-api.js";
 
 type MatrixDraftController = Awaited<ReturnType<typeof createMatrixDraftController>>;
 

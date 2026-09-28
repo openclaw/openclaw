@@ -66,6 +66,7 @@ internal sealed class ChatTimelineItem {
     val key: String,
     val durationMs: Long?,
     val expanded: Boolean,
+    val outcomes: Map<WorkedToolOutcome, Int>,
   ) : ChatTimelineItem()
 
   data class TurnRecapSummary(
@@ -204,7 +205,7 @@ internal fun PreparedChatHistory.buildTimeline(
           } else {
             span.preservedRowIndexes.asReversed().forEach { appendHistoryRow(rows[it]) }
             if (span.key in expandedWorkKeys) span.workRowIndexes.asReversed().forEach { appendHistoryRow(rows[it]) }
-            add(ChatTimelineItem.WorkedSummary(span.key, span.durationMs, span.key in expandedWorkKeys))
+            add(ChatTimelineItem.WorkedSummary(span.key, span.durationMs, span.key in expandedWorkKeys, span.outcomes))
           }
           rowIndex = span.start - 1
           spanIndex--

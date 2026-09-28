@@ -102,6 +102,7 @@ import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
   buildDefaultTestCliBackend,
   createCliRunnerPrepareFixture,
+  createCliRepositorySkillFixture,
   createTestMcpLoopbackClientGrant,
   createTestMcpLoopbackServer,
   createTestMcpLoopbackServerConfig,
@@ -250,7 +251,7 @@ function createCliBackendConfig(params: TestCliBackendParams = {}): OpenClawConf
 }
 
 const SHARED_CHAT_MESSAGE_TOOL_ETIQUETTE =
-  "- Group/channel: stale/joke/light ack/low-value chatter => reaction or silence. Needed reply => `message(action=send)`; final text private.";
+  "- Group/channel: stale/joke/light ack/low-value chatter => reaction or silence. Needed text reply => `message(action=send)`; final text private.";
 
 function createBundledMessageToolConfig(): OpenClawConfig {
   setCliRunnerPrepareTestDeps({
@@ -3152,15 +3153,11 @@ describe("prepareCliRunContext", () => {
   it.each([false, true])("uses admitted CLI repository skills (managed=%s)", async (managed) => {
     const { dir } = fixture.session;
     const taskDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-task-"));
-    const canonicalDir = path.join(dir, "canonical", "packages", "app");
-    const skillDir = path.join(managed ? canonicalDir : taskDir, ".agents", "skills", "task-proof");
-    fs.mkdirSync(skillDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(skillDir, "SKILL.md"),
-      "---\nname: task-proof\ndescription: Task-local proof\n---\n# Proof instructions\n",
-    );
+    const { canonicalDir, skillDir } = createCliRepositorySkillFixture(dir, taskDir, managed);
     try {
       const context = await fixture.prepare({
+        config: { agents: { defaults: { workspace: dir } } },
+        workspaceDir: taskDir,
         cwd: taskDir,
         skillsSnapshot: undefined,
         ...(managed
@@ -3184,6 +3181,7 @@ describe("prepareCliRunContext", () => {
       expect(context.systemPrompt).not.toContain(`Working directory: ${dir}`);
       expect(context.systemPrompt).toContain("<name>task-proof</name>");
       expect(context.systemPrompt).toContain(path.join(skillDir, "SKILL.md"));
+      expect(context.systemPrompt).not.toContain("Worktree copy");
     } finally {
       fs.rmSync(taskDir, { recursive: true, force: true });
     }

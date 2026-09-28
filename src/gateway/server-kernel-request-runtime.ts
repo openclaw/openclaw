@@ -65,6 +65,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
         return createSessionRowProjection({
           cfg: getRuntimeConfig(),
           getConfig: getRuntimeConfig,
+          getPolicyConfig: gatewayRequestContext.getCommittedRuntimeConfig ?? getRuntimeConfig,
           getModelCatalog: () =>
             readPreparedServerMethodModelCatalogs(
               gatewayRequestContext,

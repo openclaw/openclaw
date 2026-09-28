@@ -352,6 +352,7 @@ export async function runAcpAgentCommand(params: {
     }),
     params.opts.abortSignal,
   );
+  await params.opts.beforeTerminalDelivery?.();
   const { deliverAgentCommandResult } = await loadDeliveryRuntime();
   const deliveryResult = await deliverAgentCommandResult({
     cfg: params.cfg,

@@ -171,18 +171,19 @@ it.each(["resolve", "deny"] as const)(
     });
     let transactions = 0;
     const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation((admit) =>
-      createAdmission((request, grant) => {
-        if (request.stage === "transaction") {
-          transactions += 1;
-          if (transactions === 1) {
-            connection.abort();
+    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
+      (admit, attachment) =>
+        createAdmission((request, grant) => {
+          if (request.stage === "transaction") {
+            transactions += 1;
+            if (transactions === 1) {
+              connection.abort();
+            }
+          } else if (request.stage === "commit" && transactions === 2) {
+            invalidateGatewayDeviceRevocation(invocation.context, "aggregate-reviewer", "operator");
           }
-        } else if (request.stage === "commit" && transactions === 2) {
-          invalidateGatewayDeviceRevocation(invocation.context, "aggregate-reviewer", "operator");
-        }
-        return admit(request, grant);
-      }),
+          return admit(request, grant);
+        }, attachment),
     );
     resultDelivery.wrapRefusal = true;
     try {

@@ -253,6 +253,10 @@ entry, or one inheriting a disabled top-level search, also gets none of the `mem
 or `memory_forget` tools and does not participate in automatic recall or
 capture, even when the plugin-level `autoRecall`/`autoCapture` flags are on.
 
+Incognito sessions skip automatic recall and capture. Their prompts are not
+sent to the embedding provider for automatic recall, and `memory_store` refuses
+to save them. Explicit tool calls still follow their normal data-handling rules.
+
 ## Commands
 
 `memory-lancedb` registers the `ltm` CLI namespace whenever it is installed

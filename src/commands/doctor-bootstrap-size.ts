@@ -42,6 +42,28 @@ function formatCauses(causes: Array<"per-file-limit" | "total-limit">): string {
   return causes.map((cause) => (cause === "per-file-limit" ? "max/file" : "max/total")).join(", ");
 }
 
+export async function collectBootstrapFileSize(
+  cfg: OpenClawConfig,
+  workspaceDir: string,
+  agentId?: string,
+) {
+  const bootstrapMaxChars = resolveBootstrapMaxChars(cfg, agentId);
+  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(cfg, agentId);
+  const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForDiagnostics({
+    workspaceDir,
+    config: cfg,
+    agentId,
+  });
+  return {
+    bootstrapTotalMaxChars,
+    analysis: analyzeBootstrapBudget({
+      files: buildBootstrapInjectionStats({ bootstrapFiles, injectedFiles: contextFiles }),
+      bootstrapMaxChars,
+      bootstrapTotalMaxChars,
+    }),
+  };
+}
+
 /**
  * Analyzes configured bootstrap files and emits warnings when injection will truncate content.
  *
@@ -50,28 +72,13 @@ function formatCauses(causes: Array<"per-file-limit" | "total-limit">): string {
 export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
   const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const agentIds = listAgentIds(cfg);
-  const workspaces = agentIds.map((agentId) => ({
-    agentId,
-    workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
-  }));
   let defaultAnalysis: ReturnType<typeof analyzeBootstrapBudget> | undefined;
-  for (const { agentId, workspaceDir } of workspaces) {
-    const bootstrapMaxChars = resolveBootstrapMaxChars(cfg, agentId);
-    const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(cfg, agentId);
-    const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForDiagnostics({
-      workspaceDir,
-      config: cfg,
+  for (const agentId of agentIds) {
+    const { analysis, bootstrapTotalMaxChars } = await collectBootstrapFileSize(
+      cfg,
+      resolveAgentWorkspaceDir(cfg, agentId),
       agentId,
-    });
-    const stats = buildBootstrapInjectionStats({
-      bootstrapFiles,
-      injectedFiles: contextFiles,
-    });
-    const analysis = analyzeBootstrapBudget({
-      files: stats,
-      bootstrapMaxChars,
-      bootstrapTotalMaxChars,
-    });
+    );
     if (agentId === defaultAgentId) {
       defaultAnalysis = analysis;
     }

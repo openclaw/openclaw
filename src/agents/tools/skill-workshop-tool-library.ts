@@ -6,6 +6,11 @@ import { decodeSkillLibraryFile, validateSkillLibraryPath } from "../../skills/l
 import { ToolInputError, type AnyAgentTool } from "./common.js";
 import { textResult } from "./tool-results.js";
 
+const personalActions = SkillLibraryWorkshopSchema.properties.action.enum.join(" | ");
+const personalArguments = `Personal actions: ${personalActions}. List takes only action and target; read uses skill_id from list, not name. Update uses skill_id and expected_revision from read.`;
+const workshopArguments =
+  "Omit target for Workshop proposals: list returns pending proposals (limit maximum 50, default 20); read/prepare_patch/patch/update use skill_name; inspect/revise use proposal_id or name; update needs complete proposal_content.";
+
 export function createLibrarySkillWorkshopDescriptor(
   multipleProfiles: boolean,
   workspace?: AnyAgentTool,
@@ -14,7 +19,7 @@ export function createLibrarySkillWorkshopDescriptor(
     name: "skill_workshop",
     label: "Skill Workshop",
     displaySummary: "Author reusable skills",
-    description: `${workspace ? `${workspace.description} For personal library operations set target=personal. ` : "Author skills in the requesting person's personal library. "}Personal create/update publishes a revision only when the user requests the change; personal drafts are unsupported. Describe unsolicited improvements without publishing. Read before updating; name is the slug, not the command identity. Read artifact_path for a whole text support file. On update omit name/proposal_content to preserve them; files upserts named support files, delete_files removes explicit paths. Unmentioned files and omitted executable flags are preserved. Binary or oversized reads require My skills or the CLI. Ownership is bound by the Gateway. Publication affects new sessions; activate explicitly for the next turn in this session. Sharing or transfer requires explicit user intent and current permissions.${multipleProfiles ? " This shared Gateway has personal and team libraries; sharing preserves authorship and ownership, while transfer makes a skill team managed." : ""}`,
+    description: `${workspace ? `${workshopArguments} Set target=personal only for personal library operations. ${workspace.description} ` : "Author skills in the requesting person's personal library. "}${personalArguments} Workshop-only actions and fields such as prepare_patch, inspect, skill_name, query, and limit are not accepted by the personal library. Personal create/update publishes a revision only when the user requests the change; personal drafts are unsupported. Describe unsolicited improvements without publishing. Read before updating; name is the slug, not the command identity. Read artifact_path for a whole text support file. On update omit name/proposal_content to preserve them; files upserts named support files, delete_files removes explicit paths. Unmentioned files and omitted executable flags are preserved. Binary or oversized reads require My skills or the CLI. Ownership is bound by the Gateway. Publication affects new sessions; activate explicitly for the next turn in this session. Sharing or transfer requires explicit user intent and current permissions.${multipleProfiles ? " This shared Gateway has personal and team libraries; sharing preserves authorship and ownership, while transfer makes a skill team managed." : ""}`,
   };
 }
 
@@ -37,7 +42,22 @@ export function createLibrarySkillWorkshopTool(
         return workspace.execute(id, raw);
       }
       if (!Value.Check(schema, raw)) {
-        throw new ToolInputError("Invalid personal Skill Workshop arguments.");
+        const issues = Value.Errors(schema, raw)
+          .slice(0, 3)
+          .map((error) => {
+            const path = JSON.stringify((error.instancePath || "/").slice(0, 120));
+            if (error.keyword === "additionalProperties") {
+              const fields = error.params.additionalProperties
+                .slice(0, 3)
+                .map((field) => JSON.stringify(field.slice(0, 120)))
+                .join(", ");
+              return `${path}: unsupported fields ${fields}`;
+            }
+            return `${path}: ${error.message}`;
+          });
+        throw new ToolInputError(
+          `Invalid personal Skill Workshop arguments: ${issues.join("; ")}. ${personalArguments}${workspace ? " Omit target for Workshop proposal actions." : ""}`,
+        );
       }
       const result = await capability.invoke({
         action: raw.action,

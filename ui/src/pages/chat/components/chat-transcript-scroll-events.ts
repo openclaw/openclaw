@@ -1,4 +1,7 @@
 export type TranscriptScrollObservation =
+  | { type: "composer-input" }
+  | { type: "composer-layout"; changed: boolean }
+  | { type: "before-resize" }
   | { type: "resize"; scrollCorrection?: { before: number; after: number } }
   | { type: "input"; event: Event; touching: boolean }
   | {

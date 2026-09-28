@@ -9,6 +9,7 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SlackSendIdentity } from "../send.js";
 import {
   buildRelayWebSocketOptions,
   buildRelayWebSocketUrl,
@@ -16,7 +17,6 @@ import {
   parseRelayFrame,
   SlackRelayMalformedFrameError,
   SLACK_RELAY_MAX_PAYLOAD_BYTES,
-  type SlackRelayIdentity,
 } from "./relay-source.js";
 
 function deferred<T>() {
@@ -152,7 +152,7 @@ describe("Slack relay source", () => {
       },
     );
     const runtimeError = vi.fn();
-    const identities: Array<SlackRelayIdentity | undefined> = [];
+    const identities: Array<SlackSendIdentity | undefined> = [];
     const statuses: Array<Record<string, unknown>> = [];
     const monitor = monitorSlackRelaySource({
       config: {
@@ -608,7 +608,7 @@ describe("Slack relay proxy environment", () => {
       const releaseAcceptance = deferred<void>();
       const ack = deferred<unknown>();
       const receivedAcks: unknown[] = [];
-      const identities: Array<SlackRelayIdentity | undefined> = [];
+      const identities: Array<SlackSendIdentity | undefined> = [];
       const acceptRelayEvent = vi.fn(async () => {
         accepted.resolve();
         await releaseAcceptance.promise;

@@ -1,4 +1,3 @@
-// Skill install service coordinates skill installation from archives, URLs, and registries.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -48,16 +47,16 @@ function withWarnings(result: SkillInstallResult, warnings: string[]): SkillInst
   };
 }
 
-function buildNodeInstallCommand(packageName: string, prefs: SkillsInstallPreferences): string[] {
+function buildNodeInstallCommand(prefs: SkillsInstallPreferences): string[] {
   switch (prefs.nodeManager) {
     case "pnpm":
-      return ["pnpm", "add", "-g", "--ignore-scripts", packageName];
+      return ["pnpm", "add", "-g", "--ignore-scripts"];
     case "yarn":
-      return ["yarn", "global", "add", "--ignore-scripts", packageName];
+      return ["yarn", "global", "add", "--ignore-scripts"];
     case "bun":
-      return ["bun", "add", "-g", "--ignore-scripts", packageName];
+      return ["bun", "add", "-g", "--ignore-scripts"];
     default:
-      return ["npm", "install", "-g", "--ignore-scripts", packageName];
+      return ["npm", "install", "-g", "--ignore-scripts"];
   }
 }
 
@@ -93,15 +92,23 @@ const SAFE_GO_MODULE = /^[a-zA-Z0-9][a-zA-Z0-9._/-]*@[a-z0-9v._-]+$/;
 const SAFE_UV_PACKAGE =
   /^[a-z0-9][a-z0-9._-]*(\[[a-z0-9,._-]+\])?(([><=!~]=?|===?)[a-z0-9.*_-]+)?$/i;
 
-function assertSafeInstallerValue(value: string, kind: string, pattern: RegExp): string | null {
+function buildValidatedInstallCommand(
+  value: string | undefined,
+  kind: string,
+  pattern: RegExp,
+  command: readonly string[],
+): { argv: string[] | null; error?: string } {
+  if (!value) {
+    return { argv: null, error: `missing ${kind}` };
+  }
   const trimmed = value.trim();
   if (!trimmed || trimmed.startsWith("-")) {
-    return `${kind} value is empty or starts with a dash`;
+    return { argv: null, error: `${kind} value is empty or starts with a dash` };
   }
   if (!pattern.test(trimmed)) {
-    return `${kind} value contains invalid characters: ${trimmed}`;
+    return { argv: null, error: `${kind} value contains invalid characters: ${trimmed}` };
   }
-  return null;
+  return { argv: [...command, trimmed] };
 }
 
 function buildInstallCommand(
@@ -112,48 +119,29 @@ function buildInstallCommand(
   error?: string;
 } {
   switch (spec.kind) {
-    case "brew": {
-      if (!spec.formula) {
-        return { argv: null, error: "missing brew formula" };
-      }
-      const err = assertSafeInstallerValue(spec.formula, "brew formula", SAFE_BREW_FORMULA);
-      if (err) {
-        return { argv: null, error: err };
-      }
-      return { argv: ["brew", "install", spec.formula.trim()] };
-    }
-    case "node": {
-      if (!spec.package) {
-        return { argv: null, error: "missing node package" };
-      }
-      const err = assertSafeInstallerValue(spec.package, "node package", SAFE_NODE_PACKAGE);
-      if (err) {
-        return { argv: null, error: err };
-      }
-      return {
-        argv: buildNodeInstallCommand(spec.package.trim(), prefs),
-      };
-    }
-    case "go": {
-      if (!spec.module) {
-        return { argv: null, error: "missing go module" };
-      }
-      const err = assertSafeInstallerValue(spec.module, "go module", SAFE_GO_MODULE);
-      if (err) {
-        return { argv: null, error: err };
-      }
-      return { argv: ["go", "install", spec.module.trim()] };
-    }
-    case "uv": {
-      if (!spec.package) {
-        return { argv: null, error: "missing uv package" };
-      }
-      const err = assertSafeInstallerValue(spec.package, "uv package", SAFE_UV_PACKAGE);
-      if (err) {
-        return { argv: null, error: err };
-      }
-      return { argv: ["uv", "tool", "install", spec.package.trim()] };
-    }
+    case "brew":
+      return buildValidatedInstallCommand(spec.formula, "brew formula", SAFE_BREW_FORMULA, [
+        "brew",
+        "install",
+      ]);
+    case "node":
+      return buildValidatedInstallCommand(
+        spec.package,
+        "node package",
+        SAFE_NODE_PACKAGE,
+        buildNodeInstallCommand(prefs),
+      );
+    case "go":
+      return buildValidatedInstallCommand(spec.module, "go module", SAFE_GO_MODULE, [
+        "go",
+        "install",
+      ]);
+    case "uv":
+      return buildValidatedInstallCommand(spec.package, "uv package", SAFE_UV_PACKAGE, [
+        "uv",
+        "tool",
+        "install",
+      ]);
     case "download": {
       return { argv: null, error: "download install handled separately" };
     }
@@ -724,8 +712,7 @@ export async function installSkillDependencies(
   const { skillKey, spec, preferences: prefs } = params;
   const timeoutMs = Math.min(Math.max(params.timeoutMs, 1_000), 900_000);
   if (spec.kind === "download") {
-    const downloadResult = await installDownloadSpec({ skillKey, spec, timeoutMs });
-    return downloadResult;
+    return installDownloadSpec({ skillKey, spec, timeoutMs });
   }
 
   const command = buildInstallCommand(spec, prefs);
@@ -775,9 +762,7 @@ export async function installSkillDependencies(
     // Keep the just-installed command discoverable without requiring a gateway restart.
     process.env.PATH = envOverrides.PATH;
   }
-  const normalizedResult =
-    spec.kind === "go" && !installResult.ok && isGoToolchainPrerequisiteFailure(installResult)
-      ? { ...installResult, skipReason: "go" as const }
-      : installResult;
-  return normalizedResult;
+  return spec.kind === "go" && !installResult.ok && isGoToolchainPrerequisiteFailure(installResult)
+    ? { ...installResult, skipReason: "go" as const }
+    : installResult;
 }

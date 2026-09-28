@@ -884,6 +884,43 @@ describe("tools.effective handler", () => {
     expectPayloadNotice(respond, "unsupported-tool-schema:reproProbe__probe_tool");
   });
 
+  it.each(["empty", "mixed"])(
+    "reports unavailable MCP servers with a %s catalog without losing base notices",
+    async (kind) => {
+      const baseNotice = { id: "base-notice", severity: "info", message: "Keep the base notice" };
+      const base = { ...makeCoreInventory(), notices: [baseNotice] };
+      const diagnostic = {
+        serverName: "offline",
+        safeServerName: "offline",
+        launchSummary: "https://mcp.example.invalid/mcp",
+        message:
+          "unavailable; retry after 2026-09-25T12:00:30.000Z; check reachability or reload MCP",
+      };
+      runtimeMocks.resolveEffectiveToolInventory.mockReturnValueOnce(base);
+      mockMcpConfigSummary({ serverNames: ["offline", "reproProbe"] });
+      mockWarmMcpRuntime({ ...makeMcpCatalog(), diagnostics: [diagnostic] });
+      runtimeMocks.buildBundleMcpToolsFromCatalog.mockReturnValueOnce(
+        kind === "empty" ? [] : [makeMcpTool()],
+      );
+
+      const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
+      await invoke();
+
+      expectPayloadGroupIds(respond, kind === "empty" ? ["core"] : ["core", "mcp"]);
+      const payload = firstRespondCall(respond)?.[1] as ToolsEffectivePayload;
+      expect(payload.notices).toEqual([
+        baseNotice,
+        {
+          id: "mcp-server-diagnostic:offline",
+          severity: "warning",
+          message: `MCP server "offline": ${diagnostic.message}`,
+          servers: ["offline"],
+        },
+      ]);
+      expect(base.notices).toEqual([baseNotice]);
+    },
+  );
+
   it("keeps usable MCP tools and ordered quarantine notices without changing the cached base", async () => {
     const base = {
       ...makeCoreInventory(),

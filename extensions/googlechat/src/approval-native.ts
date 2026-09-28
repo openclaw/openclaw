@@ -48,38 +48,18 @@ type ChannelApprovalForwardTarget = Parameters<
 
 const DEFAULT_APPROVAL_FORWARDING_MODE = "session";
 
-function isGoogleChatAccountConfigured(params: {
-  cfg: Parameters<typeof resolveGoogleChatAccount>[0]["cfg"];
+function isGoogleChatApprovalTransportEnabled(params: {
+  cfg: OpenClawConfig;
   accountId?: string | null;
 }): boolean {
   const account = resolveGoogleChatAccount(params);
   return (
     account.enabled &&
     account.credentialSource !== "none" &&
-    account.tokenStatus !== "configured_unavailable"
+    account.tokenStatus !== "configured_unavailable" &&
+    Boolean(normalizeOptionalString(account.config.audience)) &&
+    (account.config.audienceType === "project-number" || account.config.audienceType === "app-url")
   );
-}
-
-function hasGoogleChatWebhookApprovalAuthConfig(params: {
-  cfg: Parameters<typeof resolveGoogleChatAccount>[0]["cfg"];
-  accountId?: string | null;
-}): boolean {
-  const account = resolveGoogleChatAccount(params).config;
-  const audience = normalizeOptionalString(account.audience);
-  if (!audience) {
-    return false;
-  }
-  if (account.audienceType === "project-number") {
-    return true;
-  }
-  return account.audienceType === "app-url";
-}
-
-function isGoogleChatApprovalTransportEnabled(params: {
-  cfg: Parameters<typeof resolveGoogleChatAccount>[0]["cfg"];
-  accountId?: string | null;
-}): boolean {
-  return isGoogleChatAccountConfigured(params) && hasGoogleChatWebhookApprovalAuthConfig(params);
 }
 
 function normalizeGoogleChatForwardTarget(

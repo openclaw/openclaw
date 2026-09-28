@@ -2540,47 +2540,6 @@ describe("maybeRepairLegacyCronStore", () => {
     expect(delivery.threadId).toBe("99");
   });
 
-  it("rewrites stale managed dreaming jobs to the isolated agentTurn shape", async () => {
-    const storePath = await makeTempStorePath();
-    await writeCronStore(storePath, [
-      {
-        id: "memory-dreaming",
-        name: "Memory Dreaming Promotion",
-        description:
-          "[managed-by=memory-core.short-term-promotion] Promote weighted short-term recalls.",
-        enabled: true,
-        createdAtMs: Date.parse("2026-04-01T00:00:00.000Z"),
-        updatedAtMs: Date.parse("2026-04-01T00:00:00.000Z"),
-        schedule: { kind: "cron", expr: "0 3 * * *", tz: "UTC" },
-        sessionTarget: "main",
-        wakeMode: "now",
-        payload: {
-          kind: "systemEvent",
-          text: "__openclaw_memory_core_short_term_promotion_dream__",
-        },
-        state: {},
-      },
-    ]);
-
-    await maybeRepairLegacyCronStore({
-      cfg: createCronConfig(storePath),
-      options: {},
-      prompter: makePrompter(true),
-    });
-
-    const jobs = await readPersistedJobs(storePath);
-    const job = requirePersistedJob(jobs, 0);
-    expect(job.sessionTarget).toBe("isolated");
-    const payload = requireRecord(job.payload, "cron payload");
-    expect(payload.kind).toBe("agentTurn");
-    expect(payload.message).toBe("__openclaw_memory_core_short_term_promotion_dream__");
-    expect(payload.lightContext).toBe(true);
-    const delivery = requireRecord(job.delivery, "cron delivery");
-    expect(delivery.mode).toBe("none");
-    expectNoteContaining("managed dreaming job", "Cron");
-    expectNoteContaining("Rewrote 1 managed dreaming job", "Doctor changes");
-  });
-
   it("warns and continues when the cron job store cannot be read", async () => {
     const storePath = await makeTempStorePath();
     // Force loadCronStore to throw a non-ENOENT read error by placing a

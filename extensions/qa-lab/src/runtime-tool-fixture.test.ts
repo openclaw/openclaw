@@ -1,43 +1,26 @@
 // Qa Lab tests cover runtime tool fixture plugin behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  cleanupRuntimeToolFixtureTempRoots,
+  makeEnv,
+  MOCK_BASE_URL,
+  mockToolRequests,
+  runMockRuntimeToolFixture,
+  runtimeToolFixtureConfig,
+  runtimeToolFixtureDeps,
+  type RuntimeToolFixtureConfig,
+  type RuntimeToolFixtureDeps,
+} from "../test/runtime-tool-fixture-helpers.js";
 import { QaSuiteInfraError } from "./errors.js";
 import { runRuntimeToolFixture } from "./runtime-tool-fixture.js";
 import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
-
-const tempRoots: string[] = [];
-
-async function makeEnv(overrides: Partial<QaSuiteRuntimeEnv> = {}): Promise<QaSuiteRuntimeEnv> {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "runtime-tool-fixture-"));
-  const workspaceDir = path.join(tempRoot, "workspace");
-  await fs.mkdir(workspaceDir);
-  tempRoots.push(tempRoot);
-  return {
-    outputDir: tempRoot,
-    repoRoot: tempRoot,
-    providerMode: "mock-openai",
-    primaryModel: "openai/gpt-5.6-luna",
-    alternateModel: "openai/gpt-5.6-luna",
-    mock: null,
-    cfg: {},
-    transport: {} as QaSuiteRuntimeEnv["transport"],
-    gateway: {
-      baseUrl: "http://127.0.0.1:1",
-      tempRoot,
-      workspaceDir,
-      runtimeEnv: {},
-      call: vi.fn(),
-    },
-    ...overrides,
-  };
-}
 
 async function writeQaSessionTranscript(
   env: QaSuiteRuntimeEnv,
@@ -231,25 +214,6 @@ async function simulateRuntimePatchHappyTurn(
   return {};
 }
 
-type RuntimeToolFixtureConfig = Parameters<typeof runRuntimeToolFixture>[1];
-type RuntimeToolFixtureDeps = Parameters<typeof runRuntimeToolFixture>[2];
-
-const MOCK_BASE_URL = "http://127.0.0.1:9999";
-
-function runtimeToolFixtureConfig(
-  toolName: string,
-  overrides: RuntimeToolFixtureConfig = {},
-): RuntimeToolFixtureConfig {
-  return {
-    toolName,
-    toolCoverage: {
-      bucket: "openclaw-dynamic-integration",
-      expectedLayer: "openclaw-dynamic",
-    },
-    ...overrides,
-  };
-}
-
 function nativePatchFixtureConfig(): RuntimeToolFixtureConfig {
   return runtimeToolFixtureConfig("apply_patch", {
     toolCoverage: {
@@ -258,22 +222,6 @@ function nativePatchFixtureConfig(): RuntimeToolFixtureConfig {
       required: true,
     },
   });
-}
-
-function runtimeToolFixtureDeps(
-  params: {
-    tools?: Iterable<string>;
-    fetchJson?: RuntimeToolFixtureDeps["fetchJson"];
-    runAgentPrompt?: RuntimeToolFixtureDeps["runAgentPrompt"];
-  } = {},
-): RuntimeToolFixtureDeps {
-  return {
-    createSession: vi.fn(async (_env, _label, key) => key!),
-    readEffectiveTools: vi.fn(async () => new Set(params.tools)),
-    runAgentPrompt: params.runAgentPrompt ?? vi.fn(async () => ({})),
-    fetchJson: params.fetchJson ?? vi.fn(),
-    ensureImageGenerationConfigured: vi.fn(),
-  };
 }
 
 function runLiveRuntimeToolFixture(
@@ -309,89 +257,6 @@ function runNativePatchFixture(
     tools: params.tools ?? [],
     runAgentPrompt: params.runAgentPrompt ?? vi.fn(simulateRuntimePatchHappyTurn),
   });
-}
-
-function mockRequestLog(requests: Array<Record<string, unknown>>) {
-  return vi.fn().mockResolvedValueOnce({ cursor: 0 }).mockResolvedValueOnce(requests);
-}
-
-function mockToolRequests(params: {
-  toolName?: string;
-  happyArgs?: Record<string, unknown>;
-  happyOutput?: string;
-  failureArgs?: Record<string, unknown>;
-  failureOutput?: string;
-  happyCallId?: string;
-  happyOutputCallId?: string;
-  failureCallId?: string;
-  failureOutputCallId?: string;
-  omitHappyOutput?: boolean;
-  omitFailureOutput?: boolean;
-}) {
-  const toolName = params.toolName ?? "read";
-  const happyCallId = params.happyCallId ?? `call-${toolName}-happy`;
-  const failureCallId = params.failureCallId ?? `call-${toolName}-failure`;
-  return [
-    {
-      allInputText: `target=${toolName}`,
-      plannedToolCallId: happyCallId,
-      plannedToolName: toolName,
-      plannedToolArgs: params.happyArgs ?? { path: "README.md" },
-    },
-    ...(params.omitHappyOutput
-      ? []
-      : [
-          {
-            allInputText: `target=${toolName}`,
-            toolOutputCallId: params.happyOutputCallId ?? happyCallId,
-            toolOutput: params.happyOutput ?? "README contents",
-          },
-        ]),
-    {
-      allInputText: `failure target=${toolName}`,
-      plannedToolCallId: failureCallId,
-      plannedToolName: toolName,
-      plannedToolArgs: params.failureArgs ?? { path: "/missing" },
-    },
-    ...(params.omitFailureOutput
-      ? []
-      : [
-          {
-            allInputText: `failure target=${toolName}`,
-            toolOutputCallId: params.failureOutputCallId ?? failureCallId,
-            toolOutput: params.failureOutput ?? "ENOENT: no such file or directory",
-          },
-        ]),
-  ];
-}
-
-async function runMockRuntimeToolFixture(params: {
-  env?: QaSuiteRuntimeEnv;
-  toolName?: string;
-  requests: Array<Record<string, unknown>>;
-  config?: RuntimeToolFixtureConfig;
-  tools?: Iterable<string>;
-  runAgentPrompt?: RuntimeToolFixtureDeps["runAgentPrompt"];
-  forceCodex?: boolean;
-}) {
-  const toolName = params.toolName ?? "read";
-  const env = params.env ?? (await makeEnv({ mock: { baseUrl: MOCK_BASE_URL } }));
-  if (params.forceCodex) {
-    env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME = "codex";
-  }
-  return runRuntimeToolFixture(
-    env,
-    runtimeToolFixtureConfig(toolName, {
-      promptSnippet: `target=${toolName}`,
-      failurePromptSnippet: `failure target=${toolName}`,
-      ...params.config,
-    }),
-    runtimeToolFixtureDeps({
-      tools: params.tools ?? [toolName],
-      fetchJson: mockRequestLog(params.requests),
-      runAgentPrompt: params.runAgentPrompt,
-    }),
-  );
 }
 
 function asyncImageFixtureConfig(overrides: RuntimeToolFixtureConfig = {}) {
@@ -443,9 +308,7 @@ afterEach(async () => {
   // Windows fails the removal with EBUSY unless the cached handle is released first.
   closeOpenClawAgentDatabasesForTest();
   resetPluginStateStoreForTests();
-  await Promise.all(
-    tempRoots.splice(0).map((tempRoot) => fs.rm(tempRoot, { recursive: true, force: true })),
-  );
+  await cleanupRuntimeToolFixtureTempRoots();
 });
 
 describe("runtime tool fixture", () => {

@@ -142,7 +142,7 @@ export class CodexPluginMetadataCache {
       if (
         generation === (this.generations.get(params.appCacheKey) ?? 0) &&
         clearGeneration === this.clearGeneration &&
-        !hasMarketplaceLoadErrors(response) &&
+        response.marketplaceLoadErrors.length === 0 &&
         (params.cacheable?.(response) ?? true)
       ) {
         this.entries.set(entryKey, {
@@ -188,12 +188,6 @@ export class CodexPluginMetadataCache {
 
 /** Shared plugin metadata cache used by Codex app-server runtime paths. */
 export const defaultCodexPluginMetadataCache = new CodexPluginMetadataCache();
-
-function hasMarketplaceLoadErrors(
-  response: v2.PluginListResponse | v2.PluginInstalledResponse,
-): boolean {
-  return response.marketplaceLoadErrors.length > 0;
-}
 
 function buildMetadataCacheEntryKey(
   appCacheKey: string,

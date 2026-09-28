@@ -111,6 +111,24 @@ function formatSkillMissingSummary(skill: SkillStatusEntry): string {
     .join("; ");
 }
 
+function formatSkillCheckSection(
+  title: string,
+  skills: SkillStatusEntry[],
+  reason?: (skill: SkillStatusEntry) => string,
+): string[] {
+  return skills.length === 0
+    ? []
+    : [
+        "",
+        theme.heading(title),
+        ...skills.map((skill) => {
+          const emoji = normalizeSkillEmoji(skill.emoji);
+          const suffix = reason ? ` ${theme.muted(`(${reason(skill)})`)}` : "";
+          return `  ${emoji ? `${emoji} ` : ""}${sanitizeForLog(skill.name)}${suffix}`;
+        }),
+      ];
+}
+
 /** Render skill discovery status as sanitized JSON or a terminal table. */
 export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOptions): string {
   const isReadyForAgent = (skill: SkillStatusEntry) =>
@@ -404,51 +422,20 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
     }
   }
 
-  if (modelVisible.length > 0) {
-    lines.push("");
-    lines.push(theme.heading("Ready and visible to model:"));
-    for (const skill of modelVisible) {
-      const emoji = normalizeSkillEmoji(skill.emoji);
-      lines.push(`  ${emoji ? `${emoji} ` : ""}${sanitizeForLog(skill.name)}`);
-    }
-  }
-
-  if (promptHidden.length > 0) {
-    lines.push("");
-    lines.push(theme.heading("Ready but hidden from model prompt:"));
-    for (const skill of promptHidden) {
-      const emoji = normalizeSkillEmoji(skill.emoji);
-      const reason = skill.commandVisible
+  lines.push(
+    ...formatSkillCheckSection("Ready and visible to model:", modelVisible),
+    ...formatSkillCheckSection("Ready but hidden from model prompt:", promptHidden, (skill) =>
+      skill.commandVisible
         ? "skill hides its instructions from the model; commands/cron may still use it"
-        : "skill hides its instructions from the model and is not exposed as a command";
-      lines.push(
-        `  ${emoji ? `${emoji} ` : ""}${sanitizeForLog(skill.name)} ${theme.muted(`(${reason})`)}`,
-      );
-    }
-  }
-
-  if (agentFiltered.length > 0) {
-    lines.push("");
-    lines.push(theme.heading("Excluded by agent allowlist:"));
-    for (const skill of agentFiltered) {
-      const emoji = normalizeSkillEmoji(skill.emoji);
-      lines.push(
-        `  ${emoji ? `${emoji} ` : ""}${sanitizeForLog(skill.name)} ${theme.muted("(loaded, but this agent is not allowed to see/use it)")}`,
-      );
-    }
-  }
-
-  if (missingReqs.length > 0) {
-    lines.push("");
-    lines.push(theme.heading("Missing requirements:"));
-    for (const skill of missingReqs) {
-      const emoji = normalizeSkillEmoji(skill.emoji);
-      const missing = formatSkillMissingSummary(skill);
-      lines.push(
-        `  ${emoji ? `${emoji} ` : ""}${sanitizeForLog(skill.name)} ${theme.muted(`(${missing})`)}`,
-      );
-    }
-  }
+        : "skill hides its instructions from the model and is not exposed as a command",
+    ),
+    ...formatSkillCheckSection(
+      "Excluded by agent allowlist:",
+      agentFiltered,
+      () => "loaded, but this agent is not allowed to see/use it",
+    ),
+    ...formatSkillCheckSection("Missing requirements:", missingReqs, formatSkillMissingSummary),
+  );
 
   return appendClawHubHint(lines.join("\n"));
 }

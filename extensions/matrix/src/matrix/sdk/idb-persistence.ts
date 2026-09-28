@@ -13,12 +13,6 @@ import {
 import { MATRIX_IDB_SNAPSHOT_LOCK_OPTIONS } from "./idb-persistence-lock.js";
 import { LogService } from "./logger.js";
 
-// Advisory lock options for IDB snapshot file access. Without locking, the
-// gateway's periodic 60-second persist cycle and CLI crypto commands (e.g.
-// `openclaw matrix verify bootstrap`) can corrupt each other's state.
-// Use a longer stale window than the generic 30s default because snapshot
-// restore and large crypto-store dumps can legitimately hold the lock for
-// longer, and reclaiming a live lock would reintroduce concurrent corruption.
 type IdbStoreSnapshot = {
   name: string;
   keyPath: IDBObjectStoreParameters["keyPath"];
@@ -33,17 +27,11 @@ type IdbDatabaseSnapshot = {
   stores: IdbStoreSnapshot[];
 };
 
-type IdbPersistenceDiagnostic = {
-  code: "matrix-idb-snapshot-requires-doctor";
-  message: string;
-  remediation: "openclaw doctor --fix";
-};
-
-const LEGACY_SNAPSHOT_DIAGNOSTIC: IdbPersistenceDiagnostic = {
+const LEGACY_SNAPSHOT_DIAGNOSTIC = {
   code: "matrix-idb-snapshot-requires-doctor",
   message: "Matrix IndexedDB snapshot exists outside canonical SQLite state",
   remediation: "openclaw doctor --fix",
-};
+} as const;
 
 class MatrixIdbSnapshotMigrationRequiredError extends Error {
   readonly code = LEGACY_SNAPSHOT_DIAGNOSTIC.code;
@@ -154,13 +142,7 @@ async function dumpIndexedDatabases(databasePrefix?: string): Promise<IdbDatabas
     if (expectedPrefix && !name.startsWith(expectedPrefix)) {
       continue;
     }
-    const db: IDBDatabase = await new Promise((resolve, reject) => {
-      const r = idb.open(name, version);
-      r.addEventListener("success", () => resolve(r.result), { once: true });
-      r.addEventListener("error", () => reject(toErrorObject(r.error, "Non-Error rejection")), {
-        once: true,
-      });
-    });
+    const db = await idbReq(idb.open(name, version));
 
     const stores: IdbStoreSnapshot[] = [];
     for (const storeName of db.objectStoreNames) {
@@ -168,7 +150,7 @@ async function dumpIndexedDatabases(databasePrefix?: string): Promise<IdbDatabas
       const store = tx.objectStore(storeName);
       const storeInfo: IdbStoreSnapshot = {
         name: storeName,
-        keyPath: store.keyPath as IDBObjectStoreParameters["keyPath"],
+        keyPath: store.keyPath,
         autoIncrement: store.autoIncrement,
         indexes: [],
         records: [],
@@ -196,59 +178,45 @@ async function dumpIndexedDatabases(databasePrefix?: string): Promise<IdbDatabas
 async function restoreIndexedDatabases(snapshot: IdbDatabaseSnapshot[]): Promise<void> {
   const idb = fakeIndexedDB;
   for (const dbSnap of snapshot) {
-    await new Promise<void>((resolve, reject) => {
-      const r = idb.open(dbSnap.name, dbSnap.version);
-      r.addEventListener("upgradeneeded", () => {
-        const db = r.result;
-        for (const storeSnap of dbSnap.stores) {
-          const opts: IDBObjectStoreParameters = {};
-          if (storeSnap.keyPath !== null) {
-            opts.keyPath = storeSnap.keyPath;
-          }
-          if (storeSnap.autoIncrement) {
-            opts.autoIncrement = true;
-          }
-          const store = db.createObjectStore(storeSnap.name, opts);
-          for (const idx of storeSnap.indexes) {
-            store.createIndex(idx.name, idx.keyPath, {
-              unique: idx.unique,
-              multiEntry: idx.multiEntry,
-            });
-          }
+    const request = idb.open(dbSnap.name, dbSnap.version);
+    request.addEventListener("upgradeneeded", () => {
+      const db = request.result;
+      for (const storeSnap of dbSnap.stores) {
+        const opts: IDBObjectStoreParameters = {};
+        if (storeSnap.keyPath !== null) {
+          opts.keyPath = storeSnap.keyPath;
         }
-      });
-      r.addEventListener(
-        "success",
-        () => {
-          void (async () => {
-            const db = r.result;
-            for (const storeSnap of dbSnap.stores) {
-              if (storeSnap.records.length === 0) {
-                continue;
-              }
-              const tx = db.transaction(storeSnap.name, "readwrite");
-              const store = tx.objectStore(storeSnap.name);
-              for (const rec of storeSnap.records) {
-                if (storeSnap.keyPath !== null) {
-                  store.put(rec.value);
-                } else {
-                  store.put(rec.value, rec.key);
-                }
-              }
-              await new Promise<void>((res) => {
-                tx.addEventListener("complete", () => res(), { once: true });
-              });
-            }
-            db.close();
-            resolve();
-          })().catch(reject);
-        },
-        { once: true },
-      );
-      r.addEventListener("error", () => reject(toErrorObject(r.error, "Non-Error rejection")), {
-        once: true,
-      });
+        if (storeSnap.autoIncrement) {
+          opts.autoIncrement = true;
+        }
+        const store = db.createObjectStore(storeSnap.name, opts);
+        for (const idx of storeSnap.indexes) {
+          store.createIndex(idx.name, idx.keyPath, {
+            unique: idx.unique,
+            multiEntry: idx.multiEntry,
+          });
+        }
+      }
     });
+    const db = await idbReq(request);
+    for (const storeSnap of dbSnap.stores) {
+      if (storeSnap.records.length === 0) {
+        continue;
+      }
+      const tx = db.transaction(storeSnap.name, "readwrite");
+      const store = tx.objectStore(storeSnap.name);
+      for (const rec of storeSnap.records) {
+        if (storeSnap.keyPath !== null) {
+          store.put(rec.value);
+        } else {
+          store.put(rec.value, rec.key);
+        }
+      }
+      await new Promise<void>((resolve) => {
+        tx.addEventListener("complete", () => resolve(), { once: true });
+      });
+    }
+    db.close();
   }
 }
 

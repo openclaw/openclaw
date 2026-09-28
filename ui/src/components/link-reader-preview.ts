@@ -55,7 +55,7 @@ export function parsePreviewResponse(
   );
   const badge =
     badgeValue && typeof badgeValue.label === "string" && tone
-      ? { label: badgeValue.label, tone }
+      ? { label: badgeValue.label, tone, timestamp: readNonBlankString(badgeValue.timestamp) }
       : undefined;
   return {
     url: value.url,

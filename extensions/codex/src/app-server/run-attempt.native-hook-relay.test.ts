@@ -1055,7 +1055,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
       nativeHookRelay: { enabled: true },
     });
-    await harness.waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
     const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
     expect(abortAgentHarnessRun("session-1")).toBe(true);

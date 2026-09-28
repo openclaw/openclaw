@@ -266,7 +266,7 @@ describe("protected iOS read-only inspection", () => {
       path.join(root, "bin/bundle"),
       String.raw`#!/bin/bash
 set -euo pipefail
-[[ "$1" == "_2.6.9_" ]]
+[[ "$1" == "_4.0.21_" ]]
 shift
 printf '%s:%s\n' "$1" "${"$"}{BUNDLE_DEPLOYMENT:-unset}" >> "$GITHUB_WORKSPACE/bundle-trace"
 [[ "${"$"}{BUNDLE_DEPLOYMENT:-}" == "true" ]]
@@ -276,7 +276,7 @@ case "$1" in
   exec)
     test -f "$GITHUB_WORKSPACE/installed"
     if [[ "$2" == ruby ]]; then
-      printf '2.239.0'
+      printf '2.240.1'
     else
       [[ "$BUNDLE_GEMFILE" == "$GITHUB_WORKSPACE/apps/ios/Gemfile" ]]
       [[ "$2 $3 $4" == "fastlane ios release_inspect" ]]

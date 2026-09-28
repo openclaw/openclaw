@@ -242,9 +242,9 @@ FRV_ENVELOPE="$(jq -cn --arg ref "$BRANCH" --arg sha "$SHA" \
 ```
 
 4. Watch the exact workflow run IDs and head SHA with `gh run list`, `gh run view`, and `gh api`. Read-only `gh` is fine for polling; use `$GH` only when a command mutates GitHub. Do not use Codex browser/fetch for GitHub API polling; prior Tideclaw runs failed there after successful preflight.
-5. For alpha, blocking gates are the ones Tideclaw can repair directly or that prove package safety: normal CI, plugin prerelease, npm preflight, package preparation, install smoke, tag/reachability, and publish verification. Treat cross-OS, live channel, QA Lab, package acceptance, long Docker E2E, and Telegram package E2E failures as advisory; report them in Discord and continue if the blocking gates are green.
-   - If `rerun_group=all` is stuck only on advisory lanes after CI, plugin prerelease, npm preflight, package preparation, and install smoke are green, dispatch a focused Full Release Validation on the same head with `-f rerun_group=install-smoke`, retaining the same `-f trusted_workflow_json="$FRV_ENVELOPE"`. Source admission is not registry qualification; the focused group does not change the intended publication selection. Use that successful focused Full Release Validation run as the publish proof, and include the separate CI/plugin/full advisory run IDs in the Discord summary.
-6. If a blocking gate fails, fix on the alpha branch, push, and rerun only the failed or required release CI. If the commit changes, discard old preflight/full-validation run IDs and rerun them for the new head.
+5. Every selected validation lane blocks alpha publication on failure, including cross-OS, live channel, QA Lab, package acceptance, Docker E2E, and Telegram package E2E. Report actual outcomes and resolve failed selected lanes before publication.
+   - Focused Full Release Validation groups can diagnose or refresh individual lanes for the same exact head and publication selection. A successful focused `install-smoke` run cannot replace failed `rerun_group=all` publication evidence; complete and seal the required all-group validation before publishing.
+6. If a selected gate fails, fix on the alpha branch, push, and rerun the failed or required release CI. If the commit changes, discard old preflight/full-validation run IDs and rerun them for the new head.
 7. After full validation and npm preflight are green on the same branch head,
    review the npm preflight's `Plugin SDK API diff` summary. If it reports
    changes, download the

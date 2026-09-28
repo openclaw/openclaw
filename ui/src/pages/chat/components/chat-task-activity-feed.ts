@@ -12,7 +12,7 @@ import { resolveAssistantMessagePhase } from "../../../../../src/shared/chat-mes
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { redactToolPayloadText } from "../../../lib/browser-redact.ts";
-import type { ToolCard } from "../../../lib/chat/chat-types.ts";
+import type { NormalizedMessage, ToolCard } from "../../../lib/chat/chat-types.ts";
 import {
   isStandaloneToolMessageForDisplay,
   normalizeMessage,
@@ -32,6 +32,7 @@ import {
 } from "../chat-message-recovery.ts";
 import { buildMessageItems, rawMessageTimestamp } from "../chat-thread-items.ts";
 import { coalesceToolActivityMessages } from "../chat-tool-activity-coalesce.ts";
+import { renderForwardedAttribution } from "./chat-forwarded-attribution.ts";
 import { FULL_MESSAGE_RETRY_REVISION_LIMIT } from "./chat-message-markdown.ts";
 import { renderMessageMarkdown, type AssistantMessageDisclosure } from "./chat-message-text.ts";
 
@@ -46,14 +47,13 @@ type Entry = { key: string; timestamp: number | null } & (
       calls: Array<{ key: string; card: ToolCard }>;
       activity: ReturnType<typeof readPreparedActivity>;
     }
-  | { kind: "user" | "assistant" | "block"; text: string; cappedMessageId?: string }
+  | {
+      kind: "user" | "assistant" | "block";
+      text: string;
+      cappedMessageId?: string;
+      senderSession?: NormalizedMessage["senderSession"];
+    }
 );
-
-function toolLine(call: ToolCard): string {
-  const view = resolveToolCallView(call);
-  const text = view.command ?? view.code ?? call.inputText ?? call.name;
-  return redactToolPayloadText(text.trim(), { preservePaths: true });
-}
 
 function entries(messages: unknown[]): Entry[] {
   const result: Entry[] = [];
@@ -141,6 +141,7 @@ function entries(messages: unknown[]): Entry[] {
           timestamp,
           text,
           cappedMessageId,
+          senderSession: normalized.role === "user" ? undefined : normalized.senderSession,
         };
         cappedEntry = cappedMessageId ? entry : undefined;
         result.push(entry);
@@ -182,12 +183,13 @@ function toolIcon(call: ToolCard) {
 
 function renderToolLine(call: ToolCard) {
   const view = resolveToolCallView(call);
-  const raw = toolLine(call);
+  const raw = redactToolPayloadText(
+    (view.command ?? view.code ?? call.inputText ?? call.name).trim(),
+  );
   const command = view.command ? stripShellPreamble(view.command).command : undefined;
   const label = truncateUtf16Safe(
     redactToolPayloadText(
       view.title ?? view.target ?? (command || view.command)?.split("\n")[0] ?? call.name,
-      { preservePaths: true },
     ),
     160,
   );
@@ -270,9 +272,11 @@ export function renderTaskActivityFeed(
         >
         <div class="chat-task-feed__body">
           ${
-            entry.kind === "user" || entry.kind === "assistant"
-              ? html`<span class="sr-only">${t(`sessionsView.${entry.kind}`)}: </span>`
-              : nothing
+            entry.kind === "assistant" && entry.senderSession
+              ? renderForwardedAttribution(entry, { linkSource: false })
+              : entry.kind === "user" || entry.kind === "assistant"
+                ? html`<span class="sr-only">${t(`sessionsView.${entry.kind}`)}: </span>`
+                : nothing
           }
           ${
             entry.kind === "tools"

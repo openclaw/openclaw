@@ -107,7 +107,7 @@ async function handleBroadcastAction(
     throw new Error("Broadcast requires at least one target in --targets.");
   }
   const channelHint = readToolStringParam(params, "channel");
-  const explicitAccountId = validateExplicitMessageAccountSelection({
+  const explicitAccountId = await validateExplicitMessageAccountSelection({
     cfg: input.cfg,
     accountId: readToolStringParam(params, "accountId"),
     checkResolvedAccount: false,
@@ -115,31 +115,25 @@ async function handleBroadcastAction(
   if (input.broadcastAccountPlan && input.broadcastAccountPlan.accountId !== explicitAccountId) {
     throw new Error("Broadcast account plan does not match the requested account.");
   }
-  const targetChannels: Array<{ channel: ChannelId; plugin?: ChannelPlugin }> =
-    channelHint && normalizeOptionalLowercaseString(channelHint) !== "all"
-      ? [
-          await resolveMessageChannelSelection({
-            cfg: input.cfg,
-            channel: channelHint,
-            fallbackChannel: input.toolContext?.currentChannelProvider,
-            agentId: input.agentId,
-          }),
-        ]
-      : input.broadcastAccountPlan
-        ? input.broadcastAccountPlan.candidateChannels.map((channel) => ({
-            channel,
-            plugin: getRuntimeVisibleChannelPlugin(channel),
-          }))
-        : await (async () => {
-            const configured = await listConfiguredMessageChannels(input.cfg);
-            if (configured.length === 0) {
-              throw new Error("Broadcast requires at least one configured channel.");
-            }
-            return configured.map((channel) => ({
-              channel,
-              plugin: getRuntimeVisibleChannelPlugin(channel),
-            }));
-          })();
+  let targetChannels: Array<{ channel: ChannelId; plugin?: ChannelPlugin }>;
+  if (channelHint && normalizeOptionalLowercaseString(channelHint) !== "all") {
+    targetChannels = [
+      await resolveMessageChannelSelection({
+        cfg: input.cfg,
+        channel: channelHint,
+        fallbackChannel: input.toolContext?.currentChannelProvider,
+        agentId: input.agentId,
+      }),
+    ];
+  } else {
+    const channels = input.broadcastAccountPlan
+      ? input.broadcastAccountPlan.candidateChannels
+      : await listConfiguredMessageChannels(input.cfg);
+    targetChannels = channels.map((channel) => ({
+      channel,
+      plugin: getRuntimeVisibleChannelPlugin(channel),
+    }));
+  }
   if (targetChannels.length === 0) {
     throw new Error("Broadcast requires at least one configured channel.");
   }
@@ -196,7 +190,7 @@ async function handleBroadcastAction(
         continue;
       }
       try {
-        const targetAccountId = validateExplicitMessageAccountSelection({
+        const targetAccountId = await validateExplicitMessageAccountSelection({
           cfg: input.cfg,
           channel: targetChannel,
           accountId: explicitAccountId,
@@ -597,7 +591,7 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
           });
           const structuredAttachmentMode = action === "send" ? "all" : "selected";
 
-          const resolveMediaAccess = () =>
+          const mediaAccess =
             input.mediaAccess ??
             resolveAgentScopedOutboundMediaAccess({
               cfg,
@@ -614,7 +608,6 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
               requesterSenderUsername: input.requesterSenderUsername,
               requesterSenderE164: input.requesterSenderE164,
             });
-          const mediaAccess = resolveMediaAccess();
           const sandboxMediaReadFile = input.workspaceMediaAccess?.readFile
             ? mediaAccess.readFile
             : undefined;

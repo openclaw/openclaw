@@ -176,7 +176,7 @@ describe("update-startup", () => {
   let getUpdateAvailable: (typeof import("./update-status-state.js"))["getUpdateAvailable"];
   let getUpdateEffectiveChannel: (typeof import("./update-startup.js"))["getUpdateEffectiveChannel"];
   let getUpdateSchedule: (typeof import("./update-status-state.js"))["getUpdateSchedule"];
-  let refreshGatewayUpdateStatus: (typeof import("./update-startup.js"))["refreshGatewayUpdateStatus"];
+  let refreshGatewayUpdateStatus: (typeof import("./update-status-schedule.js"))["refreshGatewayUpdateStatus"];
   let resetUpdateAvailableStateForTest: (typeof import("./update-startup.js"))["resetUpdateAvailableStateForTest"];
   let loaded = false;
   const updateChecks = new Set<ReturnType<typeof createGatewayUpdateCheck>>();
@@ -260,9 +260,9 @@ describe("update-startup", () => {
         runGatewayUpdateCheck: runGatewayUpdateCheckOwner,
         createGatewayUpdateCheck,
         getUpdateEffectiveChannel,
-        refreshGatewayUpdateStatus,
         resetUpdateAvailableStateForTest,
       } = await import("./update-startup.js"));
+      ({ refreshGatewayUpdateStatus } = await import("./update-status-schedule.js"));
       ({ getUpdateAvailable, getUpdateSchedule } = await import("./update-status-state.js"));
       loaded = true;
     }
@@ -1498,84 +1498,46 @@ describe("update-startup", () => {
     expect(runAutoUpdate).not.toHaveBeenCalled();
   });
 
-  it("does not probe dev commits when the checkout is up to date", async () => {
-    mockDevGitStatus({ behind: 0 });
-
-    await runGatewayUpdateCheck({
-      cfg: { update: { channel: "dev" } },
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
-    });
-
-    expect(runCommandWithTimeout).not.toHaveBeenCalled();
-    expect(getUpdateAvailable()).toBeNull();
-    expect(getUpdateSchedule()?.install).toEqual({
-      kind: "git",
-      git: { currentSha: "current-sha", status: "current" },
-    });
-  });
-
-  it("reports commit and verified installation times for the current checkout", async () => {
-    const installedAtMs = Date.now() - 60 * 60 * 1000;
-    const commitAtMs = installedAtMs - 24 * 60 * 60 * 1000;
-    runOpenClawStateWriteTransaction(({ db }) => {
-      writeUpdateInstallReceiptRowSync(db, {
-        kind: "update",
-        status: "ok",
-        ts: installedAtMs,
-        stats: {
-          mode: "git",
-          root: "/opt/openclaw",
-          after: { sha: "current-sha", version: "1.0.0", upstreamRef: "origin/main" },
+  it.each([undefined, "/opt/openclaw", "/opt/other-openclaw"])(
+    "reports current checkout metadata without probing commits for receipt %s",
+    async (receiptRoot) => {
+      const installedAtMs = Date.now() - 60 * 60 * 1000;
+      const commitAtMs = installedAtMs - 24 * 60 * 60 * 1000;
+      if (receiptRoot) {
+        runOpenClawStateWriteTransaction(({ db }) => {
+          writeUpdateInstallReceiptRowSync(db, {
+            kind: "update",
+            status: "ok",
+            ts: installedAtMs,
+            stats: {
+              mode: "git",
+              root: receiptRoot,
+              after: { sha: "current-sha", version: "1.0.0", upstreamRef: "origin/main" },
+            },
+          });
+        });
+      }
+      mockDevGitStatus({ behind: 0, commitAtMs });
+      await runGatewayUpdateCheck({
+        cfg: { update: { channel: "dev" } },
+        log: { info: vi.fn() },
+        isNixMode: false,
+        allowInTests: true,
+      });
+      expect(runCommandWithTimeout).not.toHaveBeenCalled();
+      expect(getUpdateAvailable()).toBeNull();
+      expect(getUpdateSchedule()?.install).toEqual({
+        kind: "git",
+        git: {
+          status: "current",
+          currentSha: "current-sha",
+          upstreamSha: "upstream-sha",
+          commitAtMs,
+          ...(receiptRoot === "/opt/openclaw" ? { installedAtMs } : {}),
         },
       });
-    });
-    mockDevGitStatus({ behind: 0, commitAtMs });
-
-    await runGatewayUpdateCheck({
-      cfg: { update: { channel: "dev" } },
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
-    });
-
-    expect(getUpdateSchedule()?.install?.git).toEqual({
-      status: "current",
-      currentSha: "current-sha",
-      commitAtMs,
-      installedAtMs,
-    });
-  });
-
-  it("does not inherit install time from a same-SHA receipt for another checkout", async () => {
-    const installedAtMs = Date.now() - 60 * 60 * 1000;
-    runOpenClawStateWriteTransaction(({ db }) => {
-      writeUpdateInstallReceiptRowSync(db, {
-        kind: "update",
-        status: "ok",
-        ts: installedAtMs,
-        stats: {
-          mode: "git",
-          root: "/opt/other-openclaw",
-          after: { sha: "current-sha", version: "1.0.0" },
-        },
-      });
-    });
-    mockDevGitStatus({ behind: 0 });
-
-    await runGatewayUpdateCheck({
-      cfg: { update: { channel: "dev" } },
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
-    });
-
-    expect(getUpdateSchedule()?.install?.git).toEqual({
-      status: "current",
-      currentSha: "current-sha",
-    });
-  });
+    },
+  );
 
   it.each([
     {
@@ -1608,12 +1570,17 @@ describe("update-startup", () => {
     {
       name: "ahead checkout",
       git: { ahead: 2, behind: 0 },
-      expected: { status: "ahead", commitsAhead: 2 },
+      expected: { status: "ahead", upstreamSha: "upstream-sha", commitsAhead: 2 },
     },
     {
       name: "diverged checkout",
       git: { ahead: 1, behind: 3 },
-      expected: { status: "diverged", commitsAhead: 1, commitsBehind: 3 },
+      expected: {
+        status: "diverged",
+        upstreamSha: "upstream-sha",
+        commitsAhead: 1,
+        commitsBehind: 3,
+      },
     },
   ])("reports $name without fabricating current", async ({ git, expected }) => {
     mockDevGitStatus(git);
@@ -2175,7 +2142,22 @@ describe("update-startup", () => {
   );
 
   it("refreshes the inferred Dev channel for a configless Git installation", async () => {
-    mockDevGitStatus({ behind: 3 });
+    mockDevGitStatus({ behind: 2 });
+    await runGatewayUpdateCheck({
+      cfg: { update: { channel: "dev", auto: { enabled: true } } },
+      log: { info: vi.fn() },
+      isNixMode: false,
+      allowInTests: true,
+      activeWorkInspectors: idleActiveWorkInspectors(),
+    });
+    const announcement = getUpdateAvailable();
+    const schedule = getUpdateSchedule();
+    expect(schedule?.campaign?.state).toBe("countdown");
+    mockDevGitStatus({
+      behind: 3,
+      upstreamSha: "new-upstream-sha",
+      repositoryUrl: "https://github.com/example/openclaw",
+    });
 
     await refreshGatewayUpdateStatus({});
 
@@ -2186,10 +2168,20 @@ describe("update-startup", () => {
       includeRegistry: false,
       useDetachedDevUpstream: true,
     });
-    expect(getUpdateSchedule()).toMatchObject({
-      channel: "dev",
-      install: { kind: "git", git: { status: "behind", commitsBehind: 3 } },
+    expect(getUpdateSchedule()).toEqual({
+      ...schedule,
+      install: {
+        kind: "git",
+        git: {
+          status: "behind",
+          currentSha: "current-sha",
+          upstreamSha: "new-upstream-sha",
+          repositoryUrl: "https://github.com/example/openclaw",
+          commitsBehind: 3,
+        },
+      },
     });
+    expect(getUpdateAvailable()).toBe(announcement);
   });
 
   it.each([false, true])(

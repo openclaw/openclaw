@@ -174,6 +174,8 @@ export type ProviderResolveUsageAuthContext = {
 
 export type ProviderUsageAuthToken = {
   token: string;
+  /** Provider-owned grant family used to authorize the usage endpoint. */
+  authFlow?: string;
   accountId?: string;
   /** Non-secret plan metadata from the resolved credential (e.g. Claude "max"). */
   subscriptionType?: string;
@@ -213,6 +215,7 @@ export type ProviderFetchUsageSnapshotContext = {
   env: NodeJS.ProcessEnv;
   provider: string;
   token: string;
+  authFlow?: string;
   accountId?: string;
   authProfileId?: string;
   /** Non-secret plan metadata from the resolved credential (e.g. Claude "max"). */
@@ -253,6 +256,8 @@ export type ProviderPrepareExtraParamsContext = {
   agentDir?: string;
   workspaceDir?: string;
   agentId?: string;
+  /** Selected credential facts; excludes credential material. */
+  auth?: { mode: string; authFlow?: string };
   nativeWebSearchAllowedByToolPolicy?: boolean;
   provider: string;
   modelId: string;

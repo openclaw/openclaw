@@ -9,6 +9,7 @@ import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperations, SqliteWorkerStore } from "../infra/sqlite-worker-store.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import {
   readOpenClawAgentDatabaseIdentity,
@@ -21,7 +22,10 @@ import {
 import { getOpenClawAgentDatabaseIfOpen } from "./openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-contract.js";
-import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
+import {
+  captureOpenClawAgentDatabaseExecution,
+  type OpenClawAgentDatabaseExecution,
+} from "./openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "./openclaw-agent-write-admission.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
@@ -47,29 +51,44 @@ export type OpenClawAgentSqliteWorkerStore<Operations extends SqliteWorkerOperat
   close(): Promise<void>;
 };
 
-/** A publication client retains its host borrow; each operation borrows the canonical executor. */
+/** Retains a native borrow or checks a caller-held executor; each operation borrows the canonical executor. */
 export async function openOpenClawAgentSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
   inputOptions: OpenClawAgentDatabaseOptions,
-  expectedDatabase: DatabaseSync,
+  publicationSource: DatabaseSync | { execution: OpenClawAgentDatabaseExecution },
   worker: { moduleUrl: URL; input: unknown },
 ): Promise<OpenClawAgentSqliteWorkerStore<Operations>> {
   const env = cloneEnvWithPlatformSemantics(inputOptions.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const options = {
     ...inputOptions,
+    agentId: normalizeAgentId(inputOptions.agentId),
     env,
     path: resolveOpenClawAgentSqlitePath({ ...inputOptions, env }),
   };
-  const prepared = readOpenClawAgentDatabaseIdentity({ db: expectedDatabase });
-  if (typeof prepared.identity !== "string") {
+  const capturedExecution =
+    "execution" in publicationSource ? publicationSource.execution : undefined;
+  const expectedDatabase = "execution" in publicationSource ? undefined : publicationSource;
+  if (
+    capturedExecution &&
+    (capturedExecution.agentId !== options.agentId || capturedExecution.path !== options.path)
+  ) {
+    throw new Error("Agent publication source differs from its captured executor");
+  }
+  const prepared = expectedDatabase
+    ? readOpenClawAgentDatabaseIdentity({ db: expectedDatabase })
+    : undefined;
+  if (prepared && typeof prepared.identity !== "string") {
     throw new Error("Agent Worker requires its existing file owner");
   }
-  const identity = `file:${prepared.identity}`;
-  const expectedIdentity = {
-    kind: "file" as const,
-    physicalIdentity: prepared.identity,
-    nativeLocation: prepared.filename,
-  };
+  const expectedIdentity =
+    prepared && typeof prepared.identity === "string"
+      ? {
+          kind: "file" as const,
+          physicalIdentity: prepared.identity,
+          nativeLocation: prepared.filename,
+        }
+      : undefined;
+  const identity = expectedIdentity ? `file:${expectedIdentity.physicalIdentity}` : undefined;
   const moduleUrl = new URL(worker.moduleUrl).href;
   const input = structuredClone(worker.input);
   const state = captureOpenClawStateDatabaseReadAdmission(
@@ -86,8 +105,13 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
       throw new Error("Agent database Worker owner is closed");
     }
     state.assertCurrent();
+    if (capturedExecution) {
+      capturedExecution.assertCurrent();
+      return;
+    }
     const current = getOpenClawAgentDatabaseIfOpen(options);
     if (
+      !expectedDatabase ||
       !current ||
       current.db !== expectedDatabase ||
       !expectedDatabase.isOpen ||
@@ -95,7 +119,9 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
     ) {
       throw new Error("Borrowed agent database closed or changed before Worker admission");
     }
-    assertExistingDatabaseIdentity(options.path, identity);
+    if (identity) {
+      assertExistingDatabaseIdentity(options.path, identity);
+    }
   };
   assertHeld();
   const close = (): Promise<void> => {
@@ -128,7 +154,9 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
         }
       },
     });
-    releaseBorrow = retainAgentDatabase(expectedDatabase);
+    if (expectedDatabase) {
+      releaseBorrow = retainAgentDatabase(expectedDatabase);
+    }
   } catch (error) {
     try {
       await close();
@@ -180,7 +208,7 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
                 if (!grant()) {
                   throw new Error("Agent publication authority expired");
                 }
-              }),
+              }, binding.attachment),
             };
           };
         },
@@ -199,7 +227,7 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
               if (!grant()) {
                 throw new Error("Agent publication cleanup authority expired");
               }
-            }),
+            }, binding.attachment),
           });
         },
       };

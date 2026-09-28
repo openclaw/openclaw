@@ -86,35 +86,46 @@ describe("tui last session state", () => {
     );
   });
 
-  it("restores only a remembered session that still belongs to the current agent", () => {
-    const sessions = [
-      { key: "agent:main:main" },
-      { key: "agent:main:tui-123" },
-      { key: "agent:ops:tui-999" },
-    ];
+  it.each(["agent:main:tui-123", "tui-123"])(
+    "restores %s only from a row belonging to the current agent",
+    (rememberedKey) => {
+      const sessions = [
+        { key: "agent:main:main" },
+        { key: "agent:ops:tui-123" },
+        { key: "agent:main:tui-123" },
+        { key: "agent:ops:tui-999" },
+      ];
 
-    expect(
-      resolveRememberedTuiSessionKey({
-        rememberedKey: "agent:main:tui-123",
-        currentAgentId: "main",
-        sessions,
-      }),
-    ).toBe("agent:main:tui-123");
-    expect(
-      resolveRememberedTuiSessionKey({
-        rememberedKey: "agent:ops:tui-999",
-        currentAgentId: "main",
-        sessions,
-      }),
-    ).toBeNull();
-    expect(
-      resolveRememberedTuiSessionKey({
-        rememberedKey: "agent:main:missing",
-        currentAgentId: "main",
-        sessions,
-      }),
-    ).toBeNull();
-  });
+      expect(
+        resolveRememberedTuiSessionKey({
+          rememberedKey,
+          currentAgentId: "main",
+          sessions,
+        }),
+      ).toBe("agent:main:tui-123");
+      expect(
+        resolveRememberedTuiSessionKey({
+          rememberedKey,
+          currentAgentId: "main",
+          sessions: [{ key: "agent:ops:tui-123" }],
+        }),
+      ).toBeNull();
+      expect(
+        resolveRememberedTuiSessionKey({
+          rememberedKey: "agent:ops:tui-999",
+          currentAgentId: "main",
+          sessions,
+        }),
+      ).toBeNull();
+      expect(
+        resolveRememberedTuiSessionKey({
+          rememberedKey: "agent:main:missing",
+          currentAgentId: "main",
+          sessions,
+        }),
+      ).toBeNull();
+    },
+  );
 
   it("does not persist or restore heartbeat sessions", async () => {
     const stateDir = await makeTempStateDir();

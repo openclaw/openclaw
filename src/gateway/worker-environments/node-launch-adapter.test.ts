@@ -815,19 +815,28 @@ describe("node worker launch adapter", () => {
       request.onDispatchReady?.("invoke-1");
       return wire(receipt(input, "running"));
     });
-    const adapter = createNodeWorkerLaunchAdapter({
-      getTransport: () => transportWith(invoke),
-      rpcTimeoutMs: 10,
-      cancellationTimeoutMs: 100,
-      sleep: async () => {
-        controller.abort();
-      },
-    });
-
-    await expect(
-      adapter.launch({ ...launchRequest(input), signal: controller.signal }),
-    ).resolves.toEqual(receipt(input, "cancelled"));
-    expect(cancelCalls).toBe(2);
+    vi.useFakeTimers();
+    try {
+      const adapter = createNodeWorkerLaunchAdapter({
+        getTransport: () => transportWith(invoke),
+        rpcTimeoutMs: 10,
+        cancellationTimeoutMs: 100,
+        sleep: async () => {
+          controller.abort();
+        },
+      });
+      const result = expect(
+        adapter.launch({ ...launchRequest(input), signal: controller.signal }),
+      ).resolves.toEqual(receipt(input, "cancelled"));
+      // Exercise the RPC expiry without spending the cleanup budget on host scheduling.
+      await vi.advanceTimersByTimeAsync(9);
+      expect(cancelCalls).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await result;
+      expect(cancelCalls).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("uses distinct cancellation authority after dispatch authority closes", async () => {

@@ -60,7 +60,7 @@ const SLACK_REACTION_RESULT_LIMIT = 100;
 const loadSlackActionsRuntime = createLazyRuntimeModule(() => import("./actions.js"));
 const bindSlackAction = createLazyRuntimeMethodBinder(loadSlackActionsRuntime);
 
-const loadSlackAccountsRuntime = createLazyRuntimeModule(() => import("./accounts.runtime.js"));
+const loadSlackAccountsRuntime = createLazyRuntimeModule(() => import("./accounts.js"));
 const loadSlackChannelTypeRuntime = createLazyRuntimeModule(() => import("./channel-type.js"));
 const bindSlackChannelType = createLazyRuntimeMethodBinder(loadSlackChannelTypeRuntime);
 
@@ -83,11 +83,7 @@ export const slackActionRuntime = {
   resolveSlackConversationInfo: bindSlackChannelType(
     (runtime) => runtime.resolveSlackConversationInfo,
   ),
-  resolveSlackChannelType: async (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    channelId: string;
-  }) => (await loadSlackChannelTypeRuntime()).resolveSlackChannelType(params),
+  resolveSlackChannelType: bindSlackChannelType((runtime) => runtime.resolveSlackChannelType),
   sendSlackMessage: bindSlackAction((runtime) => runtime.sendSlackMessage),
   unpinSlackMessage: bindSlackAction((runtime) => runtime.unpinSlackMessage),
 };
@@ -112,10 +108,6 @@ function resolveThreadTsFromContext(
   }
   // Planning stays pure so failed sends cannot consume a thread before delivery.
   return threadTs;
-}
-
-function readSlackBlocksParam(params: Record<string, unknown>) {
-  return slackActionRuntime.parseSlackBlocksInput(params.blocks);
 }
 
 function isImageContentType(value: string | undefined): boolean {
@@ -605,6 +597,22 @@ export async function handleSlackAction(
       throw new Error("Slack messages are disabled.");
     }
     const sentResults: SlackSendResult[] = [];
+    const buildSendOpts = (destination: string, forceDocument: boolean) => {
+      const threadTs = resolveThreadTsFromContext(
+        readStringParam(params, "threadTs"),
+        destination,
+        context,
+        { suppressImplicitThread: params.topLevel === true || params.threadTs === null },
+      );
+      return {
+        ...buildActionOpts("write"),
+        mediaAccess: context?.mediaAccess,
+        mediaLocalRoots: context?.mediaLocalRoots,
+        mediaReadFile: context?.mediaReadFile,
+        threadTs,
+        ...(forceDocument ? { forceDocument: true } : {}),
+      };
+    };
     const sendSlackMessage = async (
       target: string,
       content: string,
@@ -651,7 +659,7 @@ export async function handleSlackAction(
           allowEmpty: true,
         });
         const mediaUrl = readStringParam(params, "mediaUrl");
-        const blocks = readSlackBlocksParam(params);
+        const blocks = slackActionRuntime.parseSlackBlocksInput(params.blocks);
         const replyBroadcast = readBooleanParam(params, "replyBroadcast");
         const textIsSlackMrkdwn = readBooleanParam(params, "textIsSlackMrkdwn");
         const textIsSlackPlainText = readBooleanParam(params, "textIsSlackPlainText");
@@ -681,22 +689,7 @@ export async function handleSlackAction(
             "Slack replyBroadcast is only supported for text or block thread replies.",
           );
         }
-        const threadTs = resolveThreadTsFromContext(
-          readStringParam(params, "threadTs"),
-          destination,
-          context,
-          {
-            suppressImplicitThread: params.topLevel === true || params.threadTs === null,
-          },
-        );
-        const baseSendOpts = {
-          ...buildActionOpts("write"),
-          mediaAccess: context?.mediaAccess,
-          mediaLocalRoots: context?.mediaLocalRoots,
-          mediaReadFile: context?.mediaReadFile,
-          threadTs: threadTs ?? undefined,
-          ...(forceDocument ? { forceDocument: true } : {}),
-        };
+        const baseSendOpts = buildSendOpts(destination, forceDocument);
         const sendOpts = {
           ...baseSendOpts,
           ...(replyBroadcast ? { replyBroadcast } : {}),
@@ -776,22 +769,9 @@ export async function handleSlackAction(
             "Slack replyBroadcast is only supported for text or block thread replies.",
           );
         }
-        const threadTs = resolveThreadTsFromContext(
-          readStringParam(params, "threadTs"),
-          destination,
-          context,
-          {
-            suppressImplicitThread: params.topLevel === true || params.threadTs === null,
-          },
-        );
         const result = await sendSlackMessage(destination, initialComment ?? "", {
-          ...buildActionOpts("write"),
+          ...buildSendOpts(destination, forceDocument),
           mediaUrl: filePath,
-          mediaAccess: context?.mediaAccess,
-          mediaLocalRoots: context?.mediaLocalRoots,
-          mediaReadFile: context?.mediaReadFile,
-          threadTs: threadTs ?? undefined,
-          ...(forceDocument ? { forceDocument: true } : {}),
           ...(filename ? { uploadFileName: filename } : {}),
           ...(title ? { uploadTitle: title } : {}),
         });
@@ -807,7 +787,7 @@ export async function handleSlackAction(
         const content = readStringParam(params, "content", {
           allowEmpty: true,
         });
-        const blocks = readSlackBlocksParam(params);
+        const blocks = slackActionRuntime.parseSlackBlocksInput(params.blocks);
         if (!content && !blocks) {
           throw new Error("Slack editMessage requires content or blocks.");
         }
@@ -938,20 +918,16 @@ export async function handleSlackAction(
     const { channelId } = target;
     const readOpts = buildActionOpts("read", target.teamId);
     const writeOpts = buildActionOpts("write", target.teamId);
-    if (action === "pinMessage") {
+    if (action === "pinMessage" || action === "unpinMessage") {
       const messageId = readStringParam(params, "messageId", {
         required: true,
       });
       await assertReadTargetAllowed(target);
-      await slackActionRuntime.pinSlackMessage(channelId, messageId, writeOpts);
-      return jsonResult({ ok: true });
-    }
-    if (action === "unpinMessage") {
-      const messageId = readStringParam(params, "messageId", {
-        required: true,
-      });
-      await assertReadTargetAllowed(target);
-      await slackActionRuntime.unpinSlackMessage(channelId, messageId, writeOpts);
+      const updatePin =
+        action === "pinMessage"
+          ? slackActionRuntime.pinSlackMessage
+          : slackActionRuntime.unpinSlackMessage;
+      await updatePin(channelId, messageId, writeOpts);
       return jsonResult({ ok: true });
     }
     await assertReadTargetAllowed(target);

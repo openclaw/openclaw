@@ -1,6 +1,5 @@
 import { isUtf8 } from "node:buffer";
 import { execFileSync, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   chmodSync,
   closeSync,
@@ -18,6 +17,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { copyFileDescriptorSync } from "@openclaw/fs-safe/advanced";
+import { sha256FileSync } from "@openclaw/fs-safe/durability";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { z } from "zod";
 import { captureSourceWitness } from "./crabbox-staging-witness.mts";
 import { createStaging, type StagingHandle } from "./crabbox-staging.mts";
@@ -330,6 +332,19 @@ export function prepareCrabboxSourceCapsule(options: {
     const frozen = new Map<string, { mode: string; blobPath: string }>();
     const linkBlobs = join(temporary, "links");
     mkdirSync(linkBlobs);
+    function writeFailure(path: string, operation: string, error: unknown) {
+      const failure = error as NodeJS.ErrnoException;
+      const details = [
+        failure?.code === undefined ? undefined : `code=${JSON.stringify(failure.code)}`,
+        failure?.errno === undefined ? undefined : `errno=${JSON.stringify(failure.errno)}`,
+      ]
+        .filter(Boolean)
+        .join(", ");
+      return new Error(
+        `source capsule: ${operation} failed for ${JSON.stringify(path)}${details ? ` (${details})` : ""}; source was not uploaded`,
+        { cause: error },
+      );
+    }
     function writeFrozen(path: string, bytes: Buffer, mode: string) {
       const destination = join(directory, path);
       let blobPath = destination;
@@ -349,17 +364,7 @@ export function prepareCrabboxSourceCapsule(options: {
           chmodSync(destination, mode === "100755" ? 0o755 : 0o644);
         }
       } catch (error) {
-        const failure = error as NodeJS.ErrnoException;
-        const details = [
-          failure?.code === undefined ? undefined : `code=${JSON.stringify(failure.code)}`,
-          failure?.errno === undefined ? undefined : `errno=${JSON.stringify(failure.errno)}`,
-        ]
-          .filter(Boolean)
-          .join(", ");
-        throw new Error(
-          `source capsule: ${operation} failed for ${JSON.stringify(path)}${details ? ` (${details})` : ""}; source was not uploaded`,
-          { cause: error },
-        );
+        throw writeFailure(path, operation, error);
       }
       frozen.set(path, { mode, blobPath });
     }
@@ -389,29 +394,68 @@ export function prepareCrabboxSourceCapsule(options: {
       if (!info.isFile()) {
         throw new Error(`source capsule has an unsupported file kind at ${JSON.stringify(path)}`);
       }
+      const destination = join(directory, path);
+      const mode = (info.mode & 0o100) !== 0 ? "100755" : "100644";
       const fd = openSync(source, constants.O_RDONLY | constants.O_NOFOLLOW);
       try {
         const opened = fstatSync(fd);
-        const bytes = readFileSync(fd);
-        const after = sourceStat(repoRoot, path);
-        if (
-          !opened.isFile() ||
-          after.kind !== "present" ||
-          opened.ino !== info.ino ||
-          opened.ino !== after.stat.ino ||
-          opened.mode !== info.mode ||
-          opened.mode !== after.stat.mode ||
-          opened.size !== after.stat.size ||
-          opened.mtimeMs !== after.stat.mtimeMs
-        ) {
-          throw new Error(
-            `source changed while freezing ${JSON.stringify(path)}; retry after edits finish`,
-          );
+        let operation = "mkdir";
+        let output: number;
+        try {
+          mkdirSync(dirname(destination), { recursive: true });
+          operation = "write file";
+          output = openSync(destination, "wx");
+        } catch (error) {
+          throw writeFailure(path, operation, error);
         }
-        writeFrozen(path, bytes, (opened.mode & 0o100) !== 0 ? "100755" : "100644");
+        try {
+          let copied: number;
+          try {
+            copied = copyFileDescriptorSync(fd, output, { maxBytes: opened.size });
+          } catch (error) {
+            if (error instanceof FsSafeError && error.code === "too-large") {
+              throw new Error(
+                `source changed while freezing ${JSON.stringify(path)}; retry after edits finish`,
+                { cause: error },
+              );
+            }
+            // Without callbacks, helper-failed can only mean a write made no progress.
+            if (
+              (error as NodeJS.ErrnoException)?.syscall === "write" ||
+              (error instanceof FsSafeError && error.code === "helper-failed")
+            ) {
+              throw writeFailure(path, "write file", error);
+            }
+            throw error;
+          }
+          const after = sourceStat(repoRoot, path);
+          if (
+            !opened.isFile() ||
+            after.kind !== "present" ||
+            opened.ino !== info.ino ||
+            opened.ino !== after.stat.ino ||
+            opened.mode !== info.mode ||
+            opened.mode !== after.stat.mode ||
+            opened.size !== after.stat.size ||
+            opened.mtimeMs !== after.stat.mtimeMs ||
+            copied !== opened.size
+          ) {
+            throw new Error(
+              `source changed while freezing ${JSON.stringify(path)}; retry after edits finish`,
+            );
+          }
+          try {
+            chmodSync(destination, mode === "100755" ? 0o755 : 0o644);
+          } catch (error) {
+            throw writeFailure(path, "chmod", error);
+          }
+        } finally {
+          closeSync(output);
+        }
       } finally {
         closeSync(fd);
       }
+      frozen.set(path, { mode, blobPath: destination });
       return "present";
     }
     const sparse: Array<{ path: string; mode: string; hash: string }> = [];
@@ -751,7 +795,13 @@ export function prepareCrabboxSourceCapsule(options: {
       ...privateEnv,
       GIT_SHALLOW_FILE: shallow,
     });
-    const digest = createHash("sha256").update(readFileSync(bundlePath)).digest("hex");
+    const descriptor = openSync(bundlePath, "r");
+    let digest: string;
+    try {
+      digest = sha256FileSync(descriptor).digest;
+    } finally {
+      closeSync(descriptor);
+    }
     const bundleHash = capsuleObjectId(
       git(directory, ["hash-object", "-w", "--no-filters", bundlePath], privateEnv),
     );

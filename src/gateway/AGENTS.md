@@ -68,6 +68,8 @@ runtime when they only need plugin-owned static descriptors.
 - Projection work retains its creation owner's async context, never a publisher's temporary startup-admission borrow. Successful deferred database preparation publishes topology after ending that borrow.
 - Legacy ACP-key and missing-title repairs belong only to Doctor. Gateway admission and reads may select compatible stored metadata but never normalize or persist it.
 - Archived rows retain list metadata, indexes, and board membership. Exact reads and selected list pages materialize them through a bounded cache sized for the requested page. Broad catalog/config/topology invalidations evict archived materializations; publications maintain cold parent/identity indexes and promote unarchived entries. Sharing filters consume metadata even when a row is cold, and backfill requires a current materialized row.
+- Identity-scope-only config snapshots advance the projection's current config while retaining unchanged session facts. Keep permission revocation and catalog publications independent; changed resolution provenance, forced invalidation, and same-object publications retain broad refresh behavior.
+- Retain completed catalog facts while the model owner's replacement promise is pending; an absent owner during renewal is not a replacement catalog. Resume on that exact promise's settlement, including failure, without inferring completion from unpaired scoped auth events.
 - After hydration, clean materialized list/describe/event snapshots execute no SQLite statements. Dirty rows acquire stored metadata through exact-key readers. Resident materialization never reads transcript payloads; optional previews and fallback-model facts use bounded read-only background enrichment, and usage comes from its persistence owner. Background transcript work yields to foreground request lifetimes and rechecks that priority before publishing its result. Never scan an already resident store to serve a request.
 - The profile owner retains durable display facts, roles, and merge aliases while a projection is active. Its committed writes update exact catalog keys before publishing through `sessionChanges`; physical shared-store admission hydrates the catalog once. Person-reference selection reads that catalog, including profiles without sessions. Synthetic plugin readers and selected-profile bindings acquire current exact identity facts from the same catalog after readiness; display prefix matching never grants authority.
 - Prepare federation scopes on topology publication. Resolve sentinel precedence before viewer/activity filtering; model inheritance and child links use the same physical parent. A list awaits projection readiness; keyed describe/resolve/history reads prepare only their requested row, independently of bulk refresh. Requests select, authorize, present, and reply synchronously with the current viewer and clock; do not insert a result-promise await before the RPC response.
@@ -81,6 +83,10 @@ runtime when they only need plugin-owned static descriptors.
 
 ## Verification
 
+- A change to session-creation publication ownership or restart-delivery custody
+  must prove the public `sessions.create` path in an isolated Gateway with an
+  explicit non-main session, followed by a post-publication read or turn.
+  Direct creation-helper tests alone do not establish this composition.
 - Benchmark the affected Gateway test file before/after with
   `pnpm test <file>`.
 - Run `pnpm build` when changing Gateway lazy-loading or bundled plugin

@@ -73,71 +73,41 @@ function mergeWhatsAppConfig(
   options?: { unsetOnUndefined?: string[] },
 ): OpenClawConfig {
   const channelConfig: WhatsAppConfig = { ...cfg.channels?.whatsapp };
-  const mutableChannelConfig = channelConfig as Record<string, unknown>;
-  const targetPathPrefix = resolveWhatsAppConfigPathPrefix(cfg, accountId);
-  if (targetPathPrefix === "channels.whatsapp") {
-    for (const [key, value] of Object.entries(patch)) {
-      if (value === undefined) {
-        if (options?.unsetOnUndefined?.includes(key)) {
-          delete mutableChannelConfig[key];
-        }
-        continue;
-      }
-      mutableChannelConfig[key] = value;
-    }
-    return {
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        whatsapp: channelConfig,
-      },
-    };
-  }
-  const accounts = {
-    ...(channelConfig.accounts as Record<string, WhatsAppAccountConfig> | undefined),
-  };
+  const atRoot = resolveWhatsAppConfigPathPrefix(cfg, accountId) === "channels.whatsapp";
+  const accounts = { ...channelConfig.accounts };
   const targetAccountId =
     accountId === DEFAULT_ACCOUNT_ID ? resolveDefaultWhatsAppAccountWriteKey(cfg) : accountId;
   const lowerDefaultAccount =
     accountId === DEFAULT_ACCOUNT_ID && targetAccountId !== DEFAULT_ACCOUNT_ID
       ? accounts[DEFAULT_ACCOUNT_ID]
       : undefined;
-  const nextAccount: WhatsAppAccountConfig = {
-    ...accounts[targetAccountId],
-    ...lowerDefaultAccount,
-  };
-  const mutableNextAccount = nextAccount as Record<string, unknown>;
+  const target: WhatsAppAccountConfig = atRoot
+    ? channelConfig
+    : { ...accounts[targetAccountId], ...lowerDefaultAccount };
+  const mutableTarget = target as Record<string, unknown>;
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) {
       if (options?.unsetOnUndefined?.includes(key)) {
-        delete mutableNextAccount[key];
+        delete mutableTarget[key];
       }
       continue;
     }
-    mutableNextAccount[key] = value;
+    mutableTarget[key] = value;
   }
-  accounts[targetAccountId] = nextAccount;
-  if (lowerDefaultAccount) {
-    delete accounts[DEFAULT_ACCOUNT_ID];
+  if (!atRoot) {
+    accounts[targetAccountId] = target;
+    if (lowerDefaultAccount) {
+      delete accounts[DEFAULT_ACCOUNT_ID];
+    }
+    channelConfig.accounts = accounts;
   }
   return {
     ...cfg,
     channels: {
       ...cfg.channels,
-      whatsapp: {
-        ...channelConfig,
-        accounts,
-      },
+      whatsapp: channelConfig,
     },
   };
-}
-
-function setWhatsAppDmPolicy(
-  cfg: OpenClawConfig,
-  accountId: string,
-  dmPolicy: DmPolicy,
-): OpenClawConfig {
-  return mergeWhatsAppConfig(cfg, accountId, { dmPolicy });
 }
 
 function setWhatsAppAllowFrom(
@@ -146,19 +116,6 @@ function setWhatsAppAllowFrom(
   allowFrom?: string[],
 ): OpenClawConfig {
   return mergeWhatsAppConfig(cfg, accountId, { allowFrom }, { unsetOnUndefined: ["allowFrom"] });
-}
-
-function setWhatsAppSelfChatMode(
-  cfg: OpenClawConfig,
-  accountId: string,
-  selfChatMode: boolean,
-): OpenClawConfig {
-  return mergeWhatsAppConfig(cfg, accountId, { selfChatMode });
-}
-
-async function detectWhatsAppLinked(cfg: OpenClawConfig, accountId: string): Promise<boolean> {
-  const { authDir } = resolveWhatsAppAuthDir({ cfg, accountId });
-  return hasWebCredsSync(authDir);
 }
 
 async function promptWhatsAppOwnerAllowFrom(params: {
@@ -208,9 +165,11 @@ async function applyWhatsAppOwnerAllowlist(params: {
     prompter: params.prompter,
     existingAllowFrom: params.existingAllowFrom,
   });
-  let next = setWhatsAppSelfChatMode(params.cfg, params.accountId, true);
-  next = setWhatsAppDmPolicy(next, params.accountId, "allowlist");
-  next = setWhatsAppAllowFrom(next, params.accountId, allowFrom);
+  const next = mergeWhatsAppConfig(params.cfg, params.accountId, {
+    selfChatMode: true,
+    dmPolicy: "allowlist",
+    allowFrom,
+  });
   await params.prompter.note(
     [...params.messageLines, `- allowFrom includes ${normalized}`].join("\n"),
     params.title,
@@ -310,8 +269,10 @@ async function promptWhatsAppDmAccess(params: {
     ],
   })) as DmPolicy;
 
-  let next = setWhatsAppSelfChatMode(params.cfg, accountId, false);
-  next = setWhatsAppDmPolicy(next, accountId, policy);
+  let next = mergeWhatsAppConfig(params.cfg, accountId, {
+    selfChatMode: false,
+    dmPolicy: policy,
+  });
   if (policy === "open") {
     const allowFrom = normalizeWhatsAppAllowFromEntries(["*", ...existingAllowFrom]);
     next = setWhatsAppAllowFrom(next, accountId, allowFrom.length > 0 ? allowFrom : ["*"]);
@@ -338,10 +299,7 @@ async function promptWhatsAppDmAccess(params: {
 
   const mode = await params.prompter.select({
     message: t("wizard.whatsapp.allowFromPrompt"),
-    options: allowOptions.map((opt) => ({
-      value: opt.value,
-      label: opt.label,
-    })),
+    options: [...allowOptions],
   });
 
   if (mode === "keep") {
@@ -398,11 +356,8 @@ export async function finalizeWhatsAppSetup(params: {
           input: {},
         });
 
-  const linked = await detectWhatsAppLinked(next, accountId);
-  const { authDir } = resolveWhatsAppAuthDir({
-    cfg: next,
-    accountId,
-  });
+  const { authDir } = resolveWhatsAppAuthDir({ cfg: next, accountId });
+  const linked = hasWebCredsSync(authDir);
 
   if (params.options?.deferDeviceLinkToClient) {
     // The gateway client renders the pairing QR itself (web.login.start/wait);

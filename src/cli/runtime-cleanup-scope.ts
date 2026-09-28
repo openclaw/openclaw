@@ -73,12 +73,24 @@ export function withCliCommandCleanup<T>(
 export function retainCliRegistryHarnesses(
   registry: PluginRegistry,
   dispose: (harness: AgentHarness) => Promise<void>,
+  retain: () => (() => void | Promise<void>) | undefined,
 ): void {
   const current = scope.getStore();
   if (!current || current === "process") {
     return;
   }
   for (const { harness } of registry.agentHarnesses) {
+    if (!current.registries.has(registry)) {
+      // Retain physical custody for terminal teardown, not ordinary invocation authority.
+      const release = retain();
+      if (release) {
+        current.pluginResources?.adopt({
+          release: async () => {
+            await release();
+          },
+        });
+      }
+    }
     current.registries.add(registry);
     if (!current.harnesses.has(harness)) {
       // Preserve request facts as well as the exact registry binding after helpers unwind.

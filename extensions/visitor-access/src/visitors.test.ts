@@ -109,6 +109,7 @@ describe("VisitorAccessService", () => {
         role: { ...guestRole, accessPolicyPlugin: "unrelated-policy" },
       },
       { reason: "sandboxing is inherited", role: { ...guestRole, sandbox: "inherit" as const } },
+      { reason: "model access is unrestricted", role: { ...guestRole, modelPolicy: undefined } },
       {
         reason: "other sessions are writable",
         role: { ...guestRole, sessions: { others: "write" as const } },

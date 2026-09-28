@@ -1,13 +1,12 @@
 // Google Meet tests cover voice call gateway plugin behavior.
 import { createServer } from "node:http";
+import {
+  endMeetingVoiceCallGatewayCall,
+  getMeetingVoiceCallGatewayCall,
+} from "openclaw/plugin-sdk/meeting-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveGoogleMeetConfig } from "./config.js";
-import {
-  createVoiceCallGateway,
-  endMeetVoiceCallGatewayCall,
-  getMeetVoiceCallGatewayCall,
-  joinMeetViaVoiceCallGateway,
-} from "./voice-call-gateway.js";
+import { createVoiceCallGateway, joinMeetViaVoiceCallGateway } from "./voice-call-gateway.js";
 
 type GatewayRuntime = typeof import("openclaw/plugin-sdk/gateway-runtime");
 type GatewayClientOptions = ConstructorParameters<GatewayRuntime["GatewayClient"]>[0];
@@ -123,7 +122,7 @@ describe("Google Meet voice-call gateway", () => {
       });
 
       await expect(
-        getMeetVoiceCallGatewayCall({ gateway, callId: "call-1" }),
+        getMeetingVoiceCallGatewayCall({ gateway, callId: "call-1" }),
       ).rejects.toMatchObject({ code: "ECONNRESET", message: "socket hang up" });
       expect(connectionCount).toBe(1);
       expect(gatewayMocks.actualClients).toHaveLength(1);
@@ -173,7 +172,7 @@ describe("Google Meet voice-call gateway", () => {
       runtime: { gateway: { request: gatewayMocks.runtimeRequest } } as never,
     });
 
-    const request = getMeetVoiceCallGatewayCall({ gateway, callId: "call-1" });
+    const request = getMeetingVoiceCallGatewayCall({ gateway, callId: "call-1" });
     gatewayMocks.clientOptions?.onConnectError?.(originalError);
 
     await expect(request).rejects.toBe(originalError);
@@ -198,7 +197,7 @@ describe("Google Meet voice-call gateway", () => {
       runtime: { gateway: { request: gatewayMocks.runtimeRequest } } as never,
     });
 
-    await expect(getMeetVoiceCallGatewayCall({ gateway, callId: "call-1" })).rejects.toThrow(
+    await expect(getMeetingVoiceCallGatewayCall({ gateway, callId: "call-1" })).rejects.toThrow(
       "gateway event loop readiness timeout",
     );
 
@@ -220,7 +219,7 @@ describe("Google Meet voice-call gateway", () => {
     });
 
     const rejected = expect(
-      getMeetVoiceCallGatewayCall({ gateway, callId: "call-1" }),
+      getMeetingVoiceCallGatewayCall({ gateway, callId: "call-1" }),
     ).rejects.toThrow("gateway connect timeout");
     await vi.advanceTimersByTimeAsync(25);
     await rejected;
@@ -241,7 +240,7 @@ describe("Google Meet voice-call gateway", () => {
       runtime: { gateway: { request: gatewayMocks.runtimeRequest } } as never,
     });
 
-    await expect(getMeetVoiceCallGatewayCall({ gateway, callId: "call-1" })).rejects.toBe(
+    await expect(getMeetingVoiceCallGatewayCall({ gateway, callId: "call-1" })).rejects.toBe(
       constructorError,
     );
 
@@ -397,7 +396,7 @@ describe("Google Meet voice-call gateway", () => {
     });
 
     await expect(
-      endMeetVoiceCallGatewayCall({ gateway, callId: "call-1" }),
+      endMeetingVoiceCallGatewayCall({ gateway, callId: "call-1" }),
     ).resolves.toBeUndefined();
 
     expect(gatewayMocks.request).toHaveBeenCalledWith(
@@ -418,7 +417,7 @@ describe("Google Meet voice-call gateway", () => {
       runtime: { gateway: { request: gatewayMocks.runtimeRequest } } as never,
     });
 
-    await expect(getMeetVoiceCallGatewayCall({ gateway, callId: "call-1" })).resolves.toEqual({
+    await expect(getMeetingVoiceCallGatewayCall({ gateway, callId: "call-1" })).resolves.toEqual({
       found: false,
     });
 

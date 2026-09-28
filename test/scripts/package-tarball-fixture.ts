@@ -2,7 +2,6 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { gte as semverGte, valid as validSemver } from "semver";
 import { expect } from "vitest";
 import {
   PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH,
@@ -13,7 +12,6 @@ import { resolveNpmRunner } from "../../scripts/npm-runner.mts";
 import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
 
 export const CODE_MODE_WORKER_PATH = "dist/agents/code-mode.worker.js";
-export const FIRST_CODE_MODE_WORKER_VERSION = "2026.5.14-beta.2";
 
 function chmodTreeWorldReadable(dir: string) {
   chmodSync(dir, 0o755);
@@ -59,10 +57,7 @@ export function withTarball(
 ) {
   const root = mkdtempSync(join(tmpdir(), "openclaw-package-tarball-test-"));
   try {
-    const validVersion = validSemver(version);
-    const includeCodeModeWorker =
-      options.includeCodeModeWorker ??
-      (validVersion !== null && semverGte(validVersion, FIRST_CODE_MODE_WORKER_VERSION));
+    const includeCodeModeWorker = options.includeCodeModeWorker ?? true;
     const includeCodeModeWorkerInInventory =
       options.includeCodeModeWorkerInInventory ?? includeCodeModeWorker;
     const controlUiFiles =

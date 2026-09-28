@@ -26,10 +26,6 @@ const FAL_MUSIC_MODELS = [
   FAL_STABLE_AUDIO_MODEL,
 ] as const;
 
-function resolveFalMusicModel(model: string | undefined): string {
-  return normalizeOptionalString(model) ?? DEFAULT_FAL_MUSIC_MODEL;
-}
-
 function buildFalMinimaxBody(req: MusicGenerationRequest): Record<string, unknown> {
   const lyrics = normalizeOptionalString(req.lyrics);
   if (lyrics && req.instrumental === true) {
@@ -140,7 +136,7 @@ export function buildFalMusicGenerationProvider(): MusicGenerationProvider {
 
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         await resolveFalHttpRequestConfig({ req, capability: "audio" });
-      const model = resolveFalMusicModel(req.model);
+      const model = normalizeOptionalString(req.model) ?? DEFAULT_FAL_MUSIC_MODEL;
       const { response, release } = await postJsonRequest({
         url: `${baseUrl}/${model}`,
         headers,

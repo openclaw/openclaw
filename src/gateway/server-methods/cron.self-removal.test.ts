@@ -9,7 +9,7 @@ import { hasActiveCronJobs } from "../../cron/active-jobs.js";
 import { CronService, type CronEvent } from "../../cron/service.js";
 import { setupCronServiceSuite } from "../../cron/service.test-harness.js";
 import type { CronServiceDeps } from "../../cron/service/state.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { cronHandlers } from "./cron.js";
 import type { GatewayClient, RespondFn } from "./types.js";

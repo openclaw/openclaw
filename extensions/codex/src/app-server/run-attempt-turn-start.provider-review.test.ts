@@ -16,7 +16,7 @@ vi.mock("./attempt-results.js", () => ({
   buildCodexTurnStartFailureResult: vi.fn(),
   isInvalidCodexImagePayloadError: () => recovery.kind === "image",
 }));
-vi.mock("./attempt-startup.js", () => ({
+vi.mock("./thread-lifecycle-errors.js", () => ({
   isCodexContextRestartSelectionChangedError: () => false,
 }));
 vi.mock("./run-attempt-lifecycle.js", () => ({
@@ -91,6 +91,7 @@ function createFixture(acknowledged: boolean) {
   const requestRuntime = {
     startCodexTurn,
     buildLlmInputEvent: vi.fn(),
+    buildLlmOutputEvent: vi.fn(),
     codexModelCallDiagnostics: { emitStarted: vi.fn(), emitError: vi.fn() },
   } as unknown as Parameters<typeof startCodexAttemptTurn>[3];
   return {

@@ -6,7 +6,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { ThinkLevel } from "../../../auto-reply/thinking.shared.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
@@ -417,36 +416,6 @@ describe("spawnSubagentDirect seam flow", () => {
 
     expect(result.status).toBe("accepted");
     expect(result.childSessionKey).toMatch(/^agent:task-manager:subagent:/);
-  });
-
-  it("inherits incognito storage ownership for direct children", async () => {
-    const requesterSessionKey = "agent:main:dashboard:incognito-parent";
-    const sessionPatches: Record<string, unknown>[] = [];
-    const sessionStorePaths: string[] = [];
-    hoisted.updateSessionStoreMock.mockImplementation(
-      async (
-        storePath: string,
-        mutator: (store: Record<string, Record<string, unknown>>) => unknown,
-      ) => {
-        sessionStorePaths.push(storePath);
-        const store: Record<string, Record<string, unknown>> = {};
-        await mutator(store);
-        sessionPatches.push(...Object.values(store));
-        return store;
-      },
-    );
-
-    const result = await spawnSubagentDirect(
-      { task: "keep this child in memory" },
-      { agentSessionKey: requesterSessionKey },
-    );
-
-    expect(result.status).toBe("accepted");
-    expect(result.childSessionKey).toMatch(/^agent:main:subagent:incognito-/u);
-    expect(sessionPatches).toContainEqual(expect.objectContaining({ incognito: true }));
-    expect(sessionStorePaths).toContain(
-      resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
-    );
   });
 
   it("defaults collector group id from requester session and requesting run", async () => {

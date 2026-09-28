@@ -77,7 +77,7 @@ vi.mock("./agent-tools.js", () => {
     throw new Error("Inventory must not execute tools");
   };
   return {
-    createOpenClawCodingTools: () =>
+    createOpenClawCodingToolsInternal: () =>
       [
         {
           name: "healthy_tool",

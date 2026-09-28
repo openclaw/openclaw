@@ -88,7 +88,7 @@ export function encodePluginDiscoveryId(packageName: string): string {
   return encodeDiscoveryId(DISCOVERY_ID_PREFIX, normalized);
 }
 
-function encodeLocalPluginDiscoveryId(identity: string): string {
+export function encodeLocalPluginDiscoveryId(identity: string): string {
   return encodeDiscoveryId(LOCAL_DISCOVERY_ID_PREFIX, identity);
 }
 
@@ -213,6 +213,8 @@ function projectLocalDiscoveryEntry(
   const clawhubIdentity = localClawHubIdentity(plugin);
   const publishedToClawHub = clawhubIdentity ? true : publicationVerified ? false : undefined;
   const packageName = plugin.clawhubPackage ?? plugin.packageName;
+  // Distribution provenance is host-owned; an npm scope alone proves no publisher.
+  const official = plugin.origin === "bundled";
   return {
     id: clawhubIdentity
       ? encodePluginDiscoveryId(clawhubIdentity)
@@ -221,7 +223,8 @@ function projectLocalDiscoveryEntry(
       name: plugin.name,
       ...(packageName ? { packageName } : {}),
       ...(plugin.description ? { summary: plugin.description } : {}),
-      official: false,
+      official,
+      ...(official ? { author: "openclaw" } : {}),
       categories: localDiscoveryCategories(plugin),
       ...(publishedToClawHub !== undefined ? { publishedToClawHub } : {}),
       ...(plugin.version ? { latestVersion: plugin.version } : {}),
@@ -255,10 +258,21 @@ export function joinLocalPluginDetail(params: {
 }): { plugin: PluginDiscoveryEntry; detail: PluginDiscoveryDetail } {
   const plugin = projectLocalDiscoveryEntry(params.plugin, params.local.mutationAllowed);
   const inspection = params.inspection;
+  const capabilities = inspection?.overview?.capabilities;
+  const contracts = { ...capabilities?.contracts };
+  // The declared tool union also includes names supplied only by tool metadata.
+  if (inspection?.declared.tools.length) {
+    contracts.tools = inspection.declared.tools;
+  }
   return {
     plugin,
     detail: {
       origin: "local",
+      ...(plugin.catalog.official
+        ? { author: { handle: "openclaw", displayName: "OpenClaw", official: true } }
+        : inspection?.overview?.publisherName
+          ? { author: { displayName: inspection.overview.publisherName } }
+          : {}),
       ...(params.plugin.packageName ? { packageName: params.plugin.packageName } : {}),
       topics: [],
       ...(inspection?.overview?.readme ? { readme: inspection.overview.readme } : {}),
@@ -268,6 +282,10 @@ export function joinLocalPluginDetail(params: {
       ...(inspection?.overview?.documentationUrl
         ? { documentationUrl: inspection.overview.documentationUrl }
         : {}),
+      ...(Object.keys(contracts).length ? { contracts } : {}),
+      ...(capabilities?.providers.length ? { providers: capabilities.providers } : {}),
+      ...(capabilities?.channels.length ? { channels: capabilities.channels } : {}),
+      ...(capabilities?.ui !== undefined ? { uiCapabilities: capabilities.ui } : {}),
       configuration: [],
       mcpServers: inspection?.components.mcpServers ?? [],
       skills: (inspection?.components.skills ?? []).map((name) => ({ name })),
@@ -298,6 +316,9 @@ export function joinClawHubPluginDetail(params: {
     ...(params.remote.contracts ? { contracts: params.remote.contracts } : {}),
     ...(params.remote.providers ? { providers: params.remote.providers } : {}),
     ...(params.remote.channels ? { channels: params.remote.channels } : {}),
+    ...(params.remote.uiCapabilities !== undefined
+      ? { uiCapabilities: params.remote.uiCapabilities }
+      : {}),
     configuration: params.remote.configFields,
     mcpServers: params.remote.mcpServers,
     skills: params.remote.skills,

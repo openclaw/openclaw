@@ -191,6 +191,7 @@ class MessageImageResourceDirective extends AsyncDirective {
             options?.resourceBasePath,
             availability.mediaTicket,
             options,
+            image.fileName,
           )
         : unconfirmed
           ? this.element?.getAttribute("src")
@@ -540,6 +541,7 @@ async function loadGalleryImage(
       opts?.resourceBasePath,
       availability.mediaTicket,
       opts,
+      image.fileName,
     );
   }
   const safeSrc = resolveSafeExternalUrl(src, window.location.href, { allowDataImage: true });

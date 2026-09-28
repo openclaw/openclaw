@@ -30,6 +30,7 @@ import { prepareUpdateRestart } from "./update-command-restart-context.js";
 import {
   markControlPlaneUpdateRestartSentinelFailureBestEffort,
   prepareUpdateServiceResult,
+  recordServiceReconciliationWarning,
   UpdateCommandFailure,
   UpdateCommandPendingRecoveryFailure,
   resolveAutomaticUpdateTriage,
@@ -347,6 +348,15 @@ export async function finishUpdate(
         env: currentServiceStop()?.serviceEnv ?? params.ownedManagedUpdateEnv,
         timeoutMs: params.updateStepTimeoutMs,
         serviceStopped: !rolledBack && currentServiceStop()?.stopped,
+        // An initial failure before activation cannot promise a new service startup.
+        // Keep waiting after an observed stop/rebind or any rollback handling.
+        waitForStartup:
+          params.result.status !== "error" ||
+          params.mutationStarted ||
+          params.preManagedServiceStop?.stopped === true ||
+          currentServiceStop()?.stopped === true ||
+          Boolean(params.originalManagedServiceRuntime?.definition.rebound) ||
+          rollbackAttempted,
         assertCurrent,
       });
       assertCurrent();
@@ -445,6 +455,7 @@ export async function finishUpdate(
     // A replaced core keeps convergence in its original stopped interval.
     const deferPluginConvergence =
       shouldRestart &&
+      params.preManagedServiceStop?.serviceMutationAllowed !== false &&
       params.coreAlreadyCurrent === true &&
       params.preManagedServiceStop?.serviceUpdateVerdict?.kind === "owned";
     let resultWithPostUpdate = params.result;
@@ -452,6 +463,20 @@ export async function finishUpdate(
     if (!deferPluginConvergence) {
       ({ resultWithPostUpdate, postUpdateConfigSnapshot } = await convergePlugins());
       if (params.coreAlreadyCurrent) {
+        if (
+          params.preManagedServiceStop?.serviceUpdateVerdict?.kind === "absent" &&
+          params.preManagedServiceStop.serviceMutationSkipMessage
+        ) {
+          // An absent service needs no repair. Keep the explanation without
+          // reporting a service-install command as completed maintenance.
+          defaultRuntime.error(params.preManagedServiceStop.serviceMutationSkipMessage);
+        } else if (params.preManagedServiceStop?.serviceMutationSkipMessage) {
+          recordServiceReconciliationWarning(
+            resultWithPostUpdate,
+            params.preManagedServiceStop.serviceEnv ?? process.env,
+            params.preManagedServiceStop.serviceMutationSkipMessage,
+          );
+        }
         return await reportResult(resultWithPostUpdate);
       }
     }

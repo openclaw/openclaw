@@ -3250,6 +3250,8 @@ async function createChatPickerScenario(
             queuedCount: 5,
             activeCount: 8,
             maxConcurrent: 8,
+            concurrencyScope: "session",
+            saturatedLaneCount: 1,
             draining: false,
             generation: 4,
             blockedBy: "lane",

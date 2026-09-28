@@ -1,10 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  extractActiveMemorySearchDebugFromSessionRecord,
-  extractToolResultNameFromSessionRecord,
-  hasTerminalUnavailableMemoryResultInSessionRecord,
-  hasUnavailableMemoryResultInSessionRecord,
-  hasUsableMemoryResultInSessionRecord,
+  readMemoryResultFromSessionRecord,
   streamActiveMemoryTranscriptRecords,
 } from "./transcript.js";
 import {
@@ -31,12 +27,10 @@ async function readMergedActiveMemoryTranscriptState(params: {
     await streamActiveMemoryTranscriptRecords({
       source,
       onRecord: (record) => {
-        searchDebug = extractActiveMemorySearchDebugFromSessionRecord(record) ?? searchDebug;
-        hasUnavailableMemorySearchResult ||= hasUnavailableMemoryResultInSessionRecord(
-          record,
-          params.toolsAllow,
-        );
-        hasUsableMemoryResult ||= hasUsableMemoryResultInSessionRecord(record, params.toolsAllow);
+        const result = readMemoryResultFromSessionRecord(record, params.toolsAllow);
+        searchDebug = result.searchDebug ?? searchDebug;
+        hasUnavailableMemorySearchResult ||= result.hasUnavailableMemorySearchResult;
+        hasUsableMemoryResult ||= result.hasUsableMemoryResult;
       },
     });
   }
@@ -65,13 +59,14 @@ async function readTerminalMemorySearchResult(
     source,
     limits,
     onRecord: (record) => {
-      hasUsableMemoryResult ||= hasUsableMemoryResultInSessionRecord(record, toolsAllow);
-      searchDebug = extractActiveMemorySearchDebugFromSessionRecord(record) ?? searchDebug;
-      const toolName = extractToolResultNameFromSessionRecord(record);
+      const result = readMemoryResultFromSessionRecord(record, toolsAllow);
+      hasUsableMemoryResult ||= result.hasUsableMemoryResult;
+      searchDebug = result.searchDebug ?? searchDebug;
+      const toolName = result.toolName;
       if (!toolName || !recallPathNames.has(toolName)) {
         return false;
       }
-      if (hasTerminalUnavailableMemoryResultInSessionRecord(record, toolsAllow ?? [])) {
+      if (result.terminalUnavailable) {
         unavailablePathNames.add(toolName);
       } else {
         unavailablePathNames.delete(toolName);

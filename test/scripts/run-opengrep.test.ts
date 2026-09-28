@@ -116,7 +116,7 @@ function runChangedPathsWorkflow(repo: string, base: string, env: NodeJS.Process
   expect(steps[1]).toEqual({
     name: "Setup supported Node runtime",
     uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
-    with: { "node-version": "24.19.0", "package-manager-cache": false },
+    with: { "node-version": "24.21.0", "package-manager-cache": false },
   });
   expect(ensureIndex).toBeGreaterThan(1);
   // The fixture already has a supported Node; exercise the repository-owned preparation below.

@@ -53,7 +53,7 @@ export async function patchSession(
   session: SessionActionRow,
   patch: SidebarSessionPatch,
   scope: SidebarSessionMutationScope,
-  refresh: { deferListRefresh?: boolean } = {},
+  refresh: { deferListRefresh?: boolean; sessionScope?: boolean } = {},
 ): Promise<SidebarSessionMutationResult> {
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return "stale";
@@ -73,7 +73,12 @@ export async function patchSession(
     return "failed";
   }
   if (
-    !requireSessionMutationAccess(host, scope, { method: "sessions.patch", params: requestParams })
+    !requireSessionMutationAccess(host, scope, {
+      method: "sessions.patch",
+      params: requestParams,
+      sessionScope: refresh.sessionScope,
+      session,
+    })
   ) {
     return "failed";
   }
@@ -159,7 +164,7 @@ export async function archiveSessionWithUndo(
   }
   let result: SidebarSessionMutationResult;
   try {
-    result = await patchSession(host, session, { archived: true }, scope);
+    result = await patchSession(host, session, { archived: true }, scope, { sessionScope: true });
   } finally {
     finishArchive();
   }
@@ -191,7 +196,9 @@ async function archiveSessionsWithUndo(
   const pendingRows = pending.map(({ row }) => row);
   let archivedRows: SessionActionRow[] | null;
   try {
-    archivedRows = await patchSessionRows(host, pendingRows, { archived: true }, scope);
+    archivedRows = await patchSessionRows(host, pendingRows, { archived: true }, scope, {
+      sessionScope: true,
+    });
   } finally {
     for (const { finish } of pending) {
       finish();
@@ -253,7 +260,7 @@ async function restoreArchivedSessions(
       session,
       { archived: false, ...(pinned ? { pinned: true } : {}) },
       scope,
-      { deferListRefresh: true },
+      { deferListRefresh: true, sessionScope: true },
     );
     if (restored === "stale") {
       return;
@@ -261,6 +268,7 @@ async function restoreArchivedSessions(
   } else {
     const restored = await patchSessionRows(host, rows, { archived: false }, scope, {
       deferListRefresh: true,
+      sessionScope: true,
     });
     if (!restored) {
       return;
@@ -271,6 +279,7 @@ async function restoreArchivedSessions(
     if (repinRows.length > 0) {
       const repinned = await patchSessionRows(host, repinRows, { pinned: true }, scope, {
         deferListRefresh: true,
+        sessionScope: true,
       });
       if (!repinned && !host.sessionData.isSessionMutationScopeCurrent(scope)) {
         return;
@@ -409,7 +418,7 @@ export async function runBatchSessionAction(
       break;
     case "toggle-archived":
       if (rows.every((row) => row.archived === true)) {
-        await patchSessionRows(host, rows, { archived: false }, scope);
+        await patchSessionRows(host, rows, { archived: false }, scope, { sessionScope: true });
       } else {
         await archiveSessionsWithUndo(
           host,
@@ -441,7 +450,7 @@ export async function renameSession(
   }
   const patch = resolveSessionRenamePatch(value, session.renameValue, session.userLabel);
   if (patch) {
-    await patchSession(host, session, patch, scope);
+    await patchSession(host, session, patch, scope, { sessionScope: true });
   }
 }
 

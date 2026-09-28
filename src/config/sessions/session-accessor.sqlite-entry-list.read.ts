@@ -1,23 +1,87 @@
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  sqliteStringSet,
+} from "../../infra/kysely-sync.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
+import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import type { SessionEntrySummary } from "./session-accessor.sqlite-contract.js";
 import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
 import type { SessionEntryCacheSnapshot } from "./session-accessor.sqlite-entry-cache.types.js";
+import { validateDeliveryCanonicalSessionEntry } from "./session-accessor.sqlite-entry-read.js";
 import {
   cloneSessionEntry,
   resolveSqliteScope,
   toDatabaseOptions,
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
+import { parseSessionEntryJson, selectSessionEntryRows } from "./session-accessor.sqlite-status.js";
 import type { SessionEntryListScope } from "./session-accessor.types.js";
-import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
+import {
+  assertCanonicalSqliteSessionKeysCurrent,
+  canonicalSessionKeyMigrationRequiredError,
+  hasCanonicalSessionValidationProjection,
+  readWithCanonicalSessionReaderContinuation,
+  type CanonicalSessionReaderContinuation,
+} from "./session-canonical-key.js";
 import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
+
+/** Select metadata without hydrating a store snapshot or participant display facts. */
+export function readSelectedSessionEntryMetadataInDatabase(
+  database: OpenClawAgentReadOnlyDatabase,
+  sessionKeys: readonly string[],
+  continuation?: CanonicalSessionReaderContinuation,
+): SessionEntrySummary[] {
+  return readWithCanonicalSessionReaderContinuation(database, continuation, () => {
+    assertCanonicalSqliteSessionKeysCurrent(database);
+    const keys = new Set(sessionKeys);
+    const query = selectSessionEntryRows(database, "list").select("updated_at");
+    const pending = getNodeSqliteKysely<DB>(database.db)
+      .selectFrom("session_canonical_validation_pending")
+      .select("session_key");
+    // Warm admission permits raw metadata changes. The listing contract still
+    // rejects delivery-canonical sibling drift, so include its existing dirty set.
+    // Older readers have no dirty set and retain their full validation inventory.
+    const rows = executeSqliteQuerySync(
+      database.db,
+      hasCanonicalSessionValidationProjection(database)
+        ? query.where(
+            "session_key",
+            "in",
+            pending.union(
+              getNodeSqliteKysely<DB>(database.db)
+                .selectFrom("session_nodes")
+                .select("session_key")
+                .where("session_key", "in", sqliteStringSet(sessionKeys)),
+            ),
+          )
+        : query,
+    ).rows;
+    const entries: SessionEntrySummary[] = [];
+    for (const row of rows) {
+      if (isInternalSessionEffectsKey(row.session_key)) {
+        continue;
+      }
+      const entry = parseSessionEntryJson(row, "list");
+      if (!entry) {
+        continue;
+      }
+      validateDeliveryCanonicalSessionEntry(row.session_key, entry);
+      if (keys.has(row.session_key)) {
+        entries.push({ sessionKey: row.session_key, entry });
+      }
+    }
+    return entries;
+  });
+}
 
 /**
  * Lists session entries without opening the agent database writable.

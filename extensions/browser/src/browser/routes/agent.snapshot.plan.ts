@@ -15,11 +15,8 @@ import {
   DEFAULT_AI_SNAPSHOT_EFFICIENT_MAX_CHARS,
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
 } from "../constants.js";
-import {
-  resolveDefaultSnapshotFormat,
-  shouldUsePlaywrightForAriaSnapshot,
-  shouldUsePlaywrightForScreenshot,
-} from "../profile-capabilities.js";
+import { resolveBrowserEngine } from "../engines/registry.js";
+import { resolveDefaultSnapshotFormat } from "../profile-capabilities.js";
 import { normalizeBrowserTimerDelayMs } from "../timer-delay.js";
 import { toBoolean, toStringOrEmpty } from "./utils.js";
 
@@ -78,7 +75,11 @@ export function resolveSnapshotPlan(params: {
   const depthRaw = parseStrictNonNegativeInteger(params.query.depth);
   const refsModeRaw = toStringOrEmpty(params.query.refs).trim();
   const refsMode: "aria" | "role" | undefined =
-    refsModeRaw === "aria" ? "aria" : refsModeRaw === "role" ? "role" : undefined;
+    refsModeRaw === "aria"
+      ? "aria"
+      : refsModeRaw === "role"
+        ? "role"
+        : resolveBrowserEngine(params.profile.engine).defaultSnapshotRefs;
   const interactive = interactiveRaw ?? (mode === "efficient" ? true : undefined);
   const compact = compactRaw ?? (mode === "efficient" ? true : undefined);
   const depth =
@@ -114,5 +115,3 @@ export function resolveSnapshotPlan(params: {
       Boolean(frameSelectorValue),
   };
 }
-
-export { shouldUsePlaywrightForAriaSnapshot, shouldUsePlaywrightForScreenshot };

@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Command } from "commander";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import {
   cacheKeychainSecret,
   type KeychainSecretReader,
@@ -17,7 +18,6 @@ import {
   runBrowserCliCommand,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
-import { defaultRuntime } from "./core-api.js";
 
 const COOKIE_SYNC_DEBOUNCE_MS = 1_500;
 

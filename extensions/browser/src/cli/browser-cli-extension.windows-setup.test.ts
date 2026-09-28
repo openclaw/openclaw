@@ -1,4 +1,6 @@
 import { Command } from "commander";
+import * as runtimeConfigSnapshot from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "../../test-support.js";
 import type { ExtensionInstallDeps } from "../browser/extension-install-layout.js";
@@ -8,7 +10,6 @@ import type {
   WindowsManagementResponse,
 } from "../browser/extension-windows-contract.js";
 import { windowsFixture } from "../browser/extension-windows.test-support.js";
-import * as core from "./core-api.js";
 
 const boundary = vi.hoisted(() => ({
   deps: undefined as ExtensionInstallDeps | undefined,
@@ -95,12 +96,12 @@ async function setup() {
     browserProfile: "work",
   });
   manage.mockClear();
-  const cfg = vi.spyOn(core, "getRuntimeConfig").mockReturnValue({
+  const cfg = vi.spyOn(runtimeConfigSnapshot, "getRuntimeConfig").mockReturnValue({
     browser: { profiles: { work: { driver: "extension", cdpPort: 19444 } } },
   });
-  const json = vi.spyOn(core.defaultRuntime, "writeJson").mockImplementation(capture.writeJson);
-  const error = vi.spyOn(core.defaultRuntime, "error").mockImplementation(capture.error);
-  const exit = vi.spyOn(core.defaultRuntime, "exit").mockImplementation(capture.exit);
+  const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(capture.writeJson);
+  const error = vi.spyOn(defaultRuntime, "error").mockImplementation(capture.error);
+  const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(capture.exit);
   boundary.readToken.mockReturnValue("synthetic-relay-token");
   boundary.connect.mockResolvedValue({
     status: async () => ({ ready: true, identity: { extensionVersion: "fixture" } }),

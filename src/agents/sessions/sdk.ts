@@ -50,6 +50,7 @@ import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { ModelRegistry } from "./model-registry.js";
 import { findInitialModel } from "./model-resolver.js";
 import { DefaultResourceLoader, type ResourceLoader } from "./resource-loader.js";
+import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 import { SessionManager } from "./session-manager.js";
@@ -310,7 +311,8 @@ async function createAgentSessionImpl(
   }
 
   // Check if session has existing data to restore
-  const existingSession = sessionManager.buildSessionContext();
+  const existingSession = await sessionManager[sessionManagerReadInitialContext]();
+  assertInitialSessionCurrent();
   const hasExistingSession = existingSession.messages.length > 0;
   const hasThinkingEntry = sessionManager
     .getBranch()

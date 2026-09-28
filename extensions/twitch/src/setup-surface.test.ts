@@ -11,8 +11,12 @@
  * - setTwitchAccount config updates
  */
 
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WizardPrompter } from "../api.js";
+import { checkTwitchAccessControl } from "./access-control.js";
+import { getAccountConfig } from "./config.js";
+import { setTwitchRuntime } from "./runtime.js";
 import {
   configureWithEnvToken,
   promptChannelName,
@@ -391,6 +395,52 @@ describe("setup surface helpers", () => {
       });
     }
 
+    it("blocks mentioned chat after the setup wizard disables group access", async () => {
+      setTwitchRuntime(createPluginRuntimeMock());
+      const groupAccess = twitchSetupWizard.groupAccess;
+      if (!groupAccess) {
+        throw new Error("expected Twitch group access setup");
+      }
+      const cfg = groupAccess.setPolicy({
+        cfg: {
+          channels: {
+            twitch: {
+              enabled: true,
+              accounts: {
+                secondary: { ...mockAccount, enabled: true },
+              },
+            },
+          },
+        },
+        accountId: "secondary",
+        policy: "disabled",
+      });
+      const account = getAccountConfig(cfg, "secondary");
+      if (!account) {
+        throw new Error("expected configured Twitch account");
+      }
+      expect(account.enabled).toBe(true);
+
+      const result = await checkTwitchAccessControl({
+        account,
+        accountId: "secondary",
+        botUsername: mockAccount.username,
+        message: {
+          id: "disabled-group-message",
+          userId: "123456",
+          username: "viewer",
+          message: "@testbot hello",
+          channel: mockAccount.channel,
+          isMod: false,
+          isOwner: false,
+          isVip: false,
+          isSub: false,
+        },
+      });
+
+      expect(result.allowed).toBe(false);
+    });
+
     it("uses an environment-only token without sending it to wizard prompts", async () => {
       const envToken = "oauth:environment-only";
       process.env.OPENCLAW_TWITCH_ACCESS_TOKEN = envToken;
@@ -540,6 +590,158 @@ describe("setup surface helpers", () => {
         message: "Enable automatic token refresh (requires client secret and refresh token)?",
         initialValue: false,
       });
+    });
+  });
+
+  describe("group access policy", () => {
+    const groupAccess = twitchSetupWizard.groupAccess;
+    if (!groupAccess) {
+      throw new Error("expected Twitch group access setup");
+    }
+
+    it.each([
+      ["named account", "SECONDARY", "basebot", "secondary"],
+      ["nested default", "default", undefined, "default"],
+      ["empty base username", "default", "", "default"],
+      ["base default", "default", "testbot", "base"],
+      ["whitespace base username", "default", " ", "base"],
+    ] as const)("updates only the reader's %s layout", (_name, accountId, username, target) => {
+      const account = { ...mockAccount, enabled: false, allowFrom: ["123456"] };
+      const cfg = {
+        channels: {
+          twitch: {
+            ...account,
+            username,
+            accounts: { default: account, secondary: account, untouched: mockRefreshAccount },
+          },
+        },
+      };
+      const before = structuredClone(cfg);
+      const patch = { allowFrom: [], allowedRoles: [], requireMention: true };
+
+      const result = groupAccess.setPolicy({ cfg, accountId, policy: "disabled" });
+
+      expect(result).toEqual({
+        channels: {
+          twitch: {
+            ...cfg.channels.twitch,
+            enabled: true,
+            ...(target === "base"
+              ? patch
+              : {
+                  accounts: {
+                    ...cfg.channels.twitch.accounts,
+                    [target]: { ...account, ...patch },
+                  },
+                }),
+          },
+        },
+      });
+      expect(getAccountConfig(result, accountId)).toMatchObject(patch);
+      expect(cfg).toEqual(before);
+    });
+
+    it("does not create a missing account", () => {
+      const cfg = {};
+      expect(groupAccess.setPolicy({ cfg, accountId: "missing", policy: "disabled" })).toBe(cfg);
+    });
+
+    it.each([
+      ["base disabled to open", "default", [], ["open"], false, undefined, true],
+      ["IDs to open", "secondary", ["other"], ["open"], false, undefined, true],
+      ["IDs to disabled", "secondary", ["123456"], ["disabled"], false, [], false],
+      ["base disabled to roles", "default", [], ["allowlist"], true, undefined, true],
+      ["unset IDs to roles", "secondary", undefined, ["allowlist"], true, undefined, true],
+      ["retained matching ID", "secondary", ["123456"], ["allowlist"], false, ["123456"], true],
+      ["IDs precede roles", "secondary", ["other"], ["allowlist"], true, ["other"], false],
+      [
+        "open does not restore IDs",
+        "secondary",
+        ["123456"],
+        ["open", "allowlist"],
+        false,
+        undefined,
+        false,
+      ],
+      [
+        "disabled does not restore IDs",
+        "secondary",
+        ["123456"],
+        ["disabled", "allowlist"],
+        false,
+        undefined,
+        false,
+      ],
+    ] as const)(
+      "applies %s through real ingress",
+      async (_name, accountId, allowFrom, policies, isMod, expectedAllowFrom, allowed) => {
+        setTwitchRuntime(createPluginRuntimeMock());
+        const initialAccount: TwitchAccountConfig = {
+          ...mockAccount,
+          enabled: true,
+          allowFrom: allowFrom ? [...allowFrom] : undefined,
+          allowedRoles: ["all"],
+        };
+        let cfg: Parameters<typeof groupAccess.setPolicy>[0]["cfg"] = {
+          channels: {
+            twitch:
+              accountId === "default"
+                ? initialAccount
+                : { accounts: { secondary: initialAccount } },
+          },
+        };
+        for (const policy of policies) {
+          cfg = groupAccess.setPolicy({ cfg, accountId, policy });
+        }
+        const account = getAccountConfig(cfg, accountId);
+        if (!account) {
+          throw new Error("expected configured Twitch account");
+        }
+        expect(account.allowFrom).toEqual(expectedAllowFrom);
+        expect(groupAccess.currentPolicy({ cfg, accountId })).toBe(policies.at(-1));
+        expect(groupAccess.updatePrompt?.({ cfg, accountId })).toBe(true);
+        const result = await checkTwitchAccessControl({
+          account,
+          accountId,
+          botUsername: mockAccount.username,
+          message: {
+            id: "policy-transition-message",
+            userId: "123456",
+            username: "viewer",
+            message: "@testbot hello",
+            channel: mockAccount.channel,
+            isMod,
+          },
+        });
+        expect(result.allowed).toBe(allowed);
+      },
+    );
+
+    it.each([
+      [[], ["all"], "disabled", true],
+      [["123456"], ["all"], "allowlist", true],
+      [undefined, ["owner"], "allowlist", true],
+      [undefined, ["vip"], "allowlist", true],
+      [undefined, ["subscriber"], "allowlist", true],
+      [undefined, ["all"], "open", true],
+      [undefined, [], "open", false],
+      [undefined, undefined, "open", false],
+    ] as const)("reports allowFrom=%j roles=%j as %s", (allowFrom, roles, policy, updatePrompt) => {
+      const cfg = {
+        channels: {
+          twitch: {
+            accounts: {
+              secondary: {
+                ...mockAccount,
+                allowFrom: allowFrom ? [...allowFrom] : undefined,
+                allowedRoles: roles ? [...roles] : undefined,
+              },
+            },
+          },
+        },
+      };
+      expect(groupAccess.currentPolicy({ cfg, accountId: "secondary" })).toBe(policy);
+      expect(groupAccess.updatePrompt?.({ cfg, accountId: "secondary" })).toBe(updatePrompt);
     });
   });
 

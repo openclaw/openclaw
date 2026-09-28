@@ -588,7 +588,8 @@ export function countActiveRunsForSessionFromRuns(
     return 0;
   }
 
-  const readIndex = buildSubagentRunReadIndexFromRuns({ runs });
+  const now = Date.now();
+  let readIndex: SubagentRunReadIndex | undefined;
 
   const latestByChildSessionKey = new Map<string, SubagentRunRecord>();
   // Records already carry collect, and spawn admission is not request-hot, so a
@@ -612,6 +613,7 @@ export function countActiveRunsForSessionFromRuns(
       count += 1;
       continue;
     }
+    readIndex ??= buildSubagentRunReadIndexFromRuns({ runs, now });
     if (readIndex.countPendingDescendantRuns(entry.childSessionKey) > 0) {
       count += 1;
     }

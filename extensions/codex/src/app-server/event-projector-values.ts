@@ -89,21 +89,6 @@ export function readNonEmptyString(record: JsonObject, key: string): string | un
   return normalizeOptionalString(record[key]);
 }
 
-export function readNonEmptyStringArray(record: JsonObject, key: string): string[] {
-  const value = record[key];
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const entries: string[] = [];
-  for (const entry of value) {
-    const normalized = normalizeOptionalString(entry);
-    if (normalized) {
-      entries.push(normalized);
-    }
-  }
-  return entries;
-}
-
 export function readNullableString(record: JsonObject, key: string): string | null | undefined {
   const value = record[key];
   if (value === null) {
@@ -165,7 +150,7 @@ export function extractRawAssistantText(item: JsonObject): string | undefined {
 }
 
 export function readItemString(item: CodexThreadItem, key: string): string | undefined {
-  const value = (item as Record<string, unknown>)[key];
+  const value = item[key];
   return typeof value === "string" ? value : undefined;
 }
 

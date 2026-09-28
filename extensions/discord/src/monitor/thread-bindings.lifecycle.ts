@@ -1,34 +1,36 @@
 import { readAcpSessionEntry, type AcpSessionStoreEntry } from "openclaw/plugin-sdk/acp-runtime";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-// Discord plugin module implements thread bindings.lifecycle behavior.
+import {
+  resolveThreadBindingIntroText,
+  resolveThreadBindingThreadName,
+} from "openclaw/plugin-sdk/conversation-runtime";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  normalizeOptionalStringifiedId,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parseDiscordTarget } from "../targets.js";
 import { resolveChannelIdForBinding } from "./thread-bindings.discord-api.js";
 import { getThreadBindingManager } from "./thread-bindings.manager.js";
+import { removeBindingRecordSync } from "./thread-bindings.persistence.js";
 import {
-  resolveThreadBindingIntroText,
-  resolveThreadBindingThreadName,
-} from "./thread-bindings.messages.js";
-import { resolveBindingIdsForTargetSession } from "./thread-bindings.session-shared.js";
+  mutateBindingsForTargetSession,
+  resolveBindingIdsForTargetSession,
+} from "./thread-bindings.session-shared.js";
 import {
   BINDINGS_BY_THREAD_ID,
   MANAGERS_BY_ACCOUNT_ID,
   getThreadBindingToken,
-  normalizeThreadId,
   refreshUnboundThreadWebhookIdentity,
-  removeBindingRecord,
-  saveBindingsToDisk,
-  shouldPersistBindingMutations,
 } from "./thread-bindings.state.js";
 import type { ThreadBindingRecord, ThreadBindingTargetKind } from "./thread-bindings.types.js";
 export {
   setThreadBindingIdleTimeoutBySessionKey,
+  setThreadBindingIdleTimeoutBySessionKeyAsync,
   setThreadBindingMaxAgeBySessionKey,
+  setThreadBindingMaxAgeBySessionKeyAsync,
 } from "./thread-bindings.session-updates.js";
 
 export type AcpThreadBindingReconciliationResult = {
@@ -93,7 +95,7 @@ export async function autoBindSpawnedDiscordSubagent(params: {
   }
   const managerToken = getThreadBindingToken(manager.accountId);
 
-  const requesterThreadId = normalizeThreadId(params.threadId);
+  const requesterThreadId = normalizeOptionalStringifiedId(params.threadId);
   let channelId = "";
   if (requesterThreadId) {
     const existing = manager.getByThreadId(requesterThreadId);
@@ -153,6 +155,7 @@ export async function autoBindSpawnedDiscordSubagent(params: {
   });
 }
 
+/** @deprecated Public SDK compatibility; bundled callers use the awaited variant. */
 export function unbindThreadBindingsBySessionKey(params: {
   targetSessionKey: string;
   accountId?: string;
@@ -173,38 +176,38 @@ export function unbindThreadBindingsBySessionKey(params: {
       continue;
     }
     const manager = MANAGERS_BY_ACCOUNT_ID.get(record.accountId);
-    if (manager) {
-      const unbound = manager.unbindThread({
-        threadId: record.threadId,
-        reason: params.reason,
-        sendFarewell: params.sendFarewell,
-        farewellText: params.farewellText,
-      });
-      if (unbound) {
-        removed.push(unbound);
-      }
-      continue;
+    if (manager?.isStopping()) {
+      throw new Error("Discord thread binding manager is stopping");
     }
-    const unbound = removeBindingRecord(bindingKey);
+    const unbound = removeBindingRecordSync(bindingKey);
     if (unbound) {
-      refreshUnboundThreadWebhookIdentity(unbound);
+      if (manager) {
+        manager.notifyUnbound(unbound, params);
+      } else {
+        refreshUnboundThreadWebhookIdentity(unbound);
+      }
       removed.push(unbound);
     }
   }
 
-  if (removed.length > 0 && shouldPersistBindingMutations()) {
-    saveBindingsToDisk({ force: true });
-  }
   return removed;
 }
 
-function resolveStoredAcpBindingHealth(params: {
-  session: AcpSessionStoreEntry;
-}): AcpThreadBindingHealthStatus {
-  if (!params.session.acp) {
-    return "stale";
-  }
-  return "healthy";
+export async function unbindThreadBindingsBySessionKeyAsync(
+  input: Parameters<typeof unbindThreadBindingsBySessionKey>[0],
+): Promise<ThreadBindingRecord[]> {
+  const params = { ...input };
+  return mutateBindingsForTargetSession(
+    params,
+    () => null,
+    (record, manager) => {
+      if (manager) {
+        manager.notifyUnbound(record, params);
+      } else {
+        refreshUnboundThreadWebhookIdentity(record);
+      }
+    },
+  );
 }
 
 export async function reconcileAcpThreadBindingsOnStartup(params: {
@@ -255,7 +258,7 @@ export async function reconcileAcpThreadBindingsOnStartup(params: {
       continue;
     }
 
-    if (resolveStoredAcpBindingHealth({ session }) === "stale") {
+    if (!session.acp) {
       staleBindings.push(binding);
       continue;
     }
@@ -313,8 +316,15 @@ export async function reconcileAcpThreadBindingsOnStartup(params: {
   let removed = 0;
   for (const binding of staleBindings) {
     staleSessionKeys.push(binding.targetSessionKey);
-    const unbound = manager.unbindThread({
+    if (
+      getThreadBindingManager(manager.accountId) !== manager ||
+      manager.getByThreadId(binding.threadId) !== binding
+    ) {
+      continue;
+    }
+    const unbound = await manager.unbindThread({
       threadId: binding.threadId,
+      expected: binding,
       reason: "stale-session",
       sendFarewell: params.sendFarewell ?? false,
     });

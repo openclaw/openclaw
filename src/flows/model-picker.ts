@@ -1,4 +1,3 @@
-// Model picker flow lets users select provider models for config defaults.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
@@ -1366,33 +1365,18 @@ export function applyModelAllowlist(
     };
   }
 
+  const nextModels = { ...existingModels };
+  for (const key of normalized) {
+    nextModels[key] = existingModels[key] ?? {};
+  }
+  let nextAllow = normalized;
   if (scopeKeySet) {
-    const nextModels = { ...existingModels };
-    for (const key of normalized) {
-      nextModels[key] = existingModels[key] ?? {};
-    }
-    const nextAllow = existingAllow.filter((key) => !isPolicyRefInScope(key));
+    nextAllow = existingAllow.filter((key) => !isPolicyRefInScope(key));
     for (const key of normalized) {
       if (!nextAllow.includes(key)) {
         nextAllow.push(key);
       }
     }
-    return {
-      ...cfg,
-      agents: {
-        ...cfg.agents,
-        defaults: {
-          ...defaults,
-          models: nextModels,
-          modelPolicy: { ...defaults?.modelPolicy, allow: nextAllow },
-        },
-      },
-    };
-  }
-
-  const nextModels: Record<string, { alias?: string }> = { ...existingModels };
-  for (const key of normalized) {
-    nextModels[key] = existingModels[key] ?? {};
   }
 
   return {
@@ -1402,7 +1386,7 @@ export function applyModelAllowlist(
       defaults: {
         ...defaults,
         models: nextModels,
-        modelPolicy: { ...defaults?.modelPolicy, allow: normalized },
+        modelPolicy: { ...defaults?.modelPolicy, allow: nextAllow },
       },
     },
   };

@@ -173,8 +173,7 @@ describe("registered SQLite read-only worker operation diagnostics", () => {
     expect(write).toHaveBeenCalledExactlyOnceWith(
       JSON.stringify({
         ok: false,
-        message:
-          "failed while acquiring its state-handles coordinator: another OpenClaw process owns state-handles",
+        message: `failed while acquiring its state-handles coordinator: ${failure.message}`,
       }),
     );
   });

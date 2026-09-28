@@ -75,11 +75,11 @@ describe("sessions page managed roster", () => {
         await page.updateComplete;
       };
       try {
-        page.selectedKeys = new Set(["agent:main:initial"]);
+        page.selectedSessions = new Map([["agent:main:initial", { key: "agent:main:initial" }]]);
         await search("older");
         await vi.waitFor(() => expect(pending.has("older")).toBe(true));
         expect(page.result).toBeNull();
-        expect(page.selectedKeys.size).toBe(0);
+        expect(page.selectedSessions.size).toBe(0);
         expect(page.textContent).not.toContain("No sessions match your filters.");
         await search("latest");
         pending.get("older")!.resolve(result("agent:main:older"));

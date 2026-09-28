@@ -155,6 +155,7 @@ type TaskRegistryProcessState = {
     mutationDepth: number;
     pending: Set<PendingTaskRegistryMutation>;
     readTail?: Promise<void>;
+    mutationTail?: Promise<void>;
     dirtyScopes: Set<TaskRegistryMutationScope>;
   };
 };

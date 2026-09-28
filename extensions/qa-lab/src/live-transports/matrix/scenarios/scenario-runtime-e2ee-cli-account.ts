@@ -13,6 +13,7 @@ import {
   isMatrixQaCliBackupUsable,
   parseMatrixQaCliJson,
   registerMatrixQaCliE2eeAccount,
+  runMatrixQaSetupCliJson,
   type MatrixQaCliAccountAddStatus,
   type MatrixQaCliEncryptionSetupStatus,
   type MatrixQaCliVerificationStatus,
@@ -37,32 +38,31 @@ export async function runMatrixQaE2eeCliAccountAddEnableE2eeScenario(
     context,
   });
   try {
-    const addResult = await cli.run([
-      "matrix",
-      "account",
-      "add",
-      "--account",
-      accountId,
-      "--name",
-      "Matrix QA CLI Account Add E2EE",
-      "--homeserver",
-      context.baseUrl,
-      "--user-id",
-      account.userId,
-      "--password",
-      account.password,
-      "--device-name",
-      "OpenClaw Matrix QA CLI Account Add E2EE",
-      "--allow-private-network",
-      "--enable-e2ee",
-      "--json",
-    ]);
-    const addArtifacts = await writeMatrixQaCliOutputArtifacts({
-      label: "account-add-enable-e2ee",
-      result: addResult,
-      rootDir: cli.rootDir,
-    });
-    const added = parseMatrixQaCliJson(addResult) as MatrixQaCliAccountAddStatus;
+    const { artifacts: addArtifacts, payload: addedPayload } = await runMatrixQaSetupCliJson(
+      cli,
+      "account-add-enable-e2ee",
+      [
+        "matrix",
+        "account",
+        "add",
+        "--account",
+        accountId,
+        "--name",
+        "Matrix QA CLI Account Add E2EE",
+        "--homeserver",
+        context.baseUrl,
+        "--user-id",
+        account.userId,
+        "--password",
+        account.password,
+        "--device-name",
+        "OpenClaw Matrix QA CLI Account Add E2EE",
+        "--allow-private-network",
+        "--enable-e2ee",
+        "--json",
+      ],
+    );
+    const added = addedPayload as MatrixQaCliAccountAddStatus;
     if (added.accountId !== accountId || added.encryptionEnabled !== true) {
       throw new Error(
         "Matrix CLI account add did not report E2EE enabled for the expected account",
@@ -77,21 +77,20 @@ export async function runMatrixQaE2eeCliAccountAddEnableE2eeScenario(
       );
     }
 
-    const statusResult = await cli.run([
-      "matrix",
-      "verify",
-      "status",
-      "--account",
-      accountId,
-      "--allow-degraded-local-state",
-      "--json",
-    ]);
-    const statusArtifacts = await writeMatrixQaCliOutputArtifacts({
-      label: "verify-status",
-      result: statusResult,
-      rootDir: cli.rootDir,
-    });
-    const status = parseMatrixQaCliJson(statusResult) as MatrixQaCliVerificationStatus;
+    const { artifacts: statusArtifacts, payload: statusPayload } = await runMatrixQaSetupCliJson(
+      cli,
+      "verify-status",
+      [
+        "matrix",
+        "verify",
+        "status",
+        "--account",
+        accountId,
+        "--allow-degraded-local-state",
+        "--json",
+      ],
+    );
+    const status = statusPayload as MatrixQaCliVerificationStatus;
     assertMatrixQaCliAccountAddBootstrapStatus({
       expectedBackupVersion: added.verificationBootstrap.backupVersion,
       expectedUserId: account.userId,
@@ -159,20 +158,12 @@ export async function runMatrixQaE2eeCliEncryptionSetupScenario(
     }),
   });
   try {
-    const setupResult = await cli.run([
-      "matrix",
-      "encryption",
-      "setup",
-      "--account",
-      accountId,
-      "--json",
-    ]);
-    const setupArtifacts = await writeMatrixQaCliOutputArtifacts({
-      label: "encryption-setup",
-      result: setupResult,
-      rootDir: cli.rootDir,
-    });
-    const setup = parseMatrixQaCliJson(setupResult) as MatrixQaCliEncryptionSetupStatus;
+    const { artifacts: setupArtifacts, payload: setupPayload } = await runMatrixQaSetupCliJson(
+      cli,
+      "encryption-setup",
+      ["matrix", "encryption", "setup", "--account", accountId, "--json"],
+    );
+    const setup = setupPayload as MatrixQaCliEncryptionSetupStatus;
     if (
       setup.accountId !== accountId ||
       setup.success !== true ||
@@ -186,20 +177,12 @@ export async function runMatrixQaE2eeCliEncryptionSetupScenario(
     }
     assertMatrixQaCliE2eeStatus("Matrix CLI encryption setup", setup.status);
 
-    const statusResult = await cli.run([
-      "matrix",
-      "verify",
-      "status",
-      "--account",
-      accountId,
-      "--json",
-    ]);
-    const statusArtifacts = await writeMatrixQaCliOutputArtifacts({
-      label: "verify-status",
-      result: statusResult,
-      rootDir: cli.rootDir,
-    });
-    const status = parseMatrixQaCliJson(statusResult) as MatrixQaCliVerificationStatus;
+    const { artifacts: statusArtifacts, payload: statusPayload } = await runMatrixQaSetupCliJson(
+      cli,
+      "verify-status",
+      ["matrix", "verify", "status", "--account", accountId, "--json"],
+    );
+    const status = statusPayload as MatrixQaCliVerificationStatus;
     assertMatrixQaCliE2eeStatus("Matrix CLI encryption setup status", status);
 
     return {
@@ -262,13 +245,12 @@ export async function runMatrixQaE2eeCliEncryptionSetupIdempotentScenario(
   });
   try {
     const setupArgs = ["matrix", "encryption", "setup", "--account", accountId, "--json"];
-    const firstResult = await cli.run(setupArgs);
-    const firstArtifacts = await writeMatrixQaCliOutputArtifacts({
-      label: "encryption-setup-first",
-      result: firstResult,
-      rootDir: cli.rootDir,
-    });
-    const first = parseMatrixQaCliJson(firstResult) as MatrixQaCliEncryptionSetupStatus;
+    const { artifacts: firstArtifacts, payload: firstPayload } = await runMatrixQaSetupCliJson(
+      cli,
+      "encryption-setup-first",
+      setupArgs,
+    );
+    const first = firstPayload as MatrixQaCliEncryptionSetupStatus;
     if (
       first.accountId !== accountId ||
       first.success !== true ||
@@ -282,13 +264,12 @@ export async function runMatrixQaE2eeCliEncryptionSetupIdempotentScenario(
     }
     assertMatrixQaCliE2eeStatus("Matrix CLI encryption setup idempotent first run", first.status);
 
-    const secondResult = await cli.run(setupArgs);
-    const secondArtifacts = await writeMatrixQaCliOutputArtifacts({
-      label: "encryption-setup-second",
-      result: secondResult,
-      rootDir: cli.rootDir,
-    });
-    const second = parseMatrixQaCliJson(secondResult) as MatrixQaCliEncryptionSetupStatus;
+    const { artifacts: secondArtifacts, payload: secondPayload } = await runMatrixQaSetupCliJson(
+      cli,
+      "encryption-setup-second",
+      setupArgs,
+    );
+    const second = secondPayload as MatrixQaCliEncryptionSetupStatus;
     if (
       second.accountId !== accountId ||
       second.success !== true ||

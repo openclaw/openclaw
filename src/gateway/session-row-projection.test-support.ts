@@ -146,6 +146,16 @@ export function createSessionRowProjectionFixture(params: {
     return sortSessionRows(selected, query.sortBy);
   };
   const projection: SessionRowProjection = {
+    observeGeneration() {
+      const observedRevision = revision;
+      let active = true;
+      return {
+        isCurrent: (row) => active && revision === observedRevision && projection.isCurrent(row),
+        dispose() {
+          active = false;
+        },
+      };
+    },
     readPreparedRowContext: () => rowContext,
     capture: describe,
     findBySessionId: (query) =>
@@ -158,6 +168,8 @@ export function createSessionRowProjectionFixture(params: {
           (!query.storePath || row.storeTarget.storePath === query.storePath),
       ),
     describe,
+    readSource: () => undefined,
+    readMembership: (query) => describe(query)?.membership,
     // This row-only fixture cannot certify the resident owner's complete ancestry graph.
     ancestorRows: () => undefined,
     setArchivePageSize: () => {},
@@ -206,6 +218,7 @@ export function createSessionRowProjectionFixture(params: {
       return row
         ? {
             agentId: row.agentId,
+            generation: row.generation,
             canonicalKey: row.key,
             entry: row.entry,
             storeKey: row.key,
@@ -213,6 +226,10 @@ export function createSessionRowProjectionFixture(params: {
             storePath: row.storeTarget.storePath,
           }
         : null;
+    },
+    sharingTargetState(query) {
+      const target = projection.sharingTarget(query);
+      return target ? { status: "ready", target } : { status: "missing" };
     },
     hasMembership: (path, key, identity) =>
       [...rows.values()].some(
@@ -224,11 +241,13 @@ export function createSessionRowProjectionFixture(params: {
     },
     dirtyRowCount: 0,
     needsMaterialization: false,
+    getPolicyConfig: () => cfg,
     state: {
       get revision() {
         return revisionToken;
       },
       cfg,
+      policyConfig: cfg,
       modelCatalog,
       rowContext,
       scope: (options) => ({

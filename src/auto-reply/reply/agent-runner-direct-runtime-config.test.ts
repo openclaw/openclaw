@@ -55,7 +55,6 @@ const createReplyMediaPathNormalizerMock = vi.fn();
 const runSessionCompactionIfNeededMock = vi.fn();
 const runMemoryFlushIfNeededMock = vi.fn();
 const executeAgentTurnMock = vi.fn();
-const resetReplyRunSessionMock = vi.fn();
 const enqueueFollowupRunMock = vi.fn();
 const compactEmbeddedAgentSessionMock = vi.fn();
 
@@ -107,16 +106,6 @@ vi.mock("./agent-runner-execution.js", async () => {
   return {
     ...actual,
     executeAgentTurn: (...args: unknown[]) => executeAgentTurnMock(...args),
-  };
-});
-
-vi.mock("./agent-runner-session-reset.js", async () => {
-  const actual = await vi.importActual<typeof import("./agent-runner-session-reset.js")>(
-    "./agent-runner-session-reset.js",
-  );
-  return {
-    ...actual,
-    resetReplyRunSession: (...args: unknown[]) => resetReplyRunSessionMock(...args),
   };
 });
 
@@ -253,7 +242,6 @@ describe("runReplyAgent runtime config", () => {
     runSessionCompactionIfNeededMock.mockReset();
     runMemoryFlushIfNeededMock.mockReset();
     executeAgentTurnMock.mockReset();
-    resetReplyRunSessionMock.mockReset();
     enqueueFollowupRunMock.mockReset();
 
     resolveQueuedReplyExecutionConfigMock.mockResolvedValue(freshCfg);
@@ -269,7 +257,6 @@ describe("runReplyAgent runtime config", () => {
       runId: "runtime-config-test",
       outcome: { kind: "rejected", payload: { text: "main reply" } },
     });
-    resetReplyRunSessionMock.mockResolvedValue(false);
   });
 
   it("resolves direct reply runs before early helpers read config", async () => {
@@ -381,12 +368,8 @@ describe("runReplyAgent runtime config", () => {
     const memory = await vi.importActual<typeof import("./agent-runner-memory.js")>(
       "./agent-runner-memory.js",
     );
-    const reset = await vi.importActual<typeof import("./agent-runner-session-reset.js")>(
-      "./agent-runner-session-reset.js",
-    );
     runMemoryFlushIfNeededMock.mockImplementation(memory.runMemoryFlushIfNeeded);
     runSessionCompactionIfNeededMock.mockImplementation(memory.runSessionCompactionIfNeeded);
-    resetReplyRunSessionMock.mockImplementation(reset.resetReplyRunSession);
     registerMemoryCapability("memory-core", {
       flushPlanResolver: () => ({
         softThresholdTokens: 4_000,
@@ -464,7 +447,6 @@ describe("runReplyAgent runtime config", () => {
         const result = await runReplyAgent(replyParams);
 
         expect(result).toEqual({ text: "main reply" });
-        expect(resetReplyRunSessionMock).not.toHaveBeenCalled();
         expect(followupRun.run.sessionId).toBe(sessionEntry.sessionId);
         expect(replyOperation.sessionId).toBe(sessionEntry.sessionId);
         expect(loadSessionEntry(scope)).toMatchObject({
@@ -594,12 +576,13 @@ describe("runReplyAgent runtime config", () => {
   );
 
   it("keeps the compacted session when preflight recovers an exhausted memory flush", async () => {
-    const { replyParams } = createDirectRuntimeReplyParams({
+    const { replyParams, followupRun } = createDirectRuntimeReplyParams({
       shouldFollowup: false,
       isActive: false,
     });
     const sessionEntry = {
       sessionId: "session-1",
+      lifecycleRevision: "original-generation",
       updatedAt: 1,
       compactionCount: 4,
     };
@@ -616,19 +599,31 @@ describe("runReplyAgent runtime config", () => {
 
     await expect(runReplyAgent(replyParams)).resolves.toEqual({ text: "main reply" });
 
-    expect(resetReplyRunSessionMock).not.toHaveBeenCalled();
+    expect(followupRun.run.sessionId).toBe(sessionEntry.sessionId);
     expect(executeAgentTurnMock).toHaveBeenCalledOnce();
+    expect(executeAgentTurnMock.mock.calls[0]?.[0].getActiveSessionEntry()).toEqual({
+      ...sessionEntry,
+      compactionCount: 5,
+    });
   });
 
   it.each(["context_overflow", "auth profile mismatch"])(
     "surfaces required preflight failure (%s) after memory exhaustion without resetting",
     async (reason) => {
-      const { replyParams } = createDirectRuntimeReplyParams({
+      const { replyParams, followupRun } = createDirectRuntimeReplyParams({
         shouldFollowup: false,
         isActive: false,
       });
+      const sessionEntry = {
+        sessionId: "session-1",
+        lifecycleRevision: "original-generation",
+        updatedAt: 1,
+        compactionCount: 4,
+      };
+      const sessionSnapshot = { ...sessionEntry };
+      replyParams.sessionEntry = sessionEntry;
       runMemoryFlushIfNeededMock.mockResolvedValue({
-        sessionEntry: { sessionId: "session-1", updatedAt: 1, compactionCount: 4 },
+        sessionEntry,
         outcome: "exhausted",
       });
       runSessionCompactionIfNeededMock.mockImplementation(async (params: PreflightParams) => {
@@ -643,7 +638,8 @@ describe("runReplyAgent runtime config", () => {
       }
       expect(result.text).toContain("auto-compaction could not recover");
       expect(getReplyPayloadMetadata(result)?.deliverDespiteSourceReplySuppression).toBe(true);
-      expect(resetReplyRunSessionMock).not.toHaveBeenCalled();
+      expect(followupRun.run.sessionId).toBe(sessionSnapshot.sessionId);
+      expect(sessionEntry).toEqual(sessionSnapshot);
       expect(executeAgentTurnMock).not.toHaveBeenCalled();
     },
   );

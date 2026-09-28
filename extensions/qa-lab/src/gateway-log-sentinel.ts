@@ -292,7 +292,9 @@ export function createDirectReplyTranscriptSentinelScanner() {
   };
 }
 
-function transcriptHasDirectReplySelfMessage(transcriptBytes: string) {
+export function scanDirectReplyTranscriptSentinels(
+  transcriptBytes: string,
+): GatewayLogSentinelFinding[] {
   const scanner = createDirectReplyTranscriptSentinelScanner();
   for (const line of transcriptBytes.split(/\r?\n/u)) {
     const trimmed = line.trim();
@@ -302,15 +304,14 @@ function transcriptHasDirectReplySelfMessage(transcriptBytes: string) {
     try {
       const parsed = JSON.parse(trimmed) as unknown;
       const message = isRecord(parsed) && isRecord(parsed.message) ? parsed.message : undefined;
-      if (!message || message.role !== "assistant") {
-        continue;
+      if (message) {
+        scanner.recordMessage(message);
       }
-      scanner.recordMessage(message);
     } catch {
       // Ignore malformed QA transcript rows and keep sentinel scans deterministic.
     }
   }
-  return scanner.findings().length > 0;
+  return scanner.findings();
 }
 
 export function scanGatewayLogSentinels(
@@ -344,15 +345,6 @@ export function scanGatewayLogSentinels(
     }
   }
   return filterGatewayLogSentinelFindings(findings, options);
-}
-
-export function scanDirectReplyTranscriptSentinels(
-  transcriptBytes: string,
-): GatewayLogSentinelFinding[] {
-  if (!transcriptHasDirectReplySelfMessage(transcriptBytes)) {
-    return [];
-  }
-  return [createDirectReplyFinding()];
 }
 
 export function formatGatewayLogSentinelSummary(findings: readonly GatewayLogSentinelFinding[]) {

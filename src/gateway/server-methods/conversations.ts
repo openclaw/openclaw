@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   ErrorCodes,
   errorShape,
+  type ConversationSendParams,
   validateConversationListParams,
   validateConversationSendParams,
   validateConversationTurnCancelParams,
@@ -28,6 +29,7 @@ import {
 import type {
   GatewayClient,
   GatewayRequestContext,
+  GatewayRequestHandlerOptions,
   GatewayRequestHandlers,
   RespondFn,
 } from "./types.js";
@@ -139,13 +141,13 @@ function releaseConversationOperationIdentity(params: {
   }
 }
 
-async function runConversationOperation<T extends { channel: string }>(params: {
+async function runConversationOperation(params: {
   context: GatewayRequestContext;
   respond: RespondFn;
   dedupeKey: string;
   operationId: string;
   requestIdentity: string;
-  execute: () => Promise<T>;
+  execute: () => Promise<{ channel: string }>;
 }): Promise<void> {
   const inflight = resolveGatewayInflightRequest({
     context: params.context,
@@ -214,6 +216,58 @@ async function runConversationOperation<T extends { channel: string }>(params: {
   }
 }
 
+async function handleConversationWrite(
+  {
+    context,
+    client,
+    respond,
+  }: Pick<GatewayRequestHandlerOptions, "context" | "client" | "respond">,
+  request: ConversationSendParams & ({ method: "send" } | { method: "turn"; timeoutMs: number }),
+): Promise<void> {
+  const readCurrentConfig = () => context.getRuntimeConfig();
+  const config = readCurrentConfig();
+  if (!validateConversationSourceSession({ ...request, config, respond })) {
+    return;
+  }
+  const requestIdentity = bindConversationOperationIdentity(context, request);
+  if (!requestIdentity) {
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `conversation ${request.method} ${request.operationId} was already used with different input`,
+      ),
+    );
+    return;
+  }
+  await runConversationOperation({
+    context,
+    dedupeKey: conversationOperationKey(request),
+    operationId: request.operationId,
+    requestIdentity,
+    respond,
+    execute: () => {
+      const command = {
+        config,
+        readCurrentConfig,
+        agentId: request.agentId,
+        senderIsOwner: isAuthenticatedOwner(client),
+        ...(request.sourceSessionKey ? { sourceSessionKey: request.sourceSessionKey } : {}),
+        conversationRef: request.conversationRef,
+        message: request.message,
+      };
+      return request.method === "send"
+        ? runGatewayConversationSend({ ...command, operationId: request.operationId })
+        : runGatewayConversationTurn({
+            ...command,
+            turnId: request.operationId,
+            timeoutMs: request.timeoutMs,
+          });
+    },
+  });
+}
+
 export const conversationHandlers: GatewayRequestHandlers = {
   "conversations.list": defineValidatedGatewayMethod(
     "conversations.list",
@@ -248,61 +302,7 @@ export const conversationHandlers: GatewayRequestHandlers = {
   "conversations.send": defineValidatedGatewayMethod(
     "conversations.send",
     validateConversationSendParams,
-    async ({ params: request, respond, context, client }) => {
-      const readCurrentConfig = () => context.getRuntimeConfig();
-      const config = readCurrentConfig();
-      if (
-        !validateConversationSourceSession({
-          config,
-          agentId: request.agentId,
-          sourceSessionKey: request.sourceSessionKey,
-          respond,
-        })
-      ) {
-        return;
-      }
-      const requestIdentity = bindConversationOperationIdentity(context, {
-        method: "send",
-        operationId: request.operationId,
-        agentId: request.agentId,
-        ...(request.sourceSessionKey ? { sourceSessionKey: request.sourceSessionKey } : {}),
-        conversationRef: request.conversationRef,
-        message: request.message,
-      });
-      if (!requestIdentity) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `conversation send ${request.operationId} was already used with different input`,
-          ),
-        );
-        return;
-      }
-      await runConversationOperation({
-        context,
-        dedupeKey: conversationOperationKey({
-          method: "send",
-          agentId: request.agentId,
-          operationId: request.operationId,
-        }),
-        operationId: request.operationId,
-        requestIdentity,
-        respond,
-        execute: async () =>
-          await runGatewayConversationSend({
-            config,
-            readCurrentConfig,
-            agentId: request.agentId,
-            senderIsOwner: isAuthenticatedOwner(client),
-            ...(request.sourceSessionKey ? { sourceSessionKey: request.sourceSessionKey } : {}),
-            operationId: request.operationId,
-            conversationRef: request.conversationRef,
-            message: request.message,
-          }),
-      });
-    },
+    (options) => handleConversationWrite(options, { ...options.params, method: "send" }),
   ),
   "conversations.turn.cancel": defineValidatedGatewayMethod(
     "conversations.turn.cancel",
@@ -323,62 +323,11 @@ export const conversationHandlers: GatewayRequestHandlers = {
   "conversations.turn": defineValidatedGatewayMethod(
     "conversations.turn",
     validateConversationTurnParams,
-    async ({ params: request, respond, context, client }) => {
-      const readCurrentConfig = () => context.getRuntimeConfig();
-      const config = readCurrentConfig();
-      if (
-        !validateConversationSourceSession({
-          config,
-          agentId: request.agentId,
-          sourceSessionKey: request.sourceSessionKey,
-          respond,
-        })
-      ) {
-        return;
-      }
-      const requestIdentity = bindConversationOperationIdentity(context, {
+    (options) =>
+      handleConversationWrite(options, {
+        ...options.params,
+        operationId: options.params.turnId,
         method: "turn",
-        operationId: request.turnId,
-        agentId: request.agentId,
-        ...(request.sourceSessionKey ? { sourceSessionKey: request.sourceSessionKey } : {}),
-        conversationRef: request.conversationRef,
-        message: request.message,
-        timeoutMs: request.timeoutMs,
-      });
-      if (!requestIdentity) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `conversation turn ${request.turnId} was already used with different input`,
-          ),
-        );
-        return;
-      }
-      await runConversationOperation({
-        context,
-        dedupeKey: conversationOperationKey({
-          method: "turn",
-          agentId: request.agentId,
-          operationId: request.turnId,
-        }),
-        operationId: request.turnId,
-        requestIdentity,
-        respond,
-        execute: async () =>
-          await runGatewayConversationTurn({
-            config,
-            readCurrentConfig,
-            agentId: request.agentId,
-            senderIsOwner: isAuthenticatedOwner(client),
-            ...(request.sourceSessionKey ? { sourceSessionKey: request.sourceSessionKey } : {}),
-            turnId: request.turnId,
-            conversationRef: request.conversationRef,
-            message: request.message,
-            timeoutMs: request.timeoutMs,
-          }),
-      });
-    },
+      }),
   ),
 };

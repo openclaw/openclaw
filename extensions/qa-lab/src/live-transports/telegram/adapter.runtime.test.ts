@@ -22,7 +22,6 @@ const mocks = vi.hoisted(() => ({
   startApiProxy: vi.fn(),
   userbotAssertHealthy: vi.fn(),
   userbotClose: vi.fn(),
-  userbotCleanupPrivateForum: vi.fn(),
   userbotSend: vi.fn(),
   userbotStart: vi.fn(),
 }));
@@ -151,9 +150,7 @@ describe("Telegram QA transport adapter", () => {
     });
     mocks.userbotStart.mockResolvedValue({
       assertHealthy: mocks.userbotAssertHealthy,
-      chatId: -100123,
       close: mocks.userbotClose,
-      cleanupPrivateForum: mocks.userbotCleanupPrivateForum,
       send: mocks.userbotSend,
     });
     mocks.proxyDrainUpdates.mockResolvedValue(undefined);
@@ -166,9 +163,7 @@ describe("Telegram QA transport adapter", () => {
       onUpdate = params.onUpdate;
       return {
         assertHealthy: mocks.userbotAssertHealthy,
-        chatId: 200,
         close: mocks.userbotClose,
-        cleanupPrivateForum: mocks.userbotCleanupPrivateForum,
         send: mocks.userbotSend,
       };
     });
@@ -293,7 +288,6 @@ describe("Telegram QA transport adapter", () => {
       onUpdate = params.onUpdate;
       return {
         assertHealthy: mocks.userbotAssertHealthy,
-        chatId: -100123,
         close: mocks.userbotClose,
         send: mocks.userbotSend,
       };
@@ -395,7 +389,6 @@ describe("Telegram QA transport adapter", () => {
       onUpdate = params.onUpdate;
       return {
         assertHealthy: mocks.userbotAssertHealthy,
-        chatId: -100123,
         close: mocks.userbotClose,
         send: mocks.userbotSend,
       };
@@ -457,7 +450,6 @@ describe("Telegram QA transport adapter", () => {
       updates.push(params.onUpdate);
       return {
         assertHealthy: mocks.userbotAssertHealthy,
-        chatId: -100123,
         close: mocks.userbotClose,
         send: sends[index],
       };

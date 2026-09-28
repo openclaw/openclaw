@@ -96,7 +96,7 @@ describe("prepared model runtime snapshots", () => {
   it("announces a failed replacement so lifecycle readers do not wait indefinitely", async () => {
     mocks.configuredAgentIds = ["default"];
     await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
-    const events: Array<{ phase: string; error?: Error }> = [];
+    const events: Array<{ phase: string; error?: Error; replacement?: Promise<void> }> = [];
     const unregister = registerPreparedModelRuntimePublicationListener((event) => {
       events.push(event);
     });
@@ -109,9 +109,10 @@ describe("prepared model runtime snapshots", () => {
     unregister();
 
     expect(events).toEqual([
-      { phase: "invalidated" },
+      { phase: "invalidated", replacement: expect.any(Promise) },
       { phase: "failed", error: replacementError },
     ]);
+    await expect(events[0]?.replacement).rejects.toBe(replacementError);
   });
 
   it("does not let a read-only draft replace a configured gateway owner", async () => {

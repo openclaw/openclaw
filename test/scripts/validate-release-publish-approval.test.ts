@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { createStablePluginNpmBootstrapApproval } from "../../scripts/plugin-npm-bootstrap-approval.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = "scripts/validate-release-publish-approval.mjs";
@@ -916,4 +917,21 @@ describe("scripts/validate-release-publish-approval.mjs", () => {
       expect(result.stderr).toBe("");
     }
   });
+});
+
+describe("stable npm bootstrap profile authority", () => {
+  it.each(["explicit", "sealed"])(
+    "rejects historical %s waivers for beta-profile stable bootstrap",
+    (source) => {
+      expect(() =>
+        createStablePluginNpmBootstrapApproval({
+          releaseTag: "v2026.9.6",
+          publishTag: "latest",
+          releaseProfile: "beta",
+          stableSoakWaiver: "2026.9.6 approved",
+          stableSoakWaiverSource: source,
+        }),
+      ).toThrow("stable/full validation");
+    },
+  );
 });

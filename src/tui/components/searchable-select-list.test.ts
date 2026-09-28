@@ -47,6 +47,12 @@ const testItems = [
 ];
 
 describe("SearchableSelectList", () => {
+  it("keeps replacement empty-state errors on one safe terminal row", () => {
+    const list = new SearchableSelectList([], 7, ansiHighlightTheme);
+    list.setItems([], "network\nunavailable\u001b[2J");
+    expect(list.render(80).at(-1)).toBe("  network unavailable");
+  });
+
   function selectByEnter(list: SearchableSelectList) {
     const onSelect = vi.fn<(item: SearchableSelectItem) => void>();
     list.onSelect = onSelect;

@@ -290,8 +290,10 @@ turn or message injection is accepted. Work already accepted keeps its own
 lifecycle and can finish after the source retires. Use `signal` when the caller
 also intends to cancel accepted work.
 
-For detached native work, call `captureAgentHarnessCompletionCustody(scope)`
-during the admitting parent registration. Each accepted child assignment retains
+For detached native work, await `captureAgentHarnessCompletionCustody(scope)`
+during the admitting parent registration, before publishing the registration or
+starting native child work. Preparation retains the original requester lifecycle
+and rejects replacement or revocation before returning custody. Each accepted child assignment retains
 its own hold with `retain()` and passes it as `completionCustody` when delivering
 its result. Release each hold when its registration or assignment ends. The hold
 preserves the original operator ceiling and requester lifecycle; it does not
@@ -305,9 +307,25 @@ If a successful exact transition normalizes the creation timestamp, advance the
 receipt only from that transition's returned record. Carry the successor through
 later mutations, events, and delivery; never adopt it from a fresh task lookup.
 
+On hosts that provide them, await the scoped runtime's optional
+`finalizeTaskRunByRunIdAsync(...)` and `setDetachedTaskDeliveryStatusByRunIdAsync(...)`
+methods for background completion. Core persistence waits run through its existing
+worker and retain the same `expectedTask` and `completionCustody` fences. Custom
+runtimes keep their registered exact-assignment adapter; asynchronous callers never
+fall through to core when an adapter is present.
+
+For admission checks, await `prepareTaskRunRead(runId)` before delivery. Its returned
+accessor reads current resident records without synchronous database I/O. It rejects
+if the runtime, store, or relevant task identity is no longer prepared. Prepare again
+on a later attempt; do not treat a rejected read as proof that the task is absent.
+The accessor follows settled updates, but it never grants ownership of a replacement
+assignment. Continue checking the original `expectedTask` on every effect.
+
 Before admitting exact-assignment work, call the scoped task runtime's
 `assertTaskAssignmentSupported()` on each registration, including reused runtimes.
 This checks the original runtime owner without rebinding it to a replacement.
+Local agent commands use their scoped plugin registry without requiring Gateway
+activation. Retiring or replacing that owner still invalidates retained runtimes.
 Custom detached runtimes must implement the optional `transitionTaskAssignment`
 operation for these guarded mutations. Check its `expectedTask` against the current
 record and call `assertCurrent()` immediately before persistence. An adapter without

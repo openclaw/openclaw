@@ -206,28 +206,29 @@ async function prepareSchema(ctx, packageRoot, bindings) {
     owner.agentSchema > BASELINE_AGENT_SCHEMA,
     "Expected a published-to-candidate schema upgrade",
   );
-  const require = createRequire(path.join(packageRoot, "package.json"));
-  const parserPath = fs.realpathSync(require.resolve("typescript"));
-  assert(childOf(fs.realpathSync(packageRoot), parserPath), "Use the installed package's parser");
-  const ts = require(parserPath);
-  assert.equal(
-    ts.version,
-    readJson(path.join(packageRoot, "package.json")).dependencies.typescript,
-  );
+  const require = createRequire(import.meta.url);
+  const parserPath = fs.realpathSync(require.resolve("typescript/unstable/sync"));
+  const { version: parserVersion } = readJson(require.resolve("typescript/package.json"));
+  const { createNativeTypeScriptParser } = await import("../../../lib/native-typescript.mts");
+  const parser = createNativeTypeScriptParser({ cwd: packageRoot });
   const doctorBindings = {};
-  for (const [role, prefix, symbol] of [
-    ["lock", "doctor-sqlite-maintenance-lock", "withDoctorSqliteMaintenanceLock"],
-    ["migrate", "state-migrations.media-persistence", "migrateLegacyMediaPersistence"],
-    ["drain", "global-singleton", "drainGlobalSingletonLifecycleState"],
-    ["close", "openclaw-state-db-cache", "closeOpenClawStateDatabaseByPathAsync"],
-  ]) {
-    doctorBindings[role] = resolveWorkerCellFunctionBinding(
-      owner.identity,
-      packageRoot,
-      prefix,
-      symbol,
-      ts,
-    );
+  try {
+    for (const [role, prefix, symbol] of [
+      ["lock", "doctor-sqlite-maintenance-lock", "withDoctorSqliteMaintenanceLock"],
+      ["migrate", "state-migrations.media-persistence", "migrateLegacyMediaPersistence"],
+      ["drain", "global-singleton", "drainGlobalSingletonLifecycleState"],
+      ["close", "openclaw-state-db-cache", "closeOpenClawStateDatabaseByPathAsync"],
+    ]) {
+      doctorBindings[role] = await resolveWorkerCellFunctionBinding(
+        owner.identity,
+        packageRoot,
+        prefix,
+        symbol,
+        parser,
+      );
+    }
+  } finally {
+    parser.close();
   }
   const doctor = await loadBindings(owner.identity, packageRoot, doctorBindings);
   const { agentDb } = readJson(ctx.importReceipt);
@@ -261,7 +262,7 @@ async function prepareSchema(ctx, packageRoot, bindings) {
   }
   writeJson(path.join(ctx.artifacts, "worktree-schema-doctor.json"), {
     ownerBindings: doctor.evidence,
-    parser: { version: ts.version, sha256: digest(parserPath) },
+    parser: { source: "harness", version: parserVersion, sha256: digest(parserPath) },
     fromSchema: before.agent.schema,
     targetSchema: owner.agentSchema,
     result,

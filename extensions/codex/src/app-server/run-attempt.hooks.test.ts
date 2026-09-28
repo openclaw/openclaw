@@ -379,7 +379,8 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
   }, 240_000);
 
   it("classifies codex model-call timeout diagnostics", async () => {
-    vi.useFakeTimers();
+    // Diagnostic delivery drains through setImmediate after the deadline settles.
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const diagnosticEvents: DiagnosticEventPayload[] = [];
     const stopDiagnostics = onInternalDiagnosticEvent((event) => {
       if (event.type.startsWith("model.call.")) {
@@ -389,7 +390,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     try {
       const sessionFile = path.join(tempDir, "session.jsonl");
       const workspaceDir = path.join(tempDir, "workspace");
-      const harness = createStartedThreadHarness();
+      createStartedThreadHarness();
       const params = createParams(sessionFile, workspaceDir);
       params.config = {
         diagnostics: { enabled: true, otel: { enabled: true, traces: true } },
@@ -397,7 +398,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       params.timeoutMs = 60_000;
 
       const run = runCodexAppServerAttempt(params);
-      await harness.waitForMethod("turn/start");
+      await run.waitForTurnAccepted();
       await vi.advanceTimersByTimeAsync(60_000);
       const result = await run;
       await flushDiagnosticEvents();
@@ -590,7 +591,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(params);
 
-    await harness.waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
     harness.close();
     await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
 
@@ -731,7 +732,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       },
     });
 
-    await harness.waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
     harness.close();
     await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
 
@@ -959,13 +960,13 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
     );
-    const { waitForMethod } = createStartedThreadHarness();
+    createStartedThreadHarness();
     const run = runCodexAppServerAttempt(
       createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
       { pluginConfig: { appServer: { mode: "yolo" } } },
     );
 
-    await waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
     expect(abortAgentHarnessRun("session-1")).toBe(true);
 
     const result = await run;

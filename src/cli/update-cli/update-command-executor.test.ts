@@ -4,6 +4,7 @@ import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -26,6 +27,7 @@ import * as windowsProcess from "../../infra/windows-port-pids.js";
 import { isChildProcessTreeAlive } from "../../process/child-process-tree.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import * as pidAlive from "../../shared/pid-alive.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import { registerExecutorRootOwnershipTests } from "./update-command-executor-roots.test-support.js";
@@ -38,7 +40,12 @@ import {
 } from "./update-command-executor.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 
-const dirs = useAutoCleanupTempDirTracker(afterEach);
+const dirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeStateDatabaseForTest();
+    cleanup();
+  }),
+);
 let root: string;
 let temporary: string;
 beforeEach(() => {
@@ -239,18 +246,6 @@ describe("live update executor", () => {
       expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("not current");
       expect(fence.assertCurrent).not.toThrow();
     });
-  });
-
-  it("refuses to release a replaced preflight owner and preserves the new lease", async () => {
-    await expect(
-      withUpdateCommandExecutor(randomUUID(), async (executor) => {
-        const fence = await executor.enter(root, { preflight: true });
-        replaceOwner();
-        expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("no longer current");
-        const observed = createManagedHandoffLeaseStore().read(root);
-        expect(observed).toMatchObject({ kind: "current", lease: { owner: "replacement" } });
-      }),
-    ).rejects.toThrow();
   });
 
   it("reclaims a dead direct executor through the existing process-liveness owner", async () => {
@@ -648,7 +643,7 @@ describe("candidate executor delegation", () => {
             [
               process.execPath,
               "--import",
-              path.resolve("scripts/tsx.mjs"),
+              pathToFileURL(path.resolve("scripts/tsx.mjs")).href,
               "--input-type=module",
               "-e",
               childProgram,

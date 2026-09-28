@@ -19,8 +19,8 @@ function expectStopAcknowledged(threadId: number) {
   );
 }
 
-function createDebouncedBot(native: boolean, commandSender = String(from.id)) {
-  return createBot(native, true, {
+async function createDebouncedBot(native: boolean, commandSender = String(from.id)) {
+  return await createBot(native, true, {
     commands: { native, text: true, allowFrom: { telegram: [commandSender] } },
     messages: { inbound: { byChannel: { telegram: DEBOUNCE_MS } } },
     channels: {
@@ -101,7 +101,7 @@ describe("Telegram commands during buffered message processing", () => {
         }
         return undefined;
       });
-      const bot = createDebouncedBot(native);
+      const bot = await createDebouncedBot(native);
       const timer = vi.spyOn(globalThis, "setTimeout");
       const work: Promise<unknown>[] = [];
       const flushes: Array<() => void> = [];
@@ -195,7 +195,7 @@ describe("Telegram commands during buffered message processing", () => {
       }
       return undefined;
     });
-    const bot = createBot(false, true, {
+    const bot = await createBot(false, true, {
       commands: { native: false, text: true, allowFrom: { telegram: [String(from.id)] } },
       messages: { inbound: { byChannel: { telegram: DEBOUNCE_MS } } },
       channels: {
@@ -252,7 +252,7 @@ describe("Telegram commands during buffered message processing", () => {
   });
 
   it("does not let an unauthorized native stop cancel buffered input", async () => {
-    const bot = createDebouncedBot(true, "99999");
+    const bot = await createDebouncedBot(true, "99999");
     const timer = vi.spyOn(globalThis, "setTimeout");
     let flush: (() => void) | undefined;
     let sourceWork: Promise<unknown> | undefined;

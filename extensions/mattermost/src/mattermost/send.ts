@@ -350,15 +350,7 @@ async function resolveMattermostSendContext(
     assertRequestCurrent: opts.assertDirectAdapterHandoff,
   });
   // Build retry options from account config, allowing opts to override
-  const accountRetryConfig: CreateDmChannelRetryOptions | undefined = account.config.dmChannelRetry
-    ? {
-        maxRetries: account.config.dmChannelRetry.maxRetries,
-        initialDelayMs: account.config.dmChannelRetry.initialDelayMs,
-        maxDelayMs: account.config.dmChannelRetry.maxDelayMs,
-        timeoutMs: account.config.dmChannelRetry.timeoutMs,
-      }
-    : undefined;
-  const dmRetryOptions = mergeDmRetryOptions(accountRetryConfig, opts.dmRetryOptions);
+  const dmRetryOptions = mergeDmRetryOptions(account.config.dmChannelRetry, opts.dmRetryOptions);
 
   let channelId: string;
   try {

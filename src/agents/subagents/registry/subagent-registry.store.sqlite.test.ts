@@ -356,58 +356,50 @@ describe("subagent registry sqlite store", () => {
     },
   );
 
-  it.each([
-    [
-      "session-list",
-      (keys: readonly string[]) => loadSubagentRunsForSessionsFromSqlite(keys, [], "session-list"),
-    ],
-    ["full", (keys: readonly string[]) => loadSubagentRunsForSessionsFromSqlite(keys, [], "full")],
-  ] as const)(
-    "keeps %s identity selection and records in one snapshot across an external move",
-    async (_kind, read) => {
-      await withTempStateEnv(async () => {
-        const run = createRun({ model: "original-model" });
-        saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
-        const { db, path: databasePath } = openOpenClawStateDatabase();
-        const writer = new DatabaseSync(databasePath);
-        let moved = false;
-        db.setAuthorizer((action, table, column) => {
-          if (
-            !moved &&
-            action === constants.SQLITE_READ &&
-            table === "subagent_runs" &&
-            column === "payload_json"
-          ) {
-            moved = true;
-            writer
-              .prepare(
-                "UPDATE subagent_runs SET requester_session_key = ?, payload_json = ? WHERE run_id = ?",
-              )
-              .run(
-                "agent:main:other",
-                JSON.stringify({ ...run, model: "replacement-model" }),
-                run.runId,
-              );
-          }
-          return constants.SQLITE_OK;
-        });
-        try {
-          const before = read([run.requesterSessionKey]);
-          expect(moved).toBe(true);
-          expect(before.runs.get(run.runId)).toMatchObject({
-            requesterSessionKey: run.requesterSessionKey,
-            model: "original-model",
-          });
-          db.setAuthorizer(null);
-          expect(read([run.requesterSessionKey]).runs.size).toBe(0);
-          expect(read(["agent:main:other"]).runs.get(run.runId)?.model).toBe("replacement-model");
-        } finally {
-          db.setAuthorizer(null);
-          writer.close();
+  it("keeps full identity selection and records in one snapshot across an external move", async () => {
+    const read = (keys: readonly string[]) => loadSubagentRunsForSessionsFromSqlite(keys, []);
+    await withTempStateEnv(async () => {
+      const run = createRun({ model: "original-model" });
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+      const { db, path: databasePath } = openOpenClawStateDatabase();
+      const writer = new DatabaseSync(databasePath);
+      let moved = false;
+      db.setAuthorizer((action, table, column) => {
+        if (
+          !moved &&
+          action === constants.SQLITE_READ &&
+          table === "subagent_runs" &&
+          column === "payload_json"
+        ) {
+          moved = true;
+          writer
+            .prepare(
+              "UPDATE subagent_runs SET requester_session_key = ?, payload_json = ? WHERE run_id = ?",
+            )
+            .run(
+              "agent:main:other",
+              JSON.stringify({ ...run, model: "replacement-model" }),
+              run.runId,
+            );
         }
+        return constants.SQLITE_OK;
       });
-    },
-  );
+      try {
+        const before = read([run.requesterSessionKey]);
+        expect(moved).toBe(true);
+        expect(before.runs.get(run.runId)).toMatchObject({
+          requesterSessionKey: run.requesterSessionKey,
+          model: "original-model",
+        });
+        db.setAuthorizer(null);
+        expect(read([run.requesterSessionKey]).runs.size).toBe(0);
+        expect(read(["agent:main:other"]).runs.get(run.runId)?.model).toBe("replacement-model");
+      } finally {
+        db.setAuthorizer(null);
+        writer.close();
+      }
+    });
+  });
 
   it.each(["pending", "in_progress", "delivered", "failed", "suspended"] as const)(
     "preserves private %s handoffs across every current reader and restart",

@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements Mantis evidence artifact handling.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { root } from "openclaw/plugin-sdk/security-runtime";
@@ -43,38 +42,24 @@ const MANTIS_STABLE_ENTRIES = [
 
 type MantisOutputRoot = Pick<
   Awaited<ReturnType<typeof root>>,
-  "exists" | "list" | "mkdir" | "move" | "remove" | "stat"
+  "exists" | "mkdir" | "move" | "remove" | "stat"
 >;
 
 function isNotFoundError(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
 
-function isNotFoundFsSafeError(error: unknown): boolean {
-  return (
-    typeof error === "object" && error !== null && "code" in error && error.code === "not-found"
-  );
-}
-
 async function removeMantisOutputTree(
   outputRoot: MantisOutputRoot,
   relativePath: string,
 ): Promise<void> {
-  let entry: Awaited<ReturnType<MantisOutputRoot["stat"]>>;
-  try {
-    entry = await outputRoot.stat(relativePath);
-  } catch (error) {
-    if (isNotFoundFsSafeError(error)) {
-      return;
-    }
-    throw error;
-  }
-  if (entry.isDirectory && !entry.isSymbolicLink) {
-    for (const child of await outputRoot.list(relativePath)) {
-      await removeMantisOutputTree(outputRoot, path.posix.join(relativePath, child));
-    }
-  }
-  await outputRoot.remove(relativePath);
+  await outputRoot.remove(relativePath, {
+    recursive: true,
+    force: true,
+    order: "sorted",
+    maxEntries: Infinity,
+    maxDepth: Infinity,
+  });
 }
 
 export async function createMantisRunStaging(params: {

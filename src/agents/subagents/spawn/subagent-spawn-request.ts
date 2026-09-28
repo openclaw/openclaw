@@ -24,8 +24,6 @@ import {
   getRuntimeConfig,
   loadSessionEntry,
   resolveGatewaySessionStoreTarget,
-  resolveInternalSessionKey,
-  resolveMainSessionAlias,
 } from "./subagent-spawn.runtime.js";
 import { normalizeSubagentTaskName } from "./subagent-task-name.js";
 
@@ -112,20 +110,12 @@ export function resolveSubagentSpawnRequest(
       accountId: ctx.agentAccountId,
     },
   });
-  const { mainKey, alias } = resolveMainSessionAlias(cfg);
-  const requesterSessionKey = ctx.agentSessionKey;
-  const requesterInternalKey = requesterSessionKey
-    ? resolveInternalSessionKey({
-        key: requesterSessionKey,
-        alias,
-        mainKey,
-      })
-    : alias;
   const ownership = resolveSubagentSpawnOwnership({
     cfg,
     agentSessionKey: ctx.agentSessionKey,
     completionOwnerKey: ctx.completionOwnerKey,
   });
+  const requesterInternalKey = ownership.controllerSessionKey;
 
   // Capture the requester window before launch; a reset must not move child
   // progress receipts or private results to a replacement session at the same key.

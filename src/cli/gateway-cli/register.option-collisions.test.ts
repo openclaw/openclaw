@@ -134,7 +134,6 @@ vi.mock("../progress.js", () => ({
 
 vi.mock("./discover.js", () => ({
   dedupeBeacons: (beacons: unknown[]) => beacons,
-  parseDiscoverTimeoutMs: () => 2000,
   renderBeaconLines: () => [],
 }));
 

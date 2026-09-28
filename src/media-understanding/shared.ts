@@ -215,6 +215,29 @@ export async function waitProviderOperationPollInterval(params: {
   });
 }
 
+/** Poll a provider-owned request without changing its transport or response contract. */
+export async function pollProviderOperation<TPayload>(params: {
+  read: () => Promise<TPayload>;
+  isComplete: (payload: TPayload) => boolean;
+  getFailureMessage?: (payload: TPayload) => string | undefined;
+  wait: () => Promise<void>;
+  maxAttempts: number;
+  timeoutMessage: string;
+}): Promise<TPayload> {
+  for (let attempt = 0; attempt < params.maxAttempts; attempt += 1) {
+    const payload = await params.read();
+    if (params.isComplete(payload)) {
+      return payload;
+    }
+    const failureMessage = params.getFailureMessage?.(payload);
+    if (failureMessage) {
+      throw new Error(failureMessage);
+    }
+    await params.wait();
+  }
+  throw new Error(params.timeoutMessage);
+}
+
 export async function pollProviderOperationJson<TPayload>(
   params: {
     url: string;
@@ -234,19 +257,21 @@ export async function pollProviderOperationJson<TPayload>(
     deadline: params.deadline,
     defaultTimeoutMs: params.defaultTimeoutMs,
   });
-  for (let attempt = 0; attempt < params.maxAttempts; attempt += 1) {
-    const init = {
-      method: "GET",
-      headers: typeof params.headers === "function" ? params.headers() : params.headers,
-    };
-    const timeoutMs = createProviderOperationTimeoutResolver({
-      deadline: params.deadline,
-      defaultTimeoutMs: params.defaultTimeoutMs,
-    });
-    const guardedOptions = resolveGuardedRequestOptions(params);
-    const payload = guardedOptions
-      ? await (async () => {
-          const result = await fetchGuardedProviderOperationResponse({
+  return await pollProviderOperation({
+    ...params,
+    wait: () => waitProviderOperationPollInterval(params),
+    read: async () => {
+      const init = {
+        method: "GET",
+        headers: typeof params.headers === "function" ? params.headers() : params.headers,
+      };
+      const timeoutMs = createProviderOperationTimeoutResolver({
+        deadline: params.deadline,
+        defaultTimeoutMs: params.defaultTimeoutMs,
+      });
+      const guardedOptions = resolveGuardedRequestOptions(params);
+      const result = guardedOptions
+        ? await fetchGuardedProviderOperationResponse({
             stage: "poll",
             url: params.url,
             init,
@@ -254,42 +279,29 @@ export async function pollProviderOperationJson<TPayload>(
             fetchFn: params.fetchFn,
             requestFailedMessage: params.requestFailedMessage,
             guardedOptions,
-          });
-          try {
-            return (await readProviderJsonObjectResponse(
-              result.response,
-              params.requestFailedMessage,
-              bodyReadOptions,
-            )) as TPayload;
-          } finally {
-            await result.release();
-          }
-        })()
-      : ((await readProviderJsonObjectResponse(
-          await fetchProviderOperationResponse({
-            stage: "poll",
-            url: params.url,
-            init,
-            timeoutMs,
-            fetchFn: params.fetchFn,
-            requestFailedMessage: params.requestFailedMessage,
-          }),
+          })
+        : {
+            response: await fetchProviderOperationResponse({
+              stage: "poll",
+              url: params.url,
+              init,
+              timeoutMs,
+              fetchFn: params.fetchFn,
+              requestFailedMessage: params.requestFailedMessage,
+            }),
+            release: undefined,
+          };
+      try {
+        return (await readProviderJsonObjectResponse(
+          result.response,
           params.requestFailedMessage,
           bodyReadOptions,
-        )) as TPayload);
-    if (params.isComplete(payload)) {
-      return payload;
-    }
-    const failureMessage = params.getFailureMessage?.(payload);
-    if (failureMessage) {
-      throw new Error(failureMessage);
-    }
-    await waitProviderOperationPollInterval({
-      deadline: params.deadline,
-      pollIntervalMs: params.pollIntervalMs,
-    });
-  }
-  throw new Error(params.timeoutMessage);
+        )) as TPayload;
+      } finally {
+        await result.release?.();
+      }
+    },
+  });
 }
 
 export async function fetchProviderOperationResponse(params: {

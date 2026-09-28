@@ -34,7 +34,6 @@ import {
   requiresDurableToolResultDelivery,
 } from "./dispatch-from-config.payloads.js";
 import { suppressPendingFinalDelivery } from "./dispatch-from-config.pending-final.js";
-import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import type { PrepareDispatchOperationReadyState } from "./dispatch-from-config.prepare-operation.js";
 import { runReplyDispatchTakeover } from "./dispatch-from-config.reply-dispatch-hook.js";
 import {
@@ -102,7 +101,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   const shouldSuppressDefaultToolProgressMessages = () =>
     params.replyOptions?.suppressToolProgressMessages === true || !shouldEmitVerboseProgress();
   const shouldSendVerboseProgressMessages = () => !shouldSuppressDefaultToolProgressMessages();
-  const shouldSendToolSummaries = () => shouldSendVerboseProgressMessages();
+  const shouldSendToolSummaries = shouldSendVerboseProgressMessages;
   const { notifySessionMetadataChanges, routeState } = createSessionMetadataChangeNotifier(
     params.onSessionMetadataChanges,
   );
@@ -678,7 +677,8 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       result: state.finishReplyOperationBusyDispatch({ dedupeDisposition: "release" }),
     };
   }
-  const nextState = extendPreparedDispatchState(state, {
+  const nextState = Object.assign(state, {
+    shouldSuppressProgressDelivery,
     shouldSuppressDefaultToolProgressMessages,
     shouldSendVerboseProgressMessages,
     shouldSendToolSummaries,

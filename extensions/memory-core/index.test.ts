@@ -1,9 +1,13 @@
 // Memory Core tests cover index plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi, OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/core";
-import type { MemoryPluginRuntime } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import type {
+  AnyAgentTool,
+  MemoryPluginRuntime,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import { buildMemoryPromptSection } from "./src/memory-tool-contract.js";
@@ -95,9 +99,7 @@ function captureMemoryModelContract(initialConfig: OpenClawConfig) {
     config: initialConfig,
     getRuntimeConfig: () => initialConfig,
   };
-  const search = factories.get("memory_search")?.(context) as
-    | { description: string; parameters: unknown }
-    | undefined;
+  const search = factories.get("memory_search")?.(context) as AnyAgentTool | undefined;
   const get = factories.get("memory_get")?.(context) as
     | { description: string; parameters: unknown }
     | undefined;
@@ -271,6 +273,14 @@ describe("buildPromptSection", () => {
 describe("memory-core plugin runtime registration", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("accepts snake_case search arguments through the registered lazy tool", () => {
+    const { search } = captureMemoryModelContract({});
+    const args = { query: "X", min_score: 0.3, max_results: 3 };
+    const prepared = search.prepareArguments?.(args) ?? args;
+    expect(Value.Check(search.parameters, prepared)).toBe(true);
+    expect(prepared).toEqual({ query: "X", minScore: 0.3, maxResults: 3 });
   });
 
   it("does not resolve prompt config when no memory tools are exposed", () => {

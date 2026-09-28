@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
@@ -8,6 +9,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { selectUserProfileGitHubIdentities } from "./user-profile-github-identity.js";
 import {
   matchUserProfileReference,
@@ -22,6 +24,9 @@ import {
   hasEnsuredUserProfileRoleSchema,
 } from "./user-profiles-schema.js";
 import type { ProfileDisplayRow, UserProfileEmailBinding } from "./user-profiles.types.js";
+
+export const profileCatalogPath = (options: OpenClawStateDatabaseOptions) =>
+  path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));
 
 /** Worker hydration retains unknown legacy bindings without inventing their lifetime. */
 export function readUserProfileEmailBindings(
@@ -149,12 +154,21 @@ export function readCurrentUserProfileAliases(
   });
 }
 
-/** True when session-sharing policy can distinguish at least two durable people. */
-export function hasMultipleSessionSharingIdentities(
-  options: OpenClawStateDatabaseOptions = {},
+/** In-memory counterpart of the bounded SQL selector for the Gateway catalog. */
+export function projectHasMultipleSessionSharingIdentities(
+  rows: ReadonlyMap<string, ProfileDisplayRow>,
 ): boolean {
-  ensureUserProfilesSchema(options);
-  const { db } = openOpenClawStateDatabase(options);
+  let people = 0;
+  for (const row of rows.values()) {
+    if (!row.merged_into && row.id !== GATEWAY_OWNER_PROFILE_ID && ++people === 2) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** True when session-sharing policy can distinguish at least two durable people. */
+export function selectHasMultipleSessionSharingIdentities(db: DatabaseSync): boolean {
   const profiles = executeSqliteQuerySync(
     db,
     userProfilesDb(db)

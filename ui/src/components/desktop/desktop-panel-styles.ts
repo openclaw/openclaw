@@ -30,6 +30,22 @@ const desktopPanelStyles = css`
     width: 15px;
     height: 15px;
   }
+  .desktop-audio-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .desktop-audio-button > svg {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+  }
+  .desktop-audio-button:disabled {
+    opacity: 0.5;
+  }
+  .desktop-touch-toolbar .desktop-audio-label {
+    display: none;
+  }
   .desktop-fullscreen-icon > svg {
     width: 15px;
     height: 15px;

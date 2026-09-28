@@ -365,9 +365,25 @@ describe("GitHub plugin ownership and RPC migration", () => {
     ],
     [
       { state: "closed", mergedAt: date },
-      { label: "Merged", tone: "accent" },
+      { label: "Merged", tone: "accent", timestamp: date },
     ],
     [{ state: "closed" }, { label: "Closed", tone: "negative" }],
+    [
+      { state: "closed", closedAt: "2026-09-03T12:00:00Z" },
+      { label: "Closed", tone: "negative", timestamp: "2026-09-03T12:00:00Z" },
+    ],
+    [
+      { state: "closed", draft: true, closedAt: "2026-09-03T12:00:00Z" },
+      { label: "Closed", tone: "negative", timestamp: "2026-09-03T12:00:00Z" },
+    ],
+    [
+      { state: "open", closedAt: "2026-09-03T12:00:00Z" },
+      { label: "Open", tone: "positive" },
+    ],
+    [
+      { state: "closed", mergedAt: "2026-09-03T12:00:00Z", closedAt: date },
+      { label: "Merged", tone: "accent", timestamp: "2026-09-03T12:00:00Z" },
+    ],
   ] as const)(
     "maps the host preview into generic badges and metadata %#",
     async (fields, badge) => {
@@ -406,6 +422,29 @@ describe("GitHub plugin ownership and RPC migration", () => {
       expect(fetchMock).not.toHaveBeenCalled();
     },
   );
+
+  it.each([
+    ["completed", "accent"],
+    ["not_planned", "negative"],
+  ] as const)("shows the closure date for %s issues", async (stateReason, tone) => {
+    const closedAt = "2026-09-03T12:00:00Z";
+    vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({
+      ok: true,
+      payload: preview({ kind: "issue", state: "closed", stateReason, closedAt }),
+    });
+    const respond = await request("github.preview", {
+      url: "https://github.com/octocat/repo/issues/1",
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        createdAt: date,
+        badge: { label: "Closed", tone, timestamp: closedAt },
+      }),
+      undefined,
+      undefined,
+    );
+  });
 
   it.each([undefined, 0, 7])(
     "only shows an issue comment count when it is known: %s",

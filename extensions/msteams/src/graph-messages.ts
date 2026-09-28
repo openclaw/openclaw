@@ -123,7 +123,7 @@ export function resolveConversationPath(to: string): {
   };
 }
 
-type GetMessageMSTeamsParams = {
+type MSTeamsMessageTarget = {
   cfg: OpenClawConfig;
   to: string;
   messageId: string;
@@ -140,7 +140,7 @@ type GetMessageMSTeamsResult = {
  * Retrieve a single message by ID from a chat or channel via Graph API.
  */
 export async function getMessageMSTeams(
-  params: GetMessageMSTeamsParams,
+  params: MSTeamsMessageTarget,
 ): Promise<GetMessageMSTeamsResult> {
   const token = await resolveGraphToken(params.cfg);
   const conversationId = await resolveGraphConversationId(params.to);
@@ -155,12 +155,6 @@ export async function getMessageMSTeams(
   };
 }
 
-type PinMessageMSTeamsParams = {
-  cfg: OpenClawConfig;
-  to: string;
-  messageId: string;
-};
-
 /**
  * Pin a message in a chat conversation via Graph API.
  *
@@ -173,7 +167,7 @@ type PinMessageMSTeamsParams = {
  * not be enabled for the target tenant.
  */
 export async function pinMessageMSTeams(
-  params: PinMessageMSTeamsParams,
+  params: MSTeamsMessageTarget,
 ): Promise<{ ok: true; pinnedMessageId?: string }> {
   const token = await resolveGraphToken(params.cfg);
   const conversationId = await resolveGraphConversationId(params.to);
@@ -309,17 +303,8 @@ type GraphMessageWithReactions = GraphMessage & {
   reactions?: GraphReaction[];
 };
 
-type ReactMessageMSTeamsParams = {
-  cfg: OpenClawConfig;
-  to: string;
-  messageId: string;
+type ReactMessageMSTeamsParams = MSTeamsMessageTarget & {
   reactionType: string;
-};
-
-type ListReactionsMSTeamsParams = {
-  cfg: OpenClawConfig;
-  to: string;
-  messageId: string;
 };
 
 type ReactionSummary = {
@@ -336,25 +321,19 @@ type ListReactionsMSTeamsResult = {
   reactions: ReactionSummary[];
 };
 
-/**
- * Add an emoji reaction to a message via Graph API (beta).
- *
- * Writes (setReaction) require a Delegated token, so we pass
- * `preferDelegated: true`. The resolver falls back to the app-only token when
- * delegated auth is not configured, preserving today's behavior while letting
- * delegated-auth-enabled deployments hit the user-scoped endpoint.
- */
-export async function reactMessageMSTeams(
+// Graph reaction writes use beta and prefer delegated auth, falling back to
+// app-only auth when delegated credentials are unavailable.
+async function mutateMessageReaction(
   params: ReactMessageMSTeamsParams,
+  operation: "setReaction" | "unsetReaction",
 ): Promise<{ ok: true }> {
   const reactionType = resolveMSTeamsReactionEmoji(params.reactionType);
   const token = await resolveGraphToken(params.cfg, { preferDelegated: true });
   const conversationId = await resolveGraphConversationId(params.to);
   const { basePath } = resolveConversationPath(conversationId);
-  const path = `${basePath}/messages/${encodeURIComponent(params.messageId)}/setReaction`;
   await mutateGraphJson<unknown>({
     token,
-    path,
+    path: `${basePath}/messages/${encodeURIComponent(params.messageId)}/${operation}`,
     method: "POST",
     body: { reactionType },
     beta: true,
@@ -362,28 +341,12 @@ export async function reactMessageMSTeams(
   return { ok: true };
 }
 
-/**
- * Remove an emoji reaction from a message via Graph API (beta).
- *
- * Writes (unsetReaction) require a Delegated token, so we pass
- * `preferDelegated: true`. See `reactMessageMSTeams` for fallback rules.
- */
-export async function unreactMessageMSTeams(
-  params: ReactMessageMSTeamsParams,
-): Promise<{ ok: true }> {
-  const reactionType = resolveMSTeamsReactionEmoji(params.reactionType);
-  const token = await resolveGraphToken(params.cfg, { preferDelegated: true });
-  const conversationId = await resolveGraphConversationId(params.to);
-  const { basePath } = resolveConversationPath(conversationId);
-  const path = `${basePath}/messages/${encodeURIComponent(params.messageId)}/unsetReaction`;
-  await mutateGraphJson<unknown>({
-    token,
-    path,
-    method: "POST",
-    body: { reactionType },
-    beta: true,
-  });
-  return { ok: true };
+export function reactMessageMSTeams(params: ReactMessageMSTeamsParams): Promise<{ ok: true }> {
+  return mutateMessageReaction(params, "setReaction");
+}
+
+export function unreactMessageMSTeams(params: ReactMessageMSTeamsParams): Promise<{ ok: true }> {
+  return mutateMessageReaction(params, "unsetReaction");
 }
 
 /**
@@ -391,7 +354,7 @@ export async function unreactMessageMSTeams(
  * Uses Graph v1.0 (reactions are included in the message resource).
  */
 export async function listReactionsMSTeams(
-  params: ListReactionsMSTeamsParams,
+  params: MSTeamsMessageTarget,
 ): Promise<ListReactionsMSTeamsResult> {
   const token = await resolveGraphToken(params.cfg);
   const conversationId = await resolveGraphConversationId(params.to);

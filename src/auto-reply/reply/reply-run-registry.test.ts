@@ -18,22 +18,20 @@ import { resetCommandQueueStateForTest } from "../../process/command-queue.test-
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
+import { REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS } from "./reply-run-registry.contracts.js";
 import {
   abortActiveReplyRuns,
   beginReplyMessageInjectionTarget,
-  expireStaleReplyOperation,
   finalizeReplyMessageInjectionAttempt,
   forceClearReplyOperation,
   forceClearReplyRunBySessionId,
   hasCommittedReplyOperationOutcome,
-  isReplyRunEvidenceStale,
   isReplyRunActiveForSessionId,
   isReplyRunAbortableForCompaction,
   isReplyRunAbortableForSignal,
   interruptReplyRunTarget,
   clearReplyRunForResetBySessionId,
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
-  REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
   registerReplyOperationSuccessorBarrier,
   type ReplyBackendQueueMessageOptions,
   type ReplyOperation,
@@ -48,7 +46,11 @@ import {
   waitForReplyRunEndBySessionId,
   waitForReplyRunSuccessorAdmission,
 } from "./reply-run-registry.js";
-import { lifecycleAdmissionByOperation } from "./reply-run-registry.state.js";
+import {
+  expireStaleReplyOperation,
+  isReplyRunEvidenceStale,
+  lifecycleAdmissionByOperation,
+} from "./reply-run-registry.state.js";
 import {
   createTestReplyOperation,
   queueCurrentReplyRunMessage,
@@ -2022,29 +2024,32 @@ describe("reply run registry", () => {
     expect(queueMessage).not.toHaveBeenCalled();
   });
 
-  it("fails closed when backend stopped state checks throw", async () => {
-    const queueMessage = vi.fn(async () => {});
-    const operation = createTestReplyOperation({
-      sessionId: "session-running",
-    });
+  it.each(["isStopped", "isCompacting"] as const)(
+    "fails closed when backend %s checks throw",
+    async (probe) => {
+      const queueMessage = vi.fn(async () => {});
+      const operation = createTestReplyOperation({
+        sessionId: "session-running",
+      });
 
-    operation.attachBackend({
-      kind: "embedded",
-      cancel: vi.fn(),
-      isStreaming: () => true,
-      isStopped: () => {
-        throw new Error("bad stopped state");
-      },
-      queueMessage,
-    });
-    operation.setPhase("running");
+      operation.attachBackend({
+        kind: "embedded",
+        cancel: vi.fn(),
+        isStreaming: () => true,
+        [probe]: () => {
+          throw new Error("bad stopped state");
+        },
+        queueMessage,
+      });
+      operation.setPhase("running");
 
-    await expect(queueCurrentReplyRunMessage("session-running", "hello")).resolves.toMatchObject({
-      status: "rejected",
-      reason: "injection_unavailable",
-    });
-    expect(queueMessage).not.toHaveBeenCalled();
-  });
+      await expect(queueCurrentReplyRunMessage("session-running", "hello")).resolves.toMatchObject({
+        status: "rejected",
+        reason: "injection_unavailable",
+      });
+      expect(queueMessage).not.toHaveBeenCalled();
+    },
+  );
 
   it("requires a real injection capability", () => {
     const operation = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
@@ -2375,6 +2380,18 @@ describe("reply run registry", () => {
   });
 
   it("aborts compacting runs through the registry compatibility helper", () => {
+    const faultyOperation = createTestReplyOperation({
+      sessionKey: "agent:main:faulty",
+      sessionId: "session-faulty",
+    });
+    faultyOperation.attachBackend({
+      kind: "embedded",
+      cancel: vi.fn(),
+      isCompacting: () => {
+        throw new Error("compaction probe unavailable");
+      },
+    });
+    faultyOperation.setPhase("running");
     const compactingOperation = createTestReplyOperation({
       sessionId: "session-compacting",
     });
@@ -2389,6 +2406,7 @@ describe("reply run registry", () => {
     expect(abortActiveReplyRuns({ mode: "compacting" })).toBe(true);
     expect(compactingOperation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
     expect(runningOperation.result).toBeNull();
+    expect(faultyOperation.result).toBeNull();
   });
 
   it("moves a queued reservation to the target slot and frees the source", async () => {

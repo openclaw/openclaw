@@ -101,16 +101,11 @@ type DeliverAgentCommandResultParams = {
   onDeliveryResult?: (result: AgentCommandDeliveryResult) => void;
 } & FreshSessionDeliveryRefreshParams;
 
-function normalizeDeliverySessionId(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 function isFreshDeliverySessionMatch(
   freshSessionEntry: SessionEntry,
   expectedSessionId: string | undefined,
 ): boolean {
-  const normalizedExpected = normalizeDeliverySessionId(expectedSessionId);
+  const normalizedExpected = expectedSessionId?.trim();
   return Boolean(normalizedExpected && freshSessionEntry.sessionId === normalizedExpected);
 }
 
@@ -540,18 +535,13 @@ export async function deliverAgentCommandResult(
         threadId: resolvedThreadId,
       }) ?? null;
     return {
-      deliveryPlan,
       deliveryChannel,
-      effectiveDeliveryPlan: resolvedDeliveryPlan,
       deliveryPlugin,
       isDeliveryChannelKnown,
-      targetMode,
       defaultAccountId,
       resolvedAccountId,
-      resolved,
       resolvedTarget: resolved.resolvedTarget,
       deliveryTarget: resolved.resolvedTo,
-      resolvedThreadId,
       resolvedReplyToId: replyTransport?.replyToId ?? undefined,
       resolvedThreadTarget:
         replyTransport && Object.hasOwn(replyTransport, "threadId")
@@ -579,22 +569,10 @@ export async function deliverAgentCommandResult(
     }
     return undefined;
   };
-  const isRetryableFreshSessionRoutingFailure = (
-    route: Awaited<ReturnType<typeof resolveDeliveryRouting>>,
-  ): boolean => {
-    const reason = deliveryRoutingFailureReason(route);
-    if (!reason) {
-      return false;
-    }
-    if (reason === "unknown_channel") {
-      return false;
-    }
-    return true;
-  };
-
   let deliveryRouting = await resolveDeliveryRouting(sessionEntry);
   params.assertDeliveryCurrent?.();
-  if (isRetryableFreshSessionRoutingFailure(deliveryRouting)) {
+  const routingFailure = deliveryRoutingFailureReason(deliveryRouting);
+  if (routingFailure && routingFailure !== "unknown_channel") {
     const freshSessionEntry = await params.resolveFreshSessionEntryForDelivery?.();
     params.assertDeliveryCurrent?.();
     const expectedFreshSessionId =
@@ -752,33 +730,30 @@ export async function deliverAgentCommandResult(
   params.assertDeliveryCurrent?.();
   const outboundPayloadPlan = createOutboundPayloadPlan(mediaNormalizedReplyPayloads);
   const normalizedPayloads = projectOutboundPayloadPlanForJson(outboundPayloadPlan);
-  const captureDeliveryResult = (
-    deliveryResult: AgentCommandDeliveryResult,
+  const completeDelivery = (
+    status?: AgentCommandDeliveryStatus,
+    deliverySucceeded?: boolean,
   ): AgentCommandDeliveryResult => {
+    if (opts.json) {
+      const meta = result.meta;
+      writeRuntimeJson(runtime, {
+        payloads: [...normalizedPayloads],
+        ...(meta ? { meta } : {}),
+        ...(status ? { deliveryStatus: status } : {}),
+      });
+    }
+    const deliveryResult = buildDeliveryResult({
+      payloads: normalizedPayloads,
+      meta: result.meta,
+      result,
+      deliverySucceeded,
+      deliveryStatus: status,
+    });
     params.onDeliveryResult?.(deliveryResult);
     return deliveryResult;
   };
-  const emitJsonEnvelope = (status?: AgentCommandDeliveryStatus) => {
-    if (!opts.json) {
-      return;
-    }
-    const meta = result.meta;
-    writeRuntimeJson(runtime, {
-      payloads: [...normalizedPayloads],
-      ...(meta ? { meta } : {}),
-      ...(status ? { deliveryStatus: status } : {}),
-    });
-  };
   if (strictPreDeliveryError) {
-    emitJsonEnvelope(deliveryStatus);
-    captureDeliveryResult(
-      buildDeliveryResult({
-        payloads: normalizedPayloads,
-        meta: result.meta,
-        result,
-        deliveryStatus,
-      }),
-    );
+    completeDelivery(deliveryStatus);
     throw toErrorObject(strictPreDeliveryError, "Non-Error thrown");
   }
 
@@ -790,17 +765,7 @@ export async function deliverAgentCommandResult(
           replyNormalization.kind === "suppress" ? replyNormalization.reason : undefined,
         ))
       : undefined;
-    const deliverySucceeded = deliveryStatus?.succeeded === true ? true : undefined;
-    emitJsonEnvelope(deliveryStatus);
-    return captureDeliveryResult(
-      buildDeliveryResult({
-        payloads: normalizedPayloads,
-        meta: result.meta,
-        result,
-        deliverySucceeded,
-        deliveryStatus,
-      }),
-    );
+    return completeDelivery(deliveryStatus, deliveryStatus?.succeeded === true ? true : undefined);
   }
 
   let deliverySucceeded = false;
@@ -822,17 +787,14 @@ export async function deliverAgentCommandResult(
     for (const payload of deliveryPayloads) {
       logPayload(payload);
     }
-    emitJsonEnvelope();
-    return captureDeliveryResult(
-      buildDeliveryResult({ payloads: normalizedPayloads, meta: result.meta, result }),
-    );
+    return completeDelivery();
   }
   if (deliver && deliveryChannel && !isInternalMessageChannel(deliveryChannel)) {
     if (deliveryTarget && !deliveryStatus) {
       params.assertDeliveryCurrent?.();
-      const assertPlatformSendCurrent = createAgentCommandDeliveryGuard(params);
       // The outbound projection contains transport data, not private payload metadata.
-      const pendingFinalCompletion = resolvePendingFinalDeliveryCompletion(payloads);
+      const completion = resolvePendingFinalDeliveryCompletion(payloads);
+      const assertPlatformSendCurrent = createAgentCommandDeliveryGuard(params, completion);
       const restartAbort = createRestartOnlyAbortSignal(opts.abortSignal);
       let send: DurableSendResult;
       try {
@@ -842,10 +804,10 @@ export async function deliverAgentCommandResult(
           to: deliveryTarget,
           accountId: resolvedAccountId,
           payloads: deliveryPayloads,
-          ...(pendingFinalCompletion
+          ...(completion
             ? {
-                deliveryCompletion: pendingFinalCompletion,
-                deliveryIntentId: pendingFinalCompletion.deliveryId,
+                deliveryCompletion: completion,
+                deliveryIntentId: completion.deliveryId,
               }
             : {}),
           session: outboundSession,
@@ -883,16 +845,7 @@ export async function deliverAgentCommandResult(
       }
       deliveryStatus = deliveryStatusFromDurableSend(send);
       if (!bestEffortDeliver && (send.status === "failed" || send.status === "partial_failed")) {
-        emitJsonEnvelope(deliveryStatus);
-        captureDeliveryResult(
-          buildDeliveryResult({
-            payloads: normalizedPayloads,
-            meta: result.meta,
-            result,
-            deliverySucceeded: false,
-            deliveryStatus,
-          }),
-        );
+        completeDelivery(deliveryStatus, false);
         throw send.error;
       }
       deliverySucceeded = send.status === "sent" || send.status === "suppressed";
@@ -913,15 +866,6 @@ export async function deliverAgentCommandResult(
     }
   }
 
-  emitJsonEnvelope(deliveryStatus);
-  return captureDeliveryResult(
-    buildDeliveryResult({
-      payloads: normalizedPayloads,
-      meta: result.meta,
-      result,
-      deliverySucceeded,
-      deliveryStatus,
-    }),
-  );
+  return completeDelivery(deliveryStatus, deliverySucceeded);
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -51,12 +51,7 @@ import {
 import { createNoisyPngBuffer, createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
-import {
-  deleteSession,
-  listRunningSessions,
-  markBackgrounded,
-  waitForExecScope,
-} from "../agents/bash-process-registry.js";
+import { listRunningSessions, waitForExecScope } from "../agents/bash-process-registry.js";
 import { runExecProcess } from "../agents/bash-tools.exec-runtime.js";
 import { hasModelFallbackStop } from "../agents/failover-error.js";
 import * as agentSessionSdk from "../agents/sessions/sdk.js";
@@ -83,7 +78,10 @@ import {
   WorkerLiveEventClient,
   WorkerTranscriptCommitClient,
 } from "./worker-rpc-clients.js";
-import { registerWorkerBackgroundExecLifecycleTests } from "./worker-runtime-background-exec.suite.js";
+import {
+  registerWorkerBackgroundExecLifecycleTests,
+  registerWorkerExecEnvironmentFinalizationTests,
+} from "./worker-runtime-background-exec.suite.js";
 import { registerWorkerPermissionTests } from "./worker-runtime-permissions.suite.js";
 import { createWorkerRuntimeEnvironment, runWorkerDescriptor } from "./worker.runtime.js";
 
@@ -1903,68 +1901,10 @@ describe("worker runtime", () => {
     },
   );
 
-  it.each(["foreground", "hidden-background"] as const)(
-    "keeps environment state until %s exec finalization settles",
-    async (visibility) => {
-      const sessionId = `worker-finalizer-${visibility}`;
-      const scopeKey = `worker:${sessionId}`;
-      const environment = await createWorkerRuntimeEnvironment(sessionId);
-      const finalizing = createDeferred();
-      const releaseFinalizer = createDeferred();
-      const settledStateDirs: Array<string | undefined> = [];
-      let run: Awaited<ReturnType<typeof runExecProcess>> | undefined;
-      try {
-        run = await runExecProcess({
-          command: "worker-finalizer-fixture",
-          workdir: environment.stateDir,
-          env: {},
-          sandbox: {
-            containerName: "worker-finalizer-fixture",
-            workspaceDir: environment.stateDir,
-            containerWorkdir: environment.stateDir,
-            buildExecSpec: async () => ({
-              argv: [process.execPath, "-e", "process.stdout.write('worker-finalizer-output')"],
-              env: {},
-              stdinMode: "pipe-closed",
-            }),
-            finalizeExec: async () => {
-              finalizing.resolve();
-              await releaseFinalizer.promise;
-            },
-          },
-          usePty: false,
-          warnings: [],
-          maxOutput: 1000,
-          pendingMaxOutput: 1000,
-          notifyOnExit: false,
-          scopeKey,
-          timeoutSec: null,
-          onSettledBeforeNotify: () => {
-            settledStateDirs.push(process.env.OPENCLAW_STATE_DIR);
-          },
-        });
-        if (visibility === "hidden-background") {
-          markBackgrounded(run.session);
-          deleteSession(run.session.id);
-        }
-        await finalizing.promise;
-        const closing = environment.close();
-        await Promise.resolve();
-
-        expect(process.env.OPENCLAW_STATE_DIR).toBe(environment.stateDir);
-        await expect(stat(environment.stateDir)).resolves.toBeDefined();
-        releaseFinalizer.resolve();
-        await run.promise;
-        await closing;
-        expect(settledStateDirs).toEqual([environment.stateDir]);
-        await expect(stat(environment.stateDir)).rejects.toMatchObject({ code: "ENOENT" });
-      } finally {
-        releaseFinalizer.resolve();
-        await run?.promise;
-        await environment.close();
-      }
-    },
-  );
+  registerWorkerExecEnvironmentFinalizationTests({
+    runExecProcess,
+    createWorkerRuntimeEnvironment,
+  });
 
   it("revokes local tool handles when their worker turn closes", async () => {
     const { launch } = await setup();

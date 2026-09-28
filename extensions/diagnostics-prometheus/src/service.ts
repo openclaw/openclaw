@@ -29,6 +29,7 @@ import {
   type PrometheusMetricStore,
 } from "./prometheus-metric-store.js";
 import { recordGatewayRpcEvent } from "./service-gateway-rpc.js";
+import { recordMemorySample } from "./service-memory.js";
 
 const TOKEN_BUCKETS = [1, 4, 16, 64, 256, 1024, 4096, 16384, 65536, 262144, 1048576];
 const BYTE_BUCKETS = [
@@ -682,55 +683,9 @@ function recordDiagnosticEvent(
         numericValue(evt.count) ?? 0,
       );
       return;
-    case "diagnostic.memory.sample": {
-      for (const [kind, field] of [
-        ["rss", "rssBytes"],
-        ["heap_total", "heapTotalBytes"],
-        ["heap_used", "heapUsedBytes"],
-        ["external", "externalBytes"],
-        ["array_buffers", "arrayBuffersBytes"],
-        ["worker_heap_total", "workerHeapTotalBytes"],
-        ["worker_heap_used", "workerHeapUsedBytes"],
-      ] as const) {
-        store.gauge(
-          "openclaw_memory_bytes",
-          "Latest process memory usage by memory kind.",
-          { kind },
-          numericValue(evt.memory[field]),
-        );
-      }
-      for (const [name, field] of [
-        ["openclaw_worker_count", "workerCount"],
-        ["openclaw_worker_heap_sampled_count", "workerHeapSampledCount"],
-      ] as const) {
-        store.gauge(name, "Worker isolate counts.", {}, numericValue(evt.memory[field]));
-      }
-      // The resource owner supplies bounded script names and retires stale/exit samples.
-      const workerHeaps = new Map<string, number>();
-      for (const worker of evt.memory.workerHeaps ?? []) {
-        const heapUsed = numericValue(worker.heapUsed);
-        if (heapUsed !== undefined) {
-          workerHeaps.set(worker.script, (workerHeaps.get(worker.script) ?? 0) + heapUsed);
-        }
-      }
-      store.clearGauges("openclaw_worker_heap_used_bytes");
-      for (const [script, heapUsed] of workerHeaps) {
-        store.gauge(
-          "openclaw_worker_heap_used_bytes",
-          "Latest live Worker heap usage by bounded script basename.",
-          { script },
-          heapUsed,
-        );
-      }
-      store.histogram(
-        "openclaw_memory_rss_bytes",
-        "RSS memory sample distribution in bytes.",
-        {},
-        numericValue(evt.memory.rssBytes),
-        BYTE_BUCKETS,
-      );
+    case "diagnostic.memory.sample":
+      recordMemorySample(store, evt.memory, BYTE_BUCKETS);
       return;
-    }
     case "diagnostic.memory.pressure":
       store.counter(
         "openclaw_memory_pressure_total",

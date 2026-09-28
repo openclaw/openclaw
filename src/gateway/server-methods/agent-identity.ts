@@ -26,26 +26,19 @@ export const agentIdentityGetHandler: GatewayRequestHandlers["agent.identity.get
   const sessionKeyRaw = normalizeOptionalString(params.sessionKey) ?? "";
   const cfg = context.getRuntimeConfig();
   let agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : undefined;
-  if (sessionKeyRaw) {
-    if (classifySessionKeyShape(sessionKeyRaw) === "malformed_agent") {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid agent.identity.get params: malformed session key "${sessionKeyRaw}"`,
-        ),
-      );
-      return;
-    }
-    const resolved = resolveRequestedSessionAgentId(cfg, sessionKeyRaw, agentId);
-    if (!resolved.ok) {
-      respond(false, undefined, resolved.error);
-      return;
-    }
-    agentId = resolved.agentId;
-  } else if (!agentId) {
-    const resolved = resolveRequestedSessionAgentId(cfg, "main");
+  if (sessionKeyRaw && classifySessionKeyShape(sessionKeyRaw) === "malformed_agent") {
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `invalid agent.identity.get params: malformed session key "${sessionKeyRaw}"`,
+      ),
+    );
+    return;
+  }
+  if (sessionKeyRaw || !agentId) {
+    const resolved = resolveRequestedSessionAgentId(cfg, sessionKeyRaw || "main", agentId);
     if (!resolved.ok) {
       respond(false, undefined, resolved.error);
       return;

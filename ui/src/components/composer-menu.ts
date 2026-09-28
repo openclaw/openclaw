@@ -20,7 +20,7 @@ export function handleComposerMenuKeydown(
   }
   if (
     !["ArrowDown", "ArrowUp", "Home", "End", "Enter", "Tab"].includes(event.key) ||
-    ((event.key === "Home" || event.key === "End") &&
+    (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key) &&
       (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey)) ||
     (menu.count === 0 && !menu.consumeEmpty)
   ) {

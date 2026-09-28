@@ -1,4 +1,3 @@
-// Discord provider module implements model/runtime integration.
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
@@ -139,36 +138,22 @@ export function createDiscordProviderInteractionSurface(params: {
         dmPolicy: params.dmPolicy,
       },
     }),
-    createDiscordCommandArgFallbackButton({
-      readPolicy: params.readPolicy,
-      cfg: params.cfg,
-      discordConfig: params.discordConfig,
-      accountId: params.accountId,
-      sessionPrefix: params.sessionPrefix,
-      threadBindings: params.threadBindings,
-      buildContext: params.channelRuntime?.inbound.buildContext,
-      dispatchReplyFromConfig: params.channelRuntime?.reply?.dispatchReplyFromConfig,
-    }),
-    createDiscordModelPickerFallbackButton({
-      readPolicy: params.readPolicy,
-      cfg: params.cfg,
-      discordConfig: params.discordConfig,
-      accountId: params.accountId,
-      sessionPrefix: params.sessionPrefix,
-      threadBindings: params.threadBindings,
-      buildContext: params.channelRuntime?.inbound.buildContext,
-      dispatchReplyFromConfig: params.channelRuntime?.reply?.dispatchReplyFromConfig,
-    }),
-    createDiscordModelPickerFallbackSelect({
-      readPolicy: params.readPolicy,
-      cfg: params.cfg,
-      discordConfig: params.discordConfig,
-      accountId: params.accountId,
-      sessionPrefix: params.sessionPrefix,
-      threadBindings: params.threadBindings,
-      buildContext: params.channelRuntime?.inbound.buildContext,
-      dispatchReplyFromConfig: params.channelRuntime?.reply?.dispatchReplyFromConfig,
-    }),
+    ...[
+      createDiscordCommandArgFallbackButton,
+      createDiscordModelPickerFallbackButton,
+      createDiscordModelPickerFallbackSelect,
+    ].map((create) =>
+      create({
+        readPolicy: params.readPolicy,
+        cfg: params.cfg,
+        discordConfig: params.discordConfig,
+        accountId: params.accountId,
+        sessionPrefix: params.sessionPrefix,
+        threadBindings: params.threadBindings,
+        buildContext: params.channelRuntime?.inbound.buildContext,
+        dispatchReplyFromConfig: params.channelRuntime?.reply?.dispatchReplyFromConfig,
+      }),
+    ),
   ];
   const activityButton = createDiscordActivityButton(
     {

@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createHookRunner } from "../plugins/hooks.js";
 import { createMockPluginRegistry, TEST_PLUGIN_AGENT_CTX } from "../plugins/hooks.test-fixtures.js";
 import { handleAgentEnd, handleAgentStart } from "./embedded-agent-subscribe.handlers.lifecycle.js";
+import { createContext } from "./embedded-agent-subscribe.handlers.lifecycle.test-helpers.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { createReplyDelivery } from "./embedded-agent-subscribe.reply-delivery.js";
 
@@ -30,62 +31,6 @@ vi.mock("../infra/agent-events.js", () => ({
   isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
   registerAgentEventLifecycleRotationHandler: vi.fn(),
 }));
-
-function createContext(
-  lastAssistant: unknown,
-  overrides?: {
-    onAgentEvent?: (event: unknown) => void | Promise<void>;
-    onBeforeLifecycleTerminal?: () => void | Promise<void>;
-    onBeforeTerminalDelivery?: () => void | Promise<void>;
-    onBlockReply?: ((payload: unknown) => void) | undefined;
-    onBlockReplyFlush?: () => void | Promise<void>;
-    resolveTerminalStopReason?: () => string | undefined;
-  },
-): EmbeddedAgentSubscribeContext {
-  // Lifecycle tests only need terminal state and delivery callbacks; omitted
-  // fields stay as no-op mocks so failure assertions stay focused.
-  const hasOnBlockReplyOverride = Boolean(overrides && "onBlockReply" in overrides);
-  const onBlockReply = hasOnBlockReplyOverride ? overrides?.onBlockReply : vi.fn();
-  const emitBlockReply = vi.fn();
-  return {
-    params: {
-      runId: "run-1",
-      config: {},
-      sessionKey: "agent:main:main",
-      onAgentEvent: overrides?.onAgentEvent,
-      onBeforeLifecycleTerminal: overrides?.onBeforeLifecycleTerminal,
-      onBeforeTerminalDelivery: overrides?.onBeforeTerminalDelivery,
-      resolveTerminalStopReason: overrides?.resolveTerminalStopReason,
-      ...(onBlockReply ? { onBlockReply } : {}),
-      onBlockReplyFlush: overrides?.onBlockReplyFlush,
-    },
-    state: {
-      lastAssistant: lastAssistant as EmbeddedAgentSubscribeContext["state"]["lastAssistant"],
-      liveEditDiffStateById: new Map(),
-      pendingCompactionRetry: 0,
-      pendingToolMediaUrls: [],
-      pendingToolMediaTrustByUrl: new Map(),
-      toolAutoDeliveryMediaUrls: new Set(),
-      messagingToolSentMediaUrls: [],
-      pendingToolAudioAsVoice: false,
-      deferredBlockReplies: [],
-      replayState: { replayInvalid: false, hadPotentialSideEffects: false },
-    },
-    log: {
-      debug: vi.fn(),
-      warn: vi.fn(),
-    },
-    flushBlockReplyBuffer: vi.fn(),
-    emitBlockReply,
-    emitAssistantStreamData: vi.fn(),
-    flushAssistantStream: vi.fn(),
-    releaseDeferredReplies: vi.fn(),
-    clearAssistantStream: vi.fn(),
-    clearDeferredBlockReplies: vi.fn(),
-    resolveCompactionRetry: vi.fn(),
-    maybeResolveCompactionWait: vi.fn(),
-  } as unknown as EmbeddedAgentSubscribeContext;
-}
 
 async function handleAgentEndAndReadWarnMeta(ctx: EmbeddedAgentSubscribeContext) {
   // Error lifecycle assertions share the same structured warning envelope.

@@ -99,7 +99,6 @@ export function formatAuthChoiceChoicesForCli(params?: {
 
 /** Build flat auth-choice options from core choices plus provider setup flows. */
 function buildAuthChoiceOptions(params: {
-  includeSkip: boolean;
   assistantVisibleOnly?: boolean;
   detectedProviderIds?: ReadonlySet<string>;
   config?: OpenClawConfig;
@@ -133,10 +132,6 @@ function buildAuthChoiceOptions(params: {
       params.assistantVisibleOnly ? option.assistantVisibility !== "manual-only" : true,
     );
 
-  if (params.includeSkip) {
-    options.push({ value: "skip", label: "Skip for now" });
-  }
-
   return options;
 }
 
@@ -154,7 +149,6 @@ export function buildAuthChoiceGroups(params: {
 } {
   const options = buildAuthChoiceOptions({
     ...params,
-    includeSkip: false,
     assistantVisibleOnly: params.assistantVisibleOnly ?? true,
   });
   const groupsById = new Map<AuthChoiceGroupId, AuthChoiceGroup>();

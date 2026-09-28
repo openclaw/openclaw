@@ -42,7 +42,7 @@ afterEach(async () => {
   );
 });
 
-async function installStatefulOpenCode(initialSessions: StatefulOpenCodeSession[]) {
+async function installStatefulOpenCode(initialSessions: StatefulOpenCodeSession[], version = 1) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-opencode-activity-"));
   temporaryDirectories.push(directory);
   const executable = path.join(directory, "opencode");
@@ -64,8 +64,38 @@ async function installStatefulOpenCode(initialSessions: StatefulOpenCodeSession[
     "#!/usr/bin/env node\n" +
       `const fs = require("node:fs");
 const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write(${JSON.stringify(`${version}.0.0`)});
+  process.exit(0);
+}
 fs.appendFileSync(${JSON.stringify(logFile)}, JSON.stringify(args) + "\\n");
 const state = JSON.parse(fs.readFileSync(${JSON.stringify(stateFile)}, "utf8"));
+if (${version} === 2) {
+  if (args.includes("--pure") || !args.includes("--standalone")) process.exit(2);
+  if (args[0] === "api" && state.failDb) process.exit(4);
+  const id = args[0] === "api"
+    ? args.find((arg) => arg.startsWith("sessionID="))?.slice(10)
+    : args.at(-1);
+  const session = state.sessions.find((candidate) => candidate.id === id);
+  if (!session) {
+    process.stdout.write(JSON.stringify({ _tag: "SessionNotFoundError", sessionID: id }));
+    process.stderr.write("HTTP 404 Not Found");
+    process.exit(1);
+  }
+  if (args[0] === "api" && args[2] === "session.log") {
+    if (state.failDb) process.exit(4);
+    process.stdout.write("data: " + JSON.stringify({ type: "log.synced", aggregateID: id, seq: session.seq ?? 0 }) + "\\n\\n");
+  } else if (args[0] === "session" && args[1] === "export") {
+    if (state.failExports?.includes(id)) process.exit(5);
+    process.stdout.write(JSON.stringify({ info: session, messages: session.messages.map((message) => ({
+      id: message.info.id, type: message.info.role, time: message.info.time,
+      ...(message.info.role === "user"
+        ? { text: message.parts.map((part) => part.text ?? "").join("\\n") }
+        : { content: message.parts }),
+    })) }));
+  } else process.exitCode = 2;
+  process.exit();
+}
 if (args[0] === "--pure" && args[1] === "db") {
   if (state.failDb) process.exit(4);
   const query = args[2];
@@ -147,9 +177,9 @@ function markerFrom(
 }
 
 describe("OpenCode session upstream activity", () => {
-  it.runIf(process.platform !== "win32")(
-    "uses event_sequence and exports only after the cursor advances",
-    async () => {
+  it.runIf(process.platform !== "win32").each([1, 2])(
+    "uses v%s event cursors and exports only after the cursor advances",
+    async (version) => {
       const session: StatefulOpenCodeSession = {
         id: "ses_a",
         title: "Session A",
@@ -157,7 +187,7 @@ describe("OpenCode session upstream activity", () => {
         seq: 1,
         messages: [openCodeMessage("msg_001", "assistant", "ready", 1_700_000_000_000)],
       };
-      const fixture = await installStatefulOpenCode([session]);
+      const fixture = await installStatefulOpenCode([session], version);
       const continued = await linkContinuedOpenCodeSession("agent:main:ses-a", "ses_a");
       expect(continued.upstream?.marker).toEqual({ seq: 1, lastHumanMessageId: null });
 
@@ -167,9 +197,6 @@ describe("OpenCode session upstream activity", () => {
       ).resolves.toEqual([]);
       let calls = await fixture.readCalls();
       expect(calls).toHaveLength(1);
-      expect(calls[0]?.[2]).toBe(
-        "SELECT s.id AS id, es.seq AS seq FROM session AS s LEFT JOIN event_sequence AS es ON es.aggregate_id = s.id WHERE s.id IN ('ses_a')",
-      );
 
       session.messages.push(
         openCodeMessage("msg_002", "user", "external OpenCode turn", 1_700_000_001_000),
@@ -188,7 +215,7 @@ describe("OpenCode session upstream activity", () => {
         }),
       ]);
       calls = await fixture.readCalls();
-      expect(calls.filter((args) => args[1] === "db")).toHaveLength(1);
+      expect(calls).toHaveLength(2);
       expect(calls.filter((args) => args[1] === "export")).toHaveLength(1);
     },
   );
@@ -574,9 +601,9 @@ describe("OpenCode session upstream activity", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
-    "reports confirmed absence but not query or export failures",
-    async () => {
+  it.runIf(process.platform !== "win32").each([1, 2])(
+    "reports v%s confirmed absence but not query or export failures",
+    async (version) => {
       const session: StatefulOpenCodeSession = {
         id: "ses_a",
         title: "Session A",
@@ -584,7 +611,7 @@ describe("OpenCode session upstream activity", () => {
         seq: 2,
         messages: [openCodeMessage("msg_001", "user", "external", 1_700_000_001_000)],
       };
-      const fixture = await installStatefulOpenCode([session]);
+      const fixture = await installStatefulOpenCode([session], version);
       const currentProbe = probe({ seq: 1, lastHumanMessageId: null });
 
       await fixture.writeState({ sessions: [], failDb: true });

@@ -380,7 +380,7 @@ async function closeGatewayResources(
   params: GatewayCloseParams,
   preparation: GatewayClosePreparation,
 ): Promise<ShutdownResult> {
-  params.pluginMetadata.beginClose();
+  await params.pluginMetadata.beginClose();
   const { start, notice, warnings, cleanupWork } = preparation;
   const { reason } = notice;
   const restartExpectedMs = notice.restartExpectedMs ?? null;
@@ -509,12 +509,14 @@ async function closeGatewayResources(
     await measureCloseStep("gmail-watcher", () =>
       shutdownStep("gmail-watcher", () => params.stopGmailWatcher(), warnings),
     );
+    // Cron heartbeat runs await this owner's queued wakes after handing off cancellation.
+    // Settle those waiters before joining cron so shutdown cannot wait on its own next step.
+    await shutdownStep("heartbeat-runner", () => params.heartbeatRunner.stop(), warnings);
     await shutdownStep(
       "cron",
       () => (params.cron.stopAndDrain ? params.cron.stopAndDrain() : params.cron.stop()),
       warnings,
     );
-    await shutdownStep("heartbeat-runner", () => params.heartbeatRunner.stop(), warnings);
     await shutdownStep(
       "task-registry-maintenance",
       () => params.stopTaskRegistryMaintenance?.(),

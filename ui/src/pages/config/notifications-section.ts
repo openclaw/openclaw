@@ -3,11 +3,7 @@ import type {
   WebPushDevicePreferences,
   WebPushNotificationPreferences,
 } from "../../../../packages/gateway-protocol/src/schema/push.js";
-import type {
-  NativeNotificationsPermission,
-  NativeNotificationTestOutcome,
-} from "../../app/native-notifications.ts";
-import type { WebPushSnapshot } from "../../app/web-push.ts";
+import type { NativeNotificationsPermission } from "../../app/native-notifications.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderSettingsRow,
@@ -20,27 +16,23 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { renderSettingsSelectRow } from "./settings-select-row.ts";
 import { COMMUNICATION_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
+import type { ConfigProps } from "./view-types.ts";
 
 registerSettingsEnglish();
 
-// Leaf props contract: view.ts imports this module, so importing ConfigProps
-// back from view.ts would create an import cycle. ConfigProps is structurally
-// assignable to this subset.
-type NotificationsSectionProps = {
-  connected: boolean;
-  nativeNotifications?: {
-    permission: NativeNotificationsPermission | "unknown";
-    test: NativeNotificationTestOutcome | null;
-  };
-  onNativeNotificationsRequestPermission?: () => void;
-  onNativeNotificationsSendTest?: () => void;
-  webPush?: WebPushSnapshot;
-  onWebPushSubscribe?: () => void;
-  onWebPushUnsubscribe?: () => void;
-  onWebPushTest?: () => void;
-  onWebPushSetUserPreferences?: (preferences: WebPushNotificationPreferences) => void;
-  onWebPushSetDevicePreferences?: (preferences: WebPushDevicePreferences) => void;
-};
+type NotificationsSectionProps = Pick<
+  ConfigProps,
+  | "connected"
+  | "nativeNotifications"
+  | "onNativeNotificationsRequestPermission"
+  | "onNativeNotificationsSendTest"
+  | "webPush"
+  | "onWebPushSubscribe"
+  | "onWebPushUnsubscribe"
+  | "onWebPushTest"
+  | "onWebPushSetUserPreferences"
+  | "onWebPushSetDevicePreferences"
+>;
 
 const WEB_PUSH_CATEGORIES = [
   ["approvalRequested", () => t("configView.notifications.approvalRequested")],

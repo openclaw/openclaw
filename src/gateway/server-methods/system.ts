@@ -4,7 +4,6 @@ import os from "node:os";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-  readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -48,6 +47,9 @@ import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 let advertisedLanHostPromise: Promise<string | null> | null = null;
+let stateDiskSnapshot:
+  | { stateDir: string; expiresAt: number; disk: ReturnType<typeof tryReadDiskSpace> }
+  | undefined;
 // CPU identity belongs to this process; os.cpus() also reads every core's live timings.
 const cpuInfoSnapshot = (() => {
   const cpus = os.cpus();
@@ -66,7 +68,19 @@ async function collectSystemInfo(context: GatewayRequestContext): Promise<System
   const [oneMinute = 0, fiveMinutes = 0, fifteenMinutes = 0] = os.loadavg();
   const loadAverage: [number, number, number] = [oneMinute, fiveMinutes, fifteenMinutes];
   const stateDir = resolveStateDir();
-  const disk = tryReadDiskSpace(stateDir);
+  // State-volume stats share the mounted-disk cadence; a new state root invalidates immediately.
+  if (
+    !stateDiskSnapshot ||
+    stateDiskSnapshot.stateDir !== stateDir ||
+    Date.now() >= stateDiskSnapshot.expiresAt
+  ) {
+    stateDiskSnapshot = {
+      stateDir,
+      disk: tryReadDiskSpace(stateDir),
+      expiresAt: Date.now() + 30_000,
+    };
+  }
+  const { disk } = stateDiskSnapshot;
   const config = context.getRuntimeConfig();
   const port = resolveGatewayPort(config);
   const [lanAddress, disks] = await Promise.all([
@@ -234,49 +248,26 @@ export const systemHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    const deviceId = readStringValue(params.deviceId);
-    const instanceId = readStringValue(params.instanceId);
-    const host = readStringValue(params.host);
-    const ip = readStringValue(params.ip);
-    const mode = readStringValue(params.mode);
-    const version = readStringValue(params.version);
-    const platform = readStringValue(params.platform);
-    const deviceFamily = readStringValue(params.deviceFamily);
-    const modelIdentifier = readStringValue(params.modelIdentifier);
-    const reason = readStringValue(params.reason);
-    const roles =
-      Array.isArray(params.roles) && params.roles.every((t) => typeof t === "string")
-        ? params.roles
-        : undefined;
-    const scopes =
-      Array.isArray(params.scopes) && params.scopes.every((t) => typeof t === "string")
-        ? params.scopes
-        : undefined;
-    const tags =
-      Array.isArray(params.tags) && params.tags.every((t) => typeof t === "string")
-        ? params.tags
-        : undefined;
-    const lastInputSeconds = tags?.includes(SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG)
+    const reason = params.reason;
+    const lastInputSeconds = params.tags?.includes(SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG)
       ? null
-      : typeof params.lastInputSeconds === "number" && Number.isFinite(params.lastInputSeconds)
-        ? params.lastInputSeconds
-        : undefined;
+      : params.lastInputSeconds;
     const presenceUpdate = updateSystemPresence({
       text,
-      deviceId,
-      instanceId,
-      host,
-      ip,
-      mode,
-      version,
-      platform,
-      deviceFamily,
-      modelIdentifier,
+      deviceId: params.deviceId,
+      instanceId: params.instanceId,
+      host: params.host,
+      ip: params.ip,
+      mode: params.mode,
+      version: params.version,
+      platform: params.platform,
+      deviceFamily: params.deviceFamily,
+      modelIdentifier: params.modelIdentifier,
       lastInputSeconds,
       reason,
-      roles,
-      scopes,
-      tags,
+      roles: params.roles,
+      scopes: params.scopes,
+      tags: params.tags,
     });
     if (isNodePresenceLine) {
       // Node presence heartbeats are noisy; only enqueue user-visible system

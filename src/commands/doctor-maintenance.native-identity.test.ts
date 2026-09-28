@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { waitForGatewayHealthyRestart } from "../cli/daemon-cli/restart-health.js";
+import { getSelfAndAncestorPidsSync } from "../infra/restart-stale-pids.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { getFreePort } from "../test-utils/ports.js";
@@ -120,7 +121,12 @@ async function repair(scenario: Scenario) {
     readFile(file === unitFile ? fixtureUnit : file, options),
   );
   let running = true;
-  const pid = 12345;
+  // The synthetic Gateway must not be this test process or one of its ancestors.
+  const ancestors = getSelfAndAncestorPidsSync();
+  let pid = 12345;
+  while (ancestors.has(pid)) {
+    pid += 1;
+  }
   native.resident.mockImplementation(() => (running ? { pid } : undefined));
   let stopped = false;
   let diagnosticFailure = false;

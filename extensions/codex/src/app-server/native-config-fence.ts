@@ -1,6 +1,6 @@
 /** Serializes this Gateway's native config writes with its config-loading requests. */
 
-type CodexNativeConfigFenceState = Map<string, Promise<void>>;
+import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 
 type CodexNativeConfigFenceOptions = {
   signal?: AbortSignal;
@@ -11,20 +11,12 @@ type CodexNativeConfigFenceOptions = {
 
 const CODEX_NATIVE_CONFIG_FENCE_STATE = Symbol.for("openclaw.codexNativeConfigFenceState");
 
-function getFenceState(): CodexNativeConfigFenceState {
-  const globalState = globalThis as typeof globalThis & {
-    [CODEX_NATIVE_CONFIG_FENCE_STATE]?: CodexNativeConfigFenceState;
-  };
-  globalState[CODEX_NATIVE_CONFIG_FENCE_STATE] ??= new Map();
-  return globalState[CODEX_NATIVE_CONFIG_FENCE_STATE];
-}
-
 /** Acquires the per-CODEX_HOME fence and returns an idempotent release. */
 export async function acquireCodexNativeConfigFence(
   key: string,
   options: CodexNativeConfigFenceOptions = {},
 ): Promise<() => void> {
-  const state = getFenceState();
+  const state = resolveGlobalMap<string, Promise<void>>(CODEX_NATIVE_CONFIG_FENCE_STATE);
   const previous = state.get(key) ?? Promise.resolve();
   let resolveCurrent: () => void = () => undefined;
   const current = new Promise<void>((resolve) => {

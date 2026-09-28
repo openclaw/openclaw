@@ -150,13 +150,14 @@ export async function maybeCreateDiscordAutoThread(
   if (!messageChannelId) {
     return undefined;
   }
-  try {
+  const findExistingThread = async () => {
     try {
-      const existingThreadId = (
-        (await getChannelMessage(params.client.rest, messageChannelId, params.message.id)) as {
-          thread?: { id?: string };
-        }
-      )?.thread?.id;
+      const message = await getChannelMessage(
+        params.client.rest,
+        messageChannelId,
+        params.message.id,
+      );
+      const existingThreadId = message?.thread?.id;
       if (existingThreadId) {
         logVerbose(
           `discord: autoThread reusing existing thread ${existingThreadId} on ${messageChannelId}/${params.message.id}`,
@@ -165,6 +166,13 @@ export async function maybeCreateDiscordAutoThread(
       }
     } catch {
       // Best effort only. A failed message refetch must not block creating the thread.
+    }
+    return undefined;
+  };
+  try {
+    const existingThreadId = await findExistingThread();
+    if (existingThreadId) {
+      return existingThreadId;
     }
     if (params.message.author?.bot) {
       logVerbose(
@@ -223,25 +231,7 @@ export async function maybeCreateDiscordAutoThread(
     logVerbose(
       `discord: autoThread creation failed for ${messageChannelId}/${params.message.id}: ${String(err)}`,
     );
-    try {
-      const msg = (await getChannelMessage(
-        params.client.rest,
-        messageChannelId,
-        params.message.id,
-      )) as {
-        thread?: { id?: string };
-      };
-      const existingThreadId = msg?.thread?.id || "";
-      if (existingThreadId) {
-        logVerbose(
-          `discord: autoThread reusing existing thread ${existingThreadId} on ${messageChannelId}/${params.message.id}`,
-        );
-        return existingThreadId;
-      }
-    } catch {
-      // If the refetch also fails, fall through to return undefined.
-    }
-    return undefined;
+    return findExistingThread();
   }
 }
 

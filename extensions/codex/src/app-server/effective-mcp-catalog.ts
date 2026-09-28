@@ -168,7 +168,7 @@ export async function loadCodexEffectiveMcpCatalog(
   if (!binding?.clientId) {
     return undefined;
   }
-  const retained = retainSharedCodexAppServerClientByInstanceId(binding.clientId);
+  const retained = await retainSharedCodexAppServerClientByInstanceId(binding.clientId);
   if (!retained) {
     return undefined;
   }
@@ -180,6 +180,6 @@ export async function loadCodexEffectiveMcpCatalog(
       toolOverrides: params.toolOverrides,
     });
   } finally {
-    retained.release();
+    await retained.release();
   }
 }

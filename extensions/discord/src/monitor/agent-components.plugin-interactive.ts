@@ -12,10 +12,10 @@ import type {
   AgentComponentInteraction,
   ComponentInteractionContext,
   DiscordChannelContext,
-} from "./agent-components-helpers.js";
+} from "./agent-components.types.js";
 
 const loadConversationRuntime = createLazyRuntimeModule(
-  () => import("./agent-components.runtime.js"),
+  () => import("openclaw/plugin-sdk/conversation-runtime"),
 );
 
 export async function dispatchPluginDiscordInteractiveEvent(params: {

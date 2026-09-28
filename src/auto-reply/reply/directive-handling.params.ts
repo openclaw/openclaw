@@ -1,4 +1,5 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { AgentModelPrimaryWriteTarget } from "../../agents/agent-scope.js";
 /** Parameter contracts for the canonical directive transaction handler. */
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
@@ -29,6 +30,7 @@ type HandleDirectiveOnlyCoreParams = {
   policyAliasIndex?: ModelAliasIndex;
   allowedModelKeys: Set<string>;
   modelPolicy?: ModelVisibilityPolicy;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   allowedModelCatalog: Awaited<
     ReturnType<typeof import("../../agents/prepared-model-catalog.js").readPreparedModelCatalog>
   >;

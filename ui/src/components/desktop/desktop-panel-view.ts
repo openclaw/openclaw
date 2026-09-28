@@ -282,6 +282,7 @@ export function renderDesktopConnection(options: {
   showApps: boolean;
   sizing: DesktopSizingOptions;
   pictureInPictureControl: TemplateResult;
+  audioControl?: TemplateResult;
   presentationControls?: TemplateResult | typeof nothing;
   onDisconnect: () => void;
   onLaunch: (app: WorkerDesktopAppId) => void;
@@ -335,8 +336,8 @@ export function renderDesktopConnection(options: {
             ? html`<span class="desktop-toolbar-mode" role="status">${t("desktop.viewOnly")}</span>`
             : nothing
       }
-      ${renderDesktopSizing(options.sizing)} ${options.pictureInPictureControl}
-      ${options.presentationControls ?? nothing}
+      ${renderDesktopSizing(options.sizing)} ${options.audioControl ?? nothing}
+      ${options.pictureInPictureControl} ${options.presentationControls ?? nothing}
       <button
         class="desktop-toolbar-action"
         type="button"

@@ -60,20 +60,16 @@ async function listRepos(
   const repos = new Map<string, Repository>();
   const excluded = new Set(cfg.excludeRepos.map((repo) => repo.toLowerCase()));
   for (const org of new Set(cfg.orgs)) {
-    await client.attempt(
-      `List repositories for ${org}`,
-      async () => {
-        for await (const repo of client.pages(
-          pathWithQuery(`/orgs/${encodeURIComponent(org)}/repos`, { type: "all" }),
-          repoSchema,
-        )) {
-          if (!repo.archived && !excluded.has(repo.full_name.toLowerCase())) {
-            repos.set(repo.full_name.toLowerCase(), repo);
-          }
+    await client.attempt(`List repositories for ${org}`, async () => {
+      for await (const repo of client.pages(
+        pathWithQuery(`/orgs/${encodeURIComponent(org)}/repos`, { type: "all" }),
+        repoSchema,
+      )) {
+        if (!repo.archived && !excluded.has(repo.full_name.toLowerCase())) {
+          repos.set(repo.full_name.toLowerCase(), repo);
         }
-      },
-      true,
-    );
+      }
+    });
   }
   return repos;
 }
@@ -103,44 +99,32 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
       const people = new Map<string, Person>();
       const add = (login: string) => people.set(login.toLowerCase(), { github: [login] });
       for (const team of cfg.teams) {
-        await client.attempt(
-          `Load team ${team.org}/${team.slug}`,
-          async () => {
-            for await (const user of client.pages(
-              pathWithQuery(
-                `/orgs/${encodeURIComponent(team.org)}/teams/${encodeURIComponent(team.slug)}/members`,
-                {},
-              ),
-              userSchema,
-            )) {
-              add(user.login);
-            }
-          },
-          true,
-        );
+        await client.attempt(`Load team ${team.org}/${team.slug}`, async () => {
+          for await (const user of client.pages(
+            pathWithQuery(
+              `/orgs/${encodeURIComponent(team.org)}/teams/${encodeURIComponent(team.slug)}/members`,
+              {},
+            ),
+            userSchema,
+          )) {
+            add(user.login);
+          }
+        });
       }
       if (cfg.includeDirectCollaborators) {
         for (const repo of (await listRepos(client, cfg)).values()) {
-          await client.attempt(
-            `Load collaborators for ${repo.full_name}`,
-            async () => {
-              for await (const user of client.pages(
-                pathWithQuery(`${repoPath(repo.full_name)}/collaborators`, {
-                  affiliation: "direct",
-                }),
-                collaboratorSchema,
-              )) {
-                if (
-                  user.permissions?.push ||
-                  user.permissions?.maintain ||
-                  user.permissions?.admin
-                ) {
-                  add(user.login);
-                }
+          await client.attempt(`Load collaborators for ${repo.full_name}`, async () => {
+            for await (const user of client.pages(
+              pathWithQuery(`${repoPath(repo.full_name)}/collaborators`, {
+                affiliation: "direct",
+              }),
+              collaboratorSchema,
+            )) {
+              if (user.permissions?.push || user.permissions?.maintain || user.permissions?.admin) {
+                add(user.login);
               }
-            },
-            true,
-          );
+            }
+          });
         }
       }
       checkAbort(runtime.signal, ABORT_LABEL);

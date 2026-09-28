@@ -66,7 +66,7 @@ async function reconcileStartupOrphans(
   const env = database.env ?? process.env;
   const statePath = resolveOpenClawStateSqlitePath(env);
   if (!hasGatewayLifecycleCoordinator({ databasePath: statePath })) {
-    return;
+    return undefined;
   }
   try {
     const running = withOpenClawAgentDatabaseReadOnly(
@@ -74,14 +74,14 @@ async function reconcileStartupOrphans(
       database,
     );
     if (running.found && !running.value) {
-      return;
+      return undefined;
     }
   } catch {
     // The writable owner retains schema repair and integrity diagnosis for uncertain reads.
   }
   const lock = await readActiveGatewayLockIdentity({ env, requireInspection: true });
   if (lock?.pid !== process.pid || !lock.ownerId) {
-    return;
+    return undefined;
   }
   const assertGatewayOwner = () => {
     assertCurrent?.();
@@ -99,7 +99,8 @@ async function reconcileStartupOrphans(
   // Consume this admitted physical database, not a second global target scan.
   const connection = openOpenClawAgentDatabase(database);
   const selected = readSessionEntriesByStatus(connection, ["running"]);
-  let count = 0;
+  let interrupted = 0;
+  let retained = 0;
   for (const { entry, sessionKey } of selected) {
     if (
       !isSubagentSessionKey(sessionKey) ||
@@ -123,17 +124,22 @@ async function reconcileStartupOrphans(
       current.updatedAt === entry.updatedAt &&
       current.startedAt === entry.startedAt &&
       isUnsettledPredecessor(current);
+    const hasOwner = () =>
+      hasSubagentSessionRecoveryOwner(identity) ||
+      isSessionWorkAdmissionActive(connection.path, [sessionKey, entry.sessionId]);
     const assertOwnerless = () => {
       assertGatewayOwner();
-      if (
-        hasSubagentSessionRecoveryOwner(identity) ||
-        isSessionWorkAdmissionActive(connection.path, [sessionKey, entry.sessionId])
-      ) {
+      if (hasOwner()) {
         throw new Error("a current or retained run/task owns this session");
       }
     };
     try {
-      assertOwnerless();
+      assertGatewayOwner();
+      // Retained runs belong to registry recovery; only session-only orphans settle here.
+      if (hasOwner()) {
+        retained++;
+        continue;
+      }
       const outcome = buildAgentRunTerminalOutcome({
         status: "error",
         error: "subagent run was interrupted before a terminal lifecycle event was persisted",
@@ -166,14 +172,12 @@ async function reconcileStartupOrphans(
           });
         },
       });
-      count++;
+      interrupted++;
     } catch (error) {
       log.warn(`session: retained startup subagent ${sessionKey}: ${String(error)}`);
     }
   }
-  if (count > 0) {
-    log.info(`session: marked ${count} prior-process subagent run(s) interrupted`);
-  }
+  return { interrupted, retained };
 }
 
 /** Await SQLite maintenance and projection repair before serving session history. */
@@ -187,11 +191,15 @@ export async function runStartupSessionMigration(params: {
 }): Promise<void> {
   let reconcile = params.deps?.reconcileSessionTranscriptIndexes;
   let reconciledSessions = 0;
+  let interruptedSubagents = 0;
+  let retainedSubagents = 0;
   await runSessionStartupMigration({
     ...params,
     handoffDatabase: async (database) => {
       try {
-        await reconcileStartupOrphans(database, params.log, params.assertCurrent);
+        const result = await reconcileStartupOrphans(database, params.log, params.assertCurrent);
+        interruptedSubagents += result?.interrupted ?? 0;
+        retainedSubagents += result?.retained ?? 0;
       } catch (error) {
         params.assertCurrent?.();
         params.log.warn(
@@ -206,6 +214,11 @@ export async function runStartupSessionMigration(params: {
       reconciledSessions += result.reconciledSessions;
     },
   });
+  if (interruptedSubagents > 0 || retainedSubagents > 0) {
+    params.log.info(
+      `session: startup subagents: ${interruptedSubagents} interrupted, ${retainedSubagents} retained by run/task owners`,
+    );
+  }
   if (reconciledSessions > 0) {
     params.log.info(
       `session: rebuilt ${reconciledSessions} transcript projection(s) before serving history`,

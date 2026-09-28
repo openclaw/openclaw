@@ -40,7 +40,6 @@ type TelegramSelectedQuoteToolProgressHit = {
 type TelegramApiRootBotEndpointHit = {
   path: string;
   pathSegments: string[];
-  value: string;
   normalized: string;
 };
 type DoctorAllowFromList = Array<string | number>;
@@ -193,7 +192,6 @@ function scanTelegramBotEndpointApiRoots(cfg: OpenClawConfig): TelegramApiRootBo
     hits.push({
       path: `${scope.prefix}.apiRoot`,
       pathSegments: [...scope.pathSegments, "apiRoot"],
-      value,
       normalized: normalizeTelegramApiRoot(value),
     });
   }
@@ -509,9 +507,7 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
 }
 
 function hasConfiguredGroups(account: DoctorAccountRecord, parent?: DoctorAccountRecord): boolean {
-  const groups =
-    (asObjectRecord(account.groups) as DoctorAccountRecord | null) ??
-    (asObjectRecord(parent?.groups) as DoctorAccountRecord | null);
+  const groups = asObjectRecord(account.groups) ?? asObjectRecord(parent?.groups);
   return Boolean(groups) && Object.keys(groups ?? {}).length > 0;
 }
 
@@ -597,7 +593,7 @@ export const telegramDoctor: ChannelDoctorAdapter = {
       hits: scanTelegramSelectedQuoteToolProgressWarnings(cfg),
     }),
   ],
-  repairConfig: async ({ cfg }) => await repairTelegramConfig({ cfg }),
+  repairConfig: repairTelegramConfig,
   collectEmptyAllowlistExtraWarnings: collectTelegramEmptyAllowlistExtraWarnings,
   shouldSkipDefaultEmptyGroupAllowlistWarning: (params) => params.channelName === "telegram",
 };

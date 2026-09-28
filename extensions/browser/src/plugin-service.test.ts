@@ -1,6 +1,6 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Browser tests cover plugin service plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "./config/config.js";
 import { resolveBrowserPluginEnableState } from "./plugin-enabled.js";
 import { createBrowserPluginService } from "./plugin-service.js";
 
@@ -22,7 +22,7 @@ const runtimeMocks = vi.hoisted(() => ({
   stopBrowserControlService: vi.fn(async () => undefined),
 }));
 
-vi.mock("./sdk-node-runtime.js", () => ({
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
   startLazyPluginServiceModule: runtimeMocks.startLazyPluginServiceModule,
 }));
 

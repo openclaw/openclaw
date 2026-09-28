@@ -26,6 +26,16 @@ import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import type { RespondFn } from "./types.js";
 
+function expectHistoryThreadSql(queries: string[]) {
+  // Pending-input reconciliation is still local; schema admission needs one freshness probe.
+  expect(
+    queries.filter(
+      (sql) => sql !== "PRAGMA data_version" && !sql.includes('"session_pending_inputs"'),
+    ),
+  ).toEqual([]);
+  expect(queries.filter((sql) => sql === "PRAGMA data_version").length).toBeLessThanOrEqual(1);
+}
+
 it.each(["native", "acp"])(
   "keeps cursor bytes and %s coordination visibility without request-thread transcript reads",
   async (sourceKind) => {
@@ -99,12 +109,7 @@ it.each(["native", "acp"])(
       const initialCounter = observeSqliteReadSql(StatementSync.prototype);
       try {
         const repeated = await call();
-        // Pending-input reconciliation has not moved to the worker yet.
-        expect(
-          initialCounter.queries.filter(
-            (sql) => sql !== "PRAGMA user_version" && !sql.includes('"session_pending_inputs"'),
-          ),
-        ).toEqual([]);
+        expectHistoryThreadSql(initialCounter.queries);
         expect(repeated).toEqual({
           ...initial,
           sessionInfo: { ...asOptionalRecord(initial.sessionInfo), snapshotAt: expect.any(Number) },
@@ -203,11 +208,7 @@ it.each(["native", "acp"])(
         const counter = observeSqliteReadSql(StatementSync.prototype);
         try {
           expect(JSON.stringify(await call(initial.deltaCursor))).toBe(goldenJson);
-          expect(
-            counter.queries.filter(
-              (sql) => sql !== "PRAGMA user_version" && !sql.includes('"session_pending_inputs"'),
-            ),
-          ).toEqual([]);
+          expectHistoryThreadSql(counter.queries);
           expect(read).not.toHaveBeenCalled();
           expect(projectionRead).not.toHaveBeenCalled();
         } finally {

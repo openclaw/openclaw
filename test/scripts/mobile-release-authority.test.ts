@@ -18,6 +18,7 @@ import { applyMobileReleasePlan, planMobileRelease } from "../../scripts/mobile-
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { cleanupTempDirs, makeTempDir, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { runVitestShutdownCommand } from "../helpers/vitest-shutdown-command.js";
+import { registerBoundedSignalTests } from "./mobile-release-process.test-support.js";
 
 const REPOSITORY = "openclaw/openclaw";
 const TARGET_REF = "release/2026.9.2-mobile";
@@ -3658,11 +3659,11 @@ fi
           "bundler-cache": false,
           "ruby-version": "3.4.10",
           "working-directory": "apps/android",
-          bundler: "2.6.9",
+          bundler: "4.0.21",
         });
-        expect(bundleStep?.run).toContain("bundle _2.6.9_ install --jobs 4 --retry 3");
-        expect(bundleStep?.run).toContain("bundle _2.6.9_ check");
-        expect(bundleStep?.run).toContain("bundle _2.6.9_ exec ruby");
+        expect(bundleStep?.run).toContain("bundle _4.0.21_ install --jobs 4 --retry 3");
+        expect(bundleStep?.run).toContain("bundle _4.0.21_ check");
+        expect(bundleStep?.run).toContain("bundle _4.0.21_ exec ruby");
         expect(source).not.toContain("gem install fastlane");
       }
 
@@ -4066,8 +4067,8 @@ fi
     const prepared = runSigningProof();
     expect(prepared.result.status, prepared.result.stderr).toBe(0);
     expect(prepared.events).toEqual([
-      "bundle:_2.6.9_ check",
-      "bundle:_2.6.9_ exec fastlane ios signing_check",
+      "bundle:_4.0.21_ check",
+      "bundle:_4.0.21_ exec fastlane ios signing_check",
       "probe:root-cwd",
     ]);
     expect(signingProof).toContain("source ./scripts/lib/ios-fastlane.sh");
@@ -4075,7 +4076,7 @@ fi
 
     const failedCheck = runSigningProof({ FIXTURE_FAIL_CHECK: "1" });
     expect(failedCheck.result.status).not.toBe(0);
-    expect(failedCheck.events).toEqual(["bundle:_2.6.9_ check"]);
+    expect(failedCheck.events).toEqual(["bundle:_4.0.21_ check"]);
 
     const authorityCheckout = releaseSteps.find(
       (step) => step.name === "Checkout trusted mobile release authority",
@@ -4471,6 +4472,8 @@ fi
     expect(unsafeCommandCount).toBe(0);
   });
 
+  registerBoundedSignalTests();
+
   it("bounds owned child process trees", async () => {
     const runnerTemp = tempRoots.make("openclaw-ios-keychain-process-runner-");
     if (process.platform !== "win32") {
@@ -4515,7 +4518,10 @@ try {
 }
 const processIds = fs.readFileSync(${JSON.stringify(pidFile)}, "utf8").trim().split("\\n").map(Number);
 let processGroupAlive = true;
-try { process.kill(-processIds[0], 0); } catch { processGroupAlive = false; }
+try { process.kill(-processIds[0], 0); } catch (error) {
+  if (error?.code !== "ESRCH") throw error;
+  processGroupAlive = false;
+}
 process.stdout.write(JSON.stringify({ elapsedMs: Date.now() - startedAt, message, processGroupAlive, processIds }));
 `;
         const result = spawnSync(

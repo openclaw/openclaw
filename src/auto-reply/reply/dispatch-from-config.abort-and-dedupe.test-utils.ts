@@ -1140,16 +1140,25 @@ describe("dispatchReplyFromConfig", () => {
       undefined,
       boundConversationBinding.conversation,
     );
-    expect(sessionStoreMocks.loadSessionEntry).toHaveBeenCalledWith({
-      agentId: "main",
-      storePath: sourceStorePath,
-      sessionKey: sourceSessionKey,
-      readConsistency: "latest",
-    });
-    expect(sessionStoreMocks.loadSessionEntry).not.toHaveBeenCalledWith(
+    expect(sessionStoreMocks.loadSessionEntry).toHaveBeenCalledWith(
+      {
+        agentId: "main",
+        storePath: sourceStorePath,
+        sessionKey: sourceSessionKey,
+        readConsistency: "latest",
+      },
+      {
+        assertCurrent: expect.any(Function),
+        deadlineMs: expect.any(Number),
+        onWait: undefined,
+        signal: expect.any(AbortSignal),
+      },
+    );
+    const readScopes = sessionStoreMocks.loadSessionEntry.mock.calls.map(([scope]) => scope);
+    expect(readScopes).not.toContainEqual(
       expect.objectContaining({ agentId: "opencode", sessionKey: sourceSessionKey }),
     );
-    expect(sessionStoreMocks.loadSessionEntry).not.toHaveBeenCalledWith(
+    expect(readScopes).not.toContainEqual(
       expect.objectContaining({
         storePath: targetStorePath,
         sessionKey: sourceSessionKey,

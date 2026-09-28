@@ -319,62 +319,34 @@ export function inferToolKind(name?: string): ToolKind {
 
 /** Extracts textual ACP tool-call content from unknown runtime payloads. */
 export function extractToolCallContent(value: unknown): ToolCallContent[] | undefined {
+  const texts: string[] = [];
   if (hasNonEmptyString(value)) {
-    return value.trim()
-      ? [
-          {
-            type: "content",
-            content: {
-              type: "text",
-              text: value,
-            },
-          },
-        ]
-      : undefined;
-  }
-
-  const record = asRecord(value);
-  if (!record) {
-    return undefined;
-  }
-
-  const contents: ToolCallContent[] = [];
-  const blocks = Array.isArray(record.content) ? record.content : [];
-  for (const block of blocks) {
-    const entry = asRecord(block);
-    if (entry?.type === "text" && hasNonEmptyString(entry.text)) {
-      contents.push({
-        type: "content",
-        content: {
-          type: "text",
-          text: entry.text,
-        },
-      });
+    texts.push(value);
+  } else {
+    const record = asRecord(value);
+    if (!record) {
+      return undefined;
+    }
+    const blocks = Array.isArray(record.content) ? record.content : [];
+    for (const block of blocks) {
+      const entry = asRecord(block);
+      if (entry?.type === "text" && hasNonEmptyString(entry.text)) {
+        texts.push(entry.text);
+      }
+    }
+    if (texts.length === 0) {
+      const fallbackText =
+        readStringValue(record.text) ??
+        readStringValue(record.message) ??
+        readStringValue(record.error);
+      if (hasNonEmptyString(fallbackText)) {
+        texts.push(fallbackText);
+      }
     }
   }
-
-  if (contents.length > 0) {
-    return contents;
-  }
-
-  const fallbackText =
-    readStringValue(record.text) ??
-    readStringValue(record.message) ??
-    readStringValue(record.error);
-
-  if (!hasNonEmptyString(fallbackText)) {
-    return undefined;
-  }
-
-  return [
-    {
-      type: "content",
-      content: {
-        type: "text",
-        text: fallbackText,
-      },
-    },
-  ];
+  return texts.length > 0
+    ? texts.map((text) => ({ type: "content", content: { type: "text", text } }))
+    : undefined;
 }
 
 /** Extracts bounded file locations from nested tool-call payloads. */

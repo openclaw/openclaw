@@ -137,6 +137,9 @@ describe("resident Codex catalog notifications", () => {
       await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
       expect(nativeReads).toHaveBeenCalledTimes(phase === "written" ? 1 : 0);
       expect(warnings).toHaveBeenCalledOnce();
+      expect(warnings.mock.calls[0]?.[0]).toBe(
+        "Codex resident catalog metadata refresh interrupted; deferred for automatic recovery",
+      );
       const warning = warnings.mock.calls[0]?.[1];
       expect(warning).toMatchObject({
         error: {
@@ -190,6 +193,11 @@ describe("resident Codex catalog notifications", () => {
       await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
       expect(readNative).toHaveBeenCalledTimes(2);
       expect(warnings).toHaveBeenCalledOnce();
+      expect(warnings).toHaveBeenCalledWith("Codex resident catalog background update failed", {
+        error: expect.objectContaining({
+          cause: expect.objectContaining({ message: "native catalog unavailable" }),
+        }),
+      });
       await vi.advanceTimersByTimeAsync(4 * 30_000);
       expect(readNative).toHaveBeenCalledTimes(2);
       notify();
@@ -200,6 +208,43 @@ describe("resident Codex catalog notifications", () => {
       expect(warnings).toHaveBeenCalledOnce();
     },
   );
+
+  it("preserves an observation read failure while its client remains open", async () => {
+    const { index, harness, complete } = await fixture();
+    const warnings = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
+    complete();
+    const request = JSON.parse(await harness.waitForWrite(0));
+    harness.send({ id: request.id, error: { code: -32603, message: "metadata read unavailable" } });
+    await nextTurn();
+    expect(index.hasActiveWork()).toBe(false);
+    expect(warnings).toHaveBeenCalledExactlyOnceWith(
+      "Codex resident catalog background update failed",
+      {
+        error: expect.objectContaining({
+          message: expect.stringContaining("metadata read unavailable"),
+        }),
+      },
+    );
+    expect(harness.client.getCloseError()).toBeUndefined();
+  });
+
+  it("preserves a catalog persistence failure", async () => {
+    const error = new Error("catalog storage unavailable");
+    const warnings = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
+    await fixture([thread()], {
+      state: {
+        entries: async () => [],
+        register: async () => {
+          throw error;
+        },
+        delete: async () => false,
+      },
+    });
+    expect(warnings).toHaveBeenCalledExactlyOnceWith(
+      "Codex resident catalog background update failed",
+      { error },
+    );
+  });
 
   it("leaves an unchanged home idle until the 15-minute native safety walk", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });

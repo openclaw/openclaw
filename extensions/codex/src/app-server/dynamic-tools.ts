@@ -9,7 +9,6 @@ import {
   createCodexAppServerToolResultExtensionRunner,
   extractMessagingToolSend,
   extractMessagingToolSendResult,
-  extractMessagingToolSourceReplyPayload,
   finalizeToolTerminalPresentation,
   formatToolExecutionErrorMessage,
   getBeforeToolCallFailureDisposition,
@@ -34,12 +33,12 @@ import {
   setBeforeToolCallDiagnosticsEnabled,
   type AnyAgentTool,
   type MessagingToolSend,
-  type MessagingToolSourceReplyPayload,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   copyInternalToolResultState,
   createAgentHarnessToolExecutionBoundaryRegistry,
+  extractMessagingToolSourceReplyPayload,
   getCoreTtsToolResultMediaUrls,
   normalizeAcceptedSessionSpawnResult,
   recordAgentHarnessToolResultTelemetry,
@@ -172,10 +171,6 @@ function applyCurrentMessageProvider(
   return { ...args, provider };
 }
 
-export type CodexConfirmedMediaDelivery = {
-  sourceUrls: readonly string[];
-} & ({ kind: "outbound"; target: MessagingToolSend } | { kind: "sourceReply" });
-
 /** Runtime bridge returned to Codex app-server attempt code. */
 export type CodexDynamicToolBridge = {
   /** Final executable tools after schema projection and hook-wrapper quarantine. */
@@ -200,19 +195,8 @@ export type CodexDynamicToolBridge = {
   /** Bind the authenticated app-server client once remote thread startup completes. */
   setRemoteWorkspaceFileReader?: (reader: CodexRemoteWorkspaceFileReader) => void;
   telemetry: AgentHarnessToolResultTelemetry & {
-    didSendViaMessagingTool: boolean;
     didDeliverSourceReplyViaMessageTool: boolean;
     sourceReplyDelivered?: true;
-    messagingToolSentTexts: string[];
-    messagingToolSentMediaUrls: string[];
-    messagingToolSentTargets: MessagingToolSend[];
-    messagingToolSourceReplyPayloads: MessagingToolSourceReplyPayload[];
-    confirmedMediaDeliveries: CodexConfirmedMediaDelivery[];
-    toolMediaUrls: string[];
-    toolAutoDeliveryMediaUrls: string[];
-    coreTtsToolResults: object[];
-    toolAudioAsVoice: boolean;
-    successfulCronAdds?: number;
     acceptedSessionSpawns: AcceptedSessionSpawn[];
     quarantinedTools: CodexDynamicToolSchemaQuarantine[];
   };
@@ -260,6 +244,7 @@ export function createCodexDynamicToolBridge(params: {
   };
   hookContext?: CodexDynamicToolHookContext;
   loading?: CodexDynamicToolsLoading;
+  functionToolsOnly?: boolean;
   directToolNames?: Iterable<string>;
 }): CodexDynamicToolBridge {
   const toolResultHookContext = toToolResultHookContext(params.hookContext);
@@ -360,6 +345,7 @@ export function createCodexDynamicToolBridge(params: {
       entries: registeredSpecTools,
       loading: params.loading ?? "searchable",
       directToolNames,
+      functionToolsOnly: params.functionToolsOnly,
     });
   const resolveAutomationsToolsAllow = createCodexAutomationsToolsAllowResolver(specs);
   let readRemoteWorkspaceFile: CodexRemoteWorkspaceFileReader | undefined;
@@ -377,6 +363,7 @@ export function createCodexDynamicToolBridge(params: {
           entries: availableTools,
           loading: params.loading ?? "searchable",
           directToolNames,
+          functionToolsOnly: params.functionToolsOnly,
         }),
     specs,
     resultContentSourceForTool: (toolName) => toolMap.get(toolName)?.tool.resultContentSource,
@@ -421,7 +408,9 @@ export function createCodexDynamicToolBridge(params: {
         toolName === "automations" ? resolveAutomationsToolsAllow(call.arguments) : call.arguments;
       const args = asNonArrayRecord(rawArguments);
       const invocationStartedAt = Date.now();
-      const signal = composeAbortSignals(params.signal, options?.signal);
+      const signal = options?.signal
+        ? AbortSignal.any([params.signal, options.signal])
+        : params.signal;
       let preparedMessageMedia:
         | Awaited<ReturnType<typeof prepareCodexRemoteWorkspaceMessageMedia>>
         | undefined;
@@ -922,16 +911,6 @@ function toToolResultHookContext(
   };
 }
 
-function composeAbortSignals(...signals: Array<AbortSignal | undefined>): AbortSignal {
-  const activeSignals = signals.filter((signal): signal is AbortSignal => Boolean(signal));
-  if (activeSignals.length === 0) {
-    return new AbortController().signal;
-  }
-  if (activeSignals.length === 1) {
-    return expectDefined(activeSignals[0], "single active Codex abort signal");
-  }
-  return AbortSignal.any(activeSignals);
-}
 function isToolResultYield(result: AgentToolResult<unknown>): boolean {
   const details = result.details;
   if (!isRecord(details) || typeof details.status !== "string") {

@@ -78,7 +78,7 @@ vi.mock("openclaw/plugin-sdk/reply-chunking", () => ({
   resolveTextChunkLimit: resolveTextChunkLimitMock,
 }));
 
-vi.mock("./outbound-media-runtime.js", () => ({
+vi.mock("openclaw/plugin-sdk/outbound-media", () => ({
   loadOutboundMediaFromUrl: loadOutboundMediaFromUrlMock,
 }));
 

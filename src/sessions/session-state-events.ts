@@ -728,35 +728,3 @@ export function recordSubagentSpawned(params: {
     watcherSessionKeys: [params.requesterSessionKey],
   });
 }
-
-type SubagentTerminalStatus = "ok" | "error" | "timeout" | "cancelled";
-
-const SUBAGENT_TERMINAL_SUMMARY: Record<SubagentTerminalStatus, string> = {
-  ok: "child run completed",
-  error: "child run failed",
-  timeout: "child run timed out",
-  cancelled: "child run cancelled",
-};
-
-/** Project an already-normalized subagent terminal outcome into the signal log. */
-export function recordSubagentTerminalState(params: {
-  childSessionKey: string;
-  runId: string;
-  requesterSessionKey: string;
-  outcomeStatus: SubagentTerminalStatus;
-}): void {
-  // Non-ok statuses share kind run_failed: the closed kind union mirrors the sibling
-  // SubagentRunOutcome status projection, which also folds cancel/timeout into error
-  // status. The precise outcome survives in payload for changesSince consumers.
-  recordSessionStateEvent({
-    sessionKey: params.childSessionKey,
-    agentId: resolveAgentIdFromSessionKey(params.childSessionKey),
-    kind: params.outcomeStatus === "ok" ? "run_completed" : "run_failed",
-    actorType: "system",
-    runId: params.runId,
-    dedupeKey: `run-terminal:${params.runId}`,
-    summary: SUBAGENT_TERMINAL_SUMMARY[params.outcomeStatus],
-    ...(params.outcomeStatus === "ok" ? {} : { payload: { outcome: params.outcomeStatus } }),
-    watcherSessionKeys: [params.requesterSessionKey],
-  });
-}

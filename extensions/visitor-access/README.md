@@ -76,6 +76,13 @@ invitation policy. Set `accessPolicyPlugin: "visitor-access"` on that same role.
 This requirement remains in force if the plugin or its manifest is missing,
 disabled, broken, or still starting. Staff roles without this binding and the
 Gateway owner retain their independent access to repair the configuration.
+
+The role must also declare `modelPolicy`: `{}` follows the
+configured source agent's primary and fallback models. Set `sourceAgent` to name
+that agent explicitly, `allow` to replace the permitted set, and `deny` for
+resolved model or family exclusions such as `provider/restricted-*`. Apply those
+exclusions before enabling guest access; an omitted model policy is unrestricted
+and does not qualify as a visitor role. Staff roles may omit it.
 A missing or unsuitable default refuses the invitation before
 writing the grant or adding the email to Cloudflare. Keep existing staff roles
 and their assignments when configuring the guest default.

@@ -20,10 +20,12 @@ import {
   type SessionSourceVerification,
 } from "../infra/deferred-plugin-session-sources.js";
 import * as migrationArtifact from "../infra/session-sqlite-migration-artifact.js";
+import { isSessionSqliteMigrationWarning } from "../infra/session-sqlite-migration-issues.js";
 import * as migrationRun from "../infra/session-sqlite-migration-manifest.js";
 import { ExitError } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { readSessionSqliteMigrationWarnings } from "./doctor-session-sqlite-warnings.js";
 import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
@@ -184,6 +186,7 @@ describe("retained session source verification", () => {
     "preserves an empty-index receipt for an existing database (unindexed history: %s)",
     async (history) => {
       await withOpenClawTestState({ label: "deferred-empty-index" }, async (state) => {
+        openOpenClawStateDatabase({ env: state.env });
         const cfg: OpenClawConfig = { agents: { entries: { main: { default: true } } } };
         const directory = state.sessionsDir("main");
         fs.mkdirSync(directory, { recursive: true });
@@ -308,6 +311,7 @@ describe("retained session source verification", () => {
           },
         },
         async (state) => {
+          openOpenClawStateDatabase({ env: state.env });
           const cfg: OpenClawConfig = {
             agents: { entries: { main: { default: true }, ops: {} } },
             gateway: { mode: "local" },
@@ -669,4 +673,32 @@ describe("retained session source verification", () => {
       });
     },
   );
+  it("reverifies a changed retained index without replaying current canonical metadata", async () => {
+    await withOpenClawTestState({ label: "deferred-plugin-source-conflict" }, async (state) => {
+      const { cfg, storePath, scope } = seedDeferredPluginSessionSource(state);
+      await runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" });
+      await upsertSessionEntryCore(
+        { ...scope, sessionKey: "agent:main:kept" },
+        { label: "current" },
+      );
+      fs.appendFileSync(storePath, "\n");
+      const retry = await runDoctorSessionSqlite({
+        cfg,
+        env: state.env,
+        allAgents: true,
+        mode: "import",
+      });
+      expect(retry.totals.importedEntries).toBe(0);
+      const issues = retry.targets.flatMap((target) => target.issues);
+      expect(issues).toContainEqual(
+        expect.objectContaining({ code: "retained_plugin_source_index_rebuilt" }),
+      );
+      expect(issues.every(isSessionSqliteMigrationWarning)).toBe(true);
+      expect(loadExactSessionEntry({ ...scope, sessionKey: "agent:main:kept" })?.entry.label).toBe(
+        "current",
+      );
+      expect(() => assertSessionStoreMigrationComplete({ cfg, env: state.env })).not.toThrow();
+      expect(fs.existsSync(storePath)).toBe(true);
+    });
+  });
 });

@@ -37,7 +37,7 @@ import {
 } from "./google-messages.js";
 import { consumeGoogleGenerateContentStream } from "./google-stream.js";
 
-type GoogleApiType = "google-generative-ai" | "google-vertex";
+export type GoogleApiType = "google-generative-ai" | "google-vertex" | "google-interactions";
 
 type GoogleThinkingLevel = `${ThinkingLevel}`;
 
@@ -252,6 +252,39 @@ export function buildGoogleSimpleThinking<T extends GoogleApiType>(
     enabled: true,
     budgetTokens: getGoogleBudget(model, effort, options.thinkingBudgets),
   };
+}
+
+export function buildGoogleInteractionsSimpleThinking<T extends GoogleApiType>(
+  model: Model<T>,
+  options: SimpleStreamOptions | undefined,
+): GoogleThinkingOptions {
+  const thinking = buildGoogleSimpleThinking(model, options);
+  if (!thinking.enabled) {
+    if (!model.reasoning) {
+      return thinking;
+    }
+    const disabled = getDisabledGoogleThinkingConfig(model);
+    return {
+      enabled: false,
+      ...(disabled.thinkingLevel ? { level: disabled.thinkingLevel } : {}),
+    };
+  }
+  if (
+    thinking.level !== undefined ||
+    !options?.reasoning ||
+    isAdaptiveGoogleReasoningLevel(options.reasoning)
+  ) {
+    return thinking;
+  }
+
+  const clampedReasoning = clampThinkingLevel(model, options.reasoning);
+  if (clampedReasoning === "off") {
+    return { enabled: false };
+  }
+  if (clampedReasoning === "xhigh" || clampedReasoning === "max") {
+    return { enabled: true, level: getGoogleThinkingLevel("high", model) };
+  }
+  return { enabled: true, level: getGoogleThinkingLevel(clampedReasoning, model) };
 }
 
 function getDisabledGoogleThinkingConfig<T extends GoogleApiType>(model: Model<T>): ThinkingConfig {

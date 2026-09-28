@@ -738,12 +738,49 @@ async function readAppleCatalogBuild(
   return buildCatalog(existingCatalog, nativeSource, translations);
 }
 
-function validateCatalog(pathName: string, catalog: Catalog): number {
+function isCatalogDictionary(
+  value: unknown,
+  fields?: readonly string[],
+): value is Record<string, unknown> {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    (!fields || Object.keys(value).every((key) => fields.includes(key)))
+  );
+}
+
+function validateCatalog(
+  pathName: string,
+  catalog: Catalog,
+  activeKeys?: ReadonlySet<string>,
+): number {
   if (catalog.sourceLanguage !== "en" || catalog.version !== "1.0" || !catalog.strings) {
     throw new Error(`invalid Apple string catalog: ${pathName}`);
   }
   let checked = 0;
   for (const [key, entry] of Object.entries(catalog.strings)) {
+    if (activeKeys && !activeKeys.has(key)) {
+      // Retired rows still reach Xcode. Admit only valid plain generator shapes, without
+      // requiring inactive locales, translated state, nonempty copy or matching placeholders.
+      const valid =
+        isCatalogDictionary(entry, ["localizations"]) &&
+        (entry.localizations === undefined ||
+          (isCatalogDictionary(entry.localizations) &&
+            Object.values(entry.localizations).every(
+              (localization) =>
+                isCatalogDictionary(localization, ["stringUnit"]) &&
+                isCatalogDictionary(localization.stringUnit, ["state", "value"]) &&
+                typeof localization.stringUnit.state === "string" &&
+                typeof localization.stringUnit.value === "string",
+            )));
+      if (!valid) {
+        throw new Error(
+          `Apple catalog ${pathName} has an unsupported obsolete row for ${JSON.stringify(key)}; run native-app-i18n.ts sync --write`,
+        );
+      }
+      continue;
+    }
     const sourceTokens = formatTokens(key);
     for (const locale of REQUIRED_LOCALES) {
       const unit = entry.localizations?.[locale]?.stringUnit;
@@ -813,43 +850,44 @@ async function syncIosInfoPlist(write: boolean): Promise<number> {
   return checked;
 }
 
-export async function syncIosCatalog(write: boolean): Promise<AppleCatalogBuild> {
-  const build = await readAppleCatalogBuild(IOS_CATALOG_PATH, buildIosCatalog);
-  const catalogPath = path.join(ROOT, IOS_CATALOG_PATH);
+async function syncAppleCatalog(
+  catalogName: string,
+  buildCatalog: typeof buildIosCatalog,
+  write: boolean,
+  reportObsolete?: (message: string) => void,
+): Promise<AppleCatalogBuild> {
+  const build = await readAppleCatalogBuild(catalogName, buildCatalog);
+  const catalogPath = path.join(ROOT, catalogName);
   const expected = serializeAppleCatalog(build.catalog);
   const actual = await readFile(catalogPath, "utf8");
-  if (actual !== expected) {
-    if (!write) {
-      throw new Error(
-        `Apple catalog ${IOS_CATALOG_PATH} is stale; run apple-app-i18n.ts sync-ios --write`,
-      );
-    }
+  if (actual === expected) {
+    return build;
+  }
+  if (write) {
     await writeFile(catalogPath, expected, "utf8");
+    return build;
   }
-  return build;
-}
-
-export async function syncMacosCatalog(write: boolean): Promise<AppleCatalogBuild> {
-  const build = await readAppleCatalogBuild(MACOS_CATALOG_PATH, buildMacosCatalog);
-  const catalogPath = path.join(ROOT, MACOS_CATALOG_PATH);
-  const expected = serializeAppleCatalog(build.catalog);
-  const actual = await readFile(catalogPath, "utf8");
-  if (actual !== expected) {
-    if (!write) {
-      assertMacosCatalogCurrent(actual, build);
-      return build;
+  if (reportObsolete) {
+    const catalog = JSON.parse(actual) as Catalog;
+    const strings = catalog.strings;
+    if (isCatalogDictionary(strings) && actual === serializeAppleCatalog(catalog)) {
+      const active = build.catalog.strings ?? {};
+      const obsolete = Object.keys(strings).filter((key) => !Object.hasOwn(active, key));
+      // Ignore only complete obsolete rows; active values, metadata and formatting stay exact.
+      const filtered = {
+        ...catalog,
+        strings: Object.fromEntries(
+          Object.entries(strings).filter(([key]) => Object.hasOwn(active, key)),
+        ),
+      };
+      if (obsolete.length > 0 && serializeAppleCatalog(filtered) === expected) {
+        validateCatalog(catalogName, catalog, new Set(Object.keys(active)));
+        reportObsolete(`Apple obsolete catalog rows: ${catalogName} (keys=${obsolete.length})`);
+        return build;
+      }
     }
-    await writeFile(catalogPath, expected, "utf8");
   }
-  return build;
-}
-
-export function assertMacosCatalogCurrent(actual: string, build: AppleCatalogBuild): void {
-  if (actual !== serializeAppleCatalog(build.catalog)) {
-    throw new Error(
-      `Apple catalog ${MACOS_CATALOG_PATH} is stale; run native-app-i18n.ts sync --write`,
-    );
-  }
+  throw new Error(`Apple catalog ${catalogName} is stale; run native-app-i18n.ts sync --write`);
 }
 
 /**
@@ -862,7 +900,10 @@ export async function syncAppleAppI18n(): Promise<{
   infoPlistFiles: number;
   macosBuild: AppleCatalogBuild;
 }> {
-  const [build, macosBuild] = await Promise.all([syncIosCatalog(true), syncMacosCatalog(true)]);
+  const [build, macosBuild] = await Promise.all([
+    syncAppleCatalog(IOS_CATALOG_PATH, buildIosCatalog, true),
+    syncAppleCatalog(MACOS_CATALOG_PATH, buildMacosCatalog, true),
+  ]);
   const infoPlistFiles = await syncIosInfoPlist(true);
   return { build, infoPlistFiles, macosBuild };
 }
@@ -894,11 +935,13 @@ export async function verifyAppleAppI18n() {
   process.stdout.write(`apple-app-i18n: sourceMacosKeys=${macosKeys}\n`);
 }
 
-export async function checkAppleAppI18n() {
+export async function checkAppleAppI18n(
+  options: { reportObsolete?: (message: string) => void } = {},
+) {
   await verifyAppleAppI18n();
   const [iosBuild, macosBuild] = await Promise.all([
-    syncIosCatalog(false),
-    syncMacosCatalog(false),
+    syncAppleCatalog(IOS_CATALOG_PATH, buildIosCatalog, false, options.reportObsolete),
+    syncAppleCatalog(MACOS_CATALOG_PATH, buildMacosCatalog, false, options.reportObsolete),
   ]);
   const iosKeys = validateCatalog(IOS_CATALOG_PATH, iosBuild.catalog);
   const macosKeys = validateCatalog(MACOS_CATALOG_PATH, macosBuild.catalog);

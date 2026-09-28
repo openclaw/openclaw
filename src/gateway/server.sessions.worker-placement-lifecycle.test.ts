@@ -374,7 +374,6 @@ test("sessions.delete retains failed placement when worker cleanup is unavailabl
           get: () => ({ state: "failed", leaseId: "lease-1" }),
           hasInferenceForSession: () => false,
           cancelInferenceForSession: () => [],
-          resolveInferenceSessionForRunId: () => undefined,
         } as never,
         workerSessionPlacementService: placementService,
       },
@@ -442,7 +441,6 @@ test.each([
         workerEnvironmentService: {
           get: getWorkerEnvironment,
           hasInferenceForSession: () => false,
-          resolveInferenceSessionForRunId: () => undefined,
         } as never,
         workerSessionPlacementService: placementService,
       },
@@ -903,7 +901,6 @@ test.each(["worker-turn", "remote-exec"] as const)(
             ...harness.environments,
             hasInferenceForSession: () => false,
             cancelInferenceForSession: () => [],
-            resolveInferenceSessionForRunId: () => undefined,
           },
           workerPlacementDispatchService: harness.service,
           workerSessionPlacementService: placementStore,

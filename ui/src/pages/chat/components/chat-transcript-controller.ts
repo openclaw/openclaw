@@ -93,6 +93,10 @@ export class ChatTranscriptController implements ReactiveController {
     this.sessionVirtualizer?.connect();
   }
 
+  hostUpdate(): void {
+    this.sessionVirtualizer?.prepareUpdate();
+  }
+
   hostUpdated(): void {
     this.sessionVirtualizer?.update();
   }

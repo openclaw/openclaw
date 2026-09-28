@@ -87,9 +87,6 @@ export async function withUpdateCommandRecoveryUnwind(
   if (opts.recovery) {
     // Durable finalization alone owns native/terminal effects. Never replay
     // legacy compensation, including after an already-finalized failure.
-    if (failure) {
-      throw failure.error;
-    }
     return;
   }
   if (recoveryState.ledgerHandoffOwned && !recoveryState.ledgerHandoffCompleted) {

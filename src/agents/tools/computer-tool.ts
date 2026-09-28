@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ComputerUseV2ActionName } from "../../plugins/computer-use-contract.js";
@@ -37,6 +38,23 @@ import { readGatewayCallOptions } from "./gateway.js";
 
 export type { ComputerContextEpoch, ComputerToolTransport } from "./computer-tool-shared.js";
 export { invalidateComputerFrameIfMissing } from "./computer-tool-result.js";
+
+function prepareComputerArguments(args: unknown): unknown {
+  if (!isRecord(args)) {
+    return args;
+  }
+  let prepared = args;
+  for (const key of ["target", "node", "environmentId"] as const) {
+    const value = args[key];
+    if (typeof value === "string" && value.trim() === "") {
+      if (prepared === args) {
+        prepared = { ...args };
+      }
+      delete prepared[key];
+    }
+  }
+  return prepared;
+}
 
 export function createComputerTool(options?: {
   config?: OpenClawConfig;
@@ -171,10 +189,11 @@ export function createComputerTool(options?: {
     executionMode: "sequential",
     description: buildComputerToolDescription(initialCapabilities, targetScope),
     parameters: parameterSchema,
+    prepareArguments: prepareComputerArguments,
     execute: (toolCallId, args, signal) =>
       serialize(async () => {
         signal?.throwIfAborted();
-        const params = args as Record<string, unknown>;
+        const params = prepareComputerArguments(args) as Record<string, unknown>;
         const action = readToolStringParam(params, "action", {
           required: true,
         }) as ComputerToolAction;

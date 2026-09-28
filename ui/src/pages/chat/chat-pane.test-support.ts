@@ -130,8 +130,9 @@ export type TestChatPane = HTMLElement & {
   handleSessionSuggestionEvent: (event: SessionSuggestionEvent) => void;
   handleSessionTypingEvent: (event: SessionTypingEvent) => void;
   clearTypingActorForSessionMessage: (payload: unknown) => void;
+  pruneTypingActors: () => void;
   typingActors: Map<string, { label: string; expiresAt: number; preview?: string }>;
-  typingActorViews: () => { id: string; label: string; preview?: string }[];
+  typingActorViews: () => { id: string; label: string; preview?: string; paused?: boolean }[];
   sendTypingState: (typing: boolean, preview?: string) => void;
   refreshSessionSuggestions: () => Promise<void>;
   resolveCurrentSessionSuggestion: (
@@ -148,7 +149,7 @@ export type TestChatPane = HTMLElement & {
     sessionKey: string,
     transcriptLoad: Promise<boolean>,
   ) => void;
-  paneTitle: string;
+  presentationTitle: string | undefined;
   catalogSession: SessionCatalogSession | null;
   catalogItemMessage: (item: SessionCatalogTranscriptItem) => Record<string, unknown> | null;
   handleTranscriptScroll: (event: Event) => void;
@@ -229,11 +230,13 @@ type FixtureContextServices =
   | "agentIdentity"
   | "agents"
   | "sessions"
-  | "connectionBootstrap";
+  | "connectionBootstrap"
+  | "chatAttachmentHandoff";
 
 function withLiveCapabilities(
   context: Omit<ApplicationContext, FixtureContextServices> & { sessions?: SessionCapability },
 ): ApplicationContext {
+  const chatAttachmentHandoff = createChatAttachmentHandoff(context.gateway);
   const connectionBootstrap = createConnectionBootstrapCoordinator();
   const synchronizeBootstrap = (snapshot: ApplicationContext["gateway"]["snapshot"]) =>
     connectionBootstrap.synchronize({
@@ -252,6 +255,7 @@ function withLiveCapabilities(
     createSessionCapability(context.gateway, context.agentSelection, { connectionBootstrap });
   onTestFinished(() => {
     stopBootstrap();
+    chatAttachmentHandoff.dispose();
     connectionBootstrap.reset();
     if (!context.sessions) {
       sessions.dispose();
@@ -261,6 +265,7 @@ function withLiveCapabilities(
   });
   return {
     ...context,
+    chatAttachmentHandoff,
     connectionBootstrap,
     theme,
     agents,
@@ -326,7 +331,6 @@ export function createInitializationContext(client?: GatewayBrowserClient): Appl
     },
     navigate: () => undefined,
     chatSubmissions: createChatSubmissions(),
-    chatAttachmentHandoff: createChatAttachmentHandoff(),
   } as unknown as Omit<ApplicationContext, FixtureContextServices>);
 }
 
@@ -435,7 +439,6 @@ export function createSessionContext(
       },
     },
     chatSubmissions: createChatSubmissions(),
-    chatAttachmentHandoff: createChatAttachmentHandoff(),
     nativeChatDrafts: { subscribe: () => () => undefined },
     placementStartup: { get: vi.fn(() => null), hasPendingTurn: () => false, pause: vi.fn() },
     sessions,
@@ -473,6 +476,7 @@ export function createTestChatPane(params: {
     chatHistoryPagination: { hasMore: false },
     chatLoading: false,
     chatMessages: [],
+    chatToolMessages: [],
     chatModelCatalog: [],
     chatModelCatalogError: null,
     chatModelsLoading: false,

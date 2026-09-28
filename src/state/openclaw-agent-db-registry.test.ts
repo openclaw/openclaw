@@ -3,10 +3,33 @@ import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { isSameOpenClawAgentDatabasePath } from "./openclaw-agent-db-registry.js";
+import {
+  createOpenClawAgentDatabasePathMatcher,
+  isSameOpenClawAgentDatabasePath,
+} from "./openclaw-agent-db.paths.js";
 
 describe("agent database alias observation", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it.runIf(process.platform !== "win32")(
+    "retries path resolution failures within one matcher",
+    () => {
+      const stateDir = fs.realpathSync(tempDirs.make("openclaw-agent-db-"));
+      const loopPath = path.join(stateDir, "loop.sqlite");
+      fs.symlinkSync("loop.sqlite", loopPath);
+      expect(() => isSameOpenClawAgentDatabasePath(loopPath, loopPath)).toThrow(
+        expect.objectContaining({ code: "ELOOP" }),
+      );
+      const matchesPath = createOpenClawAgentDatabasePathMatcher();
+      expect(() => matchesPath(loopPath, loopPath)).toThrow(
+        expect.objectContaining({ code: "ELOOP" }),
+      );
+
+      fs.unlinkSync(loopPath);
+      fs.writeFileSync(loopPath, "recovered");
+      expect(matchesPath(loopPath, loopPath)).toBe(true);
+    },
+  );
 
   it("compares missing suffixes deeper than the default probe depth", () => {
     const stateDir = fs.realpathSync(tempDirs.make("openclaw-alias-deep-"));

@@ -35,6 +35,7 @@ type TestActivityPage = HTMLElement & {
   willUpdate: (changed: PropertyValues) => void;
   updated: (changed: PropertyValues) => void;
   render: () => unknown;
+  requestUpdate: () => void;
   runInspector: RunInspectorState;
   loadRunInspector: (
     gateway: ApplicationContext["gateway"],
@@ -211,6 +212,7 @@ describe("ActivityPage gateway lifecycle", () => {
   it("replays the active gateway on initial bind and source replacement", () => {
     const page = document.createElement("openclaw-activity-page") as TestActivityPage;
     page.context = activityContext(gateway()) as ApplicationContext;
+    page.routeData = { mode: "live", selector: null };
     page.entries = [staleEntry()];
 
     page.subscriptions.hostConnected();
@@ -222,6 +224,78 @@ describe("ActivityPage gateway lifecycle", () => {
     expect(page.entries).toEqual([]);
 
     page.subscriptions.hostDisconnected();
+  });
+
+  it.each(["sessions", "run"] as const)(
+    "retains live events without scheduling updates in %s mode",
+    (mode) => {
+      const { gateway: source, current } = activityGateway();
+      const page = bindActivity(source);
+      current().request.mockResolvedValue({
+        ts: 1,
+        path: "",
+        count: 0,
+        sessions: [],
+        defaults: { model: null, modelProvider: null, contextTokens: null },
+      });
+      current().opts.onEvent?.(toolEvent("first"));
+      const firstId = page.entries[0]!.id;
+      page.expandedIds.add(firstId);
+      const leaveLive = () => {
+        page.routeLocation = {
+          pathname: "/activity",
+          search: mode === "run" ? "?view=run" : "",
+          hash: "",
+        };
+        page.willUpdate(new Map([["routeLocation", undefined]]));
+        page.subscriptions.hostUpdate();
+      };
+      const enterLive = () => {
+        page.routeLocation = { pathname: "/activity", search: "?view=live", hash: "" };
+        page.willUpdate(new Map([["routeLocation", undefined]]));
+        page.subscriptions.hostUpdate();
+      };
+      leaveLive();
+      const update = vi.spyOn(page, "requestUpdate");
+      try {
+        for (let index = 0; index < 20; index++) {
+          current().opts.onEvent?.(toolEvent(`away-${index}`));
+        }
+        expect(update).not.toHaveBeenCalled();
+        expect(page.context.liveActivity.snapshot.entries).toHaveLength(21);
+
+        enterLive();
+        expect(page.entries).toEqual(page.context.liveActivity.snapshot.entries);
+        expect([...page.expandedIds]).toEqual([firstId]);
+
+        leaveLive();
+        page.context.liveActivity.clear();
+        current().opts.onEvent?.(toolEvent("after-clear"));
+        enterLive();
+        expect(page.entries.map((entry) => entry.outputPreview)).toEqual(["after-clear output"]);
+        expect(page.expandedIds.size).toBe(0);
+      } finally {
+        update.mockRestore();
+      }
+    },
+  );
+
+  it("keeps retained Live activity current while route data is loading", () => {
+    const { gateway: source, current } = activityGateway();
+    const page = bindActivity(source);
+    page.willUpdate(new Map([["routeLocation", undefined]]));
+    page.routeLocation = undefined;
+    page.willUpdate(new Map([["routeLocation", undefined]]));
+    page.subscriptions.hostUpdate();
+
+    current().opts.onEvent?.(toolEvent("retained"));
+    expect(page.entries.map((entry) => entry.outputPreview)).toEqual(["retained output"]);
+    page.clearEntries();
+
+    page.routeLocation = { pathname: "/activity", search: "?view=live", hash: "" };
+    page.willUpdate(new Map([["routeLocation", undefined]]));
+    page.subscriptions.hostUpdate();
+    expect(page.entries).toEqual([]);
   });
 
   it("waits for route data before querying sessions on the first Gateway bind", () => {

@@ -271,10 +271,16 @@ export class SwarmRosterHydrator {
       // The describe publishes synchronously through its observation. Only external
       // summaries should queue replacement work behind this same read.
       this.publishingParentRead = true;
+      let outcome: ReturnType<typeof reconcile>;
       try {
-        return reconcile(row);
+        outcome = reconcile(row);
       } finally {
         this.publishingParentRead = false;
+      }
+      if (outcome.status === "invalidated") {
+        this.parentRefreshQueued = true;
+      } else if (outcome.status === "current") {
+        this.recovered("parent");
       }
     };
     const request = Promise.resolve()
@@ -283,24 +289,14 @@ export class SwarmRosterHydrator {
         if (!isCurrent()) {
           return;
         }
-        const outcome = publish(row ?? undefined);
-        if (outcome.status === "invalidated") {
-          this.parentRefreshQueued = true;
-        } else if (outcome.status === "current") {
-          this.recovered("parent");
-        }
+        publish(row ?? undefined);
       })
       .catch((error: unknown) => {
         if (!isCurrent()) {
           return;
         }
         if (error instanceof GatewayRequestError && error.code === "INVALID_REQUEST") {
-          const outcome = publish(undefined);
-          if (outcome.status === "invalidated") {
-            this.parentRefreshQueued = true;
-          } else if (outcome.status === "current") {
-            this.recovered("parent");
-          }
+          publish(undefined);
         } else {
           this.retry("parent");
         }

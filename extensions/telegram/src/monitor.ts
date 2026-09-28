@@ -1,6 +1,7 @@
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
+import { makeProxyFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
@@ -12,7 +13,6 @@ import { isTelegramExecApprovalHandlerConfigured } from "./exec-approvals.js";
 import { resolveTelegramTransport } from "./fetch.js";
 import type { MonitorTelegramOpts } from "./monitor.types.js";
 import { acquireTelegramPollingLease } from "./polling-lease.js";
-import { makeProxyFetch } from "./proxy.js";
 import {
   createTelegramUpdateOffsetPersistence,
   normalizeTelegramUpdateId,
@@ -41,9 +41,7 @@ const loadTelegramMonitorPollingRuntime = createLazyRuntimeModule(
   () => import("./monitor-polling.runtime.js"),
 );
 
-const loadTelegramMonitorWebhookRuntime = createLazyRuntimeModule(
-  () => import("./monitor-webhook.runtime.js"),
-);
+const loadTelegramMonitorWebhookRuntime = createLazyRuntimeModule(() => import("./webhook.js"));
 
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const logInfo = (line: string) => (opts.runtime?.log ?? console.log)(line);

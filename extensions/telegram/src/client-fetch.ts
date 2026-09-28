@@ -1,6 +1,6 @@
 import type { ApiClientOptions } from "grammy";
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { extractTelegramApiMethod } from "./api-root.js";
 import type { TelegramTransport } from "./fetch.js";
 import {
   isTelegramMisdirectedRequestError,
@@ -47,34 +47,6 @@ function isTelegramAbortSignalLike(value: unknown): value is TelegramAbortSignal
     typeof (value as { addEventListener?: unknown }).addEventListener === "function" &&
     typeof (value as { removeEventListener?: unknown }).removeEventListener === "function"
   );
-}
-
-function readRequestUrl(input: TelegramFetchInput): string | null {
-  if (typeof input === "string") {
-    return input;
-  }
-  if (input instanceof URL) {
-    return input.toString();
-  }
-  if (input instanceof Request) {
-    return input.url;
-  }
-  return null;
-}
-
-function extractTelegramApiMethod(input: TelegramFetchInput): string | null {
-  const url = readRequestUrl(input);
-  if (!url) {
-    return null;
-  }
-  try {
-    const pathname = new URL(url).pathname;
-    const segments = pathname.split("/").filter(Boolean);
-    const method = segments.length > 0 ? (segments.at(-1) ?? null) : null;
-    return normalizeOptionalLowercaseString(method) ?? null;
-  } catch {
-    return null;
-  }
 }
 
 const TELEGRAM_TIMEOUT_FALLBACK_METHODS = new Set([
@@ -140,7 +112,7 @@ export function createTelegramClientFetch(params: {
   const isRawSourceFetch =
     params.transport?.sourceFetch !== undefined &&
     params.fetchImpl === asTelegramClientFetch(params.transport.sourceFetch);
-  const wrappedFetch = async (input: TelegramFetchInput, init?: TelegramFetchInit) => {
+  return async (input: TelegramFetchInput, init?: TelegramFetchInit) => {
     const assertCurrent = getTelegramRequestAuthority(init);
     const method = extractTelegramApiMethod(input);
     const requestTimeoutMs = resolveTelegramRequestTimeoutMs(method, params.timeoutSeconds);
@@ -254,6 +226,4 @@ export function createTelegramClientFetch(params: {
       throw err;
     }
   };
-
-  return wrappedFetch;
 }

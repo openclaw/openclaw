@@ -10,6 +10,7 @@ import { readTranscriptDisplayPosition } from "../../chat/transcript-display-pos
 import type { AgentHistoryActivity } from "../../infra/agent-activity-events.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { logLargePayload } from "../../logging/diagnostic-payload.js";
+import type { InFlightRunSnapshot } from "../chat-abort.js";
 import {
   extractChatHistoryBlockText,
   extractChatToolResultCanvasPreview,
@@ -133,7 +134,7 @@ function isChatHistoryActivity(message: unknown): boolean {
     return false;
   }
   const role = normalizeLowercaseStringOrEmpty(entry.role);
-  if (role === "toolresult" || role === "tool_result" || role === "tool" || role === "function") {
+  if (isToolResultContentType(role) || role === "tool" || role === "function") {
     return isPlainHistoryToolResult(entry);
   }
   if (
@@ -180,7 +181,7 @@ export function trimChatHistoryActivity(params: {
   });
 }
 
-function buildChatHistoryUnavailableSentinel(): Record<string, unknown> {
+export function buildChatHistoryUnavailableSentinel(): Record<string, unknown> {
   return {
     role: "assistant",
     timestamp: Date.now(),
@@ -281,4 +282,66 @@ export function reportOmittedChatHistory(params: {
     `chat.history omitted oversized payloads count=${omittedCount} total=${chatHistoryOmittedEmitCount}`,
   );
   return omittedCount;
+}
+
+export function boundInFlightRunSnapshotForChatHistory(params: {
+  snapshot: InFlightRunSnapshot | undefined;
+  messages: unknown[];
+  getMessagesBytes?: () => number;
+  maxBytes: number;
+}): InFlightRunSnapshot | undefined {
+  if (!params.snapshot) {
+    return undefined;
+  }
+  const messagesBytes = params.getMessagesBytes?.() ?? jsonUtf8Bytes(params.messages);
+  const snapshotBytes = jsonUtf8Bytes(params.snapshot);
+  if (messagesBytes + snapshotBytes <= params.maxBytes) {
+    return params.snapshot;
+  }
+  // Recovery priority is run adoption, authoritative timing, active progress,
+  // plan replay, and opportunistic text. Explicit empty projections
+  // authoritatively clear stale client state when a richer snapshot cannot fit.
+  let bounded: InFlightRunSnapshot = {
+    runId: params.snapshot.runId,
+    text: "",
+    ...(params.snapshot.sessionAbortable ? { sessionAbortable: true } : {}),
+    ...(params.snapshot.events ? { events: [] } : {}),
+    ...(params.snapshot.plan ? { plan: { steps: [] } } : {}),
+  };
+  const retainIfWithinBudget = (candidate: InFlightRunSnapshot): boolean => {
+    if (!(messagesBytes + jsonUtf8Bytes(candidate) <= params.maxBytes)) {
+      return false;
+    }
+    bounded = candidate;
+    return true;
+  };
+
+  if (params.snapshot.startedAt !== undefined) {
+    retainIfWithinBudget({ ...bounded, startedAt: params.snapshot.startedAt });
+  }
+
+  if (params.snapshot.events) {
+    const events = params.snapshot.events;
+    let start = 0;
+    let end = events.length;
+    // Try all progress first, then search suffixes instead of serializing each eviction.
+    let middle = 0;
+    while (start < end) {
+      if (retainIfWithinBudget({ ...bounded, events: events.slice(middle) })) {
+        end = middle;
+      } else {
+        start = middle + 1;
+      }
+      middle = Math.floor((start + end) / 2);
+    }
+  }
+
+  if (params.snapshot.plan) {
+    retainIfWithinBudget({ ...bounded, plan: params.snapshot.plan });
+  }
+
+  if (params.snapshot.text) {
+    retainIfWithinBudget({ ...bounded, text: params.snapshot.text });
+  }
+  return bounded;
 }

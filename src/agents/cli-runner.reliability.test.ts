@@ -351,6 +351,17 @@ function makeManagedRun(overrides: Partial<RunExit> = {}) {
   return createManagedRun(makeRunExit(overrides));
 }
 
+function makeNoOutputTimeoutRun() {
+  return makeManagedRun({
+    reason: "no-output-timeout",
+    exitCode: null,
+    exitSignal: "SIGKILL",
+    durationMs: 200,
+    timedOut: true,
+    noOutputTimedOut: true,
+  });
+}
+
 const requireRecord = createRequireRecord("object", "expected-label");
 
 function requireArray(value: unknown, label: string): Array<unknown> {
@@ -460,16 +471,7 @@ describe("runCliAgent reliability", () => {
   });
 
   it("fails with timeout when no-output watchdog trips", async () => {
-    supervisorSpawnMock.mockResolvedValueOnce(
-      makeManagedRun({
-        reason: "no-output-timeout",
-        exitCode: null,
-        exitSignal: "SIGKILL",
-        durationMs: 200,
-        timedOut: true,
-        noOutputTimedOut: true,
-      }),
-    );
+    supervisorSpawnMock.mockResolvedValueOnce(makeNoOutputTimeoutRun());
 
     await expect(
       executePreparedCliRun(
@@ -480,16 +482,7 @@ describe("runCliAgent reliability", () => {
   });
 
   it("adds request attribution to CLI watchdog failover errors", async () => {
-    supervisorSpawnMock.mockResolvedValueOnce(
-      makeManagedRun({
-        reason: "no-output-timeout",
-        exitCode: null,
-        exitSignal: "SIGKILL",
-        durationMs: 200,
-        timedOut: true,
-        noOutputTimedOut: true,
-      }),
-    );
+    supervisorSpawnMock.mockResolvedValueOnce(makeNoOutputTimeoutRun());
 
     await expectFailoverAttribution(
       executePreparedCliRun(
@@ -505,16 +498,7 @@ describe("runCliAgent reliability", () => {
   });
 
   it("enqueues a system event and heartbeat wake on no-output watchdog timeout for session runs", async () => {
-    supervisorSpawnMock.mockResolvedValueOnce(
-      makeManagedRun({
-        reason: "no-output-timeout",
-        exitCode: null,
-        exitSignal: "SIGKILL",
-        durationMs: 200,
-        timedOut: true,
-        noOutputTimedOut: true,
-      }),
-    );
+    supervisorSpawnMock.mockResolvedValueOnce(makeNoOutputTimeoutRun());
 
     await expect(
       executePreparedCliRun(
@@ -543,16 +527,7 @@ describe("runCliAgent reliability", () => {
   it("does not enqueue watchdog system events for side-question no-output timeouts", async () => {
     enqueueSystemEventMock.mockClear();
     requestHeartbeatMock.mockClear();
-    supervisorSpawnMock.mockResolvedValueOnce(
-      makeManagedRun({
-        reason: "no-output-timeout",
-        exitCode: null,
-        exitSignal: "SIGKILL",
-        durationMs: 200,
-        timedOut: true,
-        noOutputTimedOut: true,
-      }),
-    );
+    supervisorSpawnMock.mockResolvedValueOnce(makeNoOutputTimeoutRun());
 
     await expect(
       executePreparedCliRun(
@@ -590,16 +565,7 @@ describe("runCliAgent reliability", () => {
   });
 
   it("does not retry recoverable failover when no reusable CLI session was used", async () => {
-    supervisorSpawnMock.mockResolvedValueOnce(
-      makeManagedRun({
-        reason: "no-output-timeout",
-        exitCode: null,
-        exitSignal: "SIGKILL",
-        durationMs: 200,
-        timedOut: true,
-        noOutputTimedOut: true,
-      }),
-    );
+    supervisorSpawnMock.mockResolvedValueOnce(makeNoOutputTimeoutRun());
 
     await expect(
       runPreparedCliAgent(
@@ -646,16 +612,7 @@ describe("runCliAgent reliability", () => {
 
   it("does not retry a resumed recoverable failover without a reseed prompt", async () => {
     const clearBeforeRetry = vi.fn(async () => false);
-    supervisorSpawnMock.mockResolvedValueOnce(
-      makeManagedRun({
-        reason: "no-output-timeout",
-        exitCode: null,
-        exitSignal: "SIGKILL",
-        durationMs: 200,
-        timedOut: true,
-        noOutputTimedOut: true,
-      }),
-    );
+    supervisorSpawnMock.mockResolvedValueOnce(makeNoOutputTimeoutRun());
     const context = makeClaudePreparedContext({
       sessionKey: "agent:main:no-reseed",
       runId: "run-no-reseed",
@@ -678,16 +635,7 @@ describe("runCliAgent reliability", () => {
 
   it("keeps cold transcript reseed for stalled sessions without a checkpoint", async () => {
     supervisorSpawnMock
-      .mockResolvedValueOnce(
-        makeManagedRun({
-          reason: "no-output-timeout",
-          exitCode: null,
-          exitSignal: "SIGKILL",
-          durationMs: 200,
-          timedOut: true,
-          noOutputTimedOut: true,
-        }),
-      )
+      .mockResolvedValueOnce(makeNoOutputTimeoutRun())
       .mockResolvedValueOnce(makeManagedRun({ stdout: "fresh fallback" }));
     const prepareForkRetry = vi.fn(async () => true);
     const clearBeforeRetry = vi.fn(async () => true);
@@ -732,16 +680,7 @@ describe("runCliAgent reliability", () => {
     onTestFinished,
   }) => {
     supervisorSpawnMock
-      .mockResolvedValueOnce(
-        makeManagedRun({
-          reason: "no-output-timeout",
-          exitCode: null,
-          exitSignal: "SIGKILL",
-          durationMs: 200,
-          timedOut: true,
-          noOutputTimedOut: true,
-        }),
-      )
+      .mockResolvedValueOnce(makeNoOutputTimeoutRun())
       .mockResolvedValueOnce(
         makeManagedRun({
           exitCode: 1,
@@ -1015,14 +954,7 @@ describe("runCliAgent reliability", () => {
         });
         markMcpLoopbackToolCallFinished(captureHandle);
       }, 10);
-      return makeManagedRun({
-        reason: "no-output-timeout",
-        exitCode: null,
-        exitSignal: "SIGKILL",
-        durationMs: 200,
-        timedOut: true,
-        noOutputTimedOut: true,
-      });
+      return makeNoOutputTimeoutRun();
     });
     const context = makeClaudePreparedContext({
       sessionKey: "agent:main:delivered-timeout",
@@ -1362,14 +1294,7 @@ describe("runCliAgent reliability", () => {
         outcome: "completed",
       });
       markMcpLoopbackToolCallFinished(captureHandle);
-      return makeManagedRun({
-        reason: "no-output-timeout",
-        exitCode: null,
-        exitSignal: "SIGKILL",
-        durationMs: 200,
-        timedOut: true,
-        noOutputTimedOut: true,
-      });
+      return makeNoOutputTimeoutRun();
     });
     const context = makeClaudePreparedContext({
       sessionKey: "agent:main:first-turn-delivered",
@@ -1671,14 +1596,7 @@ describe("runCliAgent reliability", () => {
         },
       });
       captureStarted?.();
-      return makeManagedRun({
-        reason: "no-output-timeout",
-        exitCode: null,
-        exitSignal: "SIGKILL",
-        durationMs: 200,
-        timedOut: true,
-        noOutputTimedOut: true,
-      });
+      return makeNoOutputTimeoutRun();
     });
     const context = makeClaudePreparedContext({
       sessionKey: "agent:main:unresolved-internal-source-reply",
@@ -1725,14 +1643,7 @@ describe("runCliAgent reliability", () => {
         },
       });
       captureStarted?.();
-      return makeManagedRun({
-        reason: "no-output-timeout",
-        exitCode: null,
-        exitSignal: "SIGKILL",
-        durationMs: 200,
-        timedOut: true,
-        noOutputTimedOut: true,
-      });
+      return makeNoOutputTimeoutRun();
     });
     const context = makeClaudePreparedContext({
       sessionKey: "agent:main:telegram:direct:123456789",
@@ -1795,14 +1706,7 @@ describe("runCliAgent reliability", () => {
         },
       });
       captureStarted?.();
-      return makeManagedRun({
-        reason: "no-output-timeout",
-        exitCode: null,
-        exitSignal: "SIGKILL",
-        durationMs: 200,
-        timedOut: true,
-        noOutputTimedOut: true,
-      });
+      return makeNoOutputTimeoutRun();
     });
     const context = makeClaudePreparedContext({
       sessionKey: "agent:main:unresolved-send",
@@ -1837,14 +1741,7 @@ describe("runCliAgent reliability", () => {
         throw new Error("Expected request delivery capture");
       }
       captureStarted?.();
-      return makeManagedRun({
-        reason: "no-output-timeout",
-        exitCode: null,
-        exitSignal: "SIGKILL",
-        durationMs: 200,
-        timedOut: true,
-        noOutputTimedOut: true,
-      });
+      return makeNoOutputTimeoutRun();
     });
     const context = makeClaudePreparedContext({
       sessionKey: "agent:main:unresolved-request",
@@ -1885,14 +1782,7 @@ describe("runCliAgent reliability", () => {
       });
       markMcpLoopbackRequestClassified(requestCaptureHandle);
       captureStarted?.();
-      return makeManagedRun({
-        reason: "no-output-timeout",
-        exitCode: null,
-        exitSignal: "SIGKILL",
-        durationMs: 200,
-        timedOut: true,
-        noOutputTimedOut: true,
-      });
+      return makeNoOutputTimeoutRun();
     });
     const context = makeClaudePreparedContext({
       sessionKey: "agent:main:unresolved-non-message-request",
@@ -1940,14 +1830,7 @@ describe("runCliAgent reliability", () => {
         },
       });
       captureStarted?.();
-      return makeManagedRun({
-        reason: "no-output-timeout",
-        exitCode: null,
-        exitSignal: "SIGKILL",
-        durationMs: 200,
-        timedOut: true,
-        noOutputTimedOut: true,
-      });
+      return makeNoOutputTimeoutRun();
     });
     const context = makeClaudePreparedContext({
       sessionKey: "agent:main:unresolved-dry-run",
@@ -2292,14 +2175,7 @@ describe("runCliAgent reliability", () => {
         spawnCount += 1;
         events.push(`spawn-${spawnCount}`);
         if (spawnCount === 1 && reason === "timeout") {
-          return makeManagedRun({
-            reason: "no-output-timeout",
-            exitCode: null,
-            exitSignal: "SIGKILL",
-            durationMs: 200,
-            timedOut: true,
-            noOutputTimedOut: true,
-          });
+          return makeNoOutputTimeoutRun();
         }
         if (spawnCount === 1 && reason === "context_overflow") {
           return makeManagedRun({

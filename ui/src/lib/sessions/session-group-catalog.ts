@@ -120,14 +120,6 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     }
   };
 
-  const finishMutationFailure = (current: boolean, error: unknown): SessionGroupMutationResult => {
-    if (!current) {
-      return "stale";
-    }
-    host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
-    throw error;
-  };
-
   const finishLoadFailure = (
     scope: SessionConnectionScope,
     generation: number,
@@ -269,112 +261,75 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     void load();
   };
 
-  const put = async (
-    names: readonly string[],
-    sectionOrder?: readonly string[],
+  const mutate = async (
+    method: string,
+    params: unknown,
+    apply: (result: unknown) => void,
   ): Promise<SessionGroupMutationResult> => {
     const scope = host.connection.capture();
     if (!scope) {
       return "stale";
     }
     try {
-      const result = await scope.client.request("sessions.groups.put", {
-        names: [...names],
-        ...(sectionOrder === undefined ? {} : { sectionOrder: [...sectionOrder] }),
-      });
+      const result = await scope.client.request(method, params);
       if (!host.connection.isCurrent(scope)) {
         return "stale";
       }
-      publishPathFreeMutation(
-        mergeSessionGroupDefaults(readSessionCustomGroups(result), {
-          defaults: host.readState().groupSettings,
-        }),
-        readSidebarSectionOrder(result),
-      );
+      apply(result);
       return "completed";
     } catch (error) {
-      return finishMutationFailure(host.connection.isCurrent(scope), error);
+      if (!host.connection.isCurrent(scope)) {
+        return "stale";
+      }
+      host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
+      throw error;
     }
   };
 
-  const rename = async (from: string, to: string): Promise<SessionGroupMutationResult> => {
-    const scope = host.connection.capture();
-    if (!scope) {
-      return "stale";
-    }
-    try {
-      const result = await scope.client.request("sessions.groups.rename", { name: from, to });
-      if (!host.connection.isCurrent(scope)) {
-        return "stale";
-      }
+  const applyCatalogMutation = (result: unknown, defaults = host.readState().groupSettings) => {
+    publishPathFreeMutation(
+      mergeSessionGroupDefaults(readSessionCustomGroups(result), { defaults }),
+      readSidebarSectionOrder(result),
+    );
+  };
+
+  const put = (names: readonly string[], sectionOrder?: readonly string[]) =>
+    mutate(
+      "sessions.groups.put",
+      {
+        names: [...names],
+        ...(sectionOrder === undefined ? {} : { sectionOrder: [...sectionOrder] }),
+      },
+      applyCatalogMutation,
+    );
+
+  const rename = (from: string, to: string) =>
+    mutate("sessions.groups.rename", { name: from, to }, (result) => {
       const current = host.readState().groupSettings;
       const targetExists = current.some((group) => group.name === to);
       const renamedDefaults = current.flatMap((group) =>
         group.name === from ? (targetExists ? [] : [{ ...group, name: to }]) : [group],
       );
-      publishPathFreeMutation(
-        mergeSessionGroupDefaults(readSessionCustomGroups(result), { defaults: renamedDefaults }),
-        readSidebarSectionOrder(result),
-      );
+      applyCatalogMutation(result, renamedDefaults);
       // Mutation response commits before a background member-row reconciliation.
       void host.refreshRows();
-      return "completed";
-    } catch (error) {
-      return finishMutationFailure(host.connection.isCurrent(scope), error);
-    }
-  };
+    });
 
-  const remove = async (name: string): Promise<SessionGroupMutationResult> => {
-    const scope = host.connection.capture();
-    if (!scope) {
-      return "stale";
-    }
-    try {
-      const result = await scope.client.request("sessions.groups.delete", { name });
-      if (!host.connection.isCurrent(scope)) {
-        return "stale";
-      }
-      publishPathFreeMutation(
-        mergeSessionGroupDefaults(readSessionCustomGroups(result), {
-          defaults: host.readState().groupSettings,
-        }),
-        readSidebarSectionOrder(result),
-      );
+  const remove = (name: string) =>
+    mutate("sessions.groups.delete", { name }, (result) => {
+      applyCatalogMutation(result);
       void host.refreshRows();
-      return "completed";
-    } catch (error) {
-      return finishMutationFailure(host.connection.isCurrent(scope), error);
-    }
-  };
+    });
 
-  const update = async (
-    name: string,
-    defaults: { cwd: string | null; worktree: boolean },
-  ): Promise<SessionGroupMutationResult> => {
-    const scope = host.connection.capture();
-    if (!scope) {
-      return "stale";
-    }
-    try {
-      const result = await scope.client.request("sessions.groups.update", { name, ...defaults });
-      if (!host.connection.isCurrent(scope)) {
-        return "stale";
-      }
+  const update = (name: string, defaults: { cwd: string | null; worktree: boolean }) =>
+    mutate("sessions.groups.update", { name, ...defaults }, (result) => {
       const state = host.readState();
-      const pathFreeGroups = state.groupSettings.map(({ name: groupName, position }) => ({
-        name: groupName,
-        position,
-      }));
       publishCatalog(
-        mergeSessionGroupDefaults(pathFreeGroups, result),
+        mergeSessionGroupDefaults(state.groupSettings, result),
         state.sectionOrder,
         "ready",
       );
-      return "completed";
-    } catch (error) {
-      return finishMutationFailure(host.connection.isCurrent(scope), error);
-    }
-  };
+    });
 
   return {
     delete: remove,

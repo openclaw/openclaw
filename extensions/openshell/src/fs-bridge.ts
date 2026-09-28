@@ -3,7 +3,6 @@ import fsPromises from "node:fs/promises";
 import path from "node:path";
 import {
   assertNoSymlinkParents,
-  canonicalPathFromExistingAncestor,
   isPathInside,
   root as fsRoot,
 } from "openclaw/plugin-sdk/file-access-runtime";
@@ -62,29 +61,14 @@ class OpenShellFsBridge implements SandboxFsBridge {
   async readFile(params: Parameters<SandboxFsBridge["readFile"]>[0]): Promise<Buffer> {
     const target = this.resolveTarget(params);
     const hostPath = this.requireHostPath(target);
-    let opened: Awaited<ReturnType<Awaited<ReturnType<typeof fsRoot>>["open"]>>;
     try {
-      await assertLocalPathSafety({
-        target,
-        allowFinalSymlinkForUnlink: false,
-      });
       const root = await fsRoot(target.mountHostRoot);
-      if (params.maxBytes !== undefined) {
-        return (
-          await root.read(path.relative(target.mountHostRoot, hostPath), {
-            hardlinks: "reject",
-            maxBytes: params.maxBytes,
-          })
-        ).buffer;
-      }
-      opened = await root.open(path.relative(target.mountHostRoot, hostPath), {
-        hardlinks: "reject",
-      });
-      try {
-        return (await opened.handle.readFile()) as Buffer;
-      } finally {
-        await opened.handle.close();
-      }
+      return (
+        await root.read(relativeToRoot(target, hostPath), {
+          hardlinks: "reject",
+          maxBytes: params.maxBytes ?? Infinity,
+        })
+      ).buffer;
     } catch (err) {
       throw new Error(
         `Sandbox boundary checks failed; cannot read files: ${target.containerPath}`,
@@ -98,29 +82,27 @@ class OpenShellFsBridge implements SandboxFsBridge {
   ): Promise<DirectoryEntry[]> {
     const target = this.resolveTarget(params);
     const hostPath = this.requireHostPath(target);
-    await assertLocalPathSafety({
-      target,
-      allowFinalSymlinkForUnlink: false,
-    });
     const root = await fsRoot(target.mountHostRoot);
-    const entries = await root.list(relativeToRoot(target, hostPath), { withFileTypes: true });
-    return entries.map(({ name, isDirectory }) => ({ name, isDirectory }));
+    const entries: DirectoryEntry[] = [];
+    for await (const { name, isDirectory } of root.entries(relativeToRoot(target, hostPath), {
+      order: "sorted",
+    })) {
+      entries.push({ name, isDirectory });
+    }
+    return entries;
   }
 
   async writeFile(params: Parameters<SandboxFsBridge["writeFile"]>[0]): Promise<void> {
     const target = this.resolveTarget(params);
     const hostPath = this.requireHostPath(target);
     this.ensureWritable(target, "write files");
-    await assertLocalPathSafety({
-      target,
-      allowFinalSymlinkForUnlink: false,
-    });
     const buffer = Buffer.isBuffer(params.data)
       ? params.data
       : Buffer.from(params.data, params.encoding ?? "utf8");
     const root = await fsRoot(target.mountHostRoot);
-    await root.write(path.relative(target.mountHostRoot, hostPath), buffer, {
+    await root.write(relativeToRoot(target, hostPath), buffer, {
       mkdir: params.mkdir,
+      mutationSymlinks: "reject",
     });
     await this.backend.syncLocalPathToRemote(hostPath, target.containerPath);
   }
@@ -131,17 +113,14 @@ class OpenShellFsBridge implements SandboxFsBridge {
     const target = this.resolveTarget(params);
     const hostPath = this.requireHostPath(target);
     this.ensureWritable(target, "create files");
-    await assertLocalPathSafety({
-      target,
-      allowFinalSymlinkForUnlink: false,
-    });
     const buffer = Buffer.isBuffer(params.data)
       ? params.data
       : Buffer.from(params.data, params.encoding ?? "utf8");
     const root = await fsRoot(target.mountHostRoot);
     try {
-      await root.create(path.relative(target.mountHostRoot, hostPath), buffer, {
+      await root.create(relativeToRoot(target, hostPath), buffer, {
         mkdir: params.mkdir !== false,
+        mutationSymlinks: "reject",
       });
     } catch (error) {
       if (error instanceof FsSafeError && error.code === "already-exists") {
@@ -457,7 +436,12 @@ async function removeLocalRootPath(params: {
       await fsPromises.lstat(params.hostPath);
     }
     // Clearing a mounted root removes its contents while retaining the mount directory.
-    const targets = params.recursive && !relativePath ? await root.list("") : [relativePath];
+    const targets =
+      params.recursive && !relativePath
+        ? (await root.list("")).map((name) =>
+            relativeToRoot(params.target, path.join(params.hostPath, name)),
+          )
+        : [relativePath];
     for (const target of targets) {
       await root.remove(target, {
         force: params.force !== false,
@@ -497,7 +481,8 @@ async function mkdirParentPath(root: FsSafeRoot, relativePath: string): Promise<
 
 function relativeToRoot(target: ResolvedMountPath, hostPath: string): string {
   const relativePath = path.relative(target.mountHostRoot, hostPath);
-  return relativePath === "." ? "" : relativePath;
+  // Computed relative names must not trigger home expansion.
+  return relativePath ? `.${path.sep}${relativePath}` : "";
 }
 
 async function assertRenameSourceSupported(fromHostPath: string): Promise<void> {
@@ -573,12 +558,6 @@ async function assertLocalPathSafety(params: {
   if (!hostPath) {
     throw new Error(`Missing local host path for ${params.target.containerPath}`);
   }
-  const canonicalRoot = await fsPromises.realpath(mountHostRoot).catch((error: unknown) => {
-    if (isNotFoundError(error)) {
-      return path.resolve(mountHostRoot);
-    }
-    throw error;
-  });
   const unlinkSymlink =
     params.allowFinalSymlinkForUnlink &&
     hostPath !== mountHostRoot &&
@@ -590,15 +569,6 @@ async function assertLocalPathSafety(params: {
         throw error;
       })
     )?.isSymbolicLink();
-  const candidate = unlinkSymlink
-    ? path.resolve(canonicalRoot, path.relative(mountHostRoot, hostPath))
-    : await canonicalPathFromExistingAncestor(hostPath);
-  if (!isPathInside(canonicalRoot, candidate)) {
-    throw new Error(
-      `Sandbox path escapes allowed mounts; cannot access: ${params.target.containerPath}`,
-    );
-  }
-
   await assertNoSymlinkParents({
     rootDir: mountHostRoot,
     targetPath: unlinkSymlink ? path.dirname(hostPath) : hostPath,

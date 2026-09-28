@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const createMatrixClientMock = vi.fn();
 
-vi.mock("./probe.runtime.js", () => ({
+vi.mock("./client.js", () => ({
   createMatrixClient: (...args: unknown[]) => createMatrixClientMock(...args),
 }));
 

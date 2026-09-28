@@ -20,13 +20,17 @@ import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-ha
 import { notifyListeners } from "../shared/listeners.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { registerEmbeddedHistoryProjectionTests } from "./embedded-backend.history.test-support.js";
 import type { EmbeddedTuiBackend as EmbeddedTuiBackendType } from "./embedded-backend.js";
 import { registerEmbeddedBackendStreamTests } from "./embedded-backend.stream.test-support.js";
 import {
   registerEmbeddedModelCatalogTests,
   withEmbeddedModelCatalogOwnerFixture,
 } from "./embedded-model-catalog.test-support.js";
-import { registerEmbeddedSessionReaderTests } from "./embedded-session-reader.test-support.js";
+import {
+  createPreparedProjectionMethods,
+  registerEmbeddedSessionReaderTests,
+} from "./embedded-session-reader.test-support.js";
 import type { TuiModelChoice } from "./tui-backend.js";
 
 type EmbeddedAgentResult = {
@@ -65,10 +69,17 @@ const createGatewaySessionMock = vi.fn();
 const listProjectedSessionsMock = vi.fn(
   async (_options?: unknown): Promise<{ sessions: unknown[] }> => ({ sessions: [] }),
 );
+const preparedProjectionMethods = createPreparedProjectionMethods(() => sessionProjection);
 const sessionProjection = {
+  ...preparedProjectionMethods,
   dispose: vi.fn(),
   ensureMaterialized: vi.fn(async () => {}),
-  describe: vi.fn<(_target: unknown) => { entry: Record<string, unknown> } | undefined>(),
+  describe:
+    vi.fn<
+      (target: {
+        key: string;
+      }) => { entry: Record<string, unknown>; target: { key: string } } | undefined
+    >(),
   snapshot: vi.fn<(_target: { key: string }) => { row: { key: string; sessionId: unknown } }>(),
 };
 const createSessionRowProjectionMock = vi.fn(async (_options?: unknown) => sessionProjection);
@@ -458,10 +469,12 @@ describe("EmbeddedTuiBackend", () => {
     sessionProjection.dispose.mockReset();
     sessionProjection.ensureMaterialized.mockClear();
     sessionProjection.describe.mockReset();
-    sessionProjection.describe.mockImplementation(() => {
+    sessionProjection.describe.mockImplementation((target) => {
       const entry = loadSessionEntryMock.mock.results.at(-1)?.value?.entry;
-      return entry ? { entry } : undefined;
+      return entry ? { entry, target } : undefined;
     });
+    sessionProjection.present.mockClear();
+    sessionProjection.withPreparedExactRows.mockClear();
     sessionProjection.snapshot.mockReset();
     sessionProjection.snapshot.mockImplementation(({ key }) => ({
       row: { key, sessionId: loadSessionEntryMock.mock.results.at(-1)?.value?.entry?.sessionId },
@@ -915,6 +928,15 @@ describe("EmbeddedTuiBackend", () => {
     flushMicrotasks,
   });
 
+  registerEmbeddedHistoryProjectionTests({
+    createBackend: () => new EmbeddedTuiBackend(),
+    loadSessionEntry: loadSessionEntryMock,
+    describe: sessionProjection.describe,
+    present: sessionProjection.present,
+    withPreparedExactRows: sessionProjection.withPreparedExactRows,
+    buildSessionRow: buildGatewaySessionRowMock,
+  });
+
   it("rejects embedded session reads when the actual startup migration finds a legacy store", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const storePath = await state.writeText(
@@ -1278,11 +1300,7 @@ describe("EmbeddedTuiBackend", () => {
       expect(readChatHistoryPageMock).toHaveBeenCalledWith(
         expect.objectContaining({ canonicalKey: "global", sessionAgentId: owner, entry }),
       );
-      expect(sessionProjection.snapshot).toHaveBeenCalledWith({
-        key: "global",
-        agentId: owner,
-        storePath: `/tmp/openclaw-${owner}-sessions.json`,
-      });
+      expect(sessionProjection.present).toHaveBeenCalled();
       expect(buildGatewaySessionRowMock).not.toHaveBeenCalled();
     },
   );
@@ -1314,29 +1332,7 @@ describe("EmbeddedTuiBackend", () => {
           skipTranscriptUsageFallback: true,
         }),
       );
-      expect(sessionProjection.snapshot).not.toHaveBeenCalled();
-    } finally {
-      await backend.stop();
-    }
-  });
-
-  it("does not attach a replacement session row to captured history", async () => {
-    loadSessionEntryMock.mockReturnValue({
-      cfg: {},
-      agentId: "main",
-      canonicalKey: "agent:main:main",
-      storePath: "/tmp/main.sqlite",
-      entry: { sessionId: "previous-session" },
-    });
-    sessionProjection.describe.mockReturnValue({ entry: { sessionId: "replacement-session" } });
-    const backend = new EmbeddedTuiBackend();
-    backend.start();
-    try {
-      const result = await backend.loadHistory({ sessionKey: "agent:main:main" });
-      expect(result.sessionId).toBe("previous-session");
-      expect(result.sessionInfo).toBeUndefined();
-      expect(sessionProjection.snapshot).not.toHaveBeenCalled();
-      expect(buildGatewaySessionRowMock).not.toHaveBeenCalled();
+      expect(sessionProjection.present).not.toHaveBeenCalled();
     } finally {
       await backend.stop();
     }

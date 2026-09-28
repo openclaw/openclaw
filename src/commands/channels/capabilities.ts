@@ -4,6 +4,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { resolveChannelAccount } from "../../channels/account-resolution.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import {
   createMessageActionDiscoveryContext,
@@ -197,7 +198,7 @@ async function resolveChannelReports(params: {
   const reports: ChannelCapabilitiesReport[] = [];
 
   for (const accountId of accountIds) {
-    const resolvedAccount = plugin.config.resolveAccount(cfg, accountId);
+    const resolvedAccount = await resolveChannelAccount({ plugin, cfg, accountId });
     const configured = plugin.config.isConfigured
       ? await plugin.config.isConfigured(resolvedAccount, cfg)
       : Boolean(resolvedAccount);

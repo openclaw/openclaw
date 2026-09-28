@@ -112,6 +112,10 @@ export type GatewayServiceEnvArgs = {
   timeoutMs?: number;
 };
 
+export type GatewayServiceLoadStateReader = {
+  isLoaded: (args: GatewayServiceEnvArgs) => Promise<boolean>;
+};
+
 /** Live recovery custody, never reconstructed from a saved record alone. Loading
  * permits native definition inspection, not enablement, start, or readiness. */
 export type GatewayServiceUnitInspection = {

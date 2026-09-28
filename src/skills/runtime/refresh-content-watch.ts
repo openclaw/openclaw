@@ -1,8 +1,9 @@
-import type { FSWatcher } from "chokidar";
-import { teardownSkillsPathWatcher } from "./refresh-watch-close.js";
+import type { Result } from "@openclaw/normalization-core/result";
+import { trackSkillsWatcherClose } from "./refresh-watch-close.js";
+import type { SkillsDirectoryWatcher } from "./refresh-watch-types.js";
 
 type ContentWatchGeneration = {
-  watcher: FSWatcher;
+  watcher: SkillsDirectoryWatcher;
   revision: number;
   ready: boolean;
   readyDirectories: ReadonlySet<string>;
@@ -12,7 +13,7 @@ type ContentWatchGeneration = {
 
 /** Keep native coverage while a directory rescan establishes its replacement. */
 export function createSkillsContentWatcher(params: {
-  watch(): FSWatcher;
+  watch(): SkillsDirectoryWatcher;
   isCurrent(): boolean;
   isStructuralRaw(event: string, path: unknown, details: unknown): boolean;
   ready(rescan: boolean): void;
@@ -25,6 +26,9 @@ export function createSkillsContentWatcher(params: {
   let revision = 0;
   let active: ContentWatchGeneration;
   let pending: ContentWatchGeneration | undefined;
+  let closing: Promise<Result<void, unknown>> | undefined;
+  let retirementFailure: Result<void, unknown> | undefined;
+  const retiring = new Set<Promise<Result<void, unknown>>>();
   const owns = (generation: ContentWatchGeneration) =>
     !closed &&
     !generation.retired &&
@@ -32,7 +36,14 @@ export function createSkillsContentWatcher(params: {
     (active === generation || pending === generation);
   const retire = (generation: ContentWatchGeneration) => {
     generation.retired = true;
-    void teardownSkillsPathWatcher(generation);
+    const retirement = generation.watcher.close();
+    retiring.add(retirement);
+    void retirement.then((result) => {
+      if (!result.ok) {
+        retirementFailure ??= result;
+      }
+      retiring.delete(retirement);
+    });
   };
   const rescan = () => {
     if (!closed && params.isCurrent() && (active.ready || active.errored) && !pending) {
@@ -55,9 +66,9 @@ export function createSkillsContentWatcher(params: {
       }
       generation.ready = true;
       // Later discovery cannot prove a directory was observed before verification.
-      // Identical watch options make all getWatched keys a conservative inventory,
-      // including bookkeeping parents; this is not a native-handle census.
-      generation.readyDirectories = new Set(Object.keys(watcher.getWatched()));
+      // Identical options make the transport's ready inventory conservative,
+      // including any parent used to observe a logical symlink.
+      generation.readyDirectories = new Set(watcher.directories);
       if (generation === active) {
         // Chokidar lists before registering native watches. Verify that first
         // listing under an observing generation before publishing readiness.
@@ -97,6 +108,11 @@ export function createSkillsContentWatcher(params: {
         params.changed(event, changedPath);
       }
     });
+    watcher.on("dirty", () => {
+      if (owns(generation)) {
+        revision += 1;
+      }
+    });
     watcher.on("raw", (event, rawPath, details) => {
       if (!owns(generation)) {
         return;
@@ -129,8 +145,8 @@ export function createSkillsContentWatcher(params: {
       revision += 1;
     },
     close() {
-      if (closed) {
-        return;
+      if (closing) {
+        return closing;
       }
       closed = true;
       retire(active);
@@ -138,6 +154,15 @@ export function createSkillsContentWatcher(params: {
         retire(pending);
         pending = undefined;
       }
+      // Earlier generations can still be settling after promotion. Include
+      // them and retain their first failure instead of certifying only pointers.
+      closing = trackSkillsWatcherClose(async () => {
+        await Promise.all(retiring);
+        if (retirementFailure && !retirementFailure.ok) {
+          throw retirementFailure.error;
+        }
+      });
+      return closing;
     },
   };
 }

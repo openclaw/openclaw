@@ -1,5 +1,5 @@
 // Canonical append-only method table; derived lookup and dispatch policy lives in core-method-policy.ts.
-import type { GatewayMethodScope } from "./descriptor.js";
+import type { GatewayMethodScope, GatewayMethodSessionAccess } from "./descriptor.js";
 
 export type CoreGatewayMethodSpec = {
   name: string;
@@ -11,11 +11,17 @@ export type CoreGatewayMethodSpec = {
   controlPlaneWrite?: true;
   compatibilityRestored?: true;
   description?: string;
+  sessionAccess?: GatewayMethodSessionAccess;
 };
 
 type CoreGatewayMethodPolicy = Pick<
   CoreGatewayMethodSpec,
-  "advertise" | "startup" | "controlPlaneWrite" | "compatibilityRestored" | "description"
+  | "advertise"
+  | "startup"
+  | "controlPlaneWrite"
+  | "compatibilityRestored"
+  | "description"
+  | "sessionAccess"
 >;
 type CoreGatewayMethodSpecRow = readonly [
   name: string,
@@ -713,4 +719,28 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["users.linkChannelIdentity", "users", "operator.admin", "2026.9"],
   ["users.unlinkChannelIdentity", "users", "operator.admin", "2026.9"],
   ["users.listChannelIdentities", "users", "operator.admin", "2026.9"],
+  // Self-service personal instructions never authorize shared workspace writes.
+  ["users.personalFile.get", "users", "operator.read", "2026.9"],
+  ["users.personalFile.set", "users", "operator.read", "2026.9"],
+  [
+    "portal.session.list",
+    "portals",
+    "operator.write",
+    "2026.9",
+    { sessionAccess: { mode: "write", allowOwnSessionScope: true, requiredTool: "portal" } },
+  ],
+  [
+    "portal.session.open",
+    "portals",
+    "operator.write",
+    "2026.9",
+    { sessionAccess: { mode: "write", allowOwnSessionScope: true, requiredTool: "portal" } },
+  ],
+  [
+    "portal.session.close",
+    "portals",
+    "operator.write",
+    "2026.9",
+    { sessionAccess: { mode: "write", allowOwnSessionScope: true, requiredTool: "portal" } },
+  ],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

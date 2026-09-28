@@ -26,6 +26,7 @@ import type { CdpActionTimeouts } from "./cdp.js";
 import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
 import type { BrowserOpenResult } from "./client.types.js";
 import type { ResolvedBrowserProfile } from "./config.js";
+import { resolveBrowserEngine } from "./engines/registry.js";
 import { BrowserTabNotFoundError, BrowserTargetAmbiguousError } from "./errors.js";
 import {
   assertBrowserNavigationAllowed,
@@ -47,6 +48,7 @@ import type {
   BrowserServerState,
   BrowserTab,
   ProfileRuntimeState,
+  ProfileContext,
 } from "./server-context.types.js";
 import { findRetainedBrowserDashboardTab, readBrowserDashboardTabs } from "./session-tab-store.js";
 import {
@@ -62,17 +64,7 @@ type TabOpsDeps = {
   runtime: ProfileRuntimeState;
 };
 
-type ProfileTabOps = {
-  listTabs: (options?: BrowserOperationOptions) => Promise<BrowserTab[]>;
-  openTab: (
-    url: string,
-    opts?: {
-      label?: string;
-      signal?: AbortSignal;
-      timeoutMs?: number;
-      requireDurableOwnership?: boolean;
-    },
-  ) => Promise<BrowserOpenResult>;
+type ProfileTabOps = Pick<ProfileContext, "listTabs" | "openTab"> & {
   labelTab: (
     targetId: string,
     label: string,
@@ -152,6 +144,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         await assertCdpEndpointAllowed(profile.cdpUrl, ssrfPolicy);
         const pages = await listPagesViaPlaywright({
           cdpUrl: profile.cdpUrl,
+          ...(profile.engine ? { engine: profile.engine } : {}),
           ssrfPolicy,
           timeoutMs,
           ...(capabilities.requiresCompleteTargetEnumeration
@@ -203,15 +196,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
       }
     }
 
-    const raw = await fetchJson<
-      Array<{
-        id?: string;
-        title?: string;
-        url?: string;
-        webSocketDebuggerUrl?: string;
-        type?: string;
-      }>
-    >(
+    const raw = await fetchJson<CdpTarget[]>(
       appendCdpPath(cdpHttpBase, "/json/list"),
       options?.timeoutMs,
       options?.signal ? { signal: options.signal } : undefined,
@@ -249,7 +234,12 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
     options?.signal?.throwIfAborted();
     // Chrome MCP target identity is authoritative. A replacement tab cannot
     // inherit an alias safely, even when its URL matches the closed tab.
-    return assignTabAliases(runtime, tabs, !capabilities.usesChromeMcp);
+    return assignTabAliases(
+      runtime,
+      tabs,
+      !capabilities.usesChromeMcp &&
+        resolveBrowserEngine(profile.engine).descriptor.sessionScope !== "connection",
+    );
   };
 
   const enforceManagedTabLimit = async (
@@ -316,6 +306,15 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
     tab: BrowserTab,
     options?: BrowserOperationOptions & { requireDurableOwnership?: boolean },
   ): Promise<BrowserOpenResult> => {
+    if (resolveBrowserEngine(profile.engine).descriptor.sessionScope === "connection") {
+      if (options?.requireDurableOwnership) {
+        throw new Error("Connection-scoped browser pages cannot be retained by a dashboard.");
+      }
+      return {
+        ...tab,
+        ownership: { status: "non-durable", reason: "browser-identity-unavailable" },
+      };
+    }
     const cdpTimeouts = getRemoteCdpActionTimeouts();
     const ownership = await resolveCdpTabOwnership({
       profileName: profile.name,
@@ -331,15 +330,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
     return { ...tab, ownership };
   };
 
-  const openTab = async (
-    url: string,
-    opts?: {
-      label?: string;
-      signal?: AbortSignal;
-      timeoutMs?: number;
-      requireDurableOwnership?: boolean;
-    },
-  ): Promise<BrowserOpenResult> => {
+  const openTab: ProfileTabOps["openTab"] = async (url, opts) => {
     opts?.signal?.throwIfAborted();
     const normalizedLabel = opts?.label === undefined ? undefined : normalizeTabLabel(opts.label);
     const ssrfPolicyOpts = getNavigationPolicy();
@@ -372,6 +363,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         if (typeof createPageViaPlaywright === "function") {
           const page = await createPageViaPlaywright({
             cdpUrl: profile.cdpUrl,
+            ...(profile.engine ? { engine: profile.engine } : {}),
             url,
             cdpPolicy,
             ...(opts?.signal ? { signal: opts.signal } : {}),
@@ -522,34 +514,21 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
           })
         : undefined;
       opts?.signal?.throwIfAborted();
-      if (!committedUrl) {
-        return await withTabOwnership(
-          {
-            targetId: created.id,
-            title: created.title ?? "",
-            url: resolvedUrl,
-            wsUrl,
-            ...(wsPin?.lookup ? { wsLookup: wsPin.lookup } : {}),
-            type: created.type,
-          },
-          opts,
-        );
+      if (committedUrl) {
+        await assertBrowserNavigationResultAllowed({ url: committedUrl, ...ssrfPolicyOpts });
       }
-      await assertBrowserNavigationResultAllowed({ url: committedUrl, ...ssrfPolicyOpts });
-      return adoptValidatedTab(
-        await withTabOwnership(
-          {
-            targetId: created.id,
-            title: created.title ?? "",
-            url: committedUrl,
-            wsUrl,
-            ...(wsPin?.lookup ? { wsLookup: wsPin.lookup } : {}),
-            type: created.type,
-          },
-          opts,
-        ),
-        { ...opts, label: normalizedLabel },
+      const opened = await withTabOwnership(
+        {
+          targetId: created.id,
+          title: created.title ?? "",
+          url: committedUrl || resolvedUrl,
+          wsUrl,
+          ...(wsPin?.lookup ? { wsLookup: wsPin.lookup } : {}),
+          type: created.type,
+        },
+        opts,
       );
+      return committedUrl ? adoptValidatedTab(opened, { ...opts, label: normalizedLabel }) : opened;
     } catch (openError) {
       if (closeCreatedPage) {
         await closeCreatedPage().catch(() => {});

@@ -1,19 +1,24 @@
 import { err } from "@openclaw/normalization-core/result";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createRunningTaskRunCoreWithReceiptAsync } from "./task-executor-create.async.js";
+import { TaskFollowupCompletion, getFollowupForCohort } from "./task-followup-completion.js";
 import { captureTaskRegistryReadFence } from "./task-registry-listener-state.js";
 import { publishTaskRecordAfterAtomicStore } from "./task-registry-publication.js";
 import { deleteTaskRecordById } from "./task-registry-query.js";
 import * as taskRegistryState from "./task-registry-state.js";
 import { getTaskById } from "./task-registry.js";
 import { getTaskRegistryStore } from "./task-registry.store.js";
-import { loadTaskRegistryStateFromSqlite } from "./task-registry.store.sqlite.js";
+import {
+  loadTaskRegistryStateFromSqlite,
+  loadTaskRegistryStateFromSqliteReadOnly,
+} from "./task-registry.store.sqlite.js";
 import type { TaskRecord } from "./task-registry.types.js";
 import { bindTaskRunOwner, getTaskRunOwner } from "./task-run-owner.js";
 import {
@@ -423,3 +428,165 @@ it.each(["normalization", "replacement", "authority", "unknown result"] as const
   },
 );
 import { setImmediate } from "node:timers/promises";
+
+it("clears only an accepted successor's retained clue through its original task receipt", async () => {
+  await withOpenClawTestState({ layout: "state-only" }, async () => {
+    for (const scenario of [
+      "accepted",
+      "unaccepted",
+      "revoked",
+      "replaced",
+      "stale cohort",
+      "stale run",
+      "write revocation",
+    ] as const) {
+      const first = "first-" + scenario;
+      const second = "second-" + scenario;
+      const receipt = await createRunningTaskRunCoreWithReceiptAsync({
+        runtime: "cli",
+        runId: first,
+        ownerKey: "agent:main:A",
+        childSessionKey: "agent:main:B",
+        scopeKind: "session",
+        task: scenario,
+        notifyPolicy: "silent",
+        deliveryStatus: "not_applicable",
+      });
+      if (!receipt) {
+        throw new Error("Expected the real task receipt");
+      }
+      const authority = new AbortController();
+      const releaseCustody = vi.fn();
+      const owner = await TaskFollowupCompletion.bind(
+        {
+          runId: first,
+          requesterAgentId: "main",
+          requesterSessionKey: "agent:main:A",
+          requesterSessionId: "A",
+          targetAgentId: "main",
+          targetSessionKey: "agent:main:B",
+          custody: {
+            signal: authority.signal,
+            assertCurrent: () => authority.signal.throwIfAborted(),
+            release: releaseCustody,
+            run: (run) => run(),
+          },
+        },
+        receipt,
+      );
+      let release: (() => void) | undefined;
+      const store = getTaskRegistryStore();
+      try {
+        owner.markAccepted(first);
+        const releaseOld = await owner.activate(
+          first,
+          async () => err("old"),
+          () => {},
+        );
+        emitAgentEvent({
+          runId: first,
+          stream: "tool",
+          data: { phase: "start", name: "sessions_yield" },
+        });
+        await captureTaskRegistryReadFence(captureOpenClawStateWorkerContext().admission);
+        const before = getTaskById(receipt.task.taskId);
+        expect(before?.lastToolName).toBe("sessions_yield");
+        if (!before) {
+          throw new Error("Expected the original task projection");
+        }
+        const child: SubagentRunRecord = {
+          runId: "child-" + scenario,
+          childSessionKey: "agent:main:C",
+          requesterSessionKey: "agent:main:B",
+          requesterDisplayKey: "B",
+          task: "nested",
+          cleanup: "keep",
+          createdAt: before.createdAt,
+          execution: {
+            status: "terminal",
+            endedAt: before.createdAt + 1,
+            outcome: { status: "ok" },
+          },
+          requesterSettleWake: {
+            status: "pending",
+            attemptCount: 0,
+            requesterYieldBatch: true,
+            rearmGeneration: 1,
+          },
+        };
+        owner.promoteYield(first, [child], 1);
+        await owner.settle(first, { status: "ok", yielded: true });
+        owner.finishExecution(first);
+        const successor = owner.successor([child], second, () => {});
+        await owner.prepareSuccessor(successor);
+        if (scenario === "stale cohort") {
+          child.requesterSettleWake!.rearmGeneration = 2;
+          expect(() => owner.adopt(successor)).toThrow("cohort");
+        } else {
+          owner.adopt(successor);
+          if (scenario !== "unaccepted") {
+            owner.markAccepted(second);
+          }
+          if (scenario === "revoked") {
+            authority.abort(new Error("Requester revoked"));
+          }
+          if (scenario === "replaced") {
+            const replacement = { ...before, createdAt: before.createdAt + 1 };
+            store.upsertTaskWithDeliveryState({ task: replacement });
+            publishTaskRecordAfterAtomicStore(replacement);
+          }
+          if (scenario === "write revocation") {
+            const mutate = store.runInitialMutationAsync.bind(store);
+            vi.spyOn(store, "runInitialMutationAsync").mockImplementation(async (...args) => {
+              // Revoke at the existing writer boundary, after asynchronous receipt preparation.
+              authority.abort(new Error("Revoked before writer admission"));
+              return mutate(...args);
+            });
+          }
+          const activate = async () =>
+            owner.activate(
+              second,
+              async () => err("new"),
+              () => {
+                if (scenario === "stale run") {
+                  throw new Error("Gateway registration replaced");
+                }
+              },
+            );
+          if (scenario === "accepted") {
+            release = await activate();
+            releaseOld();
+            await expect(getTaskRunOwner(receipt.task)?.cancel("stop")).resolves.toEqual(
+              err("new"),
+            );
+          } else {
+            await expect(activate()).rejects.toThrow();
+            if (scenario === "revoked" || scenario === "write revocation") {
+              expect(getFollowupForCohort([child])).toBe(owner);
+              expect(releaseCustody).toHaveBeenCalledOnce();
+            }
+          }
+        }
+        // No successor tool event: admission owns the clear, not later telemetry.
+        const projected = getTaskById(receipt.task.taskId);
+        const stored = loadTaskRegistryStateFromSqliteReadOnly().tasks.get(receipt.task.taskId);
+        expect(projected).toEqual(stored);
+        expect(stored).toMatchObject({
+          taskId: receipt.task.taskId,
+          runId: first,
+          status: "running",
+          ownerKey: before.ownerKey,
+          childSessionKey: before.childSessionKey,
+          toolUseCount: before.toolUseCount,
+        });
+        expect(stored?.lastToolName).toBe(scenario === "accepted" ? undefined : "sessions_yield");
+        expect(stored?.executionOwner).toEqual(before.executionOwner);
+        expect(stored?.startedAt).toBe(before.startedAt);
+      } finally {
+        vi.restoreAllMocks();
+        release?.();
+        owner.close();
+      }
+    }
+  });
+});

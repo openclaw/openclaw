@@ -15,6 +15,7 @@ import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-s
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { writeSessionIngestionState } from "./dreaming-ingestion-state.js";
 import {
   filterRecallEntriesWithinLookback,
   previewRemDreaming,
@@ -29,7 +30,7 @@ import {
 } from "./dreaming-state.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import { previewRemHarness } from "./rem-harness.js";
-import { appendSessionCorpusLines, writeSessionIngestionState } from "./session-ingestion.js";
+import { appendSessionCorpusLines } from "./session-ingestion.js";
 import {
   applyShortTermPromotions,
   rankShortTermPromotionCandidates,
@@ -252,28 +253,17 @@ function createHarness(
     error: vi.fn(),
   };
 
-  const resolvedConfig = workspaceDir
-    ? {
-        ...config,
-        agents: {
-          ...config.agents,
-          defaults: {
-            ...config.agents?.defaults,
-            workspace: workspaceDir,
-            userTimezone: config.agents?.defaults?.userTimezone ?? "UTC",
-          },
-        },
-      }
-    : {
-        ...config,
-        agents: {
-          ...config.agents,
-          defaults: {
-            ...config.agents?.defaults,
-            userTimezone: config.agents?.defaults?.userTimezone ?? "UTC",
-          },
-        },
-      };
+  const resolvedConfig = {
+    ...config,
+    agents: {
+      ...config.agents,
+      defaults: {
+        ...config.agents?.defaults,
+        ...(workspaceDir ? { workspace: workspaceDir } : {}),
+        userTimezone: config.agents?.defaults?.userTimezone ?? "UTC",
+      },
+    },
+  };
   const pluginConfig = resolveMemoryDreamingPluginConfig(resolvedConfig) ?? {};
   const beforeAgentReply = async (
     event: { cleanedBody: string },
@@ -624,6 +614,46 @@ describe("memory-core dreaming phases", () => {
       expect(dailyContent).not.toContain("Light Sleep: Candidate:");
     });
   });
+
+  it.each(["<!-- openclaw:dreaming:rem:end -->", "## Ops", "# Ops"])(
+    "does not ingest nested REM output before boundary %s",
+    async (boundary) => {
+      const workspaceDir = await createDreamingWorkspace();
+      await withDreamingTestClock(async () => {
+        await writeDailyNote(workspaceDir, [
+          `# ${DREAMING_TEST_DAY}`,
+          "- Move backups to S3 Glacier.",
+          "",
+          "## REM Sleep",
+          "<!-- openclaw:dreaming:rem:start -->",
+          "### Reflections",
+          "- Theme: `across` kept surfacing across 26 memories.",
+          "#### Unexpected nested heading",
+          "- Old generated dream text must not become a daily memory.",
+          "### Possible Lasting Truths",
+          "- Old generated lasting truth must not become a daily memory.",
+          boundary,
+          "### User follow-up",
+          "- Rotate access keys.",
+        ]);
+        const subagent = createMockNarrativeSubagent();
+        const { beforeAgentReply } = createHarness(
+          LIGHT_DREAMING_TEST_CONFIG,
+          workspaceDir,
+          subagent,
+        );
+        await triggerLightDreaming(beforeAgentReply, workspaceDir, 1);
+        const store = await shortTermTesting.readRecallStore(
+          workspaceDir,
+          "2026-04-05T10:01:00.000Z",
+        );
+        expect(Object.values(store.entries).map((entry) => entry.snippet)).toEqual([
+          "Move backups to S3 Glacier.",
+          "User follow-up: Rotate access keys.",
+        ]);
+      });
+    },
+  );
 
   it("does not restage unchanged light candidates in later cycles", async () => {
     const workspaceDir = await createDreamingWorkspace();

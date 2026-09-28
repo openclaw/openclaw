@@ -634,7 +634,12 @@ suite.define(() => {
             await verifyMatch(stage, observerCanvas);
             expect(
               await observerPanel.locator(".desktop-touch-action, .desktop-sizing").count(),
-            ).toBe(5);
+            ).toBe(6);
+            expect(
+              await observerPanel
+                .getByRole("button", { name: "Audio unavailable", exact: true })
+                .isDisabled(),
+            ).toBe(true);
           }
           const colorCount = await sampledFramebufferColors(observerCanvas);
           expect(colorCount).toBeGreaterThan(8);

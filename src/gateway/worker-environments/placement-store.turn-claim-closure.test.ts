@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
@@ -31,7 +32,7 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
-import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
+import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 import {
   bindWorkerTurnOwner,
   captureWorkerTurnFinishing,
@@ -64,47 +65,7 @@ afterEach(async () => {
 });
 
 function advanceToActive(executionMode: "worker-turn" | "remote-exec" = "worker-turn") {
-  let placement = store.startDispatch({ ...SESSION, executionMode });
-  placement = store.transition({
-    sessionId: SESSION.sessionId,
-    from: "requested",
-    to: "provisioning",
-    expectedGeneration: placement.generation,
-    patch: { environmentId: "environment-placement-claim-close" },
-  });
-  placement = store.transition({
-    sessionId: SESSION.sessionId,
-    from: "provisioning",
-    to: "syncing",
-    expectedGeneration: placement.generation,
-    patch: { workerBundleHash: "a".repeat(64) },
-  });
-  placement = store.transition({
-    sessionId: SESSION.sessionId,
-    from: "syncing",
-    to: "starting",
-    expectedGeneration: placement.generation,
-    patch: {
-      workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
-      remoteWorkspaceDir: "/workspace/placement-claim-close",
-    },
-  });
-  seedAttachedPlacementEnvironment(database, {
-    environmentId: "environment-placement-claim-close",
-    sessionId: SESSION.sessionId,
-    ownerEpoch: 7,
-  });
-  const active = store.transition({
-    sessionId: SESSION.sessionId,
-    from: "starting",
-    to: "active",
-    expectedGeneration: placement.generation,
-    patch: { activeOwnerEpoch: 7 },
-  });
-  if (active.state !== "active") {
-    throw new Error("expected active worker placement");
-  }
-  return active;
+  return advancePlacementFixtureToActive(store, database, SESSION, executionMode);
 }
 
 it("rejects an unbounded claim wait when its signal is already aborted", async () => {
@@ -265,7 +226,7 @@ it("rejects invalid placement fields when reading projection facts", async () =>
   );
 });
 
-function bindFinishingOwner() {
+async function bindFinishingOwner() {
   const active = advanceToActive();
   const claim = store.claimTurn({
     ...SESSION,
@@ -277,10 +238,15 @@ function bindFinishingOwner() {
   const authority = claimAgentRunDelegatedAuthority(instance);
   const abort = new AbortController();
   const bind = () =>
-    bindWorkerTurnOwner(store, claim, undefined, instance, SESSION, () =>
-      abort.signal.throwIfAborted(),
+    bindWorkerTurnOwner(
+      store,
+      claim,
+      undefined,
+      instance,
+      { ...SESSION, storePath: path.join(root, "sessions.json") },
+      () => abort.signal.throwIfAborted(),
     );
-  const take = bind();
+  const { takeFinishingOutcome: take } = await bind();
   const identity: WorkerConnectionIdentity = {
     environmentId: active.environmentId,
     credentialHash: "finishing-credential-hash",
@@ -320,8 +286,8 @@ function bindFinishingOwner() {
 
 it.each([false, true])(
   "consumes finishing only under its current ACK (credential replaced: %s)",
-  (replaced) => {
-    const h = bindFinishingOwner();
+  async (replaced) => {
+    const h = await bindFinishingOwner();
     try {
       const record = captureWorkerTurnFinishing(h.identity, h.request);
       expect(record).toBeTypeOf("function");
@@ -351,8 +317,8 @@ it.each([false, true])(
 
 it.each(["claim", "run", "abort", "lifecycle", "same-claim replacement"] as const)(
   "rejects retained finishing readers and delayed events after %s closure",
-  (closure) => {
-    const h = bindFinishingOwner();
+  async (closure) => {
+    const h = await bindFinishingOwner();
     try {
       const record = captureWorkerTurnFinishing(h.identity, h.request);
       expect(record).toBeTypeOf("function");
@@ -368,7 +334,7 @@ it.each(["claim", "run", "abort", "lifecycle", "same-claim replacement"] as cons
       } else if (closure === "lifecycle") {
         rotateAgentRunRegistryLifecycleGeneration();
       } else {
-        replacement = h.bind();
+        replacement = (await h.bind()).takeFinishingOutcome;
       }
       record?.();
       acknowledgeWorkerTurnFinishing(h.identity, 2, () => true);
@@ -397,8 +363,8 @@ it.each([
   "generation",
   "request run",
   "request epoch",
-] as const)("does not retain finishing from a mismatched %s binding", (field) => {
-  const h = bindFinishingOwner();
+] as const)("does not retain finishing from a mismatched %s binding", async (field) => {
+  const h = await bindFinishingOwner();
   try {
     const identity = { ...h.identity };
     const request = { ...h.request };
@@ -544,12 +510,12 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
   });
   const placementClosedRun = createOperationalRunInstanceRef(placementClosedClaim.runId);
   const placementClosedAuthority = claimAgentRunDelegatedAuthority(placementClosedRun);
-  bindWorkerTurnOwner(
+  await bindWorkerTurnOwner(
     store,
     placementClosedClaim,
     createExecutionIdentityAdmissionToken(placementClosedClaim.runId),
     placementClosedRun,
-    { agentId: SESSION.agentId, sessionKey: SESSION.sessionKey },
+    { ...SESSION, storePath: path.join(root, "sessions.json") },
     () => {},
   );
   const placementCapability = getWorkerTurnExecutionIdentityCapability(store, placementClosedClaim);
@@ -557,10 +523,29 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
     throw new Error("expected placement-bound lineage capability");
   }
   let placementReceiptAuthority: (() => void) | undefined;
-  await placementCapability.run((identity) => {
-    placementReceiptAuthority = identity.receiptAuthority;
-    identity.receiptAuthority();
-  });
+  const sql = observeHostDataSql({ OPENCLAW_STATE_DIR: root });
+  try {
+    const calibration = database.db.prepare("SELECT 1");
+    database.db.exec("SELECT 1");
+    calibration.get();
+    calibration.all();
+    calibration.run();
+    expect([...calibration.iterate()]).toHaveLength(1);
+    for (const call of sql.calls) {
+      expect(call).toHaveBeenCalled();
+      call.mockClear();
+    }
+    expect(getWorkerTurnExecutionIdentityCapability(store, placementClosedClaim)).toBe(
+      placementCapability,
+    );
+    await placementCapability.run((identity) => {
+      placementReceiptAuthority = identity.receiptAuthority;
+      identity.receiptAuthority();
+    });
+    expect(sql.calls.map((call) => call.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+  } finally {
+    sql.restore();
+  }
   store.releaseTurn(placementClosedClaim);
   expect(() => placementReceiptAuthority?.()).toThrow("worker turn authority changed");
   await expect(placementCapability.run(async () => "stale")).rejects.toThrow(
@@ -576,12 +561,12 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
   });
   const runClosedOperational = createOperationalRunInstanceRef(runClosedClaim.runId);
   const runClosedAuthority = claimAgentRunDelegatedAuthority(runClosedOperational);
-  bindWorkerTurnOwner(
+  await bindWorkerTurnOwner(
     store,
     runClosedClaim,
     createExecutionIdentityAdmissionToken(runClosedClaim.runId),
     runClosedOperational,
-    { agentId: SESSION.agentId, sessionKey: SESSION.sessionKey },
+    { ...SESSION, storePath: path.join(root, "sessions.json") },
     () => {},
   );
   const runCapability = getWorkerTurnExecutionIdentityCapability(store, runClosedClaim);
@@ -618,7 +603,14 @@ it("lets an unaudited admitted worker complete the exact turn that closes its ow
   }
   try {
     await rootAdmission.run(async () =>
-      bindWorkerTurnOwner(store, claim, undefined, operationalRunInstance, SESSION, () => {}),
+      bindWorkerTurnOwner(
+        store,
+        claim,
+        undefined,
+        operationalRunInstance,
+        { ...SESSION, storePath: path.join(root, "sessions.json") },
+        () => {},
+      ),
     );
     await getWorkerTurnExecutionIdentityCapability(store, claim)?.run((owner) => {
       expect(owner.executionIdentityToken).toBeUndefined();
@@ -707,14 +699,14 @@ it.each([
     let replacement: typeof claim | undefined;
     try {
       const bind = () =>
-        bindWorkerTurnOwner(store, claim, undefined, instance, SESSION, () => {}, prepare);
+        bindWorkerTurnOwner(store, claim, undefined, instance, target, () => {}, prepare);
       if (scenario === "root admission") {
         if (!admission) {
           throw new Error("expected root admission");
         }
         await admission.run(async () => bind());
       } else {
-        bind();
+        await bind();
       }
       if (scenario === "released claim" || scenario === "replaced claim") {
         store.releaseTurn(claim);
@@ -743,6 +735,7 @@ it.each([
         // This suite isolates projection from the RPC-owned persistence authority.
         assertCurrent: () => {},
         identity,
+        sessionTarget: target,
         request: {
           runEpoch: identity.ownerEpoch,
           seq: 1,

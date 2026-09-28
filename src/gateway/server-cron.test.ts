@@ -4114,7 +4114,7 @@ describe("buildGatewayCronService", () => {
         expect(receipts()).toEqual([]);
         // Real reservation/activation writes; only this synthetic fault is injected.
         database.exec(`
-          CREATE TEMP TRIGGER fail_gateway_cron_activation
+          CREATE TRIGGER fail_gateway_cron_activation
           AFTER UPDATE OF state_json ON cron_jobs
           WHEN NEW.store_key = '${storeKey.replaceAll("'", "''")}'
             AND NEW.job_id = '${job.id}'

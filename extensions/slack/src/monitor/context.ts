@@ -17,13 +17,17 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeStringEntries,
+  normalizeStringEntriesLower,
+} from "openclaw/plugin-sdk/string-normalization-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatSlackError } from "../errors.js";
 import { buildSlackChannelIdCandidates } from "../group-policy.js";
 import { renameSlackSession, setSlackSessionStatus } from "../session-status.js";
 import type { SlackMessageEvent } from "../types.js";
 import { createSlackAgentViewState } from "./agent-view-state.js";
-import { normalizeAllowList, normalizeAllowListLower, normalizeSlackSlug } from "./allow-list.js";
+import { normalizeSlackSlug } from "./allow-list.js";
 import { createSlackAssistantThreadContextStore } from "./assistant-thread-context.js";
 import { resolveSlackChannelConfig, type SlackChannelConfigEntries } from "./channel-config.js";
 import { normalizeSlackChannelType } from "./channel-type.js";
@@ -161,8 +165,8 @@ function createSlackMonitorContextFields(params: CreateSlackMonitorContextParams
       logger.warn({ error: formatSlackError(error) }, `Slack Agent View state failed to ${action}`),
   });
 
-  const allowFrom = normalizeAllowList(params.allowFrom);
-  const groupDmChannels = normalizeAllowList(params.groupDmChannels);
+  const allowFrom = normalizeStringEntries(params.allowFrom);
+  const groupDmChannels = normalizeStringEntries(params.groupDmChannels);
   const defaultRequireMention = params.defaultRequireMention ?? true;
   const channelsConfigKeys = Object.keys(params.channelsConfig ?? {});
 
@@ -402,7 +406,7 @@ function createSlackMonitorContextFields(params: CreateSlackMonitorContextParams
 
     if (isGroupDm && this.groupDmChannels.length > 0) {
       const groupDmChannelsLower = new Set(
-        normalizeAllowListLower(this.groupDmChannels).map((entry) =>
+        normalizeStringEntriesLower(this.groupDmChannels).map((entry) =>
           entry.replace(/^channel:/, ""),
         ),
       );

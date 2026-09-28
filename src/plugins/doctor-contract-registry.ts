@@ -24,13 +24,16 @@ import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.
 import {
   coercePluginDoctorContractModule,
   type PluginDoctorContractModule,
+  type PluginDoctorMigrationBackupResource,
   type PluginDoctorStateMigration,
+  type PluginDoctorStateMigrationEntry,
 } from "./doctor-contract-module.js";
 import { pluginDoctorContractRegistryLoaderState } from "./doctor-contract-registry-loader-state.js";
 import {
   collectRelevantDoctorPluginIds,
   collectRelevantDoctorPluginIdsForTouchedPaths,
 } from "./doctor-contract-relevance.js";
+import type { PluginDoctorMigrationResourceCollectionParams } from "./doctor-migration-resources.js";
 import type { DoctorSessionRouteStateOwner } from "./doctor-session-route-state-owner-types.js";
 import { isActivatedManifestOwner } from "./manifest-owner-policy.js";
 import { loadBundledPluginManifestRegistry } from "./manifest-registry-build.js";
@@ -86,18 +89,6 @@ type PluginDoctorContractEntry = {
   >["resolveSessionStoreAgentIds"];
   sessionRouteStateOwners: DoctorSessionRouteStateOwner[];
   stateMigrations: PluginDoctorStateMigration[];
-};
-
-type PluginDoctorStateMigrationEntry = {
-  pluginId: string;
-  channelIds: string[];
-  /**
-   * Mirrors the runtime proxy's durable-store gate: only bundled plugins and trusted
-   * official installs may reach channel ingress queues. Doctor must not become a way
-   * around that for an activated workspace plugin.
-   */
-  trustedForDurableStores?: boolean;
-  migration: PluginDoctorStateMigration;
 };
 
 function isTrustedForDurableStores(record: PluginManifestRegistryRecord): boolean {
@@ -169,9 +160,6 @@ function loadPluginDoctorContractEntry(
   record: PluginManifestRegistryRecord,
   surface: PluginDoctorContractSurface,
 ): PluginDoctorContractEntry | null {
-  if (isPluginDoctorMigrationDeferred(record.id)) {
-    return null;
-  }
   const declaration = record.doctorContract;
   // Declarations gate loading only; modules remain authoritative, while absence preserves loading.
   if (declaration && !declaresPluginDoctorContractSurface(declaration, surface)) {
@@ -414,12 +402,13 @@ export function listPluginDoctorStateMigrationEntries(params?: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   pluginIds?: readonly string[];
+  inventory?: PluginDoctorStateMigrationInventory;
   validateDeclarations?: boolean;
   onInspectedPlugin?: (pluginId: string) => void;
   onInspectedStatelessPlugin?: (pluginId: string) => void;
 }): PluginDoctorStateMigrationEntry[] {
   return loadPluginDoctorStateMigrationEntries(
-    resolvePluginDoctorStateMigrationRecords(params ?? {}),
+    params?.inventory?.records ?? resolvePluginDoctorStateMigrationRecords(params ?? {}),
     params?.validateDeclarations,
     params?.onInspectedPlugin,
     params?.onInspectedStatelessPlugin,
@@ -561,6 +550,8 @@ function filterPluginDoctorStateMigrationRecords(
 }
 
 export type PluginDoctorStateMigrationInventory = {
+  /** Live selection, retained across maintenance scopes without rediscovery. */
+  records?: readonly PluginManifestRegistryRecord[];
   knownPluginIds: string[];
   sessionStoreOwnerPluginIds: string[];
   descriptors: Array<{
@@ -722,6 +713,7 @@ export function resolveLivePluginDoctorStateMigrationInventory(params: {
   }
 
   return {
+    records,
     knownPluginIds: [...new Set([...bundledInventory.knownPluginIds, ...records.map((r) => r.id)])],
     sessionStoreOwnerPluginIds: records
       .filter((record) => record.doctorContract?.resolveSessionStoreAgentIds === true)
@@ -765,4 +757,15 @@ export function applyPluginDoctorCompatibilityMigrations(
     warnings.push(...(mutation.warnings ?? []));
   }
   return { config: nextCfg, changes, ...(warnings.length ? { warnings } : {}) };
+}
+
+/** Inspect plugin-owned migration paths before the updater captures its recovery set. */
+export async function collectPluginDoctorMigrationBackupResources(
+  params: PluginDoctorMigrationResourceCollectionParams,
+): Promise<PluginDoctorMigrationBackupResource[]> {
+  const entries = loadPluginDoctorStateMigrationEntries(
+    resolvePluginDoctorStateMigrationRecords({ ...params, artifactPreservingReadOnly: true }),
+  );
+  const { collectPluginDoctorMigrationResources } = await import("./doctor-migration-resources.js");
+  return await collectPluginDoctorMigrationResources(entries, params);
 }

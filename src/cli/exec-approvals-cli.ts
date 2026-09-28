@@ -16,6 +16,11 @@ import {
   type ApprovalResolveResult,
   type ApprovalSnapshot,
 } from "../../packages/gateway-protocol/src/index.js";
+import type {
+  ExecApprovalGrantsListResult,
+  ExecApprovalStandingGrant,
+  ExecApprovalsNodeSetParams,
+} from "../../packages/gateway-protocol/src/schema/exec-approvals.js";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import {
@@ -60,18 +65,9 @@ type FileExecApprovalsSnapshot = {
   resolvedDefaults?: Required<ExecApprovalsDefaults>;
 };
 
-type NativeExecApprovalAction = "allow" | "deny" | "prompt";
-type NativeExecApprovalRule = {
-  pattern: string;
-  action: NativeExecApprovalAction;
-  shells?: string[];
-  description?: string;
-  enabled?: boolean;
-};
-type NativeExecApprovalPolicy = {
-  defaultAction?: NativeExecApprovalAction;
-  rules: NativeExecApprovalRule[];
-};
+type NativeExecApprovalPolicy = NonNullable<ExecApprovalsNodeSetParams["native"]>;
+type NativeExecApprovalRule = NativeExecApprovalPolicy["rules"][number];
+type NativeExecApprovalAction = NativeExecApprovalRule["action"];
 type NativeExecApprovalsSnapshot =
   | {
       enabled: true;
@@ -325,7 +321,6 @@ async function loadWritableSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
   source: ApprovalsTargetSource;
   targetLabel: string;
   baseHash: string;
-  kind: "file" | "native";
 }> {
   // Writes carry the base hash so gateway/node updates can reject stale snapshots.
   const { snapshot, nodeId, source } = await loadSnapshotTarget(opts);
@@ -339,8 +334,7 @@ async function loadWritableSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
   if (!baseHash) {
     exitWithError("Exec approvals hash missing; reload and retry.");
   }
-  const kind = isNativeApprovalsSnapshot(snapshot) ? "native" : "file";
-  return { snapshot, nodeId, source, targetLabel, baseHash, kind };
+  return { snapshot, nodeId, source, targetLabel, baseHash };
 }
 
 type SaveSnapshotTargetedParams = {
@@ -546,22 +540,7 @@ function formatPendingAgentSession(entry: PendingApprovalCliEntry): string {
   return parts.length > 0 ? escapeApprovalTextForTerminal(parts.join(" / ")) : "-";
 }
 
-type StandingGrantCliEntry = {
-  grantId: string;
-  agentId: string;
-  cronJobId: string;
-  cronJobName: string | null;
-  command: string;
-  cwd: string | null;
-  createdAtMs: number;
-  expiresAtMs: number | null;
-  revokedAtMs: number | null;
-  revokedBy: string | null;
-  lastUsedAtMs: number | null;
-  useCount: number;
-};
-
-function describeGrantState(grant: StandingGrantCliEntry, nowMs: number): string {
+function describeGrantState(grant: ExecApprovalStandingGrant, nowMs: number): string {
   if (grant.revokedAtMs !== null) {
     // revokedBy carries the revoking client's self-reported display name;
     // escape it visibly rather than relying on the table's silent strip.
@@ -577,7 +556,7 @@ function describeGrantState(grant: StandingGrantCliEntry, nowMs: number): string
   return "until revoked";
 }
 
-function renderStandingGrants(grants: StandingGrantCliEntry[]): void {
+function renderStandingGrants(grants: ExecApprovalStandingGrant[]): void {
   if (grants.length === 0) {
     defaultRuntime.log(theme.muted("No standing grants."));
     return;
@@ -1149,8 +1128,8 @@ async function loadWritableAllowlistAgent(opts: ExecApprovalsCliOpts) {
     resolveConfiguredAgentId(config, agentKey);
   }
   const target = await loadWritableSnapshotTarget(opts);
-  const { snapshot, kind } = target;
-  if (kind === "native" || !isFileApprovalsSnapshot(snapshot)) {
+  const { snapshot } = target;
+  if (isNativeApprovalsSnapshot(snapshot) || !isFileApprovalsSnapshot(snapshot)) {
     exitWithError(
       "Host-native node approvals do not support allowlist mutations; use approvals set --node with host-native JSON.",
     );
@@ -1274,7 +1253,7 @@ export function registerExecApprovalsCli(program: Command) {
           "exec.approval.grants.list",
           opts,
           limit !== undefined ? { limit } : {},
-        )) as { grants: StandingGrantCliEntry[] }; // SAFETY: matches ExecApprovalGrantsListResultSchema.
+        )) as ExecApprovalGrantsListResult; // SAFETY: matches ExecApprovalGrantsListResultSchema.
         if (opts.json) {
           defaultRuntime.writeJson(result, 0);
           return;
@@ -1366,7 +1345,7 @@ export function registerExecApprovalsCli(program: Command) {
         if (opts.file && opts.stdin) {
           exitWithError("Use either --file or --stdin (not both).");
         }
-        const { source, nodeId, targetLabel, baseHash, kind } =
+        const { source, nodeId, targetLabel, baseHash, snapshot } =
           await loadWritableSnapshotTarget(opts);
         const raw = opts.stdin ? await readStdin() : await readApprovalsFile(String(opts.file));
         let input: unknown;
@@ -1375,7 +1354,7 @@ export function registerExecApprovalsCli(program: Command) {
         } catch (err) {
           exitWithError(`Failed to parse approvals JSON: ${String(err)}`);
         }
-        if (kind === "native") {
+        if (isNativeApprovalsSnapshot(snapshot)) {
           const native = normalizeNativePolicyInput(input);
           await saveSnapshotTargeted({
             opts,

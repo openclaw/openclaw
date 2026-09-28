@@ -112,10 +112,6 @@ function resolveDurationSeconds(value: number | undefined): number | undefined {
   return value <= 6.5 ? 5 : 8;
 }
 
-function resolveSeed(value: unknown): number | undefined {
-  return asSafeIntegerInRange(value, { min: 0, max: 4_294_967_295 });
-}
-
 function buildDeepInfraVideoBody(
   req: VideoGenerationRequest,
   model: string,
@@ -134,7 +130,7 @@ function buildDeepInfraVideoBody(
     // /v1/openai/videos names the duration field `seconds` (VideoGenerationIn).
     body.seconds = duration;
   }
-  const seed = resolveSeed(options.seed);
+  const seed = asSafeIntegerInRange(options.seed, { min: 0, max: 4_294_967_295 });
   if (seed != null) {
     body.seed = seed;
   }
@@ -153,7 +149,7 @@ function buildDeepInfraVideoBody(
 
 function firstDeepInfraVideoUrl(job: DeepInfraVideoJob): string | undefined {
   for (const entry of job.data ?? []) {
-    const videoUrl = entry ? normalizeOptionalString((entry as { url?: unknown }).url) : undefined;
+    const videoUrl = entry ? normalizeOptionalString(entry.url) : undefined;
     if (videoUrl) {
       return videoUrl;
     }
@@ -184,9 +180,7 @@ async function extractDeepInfraVideoAsset(
 }
 
 function resolveDeepInfraVideoBaseUrl(req: VideoGenerationRequest): string {
-  const providerConfig = req.cfg?.models?.providers?.deepinfra as
-    | (Record<string, unknown> & { baseUrl?: unknown })
-    | undefined;
+  const providerConfig = req.cfg?.models?.providers?.deepinfra;
   // Canonical `baseUrl` only; legacy `nativeBaseUrl`/`/v1/inference` values are
   // migrated by `openclaw doctor --fix` (doctor-contract-api.ts), never remapped here.
   const baseUrl = normalizeDeepInfraBaseUrl(providerConfig?.baseUrl, DEEPINFRA_BASE_URL);

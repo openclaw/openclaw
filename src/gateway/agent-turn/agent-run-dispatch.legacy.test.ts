@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginRecord } from "../../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
@@ -22,6 +22,16 @@ const mocks = vi.hoisted(() => ({
     vi.fn<
       typeof import("../../tasks/task-executor-create.async.js").createRunningTaskRunCoreWithReceiptAsync
     >(),
+  coreFindByRunId: vi.fn<typeof import("../../tasks/task-registry-query.js").findTaskByRunIdAsync>(
+    () => {
+      throw new Error("Legacy task ownership must not use core async lookup");
+    },
+  ),
+  corePrepareRead: vi.fn<
+    typeof import("../../tasks/task-registry-read.js").prepareTaskRegistryRead
+  >(() => {
+    throw new Error("Legacy task ownership must not prepare core registry reads");
+  }),
   agentCommand: vi.fn<() => Promise<{ payloads: []; meta: Record<string, never> }>>(),
 }));
 vi.mock("../../config/sessions.js", () => ({
@@ -59,6 +69,12 @@ vi.mock("../../tasks/task-executor.js", () => ({
 }));
 vi.mock("../../tasks/task-executor-create.async.js", () => ({
   createRunningTaskRunCoreWithReceiptAsync: mocks.coreCreate,
+}));
+vi.mock("../../tasks/task-registry-query.js", () => ({
+  findTaskByRunIdAsync: mocks.coreFindByRunId,
+}));
+vi.mock("../../tasks/task-registry-read.js", () => ({
+  prepareTaskRegistryRead: mocks.corePrepareRead,
 }));
 vi.mock("../../tasks/task-registry-transition.native.js", () => ({
   transitionTaskRecordsByRunNative: () => {
@@ -225,11 +241,19 @@ describe("Gateway synchronous task owner compatibility", () => {
   beforeEach(() => {
     mocks.events.length = 0;
     mocks.coreCreate.mockReset();
+    mocks.coreFindByRunId.mockClear();
+    mocks.corePrepareRead.mockClear();
     mocks.agentCommand.mockReset();
     mocks.agentCommand.mockImplementation(async () => {
       mocks.events.push("command");
       throw new Error("Command failed before execution started");
     });
+  });
+
+  afterEach(() => {
+    // Lookup failures are caught by the runtime, so throws alone cannot prove isolation.
+    expect(mocks.coreFindByRunId).not.toHaveBeenCalled();
+    expect(mocks.corePrepareRead).not.toHaveBeenCalled();
   });
 
   it.each([

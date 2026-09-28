@@ -1,7 +1,7 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { saveMediaBuffer } from "../../media/store.js";
 import { withChromeMcpTarget } from "../chrome-mcp-routing.js";
 import type { ChromeMcpSnapshotNode } from "../chrome-mcp.snapshot.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
@@ -126,9 +126,15 @@ vi.mock("../screenshot.js", () => ({
   })),
 }));
 
-vi.mock("../../media/store.js", () => ({
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
   ensureMediaDir: vi.fn(async () => {}),
   saveMediaBuffer: vi.fn(async () => ({ path: "/tmp/fake.png" })),
+}));
+
+vi.mock("../pw-ai-module.js", () => ({
+  getPwAiModule: vi.fn(async () => null),
+  getLoadedPwAiModule: () => null,
 }));
 
 vi.mock("./agent.shared.js", () => createExistingSessionAgentSharedModule());
@@ -772,9 +778,10 @@ describe("existing-session browser routes", () => {
     );
 
     expect(response.statusCode).toBe(501);
-    expect(response.body).toMatchObject({
+    expect(response.body).toEqual({
       code: "ACT_EXISTING_SESSION_UNSUPPORTED",
-      error: expect.stringContaining("Paste is not supported for existing-session"),
+      error:
+        "Paste is not supported for existing-session browser profiles. Use a managed browser profile.",
     });
     expect(JSON.stringify(response.body)).not.toContain("synthetic-password-paste");
     expect(chromeMcpMocks.fillChromeMcpElement).not.toHaveBeenCalled();

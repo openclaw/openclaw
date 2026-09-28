@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 // Slack tests cover media plugin behavior.
 import type { WebClient } from "@slack/web-api";
 import type { FetchLike, SavedMedia } from "openclaw/plugin-sdk/media-runtime";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   fetchWithSsrFGuard,
   type LookupFn,
@@ -20,7 +21,6 @@ import {
 } from "./media.js";
 import { resolveSlackMessageContent } from "./message-handler/prepare-content.js";
 import { resolveSlackThreadStarter } from "./thread.js";
-import { logVerbose } from "./thread.runtime.js";
 
 type FetchMock = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 type SaveMediaBufferMock = (
@@ -96,22 +96,7 @@ const readRemoteMediaBufferMock = vi.hoisted(() =>
     },
   ),
 );
-const saveMediaBufferMock = vi.hoisted(() =>
-  vi.fn<SaveMediaBufferMock>(
-    async (
-      _buffer: Buffer,
-      contentType?: string,
-      _subdir?: string,
-      _maxBytes?: number,
-      _originalFilename?: string,
-    ) => ({
-      id: "saved-media-id",
-      path: "/tmp/test.bin",
-      size: _buffer.byteLength,
-      contentType,
-    }),
-  ),
-);
+const saveMediaBufferMock = vi.hoisted(() => vi.fn<SaveMediaBufferMock>());
 const saveRemoteMediaMock = vi.hoisted(() =>
   vi.fn(async (params: Parameters<typeof readRemoteMediaBufferMock>[0]) => {
     const fetched = await readRemoteMediaBufferMock(params);
@@ -142,7 +127,8 @@ vi.mock("./media.runtime.js", () => ({
   },
 }));
 
-vi.mock("./thread.runtime.js", () => ({
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
   logVerbose: logVerboseMock,
 }));
 

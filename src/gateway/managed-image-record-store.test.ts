@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   executeSqliteQuerySync,
@@ -15,6 +15,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   attachManagedImageRecordToMessage,
   claimManagedImageRecordCleanupIfCurrent,
@@ -67,35 +68,15 @@ describe("managed image record SQLite store", () => {
   });
 
   it("creates, reads, and reopens managed metadata without parent SQL", async () => {
-    const native = requireNodeSqlite();
-    const counters = [
-      vi.spyOn(native.DatabaseSync.prototype, "prepare"),
-      vi.spyOn(native.DatabaseSync.prototype, "exec"),
-      ...(["get", "all", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(native.StatementSync.prototype, method),
-      ),
-    ];
+    requireNodeSqlite();
+    const counters = observeMainThreadSql();
     try {
-      const calibration = new native.DatabaseSync(":memory:");
-      try {
-        calibration.exec("CREATE TABLE calibration (value INTEGER)");
-        calibration.prepare("INSERT INTO calibration VALUES (?)").run(1);
-        const read = calibration.prepare("SELECT value FROM calibration");
-        read.get();
-        read.all();
-        expect([...read.iterate()]).toHaveLength(1);
-        expect(counters.every((counter) => counter.mock.calls.length > 0)).toBe(true);
-      } finally {
-        calibration.close();
-        for (const counter of counters) {
-          counter.mockClear();
-        }
-      }
+      counters.calibrate();
       expect(await readManagedImageRecord("missing", stateDir)).toBeNull();
       expect(await listManagedImageRecordEntries({ stateDir })).toEqual([]);
       expect(await listManagedImageOriginalMediaIds(stateDir)).toEqual([]);
       expect((await fs.stat(path.join(stateDir, "state", "openclaw.sqlite"))).isFile()).toBe(true);
-      expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+      counters.expectIdle();
 
       const first = record();
       const claimed = record({ attachmentId: "22222222-2222-4222-8222-222222222222" });
@@ -110,9 +91,7 @@ describe("managed image record SQLite store", () => {
       insertManagedImageRecord(first, stateDir);
       expect(claimManagedImageRecordCleanupIfCurrent(claimed, stateDir)).toBe(true);
       await closeOpenClawStateDatabaseAsync();
-      for (const counter of counters) {
-        counter.mockClear();
-      }
+      counters.clear();
       expect(await readManagedImageRecord(first.attachmentId, stateDir)).toEqual(first);
       expect(await readManagedImageRecord(claimed.attachmentId, stateDir)).toBeNull();
       expect(await listManagedImageRecordEntries({ stateDir })).toEqual([
@@ -134,11 +113,9 @@ describe("managed image record SQLite store", () => {
         { record: claimed, cleanupPending: true },
       ]);
       await closeOpenClawStateDatabaseAsync();
-      expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+      counters.expectIdle();
     } finally {
-      for (const counter of counters) {
-        counter.mockRestore();
-      }
+      counters.restore();
     }
   });
 

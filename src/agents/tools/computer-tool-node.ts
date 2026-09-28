@@ -377,7 +377,6 @@ export class ComputerToolSession {
           gatewayOpts: selectionGatewayOpts,
           signal: params.signal,
         });
-    this.assertOpen();
     const targetKey = computerHostKey(resolvedBinding.host);
     const existingBinding = this.executionTargets.get(targetKey);
     const refreshNode =
@@ -394,9 +393,12 @@ export class ComputerToolSession {
       );
     }
     const binding = refreshNode ? resolvedBinding : (existingBinding ?? resolvedBinding);
+    // Cleanup drains the action queue before these bindings. Take custody before
+    // the closed-session fence can reject a newly resolved binding.
+    this.executionTargets.set(targetKey, binding);
+    this.assertOpen();
     const capabilities = binding.capabilities;
     this.bindCapabilities(binding, refreshNode);
-    this.executionTargets.set(targetKey, binding);
     const advertisedActions = this.options.availableActions(
       capabilities?.actions ?? this.options.defaultActions,
     );

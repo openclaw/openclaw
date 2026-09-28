@@ -17,7 +17,7 @@ type CredentialUnavailableDiagnostic = {
   reason: string;
 };
 
-const CREDENTIAL_STATUS_KEYS = [
+export const CREDENTIAL_STATUS_KEYS = [
   "tokenStatus",
   "botTokenStatus",
   "appTokenStatus",

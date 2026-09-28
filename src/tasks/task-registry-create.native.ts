@@ -38,15 +38,15 @@ import { isTerminalTaskStatus, type TaskRecord } from "./task-registry.types.js"
 class TaskCreateRejected extends Error {}
 
 /** The deprecated synchronous adapter retains its process insertion-order selection. */
-export function createTaskRecord(params: CreateTaskRecordParams): TaskRecord | null {
+export function createTaskRecord(input: CreateTaskRecordParams): TaskRecord | null {
   return withTaskRegistryMutation(
     () => {
       ensureTaskRegistryReady();
       try {
         const created = runTaskCreateOperation(
-          { params, taskId: crypto.randomUUID(), now: Date.now() },
+          { params: input, taskId: crypto.randomUUID(), now: Date.now() },
           {
-            readSelection(identity) {
+            readSelection(identity, params) {
               assertParentFlowLinkAllowed({ ...identity, parentFlowId: params.parentFlowId });
               let mirroredFlowIds: ReadonlySet<string> | undefined;
               const selectCurrent = () => {

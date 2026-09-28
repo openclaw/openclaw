@@ -1,31 +1,26 @@
 /** Redacted health diagnostics for durable channel ingress queues. */
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { INGRESS_CLAIM_LEASE_MS } from "./ingress-claim-owner.js";
+import { resolveChannelIngressStateEnv } from "./ingress-queue-client.js";
+import type { ChannelIngressFailedHealth } from "./ingress-queue-read-contract.js";
 import { getChannelIngressKysely, openChannelIngressDatabase } from "./ingress-queue.js";
 import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "./ingress-retry-policy.js";
 
-/** Count failed channel ingress events per channel account for operator health surfaces. */
-export function countFailedChannelIngressQueueEntries(stateDir?: string) {
-  const database = openChannelIngressDatabase(stateDir);
-  const queueDb = getChannelIngressKysely(database.db);
-  const rows = executeSqliteQuerySync(
-    database.db,
-    queueDb
-      .selectFrom("channel_ingress_events")
-      .select((eb) => [
-        "channel_id as channelId",
-        "account_id as accountId",
-        eb.fn.countAll<number>().as("count"),
-        eb.fn.min<number>("failed_at").as("oldestFailedAt"),
-      ])
-      .where("status", "=", "failed")
-      .groupBy(["channel_id", "account_id"])
-      .orderBy("channel_id", "asc")
-      .orderBy("account_id", "asc"),
-  ).rows;
-  return rows.map(({ oldestFailedAt, ...row }) =>
-    oldestFailedAt == null ? row : Object.assign(row, { oldestFailedAt }),
+export async function countFailedChannelIngressQueueEntries(
+  stateDir?: string,
+): Promise<ChannelIngressFailedHealth[]> {
+  const reply = await executeExistingOpenClawStateRead(
+    { env: resolveChannelIngressStateEnv(stateDir) },
+    { type: "channelIngress.failedHealth" },
   );
+  if (!reply) {
+    return [];
+  }
+  if (!reply.ok || reply.type !== "channelIngress.failedHealth") {
+    throw new Error("Channel ingress failed health reader returned an unexpected result");
+  }
+  return reply.result;
 }
 
 /** Aggregate active lanes whose retry or claim state can block later ingress. */

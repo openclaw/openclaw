@@ -62,7 +62,79 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("populates the grouped home page from one overview response", async () => {
+it("loads category navigation without waiting for catalog cards", async () => {
+  const browse = createDeferred<PluginDiscoveryResult>();
+  const categories = [
+    { slug: "memory", label: "Memory", description: "Memory", icon: "brain", order: 0 },
+  ];
+  const { controller, request } = setup([], async (method) =>
+    method === "plugins.catalog.categories" ? { categories } : browse.promise,
+  );
+  const loading = controller.refresh();
+  await controller.ensureCategories();
+  expect(request).toHaveBeenCalledWith("plugins.catalog.categories", {}, expect.anything());
+  expect(controller.categories).toEqual(categories);
+  expect(controller.loading).toBe(true);
+  browse.resolve({ items: [] });
+  await loading;
+  expect(controller.categories).toEqual(categories);
+});
+
+it("settles empty categories, deduplicates warm loads, and retries errors explicitly", async () => {
+  let fail = true;
+  const { controller, request } = setup([], async () => {
+    if (fail) {
+      throw new Error("Categories unavailable");
+    }
+    return { categories: [] };
+  });
+  await controller.ensureCategories();
+  expect(controller.categoriesLoading).toBe(false);
+  expect(controller.categoriesError).toContain("Categories unavailable");
+  await controller.ensureCategories();
+  expect(request).toHaveBeenCalledOnce();
+  fail = false;
+  await controller.ensureCategories(true);
+  expect(controller.categoriesError).toBeNull();
+  expect(controller.categoriesLoading).toBe(false);
+  await controller.ensureCategories();
+  expect(request).toHaveBeenCalledTimes(2);
+});
+
+it("uses overview categories when they arrive first without accepting a late category reply", async () => {
+  const pending = createDeferred<{ categories: never[] }>();
+  const categories = [
+    { slug: "memory", label: "Memory", description: "Memory", icon: "brain", order: 0 },
+  ];
+  const { controller } = setup([], async (method) =>
+    method === "plugins.catalog.categories" ? pending.promise : { items: [], categories },
+  );
+  const loading = controller.ensureCategories();
+  expect(controller.categoriesLoading).toBe(true);
+  await controller.refresh();
+  expect(controller.categoriesLoading).toBe(false);
+  expect(controller.categories).toEqual(categories);
+  pending.resolve({ categories: [] });
+  await loading;
+  expect(controller.categories).toEqual(categories);
+});
+
+it("discards category navigation and late responses across connection invalidation", async () => {
+  const pending = createDeferred<{
+    categories: { slug: string; label: string; description: string; icon: string; order: number }[];
+  }>();
+  const { controller } = setup([], async () => pending.promise);
+  const loading = controller.ensureCategories();
+  controller.invalidate();
+  pending.resolve({
+    categories: [{ slug: "old", label: "Old", description: "Old", icon: "brain", order: 0 }],
+  });
+  await loading;
+  expect(controller.categories).toEqual([]);
+  expect(controller.categoriesLoading).toBe(false);
+});
+
+it("populates the grouped home page and keeps it visible during a refresh", async () => {
   const featured = entry(1);
   featured.catalog.featured = true;
   featured.catalog.featuredRank = 0;
@@ -74,7 +146,11 @@ it("populates the grouped home page from one overview response", async () => {
   const categories = [
     { slug: "memory", label: "Memory", description: "Memory", icon: "database", order: 0 },
   ];
-  const { controller, request } = setup([{ items: [featured, trending, category], categories }]);
+  const refresh = createDeferred<PluginDiscoveryResult>();
+  const { controller, request } = setup([
+    { items: [featured, trending, category], categories },
+    refresh.promise,
+  ]);
 
   await controller.refresh();
 
@@ -87,6 +163,18 @@ it("populates the grouped home page from one overview response", async () => {
     { intent: "all", pageSize: 100 },
     expect.anything(),
   );
+
+  const loading = controller.refresh();
+  expect(controller.loading).toBe(false);
+  expect(controller.featuredLoading).toBe(false);
+  expect(controller.trendingLoading).toBe(false);
+  expect(controller.featured).toEqual([featured]);
+  expect(controller.trending).toEqual([trending]);
+  refresh.resolve({ items: [category], categories });
+  await loading;
+  expect(controller.result?.items).toEqual([category]);
+  expect(controller.featured).toEqual([]);
+  expect(controller.trending).toEqual([]);
 });
 
 it("switches filtered tabs to All when starting a unified search", async () => {
@@ -119,15 +207,17 @@ it("preserves home navigation when a category completes during the search deboun
     { slug: "channels", label: "Channels", description: "Channels", icon: "globe", order: 0 },
   ];
   const category = createDeferred<PluginDiscoveryResult>();
+  const search = createDeferred<PluginDiscoveryResult>();
   const categoryItems = [entry(3)];
   const searchItems = [entry(4)];
   const { controller, request } = setup([
     { items: [featured, trending], categories },
     category.promise,
-    { items: searchItems },
+    search.promise,
   ]);
   await controller.refresh();
   controller.selectCategory("channels");
+  expect(controller.loading).toBe(true);
   controller.updateQuery("calendar");
 
   category.resolve({ items: categoryItems });
@@ -141,6 +231,10 @@ it("preserves home navigation when a category completes during the search deboun
 
   await vi.advanceTimersByTimeAsync(250);
   expect(request.mock.lastCall?.[1]).toMatchObject({ query: "calendar" });
+  expect(controller.loading).toBe(true);
+  search.resolve({ items: searchItems });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(controller.loading).toBe(false);
   expect(controller.result?.items).toEqual(searchItems);
   expect.soft(controller.categories).toEqual(categories);
   expect.soft(controller.featured).toEqual([featured]);
@@ -328,11 +422,15 @@ it("preserves category navigation when a filtered view reconnects", async () => 
       order: 0,
     },
   ];
-  const { controller } = setup([{ items: [entry(1)], categories }, { items: [entry(2)] }]);
+  const { controller } = setup([], async (method) =>
+    method === "plugins.catalog.categories" ? { categories } : { items: [entry(1)], categories },
+  );
 
   await controller.refresh();
   controller.category = "channels";
   controller.invalidate();
+  expect(controller.categories).toEqual([]);
+  await controller.ensureCategories();
   await controller.refresh();
 
   expect(controller.categories).toEqual(categories);

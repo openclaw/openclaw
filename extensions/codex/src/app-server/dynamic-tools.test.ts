@@ -820,6 +820,25 @@ describe("createCodexDynamicToolBridge", () => {
     expectNoNamespace(specs.find((tool) => tool.name === "message"));
   });
 
+  it("registers subscription-sharing tools as direct functions, including model-only tools", () => {
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({ name: "computer", catalogMode: "direct-only" }),
+        createTool({ name: "message" }),
+      ],
+      signal: new AbortController().signal,
+      loading: "direct",
+      functionToolsOnly: true,
+    });
+    for (const specs of [bridge.specs, bridge.availableSpecs]) {
+      expect(specs.map((spec) => [spec.type, spec.name])).toEqual([
+        ["function", "computer"],
+        ["function", "message"],
+      ]);
+      expect(specs.every((spec) => !("deferLoading" in spec) || !spec.deferLoading)).toBe(true);
+    }
+  });
+
   it("keeps model-visible tools stable when plugin discovery order changes", () => {
     const tools = [
       createTool({ name: "web_search" }),

@@ -23,6 +23,7 @@ export type QaMockProviderDispatchRequest = {
   route: "responses" | "anthropic-messages";
   body: Record<string, unknown>;
   raw: string;
+  headers?: IncomingMessage["headers"];
 };
 
 export type QaMockProviderFailure = {
@@ -151,27 +152,9 @@ export type MockToolCallItem = { id: string; call_id: string; name: string; name
   | { type: "custom_tool_call"; input: string; status: "completed" }
 );
 
-/**
- * Provider variant tag for `body.model`. The mock previously ignored
- * `body.model` for dispatch and only echoed it in the prose output, which
- * made the parity gate tautological when run against the mock alone
- * (both providers produced identical scenario plans by construction).
- * Tagging requests with a normalized variant lets individual scenario
- * branches opt into provider-specific behavior while the rest of the
- * dispatcher stays shared, and lets `/debug/requests` consumers verify
- * which provider lane a given request came from without re-parsing the
- * raw model string.
- *
- * Policy:
- * - `openai/*`, `gpt-*`, `o1-*`, anything starting with `gpt-` → `"openai"`
- * - `anthropic/*`, `claude-*` → `"anthropic"`
- * - Everything else (including empty strings) → `"unknown"`
- *
- * The `/v1/messages` route always feeds `body.model` straight through,
- * so an Anthropic request with an `openai/gpt-5.6-luna` model string is still
- * classified as `"openai"`. That matches the parity program's convention
- * where the provider label is the source of truth, not the HTTP route.
- */
+// Model identity, not HTTP route, selects the parity lane. An Anthropic wire
+// request may intentionally carry an OpenAI model; debug consumers retain this
+// classification to verify which provider-specific scenario plan was exercised.
 type MockOpenAiProviderVariant = "openai" | "anthropic" | "unknown";
 
 export function resolveProviderVariant(model: string | undefined): MockOpenAiProviderVariant {
@@ -207,6 +190,7 @@ export type MockOpenAiCodeModeExecSurface = "native" | "guest";
 
 export type MockOpenAiRequestSnapshot = {
   cursor: number;
+  sessionId?: string;
   raw: string;
   body: Record<string, unknown>;
   prompt: string;
@@ -252,12 +236,7 @@ export type MockOpenAiRequestSnapshotBase = Omit<
 export const INTERNAL_RUNTIME_CONTEXT_BEGIN = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
 export const INTERNAL_RUNTIME_CONTEXT_END = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
 
-// Anthropic /v1/messages request/response shapes the mock actually needs.
-// This is a subset of the real Anthropic Messages API — just enough so the
-// QA suite can run its parity pack against a "baseline" Anthropic provider
-// without needing real API keys. The scenarios drive their dispatch through
-// the shared mock scenario logic (buildResponsesPayload), with `model`
-// preserved so provider-aware branches can intentionally diverge.
+// Anthropic wire fields used by the shared Responses scenario dispatcher.
 export type AnthropicMessageContentBlock =
   | { type: "text"; text: string }
   | {

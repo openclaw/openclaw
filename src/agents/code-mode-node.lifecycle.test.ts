@@ -1,10 +1,22 @@
+import { channel } from "node:diagnostics_channel";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { CodeModeWorkerThreadResult } from "./code-mode-worker-types.js";
+
+vi.mock("node:diagnostics_channel", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:diagnostics_channel")>();
+  const pressure = actual.channel(Symbol("code-mode-node-lifecycle"));
+  return {
+    ...actual,
+    channel: (name: string | symbol) =>
+      name === "openclaw.memory.critical" ? pressure : actual.channel(name),
+  };
+});
 
 const fixture = vi.hoisted(() => ({
   workerUrl: "file:///runtime/code-mode-node.worker.js",
   executions: [] as Array<{ input: unknown; options: { timeoutMs: number } }>,
   pools: [] as Array<{
+    url: string;
     isClosed: boolean;
     run: Mock<
       (
@@ -21,6 +33,7 @@ vi.mock("../infra/runtime-worker-url.js", () => ({
 vi.mock("../infra/worker-task-pool.js", () => ({
   WorkerTaskError: class extends Error {},
   WorkerTaskPool: class {
+    url: string;
     isClosed = false;
     run = vi.fn(
       async (
@@ -38,7 +51,8 @@ vi.mock("../infra/worker-task-pool.js", () => ({
     close = vi.fn(async () => {
       this.isClosed = true;
     });
-    constructor() {
+    constructor(options: { workerUrl: URL }) {
+      this.url = options.workerUrl.href;
       fixture.pools.push(this);
     }
   },
@@ -67,6 +81,40 @@ afterEach(async () => {
 });
 
 describe("Node Code Mode worker custody", () => {
+  it("reuses idle workers within five minutes and expires each after inactivity", async () => {
+    vi.useFakeTimers();
+    try {
+      await Promise.all([run(), run()]);
+      const count = fixture.pools.length;
+      const previous = fixture.pools.at(-1)!;
+      const reused = fixture.pools.at(-2)!;
+      await vi.advanceTimersByTimeAsync(70_000);
+      expect(await run()).toMatchObject({ status: "completed" });
+      expect(fixture.pools).toHaveLength(count);
+      expect(previous.isClosed).toBe(false);
+      await vi.advanceTimersByTimeAsync(4 * 60_000);
+      expect(previous.isClosed).toBe(true);
+      expect(reused.isClosed).toBe(false);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(reused.isClosed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds the warm set and retires every idle pool on memory pressure", async () => {
+    const results = await Promise.all(Array.from({ length: 6 }, run));
+    expect(results.every((result) => result.status === "completed")).toBe(true);
+    const idle = fixture.pools.filter((pool) => !pool.isClosed);
+    expect(idle).toHaveLength(4);
+    channel("openclaw.memory.critical").publish({});
+    expect(idle.every((pool) => pool.isClosed)).toBe(true);
+    expect(channel("openclaw.memory.critical").hasSubscribers).toBe(false);
+    const count = fixture.pools.length;
+    expect(await run()).toMatchObject({ status: "completed" });
+    expect(fixture.pools).toHaveLength(count + 1);
+  });
+
   it.each(["abort", "timeout"] as const)(
     "ends acquisition on %s while native retirement still owns its worker",
     async (reason) => {
@@ -182,9 +230,10 @@ describe("Node Code Mode worker custody", () => {
     },
   );
 
-  it("retires the old runtime worker before executing against a new entry", async () => {
-    await run();
+  it("retires all old runtime workers before executing against a new entry", async () => {
+    await Promise.all([run(), run()]);
     const previous = fixture.pools.at(-1)!;
+    const sibling = fixture.pools.at(-2)!;
     const previousExecutions = previous.run.mock.calls.length;
     let joined!: () => void;
     let retirementStarted!: () => void;
@@ -203,10 +252,13 @@ describe("Node Code Mode worker custody", () => {
     const result = run();
     await retiring;
     expect(fixture.pools).toHaveLength(poolCount);
+    fixture.workerUrl += ".newer";
     joined();
     expect(await result).toMatchObject({ status: "completed" });
     expect(fixture.pools).toHaveLength(poolCount + 1);
     expect(previous.run).toHaveBeenCalledTimes(previousExecutions);
+    expect(sibling.isClosed).toBe(true);
+    expect(fixture.pools.at(-1)?.url).toBe(fixture.workerUrl);
   });
 
   it("retains failed idle retirement and joins its native retry before allocating a successor", async () => {
@@ -222,7 +274,22 @@ describe("Node Code Mode worker custody", () => {
     expect(fixture.pools).toHaveLength(count + 1);
   });
 
-  it("does not release a completed pool after an idle-cache collision fails native cleanup", async () => {
+  it("retires a completing worker when its runtime entry changed during execution", async () => {
+    await run();
+    const previous = fixture.pools.at(-1)!;
+    previous.run.mockImplementationOnce(async () => {
+      fixture.workerUrl += ".updated";
+      return {
+        status: "completed",
+        value: { kind: "complete", json: "1" },
+        output: { count: 0, source: { kind: "complete", json: "[]" } },
+      };
+    });
+    expect(await run()).toMatchObject({ status: "completed" });
+    expect(previous.isClosed).toBe(true);
+  });
+
+  it("does not release an excess completed pool after native cleanup fails", async () => {
     await run();
     const first = fixture.pools.at(-1)!;
     let complete!: (value: CodeModeWorkerThreadResult<undefined>) => void;
@@ -238,7 +305,8 @@ describe("Node Code Mode worker custody", () => {
     });
     const pending = run();
     await starting;
-    expect(await run()).toMatchObject({ status: "completed" });
+    const siblings = await Promise.all(Array.from({ length: 4 }, run));
+    expect(siblings.every((result) => result.status === "completed")).toBe(true);
     first.close.mockRejectedValueOnce(new Error("native exit uncertain"));
     complete({
       status: "completed",

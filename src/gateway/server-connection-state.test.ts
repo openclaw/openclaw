@@ -1,6 +1,7 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { WebSocket } from "ws";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   replaceSessionEntrySync,
   upsertSessionEntryCore,
@@ -13,6 +14,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
@@ -54,6 +56,143 @@ function makeClient(
 }
 
 describe("gateway connection state", () => {
+  it("uses committed policy for projected and plain session events through tentative activation", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const reader = ensureProfileForEmail("event-policy-reader@example.test");
+      const other = ensureProfileForEmail("event-policy-other@example.test");
+      const config = (others: "none" | "view"): OpenClawConfig => ({
+        agents: { entries: { main: {} } },
+        gateway: {
+          roles: {
+            default: "reader",
+            definitions: {
+              reader: {
+                sessions: { others },
+                agents: ["main"],
+                scopes: ["operator.sessions.read"],
+              },
+            },
+          },
+        },
+      });
+      const restricted = config("none");
+      const relaxed = config("view");
+      let runtimeConfig = restricted;
+      let committedConfig = restricted;
+      setRuntimeConfigSnapshot(runtimeConfig);
+      const ownKey = "agent:main:policy-own";
+      const foreignKey = "agent:main:policy-foreign";
+      for (const [sessionKey, profileId] of [
+        [ownKey, reader.id],
+        [foreignKey, other.id],
+      ] as const) {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          {
+            sessionId: sessionKey,
+            updatedAt: 1,
+            visibility: "shared",
+            createdActor: { type: "human", source: "profile", id: profileId },
+          },
+        );
+      }
+      const state = createGatewayConnectionState({
+        bootId: "committed-event-policy",
+        cfg: restricted,
+        getRuntimeConfig: () => runtimeConfig,
+      });
+      try {
+        const projection = await createSessionRowProjection({
+          cfg: runtimeConfig,
+          getConfig: () => runtimeConfig,
+          getPolicyConfig: () => committedConfig,
+        });
+        const detach = state.attachSessionRowProjection(projection);
+        try {
+          const peer = makeClient("policy-reader", { count: 0 });
+          peer.client.connect.scopes = ["operator.sessions.read"];
+          peer.client.connect.client = {
+            id: "openclaw-control-ui",
+            version: "test",
+            platform: "web",
+            mode: "webchat",
+          };
+          peer.client.authenticatedUserProfile = {
+            profileId: reader.id,
+            displayName: "Reader",
+            avatarRevision: "test",
+            hasAvatar: false,
+            updatedAt: reader.updatedAt,
+          };
+          prepareGatewayRecipientProfile(peer.client);
+          state.clients.add(peer.client);
+          const publish = (stage: string, visibleKeys: string[]) => {
+            peer.send.mockClear();
+            for (const sessionKey of [ownKey, foreignKey]) {
+              const scope = { sessionKeys: [sessionKey], agentId: "main" };
+              state.broadcast("sessions.changed", { sessionKey, reason: "metadata" }, scope);
+              state.broadcast(
+                "chat",
+                {
+                  sessionKey,
+                  runId: "policy-run",
+                  seq: 1,
+                  state: "delta",
+                  message: { role: "assistant", content: [{ type: "text", text: sessionKey }] },
+                },
+                scope,
+              );
+            }
+            const frames = peer.send.mock.calls.map(([frame]): unknown => {
+              if (typeof frame !== "string") {
+                throw new Error("expected a serialized Gateway event");
+              }
+              return JSON.parse(frame);
+            });
+            expect.soft(frames, stage).toEqual(
+              visibleKeys.flatMap((sessionKey) => [
+                expect.objectContaining({
+                  event: "sessions.changed",
+                  payload: expect.objectContaining({
+                    sessionKey,
+                    session: expect.objectContaining({ key: sessionKey }),
+                  }),
+                }),
+                expect.objectContaining({
+                  event: "chat",
+                  payload: expect.objectContaining({
+                    sessionKey,
+                    message: { role: "assistant", content: [{ type: "text", text: sessionKey }] },
+                  }),
+                }),
+              ]),
+            );
+          };
+          await projection.ensureMaterialized();
+          publish("serving policy", [ownKey]);
+          runtimeConfig = relaxed;
+          setRuntimeConfigSnapshot(runtimeConfig);
+          await projection.ensureMaterialized();
+          publish("tentative relaxation", [ownKey]);
+          runtimeConfig = restricted;
+          setRuntimeConfigSnapshot(runtimeConfig);
+          await projection.ensureMaterialized();
+          publish("rollback", [ownKey]);
+          runtimeConfig = relaxed;
+          setRuntimeConfigSnapshot(runtimeConfig);
+          await projection.ensureMaterialized();
+          committedConfig = relaxed;
+          publish("committed relaxation without a projection mark", [ownKey, foreignKey]);
+        } finally {
+          detach();
+          projection.dispose();
+        }
+      } finally {
+        state.mentionInbox.dispose();
+      }
+    });
+  });
+
   it("advertises online people only through live operator connections", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const state = createGatewayConnectionState({

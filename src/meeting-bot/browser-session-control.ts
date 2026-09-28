@@ -287,5 +287,6 @@ export async function readMeetingTranscriptWithBrowser<
     droppedLines: snapshot.droppedLines,
     ...(snapshot.epoch ? { epoch: snapshot.epoch } : {}),
     lines: snapshot.lines,
+    ...(snapshot.pendingLines ? { pendingLines: snapshot.pendingLines } : {}),
   } as Transcript;
 }

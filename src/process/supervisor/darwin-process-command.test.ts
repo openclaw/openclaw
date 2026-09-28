@@ -24,12 +24,12 @@ let executable: string | undefined;
 const uid = process.getuid?.() ?? 501;
 const foreignUid = uid + 1;
 
-function argumentsReply(argv: string[], argc = argv.length) {
+function argumentsReply(argv: string[], argc = argv.length, environment = "SYNTHETIC_ENV=private") {
   const header = Buffer.alloc(4);
   header.writeInt32LE(argc);
   return Buffer.concat([
     header,
-    Buffer.from(`/runtime path/node\0\0\0${argv.join("\0")}\0SYNTHETIC_ENV=private\0`),
+    Buffer.from(`/runtime path/node\0\0\0${argv.join("\0")}\0${environment}\0`),
   ]);
 }
 
@@ -65,16 +65,29 @@ beforeEach(() => {
   });
 });
 
-it("preserves exact native argv boundaries without including environment bytes", () => {
-  const argv = ["node", "/app with spaces/openclaw.mjs", "", "doctor"];
-  reply = argumentsReply(argv);
-  expect(readDarwinProcessCommand(12, uid)).toEqual({ argv });
-});
+it.each([uid, undefined])(
+  "preserves exact native argv boundaries with observed uid %s",
+  (observedUid) => {
+    const argv = ["node", "/app with spaces/openclaw.mjs", "", "doctor"];
+    reply = argumentsReply(argv);
+    expect(readDarwinProcessCommand(12, observedUid)).toEqual({ argv });
+  },
+);
 
 it("preserves a rewritten process title with emptied original argument slots", () => {
   const argv = ["openclaw-gateway", "", "", ""];
   reply = argumentsReply(argv);
   expect(readDarwinProcessCommand(12, uid)).toEqual({ argv });
+});
+
+it("retains only the OpenClaw service marker from the native environment", () => {
+  const argv = ["node", "dist/index.js"];
+  reply = argumentsReply(
+    argv,
+    argv.length,
+    "UNRELATED_PRIVATE_VALUE=fixture\0OPENCLAW_SERVICE_MARKER=openclaw",
+  );
+  expect(readDarwinProcessCommand(12, uid)).toEqual({ argv, serviceMarker: "openclaw" });
 });
 
 it.each(["invalid count", "truncated argument"])("rejects %s native argument bytes", (fault) => {
@@ -104,7 +117,9 @@ it.each([
   "/tmp/openclaw-plugin-build-abc123/vendor/codex",
 ])("rejects unreadable argv for an ambiguous executable %s", (file) => {
   executable = file;
-  expect(() => readDarwinProcessCommand(12, foreignUid)).toThrow("Cannot inspect Darwin arguments");
+  expect(() => readDarwinProcessCommand(12, foreignUid)).toThrow(
+    "Could not classify PID 12: cannot inspect Darwin arguments",
+  );
 });
 
 it.each([
@@ -117,16 +132,25 @@ it.each([
     output.writeUInt32LE(flags);
     return result;
   });
-  expect(() => readDarwinProcessCommand(12, foreignUid)).toThrow("Cannot inspect Darwin arguments");
+  expect(() => readDarwinProcessCommand(12, foreignUid)).toThrow(
+    "Could not classify PID 12: cannot inspect Darwin arguments",
+  );
 });
 
-it("does not extend foreign-service evidence to an unreadable current-user process", () => {
-  executable = "/usr/libexec/native-service";
-  expect(() => readDarwinProcessCommand(12, uid)).toThrow("Cannot inspect Darwin arguments");
-});
+it.each([uid, undefined])(
+  "rejects foreign-service evidence with current or unavailable uid %s",
+  (observedUid) => {
+    executable = "/usr/libexec/native-service";
+    expect(() => readDarwinProcessCommand(12, observedUid)).toThrow(
+      "Could not classify PID 12: cannot inspect Darwin arguments",
+    );
+  },
+);
 
 it("distinguishes an exited process from an unavailable executable inspection", () => {
-  expect(() => readDarwinProcessCommand(12, foreignUid)).toThrow("Cannot inspect Darwin arguments");
+  expect(() => readDarwinProcessCommand(12, foreignUid)).toThrow(
+    "Could not classify PID 12: cannot inspect Darwin arguments",
+  );
   dead.mockReturnValue(true);
   expect(readDarwinProcessCommand(12, foreignUid)).toBeUndefined();
 });

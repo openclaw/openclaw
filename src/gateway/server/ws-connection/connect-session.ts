@@ -357,14 +357,14 @@ export async function attachAuthenticatedGatewayConnect(
   }
   // Record the authenticated ingress after device and role scope restrictions.
   // Later turns must not infer management authority from names or session routing.
+  const authenticatedOperator =
+    role === "operator" && authMethod !== undefined && authMethod !== "none";
   const authenticatedControlUi =
-    role === "operator" &&
-    authMethod !== undefined &&
-    authMethod !== "none" &&
-    connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
+    authenticatedOperator && connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
   const controlUiAdmin = authenticatedControlUi && scopes.includes(ADMIN_SCOPE);
   const internal = {
     ...(isLocalClient ? { isLocalClient: true as const } : {}),
+    ...(authenticatedOperator ? { authenticatedOperator: true as const } : {}),
     ...(authenticatedControlUi ? { authenticatedControlUi: true as const } : {}),
     ...(controlUiAdmin ? { controlUiAdmin: true as const } : {}),
     ...(isTrustedApprovalRuntime ? { approvalRuntime: true } : {}),

@@ -5,22 +5,23 @@ import {
   type ChannelIngressStateInput,
   readChannelIngressStoreAllowFromForDmPolicy,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeStringEntriesLower } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { collectSlackCursorPages } from "../cursor-pages.js";
 import { getSlackRuntime } from "../runtime.js";
 import {
   allowListMatches,
-  normalizeAllowListLower,
   normalizeSlackAllowOwnerEntry,
   resolveSlackUserAllowListForTeam,
 } from "./allow-list.js";
 import { resolveSlackChannelConfig } from "./channel-config.js";
-import { inferSlackChannelType } from "./channel-type.js";
+import { inferSlackChannelType, resolveSlackChatType } from "./channel-type.js";
 import { normalizeSlackChannelType, type SlackMonitorContext } from "./context.js";
 import type { SlackEventScope } from "./event-scope.js";
 import {
@@ -79,29 +80,12 @@ function getChannelMembersCache(
   return next;
 }
 
-function pruneChannelMembersCache(cache: Map<string, SlackChannelMembersCacheEntry>): void {
-  while (cache.size > CHANNEL_MEMBERS_CACHE_MAX) {
-    const oldest = cache.keys().next();
-    if (oldest.done) {
-      return;
-    }
-    cache.delete(oldest.value);
-  }
-}
-
-function buildBaseAllowFrom(ctx: SlackMonitorContext, teamId?: string): string[] {
-  return resolveSlackUserAllowListForTeam({
-    allowList: ctx.allowFrom,
-    teamId,
-  });
-}
-
 export async function resolveSlackEffectiveAllowFrom(
   ctx: SlackMonitorContext,
   options?: { includePairingStore?: boolean; eventScope?: SlackEventScope },
 ) {
   const teamId = options?.eventScope?.teamId ?? ctx.teamId;
-  const base = buildBaseAllowFrom(ctx, teamId);
+  const base = resolveSlackUserAllowListForTeam({ allowList: ctx.allowFrom, teamId });
   if (options?.includePairingStore !== true) {
     return base;
   }
@@ -135,7 +119,7 @@ async function fetchSlackChannelMemberIds(
         limit: 999,
         ...(cursor ? { cursor } : {}),
       }),
-    collectPageItems: (response) => normalizeAllowListLower(response.members),
+    collectPageItems: (response) => normalizeStringEntriesLower(response.members),
   });
   return new Set(members);
 }
@@ -171,7 +155,7 @@ async function resolveSlackChannelMemberIds(
     expiresAtMs: pendingExpiresAtMs ?? 0,
     pending,
   });
-  pruneChannelMembersCache(cache);
+  pruneMapToMaxSize(cache, CHANNEL_MEMBERS_CACHE_MAX);
   try {
     const members = await pending;
     const membersExpiresAtMs = ttlMs > 0 ? resolveExpiresAtMsFromDurationMs(ttlMs) : undefined;
@@ -180,7 +164,7 @@ async function resolveSlackChannelMemberIds(
         expiresAtMs: membersExpiresAtMs,
         members,
       });
-      pruneChannelMembersCache(cache);
+      pruneMapToMaxSize(cache, CHANNEL_MEMBERS_CACHE_MAX);
     } else {
       cache.delete(key);
     }
@@ -213,7 +197,7 @@ export async function authorizeSlackBotRoomMessage(params: {
   allowFromLower: string[];
   eventScope?: SlackEventScope;
 }): Promise<boolean> {
-  const channelUserAllowList = normalizeAllowListLower(params.channelUsers).filter(
+  const channelUserAllowList = normalizeStringEntriesLower(params.channelUsers).filter(
     (entry) => entry !== "*",
   );
   if (
@@ -261,12 +245,6 @@ function wildcardWhenOpen(entries: readonly string[]): string[] {
   return entries.length > 0 ? [...entries] : ["*"];
 }
 
-function slackIngressConversationKind(
-  channelType: SlackIngressChannelType,
-): "direct" | "group" | "channel" {
-  return channelType === "im" ? "direct" : channelType === "mpim" ? "group" : "channel";
-}
-
 export async function resolveSlackCommandIngress(params: {
   ctx: SlackMonitorContext;
   teamId?: string;
@@ -299,18 +277,18 @@ export async function resolveSlackCommandIngress(params: {
     teamId,
   });
   const channelUsersConfigured =
-    !isDirectMessage && !isGroupDm && normalizeAllowListLower(params.channelUsers).length > 0;
+    !isDirectMessage && !isGroupDm && normalizeStringEntriesLower(params.channelUsers).length > 0;
   // MPIM ingress is group-shaped, but its sender policy is DM-owned. Callers
   // pass configured allowFrom without pairing-store approvals for this path.
   const groupAllowFrom = isGroupDm ? ownerAllowFrom : channelUsersConfigured ? channelUsers : [];
-  const result = await createSlackIngressResolver(params.ctx).message({
+  return await createSlackIngressResolver(params.ctx).message({
     subject: createSlackIngressSubject({
       senderId: params.senderId,
       senderName: params.senderName,
       teamId,
     }),
     conversation: {
-      kind: slackIngressConversationKind(params.channelType),
+      kind: resolveSlackChatType(params.channelType),
       id: params.channelId,
       threadId: params.threadId,
     },
@@ -337,7 +315,6 @@ export async function resolveSlackCommandIngress(params: {
       ...(isDirectMessage ? { commandOwnerAllowFrom: ownerAllowFrom } : {}),
     },
   });
-  return result;
 }
 
 async function decideSlackSystemIngress(params: {
@@ -365,7 +342,7 @@ async function decideSlackSystemIngress(params: {
     teamId,
   });
   const channelUsersConfigured =
-    !isDirectMessage && !isGroupDm && normalizeAllowListLower(params.channelUsers).length > 0;
+    !isDirectMessage && !isGroupDm && normalizeStringEntriesLower(params.channelUsers).length > 0;
   const ownerAllowFrom =
     params.interactiveEvent && channelUsersConfigured
       ? ownerAllowFromLower.filter((entry) => entry !== "*")
@@ -396,7 +373,7 @@ async function decideSlackSystemIngress(params: {
   const input: Parameters<typeof resolver.message>[0] = {
     subject: subject(params.senderName),
     conversation: {
-      kind: slackIngressConversationKind(params.channelType),
+      kind: resolveSlackChatType(params.channelType),
       id: params.channelId ?? "slack-system",
     },
     event: {

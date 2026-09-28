@@ -125,6 +125,8 @@ it("fingerprints dependency install inputs without ordinary script churn", () =>
     ".github/actions/setup-node-env/install-dependencies.sh",
     "scripts/check-install-dependency-ownership.mjs",
     "scripts/prepare-git-hooks.mjs",
+    "scripts/lib/fs-safe-prebuild.mjs",
+    "scripts/windows-cmd-helpers.mjs",
     "scripts/lib/package-lifecycle-marker.mjs",
     "scripts/lib/pnpm-lockfile-documents.mjs",
   ]) {

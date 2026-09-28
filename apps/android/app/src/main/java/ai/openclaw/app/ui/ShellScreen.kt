@@ -53,7 +53,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -781,7 +780,9 @@ private fun OverviewMetricRow(
     },
     trailing = {
       Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
-        Text(text = card.value, style = ClawTheme.type.label, color = ClawTheme.colors.text)
+        card.value?.let { value ->
+          Text(text = value, style = ClawTheme.type.label, color = ClawTheme.colors.text)
+        }
         Icon(
           imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
           contentDescription = nativeString("Open \${card.title}", card.title),
@@ -792,9 +793,6 @@ private fun OverviewMetricRow(
     },
     onClick = onClick,
   )
-  card.progressFraction?.let { progress ->
-    OverviewProgressBar(progress = progress, tint = tint)
-  }
 }
 
 internal fun localizedUppercase(
@@ -808,36 +806,6 @@ internal fun localizedInitial(
   languageTag: String?,
   fallbackLocale: Locale = Locale.getDefault(),
 ): String? = value.firstGraphemeOrNull()?.let { localizedUppercase(it, languageTag, fallbackLocale) }
-
-@Composable
-private fun OverviewProgressBar(
-  progress: Float,
-  tint: Color,
-) {
-  val visualProgress =
-    if (progress <= 0f) {
-      0f
-    } else {
-      progress.coerceIn(0.16f, 1f)
-    }
-  Box(
-    modifier =
-      Modifier
-        .fillMaxWidth()
-        .height(4.dp)
-        .clip(RoundedCornerShape(2.dp))
-        .background(ClawTheme.colors.surfacePressed),
-  ) {
-    Box(
-      modifier =
-        Modifier
-          .fillMaxWidth(visualProgress)
-          .height(4.dp)
-          .clip(RoundedCornerShape(2.dp))
-          .background(tint),
-    )
-  }
-}
 
 @Composable
 private fun TalkEntryPanel(
@@ -922,13 +890,12 @@ private fun ChatSessionEntry.overviewRecentSessionRecencyMs(): Long = lastActivi
 
 internal data class OverviewMetricCardSpec(
   val title: String,
-  val value: String,
+  val value: String?,
   val subtitle: String,
   val icon: ImageVector,
   val status: ClawStatus,
   val tab: Tab,
   val settingsRoute: SettingsRoute? = null,
-  val progressFraction: Float? = null,
 )
 
 internal fun overviewMetricCardSpecs(
@@ -962,17 +929,14 @@ internal fun overviewMetricCardSpecs(
     ),
     OverviewMetricCardSpec(
       title = nativeString("Nodes"),
-      value = if (nodeCount == 0) nativeString("None") else nativeString("\$onlineNodes/\$nodeCount", onlineNodes, nodeCount),
+      value = null,
       subtitle =
-        if (nodesDevicesSummary.hasNodeCapabilityApprovalPending()) {
-          nativeString("Review node access")
-        } else if (nodeCount > 0) {
-          nativeString(
-            "\${nodeOnlinePercent(onlineNodes = onlineNodes, nodeCount = nodeCount)}% online",
-            nodeOnlinePercent(onlineNodes = onlineNodes, nodeCount = nodeCount),
-          )
-        } else {
-          nodesDevicesSummaryText(nodesDevicesSummary)
+        when {
+          nodesDevicesSummary.hasNodeCapabilityApprovalPending() -> nativeString("Review node access")
+          nodeCount == 0 && (nodesDevicesSummary.pendingDevices.isNotEmpty() || nodesDevicesSummary.pairedDevices.isNotEmpty()) -> nodesDevicesSummaryText(nodesDevicesSummary)
+          nodeCount == 0 -> nativeString("None paired")
+          onlineNodes == nodeCount -> nativeString("\$onlineNodes online", onlineNodes)
+          else -> nativeString("\$onlineNodes of \$nodeCount online", onlineNodes, nodeCount)
         },
       icon = Icons.Default.Cloud,
       status =
@@ -983,7 +947,6 @@ internal fun overviewMetricCardSpecs(
         },
       tab = Tab.Settings,
       settingsRoute = SettingsRoute.NodesDevices,
-      progressFraction = if (nodeCount > 0) onlineNodes.toFloat() / nodeCount.toFloat() else null,
     ),
     OverviewMetricCardSpec(
       title = nativeString("Approvals"),
@@ -1076,16 +1039,6 @@ internal fun overviewAgentActivityText(
     else -> statusText
   }
 }
-
-internal fun nodeOnlinePercent(
-  onlineNodes: Int,
-  nodeCount: Int,
-): Int =
-  if (nodeCount <= 0) {
-    0
-  } else {
-    ((onlineNodes.coerceAtLeast(0) * 100) + (nodeCount / 2)) / nodeCount
-  }
 
 private fun agentInitials(name: String): String =
   name

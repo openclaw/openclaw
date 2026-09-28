@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import {
   decodeSessionArchiveBytes,
   encodeSessionArchiveContent,
@@ -18,7 +19,6 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import { replaceFileAtomicSync } from "./replace-file.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { transformHistoricalTranscriptEvent } from "./state-migrations.transcript-directives-transform.js";
 
@@ -359,11 +359,18 @@ export async function migrateCanonicalTranscriptArchives(
   while (true) {
     const batch = listArchiveBatch(params.database, cursor, params.transformContent);
     if (batch.length === 0) {
-      runSqliteImmediateTransactionSync(params.database, () => {
-        assertAgentDatabaseMaintenanceAuthority();
-        params.writeCursor({ phase: "complete" });
-        assertAgentDatabaseMaintenanceAuthority();
-      });
+      runSqliteImmediateTransactionSync(
+        params.database,
+        () => {
+          assertAgentDatabaseMaintenanceAuthority();
+          params.writeCursor({ phase: "complete" });
+          assertAgentDatabaseMaintenanceAuthority();
+        },
+        {
+          databaseLabel: params.pathname,
+          operationLabel: "historical-transcript-archive.complete",
+        },
+      );
       return rewrittenArchives;
     }
     for (const planned of batch) {

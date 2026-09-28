@@ -3,7 +3,6 @@ import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contrac
 import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { channelReadyPatch, channelStoppedPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   danger,
@@ -14,7 +13,6 @@ import {
 import {
   canonicalizeWebhookRouteKey,
   registerWebhookTargetWithPluginRoute,
-  resolveSingleWebhookTarget,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import {
   beginWebhookRequestPipelineOrReject,
@@ -28,17 +26,9 @@ import { prepareLineReplyPayload } from "./rich-messages.js";
 import { getLineRuntime } from "./runtime.js";
 import { showLoadingAnimation } from "./send.js";
 import type { LineChannelData, ResolvedLineAccount } from "./types.js";
-import {
-  createLineNodeWebhookHandler,
-  readLineWebhookRequestBody,
-  rejectLineWebhookRequest,
-} from "./webhook-node.js";
+import { createLineNodeWebhookHandler } from "./webhook-node.js";
 import { LineWebhookTerminalDeliveryError } from "./webhook-spool.js";
-import {
-  parseLineWebhookBody,
-  resolveLineWebhookPath,
-  validateLineSignature,
-} from "./webhook-utils.js";
+import { resolveLineWebhookPath } from "./webhook-utils.js";
 
 interface MonitorLineProviderOptions {
   channelAccessToken: string;
@@ -60,8 +50,6 @@ interface LineProviderMonitor {
 }
 
 const lineWebhookInFlightLimiter = createWebhookInFlightLimiter();
-const LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES = 64 * 1024;
-const LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS = 5_000;
 
 type LineWebhookTarget = {
   accountId: string;
@@ -317,12 +305,10 @@ export async function monitorLineProvider(
 
   const normalizedPath = resolveLineWebhookPath(webhookPath);
   const webhookRouteKey = canonicalizeWebhookRouteKey(normalizedPath);
-  const createScopedLineWebhookHandler = (target: LineWebhookTarget) =>
-    createLineNodeWebhookHandler({
-      channelSecret: target.channelSecret,
-      bot: target.bot,
-      runtime: target.runtime,
-    });
+  const handleWebhook = createLineNodeWebhookHandler({
+    getTargets: () => lineWebhookTargets.get(webhookRouteKey) ?? [],
+    runtime,
+  });
   const registrationParams: Parameters<
     typeof registerWebhookTargetWithPluginRoute<LineWebhookTarget>
   >[0] = {
@@ -342,15 +328,8 @@ export async function monitorLineProvider(
       log: (msg) => logVerbose(msg),
       throwOnFailure: true,
       handler: async (req, res) => {
-        const targets = lineWebhookTargets.get(webhookRouteKey) ?? [];
-        const firstTarget = targets[0];
         if (req.method !== "POST") {
-          if (!firstTarget) {
-            res.statusCode = 404;
-            res.end("Not Found");
-            return;
-          }
-          await createScopedLineWebhookHandler(firstTarget)(req, res);
+          await handleWebhook(req, res);
           return;
         }
 
@@ -365,73 +344,7 @@ export async function monitorLineProvider(
         }
 
         try {
-          const signatureHeader = req.headers["x-line-signature"];
-          const signature =
-            typeof signatureHeader === "string"
-              ? signatureHeader.trim()
-              : Array.isArray(signatureHeader)
-                ? (signatureHeader[0] ?? "").trim()
-                : "";
-
-          if (!signature) {
-            logVerbose("line: webhook missing X-Line-Signature header");
-            res.statusCode = 400;
-            res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify({ error: "Missing X-Line-Signature header" }));
-            return;
-          }
-
-          const rawBody = await readLineWebhookRequestBody(
-            req,
-            LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES,
-            LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS,
-          );
-          const match = resolveSingleWebhookTarget(targets, (target) =>
-            validateLineSignature(rawBody, signature, target.channelSecret),
-          );
-          if (match.kind === "none") {
-            logVerbose("line: webhook signature validation failed");
-            res.statusCode = 401;
-            res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify({ error: "Invalid signature" }));
-            return;
-          }
-          if (match.kind === "ambiguous") {
-            logVerbose("line: webhook signature matched multiple accounts");
-            res.statusCode = 401;
-            res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify({ error: "Ambiguous webhook target" }));
-            return;
-          }
-
-          const body = parseLineWebhookBody(rawBody);
-          if (!body) {
-            res.statusCode = 400;
-            res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify({ error: "Invalid webhook payload" }));
-            return;
-          }
-
-          if (body.events && body.events.length > 0) {
-            logVerbose(`line: received ${body.events.length} webhook events`);
-            // Only the admission owner can distinguish queued events from ignored standby deliveries.
-            if ((await match.target.bot.handleWebhook(body)) === "durable") {
-              res.setHeader("x-openclaw-delivery-accepted", "durable");
-            }
-          }
-          res.statusCode = 200;
-          res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify({ status: "ok" }));
-        } catch (err) {
-          if (await rejectLineWebhookRequest(req, res, err)) {
-            return;
-          }
-          runtime.error?.(danger(`line webhook error: ${formatErrorMessage(err)}`));
-          if (!res.headersSent) {
-            res.statusCode = 500;
-            res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify({ error: "Internal server error" }));
-          }
+          await handleWebhook(req, res);
         } finally {
           requestLifecycle.release();
         }

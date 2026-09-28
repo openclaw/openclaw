@@ -3,9 +3,6 @@ import {
   ErrorCodes,
   errorShape,
   type SessionCatalogLocator,
-  type SessionsCatalogArchiveParams,
-  type SessionsCatalogContinueParams,
-  type SessionsCatalogReadParams,
   validateSessionsCatalogArchiveParams,
   validateSessionsCatalogContinueParams,
   validateSessionsCatalogReadParams,
@@ -34,7 +31,7 @@ import type {
   GatewayRequestHandlers,
   RespondFn,
 } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { defineValidatedGatewayHandler } from "./validation.js";
 
 export function resolveSessionCatalogProvider(
   catalogId: string,
@@ -66,21 +63,6 @@ export function resolveRegisteredCatalogCreateTarget(
   return resolved.ok
     ? { ok: true, target: { ...resolved.target, pluginOwnerId: registration.pluginId } }
     : resolved;
-}
-
-function providerOrRespond(
-  catalogId: string,
-  respond: RespondFn,
-): SessionCatalogProvider | undefined {
-  const provider = resolveSessionCatalogProvider(catalogId);
-  if (!provider) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `unknown session catalog: ${catalogId}`),
-    );
-  }
-  return provider;
 }
 
 async function authorizeCatalogRequest(params: {
@@ -126,180 +108,143 @@ function registrationOrRespond(catalogId: string, respond: RespondFn) {
   return registration;
 }
 
+function respondCatalogError(error: unknown, respond: RespondFn): void {
+  const details = catalogError(error);
+  respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, details.message, { details }));
+}
+
 export const sessionCatalogHandlers: GatewayRequestHandlers = {
   "sessions.catalog.list": listSessionCatalogHandler,
 
-  "sessions.catalog.read": async ({ params, respond, context, client }) => {
-    if (
-      !assertValidParams(
-        params,
-        validateSessionsCatalogReadParams,
-        "sessions.catalog.read",
-        respond,
-      )
-    ) {
-      return;
-    }
-    const request = params as SessionsCatalogReadParams;
-    const provider = providerOrRespond(request.catalogId, respond);
-    if (!provider) {
-      return;
-    }
-    try {
-      const authorization = await authorizeCatalogRequest({
-        access: "read",
-        request,
-        provider,
-        respond,
-        context,
-        client,
-      });
-      if (!authorization) {
+  "sessions.catalog.read": defineValidatedGatewayHandler(
+    "sessions.catalog.read",
+    validateSessionsCatalogReadParams,
+    async ({ params: request, respond, context, client }) => {
+      const provider = registrationOrRespond(request.catalogId, respond)?.provider;
+      if (!provider) {
         return;
       }
-      const result = await readAuthorizedSessionCatalog({
-        request,
-        provider,
-        ...authorization,
-        client,
-        context,
-      });
-      if (!result.ok) {
-        respond(false, undefined, result.error);
-        return;
+      try {
+        const authorization = await authorizeCatalogRequest({
+          access: "read",
+          request,
+          provider,
+          respond,
+          context,
+          client,
+        });
+        if (!authorization) {
+          return;
+        }
+        const result = await readAuthorizedSessionCatalog({
+          request,
+          provider,
+          ...authorization,
+          client,
+          context,
+        });
+        if (!result.ok) {
+          respond(false, undefined, result.error);
+          return;
+        }
+        respond(true, result.page);
+      } catch (error) {
+        respondCatalogError(error, respond);
       }
-      respond(true, result.page);
-    } catch (error) {
-      const details = catalogError(error);
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, details.message, { details }),
-      );
-    }
-  },
+    },
+  ),
 
-  "sessions.catalog.continue": async ({
-    params,
-    respond,
-    client,
-    context,
-    sessionMutationCommitGuard,
-  }) => {
-    if (
-      !assertValidParams(
-        params,
-        validateSessionsCatalogContinueParams,
-        "sessions.catalog.continue",
-        respond,
-      )
-    ) {
-      return;
-    }
-    const request = params as SessionsCatalogContinueParams;
-    const registration = registrationOrRespond(request.catalogId, respond);
-    if (!registration) {
-      return;
-    }
-    const provider = registration.provider;
-    if (!provider.continueSession && !provider.copyToGatewaySession) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "catalog is view-only"));
-      return;
-    }
-    try {
-      const authorization = await authorizeCatalogRequest({
-        access: "mutate",
-        request,
-        provider,
-        respond,
-        context,
-        client,
-      });
-      if (!authorization) {
+  "sessions.catalog.continue": defineValidatedGatewayHandler(
+    "sessions.catalog.continue",
+    validateSessionsCatalogContinueParams,
+    async ({ params: request, respond, client, context, sessionMutationCommitGuard }) => {
+      const registration = registrationOrRespond(request.catalogId, respond);
+      if (!registration) {
         return;
       }
-      const creationError = authorizeGatewaySessionCreation({
-        cfg: context.getRuntimeConfig(),
-        client,
-        agentId: authorization.agentId,
-      });
-      if (creationError) {
-        respond(false, undefined, creationError);
+      const provider = registration.provider;
+      if (!provider.continueSession && !provider.copyToGatewaySession) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "catalog is view-only"));
         return;
       }
-      const continued = await continueAuthorizedSessionCatalog({
-        request,
-        registration,
-        agentId: authorization.agentId,
-        allowProcessHomeFallback: authorization.allowProcessHomeFallback,
-        client,
-        context,
-        commitGuard: sessionMutationCommitGuard,
-      });
-      if (!continued.ok) {
-        respond(false, undefined, continued.error);
-        return;
+      try {
+        const authorization = await authorizeCatalogRequest({
+          access: "mutate",
+          request,
+          provider,
+          respond,
+          context,
+          client,
+        });
+        if (!authorization) {
+          return;
+        }
+        const creationError = authorizeGatewaySessionCreation({
+          cfg: context.getRuntimeConfig(),
+          client,
+          agentId: authorization.agentId,
+        });
+        if (creationError) {
+          respond(false, undefined, creationError);
+          return;
+        }
+        const continued = await continueAuthorizedSessionCatalog({
+          request,
+          registration,
+          agentId: authorization.agentId,
+          allowProcessHomeFallback: authorization.allowProcessHomeFallback,
+          client,
+          context,
+          commitGuard: sessionMutationCommitGuard,
+        });
+        if (!continued.ok) {
+          respond(false, undefined, continued.error);
+          return;
+        }
+        respond(true, { sessionKey: continued.sessionKey });
+      } catch (error) {
+        respondCatalogError(error, respond);
       }
-      respond(true, { sessionKey: continued.sessionKey });
-    } catch (error) {
-      const details = catalogError(error);
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, details.message, { details }),
-      );
-    }
-  },
+    },
+  ),
 
   "sessions.catalog.startTerminal": catalogStartHandler(resolveSessionCatalogProvider),
 
-  "sessions.catalog.archive": async ({ params, respond, context, client }) => {
-    if (
-      !assertValidParams(
-        params,
-        validateSessionsCatalogArchiveParams,
-        "sessions.catalog.archive",
-        respond,
-      )
-    ) {
-      return;
-    }
-    const request = params as SessionsCatalogArchiveParams;
-    const provider = providerOrRespond(request.catalogId, respond);
-    if (!provider) {
-      return;
-    }
-    if (!provider.archive) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "catalog cannot archive"));
-      return;
-    }
-    try {
-      const authorization = await authorizeCatalogRequest({
-        access: "mutate",
-        request,
-        provider,
-        respond,
-        context,
-        client,
-      });
-      if (!authorization) {
+  "sessions.catalog.archive": defineValidatedGatewayHandler(
+    "sessions.catalog.archive",
+    validateSessionsCatalogArchiveParams,
+    async ({ params: request, respond, context, client }) => {
+      const provider = registrationOrRespond(request.catalogId, respond)?.provider;
+      if (!provider) {
         return;
       }
-      const { catalogId: _catalogId, ...providerRequest } = request;
-      const result = await provider.archive({
-        ...providerRequest,
-        agentId: authorization.agentId,
-        allowProcessHomeFallback: authorization.allowProcessHomeFallback,
-      });
-      retireSessionCatalogLists(context.getRuntimeConfig());
-      respond(true, result);
-    } catch (error) {
-      const details = catalogError(error);
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, details.message, { details }),
-      );
-    }
-  },
+      if (!provider.archive) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "catalog cannot archive"));
+        return;
+      }
+      try {
+        const authorization = await authorizeCatalogRequest({
+          access: "mutate",
+          request,
+          provider,
+          respond,
+          context,
+          client,
+        });
+        if (!authorization) {
+          return;
+        }
+        const { catalogId: _catalogId, ...providerRequest } = request;
+        const result = await provider.archive({
+          ...providerRequest,
+          agentId: authorization.agentId,
+          allowProcessHomeFallback: authorization.allowProcessHomeFallback,
+        });
+        retireSessionCatalogLists(context.getRuntimeConfig());
+        respond(true, result);
+      } catch (error) {
+        respondCatalogError(error, respond);
+      }
+    },
+  ),
 };

@@ -83,7 +83,7 @@ export function reconcilePendingSubmitHistory(
   reconciledRunIds: readonly string[],
 ): boolean {
   const runId = state.pendingSubmit?.runId;
-  if (!runId || !new Set(reconciledRunIds).has(runId)) {
+  if (!runId || !reconciledRunIds.includes(runId)) {
     return false;
   }
   // History proves the Gateway accepted this submit even if reconnect hid

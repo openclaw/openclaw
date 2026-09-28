@@ -3,8 +3,10 @@ import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs, { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
+import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { scriptProcessEntrypoints } from "../../scripts/script-process-runtime.test-support.js";
 import { testing } from "../../scripts/write-cli-startup-metadata.ts";
@@ -451,6 +453,623 @@ describe("write-cli-startup-metadata", () => {
         }
       }
     },
+  );
+
+  it.runIf(process.platform === "linux")(
+    "supervised exited descendant accepts stopped work without accepting live or unknown work",
+    async () => {
+      const { spawn: actualSpawn } =
+        await vi.importActual<typeof import("node:child_process")>("node:child_process");
+      const repoRoot = fs.realpathSync(process.cwd());
+      const workerArgs = resolveRuntimeWorkerArgv(metadataUrl).slice(0, -1);
+      const observerUrl = pathToFileURL(
+        path.join(repoRoot, "scripts/lib/managed-child-process.mts"),
+      ).href;
+      const importScript = `
+import assert from "node:assert/strict";
+import crypto from "node:crypto";
+import fs from "node:fs";
+const metadataUrl = ${JSON.stringify(metadataUrl.href)};
+const observerUrl = ${JSON.stringify(observerUrl)};
+const { testing } = await import(metadataUrl);
+const observer = await import(observerUrl);
+const exports = {
+  spawnText: typeof testing?.spawnText,
+  writeCliStartupMetadata: typeof testing?.writeCliStartupMetadata,
+  inspectManagedProcessGroup: typeof observer.inspectManagedProcessGroup,
+  waitForManagedProcessGroupExit: typeof observer.waitForManagedProcessGroupExit,
+};
+for (const type of Object.values(exports)) assert.equal(type, "function");
+const hash = (url) => crypto.createHash("sha256").update(fs.readFileSync(new URL(url))).digest("hex");
+console.log("SUPERVISED_IMPORT_PREFLIGHT " + JSON.stringify({
+  node: process.version, cwd: fs.realpathSync("."), metadataUrl, observerUrl,
+  metadataSha256: hash(metadataUrl), observerSha256: hash(observerUrl),
+  loaderPrefix: ${JSON.stringify(workerArgs)}, exports,
+}));
+`;
+      const importRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-help-import-"));
+      mkdirSync(path.join(importRoot, "home"));
+      const preflight = actualSpawn(
+        process.execPath,
+        [...workerArgs, "--input-type=module", "--eval", importScript],
+        {
+          cwd: repoRoot,
+          env: {
+            PATH: process.env.PATH,
+            HOME: path.join(importRoot, "home"),
+            TMPDIR: importRoot,
+            OPENCLAW_STATE_DIR: path.join(importRoot, "state"),
+            OPENCLAW_CONFIG_PATH: path.join(importRoot, "state", "openclaw.json"),
+            LANG: "C.UTF-8",
+            CI: "1",
+          },
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
+      let importOutput = "";
+      let importError = "";
+      let importFailure: string | undefined;
+      let importJoined = false;
+      let importKill: ReturnType<typeof setTimeout> | undefined;
+      const stopImport = (reason: string) => {
+        if (importFailure) {
+          return;
+        }
+        importFailure = reason;
+        preflight.kill("SIGTERM");
+        importKill = setTimeout(() => preflight.kill("SIGKILL"), 2000);
+      };
+      const importDeadline = setTimeout(() => stopImport("import-only deadline exceeded"), 10_000);
+      preflight.stdout.on("data", (chunk: Buffer) => {
+        if (Buffer.byteLength(importOutput) + chunk.length <= 4096) {
+          importOutput += chunk.toString();
+        } else {
+          stopImport("import-only stdout bound exceeded");
+        }
+      });
+      preflight.stderr.on("data", (chunk: Buffer) => {
+        if (Buffer.byteLength(importError) + chunk.length <= 4096) {
+          importError += chunk.toString();
+        } else {
+          stopImport("import-only stderr bound exceeded");
+        }
+      });
+      try {
+        const result = await new Promise<{ code: number | null; signal: string | null }>(
+          (resolve) => {
+            preflight.once("error", (error) => {
+              importFailure = error.message;
+            });
+            preflight.once("close", (code, signal) => {
+              importJoined = true;
+              resolve({ code, signal });
+            });
+          },
+        );
+        expect(
+          importFailure,
+          "import-only gate precedes every process-tree fixture",
+        ).toBeUndefined();
+        expect(result, importError).toEqual({ code: 0, signal: null });
+        expect(importOutput).toContain("SUPERVISED_IMPORT_PREFLIGHT ");
+        console.log(importOutput.trim());
+      } finally {
+        clearTimeout(importDeadline);
+        clearTimeout(importKill);
+        if (importJoined) {
+          fs.rmSync(importRoot, { recursive: true, force: true });
+        }
+      }
+      const actor = String.raw`
+import fs from "node:fs";
+import path from "node:path";
+import { spawn } from "node:child_process";
+const [root, role] = process.argv.slice(2);
+const file = (name) => path.join(root, name);
+const publish = (name, value) => {
+  const temporary = file(name + ".tmp");
+  fs.writeFileSync(temporary, JSON.stringify(value));
+  fs.renameSync(temporary, file(name));
+};
+const wait = async (name, timeout = 5000) => {
+  const deadline = Date.now() + timeout;
+  while (!fs.existsSync(file(name))) {
+    if (fs.existsSync(file("stop"))) process.exit(2);
+    if (Date.now() >= deadline) throw new Error("fixture gate deadline: " + name);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  if (fs.existsSync(file("stop"))) process.exit(2);
+};
+publish(role + ".ready", { pid: process.pid });
+if (role === "leaf") {
+  await wait("leaf.exit", 45000);
+} else {
+  await wait(role + ".go");
+  const childRole = role === "leader" ? "forker" : "leaf";
+  const child = spawn(process.execPath, [process.argv[1], root, childRole], {
+    stdio: "ignore", env: process.env,
+  });
+  if (role === "forker") {
+    child.unref();
+    await wait("forker.exit");
+  } else {
+    const joined = await new Promise((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", (code, signal) => resolve({ code, signal }));
+    });
+    publish("forker.joined", joined);
+    await wait("leader.exit", 45000);
+    process.stdout.write("Usage: openclaw nodes\n");
+  }
+}
+`;
+      const controller = String.raw`
+import fs from "node:fs";
+import path from "node:path";
+import { spawn } from "node:child_process";
+import { pathToFileURL } from "node:url";
+const [root, mode, repo] = process.argv.slice(2);
+const { testing } = await import(${JSON.stringify(metadataUrl.href)});
+const { inspectManagedProcessGroup, waitForManagedProcessGroupExit } =
+  await import(pathToFileURL(path.join(repo, "scripts/lib/managed-child-process.mts")));
+const file = (name) => path.join(root, name);
+const publish = (name, value) => {
+  const temporary = file(name + ".tmp");
+  fs.writeFileSync(temporary, JSON.stringify(value));
+  fs.renameSync(temporary, file(name));
+};
+let renderState = "", liveControl;
+const events = [];
+const started = Date.now();
+const outputPath = file("dist/cli-startup-metadata.json");
+let outcome;
+try {
+  await testing.writeCliStartupMetadata({
+    sourceRootDir: root, distDir: file("dist"), extensionsDir: file("extensions"), outputPath,
+    renderBundledRootHelpText: () => "Usage: openclaw\n",
+    renderSourceRootHelpText: () => "Usage: openclaw\n",
+    renderSourceBrowserHelpText: () => "Usage: openclaw browser\n",
+    renderSourceSecretsHelpText: () => "Usage: openclaw secrets\n",
+    renderSourceSubcommandHelpTextRecord: () => Object.fromEntries(
+      ["config", "doctor", "gateway", "models", "plugins", "sessions", "tasks"]
+        .map((name) => [name, "Usage: openclaw " + name + "\n"])),
+    renderSourceNodesHelpText: (context, taskContext) => {
+      if (!taskContext) throw new Error("missing actual supervisor task context");
+      renderState = context.env.OPENCLAW_STATE_DIR;
+      return testing.spawnText([file("actor.mjs"), root, "leader"], {
+        cwd: root, env: process.env, failureMessage: "supervised nodes fixture failed",
+        timeoutMs: 120000, killGraceMs: 5000, maxOutputBytes: 16384,
+        onTerminalFailure: taskContext.reportFailure, signal: taskContext.signal,
+        spawnProcess: (...args) => {
+          const child = spawn(...args);
+          child.once("exit", (code, signal) => events.push({ event: "exit", code, signal }));
+          child.once("close", (code, signal) => {
+            events.push({ event: "close", code, signal });
+            publish("leader.closed", { code, signal });
+          });
+          if (mode === "live") {
+            liveControl = (async () => {
+              const readyBy = Date.now() + 5000;
+              while (!fs.existsSync(file("live-control.go"))) {
+                if (Date.now() >= readyBy) throw new Error("live control setup deadline");
+                await new Promise((resolve) => setTimeout(resolve, 5));
+              }
+              const start = Date.now();
+              const deadlineAt = start + 100;
+              const observation = inspectManagedProcessGroup(child, {
+                deadlineAt, errorPolicy: "alive-on-eperm",
+              });
+              const stopped = await waitForManagedProcessGroupExit(child, 100, {
+                deadlineAt, errorPolicy: "alive-on-eperm",
+                clampPollToDeadline: true, pollIntervalMs: 10,
+              });
+              publish("live-control.json", { observation, stopped, elapsedMs: Date.now() - start });
+            })();
+          }
+          return child;
+        },
+      });
+    },
+  });
+  outcome = { ok: true, nodesHelpText: JSON.parse(fs.readFileSync(outputPath, "utf8")).nodesHelpText };
+} catch (error) {
+  outcome = { ok: false, code: error.code ?? null,
+    cleanupCode: error.processTreeCleanupFailure?.code ?? null,
+    preserveRenderState: error.preserveRenderState === true };
+}
+await liveControl;
+publish("outcome.json", { ...outcome, events, elapsedMs: Date.now() - started,
+  outputPresent: fs.existsSync(outputPath), statePresent: !!renderState && fs.existsSync(renderState) });
+`;
+      // The reaper owns the controller and adopted leaf. It never scans or signals unrelated PIDs.
+      const reaper = String.raw`
+import ctypes, errno, json, os, pathlib, select, shutil, signal, subprocess, sys, time
+root, mode, node, repo, worker_json = sys.argv[1:]
+root = pathlib.Path(root)
+started = time.monotonic()
+deadline = started + 45
+registered, reaped, snapshots = {}, [], {}
+controller = None
+leader = None
+cancelled = False
+captured = bytearray()
+report = {"mode": mode}
+def interrupt(_signum, _frame):
+    global cancelled
+    cancelled = True
+signal.signal(signal.SIGTERM, interrupt)
+signal.signal(signal.SIGINT, interrupt)
+def identity(pid):
+    try:
+        fields = pathlib.Path("/proc", str(pid), "stat").read_text().rsplit(")", 1)[1].split()
+    except FileNotFoundError:
+        return None
+    return {"pid": pid, "state": fields[0], "ppid": int(fields[1]),
+            "pgid": int(fields[2]), "sid": int(fields[3]), "start": fields[19]}
+def register(pid):
+    current = identity(pid)
+    if current is None:
+        raise RuntimeError("owned process disappeared before admission")
+    previous = registered.get(pid)
+    if previous is not None and previous["start"] != current["start"]:
+        raise RuntimeError("owned PID identity changed")
+    registered[pid] = previous or current
+    if len(registered) > 64:
+        raise RuntimeError("owned identity limit")
+    return current
+def present(pid):
+    current = identity(pid)
+    if current is not None and current["start"] != registered[pid]["start"]:
+        raise RuntimeError("refusing recycled PID")
+    return current
+def group_present():
+    if leader is None:
+        return False
+    try:
+        os.killpg(leader, 0)
+        return True
+    except ProcessLookupError:
+        return False
+def read(name):
+    p = root / name
+    return json.loads(p.read_text()) if p.exists() else None
+def gate(name):
+    (root / name).touch()
+def drain():
+    if controller is None or controller.stdout.closed:
+        return
+    while select.select([controller.stdout], [], [], 0)[0]:
+        data = os.read(controller.stdout.fileno(), 4096)
+        if not data:
+            return
+        captured.extend(data)
+        if len(captured) > 4096:
+            raise RuntimeError("controller output limit")
+def wait(predicate, seconds=5):
+    stop = min(deadline, time.monotonic() + seconds)
+    while True:
+        drain()
+        if cancelled:
+            raise RuntimeError("fixture interrupted")
+        value = predicate()
+        if value:
+            return value
+        if time.monotonic() >= stop:
+            raise RuntimeError("fixture handshake deadline")
+        if controller is not None and controller.poll() is not None:
+            raise RuntimeError("controller exited before handshake")
+        time.sleep(.005)
+def threads(pid):
+    entries = list(pathlib.Path("/proc", str(pid), "task").iterdir())
+    if not entries or len(entries) > 256:
+        raise RuntimeError("thread bound")
+    rows = []
+    for entry in entries:
+        fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
+        rows.append({"pid": pid, "tid": int(entry.name), "state": fields[0],
+                     "pgid": int(fields[2]), "sid": int(fields[3])})
+    return sorted(rows, key=lambda r: r["tid"])
+def session_rows(ps):
+    raw = subprocess.run([ps, "-s", str(leader), "-L", "-o", "pid=,ppid=,pgid=,sid=,lwp=,stat="],
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=1, check=True)
+    if len(raw.stdout) > 8192 or len(raw.stderr) > 1024:
+        raise RuntimeError("ps output bound")
+    rows = []
+    for line in raw.stdout.decode("ascii").splitlines():
+        pid, ppid, pgid, sid, tid, state = line.split()
+        row = dict(zip(["pid", "ppid", "pgid", "sid", "tid"],
+                       map(int, [pid, ppid, pgid, sid, tid])))
+        row["state"] = state
+        if row["pid"] not in registered or row["pgid"] != leader or row["sid"] != leader:
+            raise RuntimeError("unexpected session member")
+        present(row["pid"])
+        rows.append(row)
+    if not rows or len(rows) > 256:
+        raise RuntimeError("session thread bound")
+    return rows
+def discover_owned():
+    pending, seen = [os.getpid()], set()
+    while pending:
+        pid = pending.pop()
+        if pid in seen:
+            continue
+        seen.add(pid)
+        try:
+            children = pathlib.Path("/proc", str(pid), "task", str(pid), "children").read_text()
+        except FileNotFoundError:
+            continue
+        for child in map(int, children.split()):
+            if identity(child) is not None:
+                register(child)
+                pending.append(child)
+def reap():
+    while True:
+        try:
+            pid, status = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            return True
+        if pid == 0:
+            return False
+        reaped.append({"pid": pid, "status": status})
+        if controller is not None and pid == controller.pid:
+            controller.returncode = os.waitstatus_to_exitcode(status)
+def signal_owned(sig):
+    discover_owned()
+    current = [item for pid in registered if (item := present(pid)) is not None]
+    members = [item for item in current if item["pgid"] == leader and item["sid"] == leader]
+    covered = set()
+    if leader is not None and any(item["state"] != "Z" for item in members):
+        os.killpg(leader, sig)
+        covered = {item["pid"] for item in members}
+    elif leader is not None and group_present() and not members:
+        raise RuntimeError("group ownership no longer provable")
+    for pid in registered:
+        if pid in covered:
+            continue
+        item = present(pid)
+        if item is not None and item["state"] != "Z":
+            try:
+                os.kill(pid, sig)
+            except ProcessLookupError:
+                pass
+try:
+    if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:
+        raise RuntimeError("subreaper unavailable")
+    ps = shutil.which("ps")
+    if not ps or not pathlib.Path(ps).is_absolute():
+        raise RuntimeError("absolute ps unavailable")
+    env = dict(os.environ)
+    if mode == "unknown":
+        shim = root / "bin"
+        shim.mkdir()
+        (shim / "ps").write_text("#!/bin/sh\nexit 23\n")
+        (shim / "ps").chmod(0o700)
+        env["PATH"] = str(shim) + os.pathsep + env["PATH"]
+    controller = subprocess.Popen([node, *json.loads(worker_json), str(root / "controller.mjs"),
+                                   str(root), mode, repo], cwd=repo, env=env,
+                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    register(controller.pid)
+    leader = wait(lambda: read("leader.ready"))["pid"]
+    leader_identity = register(leader)
+    if leader_identity["pgid"] != leader or leader_identity["sid"] != leader:
+        raise RuntimeError("renderer did not own a detached group")
+    gate("leader.go")
+    forker = wait(lambda: read("forker.ready"))["pid"]
+    register(forker)
+    gate("forker.go")
+    leaf = wait(lambda: read("leaf.ready"))["pid"]
+    leaf_identity = register(leaf)
+    if leaf_identity["pgid"] != leader or leaf_identity["sid"] != leader:
+        raise RuntimeError("leaf escaped renderer group")
+    gate("forker.exit")
+    joined = wait(lambda: read("forker.joined"))
+    if joined != {"code": 0, "signal": None}:
+        raise RuntimeError("forker was not joined successfully")
+    adopted = wait(lambda: (item if (item := present(leaf)) and item["ppid"] == os.getpid() else None))
+    report["adopted"] = adopted
+    if mode == "live":
+        gate("live-control.go")
+        report["liveControl"] = wait(lambda: read("live-control.json"))
+        snapshots["heldLive"] = threads(leaf)
+        if any(row["state"] == "Z" for row in snapshots["heldLive"]):
+            raise RuntimeError("live control leaf already exited")
+    gate("leaf.exit")
+    wait(lambda: all(row["state"] == "Z" for row in threads(leaf)))
+    gate("leader.exit")
+    report["leaderClose"] = wait(lambda: read("leader.closed"))
+    snapshots["stoppedGroup"] = session_rows(ps)
+    if not all(row["state"].startswith("Z") for row in snapshots["stoppedGroup"]):
+        raise RuntimeError("positive boundary contains live threads")
+    report["signalZeroPresent"] = group_present()
+    report["outcome"] = wait(lambda: read("outcome.json"), 35)
+    snapshots["terminalGroup"] = session_rows(ps)
+    if not all(row["state"].startswith("Z") for row in snapshots["terminalGroup"]):
+        raise RuntimeError("terminal group contains live threads")
+    leaf_at_reap = present(leaf)
+    if (leaf_at_reap is None or leaf_at_reap["ppid"] != os.getpid() or
+            leaf_at_reap["pgid"] != leader or leaf_at_reap["sid"] != leader or
+            leaf_at_reap["state"] != "Z"):
+        raise RuntimeError("owned leaf identity or zombie state changed before reap")
+    reaped_pid, reaped_status = os.waitpid(leaf, os.WNOHANG)
+    if reaped_pid != leaf or reaped_status != 0:
+        raise RuntimeError("owned leaf did not reap with status zero")
+    reaped.append({"pid": reaped_pid, "status": reaped_status})
+    if group_present():
+        raise RuntimeError("renderer group remains after exact leaf reap")
+    wait(lambda: controller.poll() is not None)
+    report["controllerCode"] = controller.returncode
+except BaseException as error:
+    report["fixtureError"] = type(error).__name__ + ": " + str(error).replace(str(root), "<fixture>")
+finally:
+    cleanup_start = time.monotonic()
+    cleanup_deadline = cleanup_start + 15
+    gate("stop")
+    for name in ["leaf.exit", "forker.exit", "leader.exit"]:
+        gate(name)
+    try:
+        signal_owned(signal.SIGTERM)
+        killed = False
+        while time.monotonic() < cleanup_deadline:
+            discover_owned()
+            all_reaped = reap()
+            remaining = [pid for pid in registered if present(pid) is not None]
+            if all_reaped and not remaining and not group_present():
+                break
+            if not killed and time.monotonic() >= cleanup_start + 2:
+                signal_owned(signal.SIGKILL)
+                killed = True
+            time.sleep(.005)
+        remaining = [pid for pid in registered if present(pid) is not None]
+        report["cleanup"] = {"joined": not remaining and not group_present() and
+                             (controller is None or controller.returncode is not None),
+                             "remaining": remaining, "reaped": reaped,
+                             "groupPresent": group_present()}
+    except BaseException as error:
+        report["cleanup"] = {"joined": False, "error": type(error).__name__ + ": " + str(error)}
+    if controller is not None:
+        drain()
+        controller.stdout.close()
+    report["identities"] = list(registered.values())
+    report["snapshots"] = snapshots
+    report["elapsedMs"] = round((time.monotonic() - started) * 1000)
+    if captured:
+        report["controllerOutput"] = captured.decode("utf8", errors="replace").replace(str(root), "<fixture>")
+    encoded = json.dumps(report, separators=(",", ":"))
+    if len(encoded.encode()) > 5000:
+        raise RuntimeError("structured evidence limit")
+    print(encoded, flush=True)
+`;
+      type Probe = {
+        mode: string;
+        fixtureError?: string;
+        cleanup: {
+          joined: boolean;
+          groupPresent: boolean;
+          reaped: { pid: number; status: number }[];
+        };
+        adopted: { pid: number };
+        signalZeroPresent: boolean;
+        controllerCode: number;
+        leaderClose: { code: number; signal: string | null };
+        outcome: {
+          ok: boolean;
+          code?: string;
+          cleanupCode?: string;
+          nodesHelpText?: string;
+          preserveRenderState?: boolean;
+          outputPresent: boolean;
+          statePresent: boolean;
+          events: { event: string; code: number; signal: string | null }[];
+        };
+        liveControl?: { observation: string; stopped: boolean; elapsedMs: number };
+      };
+      const runProbe = async (mode: string): Promise<Probe> => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-supervised-descendant-"));
+        let settled = false;
+        writeStartupMetadataSourceSignatureFixture(root);
+        writeFixtureFile(
+          root,
+          "dist/root-help-fixture.js",
+          "export function outputRootHelp() {}\n",
+        );
+        writeFixtureFile(root, "actor.mjs", actor);
+        writeFixtureFile(root, "controller.mjs", controller);
+        mkdirSync(path.join(root, "home"));
+        const child = actualSpawn(
+          "python3",
+          ["-c", reaper, root, mode, process.execPath, repoRoot, JSON.stringify(workerArgs)],
+          {
+            cwd: repoRoot,
+            env: {
+              PATH: process.env.PATH,
+              HOME: path.join(root, "home"),
+              TMPDIR: root,
+              OPENCLAW_STATE_DIR: path.join(root, "state"),
+              OPENCLAW_CONFIG_PATH: path.join(root, "state", "openclaw.json"),
+              LANG: "C.UTF-8",
+              CI: "1",
+            },
+            stdio: ["ignore", "pipe", "pipe"],
+          },
+        );
+        let stdout = "";
+        let stderr = "";
+        let overflow = false;
+        const term = setTimeout(() => child.kill("SIGTERM"), 45_000);
+        const kill = setTimeout(() => child.kill("SIGKILL"), 60_000);
+        child.stdout.on("data", (chunk: Buffer) => {
+          if (Buffer.byteLength(stdout) + chunk.length <= 16_384) {
+            stdout += chunk.toString();
+          } else {
+            overflow = true;
+            child.kill("SIGTERM");
+          }
+        });
+        child.stderr.on("data", (chunk: Buffer) => {
+          if (Buffer.byteLength(stderr) + chunk.length <= 4096) {
+            stderr += chunk.toString();
+          } else {
+            overflow = true;
+            child.kill("SIGTERM");
+          }
+        });
+        try {
+          const closed = await new Promise<{ code: number | null; signal: string | null }>(
+            (resolve, reject) => {
+              child.once("error", reject);
+              child.once("close", (code, signal) => resolve({ code, signal }));
+            },
+          );
+          expect(overflow, "fixture output exceeded its bound").toBe(false);
+          expect(closed, stderr).toEqual({ code: 0, signal: null });
+          const evidence = JSON.parse(stdout) as Probe;
+          settled = evidence.cleanup.joined;
+          console.log(`SUPERVISED_EXITED_DESCENDANT ${stdout.trim()}`);
+          expect(
+            evidence.fixtureError,
+            "fixture setup/runtime is not the intended RED",
+          ).toBeUndefined();
+          expect(evidence.cleanup.joined, "subreaper must join every owned child").toBe(true);
+          expect(evidence.cleanup.groupPresent).toBe(false);
+          expect(evidence.cleanup.reaped).toContainEqual({ pid: evidence.adopted.pid, status: 0 });
+          expect(evidence.controllerCode).toBe(0);
+          expect(evidence.leaderClose).toEqual({ code: 0, signal: null });
+          expect(evidence.outcome.events).toEqual([
+            { event: "exit", code: 0, signal: null },
+            { event: "close", code: 0, signal: null },
+          ]);
+          expect(evidence.signalZeroPresent).toBe(true);
+          return evidence;
+        } finally {
+          clearTimeout(term);
+          clearTimeout(kill);
+          // Failed settlement retains the synthetic state until the owned remote lease is stopped.
+          if (settled) {
+            fs.rmSync(root, { recursive: true, force: true });
+          }
+        }
+      };
+      const stopped = await runProbe("stopped");
+      const live = await runProbe("live");
+      expect(live.liveControl?.observation).not.toBe("dead");
+      expect(live.liveControl?.stopped).toBe(false);
+      expect(live.liveControl?.elapsedMs).toBeGreaterThanOrEqual(100);
+      const unknown = await runProbe("unknown");
+      expect(unknown.outcome).toMatchObject({
+        ok: false,
+        code: "EPROCESSGROUP_CLEANUP_FAILED",
+        preserveRenderState: true,
+        statePresent: true,
+        outputPresent: false,
+      });
+      expect(stopped.outcome, JSON.stringify(stopped.outcome)).toMatchObject({
+        ok: true,
+        nodesHelpText: "Usage: openclaw nodes\n",
+        outputPresent: true,
+        statePresent: false,
+      });
+    },
+    185_000,
   );
 
   it.runIf(process.platform !== "win32")(

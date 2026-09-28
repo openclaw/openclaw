@@ -11,7 +11,7 @@ import { formatDurationCompact } from "../../lib/format-duration.ts";
 import {
   buildUsageCostWindows,
   buildUsageCostWindowSummary,
-  formatUsageCost,
+  formatAnalysisCost,
   formatDayLabel,
   formatFullDate,
   formatIsoDate,
@@ -26,12 +26,6 @@ import type {
   CostDailyEntry,
 } from "./types.ts";
 import { renderSessionBarRow } from "./view-session-row.ts";
-
-function formatAnalysisCost(value: number): string {
-  const magnitude = Math.abs(value);
-  const decimals = magnitude === 0 || magnitude >= 0.01 ? 2 : magnitude >= 0.0001 ? 4 : 6;
-  return formatUsageCost(value, decimals);
-}
 
 function renderFilterChips(
   selectedDays: string[],

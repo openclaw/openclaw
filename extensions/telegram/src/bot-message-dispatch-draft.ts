@@ -9,7 +9,6 @@ import type {
   TelegramDraftStateSlice,
   TelegramQueuedAnswerBlockRotation,
   TelegramSplitLaneSegmentsResult,
-  TelegramAnswerBlockDelivery,
 } from "./bot-message-dispatch.types.js";
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 import type { TelegramDraftPreview } from "./draft-stream-message.js";
@@ -197,11 +196,11 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
       params.resolvedReasoningLevel === "on" || Boolean(lanes.reasoning.stream),
     lastAnswerPartialText: "",
     activeAnswerDraftIsToolProgressOnly: false,
-    activeAnswerBlockAssistantMessageIndex: undefined as number | undefined,
-    activeAnswerBlockDelivery: undefined as TelegramAnswerBlockDelivery | undefined,
-    queuedAnswerBlockRotations: [] as TelegramQueuedAnswerBlockRotation[],
-    queuedAnswerBlockAssistantMessageIndex: undefined as number | undefined,
-    pendingAnswerBlockAssistantMessageIndex: undefined as number | undefined,
+    activeAnswerBlockAssistantMessageIndex: undefined,
+    activeAnswerBlockDelivery: undefined,
+    queuedAnswerBlockRotations: [],
+    queuedAnswerBlockAssistantMessageIndex: undefined,
+    pendingAnswerBlockAssistantMessageIndex: undefined,
     rotateAnswerLaneWhenQueuedBlocksSettle: false,
     draftEventQueue: Promise.resolve(),
   };

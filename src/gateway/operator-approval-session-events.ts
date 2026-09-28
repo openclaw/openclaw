@@ -63,6 +63,7 @@ export function createOperatorApprovalSessionEventRuntime(params: {
   const controlUiBasePath = normalizeControlUiBasePath(params.controlUiBasePath);
   const now = params.now ?? Date.now;
   let publicationRevision = 0;
+  const preparations = new Map<string, Promise<PreparedSessionApprovalReplay>>();
 
   const canAccessRecord = (client: GatewayClient | null, record: OperatorApprovalRecord): boolean =>
     canAccessOperatorApproval({
@@ -95,6 +96,7 @@ export function createOperatorApprovalSessionEventRuntime(params: {
 
   const publish = (event: OperatorApprovalLifecycleEvent): void => {
     publicationRevision += 1;
+    preparations.clear();
     const source = event.record.source;
     const pending = event.phase === "pending" && event.record.status === "pending";
     const manager = params.getLiveManager?.(event.record.kind);
@@ -161,13 +163,62 @@ export function createOperatorApprovalSessionEventRuntime(params: {
     }
   };
 
+  const prepareReplay = async (
+    sessionKey: string,
+    reviewerDeviceId: string | undefined,
+  ): Promise<PreparedSessionApprovalReplay> => {
+    const snapshotAtMs = now();
+    const expired = await expireDueOperatorApprovals({
+      nowMs: snapshotAtMs,
+      databaseOptions: params.databaseOptions,
+    });
+    // A replay read can be the first observer after a suspended timer. Emit
+    // the durable timeout tombstone before returning the authoritative set.
+    for (const record of expired.records) {
+      const reconciled = await params.reconcileTerminal?.(record);
+      if (reconciled !== true) {
+        publish({ phase: "terminal", record });
+      }
+    }
+    if (params.isCurrent?.() === false) {
+      throw new Error("Operator approval replay authority is no longer current");
+    }
+    const revision = publicationRevision;
+    const records = await listPendingOperatorApprovals({
+      audienceSessionKey: sessionKey,
+      reviewerDeviceId,
+      limit: MAX_SESSION_APPROVAL_REPLAY + 1,
+      nowMs: snapshotAtMs,
+      databaseOptions: params.databaseOptions,
+    });
+    const isCurrent = () => revision === publicationRevision;
+    const approvals: PendingApprovalSnapshot[] = [];
+    const truncated = records.length > MAX_SESSION_APPROVAL_REPLAY;
+    for (const record of records) {
+      if (approvals.length === MAX_SESSION_APPROVAL_REPLAY) {
+        return {
+          replay: { sessionKey, updatedAtMs: snapshotAtMs, approvals, truncated: true },
+          isCurrent,
+        };
+      }
+      const approval = projectOperatorApprovalSnapshot(record, controlUiBasePath);
+      if (approval?.status === "pending") {
+        const sourceSessionKey = resolveApprovalSourceStreamKeyForRecord(record);
+        approvals.push({
+          ...approval,
+          ...(sourceSessionKey ? { sourceSessionKey } : {}),
+        });
+      }
+    }
+    return { replay: { sessionKey, updatedAtMs: snapshotAtMs, approvals, truncated }, isCurrent };
+  };
+
   return {
     publish,
     replay: async (sessionKey, client) => {
-      const snapshotAtMs = now();
       if (!canReviewOperatorApproval(client)) {
         return {
-          replay: { sessionKey, updatedAtMs: snapshotAtMs, approvals: [], truncated: false },
+          replay: { sessionKey, updatedAtMs: now(), approvals: [], truncated: false },
           isCurrent: () => !canReviewOperatorApproval(client),
         };
       }
@@ -186,55 +237,27 @@ export function createOperatorApprovalSessionEventRuntime(params: {
         }
       };
       assertCurrent();
-      const expired = await expireDueOperatorApprovals({
-        nowMs: snapshotAtMs,
-        databaseOptions: params.databaseOptions,
-      });
-      // A replay read can be the first observer after a suspended timer. Emit
-      // the durable timeout tombstone before returning the authoritative set.
-      for (const record of expired.records) {
-        const reconciled = await params.reconcileTerminal?.(record);
-        if (reconciled !== true) {
-          publish({ phase: "terminal", record });
-        }
-      }
-      assertCurrent();
-      const approvals: PendingApprovalSnapshot[] = [];
-      let revision: number;
-      let records: OperatorApprovalRecord[];
-      do {
-        revision = publicationRevision;
-        records = await listPendingOperatorApprovals({
-          audienceSessionKey: sessionKey,
-          reviewerDeviceId,
-          limit: MAX_SESSION_APPROVAL_REPLAY + 1,
-          nowMs: snapshotAtMs,
-          databaseOptions: params.databaseOptions,
+      // Only share unsettled work. Lifecycle publications fence replies but are
+      // not a durable store revision suitable for retaining completed snapshots.
+      const key = JSON.stringify([sessionKey, reviewerDeviceId]);
+      let preparation = preparations.get(key);
+      if (!preparation) {
+        preparation = prepareReplay(sessionKey, reviewerDeviceId).finally(() => {
+          if (preparations.get(key) === preparation) {
+            preparations.delete(key);
+          }
         });
-        assertCurrent();
-      } while (revision !== publicationRevision);
-      const isCurrent = () => {
-        assertCurrent();
-        return revision === publicationRevision;
-      };
-      const truncated = records.length > MAX_SESSION_APPROVAL_REPLAY;
-      for (const record of records) {
-        if (approvals.length === MAX_SESSION_APPROVAL_REPLAY) {
-          return {
-            replay: { sessionKey, updatedAtMs: snapshotAtMs, approvals, truncated: true },
-            isCurrent,
-          };
-        }
-        const approval = projectOperatorApprovalSnapshot(record, controlUiBasePath);
-        if (approval?.status === "pending") {
-          const sourceSessionKey = resolveApprovalSourceStreamKeyForRecord(record);
-          approvals.push({
-            ...approval,
-            ...(sourceSessionKey ? { sourceSessionKey } : {}),
-          });
-        }
+        preparations.set(key, preparation);
       }
-      return { replay: { sessionKey, updatedAtMs: snapshotAtMs, approvals, truncated }, isCurrent };
+      const prepared = await preparation;
+      assertCurrent();
+      return {
+        replay: prepared.replay,
+        isCurrent: () => {
+          assertCurrent();
+          return prepared.isCurrent();
+        },
+      };
     },
   };
 }

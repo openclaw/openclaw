@@ -24,6 +24,8 @@ export type StuckSessionRecoveryRequest = {
   ageMs: number;
   queueDepth?: number;
   allowActiveAbort?: boolean;
+  /** Revalidate semantic no-progress evidence after deferred recovery dispatch. */
+  repeatedRequestNoProgressAbortMs?: number;
   expectedState?: DiagnosticSessionState;
   stateGeneration?: number;
   /**

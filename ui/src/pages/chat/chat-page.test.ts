@@ -52,7 +52,7 @@ type RenderedPane = HTMLElement & {
   sessionKey: string;
   presented: boolean;
   active: boolean;
-  paneTitle: string;
+  presentationTitle: string | undefined;
   narrow: boolean;
   mergedChrome: boolean;
   onOpenSplitView?: () => void;

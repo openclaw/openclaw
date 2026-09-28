@@ -2,12 +2,12 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.ts";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
-import { createAdmittedRunOperatorAuthority } from "../../../src/agents/admitted-run-context.js";
 import type { AgentQuestionDispatcher } from "../../../src/agents/harness/gateway-question-dispatch.js";
 import { createAskUserTool } from "../../../src/agents/tools/ask-user-tool.js";
 import { upsertSessionEntryCore } from "../../../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../../../src/gateway/agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../../../src/gateway/agent-runtime-approval-authority.js";
+import { captureGatewayOperatorRunAuthority } from "../../../src/gateway/operator-run-authority.js";
 import type { OperatorScope } from "../../../src/gateway/operator-scopes.js";
 import { QuestionManager } from "../../../src/gateway/question-manager.js";
 import { createGatewayBroadcaster } from "../../../src/gateway/server-broadcast.js";
@@ -112,6 +112,17 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
       updatedAt: profile.updatedAt,
     },
   };
+  const operator = await captureGatewayOperatorRunAuthority({
+    client: browser,
+    context: { getRuntimeConfig: () => cfg },
+    sourceAuthority: {
+      signal: source.signal,
+      assertCurrent: () => source.signal.throwIfAborted(),
+    },
+  });
+  if (!operator) {
+    throw new Error("expected the Guest's admitted operator authority");
+  }
   const runtime: GatewayClient = {
     ...browser,
     connect: {
@@ -119,12 +130,7 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
       client: { id: "gateway-client", version: "e2e", platform: "test", mode: "backend" },
     },
     internal: {
-      operatorRunAuthority: createAdmittedRunOperatorAuthority({
-        profileId: profile.id,
-        scopes: guestQuestionScopes,
-        signal: source.signal,
-        assertCurrent: () => source.signal.throwIfAborted(),
-      }),
+      operatorRunAuthority: operator.authority,
       agentRuntimeIdentity: {
         kind: "agentRuntime",
         agentId: "main",
@@ -233,7 +239,9 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
       releaseAgentRunDelegatedAuthority(requesterAuthority);
       unregister();
       manager.close();
+      await manager.drain();
       clearAgentRunContext(runId);
+      operator.release();
       await flushEvents();
     },
   };

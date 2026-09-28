@@ -10,8 +10,10 @@ const authMocks = vi.hoisted(() => ({
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 const browserControlUrl = "http://127.0.0.1:18791/ok";
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/runtime-config-snapshot")
+  >("openclaw/plugin-sdk/runtime-config-snapshot");
   return { ...actual, getRuntimeConfig: authMocks.loadConfig, loadConfig: authMocks.loadConfig };
 });
 vi.mock("./control-auth.js", () => ({

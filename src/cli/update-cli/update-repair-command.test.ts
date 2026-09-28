@@ -286,7 +286,7 @@ describe("update repair ledger recovery", () => {
       const current = getUpdateRun(run.runId)!;
       const pending = updateRepairCommand({});
       await expect(pending).rejects.toThrow(
-        `Update ${run.runId} is still in progress (validating)`,
+        `Update ${run.runId} remains recorded as running (validating)`,
       );
       for (const detail of [
         `PID ${driver.pid}`,
@@ -295,7 +295,7 @@ describe("update repair ledger recovery", () => {
         `started ${new Date(run.createdAtMs).toISOString()}`,
         "age 3600s",
         `last activity ${new Date(current.updatedAtMs).toISOString()}`,
-        "stop that driver",
+        "stop it through its owning host",
         "openclaw update repair",
       ]) {
         await expect(pending).rejects.toThrow(detail);
@@ -312,7 +312,7 @@ describe("update repair ledger recovery", () => {
     });
     vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
 
-    await expect(updateRepairCommand({})).rejects.toThrow("still in progress");
+    await expect(updateRepairCommand({})).rejects.toThrow("remains recorded as running");
     expect(mocks.finalize).not.toHaveBeenCalled();
   });
 
@@ -485,7 +485,7 @@ describe("update repair ledger recovery", () => {
     const run = seedRun(fixture);
 
     await expect(updateRepairCommand({})).rejects.toThrow(
-      `Update ${run.runId} is still in progress (${run.phase});`,
+      `Update ${run.runId} remains recorded as running (${run.phase});`,
     );
 
     expect(getUpdateRun(run.runId)).toEqual(run);
@@ -499,7 +499,7 @@ describe("update repair ledger recovery", () => {
       return { healthz: 200, readyz: 200 };
     });
 
-    await expect(updateRepairCommand({})).rejects.toThrow("still in progress");
+    await expect(updateRepairCommand({})).rejects.toThrow("remains recorded as running");
 
     expect(getUpdateRun(run.runId)?.status).toBe("running");
     expect(mocks.finalize).not.toHaveBeenCalled();

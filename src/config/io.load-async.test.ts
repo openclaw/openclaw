@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   readDeferredPluginMigrations,
@@ -21,13 +21,15 @@ import {
 } from "../state/openclaw-state-db-readonly.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as configContext from "./io.context.js";
 import { createConfigIO } from "./io.factory.js";
 import * as configHealth from "./io.health-state.js";
 import * as pluginMetadata from "./io.plugin-metadata.js";
 import { hashConfigRaw } from "./io.read-helpers.js";
 import * as snapshotPreparation from "./io.snapshot-preparation.js";
+import { createConfigIoWorkerFixture } from "./io.worker.test-support.js";
 import { getConfigResolutionFacts } from "./resolution-facts.js";
 import { registerManagedRuntimeConfigWriteOwner } from "./runtime-snapshot.js";
 import type { ConfigFileSnapshot } from "./types.js";
@@ -37,6 +39,16 @@ vi.mock("../infra/shell-env.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/shell-env.js")>()),
   loadShellEnvFallback: shell.load,
 }));
+
+const workerRoots = createSuiteTempRootTracker({ prefix: "openclaw-config-load-workers-" });
+const workers = createConfigIoWorkerFixture();
+beforeAll(async () => {
+  await workers.setup(await workerRoots.setup());
+});
+afterAll(async () => {
+  await workers.close();
+  await workerRoots.cleanup();
+});
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {

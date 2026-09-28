@@ -50,6 +50,7 @@ export function createDiscordSource(runtime: SourceRuntime): DiscordSource {
           config.token ? warning.replaceAll(config.token, "[redacted]") : warning,
         );
         status.stale = true;
+        status.ok = false;
       };
       checkAbort(runtime.signal, ABORT_LABEL);
       const client = createClient(config, runtime, status);
@@ -63,7 +64,6 @@ export function createDiscordSource(runtime: SourceRuntime): DiscordSource {
         }
       } catch (error) {
         warn("Discord guild channels", error);
-        status.ok = false;
       }
 
       const configured = new Set(config.channels.map((channel) => channel.id));

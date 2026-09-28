@@ -49,10 +49,11 @@ export function createGatewayConnectionState(params: {
       try {
         const projection = sessionRowProjection;
         const cfg = loadRuntimeConfig();
+        const policyConfig = projection?.getPolicyConfig() ?? cfg;
         const prepared = projection
           ? {
               sharing: prepareProjectedSessionSharing({
-                cfg,
+                cfg: policyConfig,
                 client,
                 isMember: (target, identity) =>
                   projection.hasMembership(target.storePath, target.storeKey, identity),
@@ -65,6 +66,7 @@ export function createGatewayConnectionState(params: {
           : undefined;
         return canReceiveSessionEvent({
           cfg,
+          policyConfig,
           client,
           sessionKeys,
           agentId,

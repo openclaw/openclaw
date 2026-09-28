@@ -1,8 +1,9 @@
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { AssistantMessage } from "../../llm/types.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
+import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -15,6 +16,7 @@ import {
   replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
+import { appendAbortedSessionTranscriptPartial } from "./session-accessor.sqlite-transcript-reports.js";
 import { prepareTranscriptPayload } from "./transcript-payload.js";
 import { CURRENT_SESSION_VERSION } from "./version.js";
 
@@ -96,6 +98,194 @@ function transcriptSnapshot(db: DatabaseSync) {
 }
 
 describe("SQLite report payload selection", () => {
+  it("fences worker abort fallbacks and preserves each run's authoritative answer", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const db = await seedReports();
+      await upsertSessionEntryCore(scope, {
+        sessionId: scope.sessionId,
+        lifecycleRevision: "current-lifecycle",
+        updatedAt: 1,
+      });
+      const partial = {
+        runId: "stopped-run",
+        message: { ...assistant, idempotencyKey: "stopped-run:assistant" },
+      };
+      const before = transcriptSnapshot(db);
+      const hostTransactions = vi.spyOn(db, "exec");
+      const onUpdate = vi.fn();
+      onTestFinished(onInternalSessionTranscriptUpdate(onUpdate));
+      for (const expectedLifecycleRevision of [null, "previous-lifecycle"]) {
+        await expect(
+          appendAbortedSessionTranscriptPartial(scope, {
+            ...partial,
+            expectedLifecycleRevision,
+          }),
+        ).rejects.toThrow("session writer claim changed before transcript persistence");
+        expect(transcriptSnapshot(db)).toEqual(before);
+        expect(onUpdate).not.toHaveBeenCalled();
+      }
+      const result = await appendAbortedSessionTranscriptPartial(scope, {
+        ...partial,
+        expectedLifecycleRevision: "current-lifecycle",
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        value: {
+          skipped: false,
+          lifecycleRevision: "current-lifecycle",
+          append: { appended: true, message: { __openclaw: { runId: "stopped-run" } } },
+        },
+      });
+      if (!result.ok || result.value.skipped) {
+        throw new Error("Expected a committed fallback receipt");
+      }
+      expect(onUpdate).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          ...scope,
+          target: expect.objectContaining(scope),
+          lifecycleRevision: result.value.lifecycleRevision,
+          messageSeq: result.value.messageSeq,
+          message: result.value.append.message,
+          messageId: result.value.append.messageId,
+          runId: partial.runId,
+        }),
+      );
+      onUpdate.mockClear();
+      await expect(
+        appendAbortedSessionTranscriptPartial(scope, {
+          ...partial,
+          expectedLifecycleRevision: "current-lifecycle",
+        }),
+      ).resolves.toMatchObject({ ok: true });
+      expect(onUpdate).not.toHaveBeenCalled();
+      expect(hostTransactions.mock.calls.some(([sql]) => /^BEGIN\s+IMMEDIATE/i.test(sql))).toBe(
+        false,
+      );
+      const events = await loadTranscriptEvents(scope);
+      expect(events).toHaveLength(7);
+      expect(events.at(-1)).toMatchObject({
+        type: "message",
+        parentId: "tail",
+        message: { idempotencyKey: "stopped-run:assistant", __openclaw: { runId: "stopped-run" } },
+      });
+
+      const partitions: Array<{
+        name: string;
+        skipped: boolean;
+        terminal?: boolean;
+        otherRun?: boolean;
+        message?: Partial<AssistantMessage> & Record<string, unknown>;
+      }> = [
+        {
+          name: "success",
+          skipped: true,
+          message: {
+            content: [{ type: "text", text: "Final answer completed after the snapshot" }],
+          },
+        },
+        { name: "error-partial", skipped: true, message: { stopReason: "error" } },
+        { name: "empty-success", skipped: false, message: { content: [] } },
+        {
+          name: "empty-error",
+          skipped: false,
+          message: { content: [], stopReason: "error", errorMessage: "Synthetic failure" },
+        },
+        {
+          name: "commentary",
+          skipped: false,
+          message: {
+            content: [
+              {
+                type: "text",
+                text: body,
+                textSignature: JSON.stringify({ v: 1, id: "commentary", phase: "commentary" }),
+              },
+            ],
+          },
+        },
+        {
+          name: "media-only",
+          skipped: false,
+          message: {
+            content: [],
+            openclawDisplayContent: [{ type: "image", mimeType: "image/png", data: "synthetic" }],
+          },
+        },
+        { name: "nonterminal", skipped: false, terminal: false },
+        { name: "same-text-other-run", skipped: false, otherRun: true },
+      ];
+      for (const partition of partitions) {
+        const runId = `stopped-${partition.name}`;
+        const nativeMessage = {
+          ...assistant,
+          ...partition.message,
+          responseId: `response-${partition.name}`,
+          idempotencyKey: `native-${partition.name}:assistant`,
+          __openclaw: {
+            runId: partition.otherRun ? `other-${runId}` : runId,
+            mirrorOrigin: "codex-app-server",
+            ...(partition.terminal !== false ? { runTerminal: true } : {}),
+          },
+        };
+        await expect(
+          appendSessionTranscriptReport(scope, { kind: "assistant", message: nativeMessage }),
+        ).resolves.toMatchObject({ ok: true });
+        const committed = transcriptSnapshot(db);
+        onUpdate.mockClear();
+        const settled = await appendAbortedSessionTranscriptPartial(scope, {
+          runId,
+          message: { ...assistant, idempotencyKey: `${runId}:assistant` },
+          expectedLifecycleRevision: "current-lifecycle",
+        });
+        expect(settled, partition.name).toMatchObject({
+          ok: true,
+          value: partition.skipped
+            ? { skipped: true }
+            : { skipped: false, append: { appended: true, message: { __openclaw: { runId } } } },
+        });
+        const after = transcriptSnapshot(db);
+        expect(onUpdate, partition.name).toHaveBeenCalledTimes(partition.skipped ? 0 : 1);
+        if (partition.skipped) {
+          expect(after, partition.name).toEqual(committed);
+        } else {
+          expect(after.events, partition.name).toHaveLength(committed.events.length + 1);
+          expect(after.events.slice(0, -1), partition.name).toEqual(committed.events);
+        }
+      }
+      expect(hostTransactions.mock.calls.some(([sql]) => /^BEGIN\s+IMMEDIATE/i.test(sql))).toBe(
+        false,
+      );
+      await upsertSessionEntryCore(scope, {
+        sessionId: scope.sessionId,
+        lifecycleRevision: "current-lifecycle",
+        activeWriterRunId: "successor-run",
+        updatedAt: 1,
+      });
+      hostTransactions.mockClear();
+      onUpdate.mockClear();
+      const beforeSuccessorFallback = transcriptSnapshot(db);
+      await expect(
+        appendAbortedSessionTranscriptPartial(scope, {
+          runId: "superseded-without-answer",
+          message: { ...assistant, idempotencyKey: "superseded-without-answer:assistant" },
+          expectedLifecycleRevision: "current-lifecycle",
+        }),
+      ).rejects.toThrow("session writer claim changed before transcript persistence");
+      await expect(
+        appendAbortedSessionTranscriptPartial(scope, {
+          runId: "stopped-success",
+          message: { ...assistant, idempotencyKey: "stopped-success:assistant" },
+          expectedLifecycleRevision: "current-lifecycle",
+        }),
+      ).resolves.toEqual({ ok: true, value: { skipped: true } });
+      expect(transcriptSnapshot(db)).toEqual(beforeSuccessorFallback);
+      expect(onUpdate).not.toHaveBeenCalled();
+      expect(hostTransactions.mock.calls.some(([sql]) => /^BEGIN\s+IMMEDIATE/i.test(sql))).toBe(
+        false,
+      );
+    });
+  });
+
   it.each(["custom", "run", "response"] as const)(
     "keeps %s reporting independent of unselected compressed bodies",
     async (kind) => {

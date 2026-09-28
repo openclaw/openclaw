@@ -901,13 +901,16 @@ describe("full-release-validation-at-sha", () => {
         },
         validationPurpose: "publish",
         publicationSelection: JSON.parse(selection),
-        laneInputs: { extension_test_exclude_patterns_json: JSON.stringify(excluded) },
+        laneInputs: {
+          extension_test_exclude_patterns_json: JSON.stringify(excluded),
+        },
       });
       expect(record.request.inputs.trusted_workflow_json).toBe(wire);
       expect(fixture.readPayload().body.inputs.trusted_workflow_json).toBe(wire);
       expect(record.request.inputs).not.toHaveProperty("validation_purpose");
       expect(record.request.wireInputs).not.toHaveProperty("publication_selection_json");
       expect(record.request.wireInputs).not.toHaveProperty("extension_test_exclude_patterns_json");
+      expect(record.request.wireInputs).not.toHaveProperty("known_flaky_jobs_json");
       expect(Object.keys(fixture.readPayload().body.inputs)).toHaveLength(25);
       const before = readFileSync(fixture.requestPath());
       const callsBefore = fixture.readCalls(fixture.ghCallsPath).length;
@@ -1747,27 +1750,37 @@ describe("full-release-validation-at-sha", () => {
     }
   });
 
-  it("refuses unsupported packed lane controls before creating refs or dispatching", () => {
-    const fixture = createDispatchFixture({
-      workflowSource: CURRENT_WORKFLOW_SOURCE.replace(
-        '  FULL_RELEASE_LANE_INPUTS_CONTRACT: "1"\n',
-        "",
-      ),
-    });
-    try {
-      const result = fixture.run([
-        "--workflow-sha",
-        fixture.workflowSha,
-        "-f",
-        'extension_test_exclude_patterns_json=["extensions/example/src/example.test.ts"]',
-      ]);
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("does not support packed lane inputs");
-      expect(fixture.readCalls(fixture.ghCallsPath)).toEqual([]);
-    } finally {
-      fixture.cleanup();
-    }
-  });
+  it.each([
+    {
+      name: "packed lane",
+      marker: "FULL_RELEASE_LANE_INPUTS_CONTRACT",
+      input: 'extension_test_exclude_patterns_json=["extensions/example/src/example.test.ts"]',
+      error: "does not support packed lane inputs",
+    },
+    {
+      name: "declared flake",
+      marker: undefined,
+      input: 'known_flaky_jobs_json=["normalCi:checks-node"]',
+      error: "Automatic test retries are disabled",
+    },
+  ])(
+    "refuses unsupported $name controls before creating refs or dispatching",
+    ({ marker, input, error }) => {
+      const fixture = createDispatchFixture({
+        workflowSource: marker
+          ? CURRENT_WORKFLOW_SOURCE.replace(`  ${marker}: "1"\n`, "")
+          : CURRENT_WORKFLOW_SOURCE,
+      });
+      try {
+        const result = fixture.run(["--workflow-sha", fixture.workflowSha, "-f", input]);
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain(error);
+        expect(fixture.readCalls(fixture.ghCallsPath)).toEqual([]);
+      } finally {
+        fixture.cleanup();
+      }
+    },
+  );
 
   it.each([false, true])(
     "reopens the same retained request without mutations (explicit=%s)",

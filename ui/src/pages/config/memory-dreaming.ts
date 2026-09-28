@@ -51,12 +51,6 @@ type DreamingFieldSpec =
       fallback: boolean;
     };
 
-type DreamingFieldGroup = {
-  titleKey: string;
-  descriptionKey: string;
-  fields: readonly DreamingFieldSpec[];
-};
-
 // Mirrors the memory-core manifest configSchema/uiHints
 // (extensions/memory-core/openclaw.plugin.json). Everything here previously
 // required hand-editing openclaw.json. `bounds` restates that manifest's
@@ -101,151 +95,30 @@ const DREAMING_SCHEDULE_FIELDS: readonly DreamingFieldSpec[] = [
   },
 ];
 
-const DREAMING_PHASE_GROUPS: readonly DreamingFieldGroup[] = [
-  {
-    titleKey: "memoryPage.dreaming.phases.light.title",
-    descriptionKey: "memoryPage.dreaming.phases.light.description",
-    fields: [
-      {
-        kind: "toggle",
-        path: ["phases", "light", "enabled"],
-        labelKey: "memoryPage.dreaming.phaseFields.enabled",
-        helpKey: "memoryPage.dreaming.phaseFields.enabledHelp",
-        fallback: true,
-      },
-      {
-        kind: "number",
-        path: ["phases", "light", "lookbackDays"],
-        labelKey: "memoryPage.dreaming.phaseFields.lookbackDays",
-        helpKey: "memoryPage.dreaming.phaseFields.lookbackDaysHelp",
-        bounds: COUNT_FROM_ZERO,
-        defaultValue: 2,
-      },
-      {
-        kind: "number",
-        path: ["phases", "light", "limit"],
-        labelKey: "memoryPage.dreaming.phaseFields.limit",
-        helpKey: "memoryPage.dreaming.phaseFields.limitHelp",
-        bounds: COUNT_FROM_ZERO,
-        defaultValue: 100,
-      },
-      {
-        kind: "number",
-        path: ["phases", "light", "dedupeSimilarity"],
-        labelKey: "memoryPage.dreaming.phaseFields.dedupeSimilarity",
-        helpKey: "memoryPage.dreaming.phaseFields.dedupeSimilarityHelp",
-        bounds: RATIO,
-        defaultValue: 0.9,
-      },
-    ],
-  },
-  {
-    titleKey: "memoryPage.dreaming.phases.deep.title",
-    descriptionKey: "memoryPage.dreaming.phases.deep.description",
-    fields: [
-      {
-        kind: "toggle",
-        path: ["phases", "deep", "enabled"],
-        labelKey: "memoryPage.dreaming.phaseFields.enabled",
-        helpKey: "memoryPage.dreaming.phaseFields.enabledHelp",
-        fallback: true,
-      },
-      {
-        kind: "number",
-        path: ["phases", "deep", "limit"],
-        labelKey: "memoryPage.dreaming.phaseFields.limit",
-        helpKey: "memoryPage.dreaming.phaseFields.limitHelp",
-        bounds: COUNT_FROM_ZERO,
-        defaultValue: 10,
-      },
-      {
-        kind: "number",
-        path: ["phases", "deep", "minScore"],
-        labelKey: "memoryPage.dreaming.phaseFields.minScore",
-        helpKey: "memoryPage.dreaming.phaseFields.minScoreHelp",
-        bounds: RATIO,
-        defaultValue: 0.75,
-      },
-      {
-        kind: "number",
-        path: ["phases", "deep", "minRecallCount"],
-        labelKey: "memoryPage.dreaming.phaseFields.minRecallCount",
-        helpKey: "memoryPage.dreaming.phaseFields.minRecallCountHelp",
-        bounds: COUNT_FROM_ZERO,
-        defaultValue: 3,
-      },
-      {
-        kind: "number",
-        path: ["phases", "deep", "minUniqueQueries"],
-        labelKey: "memoryPage.dreaming.phaseFields.minUniqueQueries",
-        helpKey: "memoryPage.dreaming.phaseFields.minUniqueQueriesHelp",
-        bounds: COUNT_FROM_ZERO,
-        defaultValue: 3,
-      },
-      {
-        kind: "number",
-        path: ["phases", "deep", "recencyHalfLifeDays"],
-        labelKey: "memoryPage.dreaming.phaseFields.recencyHalfLifeDays",
-        helpKey: "memoryPage.dreaming.phaseFields.recencyHalfLifeDaysHelp",
-        bounds: COUNT_FROM_ZERO,
-        defaultValue: 14,
-      },
-      {
-        kind: "number",
-        path: ["phases", "deep", "maxAgeDays"],
-        labelKey: "memoryPage.dreaming.phaseFields.maxAgeDays",
-        helpKey: "memoryPage.dreaming.phaseFields.maxAgeDaysHelp",
-        bounds: COUNT_FROM_ONE,
-        defaultValue: 30,
-      },
-      {
-        kind: "number",
-        path: ["phases", "deep", "maxPromotedSnippetTokens"],
-        labelKey: "memoryPage.dreaming.phaseFields.maxPromotedSnippetTokens",
-        helpKey: "memoryPage.dreaming.phaseFields.maxPromotedSnippetTokensHelp",
-        bounds: COUNT_FROM_ONE,
-        defaultValue: 160,
-      },
-    ],
-  },
-  {
-    titleKey: "memoryPage.dreaming.phases.rem.title",
-    descriptionKey: "memoryPage.dreaming.phases.rem.description",
-    fields: [
-      {
-        kind: "toggle",
-        path: ["phases", "rem", "enabled"],
-        labelKey: "memoryPage.dreaming.phaseFields.enabled",
-        helpKey: "memoryPage.dreaming.phaseFields.enabledHelp",
-        fallback: true,
-      },
-      {
-        kind: "number",
-        path: ["phases", "rem", "lookbackDays"],
-        labelKey: "memoryPage.dreaming.phaseFields.lookbackDays",
-        helpKey: "memoryPage.dreaming.phaseFields.lookbackDaysHelp",
-        bounds: COUNT_FROM_ZERO,
-        defaultValue: 7,
-      },
-      {
-        kind: "number",
-        path: ["phases", "rem", "limit"],
-        labelKey: "memoryPage.dreaming.phaseFields.limit",
-        helpKey: "memoryPage.dreaming.phaseFields.limitHelp",
-        bounds: COUNT_FROM_ZERO,
-        defaultValue: 10,
-      },
-      {
-        kind: "number",
-        path: ["phases", "rem", "minPatternStrength"],
-        labelKey: "memoryPage.dreaming.phaseFields.minPatternStrength",
-        helpKey: "memoryPage.dreaming.phaseFields.minPatternStrengthHelp",
-        bounds: RATIO,
-        defaultValue: 0.75,
-      },
-    ],
-  },
-];
+const DREAMING_PHASE_NUMBERS: Record<
+  string,
+  readonly [key: string, bounds: DreamingNumberBounds, defaultValue: number][]
+> = {
+  light: [
+    ["lookbackDays", COUNT_FROM_ZERO, 2],
+    ["limit", COUNT_FROM_ZERO, 100],
+    ["dedupeSimilarity", RATIO, 0.9],
+  ],
+  deep: [
+    ["limit", COUNT_FROM_ZERO, 10],
+    ["minScore", RATIO, 0.75],
+    ["minRecallCount", COUNT_FROM_ZERO, 3],
+    ["minUniqueQueries", COUNT_FROM_ZERO, 3],
+    ["recencyHalfLifeDays", COUNT_FROM_ZERO, 14],
+    ["maxAgeDays", COUNT_FROM_ONE, 30],
+    ["maxPromotedSnippetTokens", COUNT_FROM_ONE, 160],
+  ],
+  rem: [
+    ["lookbackDays", COUNT_FROM_ZERO, 7],
+    ["limit", COUNT_FROM_ZERO, 10],
+    ["minPatternStrength", RATIO, 0.75],
+  ],
+};
 
 const STORAGE_MODES = ["inline", "separate", "both"] as const;
 type StorageMode = (typeof STORAGE_MODES)[number];
@@ -466,10 +339,31 @@ export function renderDreamingSettings(props: DreamingSettingsProps): TemplateRe
         })}
       `,
     )}
-    ${DREAMING_PHASE_GROUPS.map((group) =>
+    ${Object.entries(DREAMING_PHASE_NUMBERS).map(([phase, fields]) =>
       renderSettingsSection(
-        { title: t(group.titleKey), description: t(group.descriptionKey) },
-        group.fields.map((spec) => renderField(props, spec)),
+        {
+          title: t(`memoryPage.dreaming.phases.${phase}.title`),
+          description: t(`memoryPage.dreaming.phases.${phase}.description`),
+        },
+        [
+          renderField(props, {
+            kind: "toggle",
+            path: ["phases", phase, "enabled"],
+            labelKey: "memoryPage.dreaming.phaseFields.enabled",
+            helpKey: "memoryPage.dreaming.phaseFields.enabledHelp",
+            fallback: true,
+          }),
+          ...fields.map(([key, bounds, defaultValue]) =>
+            renderField(props, {
+              kind: "number",
+              path: ["phases", phase, key],
+              labelKey: `memoryPage.dreaming.phaseFields.${key}`,
+              helpKey: `memoryPage.dreaming.phaseFields.${key}Help`,
+              bounds,
+              defaultValue,
+            }),
+          ),
+        ],
       ),
     )}
   `;

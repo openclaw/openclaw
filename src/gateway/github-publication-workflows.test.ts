@@ -152,7 +152,7 @@ describe("accepted GitHub workflow publication", () => {
       };
       let result: unknown;
       if (route !== "rpc") {
-        const original = captureGatewayOperatorRunAuthority({ client, context });
+        const original = await captureGatewayOperatorRunAuthority({ client, context });
         if (!system) {
           assert(original, "Expected original operator authority");
         }

@@ -3,6 +3,7 @@ import {
   toErrorObject,
 } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isEmbeddedRunHandleCompacting } from "../../agents/embedded-agent-runner/runs.probes.js";
 import {
   QuestionAnswerUnconfirmedError,
   QuestionDispatchRefusedError,
@@ -20,11 +21,13 @@ import {
   replyMessageInjectionTargetOperation,
   type ReplyBackendHandle,
   type ReplyBackendMessageInjection,
+  type ReplyBackendQueueMessageMismatch,
   type ReplyBackendQueueMessageOptions,
   type ReplyBackendQueueMessageResult,
   type ReplyMessageInjectionAttempt,
   type ReplyMessageInjectionOptions,
   type ReplyMessageInjectionOutcome,
+  type ReplyMessageInjectionRejectionReason,
   type ReplyMessageInjectionTarget,
   type ReplyOperation,
 } from "./reply-run-registry.contracts.js";
@@ -33,22 +36,6 @@ import {
   isReplyRunEvidenceStale,
   replyRunState,
 } from "./reply-run-registry.state.js";
-
-type ReplyBackendQueueMessageMismatch =
-  | "input_visibility_mismatch"
-  | "tool_authority_mismatch"
-  | "image_input_unsupported"
-  | "source_reply_delivery_mode_mismatch"
-  | "reply_expectation_mismatch"
-  | "task_suggestion_delivery_mode_mismatch";
-
-type ReplyMessageInjectionRejectionReason =
-  | "no_active_run"
-  | "not_running"
-  | "stale_run"
-  | "injection_unavailable"
-  | ReplyBackendQueueMessageMismatch
-  | "runtime_rejected";
 
 export function resolveReplyBackendQueueMessageMismatch(
   backend: Pick<
@@ -203,7 +190,10 @@ export function resolveReplyMessageInjectionRejection(params: {
     return { reason: "injection_unavailable" };
   }
   try {
-    if (!injection.isAvailable()) {
+    if (
+      !injection.isAvailable() ||
+      isEmbeddedRunHandleCompacting(operation.sessionId, backend) !== false
+    ) {
       return { reason: "injection_unavailable" };
     }
   } catch (error) {

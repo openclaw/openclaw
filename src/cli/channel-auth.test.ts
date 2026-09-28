@@ -282,6 +282,28 @@ describe("channel-auth", () => {
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 
+  it("awaits account preparation for inferred local logout", async () => {
+    const account = { id: "prepared-account", enabled: true };
+    const selectedPlugin = {
+      ...plugin,
+      config: {
+        ...plugin.config,
+        resolveAccount: () => {
+          throw new Error("legacy account resolution");
+        },
+        resolveAccountAsync: async () => account,
+        isEnabled: (resolved: unknown) => resolved === account,
+      },
+    };
+    mocks.listChannelPlugins.mockReturnValue([selectedPlugin]);
+    mocks.getLoadedChannelPlugin.mockReturnValue(selectedPlugin);
+    mocks.callGateway.mockRejectedValue(new Error("gateway unreachable"));
+
+    await runChannelLogout({}, runtime);
+
+    expect(mocks.logoutAccount).toHaveBeenCalledWith(expect.objectContaining({ account }));
+  });
+
   it("keeps repeated credential-free logout free of runtime-only plugin activation writes", async () => {
     const sourceConfig: OpenClawConfig = {
       channels: { whatsapp: { enabled: false } },

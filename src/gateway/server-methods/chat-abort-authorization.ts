@@ -288,6 +288,35 @@ export function writePreRegisteredChatAbort(params: {
   return true;
 }
 
+function createChatAbortRunSelection<T extends { runId: string }>() {
+  const authorizedByRunId = new Map<string, T>();
+  const matchedRunIds = new Set<string>();
+  const authorization = {
+    hasUnauthorizedRuns: false,
+    hasUnauthorizedProtectedRuns: false,
+    hasProtectedRuns: false,
+  };
+  return {
+    add(run: T, requesterCanAbort: boolean, isProtected: boolean | undefined) {
+      matchedRunIds.add(run.runId);
+      if (isProtected) {
+        // Lifecycle cleanup still checks ownership of hidden and preserved work.
+        authorization.hasProtectedRuns = true;
+        authorization.hasUnauthorizedProtectedRuns ||= !requesterCanAbort;
+      } else if (requesterCanAbort) {
+        authorizedByRunId.set(run.runId, run);
+      } else {
+        authorization.hasUnauthorizedRuns = true;
+      }
+    },
+    result: () => ({
+      authorizedRuns: [...authorizedByRunId.values()],
+      matchedRunIds: [...matchedRunIds],
+      ...authorization,
+    }),
+  };
+}
+
 export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
   context: GatewayRequestContext;
   sessionKeys: Iterable<string>;
@@ -298,18 +327,13 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
   keyPrefix: string;
   preserveSideRuns?: boolean;
   includeProtectedRuns?: boolean;
-  excludeRunIds?: ReadonlySet<string>;
 }) {
   const sessionKeys = new Set(
     Array.from(params.sessionKeys, (sessionKey) => normalizeOptionalText(sessionKey)).filter(
       (sessionKey): sessionKey is string => Boolean(sessionKey),
     ),
   );
-  const authorizedByRunId = new Map<string, PreRegisteredAgentRun>();
-  const matchedRunIds = new Set<string>();
-  let hasUnauthorizedRuns = false;
-  let hasUnauthorizedProtectedRuns = false;
-  let hasProtectedRuns = false;
+  const selection = createChatAbortRunSelection<PreRegisteredAgentRun>();
   for (const [key, entry] of params.context.dedupe) {
     const run = readPreRegisteredRun({
       key,
@@ -324,9 +348,6 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
       params.requiredSessionId !== undefined &&
       normalizeUnknownText(run.payload.sessionId) !== params.requiredSessionId
     ) {
-      continue;
-    }
-    if (params.excludeRunIds?.has(run.runId)) {
       continue;
     }
     const runSessionKeys = [
@@ -355,34 +376,14 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
     ) {
       continue;
     }
-    matchedRunIds.add(run.runId);
     const requesterCanAbort = canRequesterAbortPreRegisteredRun(run.payload, params.requester);
     const isProtected =
       params.includeProtectedRuns !== true &&
       (run.payload.controlUiVisible === false ||
         (params.preserveSideRuns && normalizeUnknownText(run.payload.turnKind) === "btw"));
-    if (isProtected) {
-      // Broad lifecycle cleanup still needs ownership, while ordinary chat.abort
-      // must keep treating hidden or preserved work as a non-match.
-      hasProtectedRuns = true;
-      if (!requesterCanAbort) {
-        hasUnauthorizedProtectedRuns = true;
-      }
-      continue;
-    }
-    if (requesterCanAbort) {
-      authorizedByRunId.set(run.runId, run);
-    } else {
-      hasUnauthorizedRuns = true;
-    }
+    selection.add(run, requesterCanAbort, isProtected);
   }
-  return {
-    authorizedRuns: [...authorizedByRunId.values()],
-    matchedRunIds: [...matchedRunIds],
-    hasUnauthorizedRuns,
-    hasUnauthorizedProtectedRuns,
-    hasProtectedRuns,
-  };
+  return selection.result();
 }
 
 export function resolveAuthorizedRunsForSessionKeys(params: {
@@ -395,7 +396,6 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
   requester: ChatAbortRequester;
   preserveSideRuns?: boolean;
   includeProtectedRuns?: boolean;
-  excludeRunIds?: ReadonlySet<string>;
 }) {
   const sessionKeys = new Set(
     Array.from(params.sessionKeys, (sessionKey) => normalizeOptionalText(sessionKey)).filter(
@@ -408,21 +408,14 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
     ),
   );
   const agentId = normalizeOptionalText(params.agentId)?.toLowerCase();
-  const authorizedRuns: Array<{
+  const selection = createChatAbortRunSelection<{
     runId: string;
     sessionKey: string;
     sessionId: string;
     agentId?: string;
     entry: ChatAbortControllerEntry;
-  }> = [];
-  const matchedRunIds: string[] = [];
-  let hasUnauthorizedRuns = false;
-  let hasUnauthorizedProtectedRuns = false;
-  let hasProtectedRuns = false;
+  }>();
   for (const [runId, active] of params.chatAbortControllers) {
-    if (params.excludeRunIds?.has(runId)) {
-      continue;
-    }
     if (!sessionKeys.has(active.sessionKey) && !sessionIds.has(active.sessionId)) {
       continue;
     }
@@ -445,39 +438,23 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
     ) {
       continue;
     }
-    matchedRunIds.push(runId);
     const requesterCanAbort = canRequesterAbortChatRun(active, params.requester);
     const isProtected =
       params.includeProtectedRuns !== true &&
       (active.controlUiVisible === false || (params.preserveSideRuns && active.turnKind === "btw"));
-    if (isProtected) {
-      // Broad lifecycle cleanup still needs ownership, while ordinary chat.abort
-      // must keep treating hidden or preserved work as a non-match.
-      hasProtectedRuns = true;
-      if (!requesterCanAbort) {
-        hasUnauthorizedProtectedRuns = true;
-      }
-      continue;
-    }
-    if (requesterCanAbort) {
-      authorizedRuns.push({
+    selection.add(
+      {
         runId,
         sessionKey: active.sessionKey,
         sessionId: active.sessionId,
         agentId: active.agentId,
         entry: active,
-      });
-    } else {
-      hasUnauthorizedRuns = true;
-    }
+      },
+      requesterCanAbort,
+      isProtected,
+    );
   }
-  return {
-    authorizedRuns,
-    matchedRunIds,
-    hasUnauthorizedRuns,
-    hasUnauthorizedProtectedRuns,
-    hasProtectedRuns,
-  };
+  return selection.result();
 }
 
 const SESSION_LIFECYCLE_ABORT_REQUESTER: ChatAbortRequester = { isAdmin: true };
@@ -490,7 +467,6 @@ export function resolveAuthorizedQueuedTurnsForSession(params: {
   agentId?: string;
   defaultAgentId?: string;
   requester: ChatAbortRequester;
-  excludeRunIds?: ReadonlySet<string>;
 }) {
   const matches = listQueuedChatTurnsForSession({
     chatQueuedTurns: params.context.chatQueuedTurns,
@@ -499,7 +475,7 @@ export function resolveAuthorizedQueuedTurnsForSession(params: {
     requiredSessionId: params.requiredSessionId,
     agentId: params.agentId,
     defaultAgentId: params.defaultAgentId,
-  }).filter((match) => !params.excludeRunIds?.has(match.runId));
+  });
   const authorized = matches
     .filter((match) => canRequesterAbortChatRun(match.entry, params.requester))
     .map((match) => ({

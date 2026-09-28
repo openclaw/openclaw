@@ -1,8 +1,6 @@
 import "./openclaw-tools.sessions.mocks.test-support.js";
 import "./test-helpers/fast-openclaw-tools-sessions.js";
 // Verifies sessions list/history/send behavior across gateway and channel targets.
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { Value } from "typebox/value";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -33,6 +31,7 @@ import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-tool-call.state.js";
@@ -1343,7 +1342,7 @@ describe("sessions tools", () => {
   });
 
   it("keeps scoped sends from creating post-return work or durable watches", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-scoped-session-send-"));
+    const tmpDir = tempDirs.make("openclaw-scoped-session-send-");
     const storePath = path.join(tmpDir, "sessions.json");
     const requesterSessionKey = "agent:main:clickclack:discussion-proof";
     const targetSessionKey = "agent:main:main";
@@ -1427,7 +1426,7 @@ describe("sessions tools", () => {
     } finally {
       clearDecisionSink();
       unregister();
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      await closeOpenClawAgentDatabasesAsync(tmpDir);
     }
   });
 
@@ -1901,7 +1900,7 @@ describe("sessions tools", () => {
   });
 
   it("sessions_send never reroutes an exact-incarnation grant to a Cron parent", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exact-cron-send-"));
+    const tmpDir = tempDirs.make("openclaw-exact-cron-send-");
     const storePath = path.join(tmpDir, "sessions.json");
     const requesterKey = "agent:main:main";
     const runScopedTargetKey = "agent:leasing-ops:cron:monthly-utility:run:run-exact";
@@ -1966,7 +1965,7 @@ describe("sessions tools", () => {
       expect(queueMessage).not.toHaveBeenCalled();
       expect(calls.some((call) => call.method === "agent")).toBe(false);
     } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      await closeOpenClawAgentDatabasesAsync(tmpDir);
     }
   });
 

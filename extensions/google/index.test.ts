@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import type {
+  OpenClawPluginApi,
   ProviderReplaySessionEntry,
   ProviderSanitizeReplayHistoryContext,
 } from "openclaw/plugin-sdk/plugin-entry";
@@ -13,14 +14,14 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createCapturedThinkingConfigStream } from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it } from "vitest";
-import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
+import { buildGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 import googleProviderDiscovery from "./provider-discovery.js";
-import { registerGoogleProvider } from "./provider-registration.js";
+import { buildGoogleProvider } from "./provider-registration.js";
 
 const googleProviderPlugin = {
-  register(api: Parameters<typeof registerGoogleProvider>[0]) {
-    registerGoogleProvider(api);
-    registerGoogleGeminiCliProvider(api);
+  register(api: OpenClawPluginApi) {
+    api.registerProvider(buildGoogleProvider());
+    api.registerProvider(buildGoogleGeminiCliProvider());
   },
 };
 
@@ -172,6 +173,22 @@ describe("google provider plugin hooks", () => {
       provider.resolveReasoningOutputMode?.({
         provider: "google-vertex",
         modelId: "gemini-3.1-pro-preview",
+      } as never),
+    ).toBe("native");
+  });
+
+  it("keeps google-interactions hook aliases on native reasoning mode", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const provider = requireRegisteredProvider(providers, "google-interactions");
+    expect(
+      provider.resolveReasoningOutputMode?.({
+        provider: "google-interactions",
+        modelApi: "google-interactions",
+        modelId: "gemini-3.8-flash",
       } as never),
     ).toBe("native");
   });

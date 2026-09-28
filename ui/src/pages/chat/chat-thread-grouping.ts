@@ -1,10 +1,6 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { messageClientSourcesKey } from "../../../../src/chat/message-client-source.js";
-import {
-  extractAssistantTextForPhase,
-  resolveAssistantMessagePhase,
-} from "../../../../src/shared/chat-message-content.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import { resolveMessageDisplayMarkdown } from "../../lib/chat/message-display.ts";
@@ -12,12 +8,10 @@ import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
+import { resolveAssistantReplyPhase } from "./chat-assistant-reply.ts";
 import { prepareMessagesForGrouping } from "./chat-thread-duplicates.ts";
 import { userTurnRunId } from "./chat-thread-items.ts";
-import {
-  isKeyedAssistantStreamFallbackMessage,
-  transcriptRunId,
-} from "./chat-thread-run-identity.ts";
+import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import {
   assistantGroupIsForwardedBoundary,
   chatItemStartsUserTurn,
@@ -26,16 +20,7 @@ import {
 import { indexTurnContinuations, persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 
 function assistantMessageKind(message: unknown, visibleContent: MessageGroup["visibleContent"]) {
-  if (isKeyedAssistantStreamFallbackMessage(message)) {
-    return "commentary";
-  }
-  // A response can contain both phases; any explicit answer remains visible.
-  if (extractAssistantTextForPhase(message, { phase: "final_answer" })) {
-    return "final_answer";
-  }
-  return (
-    resolveAssistantMessagePhase(message) ?? (visibleContent === "none" ? "activity" : "reply")
-  );
+  return resolveAssistantReplyPhase(message) ?? (visibleContent === "none" ? "activity" : "reply");
 }
 
 function stampReplyAttribution(
@@ -118,6 +103,7 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
     const userTurnIdentity = role === "user" ? (steerTarget ?? userTurnRunId(item.message)) : null;
     const shouldSplitBySender = role === "user" || role === "assistant";
     const startsProjectedTurn =
+      item.startsTurn === true ||
       asRecord(asRecord(item.message)?.["__openclaw"])?.turnBoundary === true;
     const splitsAssistantKind =
       role === "assistant" &&

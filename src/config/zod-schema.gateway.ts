@@ -52,6 +52,20 @@ const GatewayOperatorRoleDefinitionSchema = z.strictObject({
       .array(z.string().trim().min(1).refine(isValidAgentId, "Invalid agent id"))
       .transform((agents) => uniqueValues(agents.map(normalizeAgentId))),
   ]),
+  /** Optional model ceiling for this role; defaults to the source agent's primary and fallbacks. */
+  modelPolicy: z
+    .strictObject({
+      sourceAgent: z
+        .string()
+        .trim()
+        .min(1)
+        .refine(isValidAgentId, "Invalid agent id")
+        .transform(normalizeAgentId)
+        .optional(),
+      allow: z.array(z.string().trim().min(1)).optional(),
+      deny: z.array(z.string().trim().min(1)).optional(),
+    })
+    .optional(),
   /** Ceiling applied to the authenticated profile's granted operator scopes. */
   scopes: z.array(OperatorScopeSchema).transform((scopes) => uniqueValues(scopes)),
   /** Required access-policy plugin; availability is checked at admission, not config parsing. */
@@ -152,6 +166,8 @@ export const GatewayConfigSchema = z
           .optional(),
         /** Show the Discord community invitation in this Gateway's Control UI (default true). */
         communityInvite: z.boolean().optional(),
+        /** Seed fresh drafts from configured model/reasoning instead of remembered choices. */
+        newSessionModelDefaults: z.enum(["last-used", "configured"]).optional(),
         /** Optional service credential used only for Control UI GitHub previews and discovery. */
         github: z
           .strictObject({ token: SecretInputSchema.optional().register(sensitive) })

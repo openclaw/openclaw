@@ -8,7 +8,7 @@ import {
   containsUnaccountedActiveEscapedEnvRef,
   preservesAuthoredEscapedEnvRefs,
 } from "./env-preserve-authored.js";
-import { resolveConfigEnvVars } from "./env-substitution.js";
+import { resolveConfigEnvVars, scanEnvTemplateTokens } from "./env-substitution.js";
 
 /**
  * Preserves `${VAR}` environment variable references during config write-back.
@@ -26,8 +26,6 @@ import { resolveConfigEnvVars } from "./env-substitution.js";
  * resolves to), the new value is kept as-is.
  */
 
-const ENV_VAR_PATTERN = /\$\{[A-Z_][A-Z0-9_]*\}/;
-
 class EnvRefArrayMutationError extends Error {
   constructor() {
     super("Config write would reorder or modify an array containing environment references.");
@@ -36,10 +34,13 @@ class EnvRefArrayMutationError extends Error {
 }
 
 /**
- * Check if a string contains any `${VAR}` env var references.
+ * Check if a string contains any `${VAR}` env var references, escaped or not.
+ *
+ * Escaped `$${VAR}` counts: it still changes under substitution, so the authored text
+ * must be restored on write-back the same way an active reference is.
  */
 function hasEnvVarRef(value: string): boolean {
-  return ENV_VAR_PATTERN.test(value);
+  return scanEnvTemplateTokens(value).length > 0;
 }
 
 type ArrayIdentityPath = string[];
@@ -55,17 +56,17 @@ function getArrayIdentityPathValue(value: unknown, path: ArrayIdentityPath): unk
   return current;
 }
 
-function collectStableArrayIdentityPaths(value: unknown): ArrayIdentityPath[] {
+function findStableArrayIdentityPath(value: unknown): ArrayIdentityPath | undefined {
   if (!isPlainObject(value)) {
-    return [];
+    return undefined;
   }
   for (const key of ["id", "agentId"]) {
     const child = value[key];
     if (typeof child === "string" && !hasEnvVarRef(child)) {
-      return [[key]];
+      return [key];
     }
   }
-  return [];
+  return undefined;
 }
 
 function resolveStableArrayIdentityMatch(params: {
@@ -74,39 +75,25 @@ function resolveStableArrayIdentityMatch(params: {
   parsedIndex: number;
 }): { kind: "none" } | { kind: "invalid" } | { kind: "match"; incomingIndex: number } {
   const parsedItem = params.parsed[params.parsedIndex];
-  const identityPaths = collectStableArrayIdentityPaths(parsedItem);
-  if (identityPaths.length === 0) {
+  const identityPath = findStableArrayIdentityPath(parsedItem);
+  if (!identityPath) {
     return { kind: "none" };
   }
-
-  let incomingIndex: number | undefined;
-  let hasUniqueAuthoredIdentity = false;
-  for (const identityPath of identityPaths) {
-    const identityValue = getArrayIdentityPathValue(parsedItem, identityPath);
-    const authoredCount = params.parsed.filter((item) =>
-      isDeepStrictEqual(getArrayIdentityPathValue(item, identityPath), identityValue),
-    ).length;
-    if (authoredCount !== 1) {
-      continue;
-    }
-    hasUniqueAuthoredIdentity = true;
-    const incomingMatches = params.incoming.flatMap((item, index) =>
-      isDeepStrictEqual(getArrayIdentityPathValue(item, identityPath), identityValue)
-        ? [index]
-        : [],
-    );
-    if (
-      incomingMatches.length !== 1 ||
-      (incomingIndex !== undefined && incomingIndex !== incomingMatches[0])
-    ) {
-      return { kind: "invalid" };
-    }
-    incomingIndex = incomingMatches[0];
+  const identityValue = getArrayIdentityPathValue(parsedItem, identityPath);
+  const matchesIdentity = (item: unknown) =>
+    isDeepStrictEqual(getArrayIdentityPathValue(item, identityPath), identityValue);
+  if (params.parsed.filter(matchesIdentity).length !== 1) {
+    return { kind: "none" };
   }
-  if (incomingIndex !== undefined) {
-    return { kind: "match", incomingIndex };
-  }
-  return hasUniqueAuthoredIdentity ? { kind: "invalid" } : { kind: "none" };
+  const incomingMatches = params.incoming.flatMap((item, index) =>
+    matchesIdentity(item) ? [index] : [],
+  );
+  return incomingMatches.length === 1
+    ? {
+        kind: "match",
+        incomingIndex: expectDefined(incomingMatches[0], "env preserve identity match"),
+      }
+    : { kind: "invalid" };
 }
 
 function collectLiteralArrayIdentityPaths(

@@ -52,6 +52,8 @@ Store values are not encrypted at rest. They are stored unencrypted in the share
 
 The secret egress proxy lets Gateway-hosted agent subprocesses use shared-store `secret` entries without receiving their plaintext. OpenClaw puts the existing authenticated sentinel in the subprocess environment, then a Gateway-owned loopback proxy replaces it in request URLs, headers, and streamed bodies immediately before egress.
 
+The listener runs in a dedicated Gateway Worker that owns TLS, certificate preparation, substitution, and forwarding. Request and response bytes stay off the Gateway's main event loop. The Gateway exchanges process grants and certificate health with that Worker; revocation immediately fences the grant before its connections are closed. A failed Worker closes protected egress and requires a Gateway restart.
+
 Each secret must also name the exact HTTPS hosts where substitution is allowed. Hostnames are stored lowercase in ASCII/punycode form and matched exactly; wildcards, suffix matching, and ports are not supported. A secret with no allowed hosts is never substituted. Bind a host without replacing the stored value:
 
 ```bash

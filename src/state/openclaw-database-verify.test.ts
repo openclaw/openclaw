@@ -281,7 +281,7 @@ describe("OpenClaw database integrity verifier", () => {
     );
   });
 
-  it("relays a late cached Worker open to the parent verifier after native opening settles", async () => {
+  it("relays a late restart-receipt Worker open to the parent verifier after native opening settles", async () => {
     const result = await runNodeScript(
       resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(databaseVerifyHostRuntimeEntrypoint)),
       process.env,

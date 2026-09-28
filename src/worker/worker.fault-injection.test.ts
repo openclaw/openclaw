@@ -264,8 +264,12 @@ describe("cloud worker milestone 2 fault injection", () => {
         const messages = transcript
           .getEntries()
           .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
-        expect(messages.map((message) => message.role)).toEqual(["user", "assistant"]);
-        expect(messages[1]).toMatchObject({ stopReason });
+        expect(messages.map((message) => message.role)).toEqual(
+          outcome === "cancellation" ? ["user"] : ["user", "assistant"],
+        );
+        if (outcome !== "cancellation") {
+          expect(messages[1]).toMatchObject({ stopReason });
+        }
         if (outcome === "success") {
           expect(messages[1]).toMatchObject({ content: [{ type: "text", text: "paid reply" }] });
         } else if (outcome === "provider failure") {

@@ -20,7 +20,6 @@
     hasLeafControl = false,
     systemPrompt,
     tools,
-    renderedTools,
     warning,
   } = data;
 
@@ -1129,44 +1128,12 @@
         break;
       }
       default: {
-        // Check for pre-rendered custom tool HTML
-        const rendered = renderedTools?.[call.id];
-        if (rendered?.callHtml || rendered?.resultHtml) {
-          // Custom tool with pre-rendered HTML from TUI renderer
-          if (rendered.callHtml) {
-            html += `<div class="tool-header ansi-rendered">${rendered.callHtml}</div>`;
-          } else {
-            html += `<div class="tool-header"><span class="tool-name">${escapeHtml(name)}</span></div>`;
-          }
-
-          if (rendered.resultHtml) {
-            // Apply same truncation as built-in tools (10 lines)
-            const lines = rendered.resultHtml.split("\n");
-            if (lines.length > 10) {
-              const preview = lines.slice(0, 10).join("\n");
-              html += `<div class="tool-output expandable ansi-rendered" onclick="this.classList.toggle('expanded')">
-                    <div class="output-preview">${preview}<div class="expand-hint">... (${lines.length - 10} more lines)</div></div>
-                    <div class="output-full">${rendered.resultHtml}</div>
-                  </div>`;
-            } else {
-              html += `<div class="tool-output ansi-rendered">${rendered.resultHtml}</div>`;
-            }
-          } else if (result) {
-            // Fallback to JSON for result if no pre-rendered HTML
-            const output = getResultText();
-            if (output) {
-              html += formatExpandableOutput(output, 10);
-            }
-          }
-        } else {
-          // Fallback to JSON display (existing behavior)
-          html += `<div class="tool-header"><span class="tool-name">${escapeHtml(name)}</span></div>`;
-          html += `<div class="tool-output"><pre>${escapeHtml(JSON.stringify(args, null, 2))}</pre></div>`;
-          if (result) {
-            const output = getResultText();
-            if (output) {
-              html += formatExpandableOutput(output, 10);
-            }
+        html += `<div class="tool-header"><span class="tool-name">${escapeHtml(name)}</span></div>`;
+        html += `<div class="tool-output"><pre>${escapeHtml(JSON.stringify(args, null, 2))}</pre></div>`;
+        if (result) {
+          const output = getResultText();
+          if (output) {
+            html += formatExpandableOutput(output, 10);
           }
         }
       }

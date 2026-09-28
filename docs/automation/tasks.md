@@ -366,9 +366,9 @@ For the full operator ledger, use the CLI: `openclaw tasks list`.
 
 ### Control UI
 
-The web Control UI has a **Tasks** page in the sidebar with live active and recent background tasks. Use it to inspect progress, open linked sessions, refresh the ledger, cancel queued and running tasks, or retry/dismiss a blocked completion delivery. Task detail keeps execution status and delivery status separate and exposes the retained result for copying. Final delivery and outcome corrections update the live task without counting delivery as additional execution time.
+The global **Tasks** workspace page has been removed. Use `openclaw tasks list` and `openclaw tasks show <task-id>` for the operator ledger, `openclaw tasks cancel <task-id>` to cancel work, and `openclaw tasks retry <task-id>` or `openclaw tasks dismiss <task-id>` to resolve blocked completion delivery. TaskFlow inspection and cancellation remain available through `openclaw tasks flow`. Chat task controls and automation run history remain available in the Control UI.
 
-Chat panes also have a collapsible **Background tasks** rail scoped to the current conversation, with active work, stop controls, and a finished section. Open it from the pane's **Tasks** panel action. Subagent activity below the parent conversation also opens the selected child's details.
+Chat panes have a collapsible **Background tasks** rail scoped to the current conversation, with active work, stop controls, and a finished section. Open it from the pane's **Tasks** panel action. Subagent activity below the parent conversation also opens the selected child's details.
 
 The compact subagent list below the conversation keeps queued, running, and waiting work in creation order. Completed children leave this list as soon as their task completion is published, including native harness subagents, without reloading the page. The list shows up to five ongoing children and a count of additional ongoing work. Open **Tasks** for the full active list and up to 50 recent finished tasks. Progress and result-delivery updates do not change the order.
 
@@ -414,7 +414,7 @@ After refreshing an invalidated registry projection, agent events with no matchi
 
 WAL growth stays bounded through SQLite's default autocheckpoint threshold plus periodic `PASSIVE` checkpoints. After a checkpoint completes, the next commit resets the WAL and applies a 64 MiB `journal_size_limit` ceiling, so a reader cannot leave the file parked at a pathological high-water mark until restart. Shutdown and explicit maintenance checkpoints use `TRUNCATE` so normal closes reclaim WAL space without making the background sweeper wait on active readers.
 
-The shared database replaced the `tasks/runs.sqlite` and `flows/registry.sqlite` sidecar stores in `v2026.5.30-beta.1`, stable from `v2026.6.1`. If either sidecar is still present under the state root, `openclaw doctor` imports its rows into the shared database. Installs from `v2026.6.1` onward never create these files.
+The shared database replaced the `tasks/runs.sqlite` and `flows/registry.sqlite` sidecar stores in `v2026.5.30-beta.1`, stable from `v2026.6.1`. Current versions no longer import or archive these pre-June files. To preserve their records when upgrading an older installation, back up the state root and [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions), running its `openclaw doctor --fix` before installing `latest`. Installs from `v2026.6.1` onward use the shared database.
 
 ### Automatic maintenance
 

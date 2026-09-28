@@ -174,4 +174,14 @@ describe("one-time ticket store", () => {
     vi.advanceTimersByTime(100);
     expect(onExpire).toHaveBeenCalledTimes(2);
   });
+
+  it("releases expired payloads when consumption beats a delayed timer", () => {
+    const onExpire = vi.fn();
+    const store = createOneTimeTicketStore<string>({ ttlMs: 100, now: () => 1_000, onExpire });
+    const ticket = store.mint("borrow");
+    expect(store.consume(ticket.token, 1_100)).toBeUndefined();
+    expect(onExpire).toHaveBeenCalledExactlyOnceWith("borrow", ticket.token);
+    vi.advanceTimersByTime(100);
+    expect(onExpire).toHaveBeenCalledTimes(1);
+  });
 });
