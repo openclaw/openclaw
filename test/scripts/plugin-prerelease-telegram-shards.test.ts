@@ -184,8 +184,9 @@ export const collectBundledPluginSources=()=>[{dirName:'source-only',manifestPat
       );
       const sourceTest = "extensions/source-only/index.test.ts";
       const rootTest = "extensions/root.test.ts";
-      for (const file of [sourceTest, rootTest, "extensions/packaged/index.test.ts"])
+      for (const file of [sourceTest, rootTest, "extensions/packaged/index.test.ts"]) {
         write(file, "");
+      }
       const matrix = runPluginPrereleaseManifest(root, true);
       expect(
         matrix.include
