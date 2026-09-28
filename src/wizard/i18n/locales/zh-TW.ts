@@ -430,6 +430,8 @@ export const zh_TW = {
       workspaceConflictTitle: "現有 agent 工作區",
       workspaceDirectory: "工作區目錄",
       workspaceNotDirectory: '"{path}" 不是目錄。請在目錄中選擇工作區路徑。',
+      workspaceSymlinkNotDirectory:
+        '"{path}" 是無法解析至現有目錄的符號連結。請在目錄中選擇工作區路徑。',
     },
     security: {
       askForHelp: "啟用工具或暴露到網際網路之前，請找有經驗的人協助。",

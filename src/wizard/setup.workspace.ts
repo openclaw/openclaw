@@ -14,7 +14,15 @@ export function validateSetupWorkspacePath(workspaceDir: string): string | undef
   let candidate = resolveUserPath(workspaceDir);
   while (true) {
     try {
-      return fs.statSync(candidate).isDirectory()
+      let stats = fs.lstatSync(candidate);
+      if (stats.isSymbolicLink()) {
+        try {
+          stats = fs.statSync(candidate);
+        } catch {
+          return t("wizard.setup.workspaceSymlinkNotDirectory", { path: candidate });
+        }
+      }
+      return stats.isDirectory()
         ? undefined
         : t("wizard.setup.workspaceNotDirectory", { path: candidate });
     } catch (error) {

@@ -97,8 +97,10 @@ described [above](/start/wizard-cli-reference#what-the-wizard-does).
   </Step>
   <Step title="Workspace">
     - Default `~/.openclaw/workspace` (configurable).
-    - The prompt and `--workspace` reject a file or a path beneath a non-directory
-      ancestor and identify the blocking path. Missing directories are allowed.
+    - The prompt and `--workspace` reject files, non-directory ancestors, and
+      dangling symbolic links at the workspace path or any ancestor, identifying
+      the blocking path. Missing directories and symbolic links to existing
+      directories are allowed.
     - Seeds workspace files needed for first-run bootstrap.
     - On rerun, an existing agent roster keeps its fleet-wide workspace unless
       you explicitly confirm the move. Non-interactive reruns warn and preserve

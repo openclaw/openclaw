@@ -440,6 +440,8 @@ export const en = {
       workspaceConflictTitle: "Existing agent workspace",
       workspaceDirectory: "Workspace directory",
       workspaceNotDirectory: '"{path}" is not a directory. Choose a workspace inside a directory.',
+      workspaceSymlinkNotDirectory:
+        '"{path}" is a symbolic link that does not resolve to an existing directory. Choose a workspace inside a directory.',
     },
     security: {
       askForHelp:

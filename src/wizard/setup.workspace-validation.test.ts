@@ -9,6 +9,7 @@ import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 import { runSetupWizard } from "./setup.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const workspaceSuffixes = ["", path.join("nested", "workspace")];
 const writeConfig = vi.hoisted(() => vi.fn());
 vi.mock("./setup.shared.js", () => ({
   readSetupConfigFileSnapshot: async () => ({ exists: false, valid: true, config: {} }),
@@ -27,19 +28,27 @@ vi.mock("../commands/onboard-helpers.js", () => ({
   probeGatewayReachable: async () => ({ ok: false }),
 }));
 
-it("rejects non-directory workspaces in the real prompt while accepting directories and new paths", async () => {
+it.each(workspaceSuffixes)("validates workspace prompt paths with suffix %j", async (suffix) => {
   const root = tempDirs.make("openclaw-workspace-prompt-");
   const blocker = path.join(root, "regular-file");
   const alias = path.join(root, "directory-link");
+  const dangling = path.join(root, "dangling-link");
   fs.writeFileSync(blocker, "keep");
   fs.symlinkSync(root, alias, "dir");
+  fs.symlinkSync(path.join(root, "missing-target"), dangling, "dir");
   const cancelled = new WizardCancelledError();
   const text = vi.fn<WizardPrompter["text"]>(async ({ validate }) => {
     expect(validate).toBeTypeOf("function");
-    for (const candidate of [blocker, path.join(blocker, "nested", "workspace")]) {
-      expect(validate?.(candidate)).toContain(`"${blocker}" is not a directory`);
-    }
-    for (const candidate of [root, alias, path.join(root, "new", "workspace"), ""]) {
+    expect(validate?.(path.join(blocker, suffix))).toContain(`"${blocker}" is not a directory`);
+    expect(validate?.(path.join(dangling, suffix))).toContain(
+      `"${dangling}" is a symbolic link that does not resolve to an existing directory`,
+    );
+    for (const candidate of [
+      root,
+      path.join(alias, suffix),
+      path.join(root, "new", "workspace"),
+      "",
+    ]) {
       expect(validate?.(candidate)).toBeUndefined();
     }
     throw cancelled;

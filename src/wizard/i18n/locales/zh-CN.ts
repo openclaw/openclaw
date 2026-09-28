@@ -430,6 +430,8 @@ export const zh_CN = {
       workspaceConflictTitle: "现有 agent 工作区",
       workspaceDirectory: "工作区目录",
       workspaceNotDirectory: '"{path}" 不是目录。请在目录中选择工作区路径。',
+      workspaceSymlinkNotDirectory:
+        '"{path}" 是一个无法解析到现有目录的符号链接。请在目录中选择工作区路径。',
     },
     security: {
       askForHelp: "启用工具或暴露到互联网之前，请找有经验的人协助。",
