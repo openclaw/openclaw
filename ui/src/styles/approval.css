@@ -300,25 +300,6 @@
   font-weight: 700;
 }
 
-.approval-page__action--allow-once {
-  border-color: var(--accent);
-  background: var(--primary);
-  color: var(--primary-foreground);
-}
-
-.approval-page__action--allow-once:hover:not(:disabled) {
-  border-color: var(--accent-hover);
-  background: var(--accent-hover);
-}
-
-:root[data-theme="dark"] .approval-page__action--allow-once:hover:not(:disabled) {
-  background: var(--primary-hover);
-}
-
-:root[data-theme="openknot"] .approval-page__action--allow-once:hover:not(:disabled) {
-  background: var(--primary-hover);
-}
-
 .approval-page__action--deny {
   border-color: color-mix(in srgb, var(--danger) 52%, var(--border));
   color: var(--danger);
