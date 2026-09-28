@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
+import * as postCoreCapability from "../infra/update-post-core-capability.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
 import {
@@ -97,6 +98,7 @@ describe("update-cli", () => {
   });
 
   it("isolates stale handoff values at the post-core CLI spawn boundary", async () => {
+    vi.spyOn(postCoreCapability, "supportsPostCoreExecutor").mockResolvedValueOnce(false);
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(FRESH_POST_UPDATE_ENTRYPOINT);
     readPackageVersion.mockResolvedValueOnce(null);
 

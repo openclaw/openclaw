@@ -441,10 +441,10 @@ async function verifyPriorCiAdmin({ evidencePath, repository, pr, head, actor, m
         typeof parameters.required_review_thread_resolution === "boolean",
       "effective review requirements are incomplete",
     );
+    // Code-owner review is conditional on changed paths; GitHub's per-PR
+    // reviewDecision below owns that applicability, including REVIEW_REQUIRED.
     requireReviews ||=
-      parameters.required_approving_review_count > 0 ||
-      parameters.require_code_owner_review ||
-      parameters.require_last_push_approval;
+      parameters.required_approving_review_count > 0 || parameters.require_last_push_approval;
     requireThreads ||= parameters.required_review_thread_resolution;
   }
   const query =

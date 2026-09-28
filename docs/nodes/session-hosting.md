@@ -229,6 +229,11 @@ session hosting or the affected launch fails visibly instead of falling back to
 an unisolated worker. Install or start the engine, verify `docker version` or
 `podman version`, and restart the node host.
 
+Before each container launch, daemon identity revalidation allows up to 30 seconds.
+If an engine command times out, the launch error names the engine and operation
+(for example, `docker info`) and its deadline. It omits command arguments and
+environment values. Check that operation against the selected daemon before retrying.
+
 The default image is `node:24.21.0-slim`; the engine pulls it on first use when it
 is not already present. Set `nodeHost.workerRuns.containerImage` to choose a
 digest-pinned image, a private-registry image, or an image already available

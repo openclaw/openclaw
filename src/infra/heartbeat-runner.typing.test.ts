@@ -84,6 +84,16 @@ function expectTypingCall(
   expect(params.to).toBe(expected.to);
 }
 
+async function runHeartbeatWithFakeIntervals(options: Parameters<typeof runHeartbeatOnce>[0]) {
+  // Keep typing refreshes independent of storage and dispatch wall time.
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  try {
+    return await runHeartbeatOnce(options);
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 describe("runHeartbeatOnce heartbeat typing", () => {
   beforeEach(() => {
     // Typing keepalive ticks follow the fake clock, so slow runs cannot add refreshes.
@@ -119,7 +129,7 @@ describe("runHeartbeatOnce heartbeat typing", () => {
         return { text: "HEARTBEAT_OK" };
       });
 
-      await runHeartbeatOnce({
+      await runHeartbeatWithFakeIntervals({
         cfg,
         deps: {
           getReplyFromConfig: replySpy,
@@ -150,7 +160,7 @@ describe("runHeartbeatOnce heartbeat typing", () => {
       await seedTelegramSession(storePath, cfg);
       replySpy.mockRejectedValue(new Error("model unavailable"));
 
-      const result = await runHeartbeatOnce({
+      const result = await runHeartbeatWithFakeIntervals({
         cfg,
         deps: {
           getReplyFromConfig: replySpy,

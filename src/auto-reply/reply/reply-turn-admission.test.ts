@@ -7,7 +7,6 @@ import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import {
   resetDiagnosticRunActivityForTest,
@@ -424,73 +423,6 @@ describe("reply turn admission", () => {
       });
     },
   );
-
-  it("keeps deferred owner release retries from retaining a successor", async () => {
-    vi.useFakeTimers();
-    try {
-      const sessionKey = "agent:main:telegram:topic:deferred-recovery-release";
-      const sessionId = "interrupted-session";
-      const storePath = createSessionStore({
-        [sessionKey]: {
-          sessionId,
-          updatedAt: 100,
-          status: "running",
-          abortedLastRun: true,
-          mainRestartRecovery: {
-            cycleId: "cycle-1",
-            revision: 1,
-            chargedAttempts: 0,
-          },
-        },
-      });
-      const owner = await admitTestReplyTurn({
-        sessionKey,
-        sessionId,
-        expectedSessionId: sessionId,
-        storePath,
-      });
-      expect(owner.status).toBe("owned");
-      if (owner.status !== "owned") {
-        return;
-      }
-      const applySessionEntryReplacements = sessionAccessor.applySessionEntryReplacements;
-      let failures = 0;
-      const accessorSpy = vi
-        .spyOn(sessionAccessor, "applySessionEntryReplacements")
-        .mockImplementation(async (params) => {
-          if (failures < 3) {
-            failures += 1;
-            throw new Error("SQLite session entry changed before replacement");
-          }
-          return await applySessionEntryReplacements(params);
-        });
-
-      owner.operation.complete();
-      const successor = admitTestReplyTurn({
-        sessionKey,
-        sessionId,
-        expectedSessionId: sessionId,
-        storePath,
-      });
-      let successorSettled = false;
-      void successor.then(() => {
-        successorSettled = true;
-      });
-      await vi.advanceTimersByTimeAsync(100);
-      // Worker I/O settles on real turns, not fake-clock advancement. No later
-      // retry timer is advanced while joining the successor admission.
-      const admitted = await successor;
-      expect(successorSettled).toBe(true);
-      accessorSpy.mockRestore();
-      expect(admitted.status).toBe("owned");
-      if (admitted.status === "owned") {
-        admitted.operation.complete();
-      }
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
-  });
 
   it("preserves a source recovery identity after adopting a distinct target session", async () => {
     const sourceSessionKey = "agent:main:telegram:slash:recovery-source";

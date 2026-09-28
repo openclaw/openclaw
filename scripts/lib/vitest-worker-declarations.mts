@@ -117,6 +117,8 @@ export const vitestWorkerDeclarationEntries = {
     "extensions/workboard/src/sqlite-backend-entrypoint.test-support.ts",
   "infra/update-managed-service-handoff-runtime-assets":
     "src/infra/update-managed-service-handoff-runtime-assets.ts",
+  "infra/package-update-activation-runtime-assets":
+    "src/infra/package-update-activation-runtime-assets.ts",
   "infra/triage-runtime.test-support": "src/infra/triage-runtime.test-support.ts",
   "infra/sqlite-readonly-worker.compile-cache-runtime.test-support":
     "src/infra/sqlite-readonly-worker.compile-cache-runtime.test-support.ts",

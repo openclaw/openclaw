@@ -655,12 +655,10 @@ describe("chat typing status", () => {
 
     expect(indicator?.closest('[data-virtual-row-key="presence:typing"]')).not.toBeNull();
     expect(indicator?.closest(".agent-chat__composer-shell")).toBeNull();
-    expect(
-      indicator?.querySelectorAll(
-        ".chat-message-avatar-anchor > :is(.chat-avatar, .chat-avatar-slot), .chat-group-footer .chat-author-avatar",
-      ),
-    ).toHaveLength(expectedAvatars);
-    expect(indicator?.querySelectorAll(".agent-chat__typing-state")).toHaveLength(actors.length);
+    expect(indicator?.querySelectorAll("[role=img]")).toHaveLength(expectedAvatars);
+    expect(indicator?.querySelectorAll(".agent-chat__typing-state")).toHaveLength(
+      Math.min(2, actors.length),
+    );
     expect(
       indicator?.querySelector(".agent-chat__typing-bubble")?.getAttribute("aria-hidden"),
     ).toBe("true");
@@ -6732,7 +6730,7 @@ describe("chat model controls", () => {
           '[data-chat-model-provider-group="anthropic"] [data-chat-model-provider-toggle]',
         )!
         .click();
-      details!.dispatchEvent(new KeyboardEvent("keydown", { key: "1", bubbles: true }));
+      details!.dispatchEvent(new KeyboardEvent("keydown", { key: "3", bubbles: true }));
       expect(onModelSelect).toHaveBeenCalledExactlyOnceWith(
         "anthropic/claude-sonnet-4-6",
         "main",

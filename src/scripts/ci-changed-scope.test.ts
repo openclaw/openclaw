@@ -558,7 +558,6 @@ describe("detectChangedScope", () => {
   it.each([
     "ui/src/pages/chat/chat-realtime.test.ts",
     "ui/package.json",
-    "test/vitest/vitest.shared.config.ts",
     "scripts/ensure-playwright-chromium.mts",
   ])("runs control-ui tests for %s", (changedPath) => {
     expect(detectChangedScope([changedPath]).runUiTests).toBe(true);

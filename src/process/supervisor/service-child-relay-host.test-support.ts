@@ -53,13 +53,15 @@ export async function createRelayFixture(
   const stub = createStubChild();
   const cancellations: Array<(error: Error) => void> = [];
   const acknowledgements: ServiceChildControlMessage[] = [];
+  // The simulated peer must stay outside spies on the host's incoming decoder.
+  const parseControlMessage = JSON.parse;
   // Keep channel closure independently controlled from cancellation write completion.
   const control = new Duplex({
     autoDestroy: false,
     read() {},
     write(chunk: Buffer, _encoding, callback) {
       // SAFETY: this exact adapter is the sole writer on its private control channel.
-      const message = JSON.parse(chunk.toString()) as ServiceChildControlMessage;
+      const message = parseControlMessage(chunk.toString()) as ServiceChildControlMessage;
       if (message.type === "cancel") {
         cancellations.push(callback);
       } else {

@@ -494,6 +494,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       onOpenDictationSettings: () => this.context.navigate("model-setup"),
       suggestionComposer: suggestionViewer,
       typingActors: multiIdentity ? this.typingActorViews() : [],
+      typingOverflow: multiIdentity ? this.typingOverflow : undefined,
       onTypingChange: typingEnabled
         ? (typing, preview) => this.sendTypingState(typing, preview)
         : undefined,

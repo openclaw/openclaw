@@ -6,13 +6,6 @@ read_when:
   - You need to distinguish measured workflow walls from planner estimates
 ---
 
-PR placement now prefers free hosted capacity while retaining the existing row
-counts and execution policies. The measurements below describe older routing
-and do not establish the wall time of the current PR layout. Hosted rows can
-outlast the earlier ten-minute target; shared hosted capacity can also queue.
-Focused local and Testbox proof qualify changes without dispatching additional CI
-runs. Observe ordinary CI for latency and fix forward when necessary.
-
 ## Routing from measured wall time
 
 Use GitHub-hosted runners for independent checks that fit the workflow's remaining time. Retain Blacksmith where the measured job tail threatens completion. Qualify RunsOn by workload before assigning it a production tier. Requested Blacksmith 8/16/32 labels delivered 2/4/8 CPUs in the capacity probe; labels are not worker counts.
@@ -74,9 +67,34 @@ qualifiers must not discard the existing owner measurement.
 
 Process-bounded plugin owners also retain per-file invocation prices across
 envelope changes. These prices have distinct keys from whole-envelope walls;
-shared wrapper overhead is charged once. Only complete successful receipts
+shared wrapper overhead is charged once. Only complete successful serial receipts
 with one declared file per process qualify. Other process owners and missing
 measurements keep their existing estimates.
+
+### Telegram process overlap
+
+Source-only Telegram database-worker envelopes with at least two singleton
+processes can overlap two inner processes on current self-hosted Linux runners.
+Admission requires an explicit current target (`FROZEN_TARGET=false`), one unchanged
+Node invocation from the canonical runtime selector (including `bun-compatible`),
+two workers, one outer plan, scheduler-owned caches, at least two actual CPUs, and
+7.5 GiB of effective memory. Effective memory is the smaller
+of physical memory and a positive finite process constraint. Other selections or
+insufficient capacity retain one inner process. Each test file keeps its own
+process, and focused CI still stops admitting new work after failure while
+joining admitted peers.
+
+The executor reports actual inner concurrency, including serial fallback. Its
+value participates in the existing environment-bound timing identity. Parallel
+receipts supply only the complete envelope wall; overlapping file durations are
+never summed and subtracted to derive wrapper overhead. Until that exact policy
+has qualified measurements, placement retains the conservative serial estimate.
+
+A 199-case envelope measured 184.40 seconds serially and 147.31 seconds with two
+processes on a Linux Testbox constrained to two CPUs and 7.65 GiB. Three further
+qualified replays took 147.46, 146.13 and 149.34 seconds. Peak aggregate memory
+stayed below 4.51 GiB, with no OOM events and the same cases. Whole-row budgets
+still need qualification from naturally occurring CI runs.
 
 Storage balancing additionally uses 36 config-scoped module-work hints from an
 unchanged two-worker replay of the exact tested merge. Setup, collection, and
