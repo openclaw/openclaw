@@ -1,0 +1,21 @@
+{
+  "id": "klaviyo",
+  "name": "Klaviyo",
+  "description": "Marketing accounts and campaign data through Klaviyo's official MCP service.",
+  "categories": [
+    "sales-marketing"
+  ],
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "mcpServers": {
+    "klaviyo": {
+      "url": "https://mcp.klaviyo.com/mcp",
+      "transport": "streamable-http",
+      "auth": "oauth"
+    }
+  }
+}

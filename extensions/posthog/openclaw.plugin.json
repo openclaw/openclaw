@@ -1,0 +1,23 @@
+{
+  "id": "posthog",
+  "name": "PostHog",
+  "description": "Product analytics and project data through PostHog's official MCP service.",
+  "categories": [
+    "data-analytics"
+  ],
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "mcpServers": {
+    "posthog": {
+      "url": "https://mcp.posthog.com/mcp",
+      "transport": "streamable-http",
+      "headers": {
+        "Authorization": "Bearer ${POSTHOG_MCP_TOKEN}"
+      }
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "guru",
+  "name": "Guru",
+  "description": "Company knowledge and cards through Guru's official MCP service.",
+  "categories": [
+    "context"
+  ],
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "mcpServers": {
+    "guru": {
+      "url": "https://mcp.api.getguru.com/mcp",
+      "transport": "streamable-http",
+      "headers": {
+        "Authorization": "Bearer ${GURU_EMAIL}:${GURU_API_TOKEN}"
+      }
+    }
+  }
+}

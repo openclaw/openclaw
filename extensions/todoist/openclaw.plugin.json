@@ -1,0 +1,21 @@
+{
+  "id": "todoist",
+  "name": "Todoist",
+  "description": "Tasks and projects through Todoist's official MCP service.",
+  "categories": [
+    "productivity"
+  ],
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "mcpServers": {
+    "todoist": {
+      "url": "https://ai.todoist.net/mcp",
+      "transport": "streamable-http",
+      "auth": "oauth"
+    }
+  }
+}

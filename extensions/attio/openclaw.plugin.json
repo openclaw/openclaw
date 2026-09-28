@@ -1,0 +1,21 @@
+{
+  "id": "attio",
+  "name": "Attio",
+  "description": "CRM records and relationship workflows through Attio's official MCP service.",
+  "categories": [
+    "sales-marketing"
+  ],
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "mcpServers": {
+    "attio": {
+      "url": "https://mcp.attio.com/mcp",
+      "transport": "streamable-http",
+      "auth": "oauth"
+    }
+  }
+}

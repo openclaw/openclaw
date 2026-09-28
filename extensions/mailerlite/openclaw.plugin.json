@@ -1,0 +1,21 @@
+{
+  "id": "mailerlite",
+  "name": "MailerLite",
+  "description": "Email marketing and subscriber data through MailerLite's official MCP service.",
+  "categories": [
+    "sales-marketing"
+  ],
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "mcpServers": {
+    "mailerlite": {
+      "url": "https://mcp.mailerlite.com/mcp",
+      "transport": "streamable-http",
+      "auth": "oauth"
+    }
+  }
+}

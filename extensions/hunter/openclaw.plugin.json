@@ -1,0 +1,23 @@
+{
+  "id": "hunter",
+  "name": "Hunter",
+  "description": "Company and contact discovery through Hunter's official MCP service.",
+  "categories": [
+    "sales-marketing"
+  ],
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "mcpServers": {
+    "hunter": {
+      "url": "https://mcp.hunter.io/mcp",
+      "transport": "streamable-http",
+      "headers": {
+        "X-API-Key": "${HUNTER_API_KEY}"
+      }
+    }
+  }
+}

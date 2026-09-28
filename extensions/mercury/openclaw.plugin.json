@@ -1,0 +1,21 @@
+{
+  "id": "mercury",
+  "name": "Mercury",
+  "description": "Banking account and transaction data through Mercury's official MCP service.",
+  "categories": [
+    "finance-payments"
+  ],
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "mcpServers": {
+    "mercury": {
+      "url": "https://mcp.mercury.com/mcp",
+      "transport": "streamable-http",
+      "auth": "oauth"
+    }
+  }
+}

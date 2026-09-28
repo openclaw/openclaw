@@ -1,0 +1,21 @@
+{
+  "id": "workable",
+  "name": "Workable",
+  "description": "Recruiting and account information through Workable's official MCP service.",
+  "categories": [
+    "productivity"
+  ],
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "mcpServers": {
+    "workable": {
+      "url": "https://mcp.workable.com/mcp",
+      "transport": "streamable-http",
+      "auth": "oauth"
+    }
+  }
+}

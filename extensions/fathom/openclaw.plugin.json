@@ -1,0 +1,21 @@
+{
+  "id": "fathom",
+  "name": "Fathom",
+  "description": "Meeting summaries and transcripts through Fathom's official MCP service.",
+  "categories": [
+    "inbox-collaboration"
+  ],
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "mcpServers": {
+    "fathom": {
+      "url": "https://api.fathom.ai/mcp",
+      "transport": "streamable-http",
+      "auth": "oauth"
+    }
+  }
+}

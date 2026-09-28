@@ -1,0 +1,21 @@
+{
+  "id": "clay",
+  "name": "Clay",
+  "description": "Sales research and enrichment workflows through Clay's official MCP service.",
+  "categories": [
+    "sales-marketing"
+  ],
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "mcpServers": {
+    "clay": {
+      "url": "https://api.clay.com/v3/mcp",
+      "transport": "streamable-http",
+      "auth": "oauth"
+    }
+  }
+}

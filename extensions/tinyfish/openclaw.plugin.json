@@ -1,0 +1,23 @@
+{
+  "id": "tinyfish",
+  "name": "TinyFish",
+  "description": "Web research and browser automation through TinyFish's official MCP service.",
+  "categories": [
+    "web"
+  ],
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "mcpServers": {
+    "tinyfish": {
+      "url": "https://agent.tinyfish.ai/mcp",
+      "transport": "streamable-http",
+      "headers": {
+        "Authorization": "Bearer ${TINYFISH_API_KEY}"
+      }
+    }
+  }
+}

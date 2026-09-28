@@ -1,0 +1,23 @@
+{
+  "id": "buffer",
+  "name": "Buffer",
+  "description": "Social accounts and publishing workflows through Buffer's official MCP service.",
+  "categories": [
+    "sales-marketing"
+  ],
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "mcpServers": {
+    "buffer": {
+      "url": "https://mcp.buffer.com/mcp",
+      "transport": "streamable-http",
+      "headers": {
+        "Authorization": "Bearer ${BUFFER_API_KEY}"
+      }
+    }
+  }
+}

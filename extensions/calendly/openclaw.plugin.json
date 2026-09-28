@@ -1,0 +1,21 @@
+{
+  "id": "calendly",
+  "name": "Calendly",
+  "description": "Scheduling and event types through Calendly's official MCP service.",
+  "categories": [
+    "scheduling"
+  ],
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "mcpServers": {
+    "calendly": {
+      "url": "https://mcp.calendly.com/",
+      "transport": "streamable-http",
+      "auth": "oauth"
+    }
+  }
+}

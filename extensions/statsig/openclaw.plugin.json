@@ -1,0 +1,23 @@
+{
+  "id": "statsig",
+  "name": "Statsig",
+  "description": "Feature gates and experiment data through Statsig's official MCP service.",
+  "categories": [
+    "data-analytics"
+  ],
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "mcpServers": {
+    "statsig": {
+      "url": "https://api.statsig.com/v1/mcp",
+      "transport": "streamable-http",
+      "headers": {
+        "statsig-api-key": "${STATSIG_CONSOLE_API_KEY}"
+      }
+    }
+  }
+}

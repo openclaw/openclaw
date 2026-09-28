@@ -1,0 +1,21 @@
+{
+  "id": "jotform",
+  "name": "Jotform",
+  "description": "Forms and submissions through Jotform's official MCP service.",
+  "categories": [
+    "productivity"
+  ],
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "mcpServers": {
+    "jotform": {
+      "url": "https://mcp.jotform.com",
+      "transport": "streamable-http",
+      "auth": "oauth"
+    }
+  }
+}

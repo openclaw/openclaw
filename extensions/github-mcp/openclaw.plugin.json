@@ -1,0 +1,23 @@
+{
+  "id": "github-mcp",
+  "name": "GitHub MCP",
+  "description": "Repositories, issues, and pull requests through GitHub MCP's official MCP service.",
+  "categories": [
+    "developer-tools"
+  ],
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "mcpServers": {
+    "github-mcp": {
+      "url": "https://api.githubcopilot.com/mcp",
+      "transport": "streamable-http",
+      "headers": {
+        "Authorization": "Bearer ${GITHUB_MCP_TOKEN}"
+      }
+    }
+  }
+}

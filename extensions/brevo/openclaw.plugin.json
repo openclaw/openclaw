@@ -1,0 +1,23 @@
+{
+  "id": "brevo",
+  "name": "Brevo",
+  "description": "Customer messaging and contact data through Brevo's official MCP service.",
+  "categories": [
+    "sales-marketing"
+  ],
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "mcpServers": {
+    "brevo": {
+      "url": "https://mcp.brevo.com/v1/brevo/mcp",
+      "transport": "streamable-http",
+      "headers": {
+        "Authorization": "Bearer ${BREVO_MCP_TOKEN}"
+      }
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "id": "notion",
+  "name": "Notion",
+  "description": "Workspace pages and databases through Notion's official MCP service.",
+  "categories": [
+    "documents-files"
+  ],
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "mcpServers": {
+    "notion": {
+      "url": "https://mcp.notion.com/mcp",
+      "transport": "streamable-http",
+      "auth": "oauth"
+    }
+  }
+}

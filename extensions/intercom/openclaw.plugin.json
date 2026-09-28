@@ -1,0 +1,21 @@
+{
+  "id": "intercom",
+  "name": "Intercom",
+  "description": "Customer support conversations and knowledge through Intercom's official MCP service.",
+  "categories": [
+    "inbox-collaboration"
+  ],
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "mcpServers": {
+    "intercom": {
+      "url": "https://mcp.intercom.com/mcp",
+      "transport": "streamable-http",
+      "auth": "oauth"
+    }
+  }
+}

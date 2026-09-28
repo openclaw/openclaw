@@ -1,0 +1,23 @@
+{
+  "id": "superhuman-docs",
+  "name": "Superhuman Docs",
+  "description": "Documents and structured workspace data through Superhuman Docs's official MCP service.",
+  "categories": [
+    "documents-files"
+  ],
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "mcpServers": {
+    "superhuman-docs": {
+      "url": "https://docs.superhuman.com/apis/mcp",
+      "transport": "streamable-http",
+      "headers": {
+        "Authorization": "Bearer ${SUPERHUMAN_DOCS_MCP_TOKEN}"
+      }
+    }
+  }
+}

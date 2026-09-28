@@ -1,0 +1,20 @@
+{
+  "id": "excalidraw",
+  "name": "Excalidraw",
+  "description": "Diagram creation and rendering through Excalidraw's official MCP service.",
+  "categories": [
+    "media"
+  ],
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "mcpServers": {
+    "excalidraw": {
+      "url": "https://mcp.excalidraw.com/mcp",
+      "transport": "streamable-http"
+    }
+  }
+}

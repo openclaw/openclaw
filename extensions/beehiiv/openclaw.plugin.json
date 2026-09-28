@@ -1,0 +1,21 @@
+{
+  "id": "beehiiv",
+  "name": "beehiiv",
+  "description": "Newsletter publications and subscriber data through beehiiv's official MCP service.",
+  "categories": [
+    "sales-marketing"
+  ],
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "mcpServers": {
+    "beehiiv": {
+      "url": "https://mcp.beehiiv.com/mcp",
+      "transport": "streamable-http",
+      "auth": "oauth"
+    }
+  }
+}

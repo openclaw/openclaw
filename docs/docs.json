@@ -1732,6 +1732,7 @@
                 "pages": [
                   "tools/plugin",
                   "plugins/manage-plugins",
+                  "plugins/company-services",
                   "plugins/community",
                   "plugins/bundles"
                 ]

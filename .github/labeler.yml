@@ -924,3 +924,178 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/zai/**"
+"extensions: amplemarket":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/amplemarket/**"
+          - "docs/plugins/reference/amplemarket.md"
+"extensions: attio":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/attio/**"
+          - "docs/plugins/reference/attio.md"
+"extensions: beehiiv":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/beehiiv/**"
+          - "docs/plugins/reference/beehiiv.md"
+"extensions: brevo":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/brevo/**"
+          - "docs/plugins/reference/brevo.md"
+"extensions: brex":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/brex/**"
+          - "docs/plugins/reference/brex.md"
+"extensions: buffer":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/buffer/**"
+          - "docs/plugins/reference/buffer.md"
+"extensions: calendly":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/calendly/**"
+          - "docs/plugins/reference/calendly.md"
+"extensions: clay":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/clay/**"
+          - "docs/plugins/reference/clay.md"
+"extensions: craft":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/craft/**"
+          - "docs/plugins/reference/craft.md"
+"extensions: customerio":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/customerio/**"
+          - "docs/plugins/reference/customerio.md"
+"extensions: excalidraw":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/excalidraw/**"
+          - "docs/plugins/reference/excalidraw.md"
+"extensions: fathom":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/fathom/**"
+          - "docs/plugins/reference/fathom.md"
+"extensions: fireflies":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/fireflies/**"
+          - "docs/plugins/reference/fireflies.md"
+"extensions: github-mcp":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/github-mcp/**"
+          - "docs/plugins/reference/github-mcp.md"
+"extensions: godaddy":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/godaddy/**"
+          - "docs/plugins/reference/godaddy.md"
+"extensions: guru":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/guru/**"
+          - "docs/plugins/reference/guru.md"
+"extensions: hunter":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/hunter/**"
+          - "docs/plugins/reference/hunter.md"
+"extensions: intercom":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/intercom/**"
+          - "docs/plugins/reference/intercom.md"
+"extensions: jotform":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/jotform/**"
+          - "docs/plugins/reference/jotform.md"
+"extensions: klaviyo":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/klaviyo/**"
+          - "docs/plugins/reference/klaviyo.md"
+"extensions: mailerlite":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/mailerlite/**"
+          - "docs/plugins/reference/mailerlite.md"
+"extensions: mem":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/mem/**"
+          - "docs/plugins/reference/mem.md"
+"extensions: mercury":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/mercury/**"
+          - "docs/plugins/reference/mercury.md"
+"extensions: notion":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/notion/**"
+          - "docs/plugins/reference/notion.md"
+"extensions: otter":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/otter/**"
+          - "docs/plugins/reference/otter.md"
+"extensions: posthog":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/posthog/**"
+          - "docs/plugins/reference/posthog.md"
+"extensions: readwise":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/readwise/**"
+          - "docs/plugins/reference/readwise.md"
+"extensions: statsig":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/statsig/**"
+          - "docs/plugins/reference/statsig.md"
+"extensions: superhuman-docs":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/superhuman-docs/**"
+          - "docs/plugins/reference/superhuman-docs.md"
+"extensions: tinyfish":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/tinyfish/**"
+          - "docs/plugins/reference/tinyfish.md"
+"extensions: todoist":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/todoist/**"
+          - "docs/plugins/reference/todoist.md"
+"extensions: typeform":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/typeform/**"
+          - "docs/plugins/reference/typeform.md"
+"extensions: upwork":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/upwork/**"
+          - "docs/plugins/reference/upwork.md"
+"extensions: workable":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/workable/**"
+          - "docs/plugins/reference/workable.md"
+"extensions: wrike":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/wrike/**"
+          - "docs/plugins/reference/wrike.md"

@@ -1,0 +1,25 @@
+{
+  "name": "@openclaw/customerio",
+  "version": "2026.9.6",
+  "private": true,
+  "description": "OpenClaw Customer.io MCP plugin",
+  "type": "module",
+  "license": "MIT",
+  "author": {
+    "name": "OpenClaw"
+  },
+  "homepage": "https://docs.openclaw.ai/plugins/company-services",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw",
+    "directory": "extensions/customerio"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

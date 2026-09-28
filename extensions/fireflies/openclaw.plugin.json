@@ -1,0 +1,23 @@
+{
+  "id": "fireflies",
+  "name": "Fireflies",
+  "description": "Meeting transcripts and summaries through Fireflies's official MCP service.",
+  "categories": [
+    "inbox-collaboration"
+  ],
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "mcpServers": {
+    "fireflies": {
+      "url": "https://api.fireflies.ai/mcp",
+      "transport": "streamable-http",
+      "headers": {
+        "Authorization": "Bearer ${FIREFLIES_API_KEY}"
+      }
+    }
+  }
+}

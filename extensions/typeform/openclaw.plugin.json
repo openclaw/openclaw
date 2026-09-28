@@ -1,0 +1,21 @@
+{
+  "id": "typeform",
+  "name": "Typeform",
+  "description": "Forms and responses through Typeform's official MCP service.",
+  "categories": [
+    "productivity"
+  ],
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "mcpServers": {
+    "typeform": {
+      "url": "https://api.typeform.com/mcp",
+      "transport": "streamable-http",
+      "auth": "oauth"
+    }
+  }
+}

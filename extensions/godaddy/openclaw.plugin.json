@@ -1,0 +1,20 @@
+{
+  "id": "godaddy",
+  "name": "GoDaddy Domains",
+  "description": "Public domain suggestions and availability through GoDaddy Domains's official MCP service.",
+  "categories": [
+    "infrastructure"
+  ],
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "mcpServers": {
+    "godaddy": {
+      "url": "https://api.godaddy.com/v1/domains/mcp",
+      "transport": "streamable-http"
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "id": "brex",
+  "name": "Brex",
+  "description": "Company spending and financial account data through Brex's official MCP service.",
+  "categories": [
+    "finance-payments"
+  ],
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "mcpServers": {
+    "brex": {
+      "url": "https://api.brex.com/mcp",
+      "transport": "streamable-http",
+      "auth": "oauth"
+    }
+  }
+}

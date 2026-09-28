@@ -50,7 +50,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Core npm package
 
-63 plugins
+98 plugins
 
 - **[a2a](/plugins/reference/a2a)** (`@openclaw/a2a`) - included in OpenClaw. A2A v1.0 Agent-to-Agent protocol channel plugin.
 
@@ -62,21 +62,37 @@ Each entry lists the package, distribution route, and description.
 
 - **[alibaba](/plugins/reference/alibaba)** (`@openclaw/alibaba-provider`) - included in OpenClaw. Adds video generation provider support.
 
+- **[amplemarket](/plugins/reference/amplemarket)** (`@openclaw/amplemarket`) - included in OpenClaw. Sales prospecting and account research through Amplemarket's official MCP service.
+
 - **[anthropic](/plugins/reference/anthropic)** (`@openclaw/anthropic-provider`) - included in OpenClaw. Anthropic models, Claude CLI, and native Claude session catalog.
 
 - **[apple-fm](/plugins/reference/apple-fm)** (`@openclaw/apple-fm-provider`) - included in OpenClaw. On-device Apple Intelligence inference for lightweight setup and short tasks.
+
+- **[attio](/plugins/reference/attio)** (`@openclaw/attio`) - included in OpenClaw. CRM records and relationship workflows through Attio's official MCP service.
 
 - **[azure-speech](/plugins/reference/azure-speech)** (`@openclaw/azure-speech`) - included in OpenClaw. Azure AI Speech text-to-speech (MP3, native Ogg/Opus voice notes, PCM telephony).
 
 - **[beam](/plugins/reference/beam)** (`@openclaw/beam`) - included in OpenClaw. Read-only coding-session Beam receiver.
 
+- **[beehiiv](/plugins/reference/beehiiv)** (`@openclaw/beehiiv`) - included in OpenClaw. Newsletter publications and subscriber data through beehiiv's official MCP service.
+
 - **[bonjour](/plugins/reference/bonjour)** (`@openclaw/bonjour`) - included in OpenClaw. Advertise the local OpenClaw gateway over Bonjour/mDNS.
 
+- **[brevo](/plugins/reference/brevo)** (`@openclaw/brevo`) - included in OpenClaw. Customer messaging and contact data through Brevo's official MCP service.
+
+- **[brex](/plugins/reference/brex)** (`@openclaw/brex`) - included in OpenClaw. Company spending and financial account data through Brex's official MCP service.
+
 - **[browser](/plugins/reference/browser)** (`@openclaw/browser-plugin`) - included in OpenClaw. Adds agent-callable tools.
+
+- **[buffer](/plugins/reference/buffer)** (`@openclaw/buffer`) - included in OpenClaw. Social accounts and publishing workflows through Buffer's official MCP service.
+
+- **[calendly](/plugins/reference/calendly)** (`@openclaw/calendly`) - included in OpenClaw. Scheduling and event types through Calendly's official MCP service.
 
 - **[canvas](/plugins/reference/canvas)** (`@openclaw/canvas-plugin`) - included in OpenClaw. Presents hosted widget documents on paired macOS panels.
 
 - **[clawrouter](/plugins/reference/clawrouter)** (`@openclaw/clawrouter`) - included in OpenClaw. Adds ClawRouter model provider support to OpenClaw.
+
+- **[clay](/plugins/reference/clay)** (`@openclaw/clay`) - included in OpenClaw. Sales research and enrichment workflows through Clay's official MCP service.
 
 - **[code-mode-quickjs](/plugins/reference/code-mode-quickjs)** (`@openclaw/code-mode-quickjs`) - included in OpenClaw. Hardened JavaScript execution for Code Mode using QuickJS in WebAssembly.
 
@@ -84,7 +100,11 @@ Each entry lists the package, distribution route, and description.
 
 - **[crabbox](/plugins/reference/crabbox)** (`@openclaw/crabbox-provider`) - included in OpenClaw. Cloud worker provider and lease-backed sandbox backend for the Crabbox CLI.
 
+- **[craft](/plugins/reference/craft)** (`@openclaw/craft`) - included in OpenClaw. Documents and workspace content through Craft's official MCP service.
+
 - **[cua-computer](/plugins/reference/cua-computer)** (`@openclaw/cua-computer`) - included in OpenClaw. Experimental CUA Driver computer control for macOS, Windows, and Linux node hosts.
+
+- **[customerio](/plugins/reference/customerio)** (`@openclaw/customerio`) - included in OpenClaw. Customer messaging and workspace data through Customer.io's official MCP service.
 
 - **[deepgram](/plugins/reference/deepgram)** (`@openclaw/deepgram-provider`) - included in OpenClaw. Deepgram audio transcription with Nova and Flux models, plus realtime speech recognition.
 
@@ -94,9 +114,15 @@ Each entry lists the package, distribution route, and description.
 
 - **[elevenlabs](/plugins/reference/elevenlabs)** (`@openclaw/elevenlabs-speech`) - included in OpenClaw. Adds media understanding provider support. Adds realtime transcription provider support. Adds text-to-speech provider support.
 
+- **[excalidraw](/plugins/reference/excalidraw)** (`@openclaw/excalidraw`) - included in OpenClaw. Diagram creation and rendering through Excalidraw's official MCP service.
+
 - **[fal](/plugins/reference/fal)** (`@openclaw/fal-provider`) - included in OpenClaw. Adds fal model provider support to OpenClaw.
 
+- **[fathom](/plugins/reference/fathom)** (`@openclaw/fathom`) - included in OpenClaw. Meeting summaries and transcripts through Fathom's official MCP service.
+
 - **[file-transfer](/plugins/reference/file-transfer)** (`@openclaw/file-transfer`) - included in OpenClaw. Fetch, list, and write files on paired nodes via dedicated node commands. Bypasses bash stdout truncation by using base64 over node.invoke for binaries up to 16 MB.
+
+- **[fireflies](/plugins/reference/fireflies)** (`@openclaw/fireflies`) - included in OpenClaw. Meeting transcripts and summaries through Fireflies's official MCP service.
 
 - **[geolocation](/plugins/reference/geolocation)** (`@openclaw/geolocation-plugin`) - included in OpenClaw. Resolves client IP addresses to a coarse city using a locally cached IP-geolocation database.
 
@@ -104,11 +130,25 @@ Each entry lists the package, distribution route, and description.
 
 - **[github-copilot](/plugins/reference/github-copilot)** (`@openclaw/github-copilot-provider`) - included in OpenClaw. Adds GitHub Copilot model provider support to OpenClaw.
 
+- **[github-mcp](/plugins/reference/github-mcp)** (`@openclaw/github-mcp`) - included in OpenClaw. Repositories, issues, and pull requests through GitHub MCP's official MCP service.
+
+- **[godaddy](/plugins/reference/godaddy)** (`@openclaw/godaddy`) - included in OpenClaw. Public domain suggestions and availability through GoDaddy Domains's official MCP service.
+
 - **[google](/plugins/reference/google)** (`@openclaw/google-plugin`) - included in OpenClaw. Adds Google, Google Gemini CLI, Google Vertex model provider support to OpenClaw.
+
+- **[guru](/plugins/reference/guru)** (`@openclaw/guru`) - included in OpenClaw. Company knowledge and cards through Guru's official MCP service.
 
 - **[huggingface](/plugins/reference/huggingface)** (`@openclaw/huggingface-provider`) - included in OpenClaw. Adds Hugging Face model provider support to OpenClaw.
 
+- **[hunter](/plugins/reference/hunter)** (`@openclaw/hunter`) - included in OpenClaw. Company and contact discovery through Hunter's official MCP service.
+
 - **[imap](/plugins/reference/imap)** (`@openclaw/imap`) - included in OpenClaw. Watch IMAP mailboxes and dispatch authenticated incoming email to isolated agent sessions.
+
+- **[intercom](/plugins/reference/intercom)** (`@openclaw/intercom`) - included in OpenClaw. Customer support conversations and knowledge through Intercom's official MCP service.
+
+- **[jotform](/plugins/reference/jotform)** (`@openclaw/jotform`) - included in OpenClaw. Forms and submissions through Jotform's official MCP service.
+
+- **[klaviyo](/plugins/reference/klaviyo)** (`@openclaw/klaviyo`) - included in OpenClaw. Marketing accounts and campaign data through Klaviyo's official MCP service.
 
 - **[linux-node](/plugins/reference/linux-node)** (`@openclaw/linux-node`) - included in OpenClaw. Desktop notifications, camera capture, and location for Linux node hosts.
 
@@ -120,9 +160,15 @@ Each entry lists the package, distribution route, and description.
 
 - **[logbook](/plugins/reference/logbook)** (`@openclaw/logbook`) - included in OpenClaw. Automatic work journal: captures periodic screen snapshots from a paired node and turns them into a reviewable timeline of your day.
 
+- **[mailerlite](/plugins/reference/mailerlite)** (`@openclaw/mailerlite`) - included in OpenClaw. Email marketing and subscriber data through MailerLite's official MCP service.
+
+- **[mem](/plugins/reference/mem)** (`@openclaw/mem`) - included in OpenClaw. Notes and personal knowledge through Mem's official MCP service.
+
 - **[memory-core](/plugins/reference/memory-core)** (`@openclaw/memory-core`) - included in OpenClaw. Adds agent-callable tools.
 
 - **[memory-wiki](/plugins/reference/memory-wiki)** (`@openclaw/memory-wiki`) - included in OpenClaw. Persistent wiki compiler and Obsidian-friendly knowledge vault for OpenClaw.
+
+- **[mercury](/plugins/reference/mercury)** (`@openclaw/mercury`) - included in OpenClaw. Banking account and transaction data through Mercury's official MCP service.
 
 - **[microsoft](/plugins/reference/microsoft)** (`@openclaw/microsoft-speech`) - included in OpenClaw. Adds text-to-speech provider support.
 
@@ -133,6 +179,8 @@ Each entry lists the package, distribution route, and description.
 - **[migrate-hermes](/plugins/reference/migrate-hermes)** (`@openclaw/migrate-hermes`) - included in OpenClaw. Imports Hermes configuration, memories, skills, and supported credentials into OpenClaw.
 
 - **[minimax](/plugins/reference/minimax)** (`@openclaw/minimax-provider`) - included in OpenClaw. Adds MiniMax, MiniMax Portal model provider support to OpenClaw.
+
+- **[notion](/plugins/reference/notion)** (`@openclaw/notion`) - included in OpenClaw. Workspace pages and databases through Notion's official MCP service.
 
 - **[nvidia](/plugins/reference/nvidia)** (`@openclaw/nvidia-provider`) - included in OpenClaw. Adds NVIDIA model provider support to OpenClaw.
 
@@ -148,7 +196,13 @@ Each entry lists the package, distribution route, and description.
 
 - **[openrouter](/plugins/reference/openrouter)** (`@openclaw/openrouter-provider`) - included in OpenClaw. Adds OpenRouter model provider support to OpenClaw.
 
+- **[otter](/plugins/reference/otter)** (`@openclaw/otter`) - included in OpenClaw. Meeting transcripts and summaries through Otter.ai's official MCP service.
+
 - **[policy](/plugins/reference/policy)** (`@openclaw/policy`) - included in OpenClaw. Adds policy-backed doctor checks for workspace conformance.
+
+- **[posthog](/plugins/reference/posthog)** (`@openclaw/posthog`) - included in OpenClaw. Product analytics and project data through PostHog's official MCP service.
+
+- **[readwise](/plugins/reference/readwise)** (`@openclaw/readwise`) - included in OpenClaw. Reading highlights and saved documents through Readwise's official MCP service.
 
 - **[reef](/plugins/reference/reef)** (`@openclaw/reef`) - included in OpenClaw. Guarded end-to-end encrypted claw channel.
 
@@ -160,13 +214,25 @@ Each entry lists the package, distribution route, and description.
 
 - **[sglang](/plugins/reference/sglang)** (`@openclaw/sglang-provider`) - included in OpenClaw. Adds SGLang model provider support to OpenClaw.
 
+- **[statsig](/plugins/reference/statsig)** (`@openclaw/statsig`) - included in OpenClaw. Feature gates and experiment data through Statsig's official MCP service.
+
+- **[superhuman-docs](/plugins/reference/superhuman-docs)** (`@openclaw/superhuman-docs`) - included in OpenClaw. Documents and structured workspace data through Superhuman Docs's official MCP service.
+
 - **[talk-voice](/plugins/reference/talk-voice)** (`openclaw`) - included in OpenClaw. Manage Talk voice selection (list/set).
 
 - **[telegram](/plugins/reference/telegram)** (`@openclaw/telegram`) - included in OpenClaw. OpenClaw Telegram channel plugin.
 
+- **[tinyfish](/plugins/reference/tinyfish)** (`@openclaw/tinyfish`) - included in OpenClaw. Web research and browser automation through TinyFish's official MCP service.
+
+- **[todoist](/plugins/reference/todoist)** (`@openclaw/todoist`) - included in OpenClaw. Tasks and projects through Todoist's official MCP service.
+
 - **[together](/plugins/reference/together)** (`@openclaw/together-provider`) - included in OpenClaw. Adds Together model provider support to OpenClaw.
 
 - **[tts-local-cli](/plugins/reference/tts-local-cli)** (`@openclaw/tts-local-cli`) - included in OpenClaw. Adds text-to-speech provider support.
+
+- **[typeform](/plugins/reference/typeform)** (`@openclaw/typeform`) - included in OpenClaw. Forms and responses through Typeform's official MCP service.
+
+- **[upwork](/plugins/reference/upwork)** (`@openclaw/upwork`) - included in OpenClaw. Freelance work and account information through Upwork's official MCP service.
 
 - **[vault](/plugins/reference/vault)** (`@openclaw/vault`) - included in OpenClaw. HashiCorp Vault SecretRef provider integration.
 
@@ -174,7 +240,11 @@ Each entry lists the package, distribution route, and description.
 
 - **[web-readability](/plugins/reference/web-readability)** (`@openclaw/web-readability-plugin`) - included in OpenClaw. Extract readable article content from local HTML web fetch responses.
 
+- **[workable](/plugins/reference/workable)** (`@openclaw/workable`) - included in OpenClaw. Recruiting and account information through Workable's official MCP service.
+
 - **[workboard](/plugins/reference/workboard)** (`@openclaw/workboard`) - included in OpenClaw. Dashboard workboard for agent-owned issues and sessions.
+
+- **[wrike](/plugins/reference/wrike)** (`@openclaw/wrike`) - included in OpenClaw. Project and task workflows through Wrike's official MCP service.
 
 - **[xai](/plugins/reference/xai)** (`@openclaw/xai-plugin`) - included in OpenClaw. Adds xAI model provider support to OpenClaw.
 

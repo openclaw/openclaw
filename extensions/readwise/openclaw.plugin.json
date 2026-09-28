@@ -1,0 +1,21 @@
+{
+  "id": "readwise",
+  "name": "Readwise",
+  "description": "Reading highlights and saved documents through Readwise's official MCP service.",
+  "categories": [
+    "documents-files"
+  ],
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "mcpServers": {
+    "readwise": {
+      "url": "https://mcp2.readwise.io/mcp",
+      "transport": "streamable-http",
+      "auth": "oauth"
+    }
+  }
+}
