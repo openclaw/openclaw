@@ -32,7 +32,7 @@ immediately before delegation. Source-only edits can reuse the box while HEAD
 and preparation inputs remain unchanged; every run syncs the checkout.
 Older or missing receipts require stopping the owned lease and allocating a
 fresh one through the wrapper. `OPENCLAW_TESTBOX_ALLOW_STALE` cannot bypass
-these checks. Testbox requires Crabbox 0.67.0; other providers retain 0.56.0.
+these checks. All providers require Crabbox 0.67.0 or newer.
 
 The Testbox workflow registers a separate disposable checkout for native sync.
 The hydrated execution workspace stays at its original absolute path, so native

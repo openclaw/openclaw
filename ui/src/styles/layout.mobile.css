@@ -95,7 +95,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   overflow: hidden;
   overscroll-behavior: contain;
   border-radius: 0 22px 22px 0;
-  box-shadow: 0 16px 48px color-mix(in srgb, black 30%, transparent);
+  box-shadow: var(--shadow-xl);
   transform: translateX(-100%);
   opacity: 0;
   pointer-events: none;
@@ -351,7 +351,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   .shell--mobile-nav .shell-nav,
   .shell--mobile-nav.shell--nav-collapsed .shell-nav {
     width: min(86vw, 320px);
-    box-shadow: 0 16px 48px color-mix(in srgb, black 30%, transparent);
+    box-shadow: var(--shadow-xl);
   }
 
   .shell--mobile-nav .sidebar-shell {

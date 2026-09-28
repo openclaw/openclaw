@@ -117,6 +117,10 @@ it.each([true, false])(
       profile.identity,
       undefined,
     ]);
+    expect(projectPresenceViewers(payload, null, instance).map((user) => user.identity)).toEqual([
+      profile.identity,
+      undefined,
+    ]);
   },
 );
 

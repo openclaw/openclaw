@@ -4,7 +4,7 @@ import { groupPresenceUsers, presenceUserKey } from "../../../src/shared/presenc
 import type { PresenceEntry } from "../api/types.ts";
 import {
   readPresenceEntries,
-  resolveSelfPresenceUser,
+  resolveCurrentSelfUser,
   type AuthenticatedUser,
 } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
@@ -106,8 +106,11 @@ export function projectPresenceViewers(
   sessionKey?: string,
   excludeIdentities: readonly SessionParticipantIdentity[] = [],
 ): readonly PresenceViewer[] {
-  const self =
-    selfUser ?? resolveSelfPresenceUser(readPresenceEntries(value) ?? [], selfInstanceId);
+  const self = resolveCurrentSelfUser({
+    snapshotUser: selfUser,
+    presenceEntries: readPresenceEntries(value),
+    presenceInstanceId: selfInstanceId,
+  });
   const selfKey = self ? presenceUserKey(self) : undefined;
   return projectPresencePayload(value).users.filter(
     (user) =>

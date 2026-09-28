@@ -245,6 +245,17 @@ warnings, workspace status, gateway auth and health, and supervisors.
   <Accordion title="17. Gateway runtime best practices">
     Doctor accepts Bun 1.4+ runtimes that provide WAL-reset-safe `node:sqlite` and warns when the gateway service runs on an older or unsafe Bun or a version-managed Node path (`nvm`, `fnm`, `volta`, `asdf`, etc.). Supported Bun services, whether recorded or pinned, are retained. A pinned runtime is never migrated. Only an unpinned, unsupported Bun is offered migration to a supported system Node, with interactive approval. Update-driven Doctor runs never migrate the runtime. If no supported Node is available, the service stays on Bun and Doctor warns. Version-manager paths can break after upgrades because the service does not load your shell init. Doctor can offer to migrate an unpinned version-managed Node to a supported system Node install (Homebrew/apt/choco).
 
+    When reinstalling an existing but unloaded service without a wrapper or runtime
+    pin, Doctor defaults its runtime picker to the supported recorded Node or Bun.
+    Keeping that runtime retains its executable without creating a pin; choosing
+    the other runtime selects a new executable. An unavailable or unsupported
+    recorded runtime falls back to the fresh-install default of Node, or the running supported Bun without creating a pin when no supported Node is found and no explicit runtime, pin, or wrapper is set.
+
+    Doctor uses that same suggestion for its non-interactive runtime fallback.
+    Choosing Node explicitly still fails before installation if no supported Node
+    is available; it does not silently substitute Bun. This does not change when
+    Doctor requires confirmation to install a service.
+
     Explicit runtime-path pins are retained during service repair.
     Doctor still checks their runtime capabilities, but does not migrate a valid
     pin away from a version manager. Replace or remove an invalid pin with

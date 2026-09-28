@@ -451,9 +451,7 @@ src/commands/onboarding-plugin-install.ts
 src/commands/status.test.ts
 src/config/config-misc.test.ts
 src/config/config.plugin-validation.test.ts
-src/config/io.observe-recovery.test.ts
 src/config/io.write-config.test.ts
-src/config/io.write-prepare.test.ts
 src/config/io.write-prepare.ts
 src/config/mutate.test.ts
 src/config/mutate.ts
@@ -471,7 +469,6 @@ src/context-engine/context-engine.test.ts
 src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts
 src/cron/isolated-agent/delivery-target.test.ts
 src/cron/isolated-agent/run-executor.ts
-src/cron/isolated-agent/run.message-tool-policy.test.ts
 src/cron/isolated-agent/run.test-harness.ts
 src/cron/service/ops.test.ts
 src/cron/service/timer.regression.test.ts

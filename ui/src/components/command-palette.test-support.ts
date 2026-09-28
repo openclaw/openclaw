@@ -62,6 +62,7 @@ export function createGateway(
     connectionRevision: 0,
     eventLog: [],
     eventLogRevision: 0,
+    loadSelfProfile: async () => null,
     connect: () => undefined,
     setSessionKey: () => undefined,
     start: () => undefined,
