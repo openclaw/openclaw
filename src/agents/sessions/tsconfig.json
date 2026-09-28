@@ -3,7 +3,10 @@
   "compilerOptions": {
     // Explicit source augmentations span the repository; native TSGo otherwise
     // infers this leaf directory and rejects those roots before linting.
-    "rootDir": "../../.."
+    "rootDir": "../../..",
+    // The parent graph imports these shared ambient libraries transitively.
+    // Preserve collection iterators and Intl without rooting unrelated UI tests.
+    "lib": ["DOM", "DOM.Iterable", "ES2023", "ES2025.Iterator", "ESNext.Intl"]
   },
   // Retain source-wide module augmentations when narrowing this editor/lint graph.
   "files": [

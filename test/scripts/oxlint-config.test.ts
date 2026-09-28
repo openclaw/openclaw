@@ -1026,6 +1026,15 @@ describe("oxlint config", () => {
     writeSessionCompatibilityFixture(root);
     fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
     const owner = "src/agents/sessions";
+    // Reproduce the broad graph's transitive standard-library references.
+    write(
+      "src/unrelated-library-owner.ts",
+      '/// <reference lib="es2025.iterator" />\n/// <reference lib="esnext.intl" />\nexport {};',
+    );
+    write(
+      owner + "/library-contract.ts",
+      'export const iterator = Iterator.from([1]).map(value => value + 1);\nexport const date = new Intl.DateTimeFormat().format(Temporal.PlainDate.from("2026-01-01"));',
+    );
     const contract = owner + "/contract.ts";
     write(contract, "export interface Contract {} export declare const contract: Contract;");
     const augmenters = [
@@ -1128,6 +1137,22 @@ describe("oxlint config", () => {
       path.resolve(root, "src/config/sessions/session-entry.test-compat.d.ts"),
     );
     expect(roots).not.toContain(path.resolve(root, owner, "unrelated.test-compat.d.ts"));
+    const libraryCheck = spawnSync(
+      process.execPath,
+      [
+        path.resolve("node_modules/typescript/bin/tsc"),
+        "-p",
+        owner + "/tsconfig.json",
+        "--noEmit",
+        "--incremental",
+        "false",
+        "--pretty",
+        "false",
+      ],
+      { cwd: root, encoding: "utf8", timeout: 10_000 },
+    );
+    expect(libraryCheck.error).toBeUndefined();
+    expect(libraryCheck.status, libraryCheck.stdout + libraryCheck.stderr).toBe(0);
     const reports = [baseline, narrowed].map((result) => {
       expect(result.error).toBeUndefined();
       expect(result.status, result.stdout + result.stderr).toBe(1);
