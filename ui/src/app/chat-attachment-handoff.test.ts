@@ -61,6 +61,50 @@ afterEach(() => {
 });
 
 describe("chat attachment route handoff", () => {
+  it("keeps prepared target metadata connection-scoped without taking live composer payloads", () => {
+    const fixture = createApplicationGateway();
+    const { gateway } = fixture;
+    const owner = { recoveryScope: "owner-a", recoveryScopeReady: true } as GatewayBrowserClient;
+    fixture.publish({ ...gateway.snapshot, phase: "connected", client: owner });
+    const handoff = createChatAttachmentHandoff(gateway);
+    const liveAttachment = storedAttachment("live-picker-draft", "text/plain", false);
+    const key = { owner, paneId: "new-session-draft", scopeKey: "target" };
+    const data = {
+      agentId: "main",
+      requestedAgentId: "main",
+      catalogId: "codex",
+      catalogLabel: "Codex",
+      model: "",
+      startTerminal: true,
+      terminalHosts: [{ hostId: "gateway:local", label: "Gateway" }],
+    };
+    let current = true;
+    const prepare = () =>
+      handoff.prepare({
+        ...key,
+        reviewPrivateDraft: reviewPrivateComposerDraft,
+        attachments: [],
+        fallbacks: {},
+        newSessionTarget: { data, isCurrent: () => current },
+      });
+    try {
+      prepare();
+      expect(handoff.peekNewSessionTarget(key)).toBe(data);
+      expect(handoff.retainedAttachmentIds([liveAttachment])).toEqual(new Set());
+      current = false;
+      expect(handoff.peekNewSessionTarget(key)).toBeUndefined();
+      expect(handoff.consume(key)).toBeNull();
+      expect(getChatAttachmentDataUrl(liveAttachment)).not.toBeNull();
+      current = true;
+      prepare();
+      Object.assign(gateway, { connectionRevision: gateway.connectionRevision + 1 });
+      expect(handoff.peekNewSessionTarget(key)).toBeUndefined();
+    } finally {
+      handoff.dispose();
+    }
+    expect(getChatAttachmentDataUrl(liveAttachment)).not.toBeNull();
+  });
+
   it.each(["same owner", "new credentials", "new authenticated owner"] as const)(
     "retains private handoff reload protection only for %s",
     (replacement) => {

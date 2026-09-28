@@ -25,6 +25,42 @@ function capacityCaption(row: Element | null | undefined) {
 }
 
 describe("Where chip", () => {
+  it.each([0, 1, 2])(
+    "keeps the native Where picker with %i eligible hosts and no unsupported placements",
+    (count) => {
+      const hosts = [
+        { hostId: "gateway:local", label: "Gateway" },
+        { hostId: "node:chosen", label: "Workstation" },
+      ].slice(0, count);
+      const onSelect = vi.fn();
+      const container = renderPicker(
+        true,
+        undefined,
+        {},
+        {
+          gatewayName: "My Gateway",
+          nativeTarget: { hosts, hostId: "gateway:local", onSelect },
+        },
+      );
+      expect(container.querySelector("#new-session-where-trigger")?.textContent).toContain(
+        "My Gateway",
+      );
+      expect(container.querySelectorAll("wa-popover .session-menu__item")).toHaveLength(count);
+      expect(container.querySelector('[data-value="cloud:aws"]')).toBeNull();
+      expect(container.querySelector('[data-value="device:runner"]')).toBeNull();
+      if (count === 0) {
+        expect(container.querySelector("wa-popover [role=status]")?.textContent).toContain(
+          "No native CLI is available",
+        );
+      } else {
+        container
+          .querySelector<HTMLButtonElement>('[data-value="' + hosts.at(-1)!.hostId + '"]')!
+          .click();
+        expect(onSelect).toHaveBeenCalledExactlyOnceWith(hosts.at(-1)!.hostId);
+      }
+    },
+  );
+
   it("shows device and cloud skeletons while the catalog loads", () => {
     const container = renderPicker(
       true,

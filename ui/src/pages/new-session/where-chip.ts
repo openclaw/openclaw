@@ -142,6 +142,11 @@ function renderEnvironmentSkeletons(section: "devices" | "cloud") {
 
 export function renderWhereChip(params: {
   idPrefix?: string;
+  nativeTarget?: {
+    hosts: readonly { hostId: string; label: string }[];
+    hostId: string;
+    onSelect: (hostId: string) => void;
+  };
   autoPlacementMode?: "least-busy" | "eligible-order";
   state: WhereChipState;
   gatewayName: string;
@@ -175,8 +180,14 @@ export function renderWhereChip(params: {
   const cloudPresentation = resolveCloudProfileIcon(
     params.state.cloudProfiles.find((profile) => profile.id === params.cloudProfileId),
   );
-  const icon =
-    params.state.kind === "cloud"
+  const native = params.nativeTarget;
+  const nativeHost = native?.hosts.find((host) => host.hostId === native.hostId);
+  const nativeLocal = native?.hostId === "gateway:local";
+  const icon = native
+    ? nativeLocal
+      ? icons.home
+      : icons.monitor
+    : params.state.kind === "cloud"
       ? cloudPresentation.icon
       : params.state.kind === "local"
         ? icons.home
@@ -186,9 +197,15 @@ export function renderWhereChip(params: {
               params.state.devices.find((device) => device.deviceId === params.deviceId),
             );
   const localName = params.gatewayName.trim() || t("newSession.local");
-  const label = params.state.kind === "local" ? localName : params.state.label;
+  const label = native
+    ? nativeLocal
+      ? localName
+      : (nativeHost?.label ?? t("newSession.chooseNativeHost"))
+    : params.state.kind === "local"
+      ? localName
+      : params.state.label;
   const configurationSummary =
-    params.state.kind === "cloud"
+    !native && params.state.kind === "cloud"
       ? [
           params.state.operatingSystems.find((os) => os.id === params.state.selectedOsId)?.label,
           params.state.cloudMachines.find(
@@ -341,204 +358,242 @@ export function renderWhereChip(params: {
         }
       }}
     >
-      <div class="new-session-page__environment-layout">
-        <div class="new-session-page__picker-root new-session-page__environment-picker">
-          <label class="new-session-page__environment-search">
-            <span aria-hidden="true">${icons.search}</span>
-            <input
-              type="search"
-              autofocus
-              aria-label=${t("newSession.environmentSearchPlaceholder")}
-              placeholder=${t("newSession.environmentSearchPlaceholder")}
-              .value=${params.environmentQuery}
-              ?disabled=${busy}
-              @input=${(event: Event) => {
-                if (event.currentTarget instanceof HTMLInputElement) {
-                  params.onEnvironmentQueryInput(event.currentTarget.value);
+      ${
+        native
+          ? html`
+              <div class="new-session-page__picker-root new-session-page__environment-picker">
+                ${
+                  native.hosts.length
+                    ? native.hosts.map((host) =>
+                        renderSessionMenuItem(
+                          {
+                            value: host.hostId,
+                            label: host.hostId === "gateway:local" ? localName : host.label,
+                            icon: host.hostId === "gateway:local" ? icons.home : icons.monitor,
+                            compact: true,
+                            checked: host.hostId === native.hostId,
+                            onSelect: () => native.onSelect(host.hostId),
+                          },
+                          busy,
+                        ),
+                      )
+                    : html`<div class="new-session-page__environment-empty" role="status">
+                        ${t("newSession.nativeHostsUnavailable")}
+                      </div>`
                 }
-              }}
-            />
-          </label>
-          <div ${ref(bindScrollFade)} class="new-session-page__environment-list">
-            ${
-              showLocal || devices.length || showAuto
-                ? html`<div
-                    class="new-session-page__environment-heading new-session-page__devices-heading"
-                  >
-                    <span>${t("newSession.yourDevices")}</span>
+              </div>
+            `
+          : html`
+              <div class="new-session-page__environment-layout">
+                <div class="new-session-page__picker-root new-session-page__environment-picker">
+                  <label class="new-session-page__environment-search">
+                    <span aria-hidden="true">${icons.search}</span>
+                    <input
+                      type="search"
+                      autofocus
+                      aria-label=${t("newSession.environmentSearchPlaceholder")}
+                      placeholder=${t("newSession.environmentSearchPlaceholder")}
+                      .value=${params.environmentQuery}
+                      ?disabled=${busy}
+                      @input=${(event: Event) => {
+                        if (event.currentTarget instanceof HTMLInputElement) {
+                          params.onEnvironmentQueryInput(event.currentTarget.value);
+                        }
+                      }}
+                    />
+                  </label>
+                  <div ${ref(bindScrollFade)} class="new-session-page__environment-list">
                     ${
-                      params.isAdmin
-                        ? html`<button
-                            type="button"
-                            class="new-session-page__connect-device"
-                            data-action="connect-machine"
-                            aria-label=${t("newSession.connectMachine")}
-                            ?disabled=${busy}
-                            @click=${params.onConnectMachine}
+                      showLocal || devices.length || showAuto
+                        ? html`<div
+                            class="new-session-page__environment-heading new-session-page__devices-heading"
                           >
-                            ${connectDeviceIcon}
-                          </button>`
+                            <span>${t("newSession.yourDevices")}</span>
+                            ${
+                              params.isAdmin
+                                ? html`<button
+                                    type="button"
+                                    class="new-session-page__connect-device"
+                                    data-action="connect-machine"
+                                    aria-label=${t("newSession.connectMachine")}
+                                    ?disabled=${busy}
+                                    @click=${params.onConnectMachine}
+                                  >
+                                    ${connectDeviceIcon}
+                                  </button>`
+                                : nothing
+                            }
+                          </div>`
                         : nothing
                     }
-                  </div>`
-                : nothing
-            }
-            ${
-              showAuto
-                ? html`<openclaw-tooltip
-                    class="new-session-page__environment-details"
-                    placement="right-start"
-                  >
-                    <button
-                      type="button"
-                      class="session-menu__item new-session-page__environment-option"
-                      data-value="auto-device"
-                      data-popover="close"
-                      aria-pressed=${String(params.autoDevice === true)}
-                      aria-description=${autoHelp}
-                      ?disabled=${
-                        busy ||
-                        (!params.autoDevice && Boolean(params.state.autoDeviceDisabledReason))
-                      }
-                      @click=${params.onSelectAutoDevice}
-                    >
-                      <span class="session-menu__icon" aria-hidden="true">${devicePoolIcon}</span>
-                      <span class="session-menu__text">${t("newSession.autoDeviceChoose")}</span>
-                      <span class="session-menu__check" aria-hidden="true"
-                        >${params.autoDevice ? icons.check : nothing}</span
-                      >
-                    </button>
-                    <div slot="content" class="new-session-page__environment-card">
-                      <strong>${t("newSession.autoDeviceChoose")}</strong>
-                      <div class="new-session-page__card-row">
-                        <span class="new-session-page__card-icon" aria-hidden="true"
-                          >${icons.info}</span
-                        >
-                        <span>${autoHelp}</span>
-                      </div>
-                    </div>
-                  </openclaw-tooltip>`
-                : nothing
-            }
-            ${
-              showLocal
-                ? renderSessionMenuItem(
-                    {
-                      value: "gateway",
-                      label: localName,
-                      icon: icons.home,
-                      summary: t("newSession.runsOnGateway"),
-                      compact: true,
-                      checked: params.state.kind === "local",
-                      onSelect: () => params.onSelectDevice(""),
-                    },
-                    busy,
-                  )
-                : nothing
-            }
-            ${repeat(
-              devices,
-              (device) => device.deviceId,
-              (device) => {
-                return renderSessionMenuItem(
-                  {
-                    value: `device:${device.deviceId}`,
-                    label: device.label,
-                    sub: device.subtitle,
-                    icon: environmentDeviceIcon(device),
-                    platform: device.platform ? prettifyPlatform(device.platform) : undefined,
-                    capabilityLabels: environmentCapabilityLabels(device.capabilities),
-                    hideDetails: device.hideDetails,
-                    remediation: device.remediation,
-                    capacityLabel:
-                      device.selectable && device.workerSlots
-                        ? t("newSession.concurrentSessionsValue", {
-                            used: String(device.workerSlots.total - device.workerSlots.available),
-                            total: String(device.workerSlots.total),
-                          })
-                        : undefined,
-                    compact: true,
-                    checked: params.state.kind === "device" && params.deviceId === device.deviceId,
-                    disabled: !device.selectable,
-                    title: device.disabledReason,
-                    onSelect: () => params.onSelectDevice(device.deviceId),
-                  },
-                  busy,
-                );
-              },
-            )}
-            ${showDeviceSkeletons ? renderEnvironmentSkeletons("devices") : nothing}
-            ${
-              cloudProfiles.length || showMissingCloud || showCloudSkeletons
-                ? html`<div
-                    class="new-session-page__environment-heading new-session-page__devices-heading"
-                  >
-                    <span>${t("newSession.cloud")}</span>
                     ${
-                      params.isAdmin && !showCloudSkeletons
-                        ? html`<button
-                            type="button"
-                            class="new-session-page__connect-device"
-                            data-action="manage-cloud-workers"
-                            aria-label=${t("newSession.manageCloudWorkers")}
-                            ?disabled=${busy}
-                            @click=${params.onManageCloudWorkers}
+                      showAuto
+                        ? html`<openclaw-tooltip
+                            class="new-session-page__environment-details"
+                            placement="right-start"
                           >
-                            ${connectDeviceIcon}
-                          </button>`
+                            <button
+                              type="button"
+                              class="session-menu__item new-session-page__environment-option"
+                              data-value="auto-device"
+                              data-popover="close"
+                              aria-pressed=${String(params.autoDevice === true)}
+                              aria-description=${autoHelp}
+                              ?disabled=${
+                                busy ||
+                                (!params.autoDevice &&
+                                  Boolean(params.state.autoDeviceDisabledReason))
+                              }
+                              @click=${params.onSelectAutoDevice}
+                            >
+                              <span class="session-menu__icon" aria-hidden="true"
+                                >${devicePoolIcon}</span
+                              >
+                              <span class="session-menu__text"
+                                >${t("newSession.autoDeviceChoose")}</span
+                              >
+                              <span class="session-menu__check" aria-hidden="true"
+                                >${params.autoDevice ? icons.check : nothing}</span
+                              >
+                            </button>
+                            <div slot="content" class="new-session-page__environment-card">
+                              <strong>${t("newSession.autoDeviceChoose")}</strong>
+                              <div class="new-session-page__card-row">
+                                <span class="new-session-page__card-icon" aria-hidden="true"
+                                  >${icons.info}</span
+                                >
+                                <span>${autoHelp}</span>
+                              </div>
+                            </div>
+                          </openclaw-tooltip>`
                         : nothing
                     }
-                  </div>`
-                : nothing
-            }
-            ${renderCloudProfileMenuItems({
-              profiles: cloudProfiles,
-              selectedId: params.cloudProfileId,
-              selectedOs: params.state.selectedOsId,
-              selectedMachine: params.state.selectedMachineId,
-              onSelectOs: params.onSelectCloudOs,
-              onSelectMachine: params.onSelectCloudMachine,
-              submitting: busy,
-              compact: true,
-              disabled: Boolean(params.cloudDisabledReason),
-              disabledReason: params.cloudDisabledReason,
-              profileDisabledReason: params.cloudProfileDisabledReason,
-              onSelect: params.onSelectCloudProfile,
-            })}
-            ${showCloudSkeletons ? renderEnvironmentSkeletons("cloud") : nothing}
-            ${
-              showMissingCloud
-                ? renderSessionMenuItem(
-                    {
-                      value: `cloud:${params.cloudProfileId}`,
-                      label: params.cloudProfileId,
-                      icon: icons.cloud,
-                      description: t("newSession.catalogUnavailable"),
+                    ${
+                      showLocal
+                        ? renderSessionMenuItem(
+                            {
+                              value: "gateway",
+                              label: localName,
+                              icon: icons.home,
+                              summary: t("newSession.runsOnGateway"),
+                              compact: true,
+                              checked: params.state.kind === "local",
+                              onSelect: () => params.onSelectDevice(""),
+                            },
+                            busy,
+                          )
+                        : nothing
+                    }
+                    ${repeat(
+                      devices,
+                      (device) => device.deviceId,
+                      (device) => {
+                        return renderSessionMenuItem(
+                          {
+                            value: `device:${device.deviceId}`,
+                            label: device.label,
+                            sub: device.subtitle,
+                            icon: environmentDeviceIcon(device),
+                            platform: device.platform
+                              ? prettifyPlatform(device.platform)
+                              : undefined,
+                            capabilityLabels: environmentCapabilityLabels(device.capabilities),
+                            hideDetails: device.hideDetails,
+                            remediation: device.remediation,
+                            capacityLabel:
+                              device.selectable && device.workerSlots
+                                ? t("newSession.concurrentSessionsValue", {
+                                    used: String(
+                                      device.workerSlots.total - device.workerSlots.available,
+                                    ),
+                                    total: String(device.workerSlots.total),
+                                  })
+                                : undefined,
+                            compact: true,
+                            checked:
+                              params.state.kind === "device" && params.deviceId === device.deviceId,
+                            disabled: !device.selectable,
+                            title: device.disabledReason,
+                            onSelect: () => params.onSelectDevice(device.deviceId),
+                          },
+                          busy,
+                        );
+                      },
+                    )}
+                    ${showDeviceSkeletons ? renderEnvironmentSkeletons("devices") : nothing}
+                    ${
+                      cloudProfiles.length || showMissingCloud || showCloudSkeletons
+                        ? html`<div
+                            class="new-session-page__environment-heading new-session-page__devices-heading"
+                          >
+                            <span>${t("newSession.cloud")}</span>
+                            ${
+                              params.isAdmin && !showCloudSkeletons
+                                ? html`<button
+                                    type="button"
+                                    class="new-session-page__connect-device"
+                                    data-action="manage-cloud-workers"
+                                    aria-label=${t("newSession.manageCloudWorkers")}
+                                    ?disabled=${busy}
+                                    @click=${params.onManageCloudWorkers}
+                                  >
+                                    ${connectDeviceIcon}
+                                  </button>`
+                                : nothing
+                            }
+                          </div>`
+                        : nothing
+                    }
+                    ${renderCloudProfileMenuItems({
+                      profiles: cloudProfiles,
+                      selectedId: params.cloudProfileId,
+                      selectedOs: params.state.selectedOsId,
+                      selectedMachine: params.state.selectedMachineId,
+                      onSelectOs: params.onSelectCloudOs,
+                      onSelectMachine: params.onSelectCloudMachine,
+                      submitting: busy,
                       compact: true,
-                      checked: true,
-                      disabled: true,
-                      title: t("newSession.catalogUnavailable"),
-                      onSelect: () => undefined,
-                    },
-                    busy,
-                  )
-                : nothing
-            }
-            ${
-              !showLocal &&
-              devices.length === 0 &&
-              cloudProfiles.length === 0 &&
-              !showMissingCloud &&
-              !showDeviceSkeletons &&
-              !showCloudSkeletons
-                ? html`<div class="new-session-page__environment-empty" role="status">
-                    ${t("newSession.environmentSearchEmpty")}
-                  </div>`
-                : nothing
-            }
-          </div>
-        </div>
-      </div>
+                      disabled: Boolean(params.cloudDisabledReason),
+                      disabledReason: params.cloudDisabledReason,
+                      profileDisabledReason: params.cloudProfileDisabledReason,
+                      onSelect: params.onSelectCloudProfile,
+                    })}
+                    ${showCloudSkeletons ? renderEnvironmentSkeletons("cloud") : nothing}
+                    ${
+                      showMissingCloud
+                        ? renderSessionMenuItem(
+                            {
+                              value: `cloud:${params.cloudProfileId}`,
+                              label: params.cloudProfileId,
+                              icon: icons.cloud,
+                              description: t("newSession.catalogUnavailable"),
+                              compact: true,
+                              checked: true,
+                              disabled: true,
+                              title: t("newSession.catalogUnavailable"),
+                              onSelect: () => undefined,
+                            },
+                            busy,
+                          )
+                        : nothing
+                    }
+                    ${
+                      !showLocal &&
+                      devices.length === 0 &&
+                      cloudProfiles.length === 0 &&
+                      !showMissingCloud &&
+                      !showDeviceSkeletons &&
+                      !showCloudSkeletons
+                        ? html`<div class="new-session-page__environment-empty" role="status">
+                            ${t("newSession.environmentSearchEmpty")}
+                          </div>`
+                        : nothing
+                    }
+                  </div>
+                </div>
+              </div>
+            `
+      }
     </wa-popover>
   `;
 }

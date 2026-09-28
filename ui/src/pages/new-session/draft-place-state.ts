@@ -1,6 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { FsListDirResult } from "../../../../packages/gateway-protocol/src/index.js";
-import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
@@ -15,7 +14,7 @@ import type { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftRepositoryController } from "./draft-repository-state.ts";
 import type { PendingPlacementPlace } from "./draft-session-placement.ts";
 import { DraftRestoredFolderValidation } from "./folder-validation.ts";
-import { newSessionSearch, type NewSessionRouteData } from "./location.ts";
+import type { NewSessionRouteData } from "./location.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 import {
   resolveNewSessionFolderPreference,
@@ -27,56 +26,24 @@ import type { DraftRemoteProject } from "./project-chip.ts";
 
 registerNewSessionSetupEnglish();
 
-type DraftPlaceSnapshot = Readonly<{
-  context: ApplicationContext | undefined;
-  data: NewSessionRouteData | undefined;
-  submitting: boolean;
-  pendingPlacementSessionKey: string;
-}>;
-
 type DraftPlaceCallbacks = {
   requestUpdate: () => void;
   onError: (error: string | null) => void;
   onClearError: (error: string) => void;
+  onTargetSelect?: (data: NewSessionRouteData, isCurrent: () => boolean) => Promise<boolean>;
 };
 
 export class DraftPlaceState {
-  terminalHostId = "gateway:local";
-  private terminalHostInitialized = false;
+  readonly catalogSelection: catalog.CatalogTargetSelection;
 
-  get terminalOnNode(): boolean {
-    return this.terminalHostId.startsWith("node:");
+  get data(): NewSessionRouteData | undefined {
+    return this.catalogSelection.data;
   }
 
-  selectTerminalHost(hostId: string) {
-    if (this.read().submitting) {
-      return;
-    }
-    this.terminalHostInitialized = true;
-    if (hostId === this.terminalHostId) {
-      return;
-    }
-    this.terminalHostId = hostId;
-    this.folderValidation.cancel();
-    this.browser.clearProjectSelection();
-    this.repositoryState.reset();
-    this.folderValue = this.terminalOnNode ? "" : this.workspacePath();
-    this.folderSelectedByUser = true;
-    if (!this.terminalOnNode) {
-      this.repositoryState.load();
-    }
-    this.callbacks.requestUpdate();
+  private snapshot(): catalog.CatalogDraftOwnerSnapshot {
+    return { ...this.read(), data: this.data };
   }
 
-  synchronizeTerminalHosts() {
-    const hosts = this.read().data?.terminalHosts;
-    if (this.terminalHostInitialized || !hosts?.length) {
-      return;
-    }
-    this.selectTerminalHost(
-      hosts.find((host) => host.hostId === this.terminalHostId)?.hostId ?? hosts[0]!.hostId,
-    );
-  }
   private agentIdValue = "";
   private folderValue = "";
   private freshWorkspaceValue = true;
@@ -100,9 +67,29 @@ export class DraftPlaceState {
   constructor(
     private readonly gateway: DraftGatewayState,
     readonly browser: DraftPlaceBrowser,
-    private readonly read: () => DraftPlaceSnapshot,
+    private readonly read: () => catalog.CatalogDraftOwnerSnapshot,
     private readonly callbacks: DraftPlaceCallbacks,
   ) {
+    this.catalogSelection = new catalog.CatalogTargetSelection(
+      () => ({
+        ...this.read(),
+        agentId: this.agentIdValue,
+        agentAvailable: Boolean(this.selectedAgent()),
+        remotePlacement: this.remotePlacement,
+      }),
+      callbacks.onTargetSelect,
+      callbacks.requestUpdate,
+      () => {
+        this.folderValidation.cancel();
+        this.browser.clearProjectSelection();
+        this.repositoryState.reset();
+        this.folderValue = this.catalogSelection.terminalOnNode ? "" : this.workspacePath();
+        this.folderSelectedByUser = true;
+        if (!this.catalogSelection.terminalOnNode) {
+          this.repositoryState.load();
+        }
+      },
+    );
     this.folderValidation = new DraftRestoredFolderValidation(
       () => ({
         gateway: this.read().context?.gateway.snapshot,
@@ -142,10 +129,21 @@ export class DraftPlaceState {
     this.modelControl = new NewSessionModelControl(
       callbacks.requestUpdate,
       (selection) => this.persistPreference(selection),
-      (catalogId) =>
-        this.read().context?.navigate("new-session", {
-          search: newSessionSearch(this.agentIdValue, { catalogId }),
-        }),
+      async (catalogId, ownsSelection) => {
+        const accepted = await this.catalogSelection.selectCatalogTarget(catalogId, ownsSelection);
+        if (accepted === true) {
+          this.callbacks.onError(null);
+        }
+        return accepted;
+      },
+      (model, ownsSelection) => {
+        void this.catalogSelection.selectModelTarget(model, ownsSelection).then((accepted) => {
+          if (accepted) {
+            this.callbacks.onError(null);
+          }
+        });
+      },
+      () => this.catalogSelection.transitionPending,
     );
   }
 
@@ -241,7 +239,7 @@ export class DraftPlaceState {
   }
 
   adoptGroupDefaults() {
-    if (this.read().data?.groupStatus !== "resolved" || !this.canAdoptGroupDefaults()) {
+    if (this.data?.groupStatus !== "resolved" || !this.canAdoptGroupDefaults()) {
       return;
     }
     this.adoptAgentDefaults({ preserveSelectedAgent: true });
@@ -326,7 +324,7 @@ export class DraftPlaceState {
   adoptAgentDefaults(
     options: { preserveSelectedAgent?: boolean; preserveSelectedFolder?: boolean } = {},
   ) {
-    const snapshot = this.read();
+    const snapshot = this.snapshot();
     const agents = this.agents();
     const configuredDefault = snapshot.context?.agents.state.agentsList?.defaultId;
     const fallback = agents.some((agent) => agent.id === configuredDefault)
@@ -338,12 +336,22 @@ export class DraftPlaceState {
       this.agentIdValue = catalog.resolveAgentId(snapshot.data, agents, fallback);
       this.agentSelectedByUser = false;
     }
+    const preference = this.agentIdValue ? this.gateway.readPreference(this.agentIdValue) : null;
+    this.modelControl.load(snapshot.context, this.agentIdValue, true, {
+      agent: this.selectedAgent(),
+      preference,
+      initialModel: this.routeModelIntentActive
+        ? catalog.requestedModelForAgent(snapshot.data, this.agentIdValue)
+        : undefined,
+    });
     // Node directories belong to the native host, never Gateway preferences or Git discovery.
-    if (catalog.isTarget(snapshot.data) && this.terminalOnNode) {
+    if (catalog.isTarget(snapshot.data) && this.catalogSelection.terminalOnNode) {
+      this.modelControl.load(snapshot.context, this.agentIdValue, true, {
+        agent: this.selectedAgent(),
+      });
       this.callbacks.requestUpdate();
       return;
     }
-    const preference = this.agentIdValue ? this.gateway.readPreference(this.agentIdValue) : null;
     const keepSelectedFolder = options.preserveSelectedFolder && this.folderSelectedByUser;
     if (!keepSelectedFolder && !snapshot.pendingPlacementSessionKey) {
       const workspace = this.workspacePath();
@@ -377,13 +385,6 @@ export class DraftPlaceState {
     if (this.remotePlacement) {
       this.repositoryState.forceWorktree(true);
     }
-    this.modelControl.load(snapshot.context, this.agentIdValue, !catalog.isTarget(snapshot.data), {
-      agent: this.selectedAgent(),
-      preference,
-      initialModel: this.routeModelIntentActive
-        ? catalog.requestedModelForAgent(snapshot.data, this.agentIdValue)
-        : undefined,
-    });
     if (this.preferredProjectRestore) {
       this.folderValidation.cancel();
     } else if (
@@ -414,9 +415,8 @@ export class DraftPlaceState {
   }
 
   resetDraft() {
+    this.catalogSelection.reset();
     this.routeModelIntentActive = true;
-    this.terminalHostId = "gateway:local";
-    this.terminalHostInitialized = false;
     this.agentSelectedByUser = false;
     this.folderValue = "";
     this.browser.clearProjectSelection();
@@ -428,6 +428,7 @@ export class DraftPlaceState {
   }
 
   invalidateGatewayDiscovery(resetHostSelection: boolean) {
+    this.catalogSelection.clear();
     this.repositoryState.invalidate();
     this.agentsHydratedValue = false;
     this.modelControl.invalidate(resetHostSelection);
@@ -486,7 +487,7 @@ export class DraftPlaceState {
   }
 
   selectAgentId(agentId: string) {
-    const snapshot = this.read();
+    const snapshot = this.snapshot();
     if (
       snapshot.submitting ||
       snapshot.pendingPlacementSessionKey ||
@@ -509,7 +510,7 @@ export class DraftPlaceState {
   }
 
   applyFolder(folder: string) {
-    const snapshot = this.read();
+    const snapshot = this.snapshot();
     if (snapshot.submitting || snapshot.pendingPlacementSessionKey) {
       return;
     }
@@ -521,7 +522,7 @@ export class DraftPlaceState {
     this.folderSelectedByUser = true;
     this.projectSelectedByUser = true;
     this.preferredProjectRestore = "";
-    if (catalog.isTarget(snapshot.data) && this.terminalOnNode) {
+    if (catalog.isTarget(snapshot.data) && this.catalogSelection.terminalOnNode) {
       this.callbacks.requestUpdate();
       return;
     }
@@ -538,7 +539,7 @@ export class DraftPlaceState {
   }
 
   selectNewWorkspace() {
-    const snapshot = this.read();
+    const snapshot = this.snapshot();
     if (snapshot.submitting || snapshot.pendingPlacementSessionKey || !this.remotePlacement) {
       return;
     }
@@ -575,7 +576,7 @@ export class DraftPlaceState {
   }
 
   private selectProject(selection: Parameters<DraftPlaceBrowser["selectProject"]>[0]) {
-    const snapshot = this.read();
+    const snapshot = this.snapshot();
     if (snapshot.submitting || snapshot.pendingPlacementSessionKey) {
       return;
     }
@@ -602,7 +603,7 @@ export class DraftPlaceState {
   }
 
   selectDevice(deviceId: string, autoDevice = false) {
-    const snapshot = this.read();
+    const snapshot = this.snapshot();
     if (snapshot.submitting || snapshot.pendingPlacementSessionKey) {
       return;
     }
@@ -639,7 +640,7 @@ export class DraftPlaceState {
   }
 
   selectCloudProfile(profileId: string) {
-    const snapshot = this.read();
+    const snapshot = this.snapshot();
     const profile = this.gateway.cloudProfiles.find((candidate) => candidate.id === profileId);
     if (
       snapshot.submitting ||

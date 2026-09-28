@@ -16,6 +16,7 @@ import { isWorktreeNameValid } from "./create-params.ts";
 import { renderDraftError } from "./draft-body.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
+import type { NewSessionRouteData } from "./location.ts";
 import { resolveNewSessionMentionDirectory } from "./mention-directory.ts";
 import type { NewSessionModelControl } from "./model-control.ts";
 
@@ -25,25 +26,12 @@ export function renderNewSessionDraftErrors(
   place: Pick<DraftPlaceState, "worktree" | "worktreeName">,
   submission: Pick<
     DraftSubmissionFlow,
-    | "submissionOutcomeUnknown"
-    | "pendingPlacement"
-    | "clearPendingPlacementRecovery"
-    | "capabilities"
+    "submissionOutcomeUnknown" | "pendingPlacement" | "clearPendingPlacementRecovery"
   >,
-  isCatalogTarget: boolean,
 ) {
   const worktreeNameInvalid = place.worktree && !isWorktreeNameValid(place.worktreeName);
-  const capabilities = submission.capabilities;
   return html`
     ${worktreeNameInvalid ? renderDraftError(t("newSession.worktreeNameInvalid")) : nothing}
-    ${
-      isCatalogTarget && capabilities.toolOverrides
-        ? renderDraftError(t("newSession.terminalCapabilityOverridesUnsupported"), {
-            label: t("common.reset"),
-            onClick: () => capabilities.setToolOverrides(null),
-          })
-        : nothing
-    }
     ${
       submission.submissionOutcomeUnknown
         ? renderDraftError(
@@ -86,7 +74,7 @@ export function renderNewSessionDraftComposer(
     attachmentDraft: NewSessionAttachmentDraft;
     context: ApplicationContext | undefined;
     draftOwnerKey: string;
-    isCatalogTarget: boolean;
+    catalogTarget?: NewSessionRouteData;
     modelControl: NewSessionModelControl;
     permissionControl?: TemplateResult;
   },
@@ -125,14 +113,13 @@ export function renderNewSessionDraftComposer(
       return options.message;
     },
     mentionDirectory,
-    modelControl: options.isCatalogTarget
-      ? nothing
-      : options.modelControl.render({
-          agent: options.agent,
-          agentId: options.agentId,
-          context: options.context,
-          sending: options.submitting,
-        }),
+    modelControl: options.modelControl.render({
+      agent: options.agent,
+      agentId: options.agentId,
+      context: options.context,
+      sending: options.submitting || options.messageLocked === true,
+      catalogTarget: options.catalogTarget,
+    }),
     pendingAttachmentReads: options.attachmentDraft.pendingReads,
     attachmentReads: options.attachmentDraft.reads,
     readSignal,

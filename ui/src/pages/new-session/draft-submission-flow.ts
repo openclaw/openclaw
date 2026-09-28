@@ -394,6 +394,11 @@ export class DraftSubmissionFlow {
   }
 
   async submit(startup?: DraftStartupResumption, backgroundRequested = false) {
+    if (this.place.catalogSelection.transitionPending) {
+      // The pending picker and disabled submit control already explain this brief handoff.
+      return;
+    }
+    this.place.modelControl.cancelCatalogSelection();
     if (!startup && catalog.isTarget(this.read().data)) {
       return this.startInTerminal();
     }

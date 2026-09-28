@@ -3,6 +3,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { resolveAgentId, resolveCreateTarget } from "./catalog-target.ts";
+import { preparedTarget } from "./draft-navigation-handoff.ts";
 import { takeInstantThreadRestore } from "./instant-thread-restore.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { newSessionModelLocationFromSearch } from "./model-location.ts";
@@ -15,6 +16,10 @@ export async function load(
   const restored = cause && cause !== "preload" && takeInstantThreadRestore(context, search);
   if (restored) {
     return restored;
+  }
+  const selected = cause === "navigation" && preparedTarget(context, search);
+  if (selected) {
+    return selected;
   }
   const requestedLocation = newSessionModelLocationFromSearch(search);
   const requestedAgentId = requestedLocation.agentId.trim();

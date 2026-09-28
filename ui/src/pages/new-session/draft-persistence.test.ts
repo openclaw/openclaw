@@ -5,11 +5,18 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
 import { canReloadControlUiDocument } from "../../app/document-reload-guard.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
+import { getChatAttachmentDataUrl } from "../chat/attachment-payload-store.ts";
 import { reviewPrivateComposerDraft } from "../chat/components/private-composer-recovery-dialog.ts";
+import { routeKey } from "./catalog-target.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
-import { restoreDraft, retainDraft } from "./draft-navigation-handoff.ts";
+import {
+  completeTargetTransition,
+  prepareTargetTransition,
+  restoreDraft,
+  retainDraft,
+} from "./draft-navigation-handoff.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
-import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
+import { createDraftFixture, registerTextPayload } from "./draft-submission-flow.test-support.ts";
 import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 
 type StoreReadResult =
@@ -111,6 +118,84 @@ afterEach(() => {
 });
 
 describe("NewSessionDraftPersistence restore race", () => {
+  it("moves a mounted picker draft into a new route mutation without handing away its attachments", async () => {
+    const { context, flow } = createDraftFixture();
+    const handoff = createChatAttachmentHandoff(context.gateway);
+    Object.assign(context, { chatAttachmentHandoff: handoff });
+    const data = {
+      agentId: "main",
+      requestedAgentId: "main",
+      catalogId: "codex",
+      catalogLabel: "Codex",
+      model: "",
+      startTerminal: true,
+    };
+    const destination = routeKey(data);
+    const attachment = registerTextPayload("picker-live-custody");
+    flow.draftPersistence.setOwner("ws://gateway.example", "principal-a");
+    flow.draftPersistence.selectRoute("source-route");
+    flow.setMessage("Keep this prompt");
+    flow.attachmentDraft.replace([attachment]);
+    const source = flow.draftPersistence.captureSubmission();
+    store.readDurableComposerDraft.mockResolvedValueOnce({ status: "not-found" });
+    try {
+      prepareTargetTransition(context, data, () => true);
+      expect(handoff.retainedAttachmentIds([attachment])).toEqual(new Set());
+      expect(completeTargetTransition(context, flow, destination)).toBe(true);
+      const transferred = flow.draftPersistence.captureSubmission();
+      expect(transferred.scope?.scopeKey).toBe(destination);
+      expect(transferred.mutation).not.toBe(source.mutation);
+      expect(flow.message).toBe("Keep this prompt");
+      expect(flow.attachmentDraft.attachments).toEqual([attachment]);
+      handoff.dispose();
+      expect(getChatAttachmentDataUrl(attachment)).not.toBeNull();
+      await Promise.all([...source.mutation.writes, ...transferred.mutation.writes]);
+    } finally {
+      flow.disconnect();
+      handoff.dispose();
+    }
+  });
+
+  it.each(["normal", "incognito"] as const)(
+    "retains a %s picker draft for a cold remount under the destination route",
+    async (visibility) => {
+      const { context, flow: source } = createDraftFixture();
+      const handoff = createChatAttachmentHandoff(context.gateway);
+      Object.assign(context, { chatAttachmentHandoff: handoff });
+      const target = createFlow();
+      const attachment = registerTextPayload("picker-remount-" + visibility);
+      source.draftPersistence.setOwner("ws://gateway.example", "principal-a");
+      source.draftPersistence.selectRoute("source-route");
+      source.setVisibility(visibility);
+      source.setMessage("Keep on remount");
+      source.attachmentDraft.replace([attachment]);
+      try {
+        retainDraft(context, source, "source-route", "source-route", "destination-route");
+        expect(source.attachmentDraft.attachments).toEqual([]);
+        expect(handoff.retainedAttachmentIds([attachment])).toEqual(new Set([attachment.id]));
+        source.disconnect();
+        if (visibility === "normal") {
+          store.readDurableComposerDraft.mockResolvedValueOnce({ status: "not-found" });
+        }
+        restoreDraft(context, target, "destination-route", "");
+        expect(target.message).toBe("Keep on remount");
+        expect(target.visibility).toBe(visibility);
+        expect(target.attachmentDraft.attachments).toEqual([attachment]);
+        expect(getChatAttachmentDataUrl(attachment)).not.toBeNull();
+        const transferred = target.draftPersistence.captureSubmission();
+        expect(transferred.scope?.scopeKey).toBe("destination-route");
+        await Promise.all(transferred.mutation.writes);
+        if (visibility === "incognito") {
+          expect(store.writeDurableComposerSnapshot).not.toHaveBeenCalled();
+        }
+      } finally {
+        source.disconnect();
+        target.disconnect();
+        handoff.dispose();
+      }
+    },
+  );
+
   it("preserves a newer edit when stored attachment hydration succeeds late", async () => {
     const flow = createFlow();
     const hydrationEntered = createDeferred();

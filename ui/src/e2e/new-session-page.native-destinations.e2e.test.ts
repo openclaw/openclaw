@@ -15,6 +15,7 @@ import {
   createNewSessionPageE2eSuite,
   installMockGateway,
   navigateInApp,
+  openEnvironmentPicker,
   pollLocatorText,
   WORKSPACE,
 } from "./new-session-page.test-support.ts";
@@ -204,27 +205,34 @@ suite.define(() => {
       });
       try {
         await page.goto(`${suite.server.baseUrl}new?agent=main&catalog=${id}`);
-        await pollLocatorText(page.locator(".new-session-page__runtime")).toContain(label);
-        const destination = page.getByRole("combobox", { name: "Where", exact: true });
-        expect(await destination.count()).toBe(0);
+        await pollLocatorText(page.locator('[data-chat-model-select="true"]')).toContain(label);
+        const destination = page.locator("#new-session-where-trigger");
+        const destinations = page.locator("wa-popover.new-session-page__where-popover");
+        expect(await destination.count()).toBe(1);
         expect(await page.getByRole("button", { name: "Refresh", exact: true }).count()).toBe(0);
         const message = page.locator(".new-session-page__message");
         await message.fill("Keep this draft on the selected machine");
 
         await gateway.setMethodResponse("sessions.catalog.list", result([local, node]));
         await gateway.emitGatewayEvent("node.runnerInventory.changed", { nodeId: "builder" });
-        await destination.waitFor();
-        await destination.selectOption(node.hostId);
+        await openEnvironmentPicker(page);
+        await destinations.locator(`[data-value="${node.hostId}"]`).click();
         const folder = page.getByRole("textbox", { name: "Existing absolute folder on this node" });
         await folder.fill("/workspace/native-project");
         expect(await page.getByRole("button", { name: "Refresh", exact: true }).count()).toBe(0);
 
         await gateway.setMethodResponse("sessions.catalog.list", result([local]));
         await gateway.emitGatewayEvent("presence", {
-          presence: [{ deviceId: "builder", reason: "disconnect" }],
+          presence: [{ deviceId: "builder", roles: ["node"], reason: "disconnect" }],
         });
-        await expect.poll(() => destination.locator("option").count()).toBe(2);
-        await expect.poll(() => destination.inputValue()).toBe(node.hostId);
+        await openEnvironmentPicker(page);
+        await expect
+          .poll(() => destinations.locator(`[data-value="${node.hostId}"]`).count())
+          .toBe(0);
+        expect(
+          await destinations.locator('[data-value="gateway:local"]').getAttribute("aria-pressed"),
+        ).toBe("false");
+        await page.keyboard.press("Escape");
         await expect.poll(() => folder.inputValue()).toBe("/workspace/native-project");
         await expect
           .poll(() =>
@@ -237,18 +245,24 @@ suite.define(() => {
         await gateway.setMethodResponse("sessions.catalog.list", result([local, node]));
         await gateway.setOnline(true);
         await waitForControlUiGatewayReady(page);
-        await expect
-          .poll(() => destination.locator(`option[value="${node.hostId}"]`).isDisabled())
-          .toBe(false);
-        await expect.poll(() => destination.inputValue()).toBe(node.hostId);
+        await pollLocatorText(destination).toContain("Build machine");
+        await openEnvironmentPicker(page);
+        const restored = destinations.locator(`[data-value="${node.hostId}"]`);
+        expect(await restored.isEnabled()).toBe(true);
+        expect(await restored.getAttribute("aria-pressed")).toBe("true");
+        await page.keyboard.press("Escape");
         expect(await message.inputValue()).toBe("Keep this draft on the selected machine");
         expect(await folder.inputValue()).toBe("/workspace/native-project");
         expect(await gateway.getRequests("sessions.catalog.startTerminal")).toHaveLength(0);
 
         await gateway.setMethodResponse("sessions.catalog.list", result([]));
         await gateway.emitGatewayEvent("config.changed", {});
-        await page.getByRole("status").filter({ hasText: "No native CLI is available" }).waitFor();
-        expect(await destination.count()).toBe(0);
+        await openEnvironmentPicker(page);
+        await destinations
+          .getByRole("status")
+          .filter({ hasText: "No native CLI is available" })
+          .waitFor();
+        expect(await destination.count()).toBe(1);
       } finally {
         await context.close();
       }
@@ -287,6 +301,19 @@ suite.define(() => {
       expect(folderBox!.x).toBeGreaterThanOrEqual(0);
       expect(folderBox!.x + folderBox!.width).toBeLessThanOrEqual(320);
       expect(await page.getByRole("combobox", { name: "Where", exact: true }).count()).toBe(0);
+      const message = page.locator(".new-session-page__message");
+      await message.fill("Keep this prompt when returning from the node");
+      await page.locator('[data-chat-model-select="true"]').click();
+      const provider = page.locator('[data-chat-model-provider-group="openai"]');
+      const toggle = provider.locator("[data-chat-model-provider-toggle]");
+      await toggle.waitFor();
+      if ((await toggle.getAttribute("aria-expanded")) === "false") {
+        await toggle.click();
+      }
+      await provider.locator("[data-chat-model-option]:visible").first().click();
+      await page.waitForURL((url) => !url.searchParams.get("catalog"));
+      expect(await message.inputValue()).toBe("Keep this prompt when returning from the node");
+      expect(await folder.count()).toBe(0);
       expect(await page.getByRole("button", { name: "Refresh", exact: true }).count()).toBe(0);
     } finally {
       await context.close();

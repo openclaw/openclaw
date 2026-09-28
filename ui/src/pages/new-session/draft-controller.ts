@@ -7,7 +7,6 @@ import { t } from "../../i18n/index.ts";
 import { showToast } from "../../lib/toast.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { reviewPrivateComposerDraft } from "../chat/components/private-composer-recovery-dialog.ts";
-import { isTarget as isCatalogTarget } from "./catalog-target.ts";
 import { DraftGatewayState, type DraftPreferenceOptions } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftPlaceState } from "./draft-place-state.ts";
@@ -136,6 +135,10 @@ export class NewSessionDraftController {
         onInvalidate: () => void;
         onRecoveryReady: (gatewayUrl: string, recoveryScope: string) => void;
         pickerIdPrefix?: string;
+        onTargetSelect?: (
+          data: NonNullable<DraftSubmissionSnapshot["data"]>,
+          isCurrent: () => boolean,
+        ) => Promise<boolean>;
       },
   ) {
     const requestUpdate = () => {
@@ -205,6 +208,8 @@ export class NewSessionDraftController {
       () => ({
         context: read().context,
         data: read().data,
+        isConnected: read().isConnected,
+        visibility: this.submission?.visibility ?? "normal",
         submitting: this.submission?.submitting ?? false,
         pendingPlacementSessionKey: this.submission?.pendingPlacement.sessionKey ?? "",
       }),
@@ -213,12 +218,18 @@ export class NewSessionDraftController {
         onError: (error) =>
           error === null ? this.submission.clearError() : this.submission.setError(error),
         onClearError: (error) => this.submission.clearError(error),
+        onTargetSelect: callbacks.onTargetSelect,
       },
     );
-    this.submission = new DraftSubmissionFlow(this.gateway, this.place, read, {
-      ...callbacks,
-      requestUpdate,
-    });
+    this.submission = new DraftSubmissionFlow(
+      this.gateway,
+      this.place,
+      () => ({ ...read(), data: this.place.data }),
+      {
+        ...callbacks,
+        requestUpdate,
+      },
+    );
     this.submission.draftPersistence.modelSelection = {
       read: () =>
         read().context?.config?.current.newSessionModelDefaults === "configured"
@@ -286,8 +297,8 @@ export class NewSessionDraftController {
       this.place.setAgentsHydrated(true);
       this.place.adoptAgentDefaults({ preserveSelectedAgent: true, preserveSelectedFolder: true });
     } else if (this.place.agentsHydrated && modelDefaultsPolicy !== this.modelDefaultsPolicy) {
-      const { context, data } = this.read();
-      this.place.modelControl.load(context, this.place.agentId, !isCatalogTarget(data), {
+      const { context } = this.read();
+      this.place.modelControl.load(context, this.place.agentId, true, {
         agent: this.place.selectedAgent(),
         preference: this.gateway.readPreference(this.place.agentId),
       });
@@ -302,7 +313,7 @@ export class NewSessionDraftController {
     }
     this.modelDefaultsPolicy = modelDefaultsPolicy;
     this.place.restorePreferenceSelections();
-    this.place.synchronizeTerminalHosts();
+    this.place.catalogSelection.synchronizeTerminalHosts();
   }
 
   private invalidate(resetHostSelection: boolean, outcome: SubmissionOutcomeReason) {

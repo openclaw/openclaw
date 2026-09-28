@@ -145,7 +145,10 @@ describe("new-session model runtime", () => {
       .querySelector<HTMLButtonElement>('[data-chat-model-target="anthropic"]')
       ?.click();
 
-    expect(onCatalogTargetSelect).toHaveBeenCalledExactlyOnceWith("anthropic");
+    expect(onCatalogTargetSelect).toHaveBeenCalledExactlyOnceWith(
+      "anthropic",
+      expect.any(Function),
+    );
   });
 
   it("does not discover CLI agents when the Gateway omits catalog support", async () => {

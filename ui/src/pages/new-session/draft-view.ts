@@ -65,7 +65,7 @@ export function renderNewSessionDraftView(options: {
         titlePreparation.setComposing(false);
       }}
     >
-      ${renderTargetBar()} ${renderNewSessionDraftErrors(place, submission, isCatalogTarget)}
+      ${renderTargetBar()} ${renderNewSessionDraftErrors(place, submission)}
       ${renderNewSessionDraftComposer({
         agent: place.selectedAgent(),
         agentId: place.agentId,
@@ -79,7 +79,7 @@ export function renderNewSessionDraftView(options: {
         dictationPreview: dictation.previewDraft(),
         dictationStatus: dictation.renderStatus(),
         context,
-        isCatalogTarget,
+        catalogTarget: place.data,
         draftOwnerKey,
         get message() {
           return submission.message;

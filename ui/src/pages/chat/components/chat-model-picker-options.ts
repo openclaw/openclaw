@@ -64,7 +64,7 @@ export type ChatModelPickerTargetGroup = {
   errorLabel: string;
   id: string;
   label: string;
-  options: readonly { label: string; value: string }[];
+  options: readonly { label: string; value: string; pending?: boolean; error?: string }[];
   status: "loading" | "ready" | "error";
 };
 
@@ -255,6 +255,7 @@ export function renderChatModelPickerTargetOption(params: {
   groupId: string;
   groupLabel: string;
   index: number;
+  selected?: boolean;
   onSelect: (groupId: string, value: string, event: MouseEvent) => void;
 }) {
   return html`
@@ -266,9 +267,12 @@ export function renderChatModelPickerTargetOption(params: {
       data-chat-model-name=${params.entry.label.toLocaleLowerCase()}
       data-chat-model-provider-label=${params.groupLabel.toLocaleLowerCase()}
       role="option"
-      aria-selected="false"
+      aria-selected=${String(params.selected === true)}
+      aria-busy=${String(params.entry.pending === true)}
+      title=${params.entry.error || nothing}
+      aria-label=${[params.entry.label, params.entry.error, params.entry.error ? t("lazyView.retry") : ""].filter(Boolean).join(". ")}
       type="button"
-      ?disabled=${params.disabled}
+      ?disabled=${params.disabled || params.entry.pending}
       @mouseenter=${handleModelOptionMouseEnter}
       @click=${(event: MouseEvent) => params.onSelect(params.groupId, params.entry.value, event)}
     >
@@ -281,8 +285,16 @@ export function renderChatModelPickerTargetOption(params: {
         <span class="chat-controls__model-option-title">
           <span class="chat-controls__model-option-name">${params.entry.label}</span>
         </span>
+        ${
+          params.entry.pending || params.entry.error
+            ? html`<span class="chat-controls__model-option-meta" role="status"
+                >${params.entry.error ? t("lazyView.retry") : t("common.loading")}</span
+              >`
+            : nothing
+        }
       </span>
       <span class="chat-controls__model-option-action">
+        ${params.entry.pending || params.entry.error || params.selected ? html`<span class="chat-controls__inline-select-check" aria-hidden="true">${params.entry.pending ? icons.loader : params.entry.error ? icons.alertTriangle : icons.check}</span>` : nothing}
         <kbd data-chat-model-shortcut="true" aria-hidden="true" hidden></kbd>
       </span>
     </button>

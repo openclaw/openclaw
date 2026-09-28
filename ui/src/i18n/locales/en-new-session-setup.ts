@@ -115,6 +115,8 @@ const enNewSessionSetup = {
       "No native CLI is available. Install it on the Gateway or connect a machine with CLI access, then reconnect to the Gateway.",
     nativeTerminalPrompt: "Optional initial prompt for the native CLI",
     terminalNodeFolder: "Existing absolute folder on this node",
+    terminalVisibilityUnsupported:
+      "Native CLI sessions cannot be incognito or saved as drafts. Choose a regular model to keep this draft.",
     terminalAttachmentsUnsupported:
       "Remove attachments before starting a native CLI. Add files from the terminal after it opens.",
     createOutcomeUnknown:

@@ -139,6 +139,36 @@ describe("new-session catalog target", () => {
     });
   });
 
+  it("preserves a known native route and agent when no host can start it", async () => {
+    const request = vi.fn(async () => ({
+      catalogs: [
+        {
+          id: "codex",
+          label: "Codex",
+          capabilities: { startTerminal: true },
+          hosts: [{ hostId: "node:offline", label: "Offline", canStartTerminal: false }],
+        },
+      ],
+    }));
+    const target = await resolveCreateTarget(
+      { request } as unknown as GatewayBrowserClient,
+      "codex",
+      "research",
+    );
+    expect(target).toEqual({
+      model: "",
+      catalogLabel: "Codex",
+      startTerminal: true,
+      terminalHosts: [],
+    });
+    expect(
+      allowsSelectedAgent(
+        { agentId: "research", requestedAgentId: "research", catalogId: "codex", ...target! },
+        { id: "research" },
+      ),
+    ).toBe(true);
+  });
+
   it("canonicalizes the requested agent or falls back before catalog resolution", () => {
     const target = { agentId: "Research", catalogId: "claude" };
 

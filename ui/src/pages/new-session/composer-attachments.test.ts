@@ -42,7 +42,6 @@ it.each(["owner", "tile"] as const)(
           canSubmit: attachmentDraft.pendingReads === 0,
           context: undefined,
           draftOwnerKey: "attachments",
-          isCatalogTarget: true,
           message: "Keep this draft",
           modelControl,
           requiresModifier: false,

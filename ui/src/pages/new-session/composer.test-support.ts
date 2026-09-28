@@ -76,7 +76,6 @@ export function renderComposer(
         canSubmit: overrides.canSubmit ?? true,
         context: overrides.context,
         draftOwnerKey,
-        isCatalogTarget: true,
         message,
         visibility: overrides.visibility,
         draftAvailable: overrides.draftAvailable,

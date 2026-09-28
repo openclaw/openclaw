@@ -156,6 +156,9 @@ export function resolveNewSessionSubmitBlock(
   if (host.submitting) {
     return { gate: "submitting" };
   }
+  if (place.catalogSelection.transitionPending) {
+    return { gate: "route-pending", reason: t("common.loading") };
+  }
   if (
     host.mentions.length > 0 &&
     (kind === "terminal" ||
@@ -206,6 +209,12 @@ export function resolveNewSessionSubmitBlock(
     return { gate: "access", reason: access.reason };
   }
   if (kind === "terminal") {
+    if (host.visibility !== "normal") {
+      return {
+        gate: "terminal-capabilities",
+        reason: t("newSession.terminalVisibilityUnsupported"),
+      };
+    }
     if (
       snapshot.context?.config.current.cliAgentsEnabled !== true ||
       !snapshot.context.config.current.terminalEnabled
@@ -213,7 +222,9 @@ export function resolveNewSessionSubmitBlock(
       return { gate: "terminal-capabilities", reason: t("newSession.terminalDisabled") };
     }
     if (
-      !snapshot.data?.terminalHosts?.some((candidate) => candidate.hostId === place.terminalHostId)
+      !snapshot.data?.terminalHosts?.some(
+        (candidate) => candidate.hostId === place.catalogSelection.terminalHostId,
+      )
     ) {
       return { gate: "device", reason: t("newSession.terminalHostUnavailable") };
     }
@@ -315,7 +326,7 @@ export function resolveNewSessionSubmitBlock(
   }
   if (
     kind === "terminal" &&
-    !(place.folder.trim() || (!place.terminalOnNode && place.workspacePath()))
+    !(place.folder.trim() || (!place.catalogSelection.terminalOnNode && place.workspacePath()))
   ) {
     return { gate: "terminal-folder", reason: t("newSession.terminalNeedsFolder") };
   }

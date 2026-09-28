@@ -16,6 +16,7 @@ import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capab
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import type { reviewPrivateComposerDraft } from "../pages/chat/components/private-composer-recovery-dialog.ts";
 import type { NewSessionDraftHandoff } from "../pages/new-session/draft-persistence.ts";
+import type { NewSessionRouteData } from "../pages/new-session/location.ts";
 import type { ControlUiPluginCapability } from "../plugins/control-ui-capability.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";
 import type { ApplicationChatSubmissions } from "./chat-submissions.ts";
@@ -96,6 +97,8 @@ export type ApplicationChatAttachmentHandoff = {
       replyTarget?: ChatReplyTarget | null;
       mentions?: readonly HumanMention[];
       newSessionDraft?: NewSessionDraftHandoff;
+      newSessionDraftTransfer?: true;
+      newSessionTarget?: { data: NewSessionRouteData; isCurrent: () => boolean };
       incognito?: boolean;
       reviewPrivateDraft: typeof reviewPrivateComposerDraft;
     },
@@ -109,7 +112,10 @@ export type ApplicationChatAttachmentHandoff = {
     replyTarget?: ChatReplyTarget | null;
     mentions?: readonly HumanMention[];
     newSessionDraft?: NewSessionDraftHandoff;
+    newSessionDraftTransfer?: true;
+    newSessionTarget?: { data: NewSessionRouteData; isCurrent: () => boolean };
   } | null;
+  peekNewSessionTarget(handoff: ChatAttachmentHandoffKey): NewSessionRouteData | undefined;
   retainedAttachmentIds(attachments: readonly ChatAttachment[]): ReadonlySet<string>;
   retireScope(scopeKey: string, beforeRevision: number): void;
   clearPane(paneId: string): void;
