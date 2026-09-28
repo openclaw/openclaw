@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
@@ -55,8 +57,16 @@ export async function captureUpdateDatabases(params: {
   try {
     const capture = async () => {
       params.assertCurrent();
+      let backupRoot = params.backupRoot;
+      if (execution.updateInstallKind === "git" && !execution.switchToGit) {
+        // Database recovery outlives runtime retirement and stays outside the Git source fence.
+        const artifactRoot = path.join(execution.root, ".artifacts");
+        await fs.mkdir(artifactRoot, { recursive: true });
+        params.assertCurrent();
+        backupRoot = path.join(artifactRoot, path.basename(backupRoot));
+      }
       const captured = await createUpdateDatabaseBackup({
-        backupRoot: params.backupRoot,
+        backupRoot,
         stateDir: resolveStateDir(env),
         config: source.config,
         env,
@@ -125,6 +135,7 @@ export async function restoreFailedUpdateDatabases(params: {
   runId: string;
   env: NodeJS.ProcessEnv;
   assertCurrent: () => void;
+  assertRollbackSafe?: () => Promise<void>;
   progress?: Progress;
 }): Promise<boolean> {
   const startedAt = Date.now();
@@ -146,6 +157,17 @@ export async function restoreFailedUpdateDatabases(params: {
   if (params.backup.restoreRefusal) {
     return refuse(params.backup.restoreRefusal);
   }
+  params.assertCurrent();
+  try {
+    await params.assertRollbackSafe?.();
+  } catch (error) {
+    params.assertCurrent();
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
+    return refuse(formatErrorMessage(error));
+  }
+  params.assertCurrent();
   try {
     const migratedPaths = await restoreUpdateDatabaseBackup({
       ...params,

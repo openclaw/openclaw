@@ -49,7 +49,7 @@ type GatewayLockHandle = {
   lockPath: string;
   stateLockPath: string;
   stateDir: string;
-  assertCurrent(this: void): void;
+  assertCurrent(this: void, assertPolicy?: () => void, access?: "read"): void;
   assertDatabaseAccess(this: void, databasePath: string): void;
   releaseInTree: () => Promise<void>;
   release: () => Promise<void>;
@@ -500,13 +500,18 @@ export async function acquireGatewayLock(
     log.info(`Gateway state ownership acquired after ${((now() - startedAt) / 1000).toFixed(1)} s`);
   }
   let projection: ReturnType<typeof acquireFileLockSync> | undefined;
-  const assertStateOwnerCurrent = () => {
+  const assertStateOwnerCurrent = (assertPolicy?: () => void, access?: "read") => {
     if (borrowedOwner) {
-      parentMaintenance?.assertOwnerCurrent();
+      parentMaintenance?.assertOwnerCurrent(access);
     }
     stateOwner.assertCurrent();
     if (projection && !projection.verifyStillHeld()) {
       throw new Error("OpenClaw Gateway ownership projection is no longer current");
+    }
+    if (assertPolicy) {
+      // Synchronous policy reads borrow storage custody without transferring resource ownership.
+      stateOwner.run(assertPolicy);
+      assertStateOwnerCurrent(undefined, access);
     }
   };
   const assertDatabaseAccess = (requestedPath: string) => {
@@ -517,7 +522,7 @@ export async function acquireGatewayLock(
     role === "sqlite-maintenance"
       ? createOpenClawDatabaseMaintenanceScope({
           schemaMaintenance: true,
-          assertOwnerCurrent: assertStateOwnerCurrent,
+          assertOwnerCurrent: (access) => assertStateOwnerCurrent(undefined, access),
           assertDatabaseAccess,
         })
       : undefined;

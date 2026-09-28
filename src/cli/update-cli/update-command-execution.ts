@@ -182,7 +182,7 @@ export async function executeMutableUpdate(
   let databaseCapture: Awaited<ReturnType<typeof captureUpdateDatabases>> | undefined;
   const onTransaction = async (transaction: PackageUpdateTransaction) => {
     packageTransaction = transaction;
-    if (params.updateInstallKind === "package" && originalRun) {
+    if (originalRun) {
       databaseCapture = await captureUpdateDatabases({
         backupRoot: transaction.backupRoot,
         execution: params,
@@ -645,9 +645,7 @@ export async function executeMutableUpdate(
             gitContextPrepared = true;
           }
         },
-        onTransaction: (transaction) => {
-          packageTransaction = transaction;
-        },
+        onTransaction,
         onConfigSnapshot,
         getDoctorContext,
         // Foreign inspection metadata cannot authorize backup or Doctor writes.
@@ -700,6 +698,7 @@ export async function executeMutableUpdate(
       runId: originalRun.runId,
       env: ownedManagedUpdateContext?.env ?? originalRun.env,
       assertCurrent: () => assertExecutionCurrent("restore"),
+      assertRollbackSafe: packageTransaction?.assertRollbackSafe,
       progress: params.progress,
     });
   }

@@ -140,18 +140,15 @@ export async function beginDoctorMaintenance(
       deadlineMs: stopDeadline,
     });
     try {
-      assertCallerCurrent?.();
-      owner.assertCurrent();
+      owner.assertCurrent(assertCallerCurrent);
       resources = createOpenClawDatabaseMaintenanceScope({
         schemaMaintenance: true,
         assertDatabaseAccess: owner.assertDatabaseAccess,
-        assertOwnerCurrent: () => {
-          // Policy checks read SQLite; their storage access comes from the raw process owner.
-          owner.run(() => {
+        assertOwnerCurrent: (access) => {
+          owner.assertCurrent(() => {
             assertCallerCurrent?.();
             assertUpdateAdmissionReadCurrent?.();
-            owner.assertCurrent();
-          });
+          }, access);
         },
       });
       gatewayOwner = owner;
@@ -443,7 +440,7 @@ export async function beginDoctorMaintenance(
     env,
     root: params.root ?? undefined,
     signal: exit.signal,
-    assertCurrent: () => gatewayOwner!.run(() => assertCallerCurrent?.()),
+    assertCurrent: () => gatewayOwner!.assertCurrent(assertCallerCurrent),
     warn,
   });
   try {
