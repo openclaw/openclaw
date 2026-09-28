@@ -180,7 +180,6 @@ function extractEnumValues(schema: unknown): unknown[] | undefined {
   }
   return values.length > 0 ? values : undefined;
 }
-}
 
 function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
   if (!existing) {
@@ -498,7 +497,6 @@ function normalizeArraySchemaItems(root: unknown, mode: ArrayItemsMode): unknown
   }
   return rootResult;
 }
-
 
 function normalizeToolParameterSchemaUncached(
   schema: unknown,

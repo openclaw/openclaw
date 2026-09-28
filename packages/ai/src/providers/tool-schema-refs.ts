@@ -465,11 +465,24 @@ export function canPreserveRootSchemaRefs(schema: unknown): boolean {
   ) {
     return false;
   }
-  let hasRefs = false;
+  // External schemas can nest deeper than the call stack, so the reachability scan runs on an
+  // explicit stack (#141306). A reject marker short-circuits the whole check; a leave marker
+  // drops the node from the path-local cycle set, mirroring the recursive try/finally.
+  type Pending =
+    | { kind: "visit"; node: unknown; inDefinitions: boolean }
+    | { kind: "leave"; node: object };
   const ancestors = new Set<object>();
-  function visit(node: unknown, inDefinitions = false): boolean {
+  const pending: Pending[] = [{ kind: "visit", node: schema, inDefinitions: false }];
+  let hasRefs = false;
+  let current: Pending | undefined;
+  while ((current = pending.pop()) !== undefined) {
+    if (current.kind === "leave") {
+      ancestors.delete(current.node);
+      continue;
+    }
+    const { node, inDefinitions } = current;
     if (!isSchemaRecord(node)) {
-      return true;
+      continue;
     }
     if (
       ancestors.has(node) ||
@@ -493,25 +506,28 @@ export function canPreserveRootSchemaRefs(schema: unknown): boolean {
       hasRefs ||= !inDefinitions;
     }
     ancestors.add(node);
-    try {
-      for (const [key, value] of Object.entries(node)) {
-        if (SCHEMA_MAP_KEYS.has(key) && isSchemaRecord(value)) {
-          const childInDefinitions = inDefinitions || key === "$defs" || key === "definitions";
-          if (!Object.values(value).every((entry) => visit(entry, childInDefinitions))) {
-            return false;
-          }
-        } else if (SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(value)) {
-          if (!value.every((entry) => visit(entry, inDefinitions))) {
-            return false;
-          }
-        } else if (SCHEMA_OBJECT_KEYS.has(key) && !visit(value, inDefinitions)) {
-          return false;
+    pending.push({ kind: "leave", node });
+    const children: Array<{ node: unknown; inDefinitions: boolean }> = [];
+    for (const [key, value] of Object.entries(node)) {
+      if (SCHEMA_MAP_KEYS.has(key) && isSchemaRecord(value)) {
+        const childInDefinitions = inDefinitions || key === "$defs" || key === "definitions";
+        for (const entry of Object.values(value)) {
+          children.push({ node: entry, inDefinitions: childInDefinitions });
         }
+      } else if (SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(value)) {
+        for (const entry of value) {
+          children.push({ node: entry, inDefinitions });
+        }
+      } else if (SCHEMA_OBJECT_KEYS.has(key)) {
+        children.push({ node: value, inDefinitions });
       }
-      return true;
-    } finally {
-      ancestors.delete(node);
+    }
+    for (let index = children.length - 1; index >= 0; index -= 1) {
+      const child = children[index];
+      if (child) {
+        pending.push({ kind: "visit", node: child.node, inDefinitions: child.inDefinitions });
+      }
     }
   }
-  return visit(schema) && hasRefs;
+  return hasRefs;
 }
