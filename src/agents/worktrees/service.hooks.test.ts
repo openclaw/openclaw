@@ -77,29 +77,36 @@ describe("ManagedWorktreeService repository code isolation", () => {
     await expect(fs.access(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("still executes the explicitly enabled worktree setup script", async () => {
-    const setup = path.join(repo, ".openclaw");
-    await fs.mkdir(setup);
-    await fs.writeFile(
-      path.join(setup, "worktree-setup.sh"),
-      "#!/bin/sh\nprintf setup > setup-ran.txt\n",
-      { mode: 0o755 },
-    );
+  it.each([true, false])(
+    "executes the repository setup script only when enabled (%s)",
+    async (runSetupScript) => {
+      const setup = path.join(repo, ".openclaw");
+      await fs.mkdir(setup);
+      await fs.writeFile(
+        path.join(setup, "worktree-setup.sh"),
+        "#!/bin/sh\nprintf setup > setup-ran.txt\n",
+        { mode: 0o755 },
+      );
 
-    const progress: string[] = [];
-    const created = await service.create({
-      repoRoot: repo,
-      name: "setup",
-      baseRef: "HEAD",
-      onProgress: (phase) => progress.push(phase),
-    });
+      const progress: string[] = [];
+      const created = await service.create({
+        repoRoot: repo,
+        name: "setup",
+        baseRef: "HEAD",
+        runSetupScript,
+        onProgress: (phase) => progress.push(phase),
+      });
 
-    await expect(fs.readFile(path.join(created.path, "setup-ran.txt"), "utf8")).resolves.toBe(
-      "setup",
-    );
-    await expect(fs.access(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(progress).toEqual(["checkout", "setup"]);
-  });
+      const setupOutput = path.join(created.path, "setup-ran.txt");
+      if (runSetupScript) {
+        await expect(fs.readFile(setupOutput, "utf8")).resolves.toBe("setup");
+      } else {
+        await expect(fs.access(setupOutput)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      await expect(fs.access(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(progress).toEqual(runSetupScript ? ["checkout", "setup"] : ["checkout"]);
+    },
+  );
 
   it("stops setup and removes the unbound worktree when creation is aborted", async () => {
     const setup = path.join(repo, ".openclaw");

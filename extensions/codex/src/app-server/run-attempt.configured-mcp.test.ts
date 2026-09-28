@@ -3,6 +3,8 @@ import { getEventListeners } from "node:events";
 import path from "node:path";
 import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
+import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import * as attemptContext from "./attempt-context.js";
 import * as dynamicTools from "./dynamic-tools.js";
@@ -463,4 +465,46 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     expect(mcpMocks.dispose).toHaveBeenCalledOnce();
     expect(mcpMocks.requesterDispose).toHaveBeenCalledOnce();
   });
+  it.each(["current hook policy", ""])(
+    "keeps post-hook static discovery failures visible with replacement policy %j",
+    async (systemPrompt) => {
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          { hookName: "before_prompt_build", handler: async () => ({ systemPrompt }) },
+        ]),
+      );
+      const sessionFile = path.join(tempDir, "session-static-mcp-discovery-failure.jsonl");
+      const params = createParams(
+        sessionFile,
+        path.join(tempDir, "workspace-static-mcp-discovery-failure"),
+      );
+      configureFakeMcp(params);
+      params.trigger = "cron";
+      params.toolsAllow = ["*"];
+      params.scheduledToolPolicy = { version: 1, mode: "trusted" };
+      mcpMocks.staticDiagnosticNotice =
+        "Configured MCP is incomplete for this scheduled run: fake: authentication required. " +
+        "Do not claim MCP-backed work succeeded; report this blocker to the operator.";
+
+      const harness = createStartedThreadHarness();
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
+
+      const threadStart = harness.requests.find((request) => request.method === "thread/start");
+      expect(threadStart?.params).toMatchObject({
+        developerInstructions: [systemPrompt, mcpMocks.staticDiagnosticNotice]
+          .filter(Boolean)
+          .join("\n\n"),
+      });
+      expect(harness.requests.some((request) => request.method === "thread/inject_items")).toBe(
+        false,
+      );
+      expect(mcpMocks.captureCalls).toHaveLength(1);
+      expect(mcpMocks.captureCalls[0]!.storedNames).not.toContain("fake__show");
+
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await expect(run).resolves.toBeDefined();
+      expect(mcpMocks.dispose).toHaveBeenCalledOnce();
+    },
+  );
 });

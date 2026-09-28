@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "./config.js";
 import { applyProviderConfigDefaultsForConfig } from "./provider-policy.js";
+
+function applyAnthropicDefaultsForTest(config: OpenClawConfig) {
+  return applyProviderConfigDefaultsForConfig({ provider: "anthropic", config, env: {} });
+}
 
 describe("config pruning defaults", () => {
   it("enables cache-ttl pruning + 1h cache TTL for Anthropic API keys", () => {
@@ -26,5 +31,23 @@ describe("config pruning defaults", () => {
     expect(
       cfg.agents?.defaults?.models?.["anthropic/claude-opus-4-6"]?.params?.cacheRetention,
     ).toBe("short");
+  });
+  it("does not enable contextPruning by default", () => {
+    const cfg = applyAnthropicDefaultsForTest({ agents: { defaults: {} } });
+
+    expect(cfg.agents?.defaults?.contextPruning?.mode).toBeUndefined();
+  });
+
+  it("does not override explicit contextPruning mode", () => {
+    const cfg = applyAnthropicDefaultsForTest({
+      auth: {
+        profiles: {
+          "anthropic:api": { provider: "anthropic", mode: "api_key" },
+        },
+      },
+      agents: { defaults: { contextPruning: { mode: "off" } } },
+    });
+
+    expect(cfg.agents?.defaults?.contextPruning?.mode).toBe("off");
   });
 });

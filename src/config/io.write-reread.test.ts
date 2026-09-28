@@ -160,6 +160,7 @@ describe("writeConfigFile canonical reread", () => {
 
   it.each([
     { existed: false, revoke: false },
+    { existed: true, revoke: false },
     { existed: true, revoke: true },
   ])(
     "rechecks compensation authority after reading the committed file (existed=$existed, revoke=$revoke)",
@@ -218,9 +219,15 @@ describe("writeConfigFile canonical reread", () => {
               expect.stringContaining("Rollback failed"),
             );
             expect(auditSnapshot()).toEqual(beforeAuditSnapshot);
-            await expect(fs.stat(configPath)).rejects.toMatchObject({ code: "ENOENT" });
+            if (existed) {
+              await expect(fs.readFile(configPath, "utf8")).resolves.toBe(original);
+            } else {
+              await expect(fs.stat(configPath)).rejects.toMatchObject({ code: "ENOENT" });
+            }
           }
-          expect(hash).toBe(hashConfigRaw(revoke ? String(committedRaw) : null));
+          expect(hash).toBe(
+            hashConfigRaw(revoke ? String(committedRaw) : existed ? original : null),
+          );
         }),
       );
     },

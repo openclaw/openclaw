@@ -198,6 +198,7 @@ describe("Exact removed worktree snapshot retirement", () => {
     ["ID", { id: "a0000000-0000-4000-8000-000000000099" }],
     ["snapshot namespace", { expectedSnapshotRef: "refs/heads/main" }],
     ["snapshot OID", { expectedSnapshotOid: "1".repeat(40) }],
+    ["retained source OID", { expectedRetainedSourceOid: "1".repeat(40) }],
   ] as const)("preserves custody when the expected %s does not match", async (_label, patch) => {
     await expect(retireManagedWorktreeSnapshotById({ ...request, ...patch })).rejects.toThrow(
       /snapshot identity does not match|ref OID changed/,

@@ -19,16 +19,6 @@ import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 
 setupRunAttemptTestHooks();
 
-async function createCheckpointParams(name: string) {
-  const params = createParams(path.join(tempDir, `${name}.jsonl`), path.join(tempDir, "workspace"));
-  await attachSqliteSessionTarget(
-    params,
-    path.join(tempDir, `${name}-sessions.json`),
-    `${name}-session`,
-  );
-  return params;
-}
-
 async function startCheckpointAttempt(params: ReturnType<typeof createParams>) {
   // Keep the attempt budget controlled while the real SQLite workers progress.
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
@@ -55,7 +45,15 @@ async function startCheckpointAttempt(params: ReturnType<typeof createParams>) {
 
 describe("runCodexAppServerAttempt", () => {
   it("persists completed commentary and final once when native item IDs change after streaming", async () => {
-    const params = await createCheckpointParams("identity-drift");
+    const params = createParams(
+      path.join(tempDir, "identity-drift.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    await attachSqliteSessionTarget(
+      params,
+      path.join(tempDir, "identity-drift-sessions.json"),
+      "identity-drift-session",
+    );
     const { harness, run } = await startCheckpointAttempt(params);
     // Captured from pinned rust-v0.154.0: deltas retain the started ID,
     // item/completed has a new ID, and the terminal summary repeats that new ID.
@@ -116,7 +114,15 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("checkpoints the complete native response, not the earlier execution preview", async () => {
-    const params = await createCheckpointParams("output");
+    const params = createParams(
+      path.join(tempDir, "output.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    await attachSqliteSessionTarget(
+      params,
+      path.join(tempDir, "output-sessions.json"),
+      "output-session",
+    );
     // Prepare the history reader before the attempt budget starts.
     await readCodexMirroredSessionHistoryMessages(params);
     const { harness, run } = await startCheckpointAttempt(params);
@@ -198,80 +204,99 @@ describe("runCodexAppServerAttempt", () => {
     expect((await readTranscriptMessagesByIdentity(params))[2]).toEqual(checkpoint[2]);
   });
 
-  it("checkpoints raw patch output, network provenance, and commentary", async () => {
-    const params = await createCheckpointParams("checkpoint");
-    params.config = {
-      ...params.config,
-      ui: { prefs: { chatPersistCommentary: true } },
-    };
-    const { harness, run } = await startCheckpointAttempt(params);
-    const patchId = "patch-1";
-    await harness.notify(
-      rawItemCompleted({
-        type: "custom_tool_call",
-        call_id: patchId,
-        name: "apply_patch",
-        input: "*** Begin Patch\n*** Add File: example.txt\n+saved\n*** End Patch\n",
-      }),
-    );
-    await harness.notify(
-      itemNotification("item/completed", {
-        type: "fileChange",
-        id: patchId,
-        status: "completed",
-        changes: [{ path: "example.txt", kind: { type: "add" } }],
-      }),
-    );
-    const beforeRawOutput = await readTranscriptMessagesByIdentity(params);
-    expect(beforeRawOutput.map((message) => message.role)).toEqual(["user", "assistant"]);
-    await harness.notify(
-      itemNotification("item/completed", {
-        type: "webSearch",
-        id: "search-1",
-        status: "completed",
-        query: "saved file",
-      }),
-    );
-    expect(await readTranscriptMessagesByIdentity(params)).toEqual(beforeRawOutput);
-    await harness.notify(
-      rawItemCompleted({
-        type: "custom_tool_call_output",
-        call_id: patchId,
-        output: "Success. Updated the following files:\nA example.txt",
-      }),
-    );
-    await harness.notify(
-      itemNotification("item/completed", {
-        type: "agentMessage",
-        id: "network-commentary",
-        phase: "commentary",
-        text: "The search confirms the result.",
-      }),
-    );
-    const checkpoint = await readTranscriptMessagesByIdentity(params);
-    expect(checkpoint.map((message) => message.role)).toEqual([
-      "user",
-      "assistant",
-      "toolResult",
-      "assistant",
-      "toolResult",
-      "assistant",
-    ]);
-    expect(JSON.stringify(checkpoint[2])).toContain("Success. Updated the following files:");
-    expect(checkpoint[4]).toMatchObject({ __openclaw: { resultContentSource: "network" } });
-    expect(checkpoint[5]).toMatchObject({ __openclaw: { turnTainted: true } });
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    const result = await run;
-    const finalMessages = await readTranscriptMessagesByIdentity(params);
-    for (const message of checkpoint) {
-      expect(
-        finalMessages.filter((candidate) => candidate.idempotencyKey === message.idempotencyKey),
-      ).toEqual([message]);
-    }
-    expect(
-      result.messagesSnapshot.find(
-        (message) => readMirrorIdentity(message) === "turn-1:commentary:network-commentary",
-      ),
-    ).toMatchObject({ __openclaw: { turnTainted: true } });
-  });
+  it.each([true, false])(
+    "checkpoints raw patch output and network provenance with commentary persistence %s",
+    async (persistCommentary) => {
+      const params = createParams(
+        path.join(tempDir, "checkpoint.jsonl"),
+        path.join(tempDir, "workspace"),
+      );
+      await attachSqliteSessionTarget(
+        params,
+        path.join(tempDir, "checkpoint-sessions.json"),
+        "checkpoint-session",
+      );
+      params.config = {
+        ...params.config,
+        ui: { prefs: { chatPersistCommentary: persistCommentary } },
+      };
+      const { harness, run } = await startCheckpointAttempt(params);
+      const patchId = "patch-1";
+      await harness.notify(
+        rawItemCompleted({
+          type: "custom_tool_call",
+          call_id: patchId,
+          name: "apply_patch",
+          input: "*** Begin Patch\n*** Add File: example.txt\n+saved\n*** End Patch\n",
+        }),
+      );
+      await harness.notify(
+        itemNotification("item/completed", {
+          type: "fileChange",
+          id: patchId,
+          status: "completed",
+          changes: [{ path: "example.txt", kind: { type: "add" } }],
+        }),
+      );
+      const beforeRawOutput = await readTranscriptMessagesByIdentity(params);
+      expect(beforeRawOutput.map((message) => message.role)).toEqual(["user", "assistant"]);
+      await harness.notify(
+        itemNotification("item/completed", {
+          type: "webSearch",
+          id: "search-1",
+          status: "completed",
+          query: "saved file",
+        }),
+      );
+      expect(await readTranscriptMessagesByIdentity(params)).toEqual(beforeRawOutput);
+      await harness.notify(
+        rawItemCompleted({
+          type: "custom_tool_call_output",
+          call_id: patchId,
+          output: "Success. Updated the following files:\nA example.txt",
+        }),
+      );
+      await harness.notify(
+        itemNotification("item/completed", {
+          type: "agentMessage",
+          id: "network-commentary",
+          phase: "commentary",
+          text: "The search confirms the result.",
+        }),
+      );
+      const checkpoint = await readTranscriptMessagesByIdentity(params);
+      expect(checkpoint.map((message) => message.role)).toEqual([
+        "user",
+        "assistant",
+        "toolResult",
+        "assistant",
+        "toolResult",
+        ...(persistCommentary ? ["assistant"] : []),
+      ]);
+      expect(JSON.stringify(checkpoint[2])).toContain("Success. Updated the following files:");
+      expect(checkpoint[4]).toMatchObject({ __openclaw: { resultContentSource: "network" } });
+      if (persistCommentary) {
+        expect(checkpoint[5]).toMatchObject({ __openclaw: { turnTainted: true } });
+      }
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      const result = await run;
+      const finalMessages = await readTranscriptMessagesByIdentity(params);
+      for (const message of checkpoint) {
+        expect(
+          finalMessages.filter((candidate) => candidate.idempotencyKey === message.idempotencyKey),
+        ).toEqual([message]);
+      }
+      if (persistCommentary) {
+        expect(
+          result.messagesSnapshot.find(
+            (message) => readMirrorIdentity(message) === "turn-1:commentary:network-commentary",
+          ),
+        ).toMatchObject({
+          __openclaw: { turnTainted: true },
+        });
+      } else {
+        expect(finalMessages).toEqual(checkpoint);
+      }
+    },
+  );
 });

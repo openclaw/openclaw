@@ -118,13 +118,7 @@ describe("Responses final delivery", () => {
     },
   ])(
     "preserves $name across late Responses phase updates",
-    async ({
-      prefix,
-      audioAsVoice,
-      expectedPrefix = "",
-      recoveryPrefix = "",
-      queuedDeltas = [],
-    }) => {
+    async ({ prefix, audioAsVoice, expectedPrefix = "", recoveryPrefix, queuedDeltas = [] }) => {
       const model: Model<"openai-responses"> = {
         id: "gpt-5.5",
         name: "GPT-5.5",

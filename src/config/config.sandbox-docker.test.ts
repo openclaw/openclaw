@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS,
+  resolveSandboxBrowserConfig,
   resolveSandboxDockerConfig,
 } from "../agents/sandbox/config.js";
 import { validateConfigObject } from "./validation.js";
@@ -103,5 +104,29 @@ describe("sandbox docker config", () => {
       });
       expect(sharedScope[key]).toBe(true);
     }
+  });
+  it("ignores agent browser binds under shared scope", () => {
+    const resolved = resolveSandboxBrowserConfig({
+      scope: "shared",
+      globalBrowser: { binds: ["/global:/global:ro"] },
+      agentBrowser: { binds: ["/agent:/agent:rw"] },
+    });
+    expect(resolved.binds).toEqual(["/global:/global:ro"]);
+
+    const resolvedNoGlobal = resolveSandboxBrowserConfig({
+      scope: "shared",
+      globalBrowser: {},
+      agentBrowser: { binds: ["/agent:/agent:rw"] },
+    });
+    expect(resolvedNoGlobal.binds).toBeUndefined();
+  });
+
+  it("defaults browser network to dedicated sandbox network", () => {
+    const resolved = resolveSandboxBrowserConfig({
+      scope: "agent",
+      globalBrowser: {},
+      agentBrowser: {},
+    });
+    expect(resolved.network).toBe("openclaw-sandbox-browser");
   });
 });
