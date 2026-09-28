@@ -96,6 +96,7 @@ const HOST_BUILDERS = [
     "ctx.buildContext ?? buildChannelInboundEventContext",
   ],
   ["extensions/sms/src/inbound.ts", "params.channelRuntime.inbound.buildContext"],
+  ["extensions/synology-chat/src/inbound-event.ts", "rt.channel.inbound.buildContext"],
   [
     "extensions/telegram/src/bot-message-context.session.ts",
     "sessionRuntime.buildChannelInboundEventContext",

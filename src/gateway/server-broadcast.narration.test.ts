@@ -82,6 +82,7 @@ afterEach(() => vi.useRealTimers());
 describe("narration delivery through the Gateway broadcaster", () => {
   it("paces background snapshots while preserving full foreground and lifecycle streams", () => {
     const h = harness();
+    const deadlines = vi.spyOn(globalThis, "setTimeout");
     const run = new AbortController();
     const publish = (text: string, state = "delta") =>
       h.broadcast("chat", chat(text, state), {
@@ -111,6 +112,7 @@ describe("narration delivery through the Gateway broadcaster", () => {
       publish(`Latest sentence ${index}.`);
     }
     expect(h.narration.frames.map(({ event }) => event)).toEqual(["agent", "session.narration"]);
+    expect(deadlines).toHaveBeenCalledTimes(1);
     vi.advanceTimersByTime(100);
     expect(h.narration.frames.at(-1)?.payload.text).toBe("Latest sentence 19.");
     expect(h.foreground.frames.filter(({ event }) => event === "chat")).toHaveLength(20);
