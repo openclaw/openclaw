@@ -554,6 +554,20 @@ export const PluginsInspectResultSchema = closedObject({
     }),
   ),
   credentials: Type.Optional(Type.Array(PluginCredentialDescriptorSchema)),
+  /** Stored shared OAuth state for matching plugin-owned, operator-configured HTTP servers. */
+  mcpAuth: Type.Optional(
+    Type.Array(
+      closedObject({
+        serverName: NonEmptyString,
+        state: Type.Union([
+          Type.Literal("authorized"),
+          Type.Literal("requires-authorization"),
+          Type.Literal("pending-authorization"),
+          Type.Literal("unauthenticated"),
+        ]),
+      }),
+    ),
+  ),
   decisions: Type.Optional(Type.Array(PluginDecisionProviderStatusSchema)),
   plugin: closedObject({
     id: NonEmptyString,

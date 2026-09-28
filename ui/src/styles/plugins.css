@@ -1559,3 +1559,59 @@ openclaw-plugins-page
   width: 100%;
   height: 20px;
 }
+
+.plugin-auth-alert {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  margin-bottom: 30px;
+  border: 1px solid color-mix(in srgb, var(--warn) 28%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--warn) 7%, var(--bg));
+}
+
+.plugin-auth-alert__icon {
+  display: flex;
+  flex: none;
+  color: var(--warn);
+}
+
+.plugin-auth-alert__icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.plugin-auth-alert__message {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.plugin-auth-alert__action {
+  flex: none;
+  gap: 7px;
+}
+
+.plugin-auth-alert__action svg {
+  width: 15px;
+  height: 15px;
+}
+
+@media (max-width: 560px) {
+  .plugin-auth-alert {
+    gap: 10px;
+    padding: 12px;
+    margin-bottom: 24px;
+  }
+
+  .plugin-auth-alert__message {
+    font-size: 13px;
+  }
+
+  .plugin-auth-alert__action {
+    padding-inline: 10px;
+  }
+}

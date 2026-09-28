@@ -17,6 +17,17 @@ For a shorter setup walkthrough covering Settings, the composer path (**+** → 
 
 Use the page for operator edits and quick inventory. Use `openclaw mcp doctor --probe` or `openclaw mcp probe` when you need live server proof.
 
+Installed plugins also show a sign-in alert on their detail page when a matching
+HTTP MCP server is configured with `auth: "oauth"` and its shared operator account
+has no saved credentials or requires authorization. **Connect** opens the existing
+OAuth sign-in flow; the page refreshes its saved authorization status when sign-in
+finishes. An administrator connection is required.
+
+The server name and URL must match the plugin's active MCP declaration. This
+alert does not probe service health or discover OAuth for an unconfigured URL.
+Local stdio servers, per-requester accounts, and `oauth.authProfileId` connections
+keep their existing authentication setup paths.
+
 Operator workflow:
 
 1. Open the Control UI and choose **MCP**.

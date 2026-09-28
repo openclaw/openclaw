@@ -205,6 +205,12 @@ const enPluginManagement = {
     noSettingsMatches: "No installed plugins match this search.",
     noInstalled: "No plugins are installed.",
     connectToManage: "Connect to the gateway to inspect plugins.",
+    auth: {
+      signIn: "Sign in to {name}",
+      connect: "Connect",
+      requestFailed: "Sign-in did not finish. Try connecting again.",
+      sessionExpired: "This sign-in session expired. Try connecting again.",
+    },
     toggleNamed: "Enable or disable {name}",
     schemaUnavailable: "Plugin settings schema is unavailable.",
     pluginNotFound: "This installed plugin could not be found.",

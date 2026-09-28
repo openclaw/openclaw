@@ -81,6 +81,9 @@ export type DetailProps = SharedProps &
   PluginSettingsEditorModel & {
     renderCredential?: PluginSettingsEditor["renderCredential"];
     onAskPlugin?: () => void;
+    mcpLoginBusy?: boolean;
+    canMcpLogin?: boolean;
+    onMcpLogin?: (serverName: string) => void;
     installProgress?: PluginInstallProgress;
     onAskSetting?: (field: PluginSettingsField) => void;
     skillsSection?: TemplateResult;
@@ -408,6 +411,28 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
       backHref: props.backHref,
       backLabel: props.backLabel,
       onBack: props.onBack,
+      alert: html`${(props.inspection?.mcpAuth ?? [])
+        .filter((server) => server.state !== "authorized")
+        .map(
+          (server) => html`
+            <div class="plugin-auth-alert" role="status" data-mcp-server=${server.serverName}>
+              <span class="plugin-auth-alert__icon" aria-hidden="true">${icons.key}</span>
+              <span class="plugin-auth-alert__message"
+                >${t("pluginsPage.auth.signIn", {
+                  name:
+                    (props.inspection?.mcpAuth?.length ?? 0) > 1 ? server.serverName : plugin.name,
+                })}</span
+              >
+              <button
+                class="btn oc-action oc-action-secondary plugin-auth-alert__action"
+                ?disabled=${!props.canMcpLogin || props.mcpLoginBusy || !props.onMcpLogin}
+                @click=${() => props.onMcpLogin?.(server.serverName)}
+              >
+                ${t("pluginsPage.auth.connect")}${icons.arrowUpRight}
+              </button>
+            </div>
+          `,
+        )}`,
       icon: renderArtTile(plugin.id, plugin.name, {
         iconUrl:
           props.iconUrls[plugin.id] ??
