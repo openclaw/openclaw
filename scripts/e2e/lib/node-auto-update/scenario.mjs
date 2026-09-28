@@ -307,7 +307,7 @@ async function startNode(name, registryUrl, options = {}) {
       // Gateway policy filters both status and pairing commands; the node logs its declaration.
       const advertisedCommands = fs
         .readFileSync(running.logPath, "utf8")
-        .match(/node-host: advertised commands: (.*)/)?.[1]
+        .match(/\[node-host\] advertised commands: (.*)/)?.[1]
         .split(", ");
       assert(advertisedCommands?.includes("file.stat"), `${name} did not advertise file.stat`);
     } else {
