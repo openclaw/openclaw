@@ -124,6 +124,8 @@ export function collectPluginSafetyInspectedFiles(
     const activity = activityScope(entry.path);
     const browser = browserScope(entry.path);
     if (
+      // Peer-link inspection reads ordinary dependency manifests before checking host declarations.
+      path.basename(entry.path) === "package.json" ||
       (activity &&
         path.dirname(entry.path) === activity &&
         entry.path.endsWith(".svg") &&

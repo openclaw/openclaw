@@ -229,7 +229,9 @@ the binary's package-relative path and declared companion library dependencies.
 Artifacts without an admitted package root retain their containing directory.
 Installer-owned directories use
 hardlinks or an existing retained-directory reference; files inspected by plugin
-safety checks keep independent copies. Mutable source trees retain one private
+safety checks keep independent copies. This includes ordinary dependency
+`package.json` files, which peer-link checks read even without a plugin manifest.
+Mutable source trees retain one private
 directory snapshot per admitted identity, preserving old binary and companion
 bytes through in-place edits. Files in this namespace are prepared at admission;
 module execution remains on demand. Registrations share admission facts without
