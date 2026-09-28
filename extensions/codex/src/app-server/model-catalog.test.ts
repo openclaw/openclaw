@@ -6,7 +6,8 @@ import { listAllCodexAppServerModels } from "./models.js";
 import { probeCodexNativeAuth } from "./native-auth.js";
 import { withCodexAppServerJsonClient } from "./request.js";
 
-vi.mock("./models.js", () => ({
+vi.mock("./models.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./models.js")>()),
   listAllCodexAppServerModels: vi.fn(),
 }));
 vi.mock("./native-auth.js", () => ({ probeCodexNativeAuth: vi.fn() }));

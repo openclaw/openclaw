@@ -2534,12 +2534,13 @@ jobs:
                     {
                       check_name: "android-test-third-party",
                       task: "test-third-party",
+                      ...(androidTestTier ? { app_lint: "third-party" } : {}),
                     },
                     ...(!useCompatibleAndroidCi
                       ? [{
                           check_name: "android-test-wear",
                           task: "test-wear",
-                          ...(androidTestTier ? { lint: true, app_lint: "third-party" } : {}),
+                          ...(androidTestTier ? { lint: true } : {}),
                         }]
                       : []),
                     ...(!androidTestTier
@@ -7047,7 +7048,7 @@ jobs:
               ;;
           esac
 
-          # Phone tests dominate their rows; the lighter rows own app lint without adding jobs.
+          # Third-party lint reuses its phone test compilation and build metadata.
           case "$APP_LINT" in
             third-party)
               ./gradlew "${android_build_metadata[@]}" --no-daemon --build-cache :app:lintThirdPartyDebug

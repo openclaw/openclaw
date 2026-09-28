@@ -254,7 +254,6 @@ internal data class SidebarCatalogWorkspace(
 
 internal data class SidebarCatalogHost(
   val stableId: String,
-  val catalogId: String,
   val label: String,
   val connected: Boolean,
   val errorText: String?,
@@ -347,7 +346,6 @@ internal fun sidebarCatalogHosts(catalogs: List<SessionCatalog>): List<SidebarCa
       }
       SidebarCatalogHost(
         stableId = listOf(catalog.id, host.hostId).joinToString("::"),
-        catalogId = catalog.id,
         label = host.label,
         connected = host.connected,
         errorText = host.errorText,
@@ -1274,22 +1272,18 @@ private fun SidebarSessionCatalog(
           }
         }
       }
-      hosts
-        .filter(SidebarCatalogHost::canLoadMore)
-        .map(SidebarCatalogHost::catalogId)
-        .distinct()
-        .forEach { catalogId ->
-          if (catalogId in state.loadingMoreCatalogIds) {
-            SidebarCatalogStatus(nativeString("Loading more sessions"), palette, progress = true)
-          } else {
-            SidebarActionRow(
-              label = nativeString("Load more"),
-              icon = Icons.Default.KeyboardArrowDown,
-              palette = palette,
-              onClick = { onLoadMore(catalogId) },
-            )
-          }
+      if (hosts.any(SidebarCatalogHost::canLoadMore)) {
+        if (catalog.id in state.loadingMoreCatalogIds) {
+          SidebarCatalogStatus(nativeString("Loading more sessions"), palette, progress = true)
+        } else {
+          SidebarActionRow(
+            label = nativeString("Load more"),
+            icon = Icons.Default.KeyboardArrowDown,
+            palette = palette,
+            onClick = { onLoadMore(catalog.id) },
+          )
         }
+      }
     }
   }
 }
