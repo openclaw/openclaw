@@ -8,6 +8,7 @@ import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budge
 import { tryAcquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
 import type { PortListener } from "../infra/ports-types.js";
+import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { readWindowsProcessArgsSync } from "../infra/windows-port-pids.js";
@@ -601,9 +602,11 @@ export async function terminateScheduledTaskGatewayListeners(
     }
     return ownership.pids;
   };
+  const errors: unknown[] = [];
   try {
     return await (resources ? resources.run(terminate) : terminate());
   } catch (error) {
+    errors.push(error);
     if (!stop || error !== ownership.changed) {
       throw error;
     }
@@ -611,8 +614,13 @@ export async function terminateScheduledTaskGatewayListeners(
     return null;
   } finally {
     // Failed drainage is terminal for native CLI control; retain exclusion until process exit.
-    await resources?.close();
-    exclusion?.release();
+    try {
+      await resources?.close();
+      exclusion?.release();
+    } catch (error) {
+      errors.push(error);
+      throwSqliteLifecycleErrors(errors, "Scheduled Task stop and state cleanup failed");
+    }
   }
 }
 
