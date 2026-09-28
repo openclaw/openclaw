@@ -14,8 +14,7 @@ function probeOutput(result: Record<string, unknown>): string {
   return JSON.stringify({ warnings: [], probes: {}, ...result });
 }
 
-// Fake host: `probe` is what `wxc-exec --probe` prints for MXC_EXE (or the error it
-// throws). Every other executable, including sc.exe, is missing.
+// The fake has no sc.exe: only the selected MXC executable answers --probe.
 function depsFor(params: { probe?: string | Error; systemDriveAcl?: string } = {}) {
   const probe = params.probe ?? probeOutput({ tier: "base-container" });
   const systemDriveAcl =

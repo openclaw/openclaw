@@ -40,11 +40,8 @@ type MxcExecFinalizeToken = {
   sandboxTempDir?: string;
 };
 
-// MXC containers are ephemeral (lifecycle.destroyOnExit=true) and named per invocation.
-// Keep the runtimeId as the stable handle identifier (used for logs + SDK tracking) and
-// derive a fresh per-call containerId from it so parallel spawns cannot collide on
-// backend-specific runtime names. MXC uses the containerId as the AppContainer profile
-// name, which Windows limits to 64 characters.
+// MXC uses containerId as the 64-character-limited AppContainer profile name.
+// Keep runtimeId stable for bookkeeping; mint a per-call ID to avoid collisions.
 const CONTAINER_ID_MAX_LEN = 64;
 function uniqueContainerId(runtimeId: string): string {
   const suffix = randomBytes(4).toString("hex");

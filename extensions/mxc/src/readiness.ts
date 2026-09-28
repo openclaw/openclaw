@@ -8,7 +8,6 @@ type ReadinessDeps = {
 
 const DEFAULT_DEPS: ReadinessDeps = { execFileSync };
 
-// Fields this plugin reads from `wxc-exec --probe`; other probe facts are ignored.
 const MxcProbeOutputSchema = z.object({
   tier: z.string().optional(),
   warnings: z.array(z.string()).default([]),
@@ -20,11 +19,8 @@ function resolveWindowsSystemExecutable(name: string): string {
   return path.win32.join(systemRoot || "C:\\Windows", "System32", name);
 }
 
-// MXC owns host support detection: `wxc-exec --probe` reports the isolation tier a
-// sandbox would use, without spawning one. It still exits 0 when detection fails,
-// reporting an `error` and no tier, so a missing tier means this host cannot run
-// MXC sandboxes. Probe the same executor the backend launches so an
-// `mxcBinaryPath` override is checked too.
+// `wxc-exec --probe` can exit 0 even when detection fails; only a selected tier
+// means this host can run MXC sandboxes.
 function probeMxcIsolationTier(
   executablePath: string,
   deps: ReadinessDeps,

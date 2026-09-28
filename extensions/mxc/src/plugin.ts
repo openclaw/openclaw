@@ -20,8 +20,6 @@ export function registerMxcPlugin(api: OpenClawPluginApi): void {
     return;
   }
 
-  // MXC's own host probe is the ProcessContainer readiness signal for this plugin.
-  // Binary and host readiness checks fail load with actionable remediation.
   let mxcBinaryPath: string;
   try {
     mxcBinaryPath = resolveMxcBinaryPath(config.mxcBinaryPath);

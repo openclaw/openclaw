@@ -8,9 +8,8 @@ import type { MxcConfig } from "../src/config.js";
 import { createMxcSandboxBackendHandle } from "../src/mxc-backend.js";
 import { assertMxcReadiness } from "../src/readiness.js";
 
-// The plugin hands MXC a raw ContainerConfig, so the pinned executor's wire
-// parser is the contract. `wxc-exec --dry-run` parses and validates the config
-// without creating a container or running the command.
+// The plugin passes raw ContainerConfig to wxc-exec; --dry-run validates its
+// wire schema without creating a container.
 const describeOnWindows = describe.runIf(process.platform === "win32");
 
 const tempDirs: string[] = [];
