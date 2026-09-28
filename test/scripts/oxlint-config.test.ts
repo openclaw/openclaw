@@ -1013,6 +1013,155 @@ describe("oxlint config", () => {
     expect(checked.status, checked.stdout + checked.stderr).toBe(0);
   });
 
+  it("bounds the sessions project while retaining source augmentations and typed coverage", () => {
+    const root = fs.realpathSync(createTempDir("openclaw-oxlint-session-project-"));
+    const write = (file: string, source: string) => {
+      const target = path.join(root, file);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, source);
+    };
+    for (const file of [".oxlintrc.json", "tsconfig.json", "src/tsconfig.json"]) {
+      write(file, fs.readFileSync(file, "utf8"));
+    }
+    writeSessionCompatibilityFixture(root);
+    fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
+    const owner = "src/agents/sessions";
+    const contract = owner + "/contract.ts";
+    write(contract, "export interface Contract {} export declare const contract: Contract;");
+    const augmenters = [
+      "src/agents/sessions/keybindings.ts",
+      "src/cli/program/openclaw-command.ts",
+      "src/agents/bash-tools.exec.resolve-env-hook.test.ts",
+      "src/plugin-sdk/channel-inbound.test.ts",
+    ];
+    for (const [index, file] of augmenters.entries()) {
+      let module = path
+        .relative(path.dirname(file), contract)
+        .replaceAll("\\", "/")
+        .replace(/\.ts$/, ".js");
+      if (!module.startsWith(".")) {
+        module = "./" + module;
+      }
+      write(
+        file,
+        "import " +
+          JSON.stringify(module) +
+          "; declare module " +
+          JSON.stringify(module) +
+          " { interface Contract { action" +
+          index +
+          "(): Promise<void>; } }",
+      );
+    }
+    const declarations = ["src", "packages", "ui", "extensions"].flatMap((directory) =>
+      ["ts", "mts", "cts"].map((suffix) => directory + "/contracts.d." + suffix),
+    );
+    for (const [index, file] of declarations.entries()) {
+      write(file, "export {}; declare global { function ambient" + index + "(): Promise<void>; }");
+    }
+    const ambientCalls = declarations.map((_file, index) => "ambient" + index + "();");
+    const source = [
+      'import { contract } from "./contract.js";',
+      ...augmenters.map((_file, index) => "contract.action" + index + "();"),
+      ...ambientCalls,
+    ].join("\n");
+    const selected = [
+      owner + "/owner.ts",
+      owner + "/owner.test.ts",
+      owner + "/helper.test-support.cjs",
+      "src/sibling.ts",
+    ];
+    write(selected[0]!, source);
+    write(selected[1]!, source);
+    write(selected[2]!, ambientCalls.join("\n"));
+    write(selected[3]!, "Promise.resolve();\n");
+    // Compatibility roots are excluded unless the inherited files contract
+    // explicitly names them; verify native expansion as well as diagnostics.
+    write(
+      owner + "/unrelated.test-compat.d.ts",
+      "declare const excludedCompatibility: unique symbol;",
+    );
+    const lint = () =>
+      spawnSync(
+        process.execPath,
+        [
+          path.resolve("node_modules/oxlint/bin/oxlint"),
+          "--type-aware",
+          "--threads=1",
+          "--format=json",
+          ...selected,
+        ],
+        {
+          cwd: root,
+          encoding: "utf8",
+          timeout: 10_000,
+          env: {
+            ...process.env,
+            OXC_LOG: "debug",
+            GOMAXPROCS: "2",
+            OXLINT_TSGOLINT_PATH: path.resolve(
+              "node_modules/.bin",
+              process.platform === "win32" ? "tsgolint.CMD" : "tsgolint",
+            ),
+          },
+        },
+      );
+    const baseline = lint();
+    write(owner + "/tsconfig.json", fs.readFileSync(owner + "/tsconfig.json", "utf8"));
+    const narrowed = lint();
+    const expanded = spawnSync(
+      process.execPath,
+      [
+        path.resolve("node_modules/typescript/bin/tsc"),
+        "--showConfig",
+        "-p",
+        owner + "/tsconfig.json",
+      ],
+      { cwd: root, encoding: "utf8", timeout: 10_000 },
+    );
+    expect(expanded.error).toBeUndefined();
+    expect(expanded.status, expanded.stdout + expanded.stderr).toBe(0);
+    const roots = (JSON.parse(expanded.stdout) as { files: string[] }).files.map((file) =>
+      path.resolve(root, owner, file),
+    );
+    expect(roots).toContain(
+      path.resolve(root, "src/config/sessions/session-entry.test-compat.d.ts"),
+    );
+    expect(roots).not.toContain(path.resolve(root, owner, "unrelated.test-compat.d.ts"));
+    const reports = [baseline, narrowed].map((result) => {
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stdout + result.stderr).toBe(1);
+      return JSON.parse(result.stdout) as {
+        number_of_files: number;
+        diagnostics: Array<{ filename: string; code: string }>;
+      };
+    });
+    expect(reports[0]!.number_of_files).toBe(selected.length);
+    expect(reports[1]!.number_of_files).toBe(selected.length);
+    expect(reports[0]!.diagnostics.map((item) => JSON.stringify(item)).toSorted()).toEqual(
+      reports[1]!.diagnostics.map((item) => JSON.stringify(item)).toSorted(),
+    );
+    for (const [index, file] of selected.entries()) {
+      expect(
+        reports[1]!.diagnostics
+          .filter((item) => item.filename.replaceAll("\\", "/") === file)
+          .map((item) => item.code),
+      ).toEqual(
+        Array.from(
+          { length: index < 2 ? 16 : index === 2 ? 12 : 1 },
+          () => "typescript(no-floating-promises)",
+        ),
+      );
+      const project = index < 3 ? owner + "/tsconfig.json" : "src/tsconfig.json";
+      expect(narrowed.stderr.replaceAll("\\", "/")).toContain(
+        "Got tsconfig for file " +
+          path.join(root, file).replaceAll("\\", "/") +
+          ": " +
+          path.join(root, project).replaceAll("\\", "/"),
+      );
+    }
+  });
+
   it("includes bundled extensions in type-aware lint coverage", () => {
     const tsconfig = readJson("config/tsconfig/oxlint.json") as OxlintTsconfig;
 
