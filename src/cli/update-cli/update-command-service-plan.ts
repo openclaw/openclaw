@@ -5,7 +5,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { compare, minVersion, Range, satisfies as satisfiesRange, validRange, valid } from "semver";
+import { minVersion, validRange, valid } from "semver";
 import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../../node-sqlite.mjs";
 import { SUPPORTED_NODE_VERSION_RANGE } from "../../../node-version.mjs";
 import { createConfigIO } from "../../config/io.js";
@@ -64,6 +64,7 @@ import { resolveNodeVersionManager } from "../../shared/version-manager-path.js"
 import { formatCliCommand } from "../command-format.js";
 import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
 import { resolveNodeRunner } from "./shared.js";
+import { minimumSupportedNodeVersion } from "./update-command-node-engine.js";
 import type { PackageRuntimeRecovery } from "./update-command-node-runtime-resolution.js";
 import type {
   ManagedGatewayUpdateVerdict,
@@ -580,24 +581,6 @@ export async function resolvePackageRuntimePreflight(params: {
       ],
     };
   });
-}
-
-function minimumSupportedNodeVersion(engineRange: string): string | undefined {
-  const candidate = new Range(engineRange);
-  return new Range(SUPPORTED_NODE_VERSION_RANGE).set
-    .flatMap((supported) =>
-      candidate.set.flatMap((required) => {
-        const intersection = [...supported, ...required].map((entry) => entry.value).join(" ");
-        const minimum = minVersion(intersection);
-        if (!minimum) {
-          return [];
-        }
-        // Node's release contract excludes prereleases, even when engines allow them.
-        const release = `${minimum.major}.${minimum.minor}.${minimum.patch}`;
-        return satisfiesRange(release, intersection) ? [release] : [];
-      }),
-    )
-    .toSorted(compare)[0];
 }
 
 async function resolvePackageRuntimeForPreflight(params: {
