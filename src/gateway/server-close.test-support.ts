@@ -5,8 +5,9 @@ import type {
   GatewayCloseParams as GatewayTeardownParams,
   GatewayClosePrepareParams,
 } from "./server-close.js";
+import type { GatewayCloseOptions } from "./server-public.js";
 
-type GatewayCloseParams = GatewayTeardownParams & GatewayClosePrepareParams;
+export type GatewayCloseParams = GatewayTeardownParams & GatewayClosePrepareParams;
 type GatewayCloseFixtureMocks = Pick<
   GatewayCloseParams,
   | "disposeAllBundleLspRuntimes"
@@ -17,6 +18,14 @@ type GatewayCloseFixtureMocks = Pick<
   drainRetainedEmbeddingProviders: GatewayCloseParams["drainRetainedOpenAiEmbeddingProviders"];
 };
 type GatewayCloseClient = GatewayCloseParams["clients"] extends Set<infer T> ? T : never;
+
+export function createGatewayCloseTestHandlerFactory({
+  prepareGatewayClose,
+  completeGatewayClose,
+}: Pick<typeof import("./server-close.js"), "prepareGatewayClose" | "completeGatewayClose">) {
+  return (params: GatewayCloseParams) => async (opts?: GatewayCloseOptions) =>
+    completeGatewayClose(params, await prepareGatewayClose(params, opts));
+}
 
 export function createTestChatRunState() {
   const state = createChatRunState();
@@ -64,23 +73,15 @@ export function createGatewayCloseTestDepsFactory(mocks: GatewayCloseFixtureMock
       cron: { stop: vi.fn() },
       heartbeatRunner: { stop: vi.fn() } as never,
       updateCheckStop: null,
-      stopTaskRegistryMaintenance: null,
-      nodePresenceTimers: new Map(),
       broadcast: vi.fn(),
       maintenance: {
-        tickInterval: setInterval(() => undefined, 60_000),
-        healthInterval: setInterval(() => undefined, 60_000),
-        dedupeCleanup: setInterval(() => undefined, 60_000),
+        stopPeriodicTasks: vi.fn(async () => {}),
         startMediaCleanup: vi.fn(),
         stopMediaCleanup: vi.fn(async () => "drained" as const),
-        stopSessionColdStorageMaintenance: vi.fn(async () => {}),
-        stopTelemetryChecks: vi.fn(async () => {}),
-        worktreeCleanup: setInterval(() => undefined, 60_000),
-        skillUsageCleanup: vi.fn(),
+        skillUsageCleanup: vi.fn(async () => {}),
       },
       stopMediaCleanup: vi.fn(async () => "drained" as const),
       agentUnsub: null,
-      taskUnsub: null,
       heartbeatUnsub: null,
       transcriptUnsub: null,
       lifecycleUnsub: null,

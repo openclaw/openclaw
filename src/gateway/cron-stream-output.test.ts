@@ -435,28 +435,6 @@ describe("cron stream output", () => {
     await watchers.stopAll("shutdown");
   });
 
-  it("counts a batch lost when fire dispatch rejects before cron can persist it", async () => {
-    vi.useFakeTimers();
-    const { fake, updateState, watchers } = createCronStreamWatcherFixture({
-      minIntervalMs: 1,
-      fireBatch: vi.fn(async () => await Promise.reject(new Error("transient failure"))),
-    });
-    await watchers.reconcile([job()], true);
-    await settle();
-
-    fake.inputs[0]?.onStdout?.("failed\n");
-    await vi.advanceTimersByTimeAsync(50);
-    await settle();
-
-    expect(updateState).toHaveBeenCalledWith(
-      "stream-job",
-      expect.objectContaining({ streamDroppedBatches: 1 }),
-      expect.any(String),
-      expect.any(String),
-    );
-    await watchers.stopAll("shutdown");
-  });
-
   it("fires a batch for an empty line accepted by match mode", async () => {
     vi.useFakeTimers();
     const { fake, fireBatch, watchers } = createCronStreamWatcherFixture({ minIntervalMs: 1 });

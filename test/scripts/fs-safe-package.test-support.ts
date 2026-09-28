@@ -34,3 +34,26 @@ export function copyFsSafePackageFixture(packageRoot: string) {
   }
   return { dependencyRoot, nativePackages };
 }
+
+/** Keep the real emitted SDK closure and the complete native-package composition. */
+export async function copyCompiledFsSafeRuntimeFixture(generation: string, packageRoot: string) {
+  const { collectRuntimeImportClosure } =
+    await import("../../scripts/lib/runtime-import-closure.mts");
+  const repoRoot = process.cwd();
+  const entry = path.join(generation, "dist/plugin-sdk/file-access-runtime.js");
+  const closure = collectRuntimeImportClosure(repoRoot, [entry], { includeDynamicImports: true });
+  // This emitted entry has only local module edges; dynamic native assets stay
+  // with the complete installed package and optional dependencies below.
+  for (const file of closure) {
+    const source = path.resolve(repoRoot, file);
+    const relative = path.relative(generation, source);
+    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      throw new Error(`Compiled fs-safe fixture dependency escaped its generation: ${file}`);
+    }
+    const destination = path.join(packageRoot, relative);
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    fs.copyFileSync(source, destination);
+  }
+  fs.writeFileSync(path.join(packageRoot, "package.json"), '{"type":"module"}');
+  return copyFsSafePackageFixture(packageRoot);
+}

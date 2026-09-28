@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { assertSqliteIntegrityInWorker } from "../infra/sqlite-integrity-worker.js";
 import {
   runSqliteIntegrityCheckSync,
@@ -19,7 +20,6 @@ import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db-contract.js";
-import { assertAgentDatabaseMaintenanceAccess } from "./openclaw-agent-db-lease.js";
 import {
   agentDatabaseLifecycle as cache,
   retainAgentDatabase,
@@ -83,7 +83,6 @@ function assertAgentDatabaseOperationCurrent(
   // Coalesced callers keep their own scope; admission cannot lend its cleanup authority.
   assertAgentDeletionDatabaseCleanupAccess(database, options);
   assertCurrent?.();
-  assertAgentDatabaseMaintenanceAccess(database.db);
 }
 
 /** Bind both admission drivers to the canonical private database-open generator. */
@@ -99,8 +98,9 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     operation: (database: OpenClawAgentDatabase) => T | Promise<T>,
     /** Synchronous live authority for the initiating open and this caller's operation. */
     assertCurrent?: () => void,
+    signal?: AbortSignal,
   ): Promise<T> {
-    const run = () => runAgentDatabaseAsync(inputOptions, operation, assertCurrent);
+    const run = () => runAgentDatabaseAsync(inputOptions, operation, assertCurrent, signal);
     const scope = getOpenClawDatabaseMaintenanceScope();
     return scope ? scope.run(run) : run();
   }
@@ -109,8 +109,10 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     inputOptions: OpenClawAgentDatabaseOptions,
     operation: (database: OpenClawAgentDatabase) => T | Promise<T>,
     assertCurrent?: () => void,
+    signal?: AbortSignal,
   ): Promise<T> {
     try {
+      signal?.throwIfAborted();
       assertCurrent?.();
     } catch (error) {
       // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- Caller assertions retain their original thrown value.
@@ -131,15 +133,16 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     }
     if (existing?.controller.signal.aborted) {
       return existing.promise.then(
-        () => withOpenClawAgentDatabaseAsync(options, operation, assertCurrent),
-        () => withOpenClawAgentDatabaseAsync(options, operation, assertCurrent),
+        () => withOpenClawAgentDatabaseAsync(options, operation, assertCurrent, signal),
+        () => withOpenClawAgentDatabaseAsync(options, operation, assertCurrent, signal),
       );
     }
     const pending =
       existing ?? startOpenClawAgentDatabaseAdmission(options, agentId, pathname, assertCurrent);
     pending.operations += 1;
-    const work = pending.promise
+    const work = racePromiseWithAbortSignal(pending.promise, signal)
       .then((database) => {
+        signal?.throwIfAborted();
         assertAgentDatabaseOperationCurrent(database, options, pending, assertCurrent);
         observeOpenClawDatabaseMaintenanceResource(database.db);
         return operation(database);
@@ -149,6 +152,10 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
         // settlement, including wrapper/adoption awaits before it reaches the writer.
         pending.operations -= 1;
         if (!pending.operations) {
+          // The physical owner survives one stopped waiter, but not the last one.
+          if (!pending.releaseBorrow) {
+            pending.controller.abort(new Error("Agent database admission has no waiting callers"));
+          }
           pending.releaseBorrow?.();
         }
       });
@@ -203,19 +210,12 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     try {
       while (true) {
         const outcome = await withAdmission(async (assertCurrent, validation) => {
-          try {
+          suspended = false;
+          assertAgentDatabaseOpenAuthority(steps, () => {
             assertCurrent();
             assertOpenClawAgentDatabaseAdmissionCurrent(options, pending, check?.database);
-          } catch (error) {
-            // Revocation takes precedence over repairable integrity damage.
-            failure = {
-              error: new Error(error instanceof Error ? error.message : String(error), {
-                cause: error,
-              }),
-            };
-          }
+          });
           pending.validation = validation;
-          suspended = false;
           const step = failure ? steps.throw(failure.error) : steps.next();
           if (!step.done) {
             suspended = true;
@@ -366,6 +366,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
             pending.controller.signal,
             undefined,
             step.value.timing,
+            step.value.tables,
           );
         } catch (error) {
           failure = error;

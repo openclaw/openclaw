@@ -31,7 +31,7 @@ extension GatewayConnection {
         {
             guard response.encoding == "base64",
                   let declaredMIME,
-                  declaredMIME.hasPrefix(kind.mimeTypePrefix),
+                  kind.acceptsMIMEType(declaredMIME),
                   let data = Data(base64Encoded: encoded),
                   data.count <= maximumBytes
             else { return nil }
@@ -51,7 +51,7 @@ extension GatewayConnection {
             url.scheme?.lowercased() == "https" &&
             lease.route.browserSession == nil &&
             lease.route.tls == nil &&
-            declaredMIME?.hasPrefix(kind.mimeTypePrefix) == true
+            declaredMIME.map(kind.acceptsMIMEType) == true
         if canStreamDirectly, playback != .transcode, let declaredMIME {
             guard await self.isCurrentServerLease(lease) else {
                 throw OpenClawChatTransportSendError.notDispatched
@@ -64,7 +64,7 @@ extension GatewayConnection {
 
         var urlRequest = URLRequest(url: url)
         urlRequest.timeoutInterval = kind == .video ? 60 : 20
-        urlRequest.setValue("\(kind.rawValue)/*", forHTTPHeaderField: "Accept")
+        urlRequest.setValue(kind.acceptHeader, forHTTPHeaderField: "Accept")
         if canStreamDirectly {
             urlRequest.setValue("bytes=0-0", forHTTPHeaderField: "Range")
         }
@@ -108,7 +108,7 @@ extension GatewayConnection {
         }
         guard (200..<300).contains(http.statusCode),
               let mimeType = http.mimeType?.lowercased(),
-              mimeType.hasPrefix(kind.mimeTypePrefix)
+              kind.acceptsMIMEType(mimeType)
         else { return nil }
         if canStreamDirectly {
             return .stream(OpenClawChatMediaStream(
@@ -123,6 +123,7 @@ extension GatewayConnection {
         switch kind {
         case .image: 12 * 1024 * 1024
         case .audio, .video: 16 * 1024 * 1024
+        case .file: 100 * 1024 * 1024 // Gateway document limit (media-core/constants).
         }
     }
 }

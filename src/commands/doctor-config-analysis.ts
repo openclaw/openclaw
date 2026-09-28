@@ -1,7 +1,6 @@
 /** Doctor analysis helpers for config schema cleanup and ambiguous model fallback shapes. */
 import path from "node:path";
 import { resolvePrimaryStringValue } from "@openclaw/normalization-core/string-coerce";
-import type { ZodIssue } from "zod";
 import { note } from "../../packages/terminal-core/src/note.js";
 import {
   listAgentEntries,
@@ -18,10 +17,34 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.opencla
 import { OpenClawSchema } from "../config/zod-schema.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveCliModelEntry } from "../media-understanding/resolve.js";
 import { isRecord } from "../utils.js";
 import { sanitizeDoctorNote } from "./doctor/emit-notes.js";
 
 const configLog = createSubsystemLogger("config");
+
+export function noteMediaCliModelWarnings(cfg: OpenClawConfig): void {
+  const models = cfg.tools?.media?.models;
+  if (!Array.isArray(models)) {
+    return;
+  }
+  const warnings: string[] = [];
+  models.forEach((entry, index) => {
+    if (!entry || (entry.type ?? (entry.command ? "cli" : "provider")) !== "cli") {
+      return;
+    }
+    const resolved = resolveCliModelEntry(entry);
+    if (!resolved.ok) {
+      const field = resolved.error.reason === "cli-missing-command" ? "command" : "args";
+      warnings.push(
+        `- tools.media.models[${index}].${field}: Invalid CLI media model. ${resolved.error.message} Doctor cannot choose a command or attachment arguments; edit this entry.`,
+      );
+    }
+  });
+  if (warnings.length > 0) {
+    note(warnings.join("\n"), "Doctor warnings");
+  }
+}
 
 export function noteDoctorConfigPreflightIssues(
   snapshot: ConfigFileSnapshot,
@@ -49,11 +72,6 @@ export function noteDoctorConfigPreflightIssues(
     }
   }
 }
-
-type UnrecognizedKeysIssue = ZodIssue & {
-  code: "unrecognized_keys";
-  keys: PropertyKey[];
-};
 
 function collectInvalidHookTransformsDirWarnings(
   cfg: OpenClawConfig,
@@ -87,10 +105,6 @@ function collectUnsupportedInternalHookEntryWarnings(cfg: OpenClawConfig): strin
     })
     .filter(({ unsupportedKeys }) => unsupportedKeys.length > 0);
 
-  if (unsupportedKeysByEntry.length === 0) {
-    return [];
-  }
-
   return unsupportedKeysByEntry.map(
     ({ hookKey, unsupportedKeys }) =>
       `- hooks.internal.entries.${hookKey}: unsupported loader key${unsupportedKeys.length === 1 ? "" : "s"} ${unsupportedKeys.join(", ")} will not load hook modules. Use bootstrap-extra-files for session bootstrap content, or create a managed/workspace hook directory with HOOK.md + handler.js. Doctor cannot rewrite this automatically because per-hook entry keys are open-ended hook configuration.`,
@@ -119,14 +133,6 @@ export function noteMissingDefaultAgentOwner(cfg: OpenClawConfig): void {
       "Agent ownership",
     );
   }
-}
-
-function normalizeIssuePath(pathValue: PropertyKey[]): Array<string | number> {
-  return pathValue.filter((part): part is string | number => typeof part !== "symbol");
-}
-
-function isUnrecognizedKeysIssue(issue: ZodIssue): issue is UnrecognizedKeysIssue {
-  return issue.code === "unrecognized_keys";
 }
 
 /** Formats a parsed config issue path into a user-facing dotted path. */
@@ -202,10 +208,10 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
   const next = structuredClone(config);
   const removed: string[] = [];
   for (const issue of parsed.error.issues) {
-    if (!isUnrecognizedKeysIssue(issue)) {
+    if (issue.code !== "unrecognized_keys") {
       continue;
     }
-    const issuePath = normalizeIssuePath(issue.path);
+    const issuePath = issue.path.filter((part) => typeof part !== "symbol");
     const target = resolveConfigPathTarget(next, issuePath);
     if (!target || typeof target !== "object" || Array.isArray(target)) {
       continue;

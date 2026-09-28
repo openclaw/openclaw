@@ -4,9 +4,8 @@ import { parseDurationMs } from "../cli/parse-duration.js";
 import { isPluginJsonValue } from "../plugins/host-hook-json.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
 import { normalizeCloudRepo } from "./cloud-worker-project-profiles.js";
-import { type ConfigSchemaShape, projectConfigFieldMetadata } from "./schema.field-metadata.js";
+import { projectConfigFieldMetadata } from "./schema.field-metadata.js";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
-import type { CloudWorkerProfileConfig, CloudWorkersConfig } from "./types.cloud-workers.js";
 import { isSecretRef } from "./types.secrets.js";
 import { configUiMetadata } from "./zod-schema.sensitive.js";
 
@@ -86,7 +85,7 @@ const CloudWorkerProfileShape = {
     label: "Cloud Worker Provider Settings",
     help: "Provider-owned settings validated by the selected plugin. Use SecretRef objects for secret-bearing values; opaque settings do not gain automatic secret resolution.",
   }),
-} satisfies ConfigSchemaShape<CloudWorkerProfileConfig>;
+};
 
 const CloudWorkerProfileSchema = z
   .object(CloudWorkerProfileShape)
@@ -119,7 +118,7 @@ const CloudWorkerPreparedPoolShape = {
     label: "Cloud Worker Ready Reserve Cap",
     help: "Gateway-wide cap on unassigned prepared cloud workers across projects and profiles (default: 4). Preparing workers and unconfirmed reserve cleanup count toward the cap. Set 0 to drain unassigned reserves and disable replenishment while preserving snapshot reuse and active sessions.",
   }),
-} satisfies ConfigSchemaShape<NonNullable<CloudWorkersConfig["preparedPool"]>>;
+};
 
 const CloudWorkersConfigShape = {
   desktop: z.boolean().optional().register(configUiMetadata, {
@@ -148,7 +147,7 @@ const CloudWorkersConfigShape = {
       label: "Cloud Worker Profiles",
       help: "Named cloud worker profiles. Each profile selects a worker provider registered by a plugin and carries provider-owned settings.",
     }),
-} satisfies ConfigSchemaShape<CloudWorkersConfig>;
+};
 
 export const CloudWorkersConfigSchema = z.object(CloudWorkersConfigShape).strict().optional();
 

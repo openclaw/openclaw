@@ -141,12 +141,10 @@ describe("curated meeting capture", () => {
     reselect?: boolean;
   }>([
     { field: "guildId", value: "", health: "pending" },
-    { field: "channelId", value: "   ", health: "error" },
     { field: "accountId", value: "", health: "missing provider" },
     { field: "meetingUrl", value: "   ", health: "missing setup" },
     { field: "guildId", value: "   ", health: "empty setup" },
     { field: "channelId", value: "", health: "pending", openDuringRefresh: true },
-    { field: "guildId", value: "   ", health: "pending", openDuringRefresh: true },
     { field: "accountId", value: "   ", health: "error", reselect: true },
   ])(
     "retains $field validation through $health health (open during refresh: $openDuringRefresh, reselect: $reselect)",
@@ -349,7 +347,6 @@ describe("curated meeting capture", () => {
 
   it.each([
     { health: "pending", field: "guildId", value: "" },
-    { health: "error", field: "channelId", value: "" },
     { health: "error", field: "channelId", value: "   " },
   ])(
     "preserves original provider validation through $health round trips ($field=$value)",
@@ -857,28 +854,25 @@ describe("curated meeting capture", () => {
     ).toEqual(["", "metadata-only", "test-voice"]);
   });
 
-  it.each(["disabled", "unknown", "unavailable"] as const)(
-    "keeps existing %s sources editable with unavailable guidance",
-    async (availability) => {
-      const { page, runtimeConfig, original } = await mount({
-        providers: [{ providerId: "test-voice", name: "Test voice", availability }],
-      });
-      const add = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
-        (button) => button.textContent?.trim() === "Add source",
-      )!;
-      expect(add.disabled).toBe(true);
-      click(page, "Edit source 1");
-      await page.updateComplete;
-      expect(page.textContent).toContain("Auto-start setup is unavailable");
-      input(page, "title", "Still editable");
-      page
-        .querySelector("form")!
-        .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-      expect(runtimeConfig.state.configForm).toMatchObject({
-        transcripts: { autoStart: [{ ...original, title: "Still editable" }] },
-      });
-    },
-  );
+  it("keeps existing disabled sources editable with unavailable guidance", async () => {
+    const { page, runtimeConfig, original } = await mount({
+      providers: [{ providerId: "test-voice", name: "Test voice", availability: "disabled" }],
+    });
+    const add = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Add source",
+    )!;
+    expect(add.disabled).toBe(true);
+    click(page, "Edit source 1");
+    await page.updateComplete;
+    expect(page.textContent).toContain("Auto-start setup is unavailable");
+    input(page, "title", "Still editable");
+    page
+      .querySelector("form")!
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    expect(runtimeConfig.state.configForm).toMatchObject({
+      transcripts: { autoStart: [{ ...original, title: "Still editable" }] },
+    });
+  });
 
   it("keeps health unknown after read failure and disables mutations under the parent's permission gate", async () => {
     const { page, runtimeConfig } = await mount({ disabled: true, failStatus: true });

@@ -50,8 +50,8 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<[ctx: ProgramContext]>
   ],
   [
     ["doctor", "triage", "dashboard", "reset", "uninstall"],
-    async (program) =>
-      (await import("./register.maintenance.js")).registerMaintenanceCommands(program),
+    async (program, ctx) =>
+      (await import("./register.maintenance.js")).registerMaintenanceCommands(program, ctx),
   ],
   [
     ["message"],
@@ -75,7 +75,7 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<[ctx: ProgramContext]>
     async (program) => (await import("./register.agent.js")).registerAgentsCommands(program),
   ],
   [
-    ["status", "health", "sessions", "tasks"],
+    ["status", "health", "sessions"],
     async (program) =>
       (await import("./register.status-health-sessions.js")).registerStatusHealthSessionsCommands(
         program,

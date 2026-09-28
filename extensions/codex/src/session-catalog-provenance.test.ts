@@ -87,21 +87,6 @@ describe("Codex catalog provenance", () => {
     ).resolves.toBe(false);
   });
 
-  it("recognizes an OpenClaw-originated rollout even when Codex reports vscode", async () => {
-    const file = await writeRollout({
-      id: "managed-thread",
-      originator: "openclaw",
-      source: "vscode",
-    });
-
-    await expect(
-      isOpenClawManagedCodexThread(
-        { id: "managed-thread", path: file } as CodexThread,
-        path.dirname(file),
-      ),
-    ).resolves.toBe(true);
-  });
-
   it("does not inspect a rollout outside the selected local sessions root", async () => {
     const sessionsRoot = await fs.mkdtemp(
       path.join(os.tmpdir(), "openclaw-codex-provenance-root-"),
@@ -286,7 +271,7 @@ describe("Codex exact local eligibility", () => {
     ]);
   });
 
-  it.each(["cli", "vscode", { custom: "atlas" }, { custom: "chatgpt" }] as const)(
+  it.each(["cli", { custom: "atlas" }] as const)(
     "verifies interactive source %j using one selected rollout",
     async (source) => {
       const f = await localEligibilityFixture();

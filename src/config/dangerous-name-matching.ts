@@ -1,4 +1,3 @@
-// Detects dangerous config names used by validation and warnings.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { asBoolean } from "../utils/boolean.js";
 import type { OpenClawConfig } from "./config.js";
@@ -42,12 +41,7 @@ export function collectProviderDangerousNameMatchingScopes(
   provider: string,
 ): ProviderDangerousNameMatchingScope[] {
   const scopes: ProviderDangerousNameMatchingScope[] = [];
-  const channels = asNullableRecord(cfg.channels);
-  if (!channels) {
-    return scopes;
-  }
-
-  const providerCfg = asNullableRecord(channels[provider]);
+  const providerCfg = asNullableRecord(asNullableRecord(cfg.channels)?.[provider]);
   if (!providerCfg) {
     return scopes;
   }

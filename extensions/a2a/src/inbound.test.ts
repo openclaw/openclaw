@@ -39,29 +39,26 @@ function createA2aInboundFixture(peerName = "hermes") {
 }
 
 describe("A2A channel inbound dispatch", () => {
-  it.each(["/status", "  /reset", "/approve pending allow-once", "/ custom-command"])(
-    "rejects peer slash command %s before dispatch even with a command allowlist",
-    async (text) => {
-      const fixture = createA2aInboundFixture();
-      try {
-        await dispatchA2aInbound({
-          ...fixture.params,
-          text,
-          config: { commands: { allowFrom: { "*": ["*"] } } },
-        });
+  it("rejects peer slash commands before dispatch even with a command allowlist", async () => {
+    const fixture = createA2aInboundFixture();
+    try {
+      await dispatchA2aInbound({
+        ...fixture.params,
+        text: "  / custom-command",
+        config: { commands: { allowFrom: { "*": ["*"] } } },
+      });
 
-        expect(fixture.store.get(fixture.task.id)?.status).toMatchObject({
-          state: "TASK_STATE_REJECTED",
-          message: { parts: [{ text: expect.stringContaining("only users") }] },
-        });
-        expect(fixture.runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
-      } finally {
-        fixture.store.stop();
-      }
-    },
-  );
+      expect(fixture.store.get(fixture.task.id)?.status).toMatchObject({
+        state: "TASK_STATE_REJECTED",
+        message: { parts: [{ text: expect.stringContaining("only users") }] },
+      });
+      expect(fixture.runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
+    } finally {
+      fixture.store.stop();
+    }
+  });
 
-  it("ignores non-final replies and completes the task with its final artifact", async () => {
+  it("ignores non-final replies and supplemental notices before completing with the answer", async () => {
     const fixture = createA2aInboundFixture();
     vi.mocked(fixture.runtime.channel.inbound.dispatch).mockImplementation(async (turn) => {
       expect(turn.ctxPayload).toMatchObject({
@@ -70,6 +67,10 @@ describe("A2A channel inbound dispatch", () => {
         CommandInterpretationSuppressed: true,
       });
       await turn.delivery.deliver({ text: "preview" }, { kind: "block" });
+      await turn.delivery.deliver(
+        { text: "fallback notice", isFallbackNotice: true },
+        { kind: "final" },
+      );
       expect(fixture.store.get(fixture.task.id)?.status.state).toBe("TASK_STATE_WORKING");
       await turn.delivery.deliver({ text: "agent answer" }, { kind: "final" });
       return {
@@ -88,13 +89,6 @@ describe("A2A channel inbound dispatch", () => {
         contextId: "ctx-inbound",
         status: expect.objectContaining({ state: "TASK_STATE_COMPLETED" }),
         artifacts: [expect.objectContaining({ parts: [{ text: "agent answer" }] })],
-      }),
-    );
-    expect(fixture.runtime.channel.inbound.buildContext).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "a2a",
-        conversation: expect.objectContaining({ id: "ctx-inbound", kind: "direct" }),
-        sender: { id: "hermes", name: "hermes" },
       }),
     );
     fixture.store.stop();

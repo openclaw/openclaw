@@ -44,7 +44,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "24.19.0"
+          node-version: "24.21.0"
       - name: Dispatch existing protected publisher
         id: dispatch
         env:
@@ -83,7 +83,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "24.19.0"
+          node-version: "24.21.0"
       - name: Verify the original publication, without redispatching
         env:
           GH_TOKEN: ${{ github.token }}
@@ -155,7 +155,7 @@ jobs:
       - name: Setup trusted Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "24.19.0"
+          node-version: "24.21.0"
       - name: Publish the verified draft
         env:
           GH_TOKEN: ${{ github.token }}
@@ -250,7 +250,7 @@ jobs:
       - name: Setup trusted Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "24.19.0"
+          node-version: "24.21.0"
       - name: Dispatch detached Linux mirror
         timeout-minutes: 3
         env:
@@ -302,7 +302,7 @@ jobs:
       - name: Setup trusted Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "24.19.0"
+          node-version: "24.21.0"
       - name: Dispatch detached Linux release request
         env:
           GH_TOKEN: ${{ github.token }}
@@ -350,7 +350,7 @@ jobs:
       - name: Setup trusted Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "24.19.0"
+          node-version: "24.21.0"
       - name: Dispatch detached Windows promotion
         env:
           GH_TOKEN: ${{ github.token }}
@@ -365,6 +365,7 @@ jobs:
           PARENT_WORKFLOW_SHA="$(jq -er '.tooling.sha' <<< "$RELEASE_REQUEST")"
           WINDOWS_NODE_TAG="$(jq -r '.inputs.windows_node_tag // ""' <<< "$RELEASE_REQUEST")"
           WINDOWS_NODE_INSTALLER_DIGESTS="$(jq -r '.inputs.windows_node_installer_digests // ""' <<< "$RELEASE_REQUEST")"
+          RELEASE_NPM_DIST_TAG="$(jq -er '.inputs.npm_dist_tag' <<< "$RELEASE_REQUEST")"
           source scripts/lib/release-publish-children.sh
           jq -n --arg tag "$RELEASE_TAG" --arg source "$WINDOWS_NODE_TAG" \
             --arg digests "$WINDOWS_NODE_INSTALLER_DIGESTS" \

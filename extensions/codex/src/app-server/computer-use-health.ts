@@ -1,13 +1,11 @@
-// Codex plugin module implements periodic Computer Use health probes.
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { defineCodexBuildState } from "../build-state.js";
 import type { CodexAppServerClient } from "./client.js";
-import { runCodexComputerUseLiveTest } from "./computer-use.js";
+import { createComputerUseRequest, runCodexComputerUseLiveTest } from "./computer-use-readiness.js";
 import type { ResolvedCodexComputerUseConfig } from "./config.js";
 
 type ComputerUseHealthMonitor = {
   fingerprint: string;
-  intervalMs: number;
   timer: ReturnType<typeof setInterval>;
   disposeCloseHandler: () => void;
   running: boolean;
@@ -48,7 +46,6 @@ export function startCodexComputerUseHealthMonitor(params: {
   }
   const monitor: ComputerUseHealthMonitor = {
     fingerprint,
-    intervalMs,
     timer: setInterval(() => {
       void runCodexComputerUseHealthProbe(params.client, params.config, monitor, params.tools);
     }, intervalMs),
@@ -92,16 +89,10 @@ async function runCodexComputerUseHealthProbe(
   monitor.running = true;
   try {
     const { liveTest, repair } = await runCodexComputerUseLiveTest({
+      client,
       config,
       tools,
-      request: async <T>(
-        method: string,
-        requestParams?: unknown,
-        requestOptions?: { timeoutMs?: number },
-      ) =>
-        await client.request<T>(method, requestParams, {
-          timeoutMs: requestOptions?.timeoutMs ?? config.liveTestTimeoutMs,
-        }),
+      request: createComputerUseRequest({ client, timeoutMs: config.liveTestTimeoutMs }),
     });
     if (!liveTest.ok) {
       embeddedAgentLog.warn("codex computer-use periodic health failed", {

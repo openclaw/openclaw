@@ -61,7 +61,7 @@ vi.mock("./sessions/model-registry-runtime.js", () => ({
 
 import {
   prepareSimpleCompletionModel,
-  acquireSimpleCompletionModel,
+  acquireSimpleCompletionModelWithSelection,
   acquireSimpleCompletionModelForAgent,
 } from "./simple-completion-runtime.js";
 
@@ -216,11 +216,10 @@ it.each([false, true])(
     });
     const resolve = createOllamaModelResolver();
     const preparing = parent.run(() =>
-      acquireSimpleCompletionModel({
+      acquireSimpleCompletionModelForAgent({
         cfg: {},
         agentId: "main",
-        provider: "ollama",
-        modelId: "fixture-model",
+        modelRef: "ollama/fixture-model",
         signal: controller.signal,
         modelResolver: async (...args) => {
           entered.resolve();
@@ -258,7 +257,7 @@ it.each([false, true])(
   },
 );
 
-it("acquires direct completion runtime for the exact selected model", async () => {
+it("acquires completion runtime for the exact caller-selected model", async () => {
   const modelResolver = createOllamaModelResolver();
   mocks.getApiKeyForModel.mockResolvedValue({
     apiKey: "ollama-local",
@@ -266,15 +265,15 @@ it("acquires direct completion runtime for the exact selected model", async () =
     mode: "api-key",
   });
 
-  const acquired = await acquireSimpleCompletionModel({
-    cfg: {},
-    agentId: "main",
-    provider: "ollama",
-    modelId: "qwen3:0.6b",
-    agentDir: "/tmp/openclaw-agent",
-    agentRuntimeId: "openclaw",
-    modelResolver,
-  });
+  const acquired = await acquireSimpleCompletionModelWithSelection(
+    {
+      cfg: {},
+      agentId: "main",
+      agentDir: "/tmp/openclaw-agent",
+      modelResolver,
+    },
+    () => ({ selection: { provider: "ollama", modelId: "qwen3:0.6b" } }),
+  );
 
   if ("error" in acquired) {
     throw new Error(acquired.error);
@@ -286,7 +285,6 @@ it("acquires direct completion runtime for the exact selected model", async () =
           {
             provider: "ollama",
             modelId: "qwen3:0.6b",
-            runtime: "openclaw",
             agentId: "main",
           },
         ],

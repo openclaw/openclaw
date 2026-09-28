@@ -74,13 +74,4 @@ extension GatewaySettingsStore {
         }
         return self.saveGatewayRegistry(registry)
     }
-
-    static func connectedGatewayEntries() -> [GatewayRegistryEntry] {
-        let registry = self.loadGatewayRegistry()
-        return registry.connectedStableIDs.compactMap { connectedID in
-            registry.entries.first {
-                GatewayStableIdentifier.matches($0.stableID, connectedID)
-            }
-        }
-    }
 }

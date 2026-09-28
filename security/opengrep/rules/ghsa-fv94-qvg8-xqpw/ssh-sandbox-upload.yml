@@ -1,0 +1,32 @@
+rules:
+  - id: ssh-sandbox-upload-missing-symlink-boundary-check
+    languages:
+      - typescript
+      - javascript
+    severity: WARNING
+    message: Remote sandbox tar uploads must await assertSafeUploadSymlinks on the uploaded directory before spawning tar, so escaping links are rejected before remote extraction.
+    patterns:
+      - pattern-inside: |
+          async function $FUNC(...){
+            ...
+          }
+      - pattern: |
+          $TAR = spawn("tar", ["-C", $LOCAL, "-cf", "-", "."], ...)
+      - pattern: |
+          $SSH = spawn($CMD, $ARGS, ...)
+      # A later safe upload must not exempt an earlier unvalidated spawn.
+      - pattern-not-inside: |
+          await assertSafeUploadSymlinks($LOCAL);
+          ...
+          $TAR = spawn("tar", ["-C", $LOCAL, "-cf", "-", "."], ...)
+      - pattern-not-inside: |
+          await assertSafeUploadSymlinks($LOCAL, $SIGNAL);
+          ...
+          $TAR = spawn("tar", ["-C", $LOCAL, "-cf", "-", "."], ...)
+    metadata:
+      category: security
+      confidence: medium
+      ghsa: GHSA-FV94-QVG8-XQPW
+      advisory-url: https://github.com/openclaw/openclaw/security/advisories/GHSA-FV94-QVG8-XQPW
+      detector-bucket: precise
+      source-run: 2026-04-17T07-37-10Z

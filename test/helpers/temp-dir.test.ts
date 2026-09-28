@@ -3,12 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveNativeFixtureShortPath } from "../scripts/native-boundary-fixture.js";
-import {
-  cleanupTempDirs,
-  createTempDirTracker,
-  makeTempDir,
-  useAutoCleanupTempDirTracker,
-} from "./temp-dir.js";
+import { cleanupTempDirs, makeTempDir, useAutoCleanupTempDirTracker } from "./temp-dir.js";
 
 const tempDirs = new Set<string>();
 
@@ -79,29 +74,6 @@ describe("temp-dir test helpers", () => {
       remove.mockRestore();
       cleanupTempDirs(dirs);
     }
-  });
-
-  it("tracks created temp dirs and removes populated dirs", () => {
-    const tracker = createTempDirTracker();
-    const dir = tracker.make("openclaw-temp-dir-helper-");
-    tempDirs.add(dir);
-    fs.writeFileSync(path.join(dir, "artifact.txt"), "artifact\n", "utf8");
-
-    tracker.cleanup();
-    tempDirs.delete(dir);
-
-    expect(fs.existsSync(dir)).toBe(false);
-    expect([...tracker.dirs]).toEqual([]);
-  });
-
-  it("supports existing caller-owned temp dir collections", () => {
-    const dir = makeTempDir(tempDirs, "openclaw-temp-dir-existing-");
-    fs.mkdirSync(path.join(dir, "nested"), { recursive: true });
-
-    cleanupTempDirs(tempDirs);
-
-    expect(fs.existsSync(dir)).toBe(false);
-    expect([...tempDirs]).toEqual([]);
   });
 
   it("creates default temp dirs under the canonical system temp path", () => {

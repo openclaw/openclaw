@@ -69,18 +69,34 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
     provider: WorkerProvider,
     signal?: AbortSignal,
     beforeProvision?: () => void,
-  ) => {
-    if (!provider.requiresNodeEnrollment || !options.prepareNodeBootstrap) {
+  ): Promise<
+    | { identity: WorkerNodeRuntimeIdentity; installation: WorkerInstallationArtifact | undefined }
+    | undefined
+  > => {
+    const prepareNodeBootstrap = options.prepareNodeBootstrap;
+    if (!provider.requiresNodeEnrollment || !prepareNodeBootstrap) {
       return undefined;
     }
     let identity: WorkerNodeRuntimeIdentity;
     let installation: WorkerInstallationArtifact | undefined;
     // Replay also identifies the requested bytes; it must not relabel a previously enrolled node.
     try {
-      const nodeBootstrapSha256 = await options.prepareNodeBootstrap(record, signal);
-      if (record.profileSnapshot.project) {
-        installation = await prepareBundle(undefined, signal);
+      const [bootstrapResult, installationResult] = await racePromiseWithAbortSignal(
+        Promise.allSettled([
+          Promise.resolve().then(() => prepareNodeBootstrap(record, signal)),
+          record.profileSnapshot.project ? prepareBundle(undefined, signal) : undefined,
+        ]),
+        signal,
+      );
+      signal?.throwIfAborted();
+      if (bootstrapResult.status === "rejected") {
+        throw bootstrapResult.reason;
       }
+      if (installationResult.status === "rejected") {
+        throw installationResult.reason;
+      }
+      const nodeBootstrapSha256 = bootstrapResult.value;
+      installation = installationResult.value;
       const preparation = readWorkerProjectPreparation(record.profileSnapshot.project);
       if (
         preparation &&
@@ -107,9 +123,9 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
         current.destroyRequestedAtMs === null
       ) {
         if (current.state === "requested") {
-          options.move(current, "failed", { lastError: boundedError(error) });
+          await options.move(current, "failed", { lastError: boundedError(error) });
         } else if (current.state === "provisioning") {
-          options.saveError(current, error);
+          await options.saveError(current, error);
         }
       }
       throw options.serviceError(
@@ -293,25 +309,19 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
       cancellation?.assertActive();
       beforeProvision?.();
       const current = options.store.get(record.environmentId);
-      if (current?.preparation?.consumedAtMs === null && current.preparation.expiresAtMs <= now()) {
-        options.store.requestDestroy({
-          environmentId: current.environmentId,
-          state: current.state,
-          lastError: "Unused prepared worker expired before readiness",
-        });
-      }
       if (
         options.isStopping() ||
         !current ||
         current.state !== record.state ||
         current.provisionOperationId !== record.provisionOperationId ||
         current.ownerEpoch !== record.ownerEpoch ||
+        (current.preparation?.consumedAtMs === null && current.preparation.expiresAtMs <= now()) ||
         (current.preparation !== null && current.preparation.consumedAtMs !== null) ||
         (preparation !== undefined &&
           (!enrollmentOwner?.nodeSetupId ||
             current.nodeSetupId !== enrollmentOwner.nodeSetupId ||
             current.nodeDeviceId !== lease.node.deviceId)) ||
-        options.store.get(record.environmentId)?.destroyRequestedAtMs !== null
+        current.destroyRequestedAtMs !== null
       ) {
         throw new Error("Prepared worker provisioning owner is no longer current");
       }
@@ -327,11 +337,15 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
       if (preparation && artifact.tarballSha256 !== preparation.artifacts.workerArchiveSha256) {
         throw new Error("Worker bundle differs from its admitted preparation");
       }
+      // Conversation attachments do not run the agent; only worker turns need its prewarm.
+      const prewarm =
+        record.profileSnapshot.executionMode !== "remote-exec" &&
+        !(await options.store.hasSessionAttachment(record.environmentId));
+      assertCurrent();
       nodeBuild = await options.ensureNodeWorkerBundle({
         deviceId: lease.node.deviceId,
         artifact,
-        // Remote execution uses its harness runtime; unspecified mode retains worker prewarming.
-        prewarm: record.profileSnapshot.executionMode !== "remote-exec",
+        prewarm,
         signal: cancellation?.signal,
         assertCurrent,
       });
@@ -356,9 +370,15 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
         assertCurrent();
       }
     } catch (error) {
+      await cancellation?.settleStopIntent();
       return await options.failBootstrap(record, lease.leaseId, provider, error, nodePatch);
     }
-    return options.commitReady(record, { ...nodeBuild, installKind: "bundle" }, nodePatch);
+    return options.commitReady(
+      record,
+      { ...nodeBuild, installKind: "bundle" },
+      nodePatch,
+      assertCurrent,
+    );
   };
 
   return { prepare, createEnrollmentOperation, finish };

@@ -3,11 +3,14 @@ import {
   readSessionTranscriptMessageEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
+import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import { addSessionSuggestion } from "../../config/sessions/session-suggestion-store.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { prepareGatewayRecipientProfile } from "../expected-profile.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { handleGatewayRequest } from "../server-methods.js";
 import { getSessionSuggestionTestMocks } from "./sessions-suggestions.test-mocks.js";
 import {
   call,
@@ -20,8 +23,89 @@ import {
 
 const mocks = getSessionSuggestionTestMocks();
 registerSessionSuggestionTestLifecycle(mocks);
+// Register shared mocks before the handlers capture their presence dependency.
+const { sessionSuggestionHandlers } = await import("./sessions-suggestions.js");
 
 describe("session suggestion visibility and role ceilings", () => {
+  it("retains committed suggestion visibility through a tentative role relaxation", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const owner = ensureProfileForEmail("policy-suggestion-owner@example.test");
+      const reader = ensureProfileForEmail("policy-suggestion-reader@example.test");
+      const requestClient = client(reader.id, "Reader");
+      requestClient.connect.scopes = ["operator.sessions.read"];
+      prepareGatewayRecipientProfile(requestClient);
+      const policy = (others: "view" | "write"): OpenClawConfig => ({
+        gateway: {
+          roles: {
+            default: "reader",
+            definitions: {
+              reader: { scopes: ["operator.sessions.read"], agents: "*", sessions: { others } },
+            },
+          },
+        },
+      });
+      const runtime = policy("write");
+      let committed = policy("view");
+      await state.writeConfig(runtime);
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "policy-suggestions",
+          updatedAt: 1,
+          visibility: "suggest",
+          createdActor: { type: "human", source: "profile", id: owner.id },
+        },
+      );
+      for (const [id, authorId] of [
+        ["own-idea", reader.id],
+        ["other-idea", owner.id],
+      ] as const) {
+        addSessionSuggestion(
+          { agentId: "main", sessionKey },
+          {
+            id,
+            authorId,
+            text: id,
+            expectedSessionId: "policy-suggestions",
+          },
+        );
+      }
+      const requestContext = createDirectChatContext({
+        getRuntimeConfig: () => runtime,
+        getCommittedRuntimeConfig: () => committed,
+      });
+      for (const phase of ["tentative", "committed"] as const) {
+        if (phase === "committed") {
+          committed = runtime;
+        }
+        const respond = vi.fn();
+        await handleGatewayRequest({
+          req: {
+            type: "req",
+            id: phase,
+            method: "session.suggestions.list",
+            params: { sessionKey },
+          },
+          client: requestClient,
+          context: requestContext,
+          respond,
+          isWebchatConnect: () => true,
+          extraHandlers: sessionSuggestionHandlers,
+        });
+        expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
+          role: phase === "tentative" ? "viewer" : "member",
+          suggestions:
+            phase === "tentative"
+              ? [expect.objectContaining({ id: "own-idea" })]
+              : expect.arrayContaining([
+                  expect.objectContaining({ id: "own-idea" }),
+                  expect.objectContaining({ id: "other-idea" }),
+                ]),
+        });
+      }
+    });
+  });
+
   it("lets a suggest viewer add and list only their own suggestion", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await upsertDefaultSuggestionSession();
@@ -222,6 +306,7 @@ describe("session suggestion visibility and role ceilings", () => {
 
   it("keeps incognito suggestion and typing surfaces admin-only", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      vi.useFakeTimers();
       const incognitoKey = "agent:main:dashboard:incognito-suggestions";
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: incognitoKey },
@@ -285,6 +370,37 @@ describe("session suggestion visibility and role ceilings", () => {
       expect(adminList.responses[0]?.[1]).toMatchObject({
         role: "admin",
         suggestions: [{ id: "incognito-suggestion", text: "private suggestion" }],
+      });
+
+      mocks.presence = ["admin", "other-admin"].map((id) => ({
+        user: { id, identity: { type: "profile", id } },
+        watchedSessions: [incognitoKey],
+      }));
+      const broadcast = vi.fn();
+      const typingContext = context(broadcast);
+      const admin = client("admin", "Admin", true);
+      const typeDraft = (preview: string) =>
+        call(
+          "session.typing",
+          { sessionKey: incognitoKey, sessionId: "session-incognito", typing: true, preview },
+          admin,
+          typingContext,
+        );
+      expect((await typeDraft("first private draft")).responses[0]?.[1]).toEqual({
+        ok: true,
+        broadcast: true,
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      expect((await typeDraft("latest private draft")).responses[0]?.[1]).toEqual({
+        ok: true,
+        broadcast: false,
+      });
+      await vi.advanceTimersByTimeAsync(150);
+      expect(broadcast).toHaveBeenCalledTimes(2);
+      expect(broadcast.mock.lastCall?.[1]).toMatchObject({
+        sessionKey: incognitoKey,
+        sessionId: "session-incognito",
+        preview: "latest private draft",
       });
     });
   });

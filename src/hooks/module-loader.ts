@@ -4,25 +4,13 @@ import { pathToFileURL } from "node:url";
 type ModuleNamespace = Record<string, unknown>;
 type GenericFunction = (...args: never[]) => unknown;
 
-function resolveFileModuleUrl(params: {
-  modulePath: string;
-  cacheBust?: boolean;
-  nowMs?: number;
-}): string {
-  const url = pathToFileURL(params.modulePath).href;
-  if (!params.cacheBust) {
-    return url;
-  }
-  const ts = params.nowMs ?? Date.now();
-  return `${url}?t=${ts}`;
-}
-
 export async function importFileModule(params: {
   modulePath: string;
   cacheBust?: boolean;
   nowMs?: number;
 }): Promise<ModuleNamespace> {
-  const specifier = resolveFileModuleUrl(params);
+  const url = pathToFileURL(params.modulePath).href;
+  const specifier = params.cacheBust ? `${url}?t=${params.nowMs ?? Date.now()}` : url;
   return (await import(specifier)) as ModuleNamespace;
 }
 

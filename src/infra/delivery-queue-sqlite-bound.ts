@@ -72,25 +72,24 @@ export function pruneDeliveryQueueTombstones(
   db: DatabaseSync,
   now: number,
   prefix?: { queueName: string; idPrefix: string },
-): void {
-  // sqlite-allow-raw: JSON1 and a window rank enforce authored policies in place.
-  db.prepare(`WITH policies AS (
+): boolean {
+  // Let producer-scoped cleanup use the existing queue/status indexes.
+  const result =
+    // sqlite-allow-raw: JSON1 and a window rank enforce authored policies in place.
+    db
+      .prepare(`WITH policies AS (
       ${BOUNDED_DELIVERY_RECEIPTS_SQL}
-      AND (@queueName IS NULL OR (queue_name = @queueName AND id_prefix = @idPrefix))
+      ${prefix ? "AND queue_name = @queueName AND id_prefix = @idPrefix" : ""}
     ), ranked AS (
       SELECT *, row_number() OVER (PARTITION BY queue_name, id_prefix
         ORDER BY enqueued_at DESC, id DESC) retention_rank FROM policies
     ) DELETE FROM delivery_queue_entries WHERE rowid IN (
       SELECT receipt_rowid FROM ranked
       WHERE enqueued_at < @now - max_age_ms OR retention_rank > max_entries
-    )`).run({
-    now,
-    queueName: prefix?.queueName ?? null,
-    idPrefix: prefix?.idPrefix ?? null,
-  });
-  if (!prefix) {
-    pruneOrdinaryDeliveryReceipts(db, now);
-  }
+    )`)
+      .run(prefix ? { now, ...prefix } : { now });
+  const ordinaryPruned = prefix ? false : pruneOrdinaryDeliveryReceipts(db, now);
+  return result.changes > 0 || ordinaryPruned;
 }
 
 /** Cheap maintenance cleanup: age predicates only, with no window sort. */
@@ -138,8 +137,8 @@ export function terminalizeBoundDeliveryQueueEntry(
   return executeSqliteQuerySync(db, query).numAffectedRows === 1n;
 }
 
-function pruneOrdinaryDeliveryReceipts(db: DatabaseSync, now: number): void {
-  executeSqliteQuerySync(
+function pruneOrdinaryDeliveryReceipts(db: DatabaseSync, now: number): boolean {
+  const result = executeSqliteQuerySync(
     db,
     getNodeSqliteKysely<DeliveryQueueDatabase>(db)
       .deleteFrom("delivery_queue_entries")
@@ -152,6 +151,7 @@ function pruneOrdinaryDeliveryReceipts(db: DatabaseSync, now: number): void {
         ]),
       ),
   );
+  return (result.numAffectedRows ?? 0n) > 0n;
 }
 
 type BoundDeliveryQueueEntry = {
@@ -324,7 +324,7 @@ export function upsertBoundDeliveryQueueEntryInDatabase(
 
 /** Recovery and media custody share the same inventory of unfinished work. */
 export function deliveryQueueEntriesQuery(
-  database: OpenClawStateDatabase,
+  database: Pick<OpenClawStateDatabase, "db">,
   queueNames: readonly (string | RawBuilder<string>)[],
   mode: DeliveryQueueReadMode,
 ) {

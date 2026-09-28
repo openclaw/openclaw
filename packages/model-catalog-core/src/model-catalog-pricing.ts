@@ -11,13 +11,14 @@ import { normalizeModelCatalogProviderId } from "./model-catalog-refs.js";
 import type { ModelCatalogCost, ModelCatalogTieredCost } from "./model-catalog-types.js";
 
 export const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
+export const MODELS_DEV_CATALOG_URL = "https://models.opencode.ai/api.json";
 export const LITELLM_PRICING_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
 export const MODEL_PRICING_SOURCES = [
   {
     id: "openCode",
     label: "OpenCode",
-    url: "https://models.opencode.ai/api.json",
+    url: MODELS_DEV_CATALOG_URL,
     authoritative: true,
   },
   {
@@ -43,6 +44,14 @@ export const MODEL_PRICING_SOURCES = [
     label: "DeepInfra",
     url: "https://api.deepinfra.com/models/list",
     authoritative: true,
+  },
+  // Non-authoritative order is price precedence. models.dev lists each provider's own
+  // billing; OpenRouter's feed describes OpenRouter's billing and prices only its own keys.
+  {
+    id: "modelsDev",
+    label: "models.dev",
+    url: MODELS_DEV_CATALOG_URL,
+    authoritative: false,
   },
   { id: "openRouter", label: "OpenRouter", url: OPENROUTER_MODELS_URL, authoritative: false },
   { id: "liteLLM", label: "LiteLLM", url: LITELLM_PRICING_URL, authoritative: false },

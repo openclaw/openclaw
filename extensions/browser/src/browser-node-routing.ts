@@ -1,7 +1,7 @@
+import { resolveNodeIdFromList } from "openclaw/plugin-sdk/agent-harness-runtime";
 /** Shared browser-node selection for agent tools and Gateway requests. */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { BROWSER_PROXY_COMMAND } from "./browser-node-commands.js";
-import { resolveNodeIdFromList } from "./sdk-setup-tools.js";
 
 export type BrowserNodeTarget = {
   nodeId: string;

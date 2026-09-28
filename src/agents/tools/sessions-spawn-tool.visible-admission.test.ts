@@ -2,15 +2,15 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import type { prepareModelChoice } from "../model-runtime-choice.js";
+import { callInProcessGatewayTool } from "./in-process-gateway.js";
 import { createSessionsSpawnTool } from "./sessions-spawn-tool.js";
 
 const hoisted = vi.hoisted(() => ({ prepareModelChoiceMock: vi.fn<typeof prepareModelChoice>() }));
-vi.mock("../subagents/spawn/subagent-spawn-deps.js", () => ({
-  getSubagentSpawnDeps: () => ({ prepareModelChoice: hoisted.prepareModelChoiceMock }),
+vi.mock("../subagents/spawn/subagent-spawn.runtime.js", () => ({
+  prepareModelChoice: hoisted.prepareModelChoiceMock,
 }));
 vi.mock("../subagents/registry/subagent-registry.js", () => ({
   registerSubagentRun: vi.fn(),
-  getSubagentDeliveryBacklogPressure: () => ({ suspended: 0, blocked: false }),
 }));
 
 it("rejects an unsupported visible model before creating a session or registering a run", async () => {
@@ -47,6 +47,55 @@ it("rejects an unsupported visible model before creating a session or registerin
     expect(hoisted.prepareModelChoiceMock).toHaveBeenCalledWith(
       expect.objectContaining({ raw: "xai/nonexistent-native-fixture", source: "override" }),
     );
+  });
+});
+
+it.each([
+  {
+    name: "reports the human owner returned by visible session creation",
+    actor: { type: "human", id: "profile-vito" },
+    identity: undefined,
+    owner: { type: "human", id: "profile-vito" },
+  },
+  {
+    name: "preserves the configured agent label for an ID-only stored owner",
+    actor: { type: "agent", id: "main" },
+    identity: { name: "Roboclaw" },
+    owner: { type: "agent", id: "main", label: "Roboclaw" },
+  },
+])("$name", async ({ actor, identity, owner }) => {
+  hoisted.prepareModelChoiceMock.mockResolvedValue({
+    kind: "automatic",
+    ref: { provider: "mock-provider", model: "primary" },
+  });
+  const gateway = { call: callInProcessGatewayTool };
+  vi.spyOn(gateway, "call").mockResolvedValue({
+    key: "agent:main:dashboard:owned-child",
+    runStarted: true,
+    runId: "run-visible",
+    entry: { owner: { actor } },
+  });
+  const tool = createSessionsSpawnTool({
+    agentSessionKey: "agent:main:main",
+    config: {
+      agents: {
+        defaults: { model: "mock-provider/primary" },
+        entries: { main: { identity } },
+      },
+    },
+    callGateway: gateway.call,
+    registerRun: vi.fn(),
+    countActiveRuns: () => 0,
+  });
+
+  const result = await tool.execute("owned-visible", {
+    task: "inspect the repository",
+    visible: true,
+  });
+
+  expect(result.details).toMatchObject({
+    status: "accepted",
+    owner,
   });
 });
 

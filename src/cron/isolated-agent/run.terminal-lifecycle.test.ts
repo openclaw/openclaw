@@ -188,7 +188,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
     runCliAgentMock.mockImplementation(async (runParams: RunCliAgentParams) => {
       runIds.add(runParams.runId);
       attemptIndex++;
-      runParams.onExecutionStarted?.();
+      await runParams.onExecutionStarted?.();
       secondPreparing.resolve();
       await releaseSecond.promise;
       if (outcome === "cli-exhausted-throw") {
@@ -236,7 +236,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
         ...runParams,
         runtimeKind: "embedded",
       });
-      runParams.onExecutionStarted?.();
+      await runParams.onExecutionStarted?.();
       const authStorage = AuthStorage.inMemory();
       const native = createStubSessionHarness();
       const stream = prepareEmbeddedAttemptStream({
@@ -269,8 +269,19 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
           modelRegistry: ModelRegistry.inMemory(authStorage),
           startedAtMs: Date.now(),
         },
-        activeSession: native.session,
-        hookRunner: getGlobalHookRunner(),
+        agentSession: {
+          activeSession: native.session,
+          hookRunner: getGlobalHookRunner(),
+          clientToolCallSlots: [],
+          hasDeliveredSourceReply: () => false,
+          markSourceReplyDelivered: vi.fn(),
+          builtinToolNames: new Set(),
+          coreBuiltinToolNames: new Set(),
+          replaySafeToolNames: new Set(),
+          codeModeExecToolNames: new Set(),
+          sideEffectToolOwners: new Map(),
+          trustedLocalMediaToolNames: new Set(),
+        },
         hookAgentId: "main",
         diagnosticTrace: { traceId: "1".repeat(32) },
         diagnosticOwner: createDiagnosticEmbeddedRunOwner({
@@ -278,7 +289,6 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
           sessionKey,
           runId: runParams.runId,
         }),
-        clientToolCallSlots: [],
         nestedToolActivities: [],
         isReplaySafeTool: () => false,
         runAbortController: new AbortController(),
@@ -290,14 +300,8 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
           timedOut: false,
           yieldDetected: false,
         }),
-        hasDeliveredSourceReply: () => false,
-        markSourceReplyDelivered: vi.fn(),
         onBlockReply: undefined,
         onBlockReplyFlush: undefined,
-        sandboxSessionKey: sessionKey,
-        builtinToolNames: new Set(),
-        replaySafeToolNames: new Set(),
-        trustedLocalMediaToolNames: new Set(),
       });
       const emitAssistantEnd = (message: ReturnType<typeof makeAssistantMessageFixture>) => {
         native.emit({ type: "message_start", message });

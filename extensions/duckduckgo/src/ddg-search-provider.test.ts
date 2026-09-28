@@ -1,5 +1,5 @@
-// Duckduckgo tests cover ddg search provider plugin behavior.
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 import { createDuckDuckGoWebSearchProvider as createDuckDuckGoWebSearchContractProvider } from "../web-search-contract-api.js";
 import { resolveDdgRegion, resolveDdgSafeSearch } from "./config.js";
@@ -33,17 +33,27 @@ describe("duckduckgo web search provider", () => {
     runDuckDuckGoSearch.mockImplementation(async (params: Record<string, unknown>) => params);
   });
 
+  afterEach(() => vi.restoreAllMocks());
+
+  function createSearchTool(config: OpenClawConfig = {}) {
+    const tool = createDuckDuckGoWebSearchProvider().createTool({ config });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+    return tool;
+  }
+
+  function pluginConfig(webSearch: { region?: string; safeSearch?: string }) {
+    return { plugins: { entries: { duckduckgo: { config: { webSearch } } } } };
+  }
+
   async function runHtmlSearch(query: string, html: string) {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(html, {
         headers: { "content-type": "text/html" },
       }),
     );
-    try {
-      return await runActualDuckDuckGoSearch({ query, cacheTtlMinutes: 0 });
-    } finally {
-      fetchMock.mockRestore();
-    }
+    return await runActualDuckDuckGoSearch({ query, cacheTtlMinutes: 0 });
   }
 
   function readSearchResults(payload: Record<string, unknown>) {
@@ -73,21 +83,14 @@ describe("duckduckgo web search provider", () => {
     ]);
     expect(provider.requiresCredential).toBe(false);
     expect(provider.credentialPath).toBe("");
-    const pluginEntry = applied.plugins?.entries?.duckduckgo;
-    if (!pluginEntry) {
-      throw new Error("expected DuckDuckGo plugin entry");
-    }
-    expect(pluginEntry.enabled).toBe(true);
+    expect(applied.plugins?.entries?.duckduckgo?.enabled).toBe(true);
   });
 
   it("maps generic tool arguments into DuckDuckGo search params", async () => {
-    const provider = createDuckDuckGoWebSearchProvider();
-    const tool = provider.createTool({
-      config: { test: true },
-    } as never);
-    if (!tool) {
-      throw new Error("Expected tool definition");
-    }
+    const config = pluginConfig({ region: "de-de" });
+    const tool = createSearchTool(config);
+    const response = { results: [{ url: "https://example.com" }] };
+    runDuckDuckGoSearch.mockResolvedValueOnce(response);
 
     const result = await tool.execute({
       query: "openclaw docs",
@@ -97,29 +100,17 @@ describe("duckduckgo web search provider", () => {
     });
 
     expect(runDuckDuckGoSearch).toHaveBeenCalledWith({
-      config: { test: true },
+      config,
       query: "openclaw docs",
       count: 4,
       region: "us-en",
       safeSearch: "off",
     });
-    expect(result).toEqual({
-      config: { test: true },
-      query: "openclaw docs",
-      count: 4,
-      region: "us-en",
-      safeSearch: "off",
-    });
+    expect(result).toEqual(response);
   });
 
   it("rejects fractional and out-of-range counts before searching", async () => {
-    const provider = createDuckDuckGoWebSearchProvider();
-    const tool = provider.createTool({
-      config: { test: true },
-    } as never);
-    if (!tool) {
-      throw new Error("Expected tool definition");
-    }
+    const tool = createSearchTool();
 
     await expect(tool.execute({ query: "openclaw docs", count: 4.5 })).rejects.toThrow(
       "count must be an integer from 1 to 10.",
@@ -131,10 +122,7 @@ describe("duckduckgo web search provider", () => {
   });
 
   it("forwards caller cancellation without starting an already canceled search", async () => {
-    const tool = createDuckDuckGoWebSearchProvider().createTool({ config: {} });
-    if (!tool) {
-      throw new Error("Expected tool definition");
-    }
+    const tool = createSearchTool();
     const active = new AbortController();
 
     await tool.execute({ query: "duckduckgo cancellation forwarding" }, { signal: active.signal });
@@ -171,23 +159,31 @@ describe("duckduckgo web search provider", () => {
       signal: controller.signal,
     });
 
-    try {
-      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
-      controller.abort(new Error("DuckDuckGo request canceled in flight"));
-      await expect(result).rejects.toThrow("DuckDuckGo request canceled in flight");
-      expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
-      fetchMock.mockResolvedValueOnce(
-        new Response('<a class="result__a" href="https://example.com">Example</a>', {
-          headers: { "content-type": "text/html" },
-        }),
-      );
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    controller.abort(new Error("DuckDuckGo request canceled in flight"));
+    await expect(result).rejects.toThrow("DuckDuckGo request canceled in flight");
+    expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+    fetchMock.mockResolvedValueOnce(
+      new Response('<a class="result__a" href="https://example.com">Example</a>', {
+        headers: { "content-type": "text/html" },
+      }),
+    );
 
-      await runActualDuckDuckGoSearch({ query: "duckduckgo in-flight cancellation" });
+    await runActualDuckDuckGoSearch({ query: "duckduckgo in-flight cancellation" });
 
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-    } finally {
-      fetchMock.mockRestore();
-    }
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves HTTP status for search failure guidance", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("rate limited", { status: 429 }));
+
+    await expect(
+      runActualDuckDuckGoSearch({ query: "duckduckgo rate limited", cacheTtlMinutes: 0 }),
+    ).rejects.toMatchObject({
+      status: 429,
+      statusCode: 429,
+      message: "DuckDuckGo search error (429): rate limited",
+    });
   });
 
   it("bounds successful DuckDuckGo HTML bodies without using response.text()", async () => {
@@ -198,92 +194,30 @@ describe("duckduckgo web search provider", () => {
       headers: { "Content-Type": "text/html" },
     });
     const textSpy = vi.spyOn(streamed.response, "text").mockRejectedValue(new Error("unbounded"));
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(streamed.response);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(streamed.response);
 
-    try {
-      await expect(
-        runActualDuckDuckGoSearch({
-          query: "duckduckgo bounded response",
-          cacheTtlMinutes: 0,
-        }),
-      ).rejects.toThrow("DuckDuckGo search: text response exceeds 16777216 bytes");
+    await expect(
+      runActualDuckDuckGoSearch({
+        query: "duckduckgo bounded response",
+        cacheTtlMinutes: 0,
+      }),
+    ).rejects.toThrow("DuckDuckGo search: text response exceeds 16777216 bytes");
 
-      expect(streamed.getReadCount()).toBeLessThan(32);
-      expect(streamed.wasCanceled()).toBe(true);
-      expect(textSpy).not.toHaveBeenCalled();
-    } finally {
-      fetchMock.mockRestore();
-    }
+    expect(streamed.getReadCount()).toBeLessThan(32);
+    expect(streamed.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
   });
 
   it("reads region from plugin config and normalizes empty values away", () => {
-    expect(
-      resolveDdgRegion({
-        plugins: {
-          entries: {
-            duckduckgo: {
-              config: {
-                webSearch: {
-                  region: "de-de",
-                },
-              },
-            },
-          },
-        },
-      } as never),
-    ).toBe("de-de");
-
-    expect(
-      resolveDdgRegion({
-        plugins: {
-          entries: {
-            duckduckgo: {
-              config: {
-                webSearch: {
-                  region: "   ",
-                },
-              },
-            },
-          },
-        },
-      } as never),
-    ).toBeUndefined();
+    expect(resolveDdgRegion(pluginConfig({ region: "de-de" }))).toBe("de-de");
+    expect(resolveDdgRegion(pluginConfig({ region: "   " }))).toBeUndefined();
   });
 
   it("defaults safeSearch to moderate and accepts strict and off", () => {
     expect(resolveDdgSafeSearch(undefined)).toBe("moderate");
 
-    expect(
-      resolveDdgSafeSearch({
-        plugins: {
-          entries: {
-            duckduckgo: {
-              config: {
-                webSearch: {
-                  safeSearch: "strict",
-                },
-              },
-            },
-          },
-        },
-      } as never),
-    ).toBe("strict");
-
-    expect(
-      resolveDdgSafeSearch({
-        plugins: {
-          entries: {
-            duckduckgo: {
-              config: {
-                webSearch: {
-                  safeSearch: "off",
-                },
-              },
-            },
-          },
-        },
-      } as never),
-    ).toBe("off");
+    expect(resolveDdgSafeSearch(pluginConfig({ safeSearch: "strict" }))).toBe("strict");
+    expect(resolveDdgSafeSearch(pluginConfig({ safeSearch: "off" }))).toBe("off");
   });
 
   it("keeps invalid numeric entities intact in returned results", async () => {
@@ -364,16 +298,7 @@ describe("duckduckgo web search provider", () => {
   });
 
   it("rejects bot challenge pages without flagging ordinary result snippets", async () => {
-    const challengeHtml = `
-      <html>
-        <body>
-          <form>
-            <h1>Are you a human?</h1>
-            <div class="g-recaptcha">captcha</div>
-          </form>
-        </body>
-      </html>
-    `;
+    const challengeHtml = '<form>Are you a human?<div class="g-recaptcha">captcha</div></form>';
     const normalHtml = `
       <a class="result__a" href="https://example.com/challenge">Coding Challenge</a>
       <a class="result__snippet">A fun coding challenge for interview prep.</a>

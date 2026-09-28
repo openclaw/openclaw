@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 362706,
-  "reason": "Maintainer-approved correction in #149291 for the existing startup bundle: exact base 7b6094ec7b7d and CI merge b524940307fc emitted byte-identical Control UI output at 362706 B with Vite 8.2.2/Pako 3.0.1 on Node 24.21.0. CI run 35173887678 also measured 362706 B. The 512 B growth and 64 B build variance allowances remain unchanged.",
-  "updatedAt": "2026-09-17"
+  "startupJsGzipBytes": 371771,
+  "reason": "Approved by @steipete for PR #158567 on 2026-09-27: measured startup bundle 371,771 B after main reconciliation and canonical boot-module regeneration, +1,015 B (0.27%) over the previous baseline. Paired baseline and cap retain the 512 B growth and 64 B build-variance allowances, yielding a 372,347 B enforcement limit.",
+  "updatedAt": "2026-09-27"
 }

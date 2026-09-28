@@ -255,6 +255,51 @@ struct ChatViewModelOutboxSettingsTests {
         }
     }
 
+    @Test(arguments: [false, true])
+    @MainActor
+    func `settings parking revalidates the composer owner before dispatch`(switchSession: Bool) async throws {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let parkingStarted = DeleteGate()
+        let parkingRelease = DeleteGate()
+        let outbox = ScriptedOutbox(base: store, parkingHook: {
+            await parkingStarted.open()
+            await parkingRelease.wait()
+        })
+        let patchCalls = SettingsPatchCounter()
+        let catalog = OpenClawChatComposerCapabilityCatalog(
+            sessionSettingsAvailable: true,
+            permissionMutationAvailable: true,
+            sessionSettingsCASAvailable: true)
+        let transport = OutboxTestTransport(
+            healthy: false,
+            composerCapabilityCatalog: catalog,
+            sessionSettingsPatchHook: { await patchCalls.increment() })
+        let vm = await makeOutboxViewModel(transport: transport, outbox: outbox)
+        defer { vm.detachTransport() }
+        vm.sessions = [outboxSessionEntry(
+            key: "main",
+            thinkingLevels: ["off"],
+            sessionID: "session-main",
+            permissionMode: .full)]
+        vm.sessionId = "session-main"
+        await vm.loadComposerCapabilities()
+        let target = vm.currentModelPatchTarget()
+
+        vm.selectComposerPermissionMode(.guarded)
+        await parkingStarted.wait()
+        if switchSession {
+            vm.switchSession(to: "other")
+        }
+        await parkingRelease.open()
+        await vm.waitForPendingSessionSettings(for: target)
+
+        #expect(await patchCalls.current() == (switchSession ? 0 : 1))
+        if !switchSession {
+            #expect(vm.composerPermissionMode == .guarded)
+        }
+    }
+
     @Test func `settings mutation does not reach gateway when durable parking fails`() async throws {
         let (store, _, databaseDirectory) = try makeOutboxStore()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }

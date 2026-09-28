@@ -1,8 +1,5 @@
-// Clickclack tests cover inbound plugin behavior.
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { buildAgentSessionKey, resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+// Clickclack tests cover inbound plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   recordPendingDiscussionOpen,
@@ -13,13 +10,16 @@ import {
   type ClickClackDiscussionBinding,
 } from "./discussions/binding-store.js";
 import { markClickClackDiscussionChannelRevoked } from "./discussions/revoked-channel-store.js";
-import {
-  asyncDiscussionTestStore,
-  createDiscussionMemoryStore,
-} from "./discussions/service-test-support.js";
 import { handleClickClackInbound } from "./inbound.js";
+import {
+  createInboundRuntime,
+  publishInboundAccountConfig as publishAccountConfig,
+  createInboundMessage as createMessage,
+  createInboundDiscussionBinding,
+  createInboundDiscussionConfig,
+} from "./inbound.test-support.js";
 import { setClickClackRuntime } from "./runtime.js";
-import type { ClickClackMessage, CoreConfig, ResolvedClickClackAccount } from "./types.js";
+import type { CoreConfig, ResolvedClickClackAccount } from "./types.js";
 
 const sendClickClackTextMock = vi.hoisted(() => vi.fn());
 const VALID_MESSAGE_ID = "msg_01arz3ndektsv4rrffq69g5fav";
@@ -43,63 +43,7 @@ vi.mock("./outbound.js", () => ({
 }));
 
 function createRuntime(): PluginRuntime {
-  const runtime = createPluginRuntimeMock({
-    agent: {
-      runEmbeddedAgent: vi.fn().mockResolvedValue({
-        payloads: [{ text: "service bot online" }],
-        meta: {},
-      }),
-      session: {
-        getSessionEntry: vi.fn(() => ({ sessionId: "session-id", updatedAt: 1 })),
-      },
-    },
-    channel: {
-      routing: {
-        resolveAgentRoute: vi.fn(
-          (params: Parameters<PluginRuntime["channel"]["routing"]["resolveAgentRoute"]>[0]) =>
-            resolveAgentRoute(params),
-        ),
-        buildAgentSessionKey: vi.fn(
-          (params: Parameters<PluginRuntime["channel"]["routing"]["buildAgentSessionKey"]>[0]) =>
-            buildAgentSessionKey(params),
-        ),
-      },
-    },
-    llm: {
-      complete: vi.fn().mockResolvedValue({
-        text: "service bot online",
-        provider: "openai",
-        model: "gpt-5.4-mini",
-        agentId: "service-bot",
-        usage: {},
-        execution: {
-          mode: "direct-provider",
-          owner: { kind: "provider", id: "openai" },
-        },
-        audit: {
-          caller: { kind: "plugin", id: "clickclack" },
-        },
-      }),
-    },
-  } as unknown as PluginRuntime);
-  configureDiscussionStore(runtime);
-  return runtime;
-}
-
-function configureDiscussionStore(runtime: PluginRuntime): void {
-  const stores = new Map<string, PluginStateSyncKeyedStore<unknown>>();
-  runtime.state.openSyncKeyedStore = vi.fn((options: { namespace: string }) => {
-    const existing = stores.get(options.namespace);
-    if (existing) {
-      return existing;
-    }
-    const created = createDiscussionMemoryStore<unknown>();
-    stores.set(options.namespace, created);
-    return created;
-  }) as unknown as PluginRuntime["state"]["openSyncKeyedStore"];
-  runtime.state.openKeyedStore = <T>(
-    options: Parameters<PluginRuntime["state"]["openKeyedStore"]>[0],
-  ) => asyncDiscussionTestStore(runtime.state.openSyncKeyedStore<T>(options));
+  return createInboundRuntime(true);
 }
 
 function createAgentAccount(
@@ -136,30 +80,10 @@ function createAgentAccount(
     ...overrides,
     config: {
       ...base.config,
+      workspace: overrides.workspace ?? base.workspace,
+      botUserId: overrides.botUserId,
       ...overrides.config,
     },
-  };
-}
-
-function createMessage(overrides: Partial<ClickClackMessage> = {}): ClickClackMessage {
-  return {
-    id: "msg_1",
-    workspace_id: "wsp_1",
-    channel_id: "chn_1",
-    author_id: "usr_owner",
-    thread_root_id: "msg_1",
-    body: "/fast on",
-    body_format: "markdown",
-    created_at: "2026-05-09T12:00:00.000Z",
-    author: {
-      id: "usr_owner",
-      kind: "human",
-      display_name: "Peter",
-      handle: "steipete",
-      avatar_url: "",
-      created_at: "2026-05-09T12:00:00.000Z",
-    },
-    ...overrides,
   };
 }
 
@@ -197,11 +121,12 @@ describe("handleClickClackInbound", () => {
       agentActivity: false,
       commandMenu: true,
       discussions: { enabled: false, workspace: "wsp_1", section: "Sessions" },
-      config: {},
+      config: { workspace: "wsp_1" },
       requireMention: false,
       mentionPatterns: [],
       groups: {},
     } satisfies ResolvedClickClackAccount;
+    publishAccountConfig(runtime, account, cfg);
 
     await handleClickClackInbound({
       account,
@@ -252,6 +177,7 @@ describe("handleClickClackInbound", () => {
       agentId: "service-bot",
       replyMode: "model",
     });
+    publishAccountConfig(runtime, account);
 
     await handleClickClackInbound({
       account,
@@ -284,13 +210,15 @@ describe("handleClickClackInbound", () => {
       audit: { caller: { kind: "plugin", id: "clickclack" } },
     });
     setClickClackRuntime(runtime);
+    const account = createAgentAccount({
+      accountId: "service",
+      agentId: "service-bot",
+      replyMode: "model",
+    });
+    publishAccountConfig(runtime, account);
 
     await handleClickClackInbound({
-      account: createAgentAccount({
-        accountId: "service",
-        agentId: "service-bot",
-        replyMode: "model",
-      }),
+      account,
       config: {} satisfies CoreConfig,
       message: createMessage({ body: "hello bot" }),
     });
@@ -317,12 +245,14 @@ describe("handleClickClackInbound", () => {
         },
       },
     } satisfies CoreConfig;
+    const account = createAgentAccount({
+      allowFrom: ["usr_owner"],
+      config: { allowFrom: ["usr_owner"] },
+    });
+    publishAccountConfig(runtime, account, cfg);
 
     await handleClickClackInbound({
-      account: createAgentAccount({
-        allowFrom: ["usr_owner"],
-        config: { allowFrom: ["usr_owner"] },
-      }),
+      account,
       config: cfg,
       message: createMessage(),
     });
@@ -345,11 +275,11 @@ describe("handleClickClackInbound", () => {
         allow: ["*"],
       },
     } satisfies CoreConfig;
+    const account = createAgentAccount({ toolsAllow: ["message"] });
+    publishAccountConfig(runtime, account, cfg);
 
     await handleClickClackInbound({
-      account: createAgentAccount({
-        toolsAllow: ["message"],
-      }),
+      account,
       config: cfg,
       message: createMessage(),
     });
@@ -374,25 +304,31 @@ describe("handleClickClackInbound", () => {
         },
       },
     } satisfies CoreConfig;
+    const defaultAccount = createAgentAccount();
+    const nativeProgressAccount = createAgentAccount({ nativeProgress: true });
+    const agentActivityAccount = createAgentAccount({ agentActivity: true });
 
+    publishAccountConfig(runtime, defaultAccount, cfg);
     await handleClickClackInbound({
-      account: createAgentAccount(),
+      account: defaultAccount,
       config: cfg,
       message: createMessage({
         id: VALID_MESSAGE_ID,
         thread_root_id: VALID_MESSAGE_ID,
       }),
     });
+    publishAccountConfig(runtime, nativeProgressAccount, cfg);
     await handleClickClackInbound({
-      account: createAgentAccount({ nativeProgress: true }),
+      account: nativeProgressAccount,
       config: cfg,
       message: createMessage({
         id: SECOND_VALID_MESSAGE_ID,
         thread_root_id: SECOND_VALID_MESSAGE_ID,
       }),
     });
+    publishAccountConfig(runtime, agentActivityAccount, cfg);
     await handleClickClackInbound({
-      account: createAgentAccount({ agentActivity: true }),
+      account: agentActivityAccount,
       config: cfg,
       message: createMessage({
         id: THIRD_VALID_MESSAGE_ID,
@@ -419,9 +355,11 @@ describe("handleClickClackInbound", () => {
   it("maps the authoritative message id to the agent run and correlates the final reply", async () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
+    const account = createAgentAccount();
+    publishAccountConfig(runtime, account);
 
     await handleClickClackInbound({
-      account: createAgentAccount(),
+      account,
       config: {} as CoreConfig,
       message: createMessage({
         id: VALID_MESSAGE_ID,
@@ -447,9 +385,11 @@ describe("handleClickClackInbound", () => {
   it("routes media replies through required durable delivery", async () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
+    const account = createAgentAccount();
+    publishAccountConfig(runtime, account);
 
     await handleClickClackInbound({
-      account: createAgentAccount(),
+      account,
       config: {} as CoreConfig,
       message: createMessage({
         id: VALID_MESSAGE_ID,
@@ -483,9 +423,11 @@ describe("handleClickClackInbound", () => {
   it("does not derive a run id from a noncanonical message id", async () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
+    const account = createAgentAccount({ nativeProgress: true });
+    publishAccountConfig(runtime, account);
 
     await handleClickClackInbound({
-      account: createAgentAccount({ nativeProgress: true }),
+      account,
       config: {} as CoreConfig,
       message: createMessage({ id: "msg_invalid" }),
     });
@@ -508,12 +450,14 @@ describe("handleClickClackInbound", () => {
         },
       },
     } satisfies CoreConfig;
+    const account = createAgentAccount({
+      allowFrom: ["dm:usr_owner"],
+      config: { allowFrom: ["dm:usr_owner"] },
+    });
+    publishAccountConfig(runtime, account, cfg);
 
     await handleClickClackInbound({
-      account: createAgentAccount({
-        allowFrom: ["dm:usr_owner"],
-        config: { allowFrom: ["dm:usr_owner"] },
-      }),
+      account,
       config: cfg,
       message: createMessage({
         channel_id: "",
@@ -548,9 +492,11 @@ describe("handleClickClackInbound", () => {
         },
       ],
     } satisfies CoreConfig;
+    const account = createAgentAccount({ agentId: "service-bot" });
+    publishAccountConfig(runtime, account, cfg);
 
     await handleClickClackInbound({
-      account: createAgentAccount({ agentId: "service-bot" }),
+      account,
       config: cfg,
       message: createMessage({
         channel_id: undefined,
@@ -577,34 +523,12 @@ describe("handleClickClackInbound", () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
     const mainSessionKey = "agent:research:main";
-    getClickClackDiscussionBindingStore(runtime).set(mainSessionKey, {
-      accountId: "default",
-      agentId: "research",
-      sessionId: "session-id",
-      serverBaseUrl: "http://127.0.0.1:8080",
-      externalRef: "openclaw:test:research",
-      externalUrl: "",
-      workspaceRef: "wsp_1",
-      workspaceId: "wsp_1",
-      channelId: "chn_1",
-      channelRouteId: "discussion-route",
-      workspaceRouteId: "workspace-route",
-      section: "Sessions",
-      archived: false,
-      label: "Research",
-    });
+    getClickClackDiscussionBindingStore(runtime).set(
+      mainSessionKey,
+      createInboundDiscussionBinding(),
+    );
 
-    const currentConfig = {
-      channels: {
-        clickclack: {
-          enabled: true,
-          baseUrl: "http://127.0.0.1:8080",
-          token: "test-token-placeholder",
-          workspace: "wsp_1",
-          discussions: { enabled: true, workspace: "wsp_1" },
-        },
-      },
-    } satisfies CoreConfig;
+    const currentConfig = createInboundDiscussionConfig() satisfies CoreConfig;
     vi.mocked(runtime.config.current).mockReturnValue(currentConfig);
     await handleClickClackInbound({
       account: createAgentAccount({
@@ -655,34 +579,12 @@ describe("handleClickClackInbound", () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
     const mainSessionKey = "agent:research:main";
-    getClickClackDiscussionBindingStore(runtime).set(mainSessionKey, {
-      accountId: "default",
-      agentId: "research",
-      sessionId: "old-session-id",
-      serverBaseUrl: "http://127.0.0.1:8080",
-      externalRef: "openclaw:test:research",
-      externalUrl: "",
-      workspaceRef: "wsp_1",
-      workspaceId: "wsp_1",
-      channelId: "chn_1",
-      channelRouteId: "discussion-route",
-      workspaceRouteId: "workspace-route",
-      section: "Sessions",
-      archived: false,
-      label: "Research",
-    });
+    getClickClackDiscussionBindingStore(runtime).set(
+      mainSessionKey,
+      createInboundDiscussionBinding({ sessionId: "old-session-id" }),
+    );
 
-    const currentConfig = {
-      channels: {
-        clickclack: {
-          enabled: true,
-          baseUrl: "http://127.0.0.1:8080",
-          token: "test-token-placeholder",
-          workspace: "wsp_1",
-          discussions: { enabled: true, workspace: "wsp_1" },
-        },
-      },
-    } satisfies CoreConfig;
+    const currentConfig = createInboundDiscussionConfig() satisfies CoreConfig;
     vi.mocked(runtime.config.current).mockReturnValue(currentConfig);
     await handleClickClackInbound({
       account: createAgentAccount({
@@ -705,34 +607,12 @@ describe("handleClickClackInbound", () => {
   it("ignores legacy session-derived archive metadata on a durable room", async () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
-    getClickClackDiscussionBindingStore(runtime).set("agent:research:main", {
-      accountId: "default",
-      agentId: "research",
-      sessionId: "session-id",
-      serverBaseUrl: "http://127.0.0.1:8080",
-      externalRef: "openclaw:test:research",
-      externalUrl: "",
-      workspaceRef: "wsp_1",
-      workspaceId: "wsp_1",
-      channelId: "chn_1",
-      channelRouteId: "discussion-route",
-      workspaceRouteId: "workspace-route",
-      section: "Sessions",
-      archived: true,
-      label: "Research",
-    });
+    getClickClackDiscussionBindingStore(runtime).set(
+      "agent:research:main",
+      createInboundDiscussionBinding({ archived: true }),
+    );
 
-    const currentConfig = {
-      channels: {
-        clickclack: {
-          enabled: true,
-          baseUrl: "http://127.0.0.1:8080",
-          token: "test-token-placeholder",
-          workspace: "wsp_1",
-          discussions: { enabled: true, workspace: "wsp_1" },
-        },
-      },
-    } satisfies CoreConfig;
+    const currentConfig = createInboundDiscussionConfig() satisfies CoreConfig;
     vi.mocked(runtime.config.current).mockReturnValue(currentConfig);
     await handleClickClackInbound({
       account: createAgentAccount({
@@ -755,34 +635,12 @@ describe("handleClickClackInbound", () => {
       updatedAt: 2,
       archivedAt: 1,
     });
-    getClickClackDiscussionBindingStore(runtime).set("agent:research:main", {
-      accountId: "default",
-      agentId: "research",
-      sessionId: "session-id",
-      serverBaseUrl: "http://127.0.0.1:8080",
-      externalRef: "openclaw:test:research",
-      externalUrl: "",
-      workspaceRef: "wsp_1",
-      workspaceId: "wsp_1",
-      channelId: "chn_1",
-      channelRouteId: "discussion-route",
-      workspaceRouteId: "workspace-route",
-      section: "Sessions",
-      archived: false,
-      label: "Research",
-    });
+    getClickClackDiscussionBindingStore(runtime).set(
+      "agent:research:main",
+      createInboundDiscussionBinding(),
+    );
 
-    const currentConfig = {
-      channels: {
-        clickclack: {
-          enabled: true,
-          baseUrl: "http://127.0.0.1:8080",
-          token: "test-token-placeholder",
-          workspace: "wsp_1",
-          discussions: { enabled: true, workspace: "wsp_1" },
-        },
-      },
-    } satisfies CoreConfig;
+    const currentConfig = createInboundDiscussionConfig() satisfies CoreConfig;
     vi.mocked(runtime.config.current).mockReturnValue(currentConfig);
     await handleClickClackInbound({
       account: createAgentAccount({
@@ -800,22 +658,10 @@ describe("handleClickClackInbound", () => {
   it("drops a persisted managed channel after discussions are disabled", async () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
-    getClickClackDiscussionBindingStore(runtime).set("agent:research:main", {
-      accountId: "default",
-      agentId: "research",
-      sessionId: "session-id",
-      serverBaseUrl: "http://127.0.0.1:8080",
-      externalRef: "openclaw:test:research",
-      externalUrl: "",
-      workspaceRef: "wsp_1",
-      workspaceId: "wsp_1",
-      channelId: "chn_1",
-      channelRouteId: "discussion-route",
-      workspaceRouteId: "workspace-route",
-      section: "Sessions",
-      archived: false,
-      label: "Research",
-    });
+    getClickClackDiscussionBindingStore(runtime).set(
+      "agent:research:main",
+      createInboundDiscussionBinding(),
+    );
 
     const currentConfig = {} satisfies CoreConfig;
     vi.mocked(runtime.config.current).mockReturnValue(currentConfig);
@@ -833,22 +679,10 @@ describe("handleClickClackInbound", () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
     const mainSessionKey = "agent:research:released";
-    const binding: ClickClackDiscussionBinding = {
-      accountId: "default",
-      agentId: "research",
-      sessionId: "session-id",
-      serverBaseUrl: "http://127.0.0.1:8080",
+    const binding: ClickClackDiscussionBinding = createInboundDiscussionBinding({
       externalRef: "openclaw:test:released",
-      externalUrl: "",
-      workspaceRef: "wsp_1",
-      workspaceId: "wsp_1",
-      channelId: "chn_1",
-      channelRouteId: "discussion-route",
-      workspaceRouteId: "workspace-route",
-      section: "Sessions",
-      archived: false,
       label: "Released",
-    };
+    });
     const bindingStore = getClickClackDiscussionBindingStore(runtime);
     bindingStore.set(mainSessionKey, binding);
     markClickClackDiscussionChannelRevoked(runtime, binding);
@@ -869,22 +703,13 @@ describe("handleClickClackInbound", () => {
   it("does not lose managed ownership when the local account id changes", async () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
-    getClickClackDiscussionBindingStore(runtime).set("agent:research:main", {
-      accountId: "default",
-      agentId: "research",
-      sessionId: "session-id",
-      serverBaseUrl: "http://127.0.0.1:8080",
-      externalRef: "openclaw:test:renamed-account",
-      externalUrl: "",
-      workspaceRef: "wsp_1",
-      workspaceId: "wsp_1",
-      channelId: "chn_1",
-      channelRouteId: "discussion-route",
-      workspaceRouteId: "workspace-route",
-      section: "Sessions",
-      archived: false,
-      label: "Renamed account",
-    });
+    getClickClackDiscussionBindingStore(runtime).set(
+      "agent:research:main",
+      createInboundDiscussionBinding({
+        externalRef: "openclaw:test:renamed-account",
+        label: "Renamed account",
+      }),
+    );
 
     const currentConfig = {} satisfies CoreConfig;
     vi.mocked(runtime.config.current).mockReturnValue(currentConfig);
@@ -901,6 +726,8 @@ describe("handleClickClackInbound", () => {
   it("quarantines unbound channel events while a create outcome is ambiguous", async () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
+    const account = createAgentAccount({ replyMode: "model" });
+    publishAccountConfig(runtime, account);
     const sessionKey = "agent:research:pending";
     const generation = await reserveDiscussionBindingGeneration({
       runtime,
@@ -925,7 +752,7 @@ describe("handleClickClackInbound", () => {
     });
 
     await handleClickClackInbound({
-      account: createAgentAccount({ replyMode: "model" }),
+      account,
       config: {} satisfies CoreConfig,
       message: createMessage({ channel_id: "chn_unknown", body: "Maybe managed" }),
     });
@@ -937,22 +764,10 @@ describe("handleClickClackInbound", () => {
   it("drops a managed channel after the discussion workspace changes", async () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
-    getClickClackDiscussionBindingStore(runtime).set("agent:research:main", {
-      accountId: "default",
-      agentId: "research",
-      sessionId: "session-id",
-      serverBaseUrl: "http://127.0.0.1:8080",
-      externalRef: "openclaw:test:research",
-      externalUrl: "",
-      workspaceRef: "wsp_1",
-      workspaceId: "wsp_1",
-      channelId: "chn_1",
-      channelRouteId: "discussion-route",
-      workspaceRouteId: "workspace-route",
-      section: "Sessions",
-      archived: false,
-      label: "Research",
-    });
+    getClickClackDiscussionBindingStore(runtime).set(
+      "agent:research:main",
+      createInboundDiscussionBinding(),
+    );
     const account = createAgentAccount({
       replyMode: "model",
       discussions: { enabled: true, workspace: "wsp_2", section: "Sessions" },
@@ -999,9 +814,11 @@ describe("handleClickClackInbound", () => {
         },
       ],
     } satisfies CoreConfig;
+    const account = createAgentAccount({ agentId: "SERVICE-BOT" });
+    publishAccountConfig(runtime, account, cfg);
 
     await handleClickClackInbound({
-      account: createAgentAccount({ agentId: "SERVICE-BOT" }),
+      account,
       config: cfg,
       message: createMessage({
         channel_id: undefined,
@@ -1029,12 +846,14 @@ describe("handleClickClackInbound", () => {
         },
       },
     } satisfies CoreConfig;
+    const account = createAgentAccount({
+      allowFrom: ["usr_owner"],
+      config: { allowFrom: ["usr_owner"] },
+    });
+    publishAccountConfig(runtime, account, cfg);
 
     await handleClickClackInbound({
-      account: createAgentAccount({
-        allowFrom: ["usr_owner"],
-        config: { allowFrom: ["usr_owner"] },
-      }),
+      account,
       config: cfg,
       message: createMessage({
         author_id: "usr_attacker",

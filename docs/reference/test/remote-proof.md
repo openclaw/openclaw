@@ -186,9 +186,62 @@ lease ID, and reuse it with `run --id <tbx_id>`. Stop the owned lease with
   `--shell`. Active `--script` and `--script-stdin` uploads are rejected before
   source preparation or lease work.
 
-When remote sync uses a temporary checkout, the wrapper preserves native
+Blacksmith source capsules keep one private mirror per physical source worktree
+under the configured sync root. Later runs enumerate source eligibility again,
+compare file identity, size, timestamps, mode, and kind, and copy and hash changed
+files. Unchanged source stays in place with warm Git index stat data. Git's staged
+tracking and the final raw transport tree use separate indexes, preserving the
+same ignored-file and untracked-file selection rules. The wrapper reports copied
+and reused file counts and preparation time.
+
+The mirror remains exclusively locked for the entire command, including artifact
+preservation and lease-claim restoration. An overlapping run from the same worktree
+prints a message and builds an independent fresh capsule. Only completed cleanup
+records an idle mirror for reuse; a missing witness, unsupported staging location,
+or unresolved owner uses fresh staging. Changed source during freezing fails the
+run. Cache metadata, payload, witness, or Git-version mismatches rebuild cold before
+upload. Source enumeration and metadata checks still scale with the repository;
+source-byte copying and hashing scale with changed files on warm runs.
+Private mirrors disable Git hooks and fsmonitor; source enumeration also disables
+fsmonitor in mirror mode. Other active Git callbacks retain the preparation hold
+and cannot make a reusable cache. Ordinary fresh-capsule behavior is unchanged.
+
+Different worktrees share a short allocation lock. A busy allocator prints
+`[crabbox] waiting for source mirror allocation...` and waits up to 120 seconds
+before falling back to a fresh capsule. Per-mirror validation, cold preparation,
+and eviction's payload deletion run under the slot lock without holding allocation.
+
+The sync root admits at most 32 mirror slots. Allocation evicts the least
+recently used idle mirror; active, corrupt-ownership, or interrupted slots remain
+protected and count toward the limit. If no slot can be safely reclaimed, the run
+uses ordinary fresh staging. `staging inspect` identifies idle mirrors, and
+`staging recover <id>` can remove one under its exclusive lock. Automatic abandoned
+staging recovery leaves idle mirrors available for reuse. Interrupted commands
+retain the existing witness, claim, and diagnostic recovery requirements.
+An eviction records disposal before deleting bytes and keeps its slot reserved
+until deletion finishes. If interrupted, `staging inspect` reports the recorded
+disposal as a recovery candidate; automatic recovery or `staging recover <id>`
+can resume it after acquiring the exclusive slot lock. Replaced directories and
+unknown metadata remain protected. Concurrent allocators recheck capacity after
+deletion; a slot being disposed still counts toward the 32-slot limit.
+A separate disposal receipt survives the final directory and lock removal, so
+recovery can finish interrupted namespace cleanup even after the payload receipt
+is gone. Recovery preserves an already-recorded disposal instead of rewriting it.
+Slots whose producer already removed the payload also receive a cleanup record;
+that record requires the payload root to stay absent and never authorizes deleting
+a replacement root. Both forms block slot reuse until cleanup completes.
+Private Git objects reaching 256 MiB trigger a cold rebuild on the next reuse,
+bounding retained object history without pruning objects behind saved indexes.
+
+When remote sync uses an isolated checkout, the wrapper preserves native
 `.crabbox/runs` and `.crabbox/captures` outputs together beneath a fresh
-`.crabbox/wrapper-artifacts/run-*` directory before removing that checkout.
+`.crabbox/wrapper-artifacts/run-*` directory before removing that checkout or
+returning its mirror to the idle cache. Verified native outputs are removed from
+an idle mirror so later runs retain only their own diagnostics.
+Other native `.crabbox` state uses ordinary full checkout disposal after artifact
+preservation; the next run builds a cold mirror. Mirror locks release automatically
+when their process exits, but an unresolved admitted consumer still requires the
+existing staging recovery checks before its snapshot can be removed.
 Repeated runs retain separate evidence even when native filenames match. The
 wrapper prints the old-to-new root mapping; native logs and generated proof may
 still reference the old paths. A preservation error fails the wrapper and retains
@@ -197,7 +250,8 @@ child's nonzero exit code. The wrapper rejects symlinks in artifact trees
 and destination parents, and copies only regular files and real directories.
 Retained files use mode `0600` and new directories use `0700` on POSIX systems.
 If preservation fails, recover the outputs from the reported checkout before
-removing it; incomplete destination copies are removed.
+removing it. Recognized unchanged partial copies are removed; a partial destination
+that cannot be verified is retained and reported with the original outputs.
 
 On normal completion or a supported POSIX interrupt, the wrapper settles its
 child process tree and output streams before restoring retained lease ownership, preserving
@@ -214,6 +268,84 @@ that recovery is needed. A failed retained-lease ownership restore also retains
 the checkout; restore that lease to the original repository or stop it before
 removing the checkout. Stop any remaining owned processes before recovering
 artifacts or removing their temporary inputs.
+
+The wrapper records future temporary checkouts only when staging is provably
+outside the source repository, using private recovery metadata beside the payload.
+The default `~/.cache/openclaw/crabbox-sync` location normally meets this condition.
+Configured repo-local roots, including ignored directories such as `.artifacts/`,
+continue to work through ordinary unmarked staging and cleanup. They receive no
+recovery receipts or manifests and remain protected after abrupt loss. Uncertain
+placement also uses that compatible unmarked path.
+
+Changing the configured root or ignore rules does not create new recovery metadata
+inside the repository. Existing copies at another root are not moved or adopted;
+select that root to inspect them. This feature does not filter existing user data,
+broader source scopes, or explicit raw workspace mounts. Inspect recorded copies with:
+
+```bash
+node scripts/crabbox-wrapper.mjs staging inspect
+node scripts/crabbox-wrapper.mjs staging recover <id>
+```
+
+These local commands use the existing Crabbox binary without installing it,
+starting a provider, changing claims, or stopping a lease. Recovery checks the
+original native claims namespace, verifies a recorded snapshot against an
+independently retained Git ref, and verifies saved diagnostics before deleting
+unchanged staging. A claim that still names staging requires an operator to stop
+the exact lease or explicitly reclaim it from the real repository, then retry.
+Changing `HOME` or `XDG_STATE_HOME` cannot establish absence in the old namespace.
+
+A prepared capsule with no admitted consumer can be recovered after its owner
+disappears. An admitted consumer requires a persisted writer-settlement receipt.
+Git configurations that may launch preparation helpers, or additional local Git
+seed preparation, remain held because parent-command completion does not certify
+those helpers. Their ordinary execution is unchanged. Earlier experimental
+receipt versions also remain protected.
+Explicit recovery can retry pending diagnostic preservation after a destination
+problem is repaired. Automatic recovery leaves artifact or claim failures held.
+Missing or changed saved outputs prevent removal; recovery never recreates a
+vanished original repository to invent a preservation destination.
+
+Dirty source requires another complete retained copy. After deliberately retaining
+that snapshot in an independent Git repository and named ref, select it explicitly:
+
+```bash
+node scripts/crabbox-wrapper.mjs staging recover <id> \
+  --witness-repo /path/to/retained-repository --witness-ref refs/heads/saved-source
+```
+
+Witness verification proves that the selected ref's objects are present and connected.
+On Git 2.50+, it skips unrelated reference-database checks, so stray files such as
+Finder `.DS_Store` under `.git/refs` do not block recovery. Explicit `staging recover`
+scales its work budget with witness object storage: 120 seconds plus 30 seconds per
+GiB, at most 30 minutes. Automatic recovery after a wrapper command keeps the
+120-second bound.
+Failure reasons distinguish an exhausted budget, reference-database errors, and
+missing or unconnected objects.
+
+Recovery does not create backup repositories, archives, or permanent refs. A stage's
+own Git objects or bundle do not count as another copy. Live or uncertain owners,
+unrecorded writer settlement, interrupted recovery ownership, substituted metadata,
+other boot/process namespaces, and historical unmarked directories remain protected.
+Recovery is limited to the same boot and a known PID namespace; even a reboot of
+the same computer leaves earlier copies protected. Full worktrees also remain
+protected because hooks, filters, and raw source require separate proof. Their
+ordinary cleanup retains the remaining staging if exact Git registration removal
+fails, including its receipt when registration was eligible. Repo-local copies
+remain unmarked. There is no global worktree prune or force-recovery option.
+
+Source-transfer commands inspect at most 64 bounded headers with a 250-ms soft
+discovery budget. This scan does not hash payloads, search Git history, or query a
+provider. A temporary cursor advances subsequent scans past protected entries;
+`staging inspect --after <nextCursor>` also pages the local report. After successful
+normal completion the wrapper attempts at most one discovered candidate. Help,
+listing, version output, and cancellation do not start old-stage recovery, and a
+recovery failure does not change the completed command's result. Inspection reports
+incomplete scans and elapsed time; bulk verification is separately bounded and can
+take longer. Unsupported filesystem durability, including native Windows directory
+flushes, prevents orphan recovery while preserving ordinary operation. Normal
+cleanup still removes its own successful or dirty-source staging without requiring
+an independent recovery witness.
 
 These are local artifacts, not published or fully sanitized proof. Blacksmith's
 native failure bundle contains captured stdout/stderr and diagnostic metadata;

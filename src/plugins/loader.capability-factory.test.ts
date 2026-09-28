@@ -13,7 +13,10 @@ import {
   registryContainsRuntimePluginIds,
   resolveCompatibleRuntimePluginRegistry,
 } from "./active-runtime-registry.js";
-import type { PluginCapabilityCatalogContext } from "./capability-catalog-context.types.js";
+import type {
+  PluginCapabilityCatalogContext,
+  PluginCapabilityCatalogHostContext,
+} from "./capability-catalog-context.types.js";
 import { isPluginRegistryLoadInFlight, resolvePluginRegistryLoadCacheKey } from "./loader-cache.js";
 import { createLazyPluginRuntime } from "./loader-module-runtime.js";
 import { loadOpenClawPluginsWithInternalOverrides } from "./loader-runtime-load.js";
@@ -24,6 +27,7 @@ import {
   resetPluginLoaderTestStateForTest,
   writePlugin,
 } from "./loader.test-fixtures.js";
+import * as nativeModuleRequire from "./native-module-require.js";
 import {
   createPluginCache,
   getPluginCache,
@@ -47,7 +51,7 @@ const families = [
 ] as const;
 const contextSymbol = Symbol.for("fixture.capability-context");
 
-function createContext(): PluginCapabilityCatalogContext {
+function createContext(): PluginCapabilityCatalogHostContext {
   const unavailable = () => {
     throw new Error("registration invoked a host operation");
   };
@@ -60,6 +64,7 @@ function createContext(): PluginCapabilityCatalogContext {
     resolveProviderAuthProfileApiKey: unavailable,
     resolveApiKeyForProvider: unavailable,
     captureWsEvent: unavailable,
+    captureWsEventAsync: unavailable,
     createDebugProxyWebSocketAgent: unavailable,
     resolveDebugProxySettings: unavailable,
     fetchWithSsrFGuard: unavailable,
@@ -187,17 +192,19 @@ it("retains the creating cache generation when broad services initialize later",
     expect(getPluginCache()).toBe(owner);
     return runtime;
   });
-  const loadPluginModule = vi.fn(() => {
-    expect(getPluginCache()).toBe(owner);
-    return { createPluginRuntime };
-  });
-  const lazyRuntime = withPluginCache(owner, () => createLazyPluginRuntime({ loadPluginModule }));
-  expect(loadPluginModule).not.toHaveBeenCalled();
+  const loadRuntimeModule = vi
+    .spyOn(nativeModuleRequire, "tryNativeRequireModule")
+    .mockImplementation(() => {
+      expect(getPluginCache()).toBe(owner);
+      return { ok: true, moduleExport: { createPluginRuntime } };
+    });
+  const lazyRuntime = withPluginCache(owner, () => createLazyPluginRuntime({}));
+  expect(loadRuntimeModule).not.toHaveBeenCalled();
   withPluginCache(replacement, () => {
     expect(lazyRuntime.events).toBe(runtime.events);
     expect(lazyRuntime.events).toBe(runtime.events);
   });
-  expect(loadPluginModule).toHaveBeenCalledTimes(1);
+  expect(loadRuntimeModule).toHaveBeenCalledTimes(1);
   expect(createPluginRuntime).toHaveBeenCalledTimes(1);
 });
 

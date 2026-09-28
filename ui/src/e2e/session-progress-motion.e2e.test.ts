@@ -97,6 +97,9 @@ suite.define(() => {
       };
       try {
         await page.goto(suite.server.baseUrl + "chat");
+        if (mobile) {
+          await card.locator("summary").click();
+        }
         await card.locator(".session-progress-card__body").waitFor();
         await waitForChatScrollIdle(page);
         const full = await height(card);
@@ -120,6 +123,10 @@ suite.define(() => {
         await waitForChatScrollIdle(page);
         await page.waitForTimeout(201);
         await page.mouse.wheel(0, -320);
+        if (mobile) {
+          // Explicitly close the manually opened mobile card before scrubbing it.
+          await card.locator("summary").click();
+        }
         await expect.poll(() => card.getAttribute("open")).toBeNull();
         await waitForChatScrollIdle(page);
         const closed = await height(card);

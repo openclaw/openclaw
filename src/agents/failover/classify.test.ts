@@ -102,6 +102,64 @@ describe("request validation behind gateway status codes", () => {
   });
 });
 
+describe("HTTP request rejection retry eligibility", () => {
+  it.each([
+    {
+      status: 400,
+      code: "rate_limit_exceeded",
+      message:
+        "400 This prompt is longer than the free tier allows for a single request. Shorten it.",
+      details: [
+        '{"code":"rate_limit_exceeded","message":"This prompt is longer than the free tier allows for a single request. Shorten it."}',
+        "rate_limit_exceeded",
+      ],
+    },
+    {
+      status: 422,
+      message: '422 {"error":{"code":"rate_limit_exceeded","message":"Request rejected"}}',
+    },
+    { status: 400, code: "RESOURCE_EXHAUSTED", message: "400 provider refusal" },
+  ])("does not replay a rejection based only on its inner code: $status", (signal) => {
+    expect(classifyFailoverSignal(signal, { providerPlugin: null })).toEqual({
+      kind: "reason",
+      reason: "rate_limit",
+      sameModelRetry: false,
+    });
+  });
+
+  it.each([
+    { status: 400, code: "ThrottlingException", message: "400 Too many concurrent requests" },
+    { status: 400, code: "ThrottlingException", message: "400 provider refusal" },
+    { status: 429, code: "rate_limit_exceeded", message: "Request rejected" },
+    { code: "rate_limit_exceeded", message: "Request rejected" },
+    {
+      status: 400,
+      code: "rate_limit_exceeded",
+      message: "400 Request rejected",
+      details: ['{"code":"rate_limit_exceeded","message":"Too many concurrent requests"}'],
+    },
+  ])("retains independent throttling or status evidence: $status $code", (signal) => {
+    expect(classifyFailoverSignal(signal, { providerPlugin: null })).toEqual({
+      kind: "reason",
+      reason: "rate_limit",
+    });
+  });
+
+  it("preserves a prepared provider's HTTP 400 throttling decision", () => {
+    expect(
+      classifyFailoverSignal(
+        { status: 400, code: "rate_limit_exceeded", message: "Request rejected" },
+        {
+          providerPlugin: {
+            id: "prepared-owner",
+            classifyFailoverReason: () => "rate_limit",
+          },
+        },
+      ),
+    ).toEqual({ kind: "reason", reason: "rate_limit" });
+  });
+});
+
 describe("Claude CLI logged-out failures", () => {
   const loggedOutMessage = "Not logged in · Please run /login";
 
@@ -141,5 +199,70 @@ describe("Gateway transcript validation vs provider session expiry", () => {
     "conversation expired",
   ])("still treats provider session-expiry copy as session_expired: %s", (message) => {
     expect(classifyFailoverReason(message)).toBe("session_expired");
+  });
+});
+
+describe("HTTP 5xx status classification", () => {
+  // A provider-side 5xx is not a timing failure. Naming it "timeout" both tells
+  // the user the request timed out and takes the "timeout" carve-outs in
+  // resolveRunFailoverDecision, which skip retry-limit model fallback.
+  it.each([500, 502, 503, 505, 507, 520, 521, 523])(
+    "classifies an untyped %i as server_error",
+    (status) => {
+      expect(classifyFailoverSignal({ status, message: "upstream failure" })).toEqual({
+        kind: "reason",
+        reason: "server_error",
+      });
+    },
+  );
+
+  it.each([499, 504, 522, 524])("keeps gateway-timeout status %i as timeout", (status) => {
+    expect(classifyFailoverSignal({ status, message: "upstream failure" })).toEqual({
+      kind: "reason",
+      reason: "timeout",
+    });
+  });
+
+  it.each([502, 503, 521])("classifies a CDN HTML error page at %i as server_error", (status) => {
+    // An HTML body means a CDN answered instead of the provider, so there is
+    // no provider error type to read. It is still an upstream failure.
+    const html = `${status} <!doctype html><html><head><title>${status}</title></head><body>Cloudflare</body></html>`;
+    expect(classifyFailoverSignal({ message: html })).toEqual({
+      kind: "reason",
+      reason: "server_error",
+    });
+  });
+
+  it("keeps a CDN HTML error page at 529 overloaded, matching the non-HTML body", () => {
+    // The HTML path must not disagree with the canonical status mapping just
+    // because the body happens to be a page instead of a payload.
+    const html =
+      "529 <!doctype html><html><head><title>529</title></head><body>Overloaded</body></html>";
+    expect(classifyFailoverSignal({ message: html })).toEqual({
+      kind: "reason",
+      reason: "overloaded",
+    });
+    expect(classifyFailoverSignal({ status: 529, message: "Overloaded" })).toEqual({
+      kind: "reason",
+      reason: "overloaded",
+    });
+  });
+
+  it("keeps a CDN HTML error page at a gateway-timeout status as timeout", () => {
+    const html =
+      "504 <!doctype html><html><head><title>504</title></head><body>Cloudflare</body></html>";
+    expect(classifyFailoverSignal({ message: html })).toEqual({
+      kind: "reason",
+      reason: "timeout",
+    });
+  });
+
+  it("still prefers a provider-typed body over the status mapping", () => {
+    expect(
+      classifyFailoverSignal({
+        status: 502,
+        message: '{"error":{"type":"overloaded_error","message":"Overloaded"}}',
+      }),
+    ).toEqual({ kind: "reason", reason: "overloaded" });
   });
 });

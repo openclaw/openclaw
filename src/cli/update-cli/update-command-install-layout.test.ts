@@ -12,7 +12,7 @@ import {
   renderUpdateRunReport,
   updateRunReportInputFromResult,
 } from "../../infra/update-run-report.js";
-import { runGatewayUpdate } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import * as processRunner from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isReportableUpdateRun } from "../../shared/update-outcome.js";
@@ -85,6 +85,23 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+function expectUnclassifiedInstall(reason: string) {
+  expect(output).toHaveLength(1);
+  expect(output[0]).toMatchObject({
+    status: "skipped",
+    reason,
+    before: { version: "2026.9.4" },
+    steps: [
+      expect.objectContaining({
+        exitCode: 0,
+        failureFacts: [expect.objectContaining({ code: "installation-unclassified" })],
+      }),
+    ],
+  });
+  expect(output[0]).not.toHaveProperty("recovery");
+  expect(triage).not.toHaveBeenCalled();
+}
+
 it.each([
   { containerized: true, reason: "container-image-install", action: "Pull or build" },
   { containerized: false, reason: "unmanaged-package-install", action: "Reinstall" },
@@ -96,19 +113,7 @@ it.each([
     await expect(updateCommand({ json: true, yes: true, channel: "stable" })).rejects.toMatchObject(
       { code: 0 },
     );
-    expect(output).toHaveLength(1);
-    expect(output[0]).toMatchObject({
-      status: "skipped",
-      reason,
-      before: { version: "2026.9.4" },
-      steps: [
-        expect.objectContaining({
-          exitCode: 0,
-          failureFacts: [expect.objectContaining({ code: "installation-unclassified" })],
-        }),
-      ],
-    });
-    expect(output[0]).not.toHaveProperty("recovery");
+    expectUnclassifiedInstall(reason);
     const run = listUpdateRuns({ limit: 1 }, { env: process.env })[0]!;
     expect(run).toMatchObject({
       status: "skipped",
@@ -118,7 +123,6 @@ it.each([
     expect(renderUpdateRunReport(run).markdown).toContain(action);
     expect(isReportableUpdateRun(run)).toBe(false);
     expect(output[0]).toMatchObject({ runId: run.runId, run: { origin: run.origin } });
-    expect(triage).not.toHaveBeenCalled();
     await expect(fs.readFile(path.join(root, "package.json"), "utf8")).resolves.toContain(
       '"2026.9.4"',
     );
@@ -140,31 +144,22 @@ it.each([
   },
 );
 
-it.each([true, false])(
-  "reports an untouched fresh profile (container: %s)",
-  async (containerized) => {
-    vi.spyOn(container, "isContainerEnvironment").mockReturnValue(containerized);
-    await expect(updateCommand({ json: true, yes: true })).rejects.toMatchObject({ code: 0 });
-    expect(output).toHaveLength(1);
-    expect(output[0]).toMatchObject({
-      status: "skipped",
-      reason: containerized ? "container-image-install" : "unmanaged-package-install",
-      before: { version: "2026.9.4" },
-      steps: [
-        expect.objectContaining({
-          exitCode: 0,
-          failureFacts: [expect.objectContaining({ code: "installation-unclassified" })],
-        }),
-      ],
-    });
-    expect(output[0]).not.toHaveProperty("recovery");
-    expect(output[0]).not.toHaveProperty("runId");
-    expect(triage).not.toHaveBeenCalled();
-    await expect(fs.stat(resolveOpenClawStateSqlitePath(process.env))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-  },
-);
+it("reports an untouched fresh container profile", async () => {
+  vi.spyOn(container, "isContainerEnvironment").mockReturnValue(true);
+  await expect(updateCommand({ json: true, yes: true })).rejects.toMatchObject({ code: 0 });
+  expectUnclassifiedInstall("container-image-install");
+  expect(output[0]).not.toHaveProperty("runId");
+  const result = output[0] as UpdateRunResult;
+  expect(renderUpdateRunReport(updateRunReportInputFromResult(result)).markdown).toContain(
+    "Pull or build",
+  );
+  await expect(
+    prepareUpdateFailureReport({ attemptId: "untouched-install", result }),
+  ).rejects.toThrow("Only a final failed update");
+  await expect(fs.stat(resolveOpenClawStateSqlitePath(process.env))).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+});
 
 it("renders the container non-outcome in terminal output", async () => {
   vi.spyOn(container, "isContainerEnvironment").mockReturnValue(true);
@@ -238,28 +233,6 @@ it.each(["missing", "invalid"])(
     }
   },
 );
-
-it("keeps the Git runner's untouched container result out of failure reports", async () => {
-  vi.spyOn(container, "isContainerEnvironment").mockReturnValue(true);
-  const result = await runGatewayUpdate({
-    cwd: root,
-    argv1: path.join(root, "openclaw.mjs"),
-    runCommand: processRunner.runCommandWithTimeout,
-  });
-  expect(result).toMatchObject({
-    status: "skipped",
-    mode: "unknown",
-    reason: "container-image-install",
-    steps: [],
-  });
-  expect(result.recovery).toBeUndefined();
-  expect(renderUpdateRunReport(updateRunReportInputFromResult(result)).markdown).toContain(
-    "Pull or build",
-  );
-  await expect(
-    prepareUpdateFailureReport({ attemptId: "untouched-container", result }),
-  ).rejects.toThrow("Only a final failed update");
-});
 
 it.skipIf(process.platform === "win32").each([false, true])(
   "reports Homebrew guidance across output and existing history (database: %s)",

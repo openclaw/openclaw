@@ -1,4 +1,3 @@
-// Feishu plugin module implements card ux launcher behavior.
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,

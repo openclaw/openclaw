@@ -1,3 +1,4 @@
+import { isMainThread } from "node:worker_threads";
 import { loadDotEnvAsync } from "../infra/dotenv.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
@@ -12,12 +13,12 @@ import {
   coerceConfig,
   containsConfigIncludeDirective,
   hashConfigRaw,
-  maybeLoadDotEnvForConfig,
   resolveConfigForRead,
   resolveConfigIncludesForRead,
   restoreEnvChangesIfUnchanged,
   snapshotEnv,
 } from "./io.read-helpers.js";
+import { maybeLoadDotEnvForConfig } from "./io.runtime-env.js";
 import { createConfigFileSnapshot } from "./io.snapshot-shared.js";
 import { loggedConfigWarningFingerprints, loggedInvalidConfigs } from "./io.state.js";
 import {
@@ -40,6 +41,8 @@ type ConfigLoadEffect = {
 
 type ConfigLoadOperation<T> = Generator<ConfigLoadEffect, T, void>;
 
+type ConfigLoadOptions = { skipSuspiciousRecovery?: boolean; assertCurrent?: () => void };
+
 function* resolveConfigLoadEffect<T>(effect: {
   sync: () => T;
   async: () => Promise<T>;
@@ -59,13 +62,15 @@ function* resolveConfigLoadEffect<T>(effect: {
 
 export function loadConfigFromContext(
   context: ConfigIoContext,
-  options: { skipSuspiciousRecovery?: boolean } = {},
+  options: ConfigLoadOptions = {},
 ): OpenClawConfig {
   const operation = loadConfigWithEffects(context, options);
   let step = operation.next();
   while (!step.done) {
     try {
+      options.assertCurrent?.();
       step.value.sync();
+      options.assertCurrent?.();
       step = operation.next();
     } catch (error) {
       step = operation.throw(error);
@@ -76,8 +81,12 @@ export function loadConfigFromContext(
 
 export async function loadConfigFromContextAsync(
   context: ConfigIoContext,
-  options: { skipSuspiciousRecovery?: boolean; assertCurrent?: () => void } = {},
+  options: ConfigLoadOptions = {},
 ): Promise<OpenClawConfig> {
+  // SDK callers already inside a worker use the same effects without a host broker.
+  if (!isMainThread) {
+    return loadConfigFromContext(context, options);
+  }
   const operation = loadConfigWithEffects(context, options);
   let step = operation.next();
   while (!step.done) {
@@ -95,7 +104,7 @@ export async function loadConfigFromContextAsync(
 
 function* loadConfigWithEffects(
   context: ConfigIoContext,
-  options: { skipSuspiciousRecovery?: boolean; assertCurrent?: () => void },
+  options: ConfigLoadOptions,
 ): ConfigLoadOperation<OpenClawConfig> {
   const { deps, configPath, pathResolution } = context;
   let envBeforeRead: Record<string, string | undefined> | undefined;
@@ -124,7 +133,6 @@ function* loadConfigWithEffects(
       // (compaction safeguard, session/cron defaults) silently diverges.
       const config = coerceConfig(migratePersistedImplicitMainRoster({}).config);
       const metadata = context.createValidationPluginMetadataSnapshotLoader({
-        effectiveConfigRaw: config,
         env: deps.env,
       });
       const materialized = yield* resolveConfigLoadEffect({
@@ -168,10 +176,7 @@ function* loadConfigWithEffects(
       homedir: deps.homedir,
     });
     const effectiveConfigRaw = rosterMigration.config;
-    const validationConfigRaw = effectiveConfigRaw;
-    const snapshotRaw = raw;
-    const snapshotParsed = parsed;
-    const hash = hashConfigRaw(snapshotRaw);
+    const hash = hashConfigRaw(raw);
     for (const warning of readResolution.envWarnings) {
       deps.logger.warn(
         `Config (${configPath}): missing env var "${warning.varName}" at ${warning.configPath} - feature using this value will be unavailable`,
@@ -184,13 +189,13 @@ function* loadConfigWithEffects(
     ]) {
       deps.logger.warn(`Config (${configPath}): ${diagnostic}`);
     }
-    warnOnConfigMiskeys(validationConfigRaw, deps.logger);
+    warnOnConfigMiskeys(effectiveConfigRaw, deps.logger);
     // A scalar/null root (truncated or clobbered file) must fail validation
     // below like any invalid config — never load as an empty config marked
     // valid, which would run with defaults and poison lastKnownGood.
-    if (typeof validationConfigRaw === "object" && validationConfigRaw !== null) {
+    if (typeof effectiveConfigRaw === "object" && effectiveConfigRaw !== null) {
       const duplicates = findDuplicateAgentDirs(
-        validationConfigRaw as OpenClawConfig,
+        effectiveConfigRaw as OpenClawConfig,
         pathResolution,
       );
       if (duplicates.length > 0) {
@@ -198,13 +203,12 @@ function* loadConfigWithEffects(
       }
     }
     const pluginMetadata = context.createValidationPluginMetadataSnapshotLoader({
-      effectiveConfigRaw,
       env: deps.env,
     });
     const validationParams = {
       ...pathResolution,
       pluginValidation: context.options.pluginValidation,
-      sourceRaw: snapshotParsed,
+      sourceRaw: parsed,
       preservedLegacyRootKeys: context.options.preservedLegacyRootKeys,
     };
     const { deferredPluginMigrations, validated } = yield* resolveConfigLoadEffect({
@@ -213,7 +217,7 @@ function* loadConfigWithEffects(
           const pending = context.resolveDeferredPluginMigrations();
           return {
             deferredPluginMigrations: pending,
-            validated: validateConfigObjectWithPlugins(validationConfigRaw, {
+            validated: validateConfigObjectWithPlugins(effectiveConfigRaw, {
               ...validationParams,
               deferredPluginMigrations: pending,
               loadPluginMetadataSnapshot: pluginMetadata.load,
@@ -224,7 +228,7 @@ function* loadConfigWithEffects(
         const pending = await context.resolveDeferredPluginMigrationsAsync();
         return {
           deferredPluginMigrations: pending,
-          validated: await validateConfigObjectWithPluginsAsync(validationConfigRaw, {
+          validated: await validateConfigObjectWithPluginsAsync(effectiveConfigRaw, {
             ...validationParams,
             deferredPluginMigrations: pending,
             loadPluginMetadataSnapshotAsync: pluginMetadata.loadAsync,
@@ -236,8 +240,8 @@ function* loadConfigWithEffects(
       const invalidSnapshot = createConfigFileSnapshot({
         path: configPath,
         exists: true,
-        raw: snapshotRaw,
-        parsed: snapshotParsed,
+        raw,
+        parsed,
         sourceConfig: coerceConfig(effectiveConfigRaw),
         valid: false,
         runtimeConfig: coerceConfig(effectiveConfigRaw),
@@ -305,8 +309,8 @@ function* loadConfigWithEffects(
     const snapshot = createConfigFileSnapshot({
       path: configPath,
       exists: true,
-      raw: snapshotRaw,
-      parsed: snapshotParsed,
+      raw,
+      parsed,
       sourceConfig: coerceConfig(effectiveConfigRaw),
       valid: true,
       runtimeConfig: cfg,

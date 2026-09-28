@@ -1,10 +1,14 @@
 import type {
   ChatAttachment,
   ChatGoalDraftMode,
+  ChatReplyTarget,
   DurableComposerDraftAttachment,
   HumanMention,
 } from "../../lib/chat/chat-types.ts";
-import type { DurableComposerDraftScope } from "../../lib/chat/composer-draft-store.runtime.ts";
+import type {
+  DurableComposerDraftScope,
+  DurableDraftModelSelection,
+} from "../../lib/chat/composer-draft-store.runtime.ts";
 import { readChatSelectionAnnotation } from "../../lib/chat/selection-annotation.ts";
 import { generateAttachmentId, getChatAttachmentBlob } from "./attachment-payload-store.ts";
 
@@ -17,6 +21,8 @@ export type DurableChatComposerSnapshot = {
   text: string;
   mentions?: readonly HumanMention[];
   goalMode?: ChatGoalDraftMode;
+  replyTarget?: ChatReplyTarget;
+  modelSelection?: DurableDraftModelSelection;
   storedAttachments: DurableComposerDraftAttachment[] | null;
   writeId: string;
 };
@@ -32,6 +38,7 @@ type RestoredDraft = {
   text: string;
   mentions?: readonly HumanMention[];
   goalMode?: ChatGoalDraftMode;
+  replyTarget?: ChatReplyTarget;
   attachments: ChatAttachment[];
 };
 
@@ -64,6 +71,7 @@ export function chatAttachmentDraftSignature(
   attachments: readonly ChatAttachment[],
   goalMode?: ChatGoalDraftMode | null,
   mentions?: readonly HumanMention[],
+  replyTarget?: ChatReplyTarget | null,
 ): string {
   // Admission and recovery mint a new ID for each payload. Preview URLs and
   // moving the same bytes between Blob/data-URL storage do not change that owner.
@@ -71,9 +79,18 @@ export function chatAttachmentDraftSignature(
     text,
     goalMode ?? null,
     mentions ?? [],
+    replyTarget
+      ? [
+          replyTarget.messageId,
+          replyTarget.text,
+          replyTarget.senderLabel ?? null,
+          replyTarget.sourceMessageId ?? null,
+        ]
+      : null,
     attachments.map((attachment) => [
       attachment.id,
       attachment.mimeType,
+      attachment.origin ?? null,
       attachment.fileName ?? "",
       attachment.sizeBytes ?? -1,
       attachment.browserAnnotation ?? null,
@@ -112,6 +129,7 @@ export function captureDurableChatAttachments(
     stored.push({
       blob,
       mimeType: attachment.mimeType,
+      ...(attachment.origin ? { origin: attachment.origin } : {}),
       ...(attachment.fileName ? { fileName: attachment.fileName } : {}),
       ...(typeof attachment.sizeBytes === "number" ? { sizeBytes: attachment.sizeBytes } : {}),
       ...(attachment.browserAnnotation
@@ -157,6 +175,8 @@ export async function writeDurableComposerSnapshot(snapshot: DurableChatComposer
       text: payloadUnavailable ? "" : snapshot.text,
       ...(snapshot.mentions?.length && !payloadUnavailable ? { mentions: snapshot.mentions } : {}),
       ...(snapshot.goalMode ? { goalMode: snapshot.goalMode } : {}),
+      ...(snapshot.replyTarget ? { replyTarget: snapshot.replyTarget } : {}),
+      ...(snapshot.modelSelection ? { modelSelection: snapshot.modelSelection } : {}),
       attachments: snapshot.storedAttachments ?? [],
     },
     {
@@ -279,6 +299,9 @@ export class DurableChatComposerPersistence {
         : {}),
       ...(result.status === "found" && result.draft.goalMode
         ? { goalMode: result.draft.goalMode }
+        : {}),
+      ...(result.status === "found" && result.draft.replyTarget
+        ? { replyTarget: result.draft.replyTarget }
         : {}),
       attachments,
     });

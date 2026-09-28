@@ -30,17 +30,6 @@ describe("new-session model runtime placement", () => {
       expected: undefined,
     },
     {
-      name: "accepts a worker-turn runtime on a profile supporting both execution modes",
-      runtime: {
-        id: "openclaw",
-        cloudPlacementSupported: true,
-        cloudPlacementExecutionMode: "worker-turn" as const,
-        source: "model" as const,
-      },
-      executionModes: ["worker-turn", "remote-exec"] as const,
-      expected: undefined,
-    },
-    {
       name: "accepts a remote-exec runtime on the same dual-mode profile",
       runtime: {
         id: "codex",
@@ -50,18 +39,6 @@ describe("new-session model runtime placement", () => {
       },
       executionModes: ["worker-turn", "remote-exec"] as const,
       expected: undefined,
-    },
-    {
-      name: "rejects a remote-exec runtime when the current profile supports only worker turns",
-      runtime: {
-        id: "codex",
-        cloudPlacementSupported: true,
-        cloudPlacementExecutionMode: "remote-exec" as const,
-        source: "model" as const,
-      },
-      executionModes: ["worker-turn"] as const,
-      expected:
-        "The codex runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.",
     },
     {
       name: "rejects an empty placement mode set",

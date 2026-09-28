@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   registerSessionBindingAdapter,
   type SessionBindingAdapter,
@@ -116,6 +117,37 @@ describe("inspectDiscordConversationRouteOwner", () => {
         conversation,
       }),
     ).toEqual({ kind: "agent", agentId: "main" });
+  });
+
+  it.each([
+    {
+      name: "removed account",
+      accountId: "retired",
+      discord: { accounts: { default: {} } },
+    },
+    {
+      name: "disabled account",
+      accountId: "default",
+      discord: { accounts: { default: { enabled: false } } },
+    },
+    {
+      name: "disabled channel",
+      accountId: "default",
+      discord: { enabled: false, accounts: { default: { enabled: true } } },
+    },
+  ] satisfies Array<{
+    name: string;
+    accountId: string;
+    discord: NonNullable<OpenClawConfig["channels"]>["discord"];
+  }>)("rejects a $name without requiring a runtime binding owner", ({ accountId, discord }) => {
+    unregisterSessionBindingAdapter({ channel: "discord", accountId: "default", adapter });
+    expect(
+      inspectDiscordConversationRouteOwner({
+        cfg: { channels: { discord } },
+        accountId,
+        conversation: { kind: "channel", peerId: "channel-1" },
+      }),
+    ).toBeNull();
   });
 
   it("preserves explicit plugin ownership independently of the target session key", () => {

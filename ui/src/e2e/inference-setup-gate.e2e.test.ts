@@ -186,7 +186,7 @@ suite.define(() => {
   });
 
   it.each(["page", "panel"])(
-    "keeps %s history and the runtime error visible until retry succeeds",
+    "preserves %s history and the unsent draft while runtime inference recovers",
     async (surface) => {
       const viewport = { height: 900, width: 1660 };
       const context = await suite.browser.newContext({
@@ -253,27 +253,38 @@ suite.define(() => {
         await chat.getByText("Your earlier conversation is still here.").waitFor();
         expect(await chat.getByRole("button", { name: "Review connection" }).count()).toBe(0);
         expect(await chat.locator(".agent-chat__composer-shell").count()).toBe(1);
-        expect(await chat.getByRole("textbox").isDisabled()).toBe(true);
+        const composer = chat.getByRole("textbox");
+        const send = chat.getByRole("button", { name: "Send", exact: true });
+        expect(await composer.isEnabled()).toBe(true);
+        await composer.fill("Check my setup");
+        expect(await send.isDisabled()).toBe(true);
+        await composer.press("Enter");
+        expect(await gateway.getRequests("openclaw.chat")).toHaveLength(1);
+        expect(await composer.inputValue()).toBe("Check my setup");
 
         // Each deferral is consumed by one request, including the failed startup check.
         await gateway.deferNext("openclaw.chat");
         await chat.getByRole("button", { name: "Retry", exact: true }).click();
         const retry = await gateway.waitForRequest("openclaw.chat", { after: 1 });
         expect(retry.params).not.toHaveProperty("message");
-        expect(await chat.getByRole("textbox").isDisabled()).toBe(true);
+        expect(await composer.isEnabled()).toBe(true);
+        expect(await send.isDisabled()).toBe(true);
+        await composer.press("Enter");
+        expect(await gateway.getRequests("openclaw.chat")).toHaveLength(2);
+        expect(await composer.inputValue()).toBe("Check my setup");
         await gateway.resolveDeferred("openclaw.chat", {
           sessionId: "runtime-recovered",
           reply: "Ready to help again.",
           action: "none",
         });
         await chat.getByText("Ready to help again.").waitFor();
-        await expect.poll(() => chat.getByRole("textbox").isEnabled()).toBe(true);
+        await expect.poll(() => send.isEnabled()).toBe(true);
+        expect(await composer.inputValue()).toBe("Check my setup");
         expect(await chat.locator(".custodian__error").count()).toBe(0);
         await captureProof(page, "02-runtime-recovered.png");
 
         await gateway.deferNext("openclaw.chat", { message: "Check my setup" });
-        await chat.getByRole("textbox").fill("Check my setup");
-        await chat.getByRole("button", { name: "Send", exact: true }).click();
+        await send.click();
         const turn = await gateway.waitForRequest("openclaw.chat", { after: 2 });
         expect(turn.params).toMatchObject({ message: "Check my setup" });
         await gateway.resolveDeferred("openclaw.chat", {

@@ -17,6 +17,9 @@ vi.mock("../../logging/console.js", () => ({
 vi.mock("../banner.js", () => ({ emitCliBanner: vi.fn() }));
 vi.mock("./config-guard.js", () => ({ ensureConfigReady: mocks.ensureConfigReady }));
 vi.mock("../plugin-registry.js", () => ({ ensurePluginRegistryLoaded: vi.fn() }));
+vi.mock("../state-dir-gateway-check.js", () => ({
+  checkCliGatewayStateDir: vi.fn(async () => ({ kind: "allow" })),
+}));
 
 const originalArgv = [...process.argv];
 const originalTitle = process.title;

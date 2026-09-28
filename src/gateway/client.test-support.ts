@@ -14,3 +14,10 @@ export function firstMockArg(mock: ReturnType<typeof vi.fn>, label: string): unk
   }
   return arg;
 }
+
+export function createAuthFailureMessage(): string {
+  const failureUrl = new URL("wss://gateway.example/ws?token=secret-token");
+  failureUrl.username = "user";
+  failureUrl.password = "pass";
+  return `Authorization: Bearer sk-testsecret1234567890abcd ${failureUrl.href}`; // pragma: allowlist secret
+}

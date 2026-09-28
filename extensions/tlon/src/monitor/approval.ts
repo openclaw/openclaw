@@ -14,28 +14,10 @@ import type { PendingApproval } from "../settings.js";
 
 export type { PendingApproval };
 
-type ApprovalType = "dm" | "channel" | "group";
-
-type CreateApprovalParams = {
-  type: ApprovalType;
-  requestingShip: string;
-  channelNest?: string;
-  groupFlag?: string;
-  messagePreview?: string;
-  originalMessage?: {
-    messageId: string;
-    messageText: string;
-    messageContent: unknown;
-    timestamp: number;
-    parentId?: string;
-    isThreadReply?: boolean;
-  };
-};
-
 /**
  * Generate a unique approval ID in the format: {type}-{timestamp}-{shortHash}
  */
-function generateApprovalId(type: ApprovalType): string {
+function generateApprovalId(type: PendingApproval["type"]): string {
   const timestamp = Date.now();
   const randomPart = randomBytes(3).toString("hex");
   return `${type}-${timestamp}-${randomPart}`;
@@ -44,7 +26,9 @@ function generateApprovalId(type: ApprovalType): string {
 /**
  * Create a pending approval object.
  */
-export function createPendingApproval(params: CreateApprovalParams): PendingApproval {
+export function createPendingApproval(
+  params: Omit<PendingApproval, "id" | "timestamp">,
+): PendingApproval {
   return {
     id: generateApprovalId(params.type),
     type: params.type,

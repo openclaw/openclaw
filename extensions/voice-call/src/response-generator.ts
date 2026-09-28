@@ -482,6 +482,8 @@ export async function generateVoiceResponse(
           toolsAllow,
           abortSignal,
           blockReplyBreak: "text_end",
+          resolveReplyDelivery: async (minimumAssistantMessageIndex = 0) =>
+            deliveredEarly && minimumAssistantMessageIndex === 0 ? "pending" : "missing",
           onBlockReply: (payload, context) => {
             if (latestToolBoundaryMessageIndex !== undefined) {
               const messageIndex = context?.assistantMessageIndex;

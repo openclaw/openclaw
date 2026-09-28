@@ -2,10 +2,8 @@
 // local storage could let one Control UI window steal another window's shells.
 
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type {
-  TerminalPanelAction,
-  TerminalPanelCatalogReference,
-} from "./terminal-panel-session-types.ts";
+import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import type { TerminalPanelAction } from "./terminal-panel-session-types.ts";
 
 const TERMINAL_SESSIONS_KEY = "openclaw.terminal.sessions.v1";
 const TERMINAL_ACTIONS_KEY = "openclaw.terminal.actions.v1";
@@ -14,14 +12,19 @@ function nonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
-function catalogReference(value: unknown): TerminalPanelCatalogReference | null {
+function catalogReference(value: unknown): CatalogSessionKey | null {
   if (!isRecord(value)) {
     return null;
   }
   return nonEmptyString(value.catalogId) &&
     nonEmptyString(value.hostId) &&
     nonEmptyString(value.threadId)
-    ? { catalogId: value.catalogId, hostId: value.hostId, threadId: value.threadId }
+    ? {
+        catalogId: value.catalogId,
+        hostId: value.hostId,
+        threadId: value.threadId,
+        ...(nonEmptyString(value.sourceHomeId) ? { sourceHomeId: value.sourceHomeId } : {}),
+      }
     : null;
 }
 

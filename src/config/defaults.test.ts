@@ -196,6 +196,8 @@ describe("applyModelDefaults catalog seeding", () => {
         modelCatalog: {
           providers: {
             " OpenAI ": {
+              api: "openai-responses",
+              baseUrl: "https://api.openai.com/v1",
               models: [
                 {
                   id: "gpt-5.6-sol",
@@ -459,6 +461,8 @@ describe("applyModelDefaults catalog seeding", () => {
           modelCatalog: {
             providers: {
               openai: {
+                api: "openai-responses",
+                baseUrl: "https://api.openai.com/v1",
                 models: [
                   Object.freeze({
                     id: "gpt-5.6-sol",

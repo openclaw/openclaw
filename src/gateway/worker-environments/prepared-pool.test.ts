@@ -1,6 +1,10 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../test-utils/gateway-scheduler-clock.js";
 import { createWorkerCredentialBroker } from "./credential-broker.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
@@ -32,13 +36,15 @@ describe("prepared worker reserve lifecycle", () => {
   it.each(["resolution", "idle policy"])(
     "cleans expired reserves and refills healthy projects after another provider's %s fails",
     async (failure) => {
-      const expired = fixture.ready(fixture.seed("expired", { reserve: true }));
+      const expired = await fixture.ready(await fixture.seed("expired", { reserve: true }));
       fixture.nowMs = 1_500;
-      fixture.attach(fixture.ready(fixture.seed("healthy", { projectKey: "c".repeat(64) })));
+      await fixture.attach(
+        await fixture.ready(await fixture.seed("healthy", { projectKey: "c".repeat(64) })),
+      );
       fixture.config.cloudWorkers!.profiles!.broken = { provider: "broken" };
-      fixture.attach(
-        fixture.ready(
-          fixture.store.createIntent({
+      await fixture.attach(
+        await fixture.ready(
+          await fixture.store.createIntent({
             environmentId: "broken",
             providerId: "broken",
             profileId: "broken",
@@ -84,8 +90,8 @@ describe("prepared worker reserve lifecycle", () => {
     "retains terminal demand beyond seven days with %s provider policy",
     async (policyState) => {
       const dayMs = 24 * 60 * 60 * 1_000;
-      const source = fixture.attach(fixture.ready(fixture.seed("source")));
-      fixture.teardown(source);
+      const source = await fixture.attach(await fixture.ready(await fixture.seed("source")));
+      await fixture.teardown(source);
       const placements = createWorkerSessionPlacementStore({ database: fixture.database });
       const placement = placements.get(`session:${source.environmentId}`)!;
       placements.retireSessionPlacement({
@@ -93,7 +99,7 @@ describe("prepared worker reserve lifecycle", () => {
         expectedState: "failed",
         expectedGeneration: placement.generation,
       });
-      fixture.reopenStore();
+      await fixture.reopenStore();
       fixture.nowMs += 8 * dayMs;
       fixture.provider.resolvePreparedIdleTimeoutMs = () => 10 * dayMs;
       const resolveProvider = () => {
@@ -104,7 +110,7 @@ describe("prepared worker reserve lifecycle", () => {
       };
       const owner = fixture.pool({ resolveProvider });
       expect(
-        fixture.store.pruneTerminalEnvironments({ canPruneDemand: owner.canPruneDemand }),
+        await fixture.store.pruneTerminalEnvironments({ canPruneDemand: owner.canPruneDemand }),
       ).toBe(0);
       expect(fixture.store.get(source.environmentId)?.lastActivatedAtMs).toBe(1_000);
       if (policyState === "available") {
@@ -115,14 +121,16 @@ describe("prepared worker reserve lifecycle", () => {
       fixture.nowMs += 2 * dayMs;
       // Policy recovery permits metadata cleanup only after the original deadline.
       expect(
-        fixture.store.pruneTerminalEnvironments({ canPruneDemand: fixture.pool().canPruneDemand }),
+        await fixture.store.pruneTerminalEnvironments({
+          canPruneDemand: fixture.pool().canPruneDemand,
+        }),
       ).toBe(1);
       expect(fixture.store.get(source.environmentId)).toBeUndefined();
     },
   );
 
   it("keeps expiry tied to originating demand across repeated maintenance and database reopen", async () => {
-    fixture.attach(fixture.ready(fixture.seed("source")));
+    await fixture.attach(await fixture.ready(await fixture.seed("source")));
     const reconcile = vi.fn<PoolOptions["reconcile"]>(async () => {});
     const owner = fixture.pool({ reconcile });
     await fixture.schedule(owner);
@@ -133,7 +141,7 @@ describe("prepared worker reserve lifecycle", () => {
     expect(fixture.reserves()).toEqual([reserve]);
     expect(fixture.provider.notePreparedDemand).not.toHaveBeenCalled();
 
-    fixture.reopenStore();
+    await fixture.reopenStore();
     fixture.nowMs = 2_000;
     await fixture.schedule(fixture.pool({ reconcile }));
     expect(fixture.reserves()).toHaveLength(1);
@@ -148,10 +156,10 @@ describe("prepared worker reserve lifecycle", () => {
   });
 
   it("retains activated demand after consumed worker teardown and database reopen", async () => {
-    const source = fixture.attach(fixture.ready(fixture.seed("source")));
+    const source = await fixture.attach(await fixture.ready(await fixture.seed("source")));
     const owner = fixture.pool();
     await fixture.schedule(owner);
-    const reserve = fixture.ready(fixture.reserves()[0]!);
+    const reserve = await fixture.ready(fixture.reserves()[0]!);
     await owner.noteDemand(reserve.environmentId);
     expect(fixture.provider.notePreparedDemand).not.toHaveBeenCalled();
     fixture.nowMs = 1_500;
@@ -160,15 +168,15 @@ describe("prepared worker reserve lifecycle", () => {
       { leaseId: source.leaseId, profile: {} },
       { preparationKey: PREPARATION_KEY, demandAtMs: 1_000 },
     );
-    const consumed = fixture.attach(reserve);
+    const consumed = await fixture.attach(reserve);
     await owner.noteDemand(consumed.environmentId);
     expect(fixture.provider.notePreparedDemand).toHaveBeenLastCalledWith(
       { leaseId: consumed.leaseId, profile: {} },
       { preparationKey: PREPARATION_KEY, demandAtMs: 1_500 },
     );
-    fixture.teardown(source);
-    fixture.teardown(consumed);
-    fixture.reopenStore();
+    await fixture.teardown(source);
+    await fixture.teardown(consumed);
+    await fixture.reopenStore();
     await fixture.schedule(fixture.pool());
     expect(
       fixture.reserves().find((record) => record.preparation?.consumedAtMs === null)?.preparation,
@@ -187,16 +195,16 @@ describe("prepared worker reserve lifecycle", () => {
   ] as const)(
     "does not renew consumed %s demand (failed=%s) during maintenance at %s",
     async (stage, fail, maintenanceAtMs) => {
-      const source = fixture.attach(fixture.ready(fixture.seed("source")));
+      const source = await fixture.attach(await fixture.ready(await fixture.seed("source")));
       await fixture.schedule(fixture.pool());
-      fixture.teardown(source);
-      const reserve = fixture.ready(fixture.reserves()[0]!);
+      await fixture.teardown(source);
+      const reserve = await fixture.ready(fixture.reserves()[0]!);
       fixture.nowMs = 1_900;
-      const consumed = fixture.attach(reserve, stage);
+      const consumed = await fixture.attach(reserve, stage);
       if (fail) {
-        fixture.teardown(consumed);
+        await fixture.teardown(consumed);
       }
-      fixture.reopenStore();
+      await fixture.reopenStore();
       fixture.nowMs = maintenanceAtMs;
       const owner = fixture.pool();
       await owner.noteDemand(consumed.environmentId);
@@ -222,8 +230,11 @@ describe("prepared worker reserve lifecycle", () => {
   );
 
   it("does not seed demand from a cold attachment still syncing after database reopen", async () => {
-    const attached = fixture.attach(fixture.ready(fixture.seed("syncing-cold")), "syncing");
-    fixture.reopenStore();
+    const attached = await fixture.attach(
+      await fixture.ready(await fixture.seed("syncing-cold")),
+      "syncing",
+    );
+    await fixture.reopenStore();
     const owner = fixture.pool();
     await owner.noteDemand(attached.environmentId);
     await fixture.schedule(owner);
@@ -236,12 +247,12 @@ describe("prepared worker reserve lifecycle", () => {
     async (phase) => {
       const idleWindow = 15 * 60_000;
       fixture.provider.resolvePreparedIdleTimeoutMs = () => idleWindow;
-      const allocated = fixture.ready(fixture.seed("slow-first-checkout"));
+      const allocated = await fixture.ready(await fixture.seed("slow-first-checkout"));
       const activatedAtMs = fixture.nowMs + 16 * 60_000;
       if (phase === "checkout") {
         fixture.nowMs = activatedAtMs;
       }
-      const attached = fixture.attach(allocated, "active", activatedAtMs);
+      const attached = await fixture.attach(allocated, "active", activatedAtMs);
       const owner = fixture.pool();
       await owner.noteDemand(attached.environmentId);
       await fixture.schedule(owner);
@@ -256,7 +267,7 @@ describe("prepared worker reserve lifecycle", () => {
       );
 
       fixture.nowMs += 60_000;
-      fixture.store.transition({
+      await fixture.store.transition({
         environmentId: attached.environmentId,
         from: "attached",
         to: "idle",
@@ -277,12 +288,12 @@ describe("prepared worker reserve lifecycle", () => {
     async (reserve) => {
       const idleWindow = 15 * 60_000;
       fixture.provider.resolvePreparedIdleTimeoutMs = () => idleWindow;
-      const allocated = fixture.ready(fixture.seed("slow-activation", { reserve }));
+      const allocated = await fixture.ready(await fixture.seed("slow-activation", { reserve }));
       const activatedAtMs = fixture.nowMs + 16 * 60_000;
-      const attached = fixture.attach(allocated, "active", activatedAtMs);
+      const attached = await fixture.attach(allocated, "active", activatedAtMs);
       fixture.nowMs += 60_000;
-      fixture.teardown(attached);
-      fixture.reopenStore();
+      await fixture.teardown(attached);
+      await fixture.reopenStore();
 
       await fixture.schedule(fixture.pool());
       const replacement = fixture
@@ -297,7 +308,7 @@ describe("prepared worker reserve lifecycle", () => {
   );
 
   it("does not allocate when source preparation finishes after its demand deadline", async () => {
-    fixture.attach(fixture.ready(fixture.seed("source")));
+    await fixture.attach(await fixture.ready(await fixture.seed("source")));
     const reconcile = vi.fn<PoolOptions["reconcile"]>(async () => {});
     await fixture.schedule(
       fixture.pool({
@@ -319,23 +330,25 @@ describe("prepared worker reserve lifecycle", () => {
   it("counts pending and uncertain cleanup against the shared cap after restart", async () => {
     fixture.developmentProfile.readyWorkers = 2;
     fixture.config.cloudWorkers!.preparedPool = { maxTotal: 3 };
-    fixture.attach(fixture.ready(fixture.seed("source-a")));
-    fixture.attach(fixture.ready(fixture.seed("source-b", { projectKey: "1".repeat(64) })));
+    await fixture.attach(await fixture.ready(await fixture.seed("source-a")));
+    await fixture.attach(
+      await fixture.ready(await fixture.seed("source-b", { projectKey: "1".repeat(64) })),
+    );
     await fixture.schedule(fixture.pool());
     const reserved = fixture.reserves();
     expect(reserved).toHaveLength(3);
     const uncertain = reserved[0]!;
-    fixture.store.transition({
+    await fixture.store.transition({
       environmentId: uncertain.environmentId,
       from: "requested",
       to: "provisioning",
     });
-    fixture.store.adoptProvisionCleanupFailure({
+    await fixture.store.adoptProvisionCleanupFailure({
       environmentId: uncertain.environmentId,
       leaseId: "uncertain-lease",
       lastError: "provider cleanup response lost",
     });
-    fixture.reopenStore();
+    await fixture.reopenStore();
     const warn = vi.fn();
     const reconcile = vi.fn<PoolOptions["reconcile"]>(async (record) => {
       if (record.environmentId === uncertain.environmentId) {
@@ -367,11 +380,11 @@ describe("prepared worker reserve lifecycle", () => {
       fixture.developmentProfile.provider =
         scope === "profile" ? fixture.provider.id : " Test-Provider ";
       fixture.developmentProfile.readyWorkers = 3;
-      const source = fixture.attach(fixture.ready(fixture.seed("source")));
+      const source = await fixture.attach(await fixture.ready(await fixture.seed("source")));
       await fixture.schedule(fixture.pool());
       expect(fixture.reserves()).toHaveLength(3);
       for (const reserve of fixture.reserves()) {
-        fixture.ready(reserve);
+        await fixture.ready(reserve);
       }
       if (scope === "profile") {
         fixture.developmentProfile.readyWorkers = 1;
@@ -400,12 +413,14 @@ describe("prepared worker reserve lifecycle", () => {
   );
 
   it("retires the previous fingerprint before admitting a new generation in the same project slot", async () => {
-    fixture.attach(fixture.ready(fixture.seed("source-old")));
+    await fixture.attach(await fixture.ready(await fixture.seed("source-old")));
     await fixture.schedule(fixture.pool());
     const old = fixture.reserves()[0]!;
     const nextKey = "2".repeat(64);
     fixture.nowMs = 1_100;
-    fixture.attach(fixture.ready(fixture.seed("source-new", { preparationKey: nextKey })));
+    await fixture.attach(
+      await fixture.ready(await fixture.seed("source-new", { preparationKey: nextKey })),
+    );
     const owner = fixture.pool({
       prepareIntent: async () => ({
         providerId: fixture.provider.id,
@@ -417,7 +432,11 @@ describe("prepared worker reserve lifecycle", () => {
     expect(fixture.reserves()).toHaveLength(1);
     expect(fixture.store.get(old.environmentId)?.destroyRequestedAtMs).toBe(1_100);
     // This intent never allocated; the ordinary lifecycle can terminalize it safely.
-    fixture.store.transition({ environmentId: old.environmentId, from: "requested", to: "failed" });
+    await fixture.store.transition({
+      environmentId: old.environmentId,
+      from: "requested",
+      to: "failed",
+    });
     await fixture.schedule(owner);
     expect(fixture.reserves().filter((record) => record.state === "requested")).toEqual([
       expect.objectContaining({
@@ -433,8 +452,10 @@ describe("prepared worker reserve lifecycle", () => {
   });
 
   it("revalidates an earlier source when another awaited preparation changes admission authority", async () => {
-    fixture.attach(fixture.ready(fixture.seed("source-a")));
-    fixture.attach(fixture.ready(fixture.seed("source-b", { projectKey: "1".repeat(64) })));
+    await fixture.attach(await fixture.ready(await fixture.seed("source-a")));
+    await fixture.attach(
+      await fixture.ready(await fixture.seed("source-b", { projectKey: "1".repeat(64) })),
+    );
     let generation = 0;
     let admittedAtHasFirst = false;
     const admittedAt = new WeakMap<WorkerProviderPreparedIntent, number>();
@@ -467,7 +488,7 @@ describe("prepared worker reserve lifecycle", () => {
 
   it("runs only two preparations concurrently and drains admitted work after shutdown", async () => {
     fixture.developmentProfile.readyWorkers = 3;
-    fixture.attach(fixture.ready(fixture.seed("source")));
+    await fixture.attach(await fixture.ready(await fixture.seed("source")));
     const entered = createDeferred();
     const release = createDeferred();
     fixture.releases.push(() => release.resolve());
@@ -496,7 +517,7 @@ describe("prepared worker reserve lifecycle", () => {
   });
 
   it("retires queued capacity when disabled before its reconciliation lock is acquired", async () => {
-    const reserve = fixture.seed("queued-reserve", { reserve: true });
+    const reserve = await fixture.seed("queued-reserve", { reserve: true });
     const entered = createDeferred();
     const release = createDeferred();
     fixture.releases.push(() => release.resolve());
@@ -550,11 +571,11 @@ describe("prepared worker reserve lifecycle", () => {
       let previous: WorkerEnvironmentRecord | undefined;
       if (cleanupScope === "later-global") {
         fixture.config.cloudWorkers!.preparedPool = { maxTotal: 1 };
-        fixture.attach(fixture.ready(fixture.seed("current-source")));
+        await fixture.attach(await fixture.ready(await fixture.seed("current-source")));
       } else if (cleanupScope) {
         const consumed =
           cleanupScope === "global"
-            ? fixture.store.createIntent({
+            ? await fixture.store.createIntent({
                 environmentId: "previous-global-worker",
                 providerId: fixture.provider.id,
                 profileId: "removed-profile",
@@ -567,8 +588,8 @@ describe("prepared worker reserve lifecycle", () => {
                   expiresAtMs: fixture.nowMs + IDLE_TIMEOUT_MS,
                 },
               })
-            : fixture.seed("previous-worker", { reserve: true });
-        previous = fixture.attach(fixture.ready(consumed));
+            : await fixture.seed("previous-worker", { reserve: true });
+        previous = await fixture.attach(await fixture.ready(consumed));
         fixture.nowMs += 100;
         if (cleanupScope === "global") {
           fixture.config.cloudWorkers!.preparedPool = { maxTotal: 1 };
@@ -577,11 +598,11 @@ describe("prepared worker reserve lifecycle", () => {
           fixture.developmentProfile.provider = fixture.provider.id;
         }
         if (cleanupScope !== "project") {
-          fixture.attach(fixture.ready(fixture.seed("current-source")));
+          await fixture.attach(await fixture.ready(await fixture.seed("current-source")));
         }
       } else {
-        const reserve = fixture.seed("queued-provider-reserve", { reserve: true });
-        fixture.store.transition({
+        const reserve = await fixture.seed("queued-provider-reserve", { reserve: true });
+        await fixture.store.transition({
           environmentId: reserve.environmentId,
           from: "requested",
           to: "provisioning",
@@ -602,13 +623,14 @@ describe("prepared worker reserve lifecycle", () => {
       const lifecycleOptions = {
         store: fixture.store,
         callProvider,
-        move: (record, to, patch) =>
-          fixture.store.transition({
+        move: async (record, to, patch, assertCurrent) =>
+          await fixture.store.transition({
             environmentId: record.environmentId,
             from: record.state,
             expectedOwnerEpoch: record.ownerEpoch,
             to,
             patch,
+            assertCurrent,
           }),
         saveError: (record, error) =>
           fixture.store.recordError({
@@ -652,7 +674,7 @@ describe("prepared worker reserve lifecycle", () => {
           ...lifecycleOptions,
           prepareInstallation,
           now: () => fixture.nowMs,
-          cancelInferenceEnvironment: () => {},
+          cancelInferenceEnvironment: async () => {},
         }),
         callBootstrap: unexpectedLifecycleOperation,
         bootstrapWorker: unexpectedLifecycleOperation,
@@ -678,7 +700,7 @@ describe("prepared worker reserve lifecycle", () => {
         }
       };
       const owner = fixture.pool({
-        prepareRetention: async () => ({ assertCurrent }),
+        prepareRetention: async () => ({ isCurrent: () => !intentChanged }),
         assertIntentCurrent: assertCurrent,
         reconcile: async (record, signal, beforeReconcile) => {
           await lifecycle.resumePrepared(record, signal, beforeReconcile);
@@ -699,7 +721,7 @@ describe("prepared worker reserve lifecycle", () => {
       if (cleanupScope === "later-global") {
         fixture.nowMs += 100;
         fixture.config.cloudWorkers!.preparedPool = { maxTotal: 2 };
-        const admitted = fixture.store.ensurePreparedIntent({
+        const admitted = await fixture.store.ensurePreparedIntent({
           intent: {
             environmentId: "later-global-worker",
             providerId: fixture.provider.id,
@@ -719,13 +741,13 @@ describe("prepared worker reserve lifecycle", () => {
           assertCurrent: () => {},
         });
         expect(admitted).toBeDefined();
-        previous = fixture.attach(fixture.ready(admitted!));
+        previous = await fixture.attach(await fixture.ready(admitted!));
         expect(previous.createdAtMs).toBeGreaterThan(reserve.createdAtMs);
         fixture.config.cloudWorkers!.preparedPool = { maxTotal: 1 };
       }
       if (cleanupScope && previous) {
         if (changed) {
-          fixture.store.requestDestroy({
+          await fixture.store.requestDestroy({
             environmentId: previous.environmentId,
             state: previous.state,
           });
@@ -759,8 +781,122 @@ describe("prepared worker reserve lifecycle", () => {
     },
   );
 
+  it("keeps reserve and provider maintenance ticking during slow inspection and joins them at stop", async () => {
+    await fixture.ready(await fixture.seed("slow-inspection"));
+    fixture.provider.supportedExecutionModes = ["worker-turn"];
+    const time = createGatewaySchedulerClock(fixture.nowMs);
+    const scheduler = createTestGatewayScheduler(time.clock);
+    const inspected = createDeferred();
+    const finishInspection = createDeferred();
+    const finishMaintenance = createDeferred();
+    const finishDestroy = createDeferred();
+    const destroyEntered = createDeferred();
+    const release = () => {
+      finishInspection.resolve();
+      finishMaintenance.resolve();
+      finishDestroy.resolve();
+    };
+    fixture.releases.push(release);
+    const inspect = vi.fn(async () => {
+      inspected.resolve();
+      await finishInspection.promise;
+      return { status: "active" as const };
+    });
+    fixture.provider.inspect = inspect;
+    fixture.provider.destroy = vi.fn(async ({ leaseId }) => {
+      if (leaseId === "lease:reserve-2") {
+        destroyEntered.resolve();
+        await finishDestroy.promise;
+      }
+    });
+    let holdMaintenance = false;
+    const maintainProviders = vi.fn(async (_signal: AbortSignal) => {
+      if (holdMaintenance) {
+        await finishMaintenance.promise;
+      }
+    });
+    const completed = new Map<string, () => void>();
+    const transition = fixture.store.transition.bind(fixture.store);
+    vi.spyOn(fixture.store, "transition").mockImplementation(async (input) => {
+      const record = await transition(input);
+      if (input.to === "destroyed") {
+        completed.get(input.environmentId)?.();
+      }
+      return record;
+    });
+    const closeArtifacts = vi.fn(async () => {});
+    const service = createWorkerEnvironmentService({
+      scheduler,
+      store: fixture.store,
+      getConfig: () => fixture.config,
+      resolveProvider: () => fixture.provider,
+      prepareInstallation: async () => ({
+        install: "bundle",
+        ...RECEIPT,
+        tarballBytes: 1,
+        tarballSha256: "e".repeat(64),
+        tarballPath: path.join(fixture.root, "unused.tgz"),
+      }),
+      bootstrapWorker: async () => RECEIPT,
+      executeInference: async () => ({ type: "error", reason: "cancelled", message: "unused" }),
+      maintainProviders,
+      closeNodeBootstrapArtifacts: closeArtifacts,
+      reconcileIntervalMs: 25,
+      now: () => fixture.nowMs,
+    });
+    fixture.service = service;
+    const reconciliation = service.reconcileOnce();
+    const wakes: Array<ReturnType<typeof time.advanceBy>> = [];
+    let stopping: Promise<void> | undefined;
+    try {
+      await inspected.promise;
+      service.start();
+      for (let sweep = 0; sweep < 3; sweep++) {
+        const id = `reserve-${sweep}`;
+        const destroyed = createDeferred();
+        completed.set(id, () => destroyed.resolve());
+        await fixture.ready(await fixture.seed(id, { reserve: true }));
+        if (sweep === 0) {
+          maintainProviders.mockClear();
+        }
+        holdMaintenance = sweep === 2;
+        fixture.nowMs += IDLE_TIMEOUT_MS;
+        wakes.push(time.advanceBy(IDLE_TIMEOUT_MS));
+        await Promise.resolve();
+        expect(maintainProviders).toHaveBeenCalledTimes(sweep + 1);
+        expect(inspect).toHaveBeenCalledOnce();
+        if (sweep < 2) {
+          await destroyed.promise;
+          expect(fixture.store.get(id)?.state).toBe("destroyed");
+        }
+      }
+      await destroyEntered.promise;
+      expect(fixture.provider.destroy).toHaveBeenCalledTimes(3);
+      stopping = service.stop();
+      expect(maintainProviders.mock.lastCall?.[0].aborted).toBe(true);
+      finishInspection.resolve();
+      await reconciliation;
+      expect(closeArtifacts).not.toHaveBeenCalled();
+      finishMaintenance.resolve();
+      await maintainProviders.mock.results.at(-1)?.value;
+      expect(closeArtifacts).not.toHaveBeenCalled();
+      finishDestroy.resolve();
+      await stopping;
+      expect(closeArtifacts).toHaveBeenCalledOnce();
+      expect(fixture.store.get("reserve-2")?.state).toBe("destroyed");
+      await time.advanceBy(IDLE_TIMEOUT_MS);
+      expect(inspect).toHaveBeenCalledOnce();
+      expect(maintainProviders).toHaveBeenCalledTimes(3);
+    } finally {
+      release();
+      await Promise.allSettled([reconciliation, stopping, ...wakes]);
+      await service.stop();
+      await scheduler.stop();
+    }
+  });
+
   it("keeps actual service reserve cleanup outside the installed placement fence while stop drains it", async () => {
-    const reserve = fixture.ready(fixture.seed("expired", { reserve: true }));
+    const reserve = await fixture.ready(await fixture.seed("expired", { reserve: true }));
     fixture.nowMs = 2_000;
     const entered = createDeferred();
     const release = createDeferred();
@@ -770,6 +906,7 @@ describe("prepared worker reserve lifecycle", () => {
       await release.promise;
     });
     fixture.service = createWorkerEnvironmentService({
+      scheduler: createTestGatewayScheduler(),
       store: fixture.store,
       getConfig: () => fixture.config,
       resolveProvider: () => fixture.provider,

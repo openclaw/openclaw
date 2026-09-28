@@ -67,6 +67,7 @@ const resolveSessionKeyFromResolveParams = (
               ...target,
               entry: store[key],
               readSourceEntry: (parentKey: string) => store[parentKey],
+              resolveSourceKey: (parentKey: string) => parentKey,
             },
           ]),
         ),

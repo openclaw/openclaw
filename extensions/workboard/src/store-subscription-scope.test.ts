@@ -85,18 +85,53 @@ describe("Workboard scoped subscription listing", () => {
     const { store, dbPath } = createWorkboardSqliteTestHarness();
     const selected = await store.subscribeNotifications({ boardId: "alpha", cardId: "card" });
     const unrelated = await store.subscribeNotifications({ boardId: "beta", cardId: "other" });
-    const db = new DatabaseSync(dbPath);
-    try {
-      db.prepare(
-        "UPDATE workboard_notification_subscriptions SET event_kinds_json = ? WHERE id = ?",
-      ).run("{", unrelated.id);
-      expect(
-        (await store.listNotificationSubscriptions({ boardId: "alpha" })).subscriptions,
-      ).toEqual([selected]);
-      await expect(store.listNotificationSubscriptions({ boardId: "beta" })).rejects.toThrow();
-      await expect(store.listNotificationSubscriptions()).rejects.toThrow();
-    } finally {
-      db.close();
-    }
+    using db = new DatabaseSync(dbPath);
+    db.prepare(
+      "UPDATE workboard_notification_subscriptions SET event_kinds_json = ? WHERE id = ?",
+    ).run("{", unrelated.id);
+    expect((await store.listNotificationSubscriptions({ boardId: "alpha" })).subscriptions).toEqual(
+      [selected],
+    );
+    await expect(store.listNotificationSubscriptions({ boardId: "beta" })).rejects.toThrow();
+    await expect(store.listNotificationSubscriptions()).rejects.toThrow();
+  });
+
+  it("deletes board notification subscriptions with empty board metadata", async () => {
+    const { store, dbPath } = createWorkboardSqliteTestHarness();
+    await store.upsertBoard({ id: "ops", name: "Ops" });
+    await store.subscribeNotifications({
+      boardId: "ops",
+      target: "session:operator",
+      eventKinds: ["completed"],
+    });
+
+    await expect(store.deleteBoard("default")).rejects.toThrow("default board cannot be deleted");
+    const card = await store.create({ title: "Still on board", boardId: "ops" });
+    await store.archive(card.id, true);
+    await expect(store.deleteBoard("ops")).rejects.toThrow("board still has cards");
+    await expect(store.listNotificationSubscriptions({ boardId: "ops" })).resolves.toMatchObject({
+      subscriptions: [expect.objectContaining({ boardId: "ops" })],
+    });
+    await store.delete(card.id);
+    await store.create({ title: "Other board card", boardId: "product" });
+    const unrelated = await store.subscribeNotifications({
+      boardId: "product",
+      target: "session:unrelated",
+    });
+    using raw = new DatabaseSync(dbPath);
+    raw
+      .prepare("UPDATE workboard_notification_subscriptions SET event_kinds_json = ? WHERE id = ?")
+      .run("{", unrelated.id);
+    const readUnrelated = raw.prepare(
+      "SELECT * FROM workboard_notification_subscriptions WHERE id = ?",
+    );
+    const unrelatedBefore = readUnrelated.get(unrelated.id);
+    expect(unrelatedBefore).toMatchObject({ id: unrelated.id, event_kinds_json: "{" });
+
+    await expect(store.deleteBoard("ops")).resolves.toEqual({ deleted: true });
+    await expect(store.listNotificationSubscriptions({ boardId: "ops" })).resolves.toEqual({
+      subscriptions: [],
+    });
+    expect(readUnrelated.get(unrelated.id)).toEqual(unrelatedBefore);
   });
 });

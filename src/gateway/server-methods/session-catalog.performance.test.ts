@@ -68,6 +68,7 @@ it("measures 100 composed catalog lists against real session and plugin stores",
       try {
         counters.begin();
         fixture = await createComposedCatalogFixture(state, counters);
+        const catalogNamespace = await counters.catalogPersisted;
         const first = await fixture.list();
         expect(first.sessions.length).toBeGreaterThan(0);
         const sourceHomeId = first.sessions[0]?.sourceHomeId;
@@ -85,7 +86,7 @@ it("measures 100 composed catalog lists against real session and plugin stores",
           version: number;
           kind: string;
         }>({
-          namespace: await counters.catalogPersisted,
+          namespace: catalogNamespace,
           maxEntries: 20_001,
           overflowPolicy: "reject-new",
         });
@@ -138,6 +139,7 @@ it("measures 100 composed catalog lists against real session and plugin stores",
           await fixture.projection.ensureMaterialized();
         } while (fixture.projection.needsMaterialization);
         const cpuReferenceP50Ms = measureHostCpuReference();
+        expect(fixture.setupMaintenance).toEqual({ started: 3, completed: 3 });
         counters.begin();
         const durations: number[] = [];
         const workPerList = [];
@@ -153,6 +155,7 @@ it("measures 100 composed catalog lists against real session and plugin stores",
           const currentIo = counters.snapshot();
           workPerList.push({
             sqliteReadCalls: currentIo.sqliteReadCalls - previousIo.sqliteReadCalls,
+            sqliteFreshnessReads: currentIo.sqliteFreshnessReads - previousIo.sqliteFreshnessReads,
             bindingAuthorityReads:
               currentIo.bindingAuthorityReads - previousIo.bindingAuthorityReads,
             pluginStateWorkerOperations:
@@ -170,6 +173,7 @@ it("measures 100 composed catalog lists against real session and plugin stores",
         durations.sort((a, b) => a - b);
 
         const inspector = new InspectorSession();
+        expect(fixture.setupMaintenance).toEqual({ started: 3, completed: 3 });
         inspector.connect();
         let sampledAllocationBytes: number;
         let cpuSamples: ReturnType<typeof observedCpuSamples>;
@@ -226,10 +230,12 @@ it("measures 100 composed catalog lists against real session and plugin stores",
         expect(io.pluginStateWorkerReadOperations).toBe(0);
         expect(io.sessionEntryReads).toBe(0);
         expect(io.sessionPayloadReads).toBe(0);
-        // The adopted cohort shares one freshness, schema-admission, and authority read path.
+        // Cached-handle and reused-read admission each check published/content freshness.
+        // The adopted cohort still shares one bulk binding query without rescanning rows.
         for (const work of workPerList) {
           expect(work).toEqual({
-            sqliteReadCalls: 6,
+            sqliteReadCalls: 5,
+            sqliteFreshnessReads: 4,
             bindingAuthorityReads: 1,
             pluginStateWorkerOperations: 0,
           });

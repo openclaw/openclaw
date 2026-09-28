@@ -8,6 +8,21 @@ title: "Node session catalogs"
 sidebarTitle: "Session catalogs"
 ---
 
+Catalog listing waits up to one second per provider, concurrently. Providers that
+finish within that budget return normally. A slow provider returns
+`catalog.error.code: "catalog_pending"`; when available, its last successful page
+for the same caller and query is included with hosts marked `pending: true` and
+a stale-results message. A failed refresh can likewise return the last page with
+`catalog.error.code: "catalog_stale"` and the underlying error in its message.
+Other providers remain usable. Late results refresh the page for the next list;
+existing host progress updates remain supported.
+
+These fallback pages are bounded in memory and invalidated by configuration or
+provider registration changes and catalog archive operations. Every delivery
+rechecks current visibility and local session identity. The one-second budget
+covers provider discovery and queueing, not session-projection preparation or
+time spent waiting for the Gateway event loop.
+
 ## Codex sessions and transcripts
 
 The official `codex` plugin can expose non-archived Codex sessions on a

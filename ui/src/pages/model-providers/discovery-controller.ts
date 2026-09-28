@@ -1,6 +1,9 @@
 import { html, nothing, type ReactiveControllerHost, type ReactiveController } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
+
+registerModelSetupEnglish();
 
 function renderModelProviderDiscovery(props: {
   state: "closed" | "loading" | "ready";
@@ -8,7 +11,6 @@ function renderModelProviderDiscovery(props: {
   credentialChoices: readonly string[];
   onCancel: () => void;
   onClose: () => void;
-  onConnectChoice: (authChoice?: string) => void;
 }) {
   if (props.state === "closed") {
     return nothing;
@@ -29,7 +31,6 @@ function renderModelProviderDiscovery(props: {
   return html`<openclaw-model-setup-page
     .routeData=${{ firstRun: false }}
     .embedded=${true}
-    .onConnectChoice=${props.onConnectChoice}
     .credentialChoices=${props.credentialChoices}
     .agentLabel=${props.agentLabel}
     .onClose=${props.onClose}
@@ -49,7 +50,6 @@ type DiscoveryOptions = {
   getOwner: () => DiscoveryOwner;
   isCurrent: (owner: DiscoveryOwner) => boolean;
   onClose: () => void;
-  onConnectChoice: (authChoice?: string) => void;
   onError: (error: unknown) => void;
 };
 
@@ -145,12 +145,6 @@ export class ModelProviderDiscoveryController implements ReactiveController {
         if (generation === this.generation) {
           this.reset();
           this.options.onClose();
-        }
-      },
-      onConnectChoice: (provider) => {
-        if (generation === this.generation) {
-          this.reset();
-          this.options.onConnectChoice(provider);
         }
       },
     });

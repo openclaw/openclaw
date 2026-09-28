@@ -279,7 +279,9 @@ and remain selected.
 
 Preview and apply use the same matching logic, but each reads current state;
 a preview is not an immutable plan or a lock on subsequent writes. Apply
-coordinates with the memory plugin's staging and file mutations. Indexing
+coordinates with the memory plugin's staging and file mutations. It rechecks
+selected lineage after preparation and refreshes the plan if it changed, while
+retaining entries already identified as belonging to the selected sessions. Indexing
 discards stale results instead of restoring purged chunks or cached embeddings;
 rerun an index command that reports a source change. Direct agent edits and
 external writers do not share that lock, so pause them during a sensitive

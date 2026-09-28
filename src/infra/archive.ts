@@ -1,5 +1,4 @@
 // Exposes archive extraction helpers after applying fs-safe defaults.
-import "./fs-safe-defaults.js";
 import {
   extractArchive as extractArchiveWithFsSafe,
   type ExtractArchiveOptions,
@@ -15,15 +14,10 @@ export {
   DEFAULT_MAX_ENTRIES,
   DEFAULT_MAX_EXTRACTED_BYTES,
   DEFAULT_MAX_ENTRY_BYTES,
-  createTarEntryPreflightChecker,
   inspectTarArchive,
-  loadZipArchiveWithPreflight,
-  mergeExtractedTreeIntoDestination,
-  prepareArchiveDestinationDir,
   readArchiveEntry,
   resolveArchiveKind,
   resolvePackedRootDir,
-  withStagedArchiveDestination,
   type ArchiveLogger,
   type ArchiveEntryKind,
   type ArchiveExtractLimits,
@@ -44,6 +38,7 @@ export async function extractArchive(params: ExtractArchiveOptions): Promise<voi
     limits: params.limits,
     logger: params.logger,
     entryModes: params.entryModes,
+    entryUmask: params.entryUmask,
     entryFilter: params.entryFilter,
     onFiltered: params.onFiltered,
   });

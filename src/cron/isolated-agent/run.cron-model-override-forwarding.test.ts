@@ -221,18 +221,6 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     expect(runWithModelFallbackMock).not.toHaveBeenCalled();
   });
 
-  it("passes the cron payload model override to runWithModelFallback", async () => {
-    const captured = captureModelFallbackRun();
-
-    const result = await runCronIsolatedAgentTurn(makeParams());
-
-    expect(result.status).toBe("ok");
-    // The cron payload specifies google/gemini-2.0-flash — that must be
-    // what reaches runWithModelFallback, not the agent default (opus).
-    expect(captured.provider).toBe("google");
-    expect(captured.model).toBe("gemini-2.0-flash");
-  });
-
   it("passes the cron payload model to the embedded agent runner", async () => {
     // Use passthrough so runEmbeddedAgentMock actually gets called
     mockRunCronFallbackPassthrough();

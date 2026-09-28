@@ -6,6 +6,7 @@ import {
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import {
+  readEventTimestamp,
   readTranscriptEventId,
   readTranscriptStorageRows,
   type SqliteTranscriptStorageRow,
@@ -19,8 +20,6 @@ import {
 import {
   canonicalizeTranscriptEventMedia,
   insertTranscriptRowsWithoutProjectionInTransaction,
-  readEventTimestamp,
-  readMessageIdempotencyKey,
   scheduleTranscriptProjectionReconcile,
 } from "./session-accessor.sqlite-transcript-store.js";
 import {
@@ -43,6 +42,8 @@ import {
   prepareFullTranscriptSuffixMutation,
   prepareTranscriptIndexProjection,
 } from "./session-transcript-suffix-projection.js";
+import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
+import { transcriptEventJsonSql, transcriptEventNavigationSql } from "./transcript-payload.js";
 import {
   isSessionTranscriptLeafControl,
   parseSessionTranscriptTreeEntry,
@@ -66,6 +67,32 @@ type SqliteTranscriptSuffixMutationPlan = {
   previousProjection?: SessionTranscriptIndexProjection;
   startSeq: number;
 };
+
+function readTranscriptSuffixStorageRows(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  startSeq: number,
+  expectedRows: number,
+  retainedCustomDataIds: readonly string[],
+): SqliteTranscriptStorageRow[] {
+  return executeSqliteQuerySync(
+    database.db,
+    getSessionKysely(database.db)
+      .selectFrom("transcript_events")
+      .select([
+        "created_at",
+        projectTranscriptRetainedDataSql(
+          transcriptEventJsonSql(database.db),
+          retainedCustomDataIds,
+        ).as("event_json"),
+        "seq",
+      ])
+      .where("session_id", "=", sessionId)
+      .where("seq", ">=", startSeq)
+      .orderBy("seq", "asc")
+      .limit(expectedRows + 1),
+  ).rows.map((row) => ({ createdAt: row.created_at, eventJson: row.event_json, seq: row.seq }));
+}
 
 // Preserve the raw suffix mutation when an exact incremental projection update is unsafe.
 function verifyIncrementalPlanningFence(
@@ -172,22 +199,13 @@ function prepareIncrementalTranscriptSuffixMutation(
     );
   }
   const db = getSessionKysely(database.db);
-  const storedTail = executeSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("transcript_events")
-      .select((eb) => [
-        "created_at",
-        projectTranscriptRetainedDataSql(eb.ref("event_json"), retainedCustomDataIds).as(
-          "event_json",
-        ),
-        "seq",
-      ])
-      .where("session_id", "=", resolved.sessionId)
-      .where("seq", ">=", persistedPrefixLength)
-      .orderBy("seq", "asc")
-      .limit(expectedTail.length + 1),
-  ).rows.map((row) => ({ createdAt: row.created_at, eventJson: row.event_json, seq: row.seq }));
+  const storedTail = readTranscriptSuffixStorageRows(
+    database,
+    resolved.sessionId,
+    persistedPrefixLength,
+    expectedTail.length,
+    retainedCustomDataIds,
+  );
   if (
     storedTail.length !== expectedJson.length ||
     storedTail.some((row, index) => row.eventJson !== expectedJson[index])
@@ -424,22 +442,13 @@ export function replaceSqliteTranscriptSuffixInTransaction(
   }
   const retainedCustomDataIds = plan.retainedCustomDataIds ?? [];
   const storedRows = plan.incremental
-    ? executeSqliteQuerySync(
-        database.db,
-        db
-          .selectFrom("transcript_events")
-          .select((eb) => [
-            "created_at",
-            projectTranscriptRetainedDataSql(eb.ref("event_json"), retainedCustomDataIds).as(
-              "event_json",
-            ),
-            "seq",
-          ])
-          .where("session_id", "=", resolved.sessionId)
-          .where("seq", ">=", plan.startSeq)
-          .orderBy("seq", "asc")
-          .limit(plan.expectedRows.length + 1),
-      ).rows.map((row) => ({ createdAt: row.created_at, eventJson: row.event_json, seq: row.seq }))
+    ? readTranscriptSuffixStorageRows(
+        database,
+        resolved.sessionId,
+        plan.startSeq,
+        plan.expectedRows.length,
+        retainedCustomDataIds,
+      )
     : readTranscriptStorageRows(database, resolved.sessionId);
   if (
     storedRows.length !== plan.expectedRows.length ||
@@ -565,7 +574,7 @@ export function replaceSqliteTranscriptSuffixInTransaction(
             .onRef("event.session_id", "=", "identity.session_id")
             .onRef("event.seq", "=", "identity.seq"),
         )
-        .select(["event.event_json", "identity.event_id"])
+        .select([transcriptEventNavigationSql("event").as("event_json"), "identity.event_id"])
         .where("identity.session_id", "=", resolved.sessionId)
         .where("identity.seq", "<", plan.startSeq)
         .where("identity.message_idempotency_key", "is", null)

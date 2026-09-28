@@ -50,6 +50,7 @@ type EventRecord = {
   source?: string;
   state?: string;
   outcome?: string;
+  agentId?: string;
 };
 
 describe("runCronIsolatedAgentTurn diagnostic events", () => {
@@ -90,6 +91,7 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
     const processed = ofType("message.processed");
     expect(processed).toHaveLength(1);
     expect(processed[0]?.outcome).toBe("completed");
+    expect(processed[0]?.agentId).toBe("default");
 
     const queuedKey = ofType("message.queued")[0]?.sessionKey;
     expect(queuedKey).toBeTruthy();

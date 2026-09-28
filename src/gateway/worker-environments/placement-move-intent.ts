@@ -25,6 +25,7 @@ import {
 } from "./placement-record.js";
 import { getRequired, query, transitionValues } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
+import { publishPlacementTurnClaimState } from "./placement-turn-authority.js";
 import { boundedWorkerError } from "./worker-error.js";
 
 const MOVE_SCHEMA_START = "CREATE TABLE IF NOT EXISTS worker_session_placement_moves (";
@@ -230,22 +231,12 @@ function fromRow(row: MoveRow): WorkerPlacementMoveIntent {
   if (row.target_kind === "gateway" && row.target_id === null) {
     target = { kind: "gateway" };
   } else if (row.target_kind === "profile" && row.target_id !== null) {
-    target = {
+    target = normalizeWorkerPlacementMoveTarget({
       kind: "profile",
-      profileId: boundedIdentifier(row.target_id, "move profile id"),
-      ...(row.target_os === null
-        ? {}
-        : { os: boundedIdentifier(row.target_os, "move operating system", MOVE_OS_MAX_LENGTH) }),
-      ...(row.target_machine_class === null
-        ? {}
-        : {
-            machineClass: boundedIdentifier(
-              row.target_machine_class,
-              "move machine class",
-              MOVE_MACHINE_CLASS_MAX_LENGTH,
-            ),
-          }),
-    };
+      profileId: row.target_id,
+      ...(row.target_os === null ? {} : { os: row.target_os }),
+      ...(row.target_machine_class === null ? {} : { machineClass: row.target_machine_class }),
+    });
   } else if (row.target_kind === "device" && row.target_id !== null) {
     target = { kind: "device", deviceId: boundedIdentifier(row.target_id, "move device id") };
   } else {
@@ -280,12 +271,41 @@ function findMoveRowBySession(db: DatabaseSync, sessionId: string): MoveRow | un
   );
 }
 
-export function readWorkerPlacementMove(
+function readWorkerPlacementMove(
   db: DatabaseSync,
   sessionId: string,
 ): WorkerPlacementMoveIntent | undefined {
   const row = findMoveRowBySession(db, sessionId);
   return row ? fromRow(row) : undefined;
+}
+
+/** Display reads tolerate the shipped additive columns without mutating their source. */
+export function readWorkerPlacementMovesReadOnly(
+  db: DatabaseSync,
+  sessionIds: readonly string[],
+): ReadonlyMap<string, WorkerPlacementMoveIntent> {
+  const results = new Map<string, WorkerPlacementMoveIntent>();
+  if (!tableExists(db, "worker_session_placement_moves")) {
+    return results;
+  }
+  for (let offset = 0; offset < sessionIds.length; offset += 250) {
+    for (const row of executeSqliteQuerySync(
+      db,
+      moveQuery(db)
+        .selectFrom("worker_session_placement_moves")
+        .selectAll()
+        .where("session_id", "in", sessionIds.slice(offset, offset + 250)),
+    ).rows) {
+      const intent = fromRow({
+        ...row,
+        target_machine_class: row.target_machine_class ?? null,
+        target_os: row.target_os ?? null,
+        abandon_source: row.abandon_source ?? null,
+      });
+      results.set(intent.sessionId, intent);
+    }
+  }
+  return results;
 }
 
 function findMoveRowByOperation(db: DatabaseSync, operationId: string): MoveRow | undefined {
@@ -315,18 +335,14 @@ function requireExactMove(
 }
 
 function exactMoveValues(intent: WorkerPlacementMoveIntent) {
-  const values = targetValues(intent.target);
   return {
     operation_id: intent.operationId,
     session_id: intent.sessionId,
     source_generation: intent.source.generation,
     source_environment_id: intent.source.environmentId,
     source_owner_epoch: intent.source.ownerEpoch,
-    target_kind: values.target_kind,
+    ...targetValues(intent.target),
     abandon_source: abandonSourceValue(intent.abandonSource),
-    target_id: values.target_id,
-    target_machine_class: values.target_machine_class,
-    target_os: values.target_os,
   };
 }
 
@@ -381,48 +397,6 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
   return {
     getPlacementMove(sessionId: string): WorkerPlacementMoveIntent | undefined {
       return readWorkerPlacementMove(read(), required(sessionId, "move session id"));
-    },
-
-    getPlacementMoves(
-      sessionIds: readonly string[],
-    ): ReadonlyMap<string, WorkerPlacementMoveIntent> {
-      const normalizedIds = [
-        ...new Set(sessionIds.map((sessionId) => required(sessionId, "move session id"))),
-      ];
-      const results = new Map<string, WorkerPlacementMoveIntent>();
-      const db = read();
-      if (!ensureExistingWorkerPlacementMoveSchema(db)) {
-        return results;
-      }
-      for (let offset = 0; offset < normalizedIds.length; offset += 250) {
-        const chunk = normalizedIds.slice(offset, offset + 250);
-        for (const row of executeSqliteQuerySync(
-          db,
-          moveQuery(db)
-            .selectFrom("worker_session_placement_moves")
-            .selectAll()
-            .where("session_id", "in", chunk),
-        ).rows) {
-          const intent = fromRow(row);
-          results.set(intent.sessionId, intent);
-        }
-      }
-      return results;
-    },
-
-    listPlacementMoves(): WorkerPlacementMoveIntent[] {
-      const db = read();
-      if (!ensureExistingWorkerPlacementMoveSchema(db)) {
-        return [];
-      }
-      return executeSqliteQuerySync(
-        db,
-        moveQuery(db)
-          .selectFrom("worker_session_placement_moves")
-          .selectAll()
-          .orderBy("created_at_ms")
-          .orderBy("session_id"),
-      ).rows.map(fromRow);
     },
 
     beginPlacementMove(input: {
@@ -567,7 +541,9 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
         if (intent.target.kind === "gateway") {
           deleteExactMove(db, intent);
         }
-        return getRequired(db, intent.sessionId);
+        const record = getRequired(db, intent.sessionId);
+        publishPlacementTurnClaimState(db, record);
+        return record;
       });
     },
 
@@ -613,7 +589,9 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
           throw new Error(`Session ${intent.sessionId} changed during abandoned placement move`);
         }
         deleteExactMove(db, intent);
-        return getRequired(db, intent.sessionId);
+        const record = getRequired(db, intent.sessionId);
+        publishPlacementTurnClaimState(db, record);
+        return record;
       });
     },
 

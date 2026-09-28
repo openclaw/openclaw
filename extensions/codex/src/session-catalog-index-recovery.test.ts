@@ -242,8 +242,11 @@ describe("resident Codex catalog recovery", () => {
       readNative,
       assertCurrent: () => {},
     });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     try {
       await index.initialize();
+      // Drain the startup scan before changing the rollout and arranging its read failure.
+      await vi.advanceTimersByTimeAsync(0);
       await index.reconcile();
       await writeCatalogRollout(root, { ...original, cwd: "/workspace/changed" });
       const changed = await fs.stat(file);
@@ -265,6 +268,7 @@ describe("resident Codex catalog recovery", () => {
       expect(readNative).toHaveBeenCalledOnce();
     } finally {
       await index.close();
+      vi.useRealTimers();
     }
   });
 
@@ -299,6 +303,7 @@ describe("resident Codex catalog recovery", () => {
         assertCurrent: () => {},
       });
       const harness = createClientHarness();
+      const nativeReads = vi.spyOn(harness.client, "request");
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
       try {
         await index.initialize();
@@ -343,8 +348,8 @@ describe("resident Codex catalog recovery", () => {
             : [],
         );
         harness.send({ id: request.id, result: { thread: original } });
-        // This response carries explicit originator metadata, so its projection
-        // finishes without filesystem work before the next event-loop turn.
+        await nativeReads.mock.results[0]!.value;
+        // Explicit originator metadata lets publication finish without filesystem work.
         await nextTurn();
         const refreshedStatus = {
           ...current,
@@ -432,9 +437,12 @@ describe("resident Codex catalog recovery", () => {
       readNative,
       assertCurrent: () => {},
     });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     try {
       await index.initialize();
-      await index.reconcile();
+      const initialScan = index.reconcile();
+      await vi.advanceTimersByTimeAsync(0);
+      await initialScan;
       const readCalls: Array<() => Promise<number[]>> = [];
       const realOpen = fs.open;
       vi.spyOn(fs, "open").mockImplementation(async (...args) => {
@@ -492,6 +500,7 @@ describe("resident Codex catalog recovery", () => {
       expect(readNative).toHaveBeenCalledOnce();
     } finally {
       await index.close();
+      vi.useRealTimers();
     }
   });
 });

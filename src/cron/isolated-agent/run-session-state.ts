@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
 import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-cache.js";
 import type { LiveSessionModelSelection } from "../../agents/live-model-switch.js";
+import { applyModelRuntimeDirective } from "../../auto-reply/reply/directive-handling.model-runtime.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { hasSessionTranscriptEventsSync } from "../../config/sessions/session-accessor.js";
@@ -515,11 +516,12 @@ export function syncCronSessionLiveSelection(params: {
   if (previousRuntime !== nextRuntime) {
     clearCronContextOwnerState(params.entry);
   }
-  if (params.liveSelection.agentRuntimeOverride) {
-    params.entry.agentRuntimeOverride = params.liveSelection.agentRuntimeOverride;
-  } else {
-    delete params.entry.agentRuntimeOverride;
-  }
+  applyModelRuntimeDirective(
+    params.entry,
+    params.liveSelection.agentRuntimeOverride
+      ? { kind: "set", runtime: params.liveSelection.agentRuntimeOverride }
+      : { kind: "clear" },
+  );
   if (params.liveSelection.authProfileId) {
     const source =
       params.liveSelection.authProfileIdSource ??

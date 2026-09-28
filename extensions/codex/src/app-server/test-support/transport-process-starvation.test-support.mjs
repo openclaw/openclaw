@@ -77,7 +77,17 @@ const fd = openSync(fifo, "r+");
 let release;
 try {
   // One blocking read occupies the isolated process's only filesystem worker.
+  const heldAt = performance.now();
   const held = promisify(read)(fd, Buffer.alloc(1), 0, 1, null);
+  const filesystemWorkerReleaseDeadlineMs = 10_500;
+  let blockedFilesystemWorkerMs;
+  const releaseWorker = () => {
+    if (blockedFilesystemWorkerMs !== undefined) {
+      return;
+    }
+    writeSync(fd, Buffer.from("x"));
+    blockedFilesystemWorkerMs = performance.now() - heldAt;
+  };
   const directStart = performance.now();
   readFileSync(`/proc/${process.pid}/stat`);
   const directReadMs = performance.now() - directStart;
@@ -90,13 +100,17 @@ try {
       resolve();
     }, 100);
   });
-  release = setTimeout(() => writeSync(fd, Buffer.from("x")), 10_500);
+  release = setTimeout(releaseWorker, filesystemWorkerReleaseDeadlineMs);
   const outcomes = await Promise.allSettled([
     readCodexAppServerProcessSnapshot(deadline, [process.pid]),
     readCodexAppServerProcessCommand(own, deadline),
   ]);
   const inspectionMs = performance.now() - started;
-  await Promise.all([held, responsive]);
+  const filesystemWorkerHeldAtInspection = blockedFilesystemWorkerMs === undefined;
+  await responsive;
+  clearTimeout(release);
+  releaseWorker();
+  await held;
   console.log(
     JSON.stringify(
       {
@@ -107,7 +121,9 @@ try {
           .update(readFileSync(new URL("../transport-process-snapshot.ts", import.meta.url)))
           .digest("hex"),
         startupDeadlineMs: 10_000,
-        blockedFilesystemWorkerMs: 10_500,
+        filesystemWorkerReleaseDeadlineMs,
+        blockedFilesystemWorkerMs,
+        filesystemWorkerHeldAtInspection,
         directReadMs,
         eventLoopDelayMs,
         inspectionMs,

@@ -243,7 +243,7 @@ export async function resolveProjectCloneRefreshOwner(
   context: OpenClawStateWorkerContext,
 ): Promise<ProjectRegistryRecord | undefined> {
   const { runWithOpenClawStateLeaseWorker } =
-    await import("../state/openclaw-state-worker-store.js");
+    await import("../state/openclaw-state-lease-worker-storage.js");
   return await runWithOpenClawStateLeaseWorker(lease, context, (scope, identity) =>
     scope.execute({
       type: "projects.resolveRefreshOwner",
@@ -285,7 +285,7 @@ export async function removeProjectRegistry(
     { path: context.admission.databasePath, env },
     async (lease) => {
       const { runWithOpenClawStateLeaseWorker } =
-        await import("../state/openclaw-state-worker-store.js");
+        await import("../state/openclaw-state-lease-worker-storage.js");
       return await runWithOpenClawStateLeaseWorker(lease, context, (scope, identity) =>
         scope.execute({
           type: "projects.remove",

@@ -84,25 +84,6 @@ describe("bedrockMemoryEmbeddingProviderAdapter", () => {
     expect(bedrockMemoryEmbeddingProviderAdapter.shouldContinueAutoSelection?.(error)).toBe(true);
   });
 
-  it("creates the provider when AWS credentials are available", async () => {
-    hasAwsCredentialsMock.mockResolvedValue(true);
-    stubCreate({ region: "us-east-1", model: "amazon.titan-embed-text-v2:0", dimensions: 1024 });
-
-    const result = await bedrockMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
-
-    expect(result.provider?.id).toBe("bedrock");
-    expect(result.runtime).toEqual({
-      id: "bedrock",
-      cacheKeyData: {
-        provider: "bedrock",
-        region: "us-east-1",
-        model: "amazon.titan-embed-text-v2:0",
-        dimensions: 1024,
-      },
-    });
-    expect(createBedrockEmbeddingProviderMock).toHaveBeenCalledOnce();
-  });
-
   it("invalidates cached embeddings when the configured PrivateLink endpoint changes", async () => {
     hasAwsCredentialsMock.mockResolvedValue(true);
     const firstEndpoint = "https://vpce-first.bedrock-runtime.us-east-1.vpce.amazonaws.com";
@@ -153,11 +134,15 @@ describe("bedrockMemoryEmbeddingProviderAdapter", () => {
       },
     });
 
-    expect(result.runtime?.cacheKeyData).toEqual({
-      provider: "bedrock",
-      region: "us-east-1",
-      model: "amazon.titan-embed-text-v2:0",
-      dimensions: 1024,
+    expect(result.provider?.id).toBe("bedrock");
+    expect(result.runtime).toEqual({
+      id: "bedrock",
+      cacheKeyData: {
+        provider: "bedrock",
+        region: "us-east-1",
+        model: "amazon.titan-embed-text-v2:0",
+        dimensions: 1024,
+      },
     });
   });
 });

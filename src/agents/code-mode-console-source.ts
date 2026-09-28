@@ -69,12 +69,12 @@ export const CODE_MODE_CONSOLE_SOURCE = String.raw`
     const entry = { type: "text", text: clip(message, 4096) };
     const units = JSON.stringify(entry).length;
     if (consoleUnits + units > consoleLimit - 100) {
-      output.push({ type: "text", text: consoleMarker });
+      emitOutput({ type: "text", text: consoleMarker });
       consoleUnits = consoleLimit;
       return;
     }
     consoleUnits += units;
-    output.push(entry);
+    emitOutput(entry);
   }
   const guestConsole = Object.freeze(Object.fromEntries(
     ["log", "info", "warn", "error", "debug"].map((level) => [level, (...args) => consoleWrite(level, args)]),

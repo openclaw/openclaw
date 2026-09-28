@@ -1,13 +1,9 @@
-/**
- * Canvas plugin entrypoint for node canvas control, hosted A2UI routes, and
- * node CLI registration.
- */
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { definePluginEntry, type AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
 import { canvasA2UIBoardWidgetKind } from "./src/board-widget.js";
 import { canvasConfigSchema, isCanvasHostEnabled } from "./src/config.js";
 import { A2UI_PATH } from "./src/host/a2ui-shared.js";
-import { CanvasToolSchema } from "./src/tool-schema.js";
+import { canvasToolDefinition } from "./src/tool-schema.js";
 import { createCanvasWidgetPresenter } from "./src/widget-presenter.js";
 
 const CANVAS_NODE_COMMANDS = ["canvas.present", "canvas.hide", "canvas.navigate"];
@@ -17,11 +13,7 @@ function createLazyCanvasTool(agentSessionKey?: string): AnyAgentTool {
     import("./src/tool.js").then(({ createCanvasTool }) => createCanvasTool({ agentSessionKey })),
   );
   return {
-    label: "Canvas",
-    name: "canvas",
-    resultContentSource: "network",
-    description: "Present, hide, or navigate the widget panel on a paired macOS node.",
-    parameters: CanvasToolSchema,
+    ...canvasToolDefinition,
     execute: async (...args: Parameters<AnyAgentTool["execute"]>) =>
       await (await loadTool()).execute(...args),
   };

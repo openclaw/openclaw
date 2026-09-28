@@ -23,8 +23,6 @@ export type DaemonInstallOptions = {
   token?: string;
   wrapper?: string;
   allowUnconfigured?: boolean;
-  /** Private updater IPC handoff before native service load. */
-  deferActivation?: boolean;
   force?: boolean;
   json?: boolean;
 };

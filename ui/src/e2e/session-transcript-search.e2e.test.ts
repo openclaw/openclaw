@@ -1,4 +1,4 @@
-// Control UI E2E tests transcript search through the advertised Gateway method.
+// Control UI E2E tests transcript search through the scoped Gateway method.
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
@@ -109,7 +109,8 @@ describeControlUiE2e("Control UI session transcript search", () => {
     });
     page = await context.newPage();
     const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.search"],
+      // Core search remains usable even when omitted from the feature catalog.
+      featureMethods: ["chat.metadata", "chat.startup"],
       historyMessages: [
         {
           role: "assistant",
@@ -167,10 +168,14 @@ describeControlUiE2e("Control UI session transcript search", () => {
     await result.waitFor({ state: "visible", timeout: 10_000 });
     await expect.poll(async () => gateway.getRequests("sessions.search")).toHaveLength(1);
     expect((await gateway.getRequests("sessions.search"))[0]?.params).toEqual({
-      agentId: "main",
       limit: 25,
       query: "nebula launch",
-      sessionKeys: ["agent:main:launch"],
+      scope: {
+        agentId: "main",
+        includeGlobal: true,
+        includeUnknown: false,
+        configuredAgentsOnly: true,
+      },
     });
     await expect.poll(() => result.textContent()).toContain("Launch planning");
     await expect.poll(() => result.textContent()).toContain("Assistant");
@@ -254,7 +259,12 @@ describeControlUiE2e("Control UI session transcript search", () => {
     await input.press("Enter");
     await page.getByText("Release notes from the active task.", { exact: true }).waitFor();
     expect((await gateway.getRequests("sessions.search"))[0]?.params).toMatchObject({
-      sessionKeys: ["agent:main:active"],
+      scope: {
+        agentId: "main",
+        includeGlobal: true,
+        includeUnknown: false,
+        configuredAgentsOnly: true,
+      },
     });
 
     await page.locator('.sessions-view-segment wa-radio[value="archived"]').click();
@@ -263,31 +273,27 @@ describeControlUiE2e("Control UI session transcript search", () => {
     await captureUiProof("filter-scope.png");
     expect(await page.locator(".sessions-transcript-search__result").count()).toBe(0);
     expect(await input.inputValue()).toBe("Release notes");
-    await gateway.setMethodResponse("sessions.search", { results: [] });
+    // Keep the active hit in the fixture: the Gateway must exclude it from the archived scope.
     await input.press("Enter");
     await expect.poll(async () => gateway.getRequests("sessions.search")).toHaveLength(2);
     expect((await gateway.getRequests("sessions.search"))[1]?.params).toMatchObject({
-      sessionKeys: ["agent:main:archived"],
+      scope: { agentId: "main", archived: true },
     });
+    await page
+      .getByText("No transcript messages match that search.", { exact: true })
+      .waitFor({ state: "visible" });
+    expect(await page.locator(".sessions-transcript-search__result").count()).toBe(0);
   });
 
-  it("finds a transcript when updated session order moves across a paged roster", async () => {
+  it("finds an older off-roster transcript without enumerating session pages", async () => {
     const timestamp = Date.parse("2026-07-12T14:30:00.000Z");
     const first = { key: "agent:main:first", kind: "direct", updatedAt: timestamp };
-    const moved = { key: "agent:main:moved", kind: "direct", updatedAt: timestamp + 1 };
-    const missed = { key: "agent:main:missed", kind: "direct", updatedAt: timestamp - 1 };
-    const defaults = { contextTokens: null, model: null, modelProvider: null };
-    const result = (sessions: (typeof first)[], offset: number, hasMore: boolean) => ({
-      count: sessions.length,
-      defaults,
-      hasMore,
-      nextOffset: hasMore ? offset + sessions.length : null,
-      offset,
-      path: "",
-      sessions,
-      totalCount: 3,
-      ts: timestamp,
-    });
+    const missed = {
+      key: "agent:main:missed",
+      label: "Earlier launch planning",
+      kind: "direct",
+      updatedAt: timestamp - 86_400_000,
+    };
     context = await browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -295,10 +301,21 @@ describeControlUiE2e("Control UI session transcript search", () => {
     });
     page = await context.newPage();
     const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.search"],
+      sessions: [first, missed],
       methodResponses: {
-        "sessions.list": result([first, moved], 0, true),
+        "sessions.list": {
+          count: 1,
+          defaults: { contextTokens: null, model: null, modelProvider: null },
+          hasMore: true,
+          nextOffset: 1,
+          offset: 0,
+          path: "",
+          sessions: [first],
+          totalCount: 2,
+          ts: timestamp,
+        },
         "sessions.search": {
+          sessions: [missed],
           results: [
             {
               messageId: "message-missed",
@@ -317,105 +334,33 @@ describeControlUiE2e("Control UI session transcript search", () => {
     await page.goto(`${server?.baseUrl ?? ""}sessions`);
     const input = page.getByRole("searchbox", { name: "Search session transcripts" });
     await input.waitFor({ state: "visible", timeout: 10_000 });
-    await gateway.setMethodResponse("sessions.list", {
-      cases: [
-        { match: { offset: 2 }, response: result([moved], 2, false) },
-        { response: result([first, missed], 0, true) },
-      ],
-    });
+    await page
+      .getByRole("checkbox", { name: `Select session: ${first.key}`, exact: true })
+      .waitFor();
+    expect(
+      await page
+        .getByRole("checkbox", { name: `Select session: ${missed.key}`, exact: true })
+        .count(),
+    ).toBe(0);
+    const listRequests = await gateway.getRequests("sessions.list");
     await input.fill("launch code");
     await input.press("Enter");
 
-    await page.getByText("the recovered launch code").waitFor({ state: "visible" });
-    await expect.poll(async () => gateway.getRequests("sessions.search")).toHaveLength(1);
+    const match = page.locator(".sessions-transcript-search__result");
+    await match.getByText("the recovered launch code", { exact: true }).waitFor();
+    expect(await match.textContent()).toContain("Earlier launch planning");
+    expect(await gateway.getRequests("sessions.search")).toHaveLength(1);
     expect((await gateway.getRequests("sessions.search"))[0]?.params).toEqual({
-      agentId: "main",
       limit: 25,
       query: "launch code",
-      sessionKeys: [first.key, missed.key, moved.key],
-    });
-  });
-
-  it.each([
-    {
-      label: "a later session page cannot be loaded",
-      response: null,
-      message: /Unable to load all sessions for transcript search\./,
-      proofFile: "05-incomplete-roster-error.png",
-    },
-    {
-      label: "the session pagination cursor stops advancing",
-      response: {
-        count: 0,
-        hasMore: true,
-        nextOffset: 50,
-        offset: 50,
-        sessions: [],
-      },
-      message: /Session pagination did not advance during transcript search\./,
-      proofFile: "06-stalled-roster-error.png",
-    },
-  ])("shows a retryable search error when $label", async (testCase) => {
-    const timestamp = Date.parse("2026-07-12T14:30:00.000Z");
-    context = await browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 800, width: 1200 },
-    });
-    page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.search"],
-      methodResponses: {
-        "sessions.list": {
-          cases: [
-            { match: { offset: 50 }, response: testCase.response },
-            {
-              response: {
-                count: 1,
-                defaults: { contextTokens: null, model: null, modelProvider: null },
-                hasMore: true,
-                nextOffset: 50,
-                offset: 0,
-                path: "",
-                sessions: [
-                  {
-                    key: "agent:main:visible",
-                    kind: "direct",
-                    label: "Visible session",
-                    updatedAt: timestamp,
-                  },
-                ],
-                totalCount: 51,
-                ts: timestamp,
-              },
-            },
-          ],
-        },
-        "sessions.search": { results: [] },
+      scope: {
+        agentId: "main",
+        includeGlobal: true,
+        includeUnknown: false,
+        configuredAgentsOnly: true,
       },
     });
-
-    await page.goto(`${server?.baseUrl ?? ""}sessions`);
-    const search = page.getByRole("search", { name: "Search transcripts" });
-    const input = search.getByRole("searchbox", { name: "Search session transcripts" });
-    await input.waitFor({ state: "visible", timeout: 10_000 });
-    await input.fill("needle");
-    await input.press("Enter");
-
-    await page
-      .locator(".sessions-transcript-search__notice--danger")
-      .getByText(testCase.message)
-      .waitFor({ state: "visible", timeout: 10_000 });
-    await page.getByRole("button", { name: "Retry" }).waitFor({ state: "visible" });
-    await expect
-      .poll(async () =>
-        (await gateway.getRequests("sessions.list")).some(
-          (request) => (request.params as { offset?: number } | undefined)?.offset === 50,
-        ),
-      )
-      .toBe(true);
-    expect(await gateway.getRequests("sessions.search")).toHaveLength(0);
-    await captureUiProof(testCase.proofFile);
+    expect(await gateway.getRequests("sessions.list")).toEqual(listRequests);
   });
 
   it("ignores stale results and exposes indexing and request errors", async () => {
@@ -509,36 +454,12 @@ describeControlUiE2e("Control UI session transcript search", () => {
     await page
       .getByText(/Transcript search failed:.*Search service unavailable/)
       .waitFor({ state: "visible", timeout: 10_000 });
-  });
-
-  it("disables the control when transcript search is not advertised", async () => {
-    context = await browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 800, width: 1200 },
-    });
-    page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup"],
-      methodResponses: {
-        "sessions.list": {
-          count: 0,
-          defaults: { contextTokens: null, model: null, modelProvider: null },
-          path: "",
-          sessions: [],
-          ts: Date.now(),
-        },
-      },
-    });
-
-    await page.goto(`${server?.baseUrl ?? ""}sessions`);
-    const search = page.getByRole("search", { name: "Search transcripts" });
-    const input = search.getByRole("searchbox", { name: "Search session transcripts" });
-    await input.waitFor({ state: "visible", timeout: 10_000 });
-    await expect.poll(() => input.isDisabled()).toBe(true);
+    await captureUiProof("05-search-request-error.png");
+    await page.getByRole("button", { name: "Retry" }).click();
+    await expect.poll(async () => gateway.getRequests("sessions.search")).toHaveLength(5);
     await page
-      .getByText("Transcript search requires a newer Gateway.", { exact: true })
+      .getByText("No transcript messages match that search.", { exact: true })
       .waitFor({ state: "visible" });
-    expect(await gateway.getRequests("sessions.search")).toHaveLength(0);
+    expect(await page.getByText(/Transcript search failed:/).count()).toBe(0);
   });
 });

@@ -143,7 +143,7 @@ describe("gateway suspend handlers", () => {
       suspensionId: "suspension-draining",
     });
 
-    expect(coordinator.status).toHaveBeenCalledWith("suspension-draining");
+    expect(coordinator.status).toHaveBeenCalledWith("suspension-draining", false);
     expect(respond).toHaveBeenCalledWith(true, result);
   });
 

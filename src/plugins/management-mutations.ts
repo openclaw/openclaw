@@ -186,9 +186,16 @@ export async function installManagedPlugin(
         deferRuntime: params.deferRuntime,
         beforePersistentApply,
         request,
+        enable: params.request.enable,
         snapshot,
         env,
-        logger: params.logger ?? { warn: (message) => warnings.push(message) },
+        logger: {
+          ...params.logger,
+          warn: (message) => {
+            warnings.push(message);
+            params.logger?.warn?.(message);
+          },
+        },
         onCapabilityConsent: params.onCapabilityConsent,
         beforePersistentEffect: params.beforePersistentEffect,
         ...(params.request.acknowledgeCapabilities
@@ -547,6 +554,7 @@ export async function reloadManagedPlugin(
         config,
         pluginIds,
         reason: "reload",
+        ...(params.waitForDrain ? { waitForDrain: true, drainSignal: params.signal } : {}),
         ...(expected.size ? { expectedSourceDigests: Object.fromEntries(expected) } : {}),
         ...(resolved.every((target) => target.install !== undefined)
           ? {

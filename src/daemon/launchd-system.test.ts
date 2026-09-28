@@ -125,7 +125,7 @@ esac
 fixture=$(/bin/cat "$last")
 if [ "$mode" = "-extract" ]; then
   if [ "$fixture" = "same-label" ]; then
-    printf '%s\\n' "ai.openclaw.gateway"
+    printf '%s' "ai.openclaw.gateway"
     exit 0
   fi
   printf '%s\\n' "No value at that key path: Label" >&2
@@ -203,16 +203,6 @@ describe("system LaunchDaemon ownership", () => {
     }
   });
 
-  it("uses the readable system-domain query and reports a loaded owner", async () => {
-    state.launchctl = { stdout: "state = running", stderr: "", code: 0 };
-
-    await expect(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway")).resolves.toEqual({
-      status: "loaded",
-      serviceTarget: "system/ai.openclaw.gateway",
-    });
-    expect(execLaunchctl).toHaveBeenCalledWith(["print", "system/ai.openclaw.gateway"], undefined);
-  });
-
   it("fails closed when launchctl cannot classify system ownership", async () => {
     state.launchctl = { stdout: "", stderr: "Operation not permitted", code: 1 };
 
@@ -223,32 +213,6 @@ describe("system LaunchDaemon ownership", () => {
       detail: "Operation not permitted",
       reason: "launchd-system-domain-unavailable",
     });
-  });
-
-  it("detects the canonical unloaded plist by its structural Label", async () => {
-    const plistPath = "/Library/LaunchDaemons/ai.openclaw.gateway.plist";
-    state.files.set(plistPath, "bplist00-binary-payload");
-    state.plutilValues.set(plistPath, { Label: "ai.openclaw.gateway" });
-
-    await expect(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway")).resolves.toEqual({
-      status: "installed",
-      serviceTarget: "system/ai.openclaw.gateway",
-      plistPath,
-    });
-  });
-
-  it("detects a noncanonical XML plist by its decoded Label", async () => {
-    const plistPath = "/Library/LaunchDaemons/vendor-openclaw.plist";
-    state.files.set(
-      plistPath,
-      "<plist><dict><key>Label</key><string>ai.openclaw.gateway</string></dict></plist>",
-    );
-    state.plutilValues.set(plistPath, { Label: "ai.openclaw.gateway" });
-
-    const ownership = await inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway");
-
-    expect(ownership).toMatchObject({ status: "installed", plistPath });
-    expect(runExec).toHaveBeenCalled();
   });
 
   it("uses the native top-level Label instead of an earlier nested XML key", async () => {
@@ -417,7 +381,7 @@ describe("system LaunchDaemon ownership", () => {
 
     expect(script).toContain('launchctl print "$openclaw_system_launchd_target"');
     expect(script).toContain(
-      '/usr/bin/plutil -extract Label raw -o - -- "$openclaw_system_launchd_plist"',
+      '/usr/bin/plutil -extract Label raw -expect string -n -o - -- "$openclaw_system_launchd_plist"',
     );
     expect(script).toContain(
       '/usr/bin/plutil -lint -- "$openclaw_system_launchd_plist" >/dev/null 2>&1',

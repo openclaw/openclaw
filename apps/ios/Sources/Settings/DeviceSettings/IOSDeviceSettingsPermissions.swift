@@ -67,7 +67,7 @@ final class IOSDeviceSettingsPermissions {
             _ = await PermissionRequestBridge.awaitRequest(isCurrent: isCurrent) { completion in
                 PHPhotoLibrary.requestAuthorization(for: .readWrite) { completion(PhotoLibraryAccess.canRead($0)) }
             }
-        case .notifications, .location, .accessibility, .screenRecording, .automation:
+        case .notifications, .location, .accessibility, .screenRecording:
             break
         }
         try Task.checkCancellation()

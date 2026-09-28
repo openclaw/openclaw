@@ -1,4 +1,3 @@
-// Matrix plugin module implements sdk behavior.
 import type { Room } from "matrix-js-sdk/lib/models/room.js";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -621,7 +620,6 @@ export class MatrixClient extends MatrixClientVerification {
 
   private emitMembershipForRoom(room: Room): void {
     emitMatrixMembershipForRoom({
-      client: this.client,
       emitter: this.emitter,
       room,
       selfUserId: this.client.getUserId() ?? this.selfUserId ?? "",

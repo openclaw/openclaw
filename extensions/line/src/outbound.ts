@@ -3,7 +3,6 @@ import {
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
-// Line plugin module implements outbound behavior.
 import {
   defineChannelMessageAdapter,
   listMessageReceiptPlatformIds,
@@ -136,13 +135,12 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       ? quickReplyItems.map((item) => item.label)
       : quickReplies;
 
-    // LINE SDK expects Message[] but we build dynamically.
-    const sendMessageBatch = async (messages: Array<Record<string, unknown>>) => {
+    const sendMessageBatch = async (messages: messagingApi.Message[]) => {
       if (messages.length === 0) {
         return;
       }
       for (let i = 0; i < messages.length; i += 5) {
-        const batch = messages.slice(i, i + 5) as unknown as Parameters<typeof sendBatch>[1];
+        const batch = messages.slice(i, i + 5);
         await recordResult(sendBatch(to, batch, sendOptions));
       }
     };
@@ -279,7 +277,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         }
       }
     } else if (shouldSendQuickRepliesInline) {
-      const quickReplyMessages: Array<Record<string, unknown>> = [];
+      const quickReplyMessages: messagingApi.Message[] = [];
       if (lineData.flexMessage) {
         quickReplyMessages.push(
           outboundRuntime.createFlexMessage(
@@ -313,10 +311,11 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         }
         quickReplyMessages.push(await buildLineMediaMessage(trimmed, mediaOptions, to));
       }
-      if (quickReplyMessages.length > 0 && quickReply) {
+      const lastMessage = quickReplyMessages.at(-1);
+      if (lastMessage && quickReply) {
         const lastIndex = quickReplyMessages.length - 1;
         quickReplyMessages[lastIndex] = {
-          ...quickReplyMessages[lastIndex],
+          ...lastMessage,
           quickReply,
         };
         await sendMessageBatch(quickReplyMessages);

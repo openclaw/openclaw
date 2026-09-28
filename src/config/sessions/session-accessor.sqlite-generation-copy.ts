@@ -3,6 +3,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
+  prepareSqliteQuerySync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -14,10 +15,7 @@ import type {
 } from "./session-accessor.sqlite-generation.types.js";
 import { readSessionInputArtifactRows } from "./session-accessor.sqlite-pending-inputs-repair.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import {
-  createTranscriptEventInserter,
-  createTranscriptIdentityInserter,
-} from "./session-accessor.sqlite-transcript-store.js";
+import { createTranscriptIdentityInserter } from "./session-accessor.sqlite-transcript-store.js";
 import {
   assertSessionTranscriptHot,
   readSessionColdTranscript,
@@ -27,6 +25,7 @@ import {
   reconcileSessionTranscriptIndexInTransaction,
 } from "./session-transcript-index.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
+import { transcriptEventJsonSql, type TranscriptPayloadRecord } from "./transcript-payload.js";
 
 export function readSqliteSessionGenerationWindows(
   database: Pick<OpenClawAgentDatabase, "db">,
@@ -54,14 +53,6 @@ function readSqliteSessionGenerationRows(
 ) {
   const db = getSessionKysely(database.db);
   return {
-    events: iterateSqliteQuerySync(
-      database.db,
-      db
-        .selectFrom("transcript_events")
-        .selectAll()
-        .where("session_id", "=", sessionId)
-        .orderBy("seq"),
-    ),
     identities: iterateSqliteQuerySync(
       database.db,
       db
@@ -126,7 +117,20 @@ export function readSqliteSessionGenerationClaim(
       }
     }
   };
-  hashRows("events", rows.events, (row) => ["event", row.seq, row.event_json]);
+  hashRows(
+    "events",
+    iterateSqliteQuerySync(
+      database.db,
+      getSessionKysely(database.db)
+        .selectFrom("transcript_events")
+        .select(["session_id", "seq"])
+        .select(transcriptEventJsonSql(database.db).as("event_json"))
+        .select("created_at")
+        .where("session_id", "=", window.session_id)
+        .orderBy("seq"),
+    ),
+    (row) => ["event", row.seq, row.event_json],
+  );
   hashRows("identities", rows.identities, (row) => [
     "identity",
     row.event_id,
@@ -231,7 +235,7 @@ export function copySqliteSessionGenerationRows(params: {
   ) {
     return;
   }
-  const { events, identities, rewriteWatermarks, trajectoryEvents, parentStreamEvents } =
+  const { identities, rewriteWatermarks, trajectoryEvents, parentStreamEvents } =
     readSqliteSessionGenerationRows(params.source, params.sessionId);
   const destinationDb = getSessionKysely(params.destination.db);
   for (const table of tables) {
@@ -240,9 +244,44 @@ export function copySqliteSessionGenerationRows(params: {
       destinationDb.deleteFrom(table).where("session_id", "=", params.sessionId),
     );
   }
-  const insertEvent = createTranscriptEventInserter(params.destination, params.sessionId);
-  for (const row of events) {
-    insertEvent({ seq: row.seq, eventJson: row.event_json, createdAt: row.created_at });
+  const eventQuery = sourceDb
+    .selectFrom("transcript_events")
+    .where("session_id", "=", params.sessionId)
+    .orderBy("seq");
+  const insertEvent = prepareSqliteQuerySync<
+    TranscriptPayloadRecord & { seq: number; created_at: number }
+  >(params.destination.db, (parameter) =>
+    destinationDb.insertInto("transcript_events").values({
+      session_id: params.sessionId,
+      seq: parameter((row) => row.seq),
+      created_at: parameter((row) => row.created_at),
+      event_json: parameter((row) => row.event_json),
+      event_zstd: parameter((row) => row.event_zstd),
+      event_utf8_bytes: parameter((row) => row.event_utf8_bytes),
+      navigation_json: parameter((row) => row.navigation_json),
+    }),
+  );
+  // UTF-16 destinations retain native TEXT byte accounting and JSON semantics.
+  // UTF-8 stores can preserve encoded payloads without another codec round trip.
+  const destinationEncoding = params.destination.db.prepare("PRAGMA encoding").get()?.encoding;
+  if (destinationEncoding !== "UTF-8") {
+    for (const row of iterateSqliteQuerySync(
+      params.source.db,
+      eventQuery
+        .select(["session_id", "seq", "created_at"])
+        .select(transcriptEventJsonSql(params.source.db).as("event_json")),
+    )) {
+      insertEvent({
+        ...row,
+        event_zstd: null,
+        event_utf8_bytes: null,
+        navigation_json: null,
+      });
+    }
+  } else {
+    for (const row of iterateSqliteQuerySync(params.source.db, eventQuery.selectAll())) {
+      insertEvent(row);
+    }
   }
   // Preserve recorded idempotency ownership, which cannot be inferred from the JSON.
   const insertIdentity = createTranscriptIdentityInserter(
@@ -281,5 +320,14 @@ export function copySqliteSessionGenerationRows(params: {
   // Cross-store repair must atomically finish copied projections before publishing the new owner.
   markSessionTranscriptIndexDirtyInTransaction(params.destination.db, params.sessionId);
   reconcileSessionTranscriptIndexInTransaction(params.destination.db, params.sessionId);
-  publishSessionEntryCacheInvalidation(params.destination);
+  const owner = executeSqliteQueryTakeFirstSync(
+    params.destination.db,
+    destinationDb
+      .selectFrom("session_windows")
+      .select("session_key")
+      .where("session_id", "=", params.sessionId),
+  );
+  if (owner) {
+    publishSessionEntryCacheInvalidation(params.destination, { sessionKey: owner.session_key });
+  }
 }

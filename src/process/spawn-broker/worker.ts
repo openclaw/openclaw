@@ -1,7 +1,8 @@
-import { spawn, type ChildProcess, type SendHandle } from "node:child_process";
+import type { ChildProcess, SendHandle } from "node:child_process";
 import { Socket } from "node:net";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { killProcessTree } from "../kill-tree.js";
+import { spawnWithInheritedOomScore } from "../linux-oom-score.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "../supervisor/cancellation-policy.js";
 import { hasLiveOwnedProcessGroupMembers } from "../supervisor/service-child-group-ownership.js";
 import { serializeExecaError } from "./execa-protocol.js";
@@ -169,7 +170,7 @@ async function launch(
       const child =
         execa?.child ??
         (message.type === "spawn"
-          ? spawn(message.argv[0]!, message.argv.slice(1), message.options)
+          ? spawnWithInheritedOomScore(message.argv[0]!, message.argv.slice(1), message.options)
           : undefined);
       spawnedChild = child;
       if (!child) {
@@ -415,7 +416,10 @@ process.on("message", (raw: unknown, handle: SendHandle) => {
   } else if (message.type === "cancel") {
     entry.execa?.cancel();
   } else if (message.type === "output-drained") {
-    entry.execa?.outputDrained(message.fd, message.error ? new Error(message.error) : undefined);
+    entry.execa?.outputDrained(
+      message.fd,
+      message.error ? Object.assign(new Error(message.error.message), message.error) : undefined,
+    );
     entry.openPipes.delete(message.fd);
     forget(message.id, entry);
   } else if (message.type === "disconnect" && entry.child.connected) {

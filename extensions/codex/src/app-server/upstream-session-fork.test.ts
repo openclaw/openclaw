@@ -160,6 +160,7 @@ describe("forkCodexUpstreamSession", () => {
       try {
         await peer.request("model/list", {});
         const close = vi.spyOn(peer, "close");
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
         await controlFactory.forRequest("main").initialize();
         const params = forkParams();
         params.upstream.ref.connectionFingerprint = buildCodexAppServerConnectionFingerprint(
@@ -168,9 +169,6 @@ describe("forkCodexUpstreamSession", () => {
         );
         boundaryMocks.listTurns.mockResolvedValueOnce([codexForkTurn("turn-2", "edit me")]);
         const runtime = createPluginRuntimeMock();
-        if (outcome === "late-response") {
-          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-        }
         const operation = forkCodexUpstreamSession(params, {
           bindingStore: createCodexTestBindingStore(),
           controlFactory,
@@ -290,11 +288,14 @@ describe("forkCodexUpstreamSession", () => {
       runtime,
     });
 
-    expect(forkThread).toHaveBeenCalledWith({
-      threadId: sourceThreadId,
-      beforeTurnId: "turn-2",
-      excludeTurns: true,
-    });
+    expect(forkThread).toHaveBeenCalledWith(
+      {
+        threadId: sourceThreadId,
+        beforeTurnId: "turn-2",
+        excludeTurns: true,
+      },
+      expect.any(Function),
+    );
     expect(boundaryMocks.listTurns).toHaveBeenLastCalledWith(control, "thread-forked");
     expect(transcriptMocks.importHistory).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -367,6 +368,7 @@ describe("forkCodexUpstreamSession", () => {
     });
     expect(forkThread).toHaveBeenCalledWith(
       expect.objectContaining({ sandbox: "workspace-write" }),
+      expect.any(Function),
     );
   });
 

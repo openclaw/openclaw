@@ -194,12 +194,8 @@ export function createSqliteAuditRecordKernel<T>(
       // Keep the just-addressed key while pruning the oldest rows in this scope.
       pruneAuditRecords({ database, scope, maxEntries, protectedKey: record.event_key });
     },
-    upsert(record: PreparedSqliteAuditRecord): void {
-      upsertPreparedRecord(record);
-    },
-    delete(key: string): void {
-      deleteRecord(key);
-    },
+    upsert: upsertPreparedRecord,
+    delete: deleteRecord,
     compareAndSet(
       key: string,
       expectedPayloadJson: string | null | undefined,

@@ -84,7 +84,6 @@ export async function installPluginFromPluginsCommand(params: {
   }
   const warnings: string[] = plan.warning ? [plan.warning] : [];
   const logger = createPluginInstallLogger();
-  const clawhub = plan.request.source === "clawhub";
   let result: Awaited<ReturnType<typeof installManagedPlugin>>;
   try {
     result = await installManagedPlugin({
@@ -98,16 +97,7 @@ export async function installPluginFromPluginsCommand(params: {
         action: "install",
         allowPrompt: false,
       }),
-      logger: clawhub
-        ? {
-            info: logger.info,
-            warn: (message) => {
-              warnings.push(stripAnsi(message));
-              logger.warn(message);
-            },
-            terminalLinks: false,
-          }
-        : logger,
+      logger: { ...logger, terminalLinks: false },
     });
   } catch (error) {
     const forceFlag = params.force ? " --force" : "";
@@ -123,7 +113,7 @@ export async function installPluginFromPluginsCommand(params: {
     }
     throw error;
   }
-  warnings.push(...(result.warnings ?? []));
+  warnings.push(...(result.warnings ?? []).map(stripAnsi));
   if (acknowledgement?.ok) {
     warnings.push(acknowledgement.warning);
   }

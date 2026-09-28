@@ -29,7 +29,6 @@ import {
   type ExecCommandAnalysis,
   type ExecCommandSegment,
   type ExecutableResolution,
-  type ShellChainOperator,
 } from "./exec-approvals-analysis.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import {
@@ -798,124 +797,46 @@ function evaluateAuthorizationCandidate(params: {
   return { match, satisfiedBy };
 }
 
-type PlanGroupEvaluation = {
-  analysis: ExecCommandAnalysis;
-  evaluation: ExecAllowlistEvaluation;
-  opToNext: ShellChainOperator | null;
-};
-
-function evaluateAuthorizationPlanGroup(params: {
-  group: Extract<ExecAuthorizationPlan, { ok: true }>["groups"][number];
-  context: ExecAllowlistContext;
-  allowSkills: boolean;
-  skillBinTrust: ReadonlyMap<string, ReadonlySet<string>>;
-}): {
-  evaluation: ExecAllowlistEvaluation;
-  segments: ExecCommandSegment[];
-} {
-  const matches: ExecAllowlistEntry[] = [];
-  const segmentAllowlistEntries: Array<ExecAllowlistEntry | null> = [];
-  const segmentSatisfiedBy: ExecSegmentSatisfiedBy[] = [];
-  const segments: ExecCommandSegment[] = [];
-  let allowlistSatisfied = true;
-
-  for (const candidate of params.group.candidates) {
-    const result = evaluateAuthorizationCandidate({
-      candidate,
-      context: params.context,
-      allowSkills: params.allowSkills,
-      skillBinTrust: params.skillBinTrust,
-    });
-    if (result.match) {
-      matches.push(result.match);
-    }
-    segments.push(candidate.sourceSegment);
-    segmentAllowlistEntries.push(result.match);
-    segmentSatisfiedBy.push(result.satisfiedBy);
-    if (!result.satisfiedBy) {
-      allowlistSatisfied = false;
-    }
-  }
-
-  return {
-    evaluation: {
-      allowlistSatisfied,
-      allowlistMatches: matches,
-      segmentAllowlistEntries,
-      segmentSatisfiedBy,
-    },
-    segments,
-  };
-}
-
-function finalizeShellAllowlistEvaluations(params: {
-  evaluations: PlanGroupEvaluation[];
-  authorizationPlan?: ExecAuthorizationPlan;
-}): ExecAllowlistAnalysis {
-  const allowlistMatches: ExecAllowlistEntry[] = [];
-  const segments: ExecCommandSegment[] = [];
-  const segmentAllowlistEntries: Array<ExecAllowlistEntry | null> = [];
-  const segmentSatisfiedBy: ExecSegmentSatisfiedBy[] = [];
-  let allowlistSatisfied = true;
-
-  for (const { analysis, evaluation } of params.evaluations) {
-    segments.push(...analysis.segments);
-    allowlistMatches.push(...evaluation.allowlistMatches);
-    segmentAllowlistEntries.push(...evaluation.segmentAllowlistEntries);
-    segmentSatisfiedBy.push(...evaluation.segmentSatisfiedBy);
-    if (!evaluation.allowlistSatisfied) {
-      allowlistSatisfied = false;
-    }
-  }
-
-  return {
-    analysisOk: true,
-    allowlistSatisfied,
-    allowlistMatches,
-    segments,
-    segmentAllowlistEntries,
-    segmentSatisfiedBy,
-    ...(params.authorizationPlan ? { authorizationPlan: params.authorizationPlan } : {}),
-  };
-}
-
 function evaluateAuthorizationPlan(params: {
   plan: ExecAuthorizationPlan;
   context: ExecAllowlistContext;
 }): ExecAllowlistAnalysis {
-  const analysisFailure = (): ExecAllowlistAnalysis => ({
-    analysisOk: false,
-    allowlistSatisfied: false,
+  const result: ExecAllowlistAnalysis = {
+    analysisOk: params.plan.ok,
+    allowlistSatisfied: params.plan.ok,
     allowlistMatches: [],
     segments: [],
     segmentAllowlistEntries: [],
     segmentSatisfiedBy: [],
     authorizationPlan: params.plan,
-  });
+  };
   if (!params.plan.ok) {
-    return analysisFailure();
+    return result;
   }
 
   const skillBins = params.context.skillBins ?? [];
   const allowSkills = params.context.autoAllowSkills === true && skillBins.length > 0;
   const skillBinTrust = buildSkillBinTrustIndex(skillBins);
-  const groupEvaluations: PlanGroupEvaluation[] = params.plan.groups.map((group) => {
-    const { evaluation, segments } = evaluateAuthorizationPlanGroup({
-      group,
-      context: params.context,
-      allowSkills,
-      skillBinTrust,
-    });
-    return {
-      analysis: { ok: true, segments },
-      evaluation,
-      opToNext: group.opToNext ?? null,
-    };
-  });
-  return finalizeShellAllowlistEvaluations({
-    evaluations: groupEvaluations,
-    authorizationPlan: params.plan,
-  });
+  for (const group of params.plan.groups) {
+    for (const candidate of group.candidates) {
+      const { match, satisfiedBy } = evaluateAuthorizationCandidate({
+        candidate,
+        context: params.context,
+        allowSkills,
+        skillBinTrust,
+      });
+      if (match) {
+        result.allowlistMatches.push(match);
+      }
+      result.segments.push(candidate.sourceSegment);
+      result.segmentAllowlistEntries.push(match);
+      result.segmentSatisfiedBy.push(satisfiedBy);
+      if (!satisfiedBy) {
+        result.allowlistSatisfied = false;
+      }
+    }
+  }
+  return result;
 }
 
 export function evaluateExecAllowlist(
@@ -1221,22 +1142,13 @@ function buildScriptArgPatternFromArgv(
   cwd?: string,
   platform?: string | null,
 ): string | undefined {
-  const scriptBase = normalizeLowercaseStringOrEmpty(path.basename(scriptPath));
+  const scriptArgv = resolveShellWrapperScriptArgv({
+    shellScriptCandidatePath: scriptPath,
+    effectiveArgv: argv,
+    cwd,
+  });
   const base = cwd && cwd.trim() ? cwd.trim() : process.cwd();
-  const resolveArgPath = (arg: string): string =>
-    path.isAbsolute(arg) ? arg : path.resolve(base, arg);
-  let scriptIdx = argv.findIndex((arg) => resolveArgPath(arg) === scriptPath);
-  if (scriptIdx === -1) {
-    scriptIdx = argv.findIndex(
-      (arg) => normalizeLowercaseStringOrEmpty(path.basename(arg)) === scriptBase,
-    );
-  }
-  const scriptArgs = scriptIdx !== -1 ? argv.slice(scriptIdx + 1) : [];
-  return buildCwdBoundHashedArgPattern([scriptPath, ...scriptArgs], base, platform);
-}
-
-function buildArgPatternFromArgv(argv: string[], cwd: string, platform?: string | null): string {
-  return buildCwdBoundHashedArgPattern(argv, cwd, platform);
+  return buildCwdBoundHashedArgPattern(scriptArgv, base, platform);
 }
 
 function addAllowAlwaysPattern(
@@ -1329,7 +1241,7 @@ function collectAllowAlwaysPatterns(params: {
     }
   }
   if (!trustPlan.shellWrapperExecutable) {
-    const argPattern = buildArgPatternFromArgv(
+    const argPattern = buildCwdBoundHashedArgPattern(
       segment.argv,
       params.cwd ?? process.cwd(),
       params.platform,
@@ -1360,7 +1272,7 @@ function collectAllowAlwaysPatterns(params: {
     }
     const positionalTrustPath =
       resolveCandidateTrustPath(positionalArgvCandidate.path) ?? positionalArgvCandidate.path;
-    const argPattern = buildArgPatternFromArgv(
+    const argPattern = buildCwdBoundHashedArgPattern(
       positionalArgvCandidate.argv,
       params.cwd ?? process.cwd(),
       params.platform,

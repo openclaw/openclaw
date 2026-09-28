@@ -8,7 +8,7 @@ import { matchPluginCommand } from "../plugins/commands.js";
 import { listChatCommands, listChatCommandsForConfig } from "./commands-registry-list.js";
 import { normalizeCommandBody } from "./commands-registry-normalize.js";
 import type { CommandNormalizeOptions } from "./commands-registry.types.js";
-import { isAbortTrigger } from "./reply/abort-primitives.js";
+import { isAbortTrigger } from "./reply/abort-trigger-text.js";
 import { stripInboundMetadata } from "./reply/strip-inbound-meta.js";
 
 /** Returns true when text starts with a configured control command alias. */

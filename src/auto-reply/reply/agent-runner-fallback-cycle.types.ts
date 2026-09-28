@@ -116,7 +116,6 @@ export type AgentFallbackCycleParams = {
   >;
   state: AgentFallbackCycleState;
   presentation: ReturnType<typeof createAgentTurnPresentation>;
-  directlySentBlockKeys: Set<string>;
   directBlockDeliveries: DirectBlockDelivery[];
   notifyAgentRunStart: () => void;
   signalExecutionPhaseForTyping: NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>;

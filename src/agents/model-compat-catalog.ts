@@ -6,21 +6,27 @@ type ModelTransportRoute = {
   baseUrl?: unknown;
 };
 
-function normalizeBaseUrl(value: unknown): string {
-  if (typeof value !== "string") {
-    return "";
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
+export function normalizeModelTransportBaseUrl(api: string, baseUrl: string): string {
+  return api === "anthropic-messages" ? baseUrl.replace(/\/v1\/?$/, "") : baseUrl;
+}
+
+export function normalizeCatalogRouteBaseUrl(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
   }
   try {
-    const url = new URL(trimmed);
+    const url = new URL(value);
     url.pathname = url.pathname.replace(/\/+$/u, "") || "/";
     return url.toString();
   } catch {
-    return trimmed.replace(/\/+$/u, "");
+    return value.replace(/\/+$/u, "");
   }
+}
+
+function normalizeBaseUrl(value: unknown, api: string): string {
+  return typeof value === "string"
+    ? (normalizeCatalogRouteBaseUrl(normalizeModelTransportBaseUrl(api, value.trim())) ?? "")
+    : "";
 }
 
 export function modelTransportRoutesMatch(
@@ -28,10 +34,11 @@ export function modelTransportRoutesMatch(
   configuredRoute: ModelTransportRoute,
 ): boolean {
   const catalogApi = normalizeApi(catalogRoute.api);
-  const catalogBaseUrl = normalizeBaseUrl(catalogRoute.baseUrl);
+  const configuredApi = normalizeApi(configuredRoute.api) || catalogApi;
+  const catalogBaseUrl = normalizeBaseUrl(catalogRoute.baseUrl, catalogApi);
   return (
-    (normalizeApi(configuredRoute.api) || catalogApi) === catalogApi &&
-    (normalizeBaseUrl(configuredRoute.baseUrl) || catalogBaseUrl) === catalogBaseUrl
+    configuredApi === catalogApi &&
+    (normalizeBaseUrl(configuredRoute.baseUrl, configuredApi) || catalogBaseUrl) === catalogBaseUrl
   );
 }
 

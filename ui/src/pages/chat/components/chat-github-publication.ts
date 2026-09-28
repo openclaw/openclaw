@@ -2,6 +2,7 @@ import WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { icons } from "../../../components/icons.ts";
+import { syncPopoverLabel } from "../../../components/web-awesome-popover.ts";
 import { t } from "../../../i18n/index.ts";
 import {
   selectedGitHubPublisher,
@@ -76,6 +77,7 @@ function bindPublicationPopover(element: Element | undefined) {
     element.id ||= `${trigger.id}-popover`;
     element.for = trigger.id;
     trigger.setAttribute("aria-controls", element.id);
+    syncPopoverLabel(element);
   }
 }
 

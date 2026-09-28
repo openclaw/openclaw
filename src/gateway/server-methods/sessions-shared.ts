@@ -15,23 +15,14 @@ import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import {
   resolveCanonicalSessionEntryFromStoreKeys,
-  resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
 } from "../session-utils.js";
 import { resolveWorkerPlacementSessionRuntimeCapabilities } from "../worker-environments/placement-session-runtime.js";
 import type { SessionWorkerPlacementContext } from "../worker-environments/session-placement-lifecycle.js";
 import { resolveWorkerPlacementArchiveRestoreError } from "../worker-environments/session-placement-lifecycle.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
-export { resolveSessionWorkerPlacementMutationError } from "../worker-environments/session-placement-lifecycle.js";
 
 export const sessionLog = createSubsystemLogger("gateway/sessions");
-
-export function respondSessionWorkerPlacementMutationError(
-  error: { message: string },
-  respond: RespondFn,
-): void {
-  respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
-}
 
 export function resolveSessionWorkerPlacementPatchError(params: {
   agentId: string;
@@ -70,7 +61,9 @@ export function resolveSessionWorkerPlacementPatchError(params: {
   }
   if (
     !params.validateModelRuntime ||
-    (params.patch.model === undefined && params.patch.agentRuntime === undefined) ||
+    (params.patch.model === undefined &&
+      params.patch.agentRuntime === undefined &&
+      params.patch.nativeRuntimeConsent === undefined) ||
     !params.entry?.sessionId
   ) {
     return undefined;
@@ -108,19 +101,6 @@ export function requireSessionKey(key: unknown, respond: RespondFn): string | nu
     return null;
   }
   return normalized;
-}
-
-export function resolveGatewaySessionTargetFromKey(
-  key: string,
-  cfg: OpenClawConfig,
-  opts?: { agentId?: string },
-) {
-  const target = resolveGatewaySessionStoreTarget({
-    cfg,
-    key,
-    ...(opts?.agentId ? { agentId: opts.agentId } : {}),
-  });
-  return { cfg, target, storePath: target.storePath };
 }
 
 export function loadAccessorSessionEntryForGatewayTarget(params: {

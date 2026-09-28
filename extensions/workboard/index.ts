@@ -1,4 +1,3 @@
-// Workboard plugin entrypoint registers its OpenClaw integration.
 import { definePluginEntry } from "./api.js";
 import { registerWorkboardGatewayMethods } from "./runtime-api.js";
 import { createWorkboardAutomationNudgeService } from "./src/automation-nudge.js";
@@ -35,7 +34,6 @@ export default definePluginEntry({
     resourceServices.push(changeEvents);
     const automationNudge = createWorkboardAutomationNudgeService({
       store,
-      gateway: api.runtime.gateway,
     });
     resourceServices.push(automationNudge);
     const lifecycleSync = createWorkboardLifecycleService({
@@ -77,7 +75,7 @@ export default definePluginEntry({
     api.registerService(changeEvents);
     api.registerService(automationNudge);
     api.registerService(lifecycleSync);
-    api.on("gateway_start", () => lifecycleSync.onGatewayStart());
+    api.on("gateway_start", (_event, context) => lifecycleSync.onGatewayStart(context.abortSignal));
     api.on("gateway_stop", () => lifecycleSync.onGatewayStop());
     api.on("subagent_ended", (event) =>
       store.runOperation(async () => {

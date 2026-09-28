@@ -1,4 +1,3 @@
-// Respawn child runner restarts child processes after configured exits.
 import type { ChildProcess, spawn } from "node:child_process";
 import type { attachChildProcessBridge } from "./child-process-bridge.js";
 import { signalProcessTree } from "./kill-tree.js";
@@ -30,6 +29,7 @@ export function runRespawnChildWithSignalBridge(params: {
     stdio: "inherit",
     env,
     detached: detachForProcessTree,
+    windowsHide: !stdioIsTerminal,
   });
 
   // Let the child honor forwarded signals first; then terminate it so the
@@ -41,18 +41,12 @@ export function runRespawnChildWithSignalBridge(params: {
   let firstForwardedSignal: NodeJS.Signals | undefined;
   let hardKillBackstopStarted = false;
   const clearSignalTimers = (): void => {
-    if (signalExitTimer) {
-      clearTimeout(signalExitTimer);
-      signalExitTimer = undefined;
-    }
-    if (signalForceKillTimer) {
-      clearTimeout(signalForceKillTimer);
-      signalForceKillTimer = undefined;
-    }
-    if (signalHardExitTimer) {
-      clearTimeout(signalHardExitTimer);
-      signalHardExitTimer = undefined;
-    }
+    clearTimeout(signalExitTimer);
+    clearTimeout(signalForceKillTimer);
+    clearTimeout(signalHardExitTimer);
+    signalExitTimer = undefined;
+    signalForceKillTimer = undefined;
+    signalHardExitTimer = undefined;
   };
   const signalChild = (signal: "SIGTERM" | "SIGKILL"): void => {
     if (detachForProcessTree && typeof child.pid === "number" && child.pid > 0) {

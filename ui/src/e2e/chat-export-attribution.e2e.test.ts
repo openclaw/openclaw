@@ -30,6 +30,18 @@ const messages = [
   },
   {
     role: "assistant",
+    content: [
+      {
+        type: "toolCall",
+        id: "build-check",
+        name: "exec",
+        arguments: { command: "synthetic-check" },
+      },
+    ],
+  },
+  { role: "toolResult", toolCallId: "build-check", content: "  Build verification passed.\n" },
+  {
+    role: "assistant",
     senderLabel: "Review assistant",
     content: "Alex owns the notes; Sam owns build verification.",
   },
@@ -85,7 +97,7 @@ suite.define(() => {
           } else {
             const row = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
             await row.hover();
-            await row.getByRole("button", { name: "Open session menu: Release planning" }).click();
+            await row.click({ button: "right" });
             await openSessionMenuSubmenu(page, "Copy");
             const copy = page.locator("openclaw-session-menu").getByRole("menuitem", {
               name: "Conversation as Markdown",
@@ -123,10 +135,18 @@ suite.define(() => {
             );
             await preview.close();
           }
-          expect(markdown.match(/^## .+$/gm)).toEqual(["## Alex", "## Sam", "## Review assistant"]);
+          expect(markdown.match(/^## .+$/gm)).toEqual([
+            "## Alex",
+            "## Sam",
+            "## Tool",
+            "## Review assistant",
+          ]);
           for (const message of messages) {
-            expect(markdown).toContain(message.content);
+            if (typeof message.content === "string") {
+              expect(markdown).toContain(message.content);
+            }
           }
+          expect(markdown).not.toContain("synthetic-check");
         },
       );
     },

@@ -97,6 +97,12 @@ described [above](/start/wizard-cli-reference#what-the-wizard-does).
   </Step>
   <Step title="Workspace">
     - Default `~/.openclaw/workspace` (configurable).
+    - The prompt and `--workspace` reject files, non-directory ancestors,
+      dangling symbolic links, and symlink loops at the workspace path or any
+      ancestor, identifying the failing path. Other inspection failures, such
+      as permission errors, are reported, not treated as missing directories.
+      Missing directories and symbolic links to existing directories are
+      allowed.
     - Seeds workspace files needed for first-run bootstrap.
     - On rerun, an existing agent roster keeps its fleet-wide workspace unless
       you explicitly confirm the move. Non-interactive reruns warn and preserve
@@ -339,6 +345,7 @@ on a different release.
   </Accordion>
   <Accordion title="Custom provider">
     Works with OpenAI-compatible, OpenAI Responses-compatible, and Anthropic-compatible endpoints.
+    The API base URL must use `http://` or `https://`; other URL schemes are rejected before verification.
 
     Interactive onboarding supports the same API key storage choices as other provider API key flows:
     - **Paste API key now** (plaintext)

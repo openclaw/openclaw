@@ -1,9 +1,15 @@
 import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
-import type { renderAgentFiles } from "./panels-status-files.ts";
+import type { renderAgentFiles } from "./panels-files.ts";
 import type { renderAgents } from "./view.ts";
 
 type AgentsViewProps = Parameters<typeof renderAgents>[0];
 type AgentFilesProps = Parameters<typeof renderAgentFiles>[0];
+
+export function primaryModelPicker(container: ParentNode) {
+  return container.querySelector(
+    'openclaw-select-picker:has([role="listbox"][aria-label^="Primary model"])',
+  );
+}
 
 export const inertAgentFileControls = {
   agentFileConflict: null,
@@ -40,39 +46,41 @@ export function createAgentViewTestProps(
     selectedAgentId: "beta",
     activePanel: "overview",
     config: {
-      form: null,
-      loading: false,
-      saving: false,
-      dirty: false,
-      error: null,
+      configForm: null,
+      configSnapshot: null,
+      configLoading: false,
+      configSaving: false,
+      configFormDirty: false,
+      lastError: null,
     },
     channels: {
-      snapshot: null,
-      loading: false,
-      error: null,
-      lastSuccess: null,
+      channelsSnapshot: null,
+      channelsLoading: false,
+      channelsError: null,
+      channelsLastSuccess: null,
     },
     cron: {
-      status: null,
-      jobs: [],
-      jobsTotal: 0,
-      jobsHasMore: false,
-      jobsLoadingMore: false,
-      scopedTotal: null,
-      scopedNextWakeAtMs: null,
-      loading: false,
-      error: null,
+      cronStatus: null,
+      cronJobs: [],
+      cronJobsTotal: 0,
+      cronJobsHasMore: false,
+      cronJobsLoadingMore: false,
+      cronScopedTotal: null,
+      cronScopedNextWakeAtMs: null,
+      cronLoading: false,
+      cronError: null,
     },
     agentFiles: {
-      list: null,
-      loading: false,
-      error: null,
-      active: null,
-      contents: {},
-      drafts: {},
-      saving: false,
-      conflict: null,
+      agentFilesList: null,
+      agentFilesLoading: false,
+      agentFilesError: null,
+      agentFileActive: null,
+      agentFileContents: {},
+      agentFileDrafts: {},
+      agentFileSaving: false,
+      agentFileConflict: null,
     },
+    agentFilesListError: null,
     agentIdentityLoading: false,
     agentIdentityError: null,
     agentIdentityById: {},
@@ -84,21 +92,19 @@ export function createAgentViewTestProps(
     identitySaving: false,
     identityError: null,
     agentSkills: {
-      report: null,
-      loading: false,
-      error: null,
-      agentId: null,
-      filter: "",
+      agentSkillsReport: null,
+      agentSkillsLoading: false,
+      agentSkillsError: null,
+      agentSkillsAgentId: null,
+      skillsFilter: "",
     },
-    toolsCatalog: {
-      loading: false,
-      error: null,
-      result: null,
-    },
-    toolsEffective: {
-      loading: false,
-      error: null,
-      result: null,
+    tools: {
+      toolsCatalogLoading: false,
+      toolsCatalogError: null,
+      toolsCatalogResult: null,
+      toolsEffectiveLoading: false,
+      toolsEffectiveError: null,
+      toolsEffectiveResult: null,
     },
     onOpenGitHubConnections: () => undefined,
     githubIdentity: new GitHubIdentityController({
@@ -111,7 +117,7 @@ export function createAgentViewTestProps(
     }),
     runtimeSessionKey: "main",
     runtimeSessionMatchesSelectedAgent: false,
-    modelCatalog: [],
+    modelCatalog: { models: [], hasSnapshot: false, retired: false },
     modelCatalogStatus: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
     pinnedAgentIds: [],
     onRefresh: () => undefined,
@@ -129,6 +135,7 @@ export function createAgentViewTestProps(
     onConfigReload: () => undefined,
     onConfigSave: () => undefined,
     onModelChange: () => undefined,
+    onDecisionModelChange: () => undefined,
     onModelFallbacksChange: () => undefined,
     onModelCatalogOpen: () => undefined,
     onChannelsRefresh: () => undefined,

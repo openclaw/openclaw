@@ -1,7 +1,3 @@
-/**
- * Submits or skips the prompt after build/preflight and before stream execution.
- * It may assume prompt context is assembled and admission state is published.
- */
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ImageContent } from "../../../llm/types.js";
 import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
@@ -39,9 +35,6 @@ import { isMidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-/**
- * Submits one prepared prompt while owning provider transforms and cleanup.
- */
 type PromptSubmissionSession = {
   messages: AgentMessage[];
   [agentSessionQueuePromptContext]: AgentSession[typeof agentSessionQueuePromptContext];
@@ -119,6 +112,8 @@ export async function submitEmbeddedAttemptPrompt(input: {
     const baseStreamFn = activeSession.agent.streamFn;
     const persistThenStream: StreamFn = async (model, context, options) => {
       await input.persistToolResultProjections();
+      // Runtime admission queues behind the user append; join it outside that write lane.
+      await userTurnRecorder?.waitForRuntimePersistence();
       options?.signal?.throwIfAborted();
       assertSteeringCurrent();
       const stream = await baseStreamFn(model, context, options);
@@ -230,7 +225,6 @@ export function resolvePromptSubmissionSkipReason(params: {
   prompt: string;
   messages: readonly unknown[];
   imageCount: number;
-  runtimeOnly?: boolean;
 }): PromptSubmissionSkipReason | null {
   if (params.prompt.trim().length > 0 || params.imageCount > 0) {
     return null;
@@ -280,7 +274,7 @@ export async function handleEmbeddedAttemptPromptError(input: {
   activeSession: AgentSession;
   attempt: PromptErrorAttempt;
   error: unknown;
-  handleMidTurnPrecheckRequest: (request: MidTurnPrecheckRequest) => void;
+  handleMidTurnPrecheckRequest: (request: MidTurnPrecheckRequest) => Promise<void>;
   markYieldAborted: () => void;
   releaseLeasedSteering: (error?: unknown) => void;
   withOwnedTranscriptWrite: WithOwnedTranscriptWrite;

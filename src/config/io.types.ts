@@ -1,7 +1,6 @@
-import type fs from "node:fs";
-import type JSON5 from "json5";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { ConfigIoDeps, ConfigSnapshotReadMeasure } from "./io.read.types.js";
 import type { ConfigMutationBase } from "./mutation-types.js";
 import type {
   ConfigWriteAfterWrite,
@@ -9,8 +8,6 @@ import type {
   RuntimeConfigWriteNotification,
 } from "./runtime-snapshot.js";
 import type { ConfigFileSnapshot, ConfigValidationIssue, OpenClawConfig } from "./types.js";
-
-export type ParseConfigJson5Result = { ok: true; parsed: unknown } | { ok: false; error: string };
 
 export const configWriteCommittedSnapshot = Symbol("configWriteCommittedSnapshot");
 
@@ -28,7 +25,10 @@ export type ConfigWriteInputBasis = { kind: ConfigMutationBase; config: unknown 
 export const configWritePostCommitRollback = Symbol("configWritePostCommitRollback");
 
 export type InternalConfigWriteResult = ConfigWriteResult & {
-  [configWritePostCommitRollback]?: (assertCurrent: () => void) => void;
+  [configWritePostCommitRollback]?: {
+    restoreFile: (assertCurrent: () => void) => Promise<boolean>;
+    restoreEffects: (assertCurrent: () => void) => void;
+  };
 };
 
 export type ConfigWriteAuditOrigin =
@@ -105,7 +105,6 @@ export type ReadConfigFileSnapshotForWriteResult = {
 };
 
 export type ConfigWriteNotification = RuntimeConfigWriteNotification;
-export type ConfigSnapshotReadMeasure = <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
 
 export class ConfigRuntimeRefreshError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {
@@ -113,21 +112,6 @@ export class ConfigRuntimeRefreshError extends Error {
     this.name = "ConfigRuntimeRefreshError";
   }
 }
-
-export type ConfigIoDeps = {
-  fs?: typeof fs;
-  json5?: typeof JSON5;
-  env?: NodeJS.ProcessEnv;
-  lowerPrecedenceEnv?: Readonly<Record<string, string>>;
-  homedir?: () => string;
-  configPath?: string;
-  logger?: Pick<typeof console, "error" | "warn">;
-  measure?: ConfigSnapshotReadMeasure;
-  suppressFutureVersionWarning?: boolean;
-  observe?: boolean;
-};
-
-export type NormalizedConfigIoDeps = Required<ConfigIoDeps>;
 
 export type ConfigIoFactoryOptions = ConfigIoDeps & {
   pluginValidation?: "full" | "skip" | "core-only";
@@ -156,7 +140,13 @@ export type ConfigSnapshotReadOptions = {
   suppressFutureVersionWarning?: boolean;
 };
 
+export type ConfigSnapshotMetadataReadOptions = ConfigSnapshotReadOptions & {
+  /** CLI diagnostics prepare metadata before validation; strict mode also retains source facts. */
+  prepareValidation?: "runtime" | "strict";
+};
+
 export type ReadConfigFileSnapshotInternalResult = {
+  strictIssues?: ConfigValidationIssue[];
   snapshot: ConfigFileSnapshot;
   envSnapshotForRestore?: Record<string, string | undefined>;
   includeFileHashesForWrite?: Record<string, string>;
@@ -165,6 +155,7 @@ export type ReadConfigFileSnapshotInternalResult = {
 };
 
 export type ReadConfigFileSnapshotWithPluginMetadataResult = {
+  strictIssues?: ConfigValidationIssue[];
   snapshot: ConfigFileSnapshot;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };

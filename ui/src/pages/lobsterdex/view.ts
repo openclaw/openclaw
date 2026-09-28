@@ -52,12 +52,15 @@ export function renderLobsterdex(entries: LobsterdexViewEntries, props: Lobsterd
         </div>
         <span class="lobsterdex-page__count">${countLabel}</span>
       </header>
+      <span class="sr-only" role="status">
+        ${props.copyFeedback?.status === "copied" ? t("common.copied") : nothing}
+      </span>
       ${
         props.copyFeedback?.status === "error"
           ? html`<div class="callout danger" role="alert">${t("common.copyFailed")}</div>`
           : nothing
       }
-      <div class="lobsterdex-page__grid" aria-label=${countLabel}>
+      <section class="lobsterdex-page__grid" aria-label=${countLabel}>
         ${LOBSTER_PET_PALETTES.map((palette) => {
           const look = canonicalLobsterLook(palette);
           const entry = entries.get(palette.id);
@@ -130,7 +133,7 @@ export function renderLobsterdex(entries: LobsterdexViewEntries, props: Lobsterd
             </article>
           `;
         })}
-      </div>
+      </section>
     </section>
   `;
 }

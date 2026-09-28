@@ -92,6 +92,8 @@ export type WorkerSshIdentity =
 
 /** Durable context supplied when a worker provider resolves the identity it minted. */
 export type WorkerSshIdentityRequest = {
+  /** Optional live invocation guard; core supplies it for identity resolution. */
+  assertCurrent?: () => void;
   leaseId: string;
   profile: WorkerProfile;
   keyRef: SecretRef;
@@ -102,9 +104,11 @@ export type WorkerDesktopApp =
   | {
       id: "browser";
       executablePath: string;
+      /** Fixed provider-owned arguments, passed directly without a shell. */
+      args?: string[];
       cdpPort: number;
     }
-  | { id: "terminal"; executablePath: string };
+  | { id: "terminal"; executablePath: string; args?: string[] };
 
 /** Optional interactive desktop endpoint provisioned with the lease (warm-time capability). */
 export type WorkerDesktopEndpoint = {
@@ -114,6 +118,10 @@ export type WorkerDesktopEndpoint = {
   port: number;
   /** Absolute on-box path to the per-lease password file; read by the owning transport, never persisted as plaintext. */
   passwordFilePath?: string;
+  /** Managed desktop account for ARD authentication; its password stays in passwordFilePath. */
+  username?: string;
+  /** False restricts a native desktop from the provider-wide virtual display resize capability. */
+  allowsResize?: boolean;
   /** Closed application metadata advertised by the provider for this desktop. */
   apps?: WorkerDesktopApp[];
 };
@@ -265,6 +273,13 @@ export class WorkerProviderError extends Error {
 /** Cloud-worker lifecycle capability shared by plugin and internal providers. */
 export type WorkerProvider = {
   id: string;
+  /**
+   * Nonsecret backend display ID, never a routing or allocation identity.
+   * Synchronous local presentation only: no commands, network, or credential reads.
+   * Return 1–64 lowercase ASCII letters/digits/hyphens, starting with a letter.
+   * Omission, invalid values, and exceptions retain generic provider presentation.
+   */
+  resolveDisplayId?: (profile: WorkerProfile) => string | undefined;
   /** Safe to request virtual desktop resizing; the RFB server still negotiates support. */
   allowsDesktopResize?: boolean;
   /** Process-stable choices available for this profile; omit the hook to hide machine selection. */
@@ -321,6 +336,8 @@ export type WorkerProvider = {
       profileId?: string;
       /** Cancel this attempt; settle its active commands before rejecting. Cleanup proves release separately. */
       signal?: AbortSignal;
+      /** Modern hosts supply authority; legacy optionality is source compatibility only. */
+      assertCurrent?: () => void;
       executionMode?: WorkerExecutionMode;
       machineClass?: string;
       os?: string;

@@ -6,16 +6,20 @@ import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
-const mocks = vi.hoisted(() => ({
-  clawhubInstall: vi.fn(),
-  gatewayMetadata: vi.fn(),
-  metadata: vi.fn(),
-  officialCatalog: vi.fn(),
-  persistInstall: vi.fn(),
-  readConfig: vi.fn(),
-  refreshRegistry: vi.fn(),
-  replaceConfig: vi.fn(),
-}));
+const mocks = vi.hoisted(() => {
+  // Earlier shared-worker files can cache the real config-wide metadata reader.
+  vi.resetModules();
+  return {
+    clawhubInstall: vi.fn(),
+    gatewayMetadata: vi.fn(),
+    metadata: vi.fn(),
+    officialCatalog: vi.fn(),
+    persistInstall: vi.fn(),
+    readConfig: vi.fn(),
+    refreshRegistry: vi.fn(),
+    replaceConfig: vi.fn(),
+  };
+});
 
 vi.mock("./current-plugin-metadata-state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./current-plugin-metadata-state.js")>()),

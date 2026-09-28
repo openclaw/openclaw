@@ -12,8 +12,30 @@ import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { page } from "./route.ts";
 import type { UsageRouteData } from "./usage-page.ts";
 
-const usageMethods = ["sessions.usage", "usage.cost", "usage.status"];
-const payload = { sessions: [], daily: [], providers: [] };
+const usageMethods = ["sessions.usage", "usage.status"];
+const totals = {
+  input: 100,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 100,
+  totalCost: 1,
+  inputCost: 1,
+  outputCost: 0,
+  cacheReadCost: 0,
+  cacheWriteCost: 0,
+  missingCostEntries: 0,
+};
+const payload = {
+  updatedAt: 1,
+  startDate: "2026-07-09",
+  endDate: "2026-08-07",
+  sessions: [],
+  totals,
+  aggregates: { costDaily: [{ date: "2026-08-07", ...totals }] },
+  cacheStatus: { status: "refreshing", cachedFiles: 1, pendingFiles: 1, staleFiles: 0 },
+  providers: [],
+};
 const cleanups: Array<() => void> = [];
 
 function createUsageRouter() {
@@ -47,7 +69,10 @@ function createUsageRouter() {
     selection,
     router,
     request,
-    usageCalls: () => request.mock.calls.filter(([method]) => usageMethods.includes(method)),
+    usageCalls: () =>
+      request.mock.calls.filter(
+        ([method]) => method === "sessions.usage" || method.startsWith("usage."),
+      ),
   };
 }
 
@@ -119,7 +144,7 @@ describe("usage route", () => {
         if (!usageMethods.includes(method)) {
           return {};
         }
-        if (++requests === 3) {
+        if (++requests === 2) {
           started.resolve();
         }
         return response.promise;
@@ -148,10 +173,20 @@ describe("usage route", () => {
       expect(data?.result).toEqual(payload);
       expect(data?.query).toEqual({
         startDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
-        endDate: data?.query.startDate,
+        endDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
         scope: "family",
         timeZone: "local",
         agentId: "main",
+      });
+      expect(
+        (Date.parse(data!.query.endDate) - Date.parse(data!.query.startDate)) / 86_400_000,
+      ).toBe(29);
+      expect(data?.costSummary).toEqual({
+        updatedAt: 1,
+        days: 30,
+        totals,
+        daily: [{ date: "2026-08-07", ...totals }],
+        cacheStatus: payload.cacheStatus,
       });
       expect(calls.find(([method]) => method === "sessions.usage")?.[1]).toMatchObject({
         startDate: data?.query.startDate,
@@ -171,9 +206,7 @@ describe("usage route", () => {
     request.mockImplementation(async (method) => {
       switch (method) {
         case "sessions.usage":
-          return { sessions: [], totals: null };
-        case "usage.cost":
-          return { daily: [] };
+          return payload;
         case "usage.status":
           throw new Error("gateway transport unavailable");
         default:

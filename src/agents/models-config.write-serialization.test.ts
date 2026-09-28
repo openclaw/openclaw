@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
@@ -192,6 +193,29 @@ beforeEach(() => {
 });
 
 describe("models-config write serialization", () => {
+  it("retains configless caller options across asynchronous config capture", async () => {
+    await withModelsTempHome(async (home) => {
+      setRuntimeConfigSnapshot(CUSTOM_PROXY_MODELS_CONFIG);
+      const options = {
+        env: { MODEL_CAPTURE_VALUE: "original" },
+        workspaceDir: home,
+        providerDiscoveryProviderIds: ["custom-proxy"],
+        pluginMetadataSnapshot: createPluginMetadataSnapshot(home),
+      };
+      const pending = ensureOpenClawModelsJson(undefined, path.join(home, "agent"), options);
+      options.workspaceDir = path.join(home, "replacement");
+      options.providerDiscoveryProviderIds.push("replacement");
+      options.env.MODEL_CAPTURE_VALUE = "replacement";
+      await pending;
+      const context = planOpenClawModelsJsonMock.mock.calls[0]?.[0]?.context;
+      expect(context).toMatchObject({
+        workspaceDir: home,
+        providerDiscoveryProviderIds: ["custom-proxy"],
+        env: { MODEL_CAPTURE_VALUE: "original" },
+      });
+    });
+  });
+
   it("refreshes cached usage prices after publishing an agent's models.json", async () => {
     await withModelsTempHome(async (home) => {
       const configFor = (input: number) => ({

@@ -1,4 +1,3 @@
-// Discord plugin module implements model picker preferences migrations behavior.
 import fs from "node:fs";
 import path from "node:path";
 import type { ChannelLegacyStateMigrationPlan } from "openclaw/plugin-sdk/channel-contract";

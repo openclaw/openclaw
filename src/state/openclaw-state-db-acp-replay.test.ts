@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { constants, DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,7 +9,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   repairOpenClawStateDatabaseSchema,
-  repairOpenClawStateDatabaseSchemaIfNeeded,
+  prepareOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
 
 function seedLegacyReplay(db: DatabaseSync) {
@@ -66,8 +67,12 @@ function estimates(db: DatabaseSync) {
   };
 }
 
-function withoutHistoricalPayloadReads<T>(pathname: string, operation: () => T): T {
+async function withoutHistoricalPayloadReads<T>(
+  pathname: string,
+  operation: () => T | Promise<T>,
+): Promise<T> {
   const open = nodeSqlite.openNodeSqliteDatabase;
+  const databaseLocation = path.toNamespacedPath(fs.realpathSync(pathname));
   const opened = new Set<DatabaseSync>();
   const historicalReads: string[] = [];
   const historicalColumns = new Set([
@@ -81,7 +86,8 @@ function withoutHistoricalPayloadReads<T>(pathname: string, operation: () => T):
   ]);
   const spy = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
     const database = open(...args);
-    if (args[0] === pathname) {
+    const location = database.location();
+    if (location !== null && path.toNamespacedPath(location) === databaseLocation) {
       opened.add(database);
       database.setAuthorizer((action, table, column) => {
         const field = `${table}.${column}`;
@@ -95,7 +101,7 @@ function withoutHistoricalPayloadReads<T>(pathname: string, operation: () => T):
     return database;
   });
   try {
-    const result = operation();
+    const result = await operation();
     expect(opened.size).toBeGreaterThan(0);
     expect(historicalReads).toEqual([]);
     return result;
@@ -127,15 +133,17 @@ describe("ACP replay accounting repair", () => {
         closeOpenClawStateDatabaseForTest();
 
         if (entrance === "automatic") {
-          expect(repairOpenClawStateDatabaseSchemaIfNeeded(options).warnings).toEqual([]);
+          expect((await prepareOpenClawStateDatabaseSchema(options)).warnings).toEqual([]);
         }
         const upgraded = openOpenClawStateDatabase(options).db;
         expectAcpReplayUtf8Accounting(upgraded);
         expect(canonicalReplay(upgraded)).toEqual(before);
         closeOpenClawStateDatabaseForTest();
 
-        const reopened = withoutHistoricalPayloadReads(options.path, () =>
-          openOpenClawStateDatabase(options),
+        const reopened = (
+          await withoutHistoricalPayloadReads(options.path, () =>
+            openOpenClawStateDatabase(options),
+          )
         ).db;
         expect(reopened.prepare("SELECT total_changes() AS count").get()?.count).toBe(0);
         expectAcpReplayUtf8Accounting(reopened);
@@ -187,12 +195,16 @@ describe("ACP replay accounting repair", () => {
         closeOpenClawStateDatabaseForTest();
         if (entrance === "automatic") {
           expect(
-            withoutHistoricalPayloadReads(options.path, () =>
-              repairOpenClawStateDatabaseSchemaIfNeeded(options),
+            (
+              await withoutHistoricalPayloadReads(options.path, () =>
+                prepareOpenClawStateDatabaseSchema(options),
+              )
             ).warnings,
           ).toEqual([]);
         } else {
-          withoutHistoricalPayloadReads(options.path, () => openOpenClawStateDatabase(options));
+          await withoutHistoricalPayloadReads(options.path, () =>
+            openOpenClawStateDatabase(options),
+          );
           closeOpenClawStateDatabaseForTest();
         }
         const inspected = new DatabaseSync(options.path, { readOnly: true });
@@ -205,8 +217,10 @@ describe("ACP replay accounting repair", () => {
         } finally {
           inspected.close();
         }
-        const runtime = withoutHistoricalPayloadReads(options.path, () =>
-          openOpenClawStateDatabase(options),
+        const runtime = (
+          await withoutHistoricalPayloadReads(options.path, () =>
+            openOpenClawStateDatabase(options),
+          )
         ).db;
         expect(estimates(runtime)).toMatchObject({
           sessions: oldEstimates.sessions,
@@ -222,8 +236,10 @@ describe("ACP replay accounting repair", () => {
         const repairedEstimates = estimates(repaired);
         closeOpenClawStateDatabaseForTest();
 
-        const reopened = withoutHistoricalPayloadReads(options.path, () =>
-          openOpenClawStateDatabase(options),
+        const reopened = (
+          await withoutHistoricalPayloadReads(options.path, () =>
+            openOpenClawStateDatabase(options),
+          )
         ).db;
         expect(reopened.prepare("SELECT total_changes() AS count").get()?.count).toBe(0);
         expect(estimates(reopened)).toEqual(repairedEstimates);

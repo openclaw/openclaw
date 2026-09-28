@@ -169,6 +169,7 @@ export function normalizeCompatibilityConfigValues(
     next = tuningCandidate;
   }
   const channelMigrations = applyChannelDoctorCompatibilityMigrations(next);
+  contextBudgetWarnings.push(...(channelMigrations.warnings ?? []));
   if (channelMigrations.changes.length > 0) {
     next = channelMigrations.next;
     changes.push(...channelMigrations.changes);

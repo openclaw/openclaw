@@ -9,6 +9,36 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TrustedSubagentResume } from "./in-process-subagent-resume.js";
 import type { GatewayContextResolver, TrustedAgentToolCaller } from "./server-methods/types.js";
 
+/** Select task continuation from recorded ownership; admission still binds and revalidates it. */
+export function shouldResumeParentSubagent(params: {
+  cfg: OpenClawConfig;
+  caller: TrustedAgentToolCaller;
+  childSessionKey: string;
+}): boolean {
+  const entry = getLatestLiveSubagentRunByChildSessionKey(
+    params.childSessionKey,
+    (candidate) => candidate.pauseReason === "sessions_yield",
+  );
+  if (!entry || entry.expectsCompletionMessage !== true) {
+    return false;
+  }
+  const controllerStorePath = entry.controllerSessionKey?.trim()
+    ? entry.controllerStorePath
+    : entry.requesterStorePath;
+  if (controllerStorePath === undefined) {
+    return false;
+  }
+  const controller = resolveSubagentController({
+    cfg: params.cfg,
+    agentId: params.caller.agentId,
+    agentSessionKey: params.caller.sessionKey,
+  });
+  return (
+    controller.controlScope === "children" &&
+    ensureSubagentControllerOwnsRun({ cfg: params.cfg, controller, entry }) === undefined
+  );
+}
+
 // Control ownership comes from the registry, not the child's key shape or message provenance.
 function requirePausedChild(cfg: OpenClawConfig, caller: TrustedAgentToolCaller, key: string) {
   if (!caller.assertCurrent) {

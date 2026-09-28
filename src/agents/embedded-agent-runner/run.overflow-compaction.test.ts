@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { markRuntimeCompactionDelegate } from "../../context-engine/compaction-watchdog.js";
 import { delegateCompactionToRuntime } from "../../context-engine/delegate.js";
@@ -11,6 +11,7 @@ import type {
   ContextEngineSessionTarget,
 } from "../../context-engine/types.js";
 import { getAgentRunLifecycleGeneration } from "../../infra/agent-run-registry.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   prepareSystemAgentRunAdmission,
   type PreparedAgentRunAdmission,
@@ -384,7 +385,7 @@ describe("compactEmbeddedRunForRecovery", () => {
           tokensAfter: 40,
           compactionKind: "context-engine",
         });
-        state.observeContextAccounting({ kind: "model", contextTokens: 20 });
+        state.observeContextAccounting({ kind: "model", contextTokens: 20, successful: false });
         if (outcome === "failed") {
           throw error;
         }
@@ -588,8 +589,11 @@ describe("createEmbeddedRunCompactionRuntime", () => {
     const fixture = await createRuntime();
     const { getOrCreateSessionMcpRuntime, unopenedMcpConfig } =
       await import("../agent-bundle-mcp-manager.test-support.js");
-    const { getSessionMcpRuntimeManagerForTesting } =
+    const { getSessionMcpRuntimeManagerForTesting, setSessionMcpRuntimeScheduler } =
       await import("../agent-bundle-mcp-manager-api.js");
+    const scheduler = createTestGatewayScheduler();
+    onTestFinished(() => scheduler.stop());
+    await setSessionMcpRuntimeScheduler(scheduler);
     const manager = getSessionMcpRuntimeManagerForTesting();
     const create = (sessionId: string) =>
       getOrCreateSessionMcpRuntime({

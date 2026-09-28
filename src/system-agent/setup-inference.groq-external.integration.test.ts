@@ -29,9 +29,7 @@ it("resolves a Groq manifest model from a global external install during setup",
   clearPluginMetadataLifecycleCaches();
   resetPluginLoaderTestStateForTest();
   clearLoadInstalledPluginIndexInstallRecordsCache();
-  const sdkHost = createCompiledSdkHost(groqSetupSdkEntrypoints[0], (prefix) =>
-    tempDirs.make(prefix),
-  );
+  const sdkHost = createCompiledSdkHost(groqSetupSdkEntrypoints, (prefix) => tempDirs.make(prefix));
   await withOpenClawTestState(
     {
       label: "groq-external-setup",
@@ -45,7 +43,11 @@ it("resolves a Groq manifest model from a global external install during setup",
     },
     async (state) => {
       const pluginDir = state.statePath("extensions", "groq");
-      await fs.cp(path.join(process.cwd(), "extensions", "groq"), pluginDir, { recursive: true });
+      // This fixture owns its SDK peer; checkout dependency directories may be borrowed links.
+      await fs.cp(path.join(process.cwd(), "extensions", "groq"), pluginDir, {
+        recursive: true,
+        filter: (source) => path.basename(source) !== "node_modules",
+      });
       // The changed-node job uses a sparse checkout, so untouched package files
       // such as the runtime entry may not be present. Keep this external package
       // fixture self-contained while retaining the real Groq manifest and

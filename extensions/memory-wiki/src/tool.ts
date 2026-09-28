@@ -3,7 +3,7 @@ import { optionalFiniteNumberSchema } from "openclaw/plugin-sdk/channel-actions"
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { textResult } from "openclaw/plugin-sdk/tool-results";
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import type { AnyAgentTool, OpenClawConfig } from "../api.js";
 import { applyMemoryWikiMutation, normalizeMemoryWikiMutationInput } from "./apply.js";
 import {
@@ -158,13 +158,7 @@ export function createWikiSearchTool(
       "Search wiki pages and, when shared search is enabled, the active memory corpus by title, path, id, or body text.",
     parameters: WikiSearchSchema,
     execute: async (_toolCallId, rawParams) => {
-      const params = rawParams as {
-        query: string;
-        maxResults?: number;
-        backend?: ResolvedMemoryWikiConfig["search"]["backend"];
-        corpus?: ResolvedMemoryWikiConfig["search"]["corpus"];
-        mode?: (typeof WIKI_SEARCH_MODES)[number];
-      };
+      const params = rawParams as Static<typeof WikiSearchSchema>;
       await syncImportedSourcesIfNeeded(config, appConfig, memoryContext.signal);
       const results = await searchMemoryWiki({
         config,
@@ -260,13 +254,7 @@ export function createWikiGetTool(
       "Read a wiki page by id or relative path, or fall back to the active memory corpus when shared search is enabled.",
     parameters: WikiGetSchema,
     execute: async (_toolCallId, rawParams) => {
-      const params = asNonArrayRecord(rawParams) as {
-        lookup?: string;
-        fromLine?: number;
-        lineCount?: number;
-        backend?: ResolvedMemoryWikiConfig["search"]["backend"];
-        corpus?: ResolvedMemoryWikiConfig["search"]["corpus"];
-      };
+      const params = asNonArrayRecord(rawParams) as Partial<Static<typeof WikiGetSchema>>;
       const lookup = typeof params.lookup === "string" ? params.lookup.trim() : "";
       if (!lookup) {
         return textResult("wiki_get requires a non-empty `lookup` path or id.", { found: false });

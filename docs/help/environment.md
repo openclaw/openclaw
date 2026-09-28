@@ -69,6 +69,25 @@ Blank values and the literal strings `undefined` and `null` (after trimming) are
 
 Explicit path variables such as `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, and `OPENCLAW_GIT_DIR` still take precedence. OS-account tasks such as shell startup file detection, package-manager setup, and host `~` expansion may still use the real system home.
 
+### Temporary compile cache
+
+Packaged OpenClaw uses `NODE_COMPILE_CACHE/openclaw/<version>/<build>` when
+`NODE_COMPILE_CACHE` is set, or `node-compile-cache/openclaw` under the OS temporary
+directory otherwise. Child processes reuse the same build namespace. Source
+checkouts keep their existing cache-disable policy.
+
+The compile-cache bootstrap owner starts best-effort maintenance in a background
+worker that does not keep CLI commands alive. Node permission mode skips this
+maintenance because workers do not inherit its filesystem restrictions; cache
+entries remain until removed by an unrestricted invocation or by the operator.
+Cleanup stops when the command exits; long-lived processes give it time to
+complete. It removes superseded build directories as units. At most once an hour, or after retiring another build, it removes bytecode older than seven days
+and trims the current cache to 512 MiB, oldest files first. This is a maintenance
+target, not a hard disk quota: concurrent writes and processes that exit before
+cleanup completes can temporarily exceed it. Interrupted maintenance is eligible
+for another attempt after an hour. Other applications' caches outside
+the `openclaw` subtree are preserved.
+
 ### Gateway and authentication
 
 | Variable                    | Purpose                                                         |

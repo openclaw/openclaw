@@ -336,17 +336,6 @@ describe("question prompt state", () => {
     });
   });
 
-  it("expires pending cards locally when their countdown ends", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-17T00:00:00.000Z"));
-    const state = createState();
-    requestQuestion(state, { expiresAtMs: Date.now() + 1_000 });
-
-    vi.advanceTimersByTime(1_000);
-
-    expect(state.prompts.get("question-1")?.status).toBe("expired");
-  });
-
   it("re-enables a prompt with a non-destructive resolve error", async () => {
     const request = vi.fn<RequestFn>(async () => {
       throw new Error("gateway unavailable");

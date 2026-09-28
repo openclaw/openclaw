@@ -315,49 +315,6 @@ final class ChatViewModelAttachmentTests: XCTestCase {
         XCTAssertEqual(payload.content, data.base64EncodedString())
     }
 
-    func testVideoFileUsesServerDefaultTwentyMiBCap() async throws {
-        let fileURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("composer-video-oversize-\(UUID().uuidString).mp4")
-        try Data(count: OpenClawChatViewModel.maxVideoAttachmentBytes + 1).write(to: fileURL)
-        defer { try? FileManager.default.removeItem(at: fileURL) }
-        let viewModel = await MainActor.run {
-            OpenClawChatViewModel(sessionKey: "main", transport: AttachmentProcessingTransport())
-        }
-
-        await MainActor.run { viewModel.addAttachments(urls: [fileURL]) }
-        try await waitUntil("oversize video rejected") {
-            await MainActor.run { viewModel.errorText != nil }
-        }
-
-        let state = await MainActor.run { (viewModel.attachments.isEmpty, viewModel.errorText) }
-        XCTAssertTrue(state.0)
-        XCTAssertEqual(
-            state.1,
-            "Attachment \(fileURL.lastPathComponent) exceeds the 20 MB video limit")
-    }
-
-    func testUnsupportedAudioFileIsRejectedBeforeReadingItsPayload() async throws {
-        let fileURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("composer-audio-oversize-\(UUID().uuidString).mp3")
-        XCTAssertTrue(FileManager.default.createFile(atPath: fileURL.path, contents: nil))
-        let handle = try FileHandle(forWritingTo: fileURL)
-        try handle.truncate(atOffset: UInt64(OpenClawChatViewModel.maxVideoAttachmentBytes * 10))
-        try handle.close()
-        defer { try? FileManager.default.removeItem(at: fileURL) }
-        let viewModel = await MainActor.run {
-            OpenClawChatViewModel(sessionKey: "main", transport: AttachmentProcessingTransport())
-        }
-
-        await MainActor.run { viewModel.addAttachments(urls: [fileURL]) }
-        try await waitUntil("unsupported audio rejected") {
-            await MainActor.run { viewModel.errorText != nil }
-        }
-
-        let state = await MainActor.run { (viewModel.attachments.isEmpty, viewModel.errorText) }
-        XCTAssertTrue(state.0)
-        XCTAssertEqual(state.1, "Only image and video attachments are supported right now")
-    }
-
     func testVoiceNoteAttachmentStagesAudioAndDeletesTemporaryFile() async throws {
         let fileURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("voice-note-20260706-120000.m4a")
@@ -969,8 +926,13 @@ final class ChatViewModelAttachmentTests: XCTestCase {
         let incoming = try JSONDecoder().decode(
             OpenClawChatMessage.self,
             from: Data(
-                #"{"role":"user","content":"See attached.","__openclaw":{"idempotencyKey":"run:user"},"MediaPaths":["media/inbound/media-1.m4a"],"MediaTypes":["audio/mp4"]}"#
-                    .utf8))
+                #"""
+                {"role":"user","content":[
+                    {"type":"text","text":"See attached."},
+                    {"type":"file","mimeType":"audio/mp4","fileName":"media-1.m4a",
+                     "runId":"voice-run","preview":{"title":"Voice transcript"}}
+                ],"__openclaw":{"idempotencyKey":"run:user"}}
+                """#.utf8))
 
         let adopted = OpenClawChatViewModel.adoptingCanonicalMessage(incoming, over: existing)
 
@@ -978,5 +940,7 @@ final class ChatViewModelAttachmentTests: XCTestCase {
         XCTAssertEqual(audio.fileName, "media-1.m4a")
         XCTAssertNil(audio.content)
         XCTAssertEqual(audio.durationSeconds, 14.6)
+        XCTAssertEqual(audio.runId, "voice-run")
+        XCTAssertEqual(audio.preview?.title, "Voice transcript")
     }
 }

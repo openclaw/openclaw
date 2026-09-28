@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements lifecycle behavior.
 import type { BaileysEventEmitter, BaileysEventMap } from "baileys";
 
 type BaileysListener<Event extends keyof BaileysEventMap> = (arg: BaileysEventMap[Event]) => void;

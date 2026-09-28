@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "Ownership of subagent completion and progress when a requester yields"
 read_when:
   - Changing nested subagent completion or sessions_yield behavior
@@ -48,6 +49,12 @@ that finishes before the requester yields: successor admission must not depend
 on the later lifecycle-end notification. The successor keeps the same task,
 and a delayed notification from the predecessor cannot reopen it.
 
+While the requester executes a settle-wake continuation, its own completion
+batch can still be marked dispatching. The yield tool excludes that exact batch
+from older pending children: it must not promise another wake for the results
+already being processed. Unrelated pending batches and newly spawned work keep
+their existing completion ownership.
+
 Settlement dispatch uses `subagent_settle` input provenance. Individual
 announcements and the older descendant-wake path retain `subagent_announce`:
 the latter already owns its run replacement after dispatch and must not trigger
@@ -81,11 +88,28 @@ with its scheduler-owned continuation.
   After the successor binds its run scope, that scope owns the entitlement until
   it closes. Retiring the delivered child batch cannot revoke a still-running
   requester.
+- **Completion-source custody.** Registration retains the live operator source
+  separately from execution. Individual delivery and requester settlement use
+  that captured permission ceiling, not the async caller that later schedules
+  cleanup. Committed settlement, retirement, or source/Gateway revocation
+  releases it; provisional writes and same-task replacement cannot drop it.
+  Retained results do not retain usable authority after that release, and a
+  batch cannot combine incompatible operator sources. Cancellation-only batches
+  keep the existing cancellation caller's admission, rather than using the
+  revoked target to authorize a new turn. Mixed result/cancellation batches
+  require every original source to remain live and compatible. An explicit
+  delivery retry captures its newly admitted caller while live and transfers
+  custody only after the new delivery generation commits; it does not reopen the
+  expired source. Restart still admits a
+  fresh recovery owner rather than reviving the previous process capability.
 - **Stable audience.** A nested wake uses internal delivery. A settlement
   continuation targeting a live `sessions_yield`-paused row adopts that row;
-  ordinary inter-session messages do not adopt that row. A parent's
-  `sessions_send` turn to its native child has separate activity tracking and
-  keeps the child's original result or pending yield intact. Explicit plugin follow-ups
+  unrelated inter-session messages do not adopt that row. An ordinary
+  `sessions_send` from the controlling parent to its paused native child resumes
+  the existing task through the same exact-generation admission owner as explicit
+  `mode: "resume"`. Task-owned completion remains the sole result delivery path.
+  An explicit `mode: "followup"` keeps separate activity tracking and leaves the
+  child's original result or pending yield intact. Explicit plugin follow-ups
   naming a new requester continue to create their own delivery obligation.
 - **Deterministic batches.** Frozen run IDs are sorted. Findings use creation
   time, completion time, and child session identity as tie-breakers. Superseded
@@ -93,7 +117,11 @@ with its scheduler-owned continuation.
   IDs, and yield generation.
 - **Bounded delivery.** Existing limits remain: three attempts, three ambiguous
   transport replays, and ten stale deferrals. Active descendants do not consume
-  the stale-deferral budget. A private handoff's observation timeout does not
+  the stale-deferral budget. Delivery bookkeeping for executions that ended
+  before the current batch's earliest child was created cannot block its
+  continuation. Active descendants and delivery settlement overlapping that
+  batch still hold the wake; historical failure records remain available.
+  A private handoff's observation timeout does not
   cancel the underlying Gateway turn. When the Gateway reports that turn as
   in flight, settlement observes the same request without spending failure
   attempts or discarding the child results. Gateway admission and execution
@@ -105,31 +133,22 @@ with its scheduler-owned continuation.
 
 ## Progress after yield
 
-The old agent turn closes its admission authority and channel dispatch cleans
-up its draft. Task notifications can continue after this handoff: opt a child
-into `state_changes` with `openclaw tasks notify <lookup> state_changes`.
-The default `done_only` and `silent` policies produce no progress notifications.
+Yield closes the old execution, not the delegated work. When the turn would
+otherwise be silent, the shared reply pipeline can send a waiting acknowledgment.
+The native subagent registry retains the completion obligation and wakes the
+requester through its accepted completion path; progress text is not proof that
+a child finished or that its result was delivered.
 
-The existing task delivery owner coalesces host-observed child activity into a
-single update per requester batch over 15 seconds. It uses the original
-channel, account, recipient, and thread, and mirrors the update to the requester
-transcript. Updates show bounded task labels, execution or wait state, and tool
-activity counts. Private child prose, tool arguments, and results stay out of
-these notifications. A batch shows at most eight tasks in creation order;
-additional activity remains available in Tasks.
+The former Tasks-backed detached presenter and its notification policies are no
+longer available. A yielded turn does not start a separate task or flow projection
+to keep editing a channel progress message. Ordinary channel streaming still
+follows the channel's settings while its turn is active.
 
-Progress does not start a requester turn or mark a result delivered. A resumed
-requester, changed batch generation, cancellation, reset, muted task, or closed
-Gateway invalidates queued progress. The delivery owner rechecks authority
-after loading the transport and immediately before the adapter sends. It never
-reuses the closed turn's callbacks or drafts.
-
-Progress is best effort and process-local: up to 128 batches retain at most 32
-task references each. An overflowing queue leaves activity in Tasks; transport
-failure does not affect completion. Progress without a concrete channel target
-remains visible in Tasks and does not wake the parent just to narrate activity.
-Restart discards queued progress while the existing durable completion owner
-continues to own the final result.
+[Progress cards](/tools/progress-card) remain durable session state. The parent
+updates its own card as work advances and when child results return. Inspect
+native child status or retained messages through [sub-agent commands](/tools/subagents/slash-command)
+and session history. Neither a saved card nor a stored message ID authorizes a
+new execution or delivery.
 
 Cron observes the registry's descendant settlement boundary before starting
 its bounded synthesis grace period. A yielded task remains pending between the

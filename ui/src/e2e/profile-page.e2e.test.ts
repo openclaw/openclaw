@@ -784,7 +784,12 @@ suite.define(() => {
         await captureAccounts("model-accounts-default-selected.png", selectedAccount);
         await gateway.setMethodResponse("users.unlinkAuthProfile", { links: [] });
         await gateway.setMethodResponse("users.listModelAccounts", inventory(null));
-        await section.getByRole("button", { name: "Use gateway default", exact: true }).click();
+        await section
+          .getByRole("button", {
+            name: `Use gateway default: OpenAI · ${work.label}`,
+            exact: true,
+          })
+          .click();
         await expect(selectedAccount).toHaveCount(0);
         await expect(section.locator(".profile-auth-account-select")).toHaveCount(3);
         await expect(section.locator(".model-accounts-notice")).toContainText(

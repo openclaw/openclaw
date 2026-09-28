@@ -2,29 +2,37 @@
 import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveLegacyTranscriptPaths } from "../config/sessions/legacy-store-inspection.js";
-import { withSqliteSessionImportStage } from "../config/sessions/session-accessor.sqlite-import-stage.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
+import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
-import { executeSqliteQueryTakeFirstSync, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
-import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
-import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
-import { migrateLegacySessionCreator } from "../state/creator-namespace-migration.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
-import { inspectOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db.js";
+import { executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import {
   readMigrationArtifactIdentity,
   type MigrationArtifact,
-} from "./doctor-session-sqlite-artifact.js";
+} from "../infra/session-sqlite-migration-artifact.js";
 import {
   canonicalMigrationFilePath,
   uniqueRestoreMoves,
   type SessionSqliteMigrationMove,
   type SessionSqliteMigrationTargetManifest,
-} from "./doctor-session-sqlite-migration-run.js";
+} from "../infra/session-sqlite-migration-manifest.js";
 import {
-  createTranscriptEventReader,
-  readTranscriptFingerprint,
-} from "./doctor-session-sqlite-readers.js";
+  countTranscriptEventsForPath,
+  readOnlySqliteValidationSnapshot,
+  type ReadOnlySqliteValidationSnapshot,
+} from "../infra/session-sqlite-migration-readers.js";
+import {
+  verifyTranscriptEvents,
+  verifyCanonicalSessionTranscriptSources,
+} from "../infra/session-sqlite-transcript-verification.js";
+import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
+import { migrateLegacySessionCreator } from "../state/creator-namespace-migration.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
+import { inspectOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db.js";
+import type { LegacySessionRecord } from "./doctor-session-sqlite-discovery.js";
+import type { DoctorSessionSqliteTargetReport } from "./doctor-session-sqlite-types.js";
 import { assertDoctorSqliteMaintenancePathsNotAliased } from "./doctor-sqlite-maintenance-lock.js";
 
 /** Keep one owner proof per database; fence in-place writes and sidecar changes after awaits. */
@@ -160,36 +168,10 @@ export function verifyHistoricalMigrationArtifact(params: {
           }
           continue;
         }
-        const complete = withSqliteSessionImportStage((stage) => {
-          let seq = 0;
-          const validate = createTranscriptEventReader(
-            move.archivePath,
-            sessionId,
-            false,
-            readTranscriptFingerprint(move.archivePath),
-            move.sourcePath,
-          )((event) => stage.append(0, seq++, JSON.stringify(event)));
-          const repair = stage.repairLegacyTranscript(0);
-          // Old metadata cannot prove that a now-discarded branch was deliberately retired then.
-          if (repair.repaired || !repair.recognized) {
-            return false;
-          }
-          for (const event of iterateSqliteQuerySync(
-            database.db,
-            db
-              .selectFrom("transcript_events")
-              .select("event_json")
-              .where("session_id", "=", sessionId),
-          )) {
-            stage.addSeen(event.event_json);
-          }
-          for (const event of stage.rows(0)) {
-            if (!stage.contains(event.eventJson)) {
-              return false;
-            }
-          }
-          validate();
-          return true;
+        const complete = verifyTranscriptEvents(database.db, {
+          path: move.archivePath,
+          originalPath: move.sourcePath,
+          sessionId,
         });
         if (!complete) {
           return false;
@@ -209,4 +191,122 @@ export function verifyHistoricalMigrationArtifact(params: {
     dependencies: [...dependencies],
     disposal: { state: "retained" },
   };
+}
+
+export function validateLegacySessionRecords(
+  target: SessionStoreTarget,
+  records: readonly LegacySessionRecord[],
+  report: DoctorSessionSqliteTargetReport,
+  purpose: "validate" | "before-archive",
+  env: NodeJS.ProcessEnv,
+): boolean {
+  if (purpose === "before-archive" && records.length === 0) {
+    return true;
+  }
+  const issueCountBeforeValidation = report.issues.length;
+  const validation = readOnlySqliteValidationSnapshot(target);
+  if (!validation.ok) {
+    report.issues.push({
+      code: "sqlite_read_failed",
+      message: `SQLite validation read failed: ${String(validation.error)}`,
+    });
+    return false;
+  }
+  for (const record of records) {
+    validateLegacySessionRecord(record, report, validation.snapshot, purpose, env);
+  }
+  return report.issues.length === issueCountBeforeValidation;
+}
+
+function validateLegacySessionRecord(
+  record: LegacySessionRecord,
+  report: DoctorSessionSqliteTargetReport,
+  snapshot: ReadOnlySqliteValidationSnapshot,
+  purpose: "validate" | "before-archive",
+  env: NodeJS.ProcessEnv,
+): void {
+  const beforeArchive = purpose === "before-archive";
+  // Import preserves aliases until canonical repair; standalone validation compares canonical keys.
+  const normalizedKey = beforeArchive
+    ? record.sessionKey
+    : normalizeStoreSessionKey(record.sessionKey);
+  const sqliteSessionId = record.historical
+    ? snapshot.sessionKeysBySessionId.get(record.entry.sessionId) === normalizedKey
+      ? record.entry.sessionId
+      : undefined
+    : snapshot.sessionIdsBySessionKey.get(normalizedKey);
+  if (!sqliteSessionId) {
+    report.issues.push({
+      code: "sqlite_entry_missing",
+      message: `SQLite entry is missing for ${normalizedKey}.`,
+      sessionKey: record.sessionKey,
+    });
+    return;
+  }
+  if (sqliteSessionId !== record.entry.sessionId) {
+    report.issues.push({
+      code: "sqlite_entry_mismatch",
+      message: `SQLite sessionId ${sqliteSessionId} does not match ${record.entry.sessionId}.`,
+      sessionKey: record.sessionKey,
+    });
+    return;
+  }
+  if (!beforeArchive) {
+    report.validatedEntries += 1;
+  }
+  const result = countTranscriptEventsForPath(record.transcriptPath);
+  if (result.status === "missing") {
+    if (!beforeArchive) {
+      report.validatedTranscriptEvents +=
+        snapshot.transcriptEventCountsBySessionId.get(record.entry.sessionId) ?? 0;
+    }
+    return;
+  }
+  if (result.status !== "ok") {
+    if (
+      !report.issues.some(
+        (issue) => issue.code === "transcript_malformed" && issue.sessionKey === record.sessionKey,
+      )
+    ) {
+      report.issues.push({
+        code: "transcript_malformed",
+        message: result.message,
+        sessionKey: record.sessionKey,
+      });
+    }
+    return;
+  }
+  const sqliteEvents = snapshot.transcriptEventCountsBySessionId.get(record.entry.sessionId) ?? 0;
+  // Import has already verified normalized rows; standalone validation proves source containment.
+  const expectedEvents = beforeArchive
+    ? (record.recovery?.sqliteEvents ?? record.recovery?.events ?? result.events)
+    : result.events;
+  const verified =
+    beforeArchive || !record.transcriptPath
+      ? sqliteEvents >= expectedEvents
+      : verifyCanonicalSessionTranscriptSources({
+          target: report,
+          mode: "contained",
+          sources: [
+            {
+              path: record.transcriptPath,
+              sessionId: record.entry.sessionId,
+              originalPath: record.historical?.originalPath,
+            },
+          ],
+          env,
+        });
+  if (!verified) {
+    report.issues.push({
+      code: "sqlite_transcript_count_mismatch",
+      message: beforeArchive
+        ? `SQLite transcript has ${sqliteEvents} events; verified import expects ${expectedEvents}.`
+        : `SQLite transcript has ${sqliteEvents} events; source has ${result.events}, but its events are not all present with matching content. Run openclaw doctor --session-sqlite recover to import a missing suffix or identify conflicting events.`,
+      sessionKey: record.sessionKey,
+    });
+    return;
+  }
+  if (!beforeArchive) {
+    report.validatedTranscriptEvents += sqliteEvents;
+  }
 }

@@ -19,6 +19,7 @@ import {
 } from "../gateway/call.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import { projectGatewayUrlForDiagnostics } from "../gateway/connection-details.js";
+import { normalizeAgentIdStrict, parseAgentSessionKey } from "../routing/session-key.js";
 import {
   parseSessionTargetInput,
   SessionTargetParseError,
@@ -35,8 +36,8 @@ export type SessionTargetGateway = {
 
 type ResolvedSessionTarget = {
   sessionKey: string;
+  agentId: string;
   gateway: SessionTargetGateway;
-  parsed: SessionTargetInput;
 };
 
 function gatewayUrlForTarget(target: SessionTargetInput): string | undefined {
@@ -204,8 +205,8 @@ export async function resolveSessionTarget(params: {
       requiredScope: params.requiredScope ?? "operator.read",
     });
     return {
-      parsed,
       gateway,
+      agentId: parsed.agentId,
       sessionKey: resolveCanonicalMainSessionKey({
         agentId: parsed.agentId,
         mainKey: agents.mainKey,
@@ -230,7 +231,12 @@ export async function resolveSessionTarget(params: {
     shortRef: ref.kind === "short",
   });
   if (result.ok) {
-    return { parsed, gateway, sessionKey: result.key };
+    const keyOwner = parseAgentSessionKey(result.key)?.agentId;
+    const owner = normalizeAgentIdStrict(result.agentId ?? keyOwner);
+    if (!owner.ok || (keyOwner && keyOwner !== owner.value)) {
+      throw new Error("Gateway returned a session without a consistent agent identity.");
+    }
+    return { gateway, sessionKey: result.key, agentId: owner.value };
   }
   if (result.candidates?.length) {
     throw new Error(formatAmbiguousCandidates(result.candidates, gateway.url));

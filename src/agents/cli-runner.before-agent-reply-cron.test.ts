@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 /** Tests cron before_agent_reply gating at the CLI runner entrypoint. */
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -12,6 +13,7 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import type { HookRunner } from "../plugins/hooks.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
 import {
   getOrCreateSessionMcpRuntime,
@@ -149,6 +151,7 @@ function makeStubContext(params: typeof baseRunParams & { trigger?: string }) {
   return {
     params,
     started: Date.now(),
+    startedMonotonicMs: performance.now(),
     workspaceDir: params.workspaceDir,
     modelId: params.model,
     normalizedModel: params.model,
@@ -204,6 +207,36 @@ afterEach(() => {
 });
 
 describe("runCliAgent before_agent_reply seam", () => {
+  it("waits for execution-start work and rechecks cancellation before preparing the runtime", async () => {
+    const entered = createDeferred();
+    const release = createDeferred();
+    const abort = new AbortController();
+    const failure = new Error("run cancelled during execution-start work");
+    const operation = runCliAgent({
+      ...baseRunParams,
+      abortSignal: abort.signal,
+      onExecutionStarted: async () => {
+        entered.resolve();
+        await release.promise;
+      },
+    });
+    const outcome = operation.catch((error: unknown) => error);
+    try {
+      await entered.promise;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(prepareCliRunContextMock).not.toHaveBeenCalled();
+    } finally {
+      abort.abort(failure);
+      release.resolve();
+      await outcome;
+    }
+    expect(await outcome).toBe(failure);
+    expect(prepareCliRunContextMock).not.toHaveBeenCalled();
+    expect(executePreparedCliRunMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["claude-cli", "user"],
     ["google-gemini-cli", "cron"],
@@ -596,6 +629,7 @@ describe("runCliAgent before_agent_reply seam", () => {
       expect(hookContext?.trigger).toBe("cron");
       expect(hookContext?.chatId).toBeUndefined();
       expect(hookContext?.channel).toBeUndefined();
+      expect(prepareCliRunContextMock).not.toHaveBeenCalled();
       expect(executePreparedCliRunMock).not.toHaveBeenCalled();
       expect(result.payloads?.[0]?.text).toBe("dreaming claimed via cli runner");
       expect(result.meta.agentMeta?.sessionId).toBe("");
@@ -664,19 +698,6 @@ describe("runCliAgent before_agent_reply seam", () => {
     expect(executePreparedCliRunMock).not.toHaveBeenCalled();
   });
 
-  it("does not run prepareCliRunContext when the cron hook claims (no resource allocation, no leak)", async () => {
-    // Regression for PR #70950 review (greptile-apps, P1): the gate must fire
-    // before any backend resources are allocated, otherwise preparedBackend.cleanup
-    // is silently skipped on every claimed cron turn.
-    hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
-    runBeforeAgentReplyMock.mockResolvedValue({ handled: true });
-
-    await runCliAgent({ ...baseRunParams, trigger: "cron", jobId: "cron-job-123" });
-
-    expect(prepareCliRunContextMock).not.toHaveBeenCalled();
-    expect(executePreparedCliRunMock).not.toHaveBeenCalled();
-  });
-
   it("re-arms setup progress when a cron hook does not claim", async () => {
     hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
     runBeforeAgentReplyMock.mockResolvedValue(undefined);
@@ -704,10 +725,16 @@ describe("runCliAgent before_agent_reply seam", () => {
     expect(executePreparedCliRunMock).toHaveBeenCalledTimes(1);
   });
 
-  it("treats empty CLI subprocess output as a failover failure, not a green cron run", async () => {
+  it("treats empty CLI subprocess output as a failover failure, not a green required cron run", async () => {
     executePreparedCliRunMock.mockResolvedValue({ text: "   " });
 
-    await expect(runCliAgent({ ...baseRunParams, trigger: "cron" })).rejects.toMatchObject({
+    await expect(
+      runCliAgent({
+        ...baseRunParams,
+        trigger: "cron",
+        terminalReplyExpectation: "required",
+      }),
+    ).rejects.toMatchObject({
       name: "FailoverError",
       reason: "empty_response",
       provider: baseRunParams.provider,
@@ -950,6 +977,10 @@ describe("runCliAgent before_agent_reply seam", () => {
   });
 
   it("does not retire a newer MCP runtime after its stable session key is rebound", async () => {
+    const { setSessionMcpRuntimeScheduler } = await import("./agent-bundle-mcp-manager-api.js");
+    const scheduler = createTestGatewayScheduler();
+    onTestFinished(() => scheduler.stop());
+    await setSessionMcpRuntimeScheduler(scheduler);
     const mcpTools = await vi.importActual<typeof import("./agent-bundle-mcp-tools.js")>(
       "./agent-bundle-mcp-tools.js",
     );

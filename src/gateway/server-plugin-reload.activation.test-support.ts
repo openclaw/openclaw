@@ -127,6 +127,10 @@ export async function verifyServiceCleanupRecovery(createFixture: RecoveryFixtur
       throw new Error("fixture service could not close");
     },
   });
+  await expect(fixture.reload()).rejects.toMatchObject({
+    details: { phase: "drain", committed: false },
+  });
+  expect(fixture.rollbackConfigEffects).toHaveBeenCalledOnce();
   const disabled = await fixture.reload({
     plugins: { allow: ["first", "sibling"], entries: { first: { enabled: false } } },
   });

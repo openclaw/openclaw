@@ -116,29 +116,16 @@ struct ChatMessageUsagePresentation: Equatable {
         let cacheRead = self.positive(usage.cacheRead)
         let cacheWrite = self.positive(usage.cacheWrite)
 
-        if let input {
-            visualParts.append("↑\(ChatCompactTokenCountFormatter.string(Double(input)))")
-            accessibilityParts.append(String(
-                format: String(localized: "Input tokens: %@"),
-                input.formatted()))
-        }
-        if let output {
-            visualParts.append("↓\(ChatCompactTokenCountFormatter.string(Double(output)))")
-            accessibilityParts.append(String(
-                format: String(localized: "Output tokens: %@"),
-                output.formatted()))
-        }
-        if let cacheRead {
-            visualParts.append("R\(ChatCompactTokenCountFormatter.string(Double(cacheRead)))")
-            accessibilityParts.append(String(
-                format: String(localized: "Cache read tokens: %@"),
-                cacheRead.formatted()))
-        }
-        if let cacheWrite {
-            visualParts.append("W\(ChatCompactTokenCountFormatter.string(Double(cacheWrite)))")
-            accessibilityParts.append(String(
-                format: String(localized: "Cache write tokens: %@"),
-                cacheWrite.formatted()))
+        let tokenParts: [(Int?, String, String)] = [
+            (input, "↑", String(localized: "Input tokens: %@")),
+            (output, "↓", String(localized: "Output tokens: %@")),
+            (cacheRead, "R", String(localized: "Cache read tokens: %@")),
+            (cacheWrite, "W", String(localized: "Cache write tokens: %@")),
+        ]
+        for (count, symbol, format) in tokenParts {
+            guard let count else { continue }
+            visualParts.append("\(symbol)\(ChatCompactTokenCountFormatter.string(Double(count)))")
+            accessibilityParts.append(String(format: format, count.formatted()))
         }
         if let cost = usage.cost?.total, cost > 0 {
             let formattedCost = String(format: "$%.4f", locale: Locale(identifier: "en_US_POSIX"), cost)

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import type { ApplicationStatusBanner } from "../app/update-overlay-helpers.ts";
+import { formatDateTimeMs } from "../lib/format.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import "./sidebar-update-card.ts";
 
@@ -18,6 +19,7 @@ type SidebarUpdateCardElement = HTMLElement & {
   canUpdate: boolean;
   canHoldUpdate: boolean;
   onUpdate: () => void;
+  onDismiss?: () => void;
   refreshRequired: boolean;
   onRefresh: () => Promise<boolean>;
   onHoldUpdate: () => Promise<boolean>;
@@ -51,8 +53,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  vi.useRealTimers();
   document.body.replaceChildren();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   if (originalWebkit) {
     Object.defineProperty(window, "webkit", originalWebkit);
   } else {
@@ -61,27 +64,6 @@ afterEach(() => {
 });
 
 describe("SidebarUpdateCard", () => {
-  it("renders the refresh state and invokes its action", async () => {
-    const element = await mount(null);
-    const onRefresh = vi.fn(async () => false);
-    element.refreshRequired = true;
-    element.onRefresh = onRefresh;
-    await element.updateComplete;
-
-    const card = element.querySelector(".sidebar-update-card");
-    expect(card?.getAttribute("role")).toBe("status");
-    expect(card?.getAttribute("aria-live")).toBe("polite");
-    expect(element.querySelector(".sidebar-update-card__title")?.textContent).toBe(
-      "Server updated",
-    );
-    expect(element.querySelector(".sidebar-update-card__subtitle")?.textContent).toBe(
-      "Refresh for full capabilities",
-    );
-    element.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
-
-    expect(onRefresh).toHaveBeenCalledOnce();
-  });
-
   it("restores an actionable retry after stale-client recovery cannot reach the Gateway", async () => {
     const element = await mount(null);
     let completeRefresh: ((reloading: boolean) => void) | undefined;
@@ -172,7 +154,15 @@ describe("SidebarUpdateCard", () => {
     element.onUpdate = onUpdate;
     await element.updateComplete;
 
-    expect(element.textContent).toContain("Server updated");
+    const card = element.querySelector(".sidebar-update-card");
+    expect(card?.getAttribute("role")).toBe("status");
+    expect(card?.getAttribute("aria-live")).toBe("polite");
+    expect(element.querySelector(".sidebar-update-card__title")?.textContent).toBe(
+      "Server updated",
+    );
+    expect(element.querySelector(".sidebar-update-card__subtitle")?.textContent).toBe(
+      "Refresh for full capabilities",
+    );
     expect(element.textContent).not.toContain("Update Gateway");
     expect(element.textContent).not.toContain("v2.0.0");
     element.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
@@ -222,7 +212,14 @@ describe("SidebarUpdateCard", () => {
 
   it("renders an available update and narrates it after the Gateway drops its metadata", async () => {
     const element = await mount(
-      { currentVersion: "1.0.0", latestVersion: "1.0.0", channel: "dev", commitsBehind: 246 },
+      {
+        currentVersion: "1.0.0",
+        latestVersion: "1.0.0",
+        channel: "dev",
+        commitsBehind: 246,
+        currentSha: "1234567890abcdef",
+        upstreamSha: "abc1234def",
+      },
       {
         channel: "dev",
         autoEnabled: false,
@@ -237,6 +234,9 @@ describe("SidebarUpdateCard", () => {
     expect(element.querySelector(".sidebar-update-card__action")?.textContent).toContain(
       "246 commits behind",
     );
+    expect(
+      [...element.querySelectorAll(".update-git-revisions code")].map((code) => code.textContent),
+    ).toEqual(["12345678", "abc1234d"]);
 
     element.updateBusy = true;
     await element.updateComplete;
@@ -313,14 +313,105 @@ describe("SidebarUpdateCard", () => {
       channel: "stable",
     });
     element.compact = true;
+    element.onDismiss = vi.fn();
+    element.onUpdate = vi.fn();
     await element.updateComplete;
 
     expect(element.querySelector(".sidebar-issues-panel__entity")?.textContent).toBe(
       "Update available",
     );
+    expect(element.querySelector("summary time")).toBeNull();
     expect(element.querySelector(".sidebar-update-card__action")?.textContent).toContain(
       "Update Gateway",
     );
+    const dismiss = element.querySelector<HTMLButtonElement>(".sidebar-issues-panel__dismiss")!;
+    expect(dismiss.getAttribute("aria-label")).toBe("Dismiss Update available");
+    expect(dismiss.querySelector("svg")).not.toBeNull();
+    dismiss.click();
+    expect(element.onDismiss).toHaveBeenCalledOnce();
+    expect(element.onUpdate).not.toHaveBeenCalled();
+    expect(element.querySelector("details")?.open).toBe(false);
+  });
+
+  it.each([
+    { state: "running", ageMinutes: 30 },
+    { state: "succeeded", ageMinutes: 5 },
+    { state: "failed", ageMinutes: 5 },
+    { state: "campaign", ageMinutes: 20 },
+  ] as const)(
+    "shows the recorded $state age beside the compact row's detail",
+    async ({ state, ageMinutes }) => {
+      const now = Date.parse("2026-09-23T12:00:00Z");
+      vi.useFakeTimers({ now });
+      const element = await mount(null);
+      element.compact = true;
+      if (state === "campaign") {
+        element.updateSchedule = {
+          channel: "stable",
+          autoEnabled: true,
+          target: { kind: "package", version: "2026.9.2" },
+          campaign: {
+            id: "campaign-age",
+            state: "countdown",
+            announcedAtMs: now - 20 * 60_000,
+            updatedAtMs: now - 60_000,
+            applyAtMs: now + 10 * 60_000,
+            forceAtMs: now + 60 * 60_000,
+          },
+        };
+      } else {
+        element.updateRun = createUpdateRunFixture({
+          status: state,
+          phase: state === "running" ? "staging" : "finished",
+          createdAtMs: now - 30 * 60_000,
+          updatedAtMs: now - 60_000,
+          finishedAtMs: state === "running" ? null : now - 5 * 60_000,
+        });
+      }
+      await element.updateComplete;
+      await element.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+        "openclaw-relative-time",
+      )?.updateComplete;
+
+      const title = element.querySelector("summary .sidebar-issues-panel__entity");
+      const meta = title?.nextElementSibling;
+      const time = meta?.querySelector("time");
+      const timestamp = now - ageMinutes * 60_000;
+      expect(meta?.querySelector(".sidebar-issues-panel__state")).not.toBeNull();
+      expect(time?.getAttribute("datetime")).toBe(new Date(timestamp).toISOString());
+      expect(time?.getAttribute("title")).toBe(formatDateTimeMs(timestamp));
+      expect(time?.textContent?.trim()).toBe(`${ageMinutes}m ago`);
+      expect(element.querySelector("details")?.open).toBe(false);
+    },
+  );
+
+  it("refreshes a completed update's age without new state and stops ticking on disconnect", async () => {
+    const now = Date.parse("2026-09-23T12:00:00Z");
+    vi.useFakeTimers({ now });
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const timersBefore = vi.getTimerCount();
+    const element = await mount(null);
+    element.compact = true;
+    element.updateRun = createUpdateRunFixture({
+      status: "succeeded",
+      phase: "finished",
+      createdAtMs: now - 30 * 60_000,
+      updatedAtMs: now - 5 * 60_000,
+      finishedAtMs: now - 5 * 60_000,
+    });
+    await element.updateComplete;
+    await element.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+      "openclaw-relative-time",
+    )?.updateComplete;
+    expect(element.querySelector("summary time")?.textContent?.trim()).toBe("5m ago");
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(element.querySelector("summary time")?.textContent?.trim()).toBe("6m ago");
+
+    element.remove();
+    expect(vi.getTimerCount()).toBe(timersBefore);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(element.querySelector("summary time")?.textContent?.trim()).toBe("6m ago");
   });
 
   it("keeps an unauthorized update discoverable without allowing activation", async () => {

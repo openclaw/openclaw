@@ -12,12 +12,18 @@ import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import type { ChatModelPickerTargetGroup } from "../chat/components/chat-model-picker-options.ts";
-import { newSessionLocationFromSearch, type NewSessionRouteData } from "./location.ts";
+import type { NewSessionRouteData } from "./location.ts";
+import { newSessionModelLocationFromSearch } from "./model-location.ts";
 
 registerNewSessionSetupEnglish();
 
-function draftRouteKey(requestedAgentId: string, catalogId: string, group: string): string {
-  return JSON.stringify([requestedAgentId, catalogId, group]);
+function draftRouteKey(
+  requestedAgentId: string,
+  catalogId: string,
+  group: string,
+  model?: string,
+): string {
+  return JSON.stringify([requestedAgentId, catalogId, group, ...(model ? [model] : [])]);
 }
 
 /**
@@ -27,12 +33,32 @@ function draftRouteKey(requestedAgentId: string, catalogId: string, group: strin
  * would make that fill-in look like a navigation and discard the draft.
  */
 export function routeKey(data?: NewSessionRouteData): string {
-  return draftRouteKey(data?.requestedAgentId ?? "", data?.catalogId ?? "", data?.group ?? "");
+  return draftRouteKey(
+    data?.requestedAgentId ?? "",
+    data?.catalogId ?? "",
+    data?.group ?? "",
+    data?.requestedModel,
+  );
 }
 
 export function routeKeyFromSearch(search: string): string {
-  const location = newSessionLocationFromSearch(search);
-  return draftRouteKey(location.agentId, location.catalogId, location.group ?? "");
+  const location = newSessionModelLocationFromSearch(search);
+  return draftRouteKey(
+    location.agentId,
+    location.catalogId,
+    location.group ?? "",
+    location.requestedModel,
+  );
+}
+
+export function requestedModelForAgent(
+  data: NewSessionRouteData | undefined,
+  agentId: string,
+): string | undefined {
+  return !data?.requestedAgentId ||
+    normalizeAgentId(data.requestedAgentId) === normalizeAgentId(agentId)
+    ? data?.requestedModel
+    : undefined;
 }
 
 export function isTarget(data?: NewSessionRouteData): boolean {
@@ -351,7 +377,7 @@ function renderTarget(data?: NewSessionRouteData) {
     title=${ready ? t("newSession.nativeTerminalHint") : t("newSession.catalogUnavailable")}
   >
     <span class="new-session-page__target-icon" aria-hidden="true">${icons.terminal}</span>
-    <span>${label}</span>
+    <span class="new-session-page__trigger-label">${label}</span>
   </span>`;
 }
 

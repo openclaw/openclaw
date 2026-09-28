@@ -6,6 +6,7 @@ import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   getSessionMcpRuntimeManagerForTesting,
   peekSessionMcpRuntime,
+  setSessionMcpRuntimeScheduler,
 } from "../../agents/agent-bundle-mcp-manager-api.js";
 import { waitForSessionMaintenance } from "../../agents/session-maintenance/coordinator.js";
 import { createSessionMaintenanceFollowup } from "../../agents/session-maintenance/run.js";
@@ -28,14 +29,16 @@ import {
   onInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
 } from "../../infra/diagnostic-events.js";
-import { clearMemoryPluginState, registerMemoryCapability } from "../../plugins/memory-state.js";
+import { clearMemoryPluginState } from "../../plugins/memory-state.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
 import { runReplyAgent } from "./agent-runner.js";
 import {
   createTestFollowupRun,
+  installAgentRunnerMemoryFixture,
   isModelRuntimeContextCarrier,
 } from "./agent-runner.test-fixtures.js";
 import { createTypingController } from "./typing.js";
@@ -221,7 +224,9 @@ it.each(["completed", "interrupted"] as const)(
       };
       let flush: ReturnType<typeof runMemoryFlushIfNeeded> | undefined;
       let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+      const scheduler = createTestGatewayScheduler();
       try {
+        await setSessionMcpRuntimeScheduler(scheduler);
         await state.writeConfig(cfg);
         setRuntimeConfigSnapshot(cfg);
         await replaceSessionEntry(scope, {
@@ -275,17 +280,15 @@ it.each(["completed", "interrupted"] as const)(
           model: "owner-model",
           auth: {},
         });
-        registerMemoryCapability("memory-core", {
-          flushPlanResolver: () => ({
-            softThresholdTokens: 4_000,
-            reserveTokensFloor: 8_192,
-            forceFlushTranscriptBytes: 2 * 1024 * 1024,
-            prompt: "Checkpoint durable notes. Reply NO_REPLY.",
-            systemPrompt: "Write durable notes only.",
-            relativePath: "memory/checkpoint.md",
-            model: "test-provider/test-model",
-          }),
-        });
+        installAgentRunnerMemoryFixture(() => ({
+          softThresholdTokens: 4_000,
+          reserveTokensFloor: 8_192,
+          forceFlushTranscriptBytes: 2 * 1024 * 1024,
+          prompt: "Checkpoint durable notes. Reply NO_REPLY.",
+          systemPrompt: "Write durable notes only.",
+          relativePath: "memory/checkpoint.md",
+          model: "test-provider/test-model",
+        }));
         admission = await beginSessionWorkAdmission({
           scope: scope.storePath,
           identities: [scope.sessionKey, scope.sessionId],
@@ -434,6 +437,7 @@ it.each(["completed", "interrupted"] as const)(
             await mcpManager.disposeSession(sessionId);
           }
         }
+        await scheduler.stop();
         clearMemoryPluginState();
         clearRuntimeConfigSnapshot();
         stopDiagnostics();

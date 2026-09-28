@@ -9,6 +9,16 @@
   text-align: center;
 }
 
+.about-hero__mark--neutral {
+  width: 168px;
+  height: 168px;
+}
+
+.about-hero__mark--neutral svg {
+  width: 100%;
+  height: 100%;
+}
+
 .about-hero__clawd {
   position: relative;
   width: 168px;

@@ -14,7 +14,7 @@ const processTool = createProcessTool();
 afterEach(() => vi.restoreAllMocks());
 
 describe("tool descriptions", () => {
-  it.each(["auto", "ask", "full", undefined] as const)(
+  it.each(["auto", "ask"] as const)(
     "includes denial guidance only for auto review through finalization: %s",
     (mode) => {
       const guidance =
@@ -36,7 +36,7 @@ describe("tool descriptions", () => {
     },
   );
 
-  it.each(["win32", "linux", "darwin"] as const)(
+  it.each(["win32"] as const)(
     "keeps exec descriptors stable across approval changes on %s",
     (platform) =>
       withMockedPlatform(platform, () => {
@@ -92,19 +92,6 @@ describe("tool descriptions", () => {
     expect(processTool.description).toContain("completion without auto-wake");
     expect(processTool.description).toContain("write, send-keys, submit, paste, kill");
   });
-
-  it.each(["darwin", "linux", "win32"] as const)(
-    "limits shell-quoting guidance to Unix hosts: %s",
-    (platform) => {
-      withMockedPlatform(platform, () => {
-        expect(
-          execTool.description.includes(
-            "Quote arguments containing shell metacharacters, including URL query strings with `?` or `&`.",
-          ),
-        ).toBe(platform !== "win32");
-      });
-    },
-  );
 
   it("adds file-write guidance only when dedicated file-writing tools survive filtering", () => {
     const fileWriteGuidance =

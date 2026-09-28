@@ -1,4 +1,3 @@
-// Openshell helper module supports config behavior.
 import path from "node:path";
 import { buildPluginConfigSchema, type OpenClawPluginConfigSchema } from "openclaw/plugin-sdk/core";
 import {
@@ -34,20 +33,6 @@ const OPEN_SHELL_MANAGED_REMOTE_ROOTS = [
   DEFAULT_REMOTE_WORKSPACE_DIR,
   DEFAULT_REMOTE_AGENT_WORKSPACE_DIR,
 ] as const;
-
-function normalizeProviders(value: string[] | undefined): string[] {
-  const seen = new Set<string>();
-  const providers: string[] = [];
-  for (const entry of value ?? []) {
-    const normalized = entry.trim();
-    if (seen.has(normalized)) {
-      continue;
-    }
-    seen.add(normalized);
-    providers.push(normalized);
-  }
-  return providers;
-}
 
 const nonEmptyTrimmedString = (message: string) =>
   z.string({ error: message }).trim().min(1, { error: message });
@@ -152,42 +137,21 @@ export function createOpenShellPluginConfigSchema(): OpenClawPluginConfigSchema 
 }
 
 export function resolveOpenShellPluginConfig(value: unknown): ResolvedOpenShellPluginConfig {
-  if (value === undefined) {
-    // The built-in defaults are managed OpenShell roots, so they do not need to
-    // flow back through normalizeOpenShellRemotePath.
-    return {
-      mode: DEFAULT_MODE,
-      command: DEFAULT_COMMAND,
-      gateway: undefined,
-      gatewayEndpoint: undefined,
-      workspace: undefined,
-      from: DEFAULT_SOURCE,
-      policy: undefined,
-      providers: [],
-      gpu: false,
-      autoProviders: true,
-      remoteWorkspaceDir: DEFAULT_REMOTE_WORKSPACE_DIR,
-      remoteAgentWorkspaceDir: DEFAULT_REMOTE_AGENT_WORKSPACE_DIR,
-      timeoutMs: DEFAULT_TIMEOUT_MS,
-    };
-  }
-
-  const parsed = OpenShellPluginConfigSchema.safeParse(value);
+  const parsed = OpenShellPluginConfigSchema.safeParse(value === undefined ? {} : value);
   if (!parsed.success) {
     const message = formatPluginConfigIssue(parsed.error.issues[0]);
     throw new Error(`Invalid openshell plugin config: ${message}`);
   }
   const cfg = parsed.data;
-  const mode = cfg.mode ?? DEFAULT_MODE;
   return {
-    mode,
+    mode: cfg.mode ?? DEFAULT_MODE,
     command: cfg.command ?? DEFAULT_COMMAND,
     gateway: cfg.gateway,
     gatewayEndpoint: cfg.gatewayEndpoint,
     workspace: cfg.workspace,
     from: cfg.from ?? DEFAULT_SOURCE,
     policy: cfg.policy,
-    providers: normalizeProviders(cfg.providers),
+    providers: [...new Set(cfg.providers ?? [])],
     gpu: cfg.gpu ?? false,
     autoProviders: cfg.autoProviders ?? true,
     remoteWorkspaceDir: normalizeOpenShellRemotePath(

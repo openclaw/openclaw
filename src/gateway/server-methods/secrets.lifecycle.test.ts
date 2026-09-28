@@ -18,8 +18,9 @@ import {
   readSecretStoreValue,
   writeSecretStoreEntry,
 } from "../../secrets/store/secret-store.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { QuestionManager } from "../question-manager.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createQuestionHandlers } from "./question.js";
@@ -175,11 +176,12 @@ describe("secret store mutation lifecycle", () => {
           },
         },
       } as GatewayClient;
-      const manager = new QuestionManager();
+      const scheduler = createTestGatewayScheduler();
+      const manager = new QuestionManager(scheduler);
       const reloadSecrets = async () => ({ warningCount: 0 });
       const storeWriteService = createSecretStoreWriteService({ reloadSecrets });
       const handlers = {
-        ...createQuestionHandlers(manager, storeWriteService),
+        ...createQuestionHandlers(manager, storeWriteService, scheduler),
         ...createSecretsHandlers({ reloadSecrets, resolveSecrets, storeWriteService }),
       };
       const methods: string[] = [];

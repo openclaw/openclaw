@@ -130,32 +130,6 @@ vi.mock("../model-suppression.js", async (importOriginal) => {
 
   return {
     ...actual,
-    shouldSuppressBuiltInModelCore: ({
-      provider,
-      id,
-      baseUrl,
-      config,
-    }: {
-      provider?: string;
-      id?: string;
-      baseUrl?: string;
-      config?: unknown;
-    }) => {
-      if (
-        (provider === "openai" || provider === "azure-openai-responses" || provider === "openai") &&
-        id?.trim().toLowerCase() === "gpt-5.3-codex-spark"
-      ) {
-        return true;
-      }
-      if (isUnsupportedXaiMultiAgentModel(provider, id)) {
-        return true;
-      }
-      return (
-        (provider === "qwen" || provider === "modelstudio") &&
-        id?.trim().toLowerCase() === "qwen3.6-plus" &&
-        isQwenCodingPlanBaseUrl(baseUrl ?? resolveConfiguredQwenBaseUrl(config))
-      );
-    },
     shouldUnconditionallySuppress: ({ provider, id }: { provider?: string; id?: string }) => {
       if (
         (provider === "openai" || provider === "azure-openai-responses" || provider === "openai") &&

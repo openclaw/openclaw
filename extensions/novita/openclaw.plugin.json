@@ -1,11 +1,20 @@
 {
   "id": "novita",
-  "categories": ["models"],
+  "categories": ["models", "media"],
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
   "providers": ["novita", "novita-ai", "novitaai"],
+  "contracts": {
+    "videoGenerationProviders": ["novita"]
+  },
+  "videoGenerationProviderMetadata": {
+    "novita": {
+      "authSignals": [{ "provider": "novita" }],
+      "referenceAudioInputs": true
+    }
+  },
   "providerAuthAliases": {
     "novita-ai": "novita",
     "novitaai": "novita"

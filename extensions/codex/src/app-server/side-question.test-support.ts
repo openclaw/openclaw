@@ -1,12 +1,19 @@
 import { nativeHookRelayTesting } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { setHostToolFactoryForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { resetDiagnosticEventsForTest } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { resetGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import {
   codexTestTurnIds,
   createFakeCodexAppServerClient,
+  threadStartResult as nativeThreadStartResult,
+  turnStartResult as nativeTurnStartResult,
 } from "./codex-app-server.test-fixtures.js";
-import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
+import {
+  createCodexTestHostCapabilities,
+  getCodexTestToolFactory,
+  setCodexTestToolFactory,
+} from "./host-capability.test-support.js";
 import { isJsonObject, type CodexServerNotification, type JsonObject } from "./protocol.js";
 import {
   createCodexTestBindingStore,
@@ -77,10 +84,16 @@ const bindingStore: CodexAppServerBindingStore = {
   read: (...args) => readCodexAppServerBindingMock(...args),
 };
 
-function runCodexAppServerSideQuestion(
+async function runCodexAppServerSideQuestion(
   params: Parameters<typeof runCodexAppServerSideQuestionImpl>[0],
   options: Omit<Parameters<typeof runCodexAppServerSideQuestionImpl>[1], "bindingStore"> = {},
 ) {
+  const runId = params.opts?.runId;
+  if (runId && !getCodexTestToolFactory(params)) {
+    await setHostToolFactoryForTest({ runId }, (toolOptions) =>
+      createOpenClawCodingToolsMock(toolOptions),
+    );
+  }
   return runCodexAppServerSideQuestionImpl(params, { ...options, bindingStore });
 }
 
@@ -179,28 +192,9 @@ export function extractRelayIdFromThreadConfig(config: unknown): string {
 }
 
 function threadResult(threadId: string) {
+  const { thread } = nativeThreadStartResult(threadId, "/tmp/workspace");
   return {
-    thread: {
-      id: threadId,
-      sessionId: threadId,
-      forkedFromId: null,
-      preview: "",
-      ephemeral: true,
-      modelProvider: "openai",
-      createdAt: 1,
-      updatedAt: 1,
-      status: { type: "idle" },
-      path: null,
-      cwd: "/tmp/workspace",
-      projectId: null,
-      cliVersion: "0.149.0",
-      source: "unknown",
-      agentNickname: null,
-      agentRole: null,
-      gitInfo: null,
-      name: null,
-      turns: [],
-    },
+    thread: { ...thread, sessionId: threadId, ephemeral: true, cliVersion: "0.149.0" },
     model: "gpt-5.5",
     modelProvider: "openai",
     cwd: "/tmp/workspace",
@@ -211,18 +205,7 @@ function threadResult(threadId: string) {
 }
 
 function turnStartResult(turnId: string) {
-  return {
-    turn: {
-      id: turnId,
-      threadId: "side-thread",
-      status: "inProgress",
-      items: [],
-      error: null,
-      startedAt: null,
-      completedAt: null,
-      durationMs: null,
-    },
-  };
+  return { turn: { ...nativeTurnStartResult(turnId).turn, threadId: "side-thread" } };
 }
 
 function agentDelta(threadId: string, turnId: string, delta: string): CodexServerNotification {
@@ -243,14 +226,9 @@ function turnCompleted(
     params: {
       threadId,
       turn: {
-        id: turnId,
+        ...nativeTurnStartResult(turnId, status).turn,
         threadId,
-        status,
         items: [{ id: "agent-1", type: "agentMessage", text }],
-        error: null,
-        startedAt: null,
-        completedAt: null,
-        durationMs: null,
       },
     },
   };
@@ -268,7 +246,38 @@ const TEST_HOST_CAPABILITIES: SideQuestionParams["hostCapabilities"] = Object.fr
   waitForApproval: async () => undefined,
 });
 
+export function platformPreparedRuntimeAuth(resolvedApiKey?: string) {
+  return {
+    plan: {
+      providerForAuth: "openai",
+      authProfileProviderForAuth: "openai",
+      selectedAuthMode: "api-key",
+      modelRoute: {
+        provider: "openai",
+        modelId: "gpt-5.6",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        authRequirement: "api-key",
+        requestTransportOverrides: "none",
+      },
+    },
+    authProfileStore: {
+      version: 1 as const,
+      profiles: {},
+      order: { openai: [] },
+    },
+    authStorage: {} as never,
+    modelRegistry: {} as never,
+    ...(resolvedApiKey ? { resolvedApiKey } : {}),
+  } satisfies Parameters<typeof runCodexAppServerSideQuestion>[0]["preparedRuntimeAuth"];
+}
+
 function sideParams(overrides: Partial<SideQuestionParams> = {}): SideQuestionParams {
+  let hostCapabilities = overrides.hostCapabilities ?? TEST_HOST_CAPABILITIES;
+  if (!hostCapabilities.createToolSurface) {
+    hostCapabilities = createCodexTestHostCapabilities(hostCapabilities);
+    setCodexTestToolFactory({ hostCapabilities }, createOpenClawCodingToolsMock);
+  }
   const authProfileId = Object.hasOwn(overrides, "authProfileId")
     ? overrides.authProfileId
     : "openai:work";
@@ -330,7 +339,7 @@ function sideParams(overrides: Partial<SideQuestionParams> = {}): SideQuestionPa
       modelRegistry: {} as never,
     },
     ...overrides,
-    hostCapabilities: overrides.hostCapabilities ?? TEST_HOST_CAPABILITIES,
+    hostCapabilities,
   };
 }
 
@@ -342,8 +351,6 @@ export function useSideQuestionTestSetup() {
     getSharedCodexAppServerClientMock.mockReset();
     retireSharedCodexAppServerClientIfCurrentMock.mockReset();
     createOpenClawCodingToolsMock.mockReset();
-    dynamicToolBuildState.openClawCodingToolsFactory = (...args) =>
-      createOpenClawCodingToolsMock(...args);
     toolExecuteMock.mockReset();
     handleCodexAppServerApprovalRequestMock.mockReset();
     resolveCodexProviderWebSearchSupportForClientMock.mockReset();
@@ -393,7 +400,6 @@ export function useSideQuestionTestSetup() {
   });
 
   afterEach(async () => {
-    dynamicToolBuildState.openClawCodingToolsFactory = undefined;
     await nativeHookRelayTesting.clearNativeHookRelaysForTests();
     resetDiagnosticEventsForTest();
     resetGlobalHookRunner();

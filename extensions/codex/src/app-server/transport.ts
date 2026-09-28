@@ -4,6 +4,7 @@
  */
 import { finished } from "node:stream/promises";
 import { terminateCodexAppServerDescendants } from "./transport-process-containment.js";
+import { waitForCodexAppServerProcessRegistrationCleanup } from "./transport-process-registration.js";
 
 export type CodexAppServerCloseResult =
   | { exited: true; cleanup: "closed" | "uncertain" }
@@ -25,6 +26,7 @@ export function hasCodexAppServerNaturalExit(child: CodexAppServerTransport): bo
 
 /** Child-process-like transport shape consumed by the Codex app-server client. */
 export type CodexAppServerTransport = {
+  startupFailure?: { error?: Error; complete(): void };
   maxFrameBytes?: number;
   stdin: {
     write: (data: string | Uint8Array, callback?: (error?: Error | null) => void) => unknown;
@@ -80,12 +82,7 @@ function beginCodexAppServerTransportClose(
       finishCodexAppServerTransportClose(child, options, forceKill);
       return "uncertain";
     }
-    let contained;
-    try {
-      contained = await terminateCodexAppServerDescendants(child);
-    } catch {
-      contained = undefined;
-    }
+    const contained = await terminateCodexAppServerDescendants(child).catch(() => undefined);
     if (contained === "exited") {
       return "natural";
     }
@@ -159,6 +156,9 @@ export async function closeCodexAppServerTransportAndWait(
     options.exitTimeoutMs ?? 2_000,
     drained,
   );
+  if (settled) {
+    await waitForCodexAppServerProcessRegistrationCleanup(child);
+  }
   closure.naturalExit = containment === "natural" && settled;
   if (options.drainStdio) {
     // Share the existing exit budget with pipe draining. A timed-out drain is
@@ -178,9 +178,7 @@ export async function closeCodexAppServerTransportAndWait(
 }
 
 function hasCodexAppServerTransportExited(child: CodexAppServerTransport): boolean {
-  return child.exitCode !== null && child.exitCode !== undefined
-    ? true
-    : child.signalCode !== null && child.signalCode !== undefined;
+  return child.exitCode != null || child.signalCode != null;
 }
 
 async function waitForCodexAppServerTransportExit(

@@ -1,20 +1,26 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import {
-  assertCanInsertPluginStateEntry,
   bindPluginStateEntry,
+  createPluginStateError,
   deleteExpiredPluginStateEntries,
   deletePluginStateEntry,
-  enforcePostRegisterLimits,
   getPluginStateKysely,
   hasPluginStateEntry,
   insertPluginStateEntryIfAbsent,
+  isRetainedPluginStateNamespace,
   parseStoredJson,
   resolvePluginStateExpiresAtMs,
   selectPluginStateEntry,
+  upsertPluginStateEntry,
   type PluginStateDatabase,
-  type PluginStateRegisterEntryParams,
 } from "./plugin-state-store.kernel.js";
+import {
+  assertCanInsertPluginStateEntry,
+  enforcePostRegisterLimits,
+  type PluginStateRegisterEntryParams,
+} from "./plugin-state-store.retention.js";
+import type { PluginStateMoveEntries } from "./plugin-state-store.types.js";
 
 export function clearPluginStateNamespace(
   db: DatabaseSync,
@@ -33,11 +39,11 @@ export function clearPluginStateNamespace(
 export function registerPluginStateEntryIfAbsent(
   store: PluginStateDatabase,
   params: Omit<PluginStateRegisterEntryParams, "createdAtMs">,
-  maxPluginEntries: number,
 ): boolean {
   const now = Date.now();
   const expiresAt = resolvePluginStateExpiresAtMs({
     ttlMs: params.ttlMs,
+    namespace: params.namespace,
     now,
     operation: "register",
     path: store.path,
@@ -49,7 +55,7 @@ export function registerPluginStateEntryIfAbsent(
   }
   // The exact expired key can lie beyond the namespace cleanup batch.
   deletePluginStateEntry(store.db, params);
-  assertCanInsertPluginStateEntry({ maxPluginEntries, store, ...params, now });
+  assertCanInsertPluginStateEntry({ store, ...params, now });
   const inserted = insertPluginStateEntryIfAbsent(
     store.db,
     bindPluginStateEntry({
@@ -65,13 +71,33 @@ export function registerPluginStateEntryIfAbsent(
     return false;
   }
   enforcePostRegisterLimits({
-    maxPluginEntries,
     store,
     ...params,
     now,
     protectedKey: params.key,
   });
   return true;
+}
+
+/** Apply a prepared update after the caller has read and checked the current row. */
+export function updatePluginStateEntry(
+  store: PluginStateDatabase,
+  params: Omit<PluginStateRegisterEntryParams, "createdAtMs">,
+  now: number,
+  exists: boolean,
+): void {
+  if (!exists) {
+    assertCanInsertPluginStateEntry({ ...params, store, now });
+  }
+  const expiresAt = resolvePluginStateExpiresAtMs({
+    ttlMs: params.ttlMs,
+    namespace: params.namespace,
+    now,
+    operation: "register",
+    path: store.path,
+  });
+  upsertPluginStateEntry(store.db, bindPluginStateEntry({ ...params, createdAt: now, expiresAt }));
+  enforcePostRegisterLimits({ ...params, store, now, protectedKey: params.key });
 }
 
 /** The caller owns the transaction containing the authoritative comparison and deletion. */
@@ -107,4 +133,60 @@ export function consumePluginStateEntry(
   }
   deletePluginStateEntry(store.db, params);
   return parseStoredJson(row.value_json, "consume", store.path);
+}
+
+export type PluginStateMoveEntriesParams = {
+  pluginId: string;
+  namespace: string;
+  sourceNamespace: string;
+  entries: PluginStateMoveEntries["entries"];
+};
+
+/** The worker owns the transaction; no payload decoding or plugin callback occurs here. */
+export function movePluginStateEntries(
+  store: PluginStateDatabase,
+  params: PluginStateMoveEntriesParams,
+): number {
+  if (
+    !isRetainedPluginStateNamespace(params.namespace) ||
+    isRetainedPluginStateNamespace(params.sourceNamespace) ||
+    params.sourceNamespace === params.namespace
+  ) {
+    throw createPluginStateError({
+      code: "PLUGIN_STATE_INVALID_INPUT",
+      operation: "register",
+      message: "Plugin state moves require a bounded source and a retained destination.",
+    });
+  }
+  const now = Date.now();
+  let moved = 0;
+  for (const entry of params.entries) {
+    const source = {
+      pluginId: params.pluginId,
+      namespace: params.sourceNamespace,
+      key: entry.sourceKey,
+    };
+    const row = selectPluginStateEntry(store.db, { ...source, now });
+    if (!row) {
+      continue;
+    }
+    if (row.expires_at !== null) {
+      throw createPluginStateError({
+        code: "PLUGIN_STATE_INVALID_INPUT",
+        operation: "register",
+        message: "Cannot move live expiring plugin state into a retained store.",
+        path: store.path,
+      });
+    }
+    insertPluginStateEntryIfAbsent(store.db, {
+      plugin_id: params.pluginId,
+      namespace: params.namespace,
+      entry_key: entry.targetKey,
+      value_json: row.value_json,
+      created_at: row.created_at,
+      expires_at: row.expires_at,
+    });
+    moved += deletePluginStateEntry(store.db, source);
+  }
+  return moved;
 }

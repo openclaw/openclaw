@@ -1,10 +1,8 @@
 // Chunk-limit enforcement for typed rich blocks: surrogate-safe, wrapper- and
 // caption-preserving splitting against the live-verified Bot API limits.
 import {
-  countInputRichBlockChars,
-  countInputRichBlockMedia,
-  countInputRichBlocks,
   countRichTextChars,
+  measureInputRichBlocks,
   normalizeRichText,
   type InputRichBlock,
   type InputRichBlockListItem,
@@ -17,14 +15,6 @@ const TELEGRAM_RICH_MEDIA_LIMIT = 50;
 
 type RichBlockBudget = { chars: number; blocks: number; media: number };
 type RichBlockLimits = { textLimit: number; blockLimit: number };
-
-function measureRichBlocks(blocks: readonly InputRichBlock[]): RichBlockBudget {
-  return {
-    chars: blocks.reduce((total, block) => total + countInputRichBlockChars(block), 0),
-    blocks: countInputRichBlocks(blocks),
-    media: blocks.reduce((total, block) => total + countInputRichBlockMedia(block), 0),
-  };
-}
 
 function addRichBlockBudget(left: RichBlockBudget, right: RichBlockBudget): RichBlockBudget {
   return {
@@ -42,34 +32,12 @@ function exceedsRichBlockLimits(size: RichBlockBudget, limits: RichBlockLimits):
   );
 }
 
-type RichTextStyleWrap =
-  | "bold"
-  | "italic"
-  | "underline"
-  | "strikethrough"
-  | "code"
-  | "spoiler"
-  | "marked"
-  | "subscript"
-  | "superscript";
-type RichTextWrapper =
-  | { type: RichTextStyleWrap }
-  | { type: "url"; url: string }
-  | { type: "anchor_link"; anchor_name: string };
+type RichTextWrapper = Extract<RichText, { text: RichText }>;
 
 function wrapRichTextFragment(fragment: RichText, wrappers: readonly RichTextWrapper[]): RichText {
   let node = fragment;
   for (let index = wrappers.length - 1; index >= 0; index -= 1) {
-    const wrapper = wrappers[index];
-    if (!wrapper) {
-      continue;
-    }
-    node =
-      wrapper.type === "url"
-        ? { type: "url", text: node, url: wrapper.url }
-        : wrapper.type === "anchor_link"
-          ? { type: "anchor_link", text: node, anchor_name: wrapper.anchor_name }
-          : { type: wrapper.type, text: node };
+    node = { ...wrappers[index]!, text: node };
   }
   return node;
 }
@@ -119,13 +87,7 @@ function splitRichTextByChars(text: RichText, limit: number): RichText[] {
       chars += atomicChars;
       return;
     }
-    const wrapper: RichTextWrapper =
-      node.type === "url"
-        ? { type: "url", url: node.url }
-        : node.type === "anchor_link"
-          ? { type: "anchor_link", anchor_name: node.anchor_name }
-          : { type: node.type };
-    visit(node.text, [...wrappers, wrapper]);
+    visit(node.text, [...wrappers, node]);
   };
   visit(text, []);
   flush();
@@ -134,7 +96,7 @@ function splitRichTextByChars(text: RichText, limit: number): RichText[] {
 
 function splitOversizedRichBlock(block: InputRichBlock, limits: RichBlockLimits): InputRichBlock[] {
   const { textLimit, blockLimit } = limits;
-  if (!exceedsRichBlockLimits(measureRichBlocks([block]), limits)) {
+  if (!exceedsRichBlockLimits(measureInputRichBlocks([block]), limits)) {
     return [block];
   }
   if (block.type === "pre") {
@@ -167,7 +129,7 @@ function splitOversizedRichBlock(block: InputRichBlock, limits: RichBlockLimits)
     if (
       block.blocks.length === 0 ||
       remainingText < 0 ||
-      (remainingText === 0 && block.blocks.some((child) => countInputRichBlockChars(child) > 0))
+      (remainingText === 0 && measureInputRichBlocks(block.blocks).chars > 0)
     ) {
       // Wrapper text cannot be divided without losing its owner; the existing
       // plain fallback handles this irreducibly oversized semantic unit.
@@ -237,7 +199,7 @@ function splitOversizedRichBlock(block: InputRichBlock, limits: RichBlockLimits)
     let items: InputRichBlockListItem[] = [];
     let size: RichBlockBudget = { chars: 0, blocks: 1, media: 0 };
     for (const item of block.items) {
-      const measured = measureRichBlocks(item.blocks);
+      const measured = measureInputRichBlocks(item.blocks);
       const itemSize = { ...measured, blocks: measured.blocks + 1 };
       const nextSize = addRichBlockBudget(size, itemSize);
       if (items.length > 0 && exceedsRichBlockLimits(nextSize, limits)) {
@@ -284,7 +246,7 @@ export function splitTelegramRichBlocks(
     }
   };
   for (const block of expanded) {
-    const blockSize = measureRichBlocks([block]);
+    const blockSize = measureInputRichBlocks([block]);
     if (current.length > 0 && exceedsRichBlockLimits(addRichBlockBudget(size, blockSize), limits)) {
       flush();
     }

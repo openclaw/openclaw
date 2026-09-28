@@ -25,7 +25,7 @@ it("finishes cheap fleet reads without waiting behind every queued background tu
       return { count: 1, recent: [], byAgent: new Map() };
     });
     try {
-      const reader = createStatusSessionStoreReader([], 10, read);
+      const reader = createStatusSessionStoreReader([], 10, { readSummary: read });
       for (let index = 0; index < 600; index += 1) {
         await expect(reader.read(state.path(`store-${index}.sqlite`))).resolves.toMatchObject({
           count: 1,

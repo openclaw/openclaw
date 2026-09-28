@@ -2,6 +2,7 @@
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOpenClawVersionBase } from "../config/version.js";
+import { inspectDecisionProviders } from "../decisions/runtime.js";
 import { listImportedBundledPluginFacadeIds } from "../plugin-sdk/facade-runtime.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { inspectBundleLspRuntimeSupport } from "./bundle-lsp.js";
@@ -27,7 +28,6 @@ import {
   resolveCompatibleRuntimePluginRegistry,
 } from "./loader.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
-import { tracksPluginDependencyStatus } from "./official-external-plugin-repair-hints.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import {
   tracePluginLifecyclePhase,
@@ -39,6 +39,7 @@ import {
 } from "./plugin-metadata-snapshot.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { resolveBundledProviderCompatPluginIds } from "./providers.js";
+import { groupPluginRecords } from "./record-groups.js";
 import type { PluginRegistry } from "./registry.js";
 import { listImportedRuntimePluginIds } from "./runtime.js";
 import { buildPluginRuntimeLoadOptions } from "./runtime/load-context.js";
@@ -48,11 +49,7 @@ import {
   formatPluginCompatibilityNotice,
   type PluginCompatibilityNotice,
 } from "./status-compatibility.js";
-import {
-  buildPluginDependencyStatus,
-  projectPluginDependencyHealth,
-} from "./status-dependencies-core.js";
-import { collectPluginCapabilityConsentDiagnostics } from "./status-snapshot.js";
+import { projectPluginInstallHealth } from "./status-snapshot.js";
 import type { PluginHookName, PluginLogger } from "./types.js";
 
 export type PluginStatusReport = PluginRegistry & {
@@ -99,6 +96,7 @@ export type PluginInspectReport = {
   commands: string[];
   cliCommands: string[];
   services: string[];
+  decisions?: ReturnType<typeof inspectDecisionProviders>;
   gatewayDiscoveryServices: string[];
   gatewayMethods: string[];
   mcpServers: Array<{
@@ -200,6 +198,7 @@ type PluginReportParams = {
   onlyPluginIds?: readonly string[];
   /** Capture full registrations without starting channel runtime sidecars. */
   runtimeInspection?: boolean;
+  loadMode?: "validate";
   workspaceDir?: string;
   /** Use an explicit env when plugin roots should resolve independently from process.env. */
   env?: NodeJS.ProcessEnv;
@@ -239,11 +238,6 @@ function preparePluginReport(params: PluginReportParams | undefined) {
           ...baseContext,
           workspaceDir,
         };
-  const manifestByPluginId = metadataSnapshot.byPluginId;
-  // Runtime records drop package build metadata; the installed index still owns it.
-  const packageBuildByPluginId = new Map(
-    metadataSnapshot.index.plugins.map((plugin) => [plugin.pluginId, plugin.packageBuild]),
-  );
   const config = context.config;
 
   // Apply bundled-provider allowlist compat so that `plugins list` and `doctor`
@@ -278,8 +272,6 @@ function preparePluginReport(params: PluginReportParams | undefined) {
     workspaceDir,
     metadataSnapshot,
     context,
-    manifestByPluginId,
-    packageBuildByPluginId,
     runtimeCompatConfig,
     onlyPluginIds,
     runtimeLoadOptions: buildPluginRuntimeLoadOptions(context, {
@@ -289,6 +281,7 @@ function preparePluginReport(params: PluginReportParams | undefined) {
       env: params?.env,
       loadModules: true,
       cache: true,
+      mode: params?.loadMode,
       onlyPluginIds,
       toolDiscovery: params?.runtimeInspection,
     }),
@@ -333,8 +326,7 @@ function projectPluginReport(
   params: PluginReportParams | undefined,
   loadModules: boolean,
 ): PluginStatusReport {
-  const { workspace, workspaceDir, metadataSnapshot, manifestByPluginId, packageBuildByPluginId } =
-    prepared;
+  const { workspace, workspaceDir, metadataSnapshot } = prepared;
   const importedPluginIds = new Set([
     ...(loadModules
       ? registry.plugins
@@ -345,42 +337,24 @@ function projectPluginReport(
     ...listImportedBundledPluginFacadeIds(),
   ]);
 
-  return projectPluginDependencyHealth({
-    workspaceDir,
-    workspaceScope: workspace.workspaceScope,
-    ...registry,
-    diagnostics: appendPluginControlPlaneWorkspaceDiagnostic(
-      [
-        ...registry.diagnostics,
-        ...collectPluginCapabilityConsentDiagnostics({
-          index: metadataSnapshot.index,
-          manifests: manifestByPluginId,
+  return projectPluginInstallHealth(
+    {
+      workspaceDir,
+      workspaceScope: workspace.workspaceScope,
+      ...registry,
+      diagnostics: appendPluginControlPlaneWorkspaceDiagnostic(
+        [...registry.diagnostics],
+        workspace,
+      ),
+      plugins: registry.plugins.map((plugin) =>
+        Object.assign({}, plugin, {
+          imported: plugin.format !== `bundle` && importedPluginIds.has(plugin.id),
+          version: resolveReportedPluginVersion(plugin, params?.env),
         }),
-      ],
-      workspace,
-    ),
-    plugins: registry.plugins.map((plugin) =>
-      Object.assign({}, plugin, {
-        imported: plugin.format !== `bundle` && importedPluginIds.has(plugin.id),
-        version: resolveReportedPluginVersion(plugin, params?.env),
-        dependencyStatus:
-          plugin.dependencyStatus ??
-          (tracksPluginDependencyStatus({
-            origin: plugin.origin,
-            pluginId: plugin.id,
-            packageName: plugin.packageName ?? manifestByPluginId.get(plugin.id)?.packageName,
-            packageBuild: packageBuildByPluginId.get(plugin.id),
-          })
-            ? buildPluginDependencyStatus({
-                rootDir: plugin.rootDir,
-                dependencies: manifestByPluginId.get(plugin.id)?.packageDependencies,
-                optionalDependencies: manifestByPluginId.get(plugin.id)
-                  ?.packageOptionalDependencies,
-              })
-            : undefined),
-      }),
-    ),
-  });
+      ),
+    },
+    { metadata: metadataSnapshot, config: prepared.rawConfig, env: params?.env },
+  );
 }
 
 export function buildPluginSnapshotReport(params?: PluginReportParams): PluginStatusReport {
@@ -564,6 +538,9 @@ function buildPluginInspectRecord(
     commands: [...plugin.commands],
     cliCommands: [...plugin.cliCommands],
     services: [...plugin.services],
+    decisions: inspectDecisionProviders(getRuntimeConfig(), report).filter(
+      (entry) => entry.pluginId === plugin.id,
+    ),
     gatewayDiscoveryServices: [...plugin.gatewayDiscoveryServiceIds],
     gatewayMethods,
     mcpServers,
@@ -584,35 +561,18 @@ function buildPluginInspectRecord(
   };
 }
 
-function groupByPluginId<T>(rows: readonly T[], getPluginId: (row: T) => string | undefined) {
-  const grouped = new Map<string, T[]>();
-  for (const row of rows) {
-    const pluginId = getPluginId(row);
-    if (pluginId === undefined) {
-      continue;
-    }
-    const group = grouped.get(pluginId);
-    if (group) {
-      group.push(row);
-    } else {
-      grouped.set(pluginId, [row]);
-    }
-  }
-  return grouped;
-}
-
 export function buildAllPluginInspectReports(params: PluginInspectParams): PluginInspectReport[] {
   const context = resolvePluginInspectContext(params);
   const { report } = context;
   if (report.plugins.length < 2) {
     return report.plugins.map((plugin) => buildPluginInspectRecord(plugin, context));
   }
-  const typedHooks = groupByPluginId(report.typedHooks, (entry) => entry.pluginId);
-  const hooks = groupByPluginId(report.hooks, (entry) => entry.pluginId);
-  const tools = groupByPluginId(report.tools, (entry) => entry.pluginId);
-  const diagnostics = groupByPluginId(report.diagnostics, (entry) => entry.pluginId);
-  const sessionCatalogs = groupByPluginId(report.sessionCatalogs, (entry) => entry.pluginId);
-  const gatewayMethodDescriptors = groupByPluginId(
+  const typedHooks = groupPluginRecords(report.typedHooks, (entry) => entry.pluginId);
+  const hooks = groupPluginRecords(report.hooks, (entry) => entry.pluginId);
+  const tools = groupPluginRecords(report.tools, (entry) => entry.pluginId);
+  const diagnostics = groupPluginRecords(report.diagnostics, (entry) => entry.pluginId);
+  const sessionCatalogs = groupPluginRecords(report.sessionCatalogs, (entry) => entry.pluginId);
+  const gatewayMethodDescriptors = groupPluginRecords(
     report.gatewayMethodDescriptors ?? [],
     (descriptor) => (descriptor.owner.kind === "plugin" ? descriptor.owner.pluginId : undefined),
   );

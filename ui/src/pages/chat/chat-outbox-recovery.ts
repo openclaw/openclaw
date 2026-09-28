@@ -83,6 +83,9 @@ class ChatOutboxRecovery extends LitElement {
         this.drafts = result.entries;
       }
     } catch {
+      if (generation !== this.generation || !this.isConnected) {
+        return;
+      }
       this.error = t("chat.outboxRecoveryStorageFailed");
     }
     this.requestUpdate();
@@ -107,6 +110,7 @@ class ChatOutboxRecovery extends LitElement {
       JSON.stringify(this.owner()) === JSON.stringify(owner) &&
       !host.chatMessage &&
       !host.chatGoalDraftMode &&
+      !host.chatReplyTarget &&
       !host.chatAttachments.length &&
       !host.chatQueue.length;
     this.busy = true;

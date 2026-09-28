@@ -1,4 +1,3 @@
-// Slack plugin module implements reply action ids behavior.
 import type { Block, KnownBlock } from "@slack/web-api";
 
 export const SLACK_REPLY_BUTTON_ACTION_ID = "openclaw:reply_button";

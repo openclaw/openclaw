@@ -1,5 +1,8 @@
 import type { HealthCheck, HealthFinding } from "openclaw/plugin-sdk/health";
-import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-store-runtime";
+import type {
+  OpenKeyedStoreOptions,
+  PluginStateEntry,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   asOptionalRecord as readRecord,
   normalizeOptionalString as nonEmptyString,
@@ -11,7 +14,6 @@ import { WARM_IMAGE_MAX_ENTRIES } from "./crabbox-worker-warm-image-records.js";
 import {
   crabboxWarmImageRecoveryHint,
   CRABBOX_WARM_IMAGE_WAIT_HINT,
-  isCrabboxWarmImageCaptureUncertain,
   projectCrabboxWarmImage,
   type WarmProfileRecord,
 } from "./crabbox-worker-warm-image-store.js";
@@ -19,10 +21,13 @@ import {
 export const CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID = "crabbox/cloud-worker-profiles";
 const CRABBOX_WARM_IMAGES_CHECK_ID = "crabbox/warm-images";
 
-type CrabboxDoctorRegistrationHost = {
+export type CrabboxDoctorRegistrationHost = {
   readonly openclawRoot: string;
   readonly getHealthCheck: (id: string) => HealthCheck | undefined;
   readonly registerHealthCheck: (check: HealthCheck) => void;
+  readonly listPluginStateEntries: <T>(
+    options: OpenKeyedStoreOptions,
+  ) => Promise<PluginStateEntry<T>[]>;
 };
 
 function createCrabboxCloudWorkerProfileCheck(openclawRoot: string): HealthCheck {
@@ -137,13 +142,12 @@ export function registerCrabboxWorkerProviderDoctorChecks(
       source: "crabbox",
       async detect(ctx) {
         const findings: HealthFinding[] = [];
-        // The standalone Doctor artifact has no runtime state capability yet.
-        const entries = createPluginStateSyncKeyedStore<WarmProfileRecord>("crabbox", {
+        const entries = await host.listPluginStateEntries<WarmProfileRecord>({
           namespace: "warm-images",
           maxEntries: WARM_IMAGE_MAX_ENTRIES,
           overflowPolicy: "reject-new",
           ...(ctx.env ? { env: ctx.env } : {}),
-        }).entries();
+        });
         for (const { key, value } of entries) {
           const image = projectCrabboxWarmImage(key, value);
           const facts = [
@@ -161,7 +165,7 @@ export function registerCrabboxWorkerProviderDoctorChecks(
             target: image.profileKey,
           } as const;
           if (image.capture) {
-            const uncertain = isCrabboxWarmImageCaptureUncertain(image.capture);
+            const uncertain = image.capture.phase === "uncertain";
             findings.push({
               ...details,
               severity: uncertain || image.capture.stale ? "warning" : "info",

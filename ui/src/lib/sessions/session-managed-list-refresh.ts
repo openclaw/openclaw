@@ -10,11 +10,10 @@ import type {
   SessionListSnapshot,
   SessionState,
 } from "./session-capability.ts";
-import {
-  sessionListQueryAgentId,
-  type ManagedSessionList,
-  type ManagedSessionListRefresh,
-  type ObservedSessionList,
+import type {
+  ManagedSessionList,
+  ManagedSessionListRefresh,
+  ObservedSessionList,
 } from "./session-list-query.ts";
 import { requestSessionListParams } from "./session-requests.ts";
 import type { createSessionRosterObservations } from "./session-roster-observations.ts";
@@ -124,16 +123,12 @@ export function createSessionManagedListRefresh(
           if (!response) {
             throw new Error("The session query did not return a result. Try again.");
           }
-          const result = host.reconcileList(
-            response,
-            issuedRevision,
-            sessionListQueryAgentId(entry.query),
-          );
+          const result = host.reconcileList(response, issuedRevision, entry.query.agentId);
           const previous = entry.snapshot.result;
           // Only this response's rows were observed now; pagination retains older
           // members and discards duplicate page rows without refreshing their facts.
           const presented = reconcileRosterPresentationMetadata(result, previous);
-          const agentId = sessionListQueryAgentId(entry.query);
+          const agentId = entry.query.agentId;
           observations.inherit(presented, result, previous, agentId);
           const observed = observations.accept(
             presented,

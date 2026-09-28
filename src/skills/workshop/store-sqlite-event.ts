@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -10,11 +11,7 @@ import {
   parseSkillProposalEvaluation,
 } from "./store-record.js";
 import { parseJson } from "./store-sqlite-record.js";
-import {
-  openSkillWorkshopStore,
-  type SkillWorkshopDatabase,
-  type SkillWorkshopStoreOptions,
-} from "./store-sqlite-schema.js";
+import type { SkillWorkshopDatabase } from "./store-sqlite-schema.js";
 import type {
   SkillProposalEvent,
   SkillProposalEventActor,
@@ -25,18 +22,9 @@ import type {
 } from "./types.js";
 
 export type NewSkillProposalEvent = Omit<SkillProposalEvent, "sequence">;
-type StoredSkillProposalEventRow = {
-  sequence: number;
-  event_id: string;
-  proposal_id: string;
-  proposed_version: string;
-  revision_hash: string;
-  event_type: string;
-  occurred_at: string;
-  actor_json: string;
-  correlation_id: string | null;
-  payload_json: string | null;
-};
+type StoredSkillProposalEventRow = Selectable<
+  SkillWorkshopDatabase["skill_workshop_proposal_events"]
+>;
 const STORED_EVENT_DATA_VERSION = 1;
 const MAX_SKILL_PROPOSAL_EVENT_DATA_BYTES = MAX_SKILL_PROPOSAL_EVALUATION_BYTES + 64 * 1024;
 const MAX_SKILL_PROPOSAL_EVENTS_RESPONSE_BYTES = 2 * 1024 * 1024;
@@ -81,23 +69,23 @@ export function appendSkillProposalEvent(
   return { ...event, sequence: inserted.sequence };
 }
 
-export function readStoredSkillProposalEvent(
+export function readStoredSkillProposalEventInDatabase(
+  database: DatabaseSync,
   eventId: string,
-  options: SkillWorkshopStoreOptions = {},
 ): SkillProposalEvent | null {
-  const { database, kysely } = openSkillWorkshopStore(options);
+  const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(database);
   const row = executeSqliteQueryTakeFirstSync(
-    database.db,
+    database,
     kysely.selectFrom("skill_workshop_proposal_events").selectAll().where("event_id", "=", eventId),
   );
   return row ? parseStoredSkillProposalEventRow(row) : null;
 }
 
-export function listStoredSkillProposalEvents(
-  input: SkillProposalEventsListInput,
-  options: SkillWorkshopStoreOptions = {},
+export function listStoredSkillProposalEventsInDatabase(
+  database: DatabaseSync,
+  input: Pick<SkillProposalEventsListInput, "agentId" | "proposalId" | "afterSequence" | "limit">,
 ): SkillProposalEventsListResult {
-  const { database, kysely } = openSkillWorkshopStore(options);
+  const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(database);
   const limit = Math.min(Math.max(input.limit ?? 100, 1), 200);
   let query = kysely
     .selectFrom("skill_workshop_proposal_events")
@@ -106,18 +94,7 @@ export function listStoredSkillProposalEvents(
       "skill_workshop_proposals.proposal_id",
       "skill_workshop_proposal_events.proposal_id",
     )
-    .select([
-      "skill_workshop_proposal_events.sequence",
-      "skill_workshop_proposal_events.event_id",
-      "skill_workshop_proposal_events.proposal_id",
-      "skill_workshop_proposal_events.proposed_version",
-      "skill_workshop_proposal_events.revision_hash",
-      "skill_workshop_proposal_events.event_type",
-      "skill_workshop_proposal_events.occurred_at",
-      "skill_workshop_proposal_events.actor_json",
-      "skill_workshop_proposal_events.correlation_id",
-      "skill_workshop_proposal_events.payload_json",
-    ])
+    .selectAll("skill_workshop_proposal_events")
     .where("skill_workshop_proposal_events.sequence", ">", input.afterSequence ?? 0);
   if (input.proposalId) {
     query = query.where("skill_workshop_proposal_events.proposal_id", "=", input.proposalId);
@@ -128,7 +105,7 @@ export function listStoredSkillProposalEvents(
     query = query.where("skill_workshop_proposals.owner_agent_id", "is not", null);
   }
   const rows = executeSqliteQuerySync(
-    database.db,
+    database,
     query.orderBy("skill_workshop_proposal_events.sequence", "asc").limit(limit + 1),
   ).rows;
   let hasMore = rows.length > limit;
@@ -271,9 +248,6 @@ function parseSkillProposalEventPayload(
     )
   ) {
     return undefined;
-  }
-  if (entries.length === 0) {
-    return {};
   }
   return Object.fromEntries(entries);
 }

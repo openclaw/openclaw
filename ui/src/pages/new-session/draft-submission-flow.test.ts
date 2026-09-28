@@ -1,7 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { createRouter } from "@openclaw/uirouter";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SESSION_CREATE_RETRY_WINDOW_MS } from "../../../../packages/gateway-protocol/src/index.js";
+import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import * as terminalStart from "../../lib/sessions/catalog-terminal.ts";
 import { writeSessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
 import { buildChatApiAttachments } from "../chat/attachment-api.ts";
 import {
@@ -20,7 +23,6 @@ import {
 } from "./draft-submission-flow.test-support.ts";
 import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
-import * as terminalStart from "./terminal-start.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -32,6 +34,20 @@ afterEach(() => {
 });
 
 describe("DraftSubmissionFlow", () => {
+  it("preserves a restored file draft and reports disabled uploads without creating a session", async () => {
+    const { context, flow } = createDraftFixture();
+    context.config.current.uploadsEnabled = false;
+    const attachment = registerTextPayload("retained-upload");
+    flow.setMessage("Keep this prompt");
+    flow.attachmentDraft.restore([attachment]);
+    await flow.submit();
+    expect(context.sessions.createResult).not.toHaveBeenCalled();
+    expect(flow.message).toBe("Keep this prompt");
+    expect(flow.attachmentDraft.attachments).toEqual([attachment]);
+    expect(flow.error).toContain("uploads are disabled");
+    flow.disconnect();
+  });
+
   it.each(["navigation", "reconnect"])("retires only the captured draft after %s", async (mode) => {
     const { context, flow } = createDraftFixture();
     let accept!: (value: { key: string; initialRun: { status: "started"; runId: string } }) => void;
@@ -123,11 +139,11 @@ describe("DraftSubmissionFlow", () => {
         sessionKey,
         context.gateway.snapshot.client,
       );
-      expect(retained?.message.content).toContainEqual({
+      expect(retained?.message?.content).toContainEqual({
         type: "text",
         text: "@Alex keep the accepted prompt",
       });
-      expect(retained?.message["__openclaw"]).toMatchObject({
+      expect(retained?.message?.["__openclaw"]).toMatchObject({
         humanMentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
       });
       if (next === "reconnect") {
@@ -166,7 +182,7 @@ describe("DraftSubmissionFlow", () => {
       },
     });
     Object.assign(context, { basePath: "/openclaw", replace: vi.fn() });
-    vi.spyOn(terminalStart, "startNewSessionInTerminal").mockResolvedValue({
+    vi.spyOn(terminalStart, "startCatalogSessionInTerminal").mockResolvedValue({
       sessionId: "terminal-created",
       cwd: "/workspace",
       shell: "codex",
@@ -297,10 +313,10 @@ describe("DraftSubmissionFlow", () => {
       "agent:main:dashboard:background",
       context.gateway.snapshot.client,
     );
-    expect(retained?.message["__openclaw"]).toMatchObject({
+    expect(retained?.message?.["__openclaw"]).toMatchObject({
       humanMentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
     });
-    expect(retained?.message.content).toContainEqual({
+    expect(retained?.message?.content).toContainEqual({
       type: "attachment",
       attachment: {
         url: `data:text/plain;base64,${btoa("background-note")}`,
@@ -741,9 +757,14 @@ describe("DraftSubmissionFlow", () => {
         return {};
       }),
     };
+    const router = createRouter<RouteId, ApplicationContext>({
+      routes: [{ id: "chat", path: "/chat", component: () => ({}) }],
+    });
     const context = {
       basePath: "",
+      router,
       gateway: {
+        subscribe: () => () => undefined,
         subscribeEvents: () => () => undefined,
         connection: { gatewayUrl: "ws://gateway.example" },
         snapshot: {
@@ -782,6 +803,7 @@ describe("DraftSubmissionFlow", () => {
       config: { current: {} },
       navigateAndWait,
     } as unknown as ApplicationContext;
+    await router.navigate("chat", context);
     const host = new TestReactiveControllerHost();
     const gateway = new DraftGatewayState(
       host,
@@ -887,9 +909,13 @@ describe("DraftSubmissionFlow", () => {
       },
     ]);
 
+    if (background) {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    }
     const submission = flow.submit(undefined, background);
     if (background) {
-      await vi.waitFor(() => expect(start).toHaveBeenCalledOnce());
+      await submission;
+      expect(start).toHaveBeenCalledOnce();
       expect(navigateAndWait).not.toHaveBeenCalled();
     } else {
       await vi.waitFor(() => expect(navigateAndWait).toHaveBeenCalledOnce());
@@ -905,13 +931,7 @@ describe("DraftSubmissionFlow", () => {
     await submission;
     if (background) {
       context.gateway.snapshot.phase = "connected";
-      await vi.waitFor(
-        () =>
-          expect(
-            client.request.mock.calls.filter(([method]) => method === "agent.wait"),
-          ).toHaveLength(4),
-        { timeout: 4_000 },
-      );
+      await vi.advanceTimersByTimeAsync(3_000);
     }
 
     expect(start).toHaveBeenCalledOnce();
@@ -922,6 +942,11 @@ describe("DraftSubmissionFlow", () => {
       phase: "dispatching",
     });
     expect(flow.pendingPlacement.capture()).toBeNull();
+    expect(flow.completedSubmission?.key).toBe(start.mock.calls[0]?.[0].recovery.sessionKey);
+    expect(flow.pendingMessage?.content).toContainEqual({
+      type: "text",
+      text: "@Alex keep this cloud task",
+    });
     expect(flow.message).toBe("");
     expect(flow.mentions).toEqual([]);
     expect(flow.attachmentDraft.attachments).toHaveLength(0);

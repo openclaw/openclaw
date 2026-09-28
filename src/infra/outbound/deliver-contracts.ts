@@ -7,6 +7,7 @@ import type {
   ChannelOutboundAdapter,
   ChannelOutboundTargetRef,
 } from "../../channels/plugins/types.adapters.js";
+import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MessagePresentation, ReplyPayloadDeliveryPin } from "../../interactive/payload.js";
@@ -81,6 +82,7 @@ export type ChannelHandler = {
   chunkerMode?: "text" | "markdown";
   chunkedTextFormatting?: OutboundDeliveryFormattingOptions;
   textChunkLimit?: number;
+  extractMarkdownImages?: boolean;
   preserveMarkdownDetails?: boolean;
   supportsMedia: boolean;
   supportsMediaPayload?: boolean;
@@ -275,6 +277,8 @@ export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & 
 
 /** Private owner facts excluded from SDK delivery parameters and stored payloads. */
 export type InternalDeliverOutboundPayloadsParams = DeliverOutboundPayloadsParams & {
+  /** Host-captured session generation retained independently by this delivery intent. */
+  sessionGeneration?: SessionDeliveryGeneration;
   conversationDeliveryTarget?: ConversationDeliveryTarget;
   deliveryQueueStateContext?: DeliveryQueueStateContext;
 };

@@ -26,6 +26,9 @@ data class WearRealtimeTalkEntry(
   val role: WearRealtimeTalkRole,
   val text: String,
   val streaming: Boolean = false,
+  val textTruncated: Boolean = false,
+  val fullTextAvailable: Boolean = false,
+  val textRevision: Long = 0,
 )
 
 @Serializable

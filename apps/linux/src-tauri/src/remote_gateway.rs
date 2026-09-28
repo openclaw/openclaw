@@ -266,6 +266,31 @@ pub(crate) fn normalize_gateway_url(raw: &str) -> Result<Url, String> {
     Ok(url)
 }
 
+/// Node pairing follows the logical SSH endpoint, not a replacement tunnel's local port.
+pub(crate) fn desktop_node_identity_scope(
+    request: &RemoteGatewayRequest,
+    gateway_url: &Url,
+) -> Result<String, String> {
+    let context = gateway_url.path().trim_end_matches('/');
+    if request.transport == "ssh" {
+        let (target, ssh_port) = validate_ssh_target(
+            request
+                .ssh_target
+                .as_deref()
+                .ok_or("The SSH Gateway target is missing.")?,
+        )?;
+        return Ok(format!(
+            "ssh://{target}:{}/{remote_port}{context}",
+            ssh_port.unwrap_or(22),
+            remote_port = request.remote_port.unwrap_or(DEFAULT_GATEWAY_PORT)
+        ));
+    }
+    Ok(format!(
+        "{}{context}",
+        gateway_url.origin().ascii_serialization()
+    ))
+}
+
 fn is_private_host(host: &str) -> bool {
     let host = host.trim_matches(['[', ']']).to_ascii_lowercase();
     if host == "localhost" || host.ends_with(".local") || host.ends_with(".ts.net") {

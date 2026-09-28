@@ -179,7 +179,7 @@ describe("AcpSessionManager runtime handles", () => {
     expect(manager.getObservabilitySnapshot().runtimeCache.activeSessions).toBe(0);
   });
 
-  it("re-ensures cached runtime handles when the runtime config changes", async () => {
+  it("keeps handles across policy edits and replaces them when their backend owner changes", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
       id: "acpx",
@@ -227,8 +227,25 @@ describe("AcpSessionManager runtime handles", () => {
       requestId: "r2",
     });
 
-    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+    expect(runtimeState.ensureSession).toHaveBeenCalledOnce();
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
+    expect(runtimeState.close).not.toHaveBeenCalled();
+
+    const successor = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: successor.runtime,
+    });
+    await manager.runTurn({
+      provenance: "system",
+      cfg: denyCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "third",
+      mode: "prompt",
+      requestId: "r3",
+    });
+    expect(successor.ensureSession).toHaveBeenCalledOnce();
+    expect(successor.runTurn).toHaveBeenCalledOnce();
     expectRecordFields(mockCallArg(runtimeState.close), {
       reason: "runtime-handle-replaced",
     });

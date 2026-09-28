@@ -1,4 +1,3 @@
-// Googlechat plugin module implements monitor webhook behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -91,13 +90,6 @@ function logGoogleChatWebhookAuthRejections(rejections: GoogleChatWebhookAuthRej
       `[${rejection.target.account.accountId}] Google Chat webhook auth rejected: ${rejection.reason}`,
     );
   }
-}
-
-function logGoogleChatWebhookAuthRejectedForTargets(
-  targets: readonly WebhookTarget[],
-  reason: string,
-): void {
-  logGoogleChatWebhookAuthRejections(targets.map((target) => ({ target, reason })));
 }
 
 async function resolveGoogleChatWebhookTargetWithAuthOrReject(params: {
@@ -223,7 +215,9 @@ export function createGoogleChatWebhookRequestHandler(params: {
           parsedInbound = parsed;
 
           if (!parsed.addOnBearerToken) {
-            logGoogleChatWebhookAuthRejectedForTargets(targets, "missing token");
+            logGoogleChatWebhookAuthRejections(
+              targets.map((target) => ({ target, reason: "missing token" })),
+            );
             res.statusCode = 401;
             res.end("unauthorized");
             return true;
@@ -239,12 +233,6 @@ export function createGoogleChatWebhookRequestHandler(params: {
           }
         }
 
-        if (!selectedTarget || !parsedInbound) {
-          res.statusCode = 401;
-          res.end("unauthorized");
-          return true;
-        }
-
         const dispatchTarget = selectedTarget;
         dispatchTarget.statusSink?.({ lastInboundAt: Date.now() });
         try {
@@ -258,7 +246,7 @@ export function createGoogleChatWebhookRequestHandler(params: {
             // Non-turn actions preserve their existing detached webhook path.
             let event: GoogleChatEvent;
             try {
-              event = normalizeGoogleChatInboundPayload(parsedInbound.raw).event;
+              event = normalizeGoogleChatInboundPayload(parsedInbound.raw);
             } catch {
               res.statusCode = 400;
               res.end("invalid payload");

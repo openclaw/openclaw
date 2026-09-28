@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayProtocolRequestTimeoutError } from "../../packages/gateway-client/src/protocol-request.js";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import { registerSkillsCli } from "./skills-cli.js";
 
@@ -108,7 +109,10 @@ describe("skills curator cli", () => {
     delete mocks.config.gateway;
     mocks.getSkillCuratorStatus.mockReset().mockReturnValue(status);
     mocks.releaseGatewayLock.mockReset();
-    mocks.acquireGatewayLock.mockReset().mockResolvedValue({ release: mocks.releaseGatewayLock });
+    mocks.acquireGatewayLock.mockReset().mockResolvedValue({
+      run: <T>(action: () => T) => action(),
+      release: mocks.releaseGatewayLock,
+    });
     mocks.callGateway.mockReset().mockImplementation(async (request: { method: string }) => {
       if (request.method === "skills.curator.status") {
         return status;
@@ -174,10 +178,41 @@ describe("skills curator cli", () => {
       expect.stringContaining("Legacy inventory:"),
     );
     mocks.callGateway.mockRejectedValue(createGatewayTransportError("closed"));
-    mocks.getSkillCuratorStatus.mockReturnValue(liveStatus);
-    await createProgram().parseAsync(["skills", "curator", "status", "--json"], { from: "user" });
+    const requested = createDeferred();
+    const pendingStatus = createDeferred<typeof liveStatus>();
+    mocks.getSkillCuratorStatus.mockImplementationOnce(() => {
+      requested.resolve();
+      return pendingStatus.promise;
+    });
+    mocks.defaultRuntime.writeJson.mockClear();
+    mocks.defaultRuntime.writeStdout.mockClear();
+    const command = createProgram().parseAsync(["skills", "curator", "status", "--json"], {
+      from: "user",
+    });
+    try {
+      await requested.promise;
+      expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
+      expect(mocks.defaultRuntime.writeStdout).not.toHaveBeenCalled();
+    } finally {
+      pendingStatus.resolve(liveStatus);
+      await command;
+    }
     expect(mocks.getSkillCuratorStatus).toHaveBeenCalledWith({ config: mocks.config });
-    expect(mocks.defaultRuntime.writeJson).toHaveBeenLastCalledWith(liveStatus);
+    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(liveStatus);
+  });
+
+  it("reports an asynchronous local status failure without printing a result", async () => {
+    mocks.callGateway.mockRejectedValue(createGatewayTransportError("closed"));
+    mocks.getSkillCuratorStatus.mockRejectedValueOnce(new Error("curator state unavailable"));
+
+    await expect(
+      createProgram().parseAsync(["skills", "curator", "status", "--json"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(mocks.defaultRuntime.error).toHaveBeenCalledExactlyOnceWith("curator state unavailable");
+    expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(mocks.defaultRuntime.writeStdout).not.toHaveBeenCalled();
+    expect(mocks.acquireGatewayLock).not.toHaveBeenCalled();
   });
 
   it("keeps retired curator actions registered and reports why they no longer exist", async () => {
@@ -201,17 +236,6 @@ describe("skills curator cli", () => {
       expect.stringContaining("Skill lifecycle curation is retired"),
     );
     expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
-  });
-
-  it("reports curator retirement locally when the gateway cannot be reached", async () => {
-    mocks.callGateway.mockRejectedValue(createGatewayTransportError("closed"));
-
-    await expect(
-      createProgram().parseAsync(["skills", "curator", "pin", "daily-brief"], { from: "user" }),
-    ).rejects.toThrow("__exit__:1");
-    expect(mocks.defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Skill lifecycle curation is retired"),
-    );
   });
 
   const curatorActions = [
@@ -285,7 +309,7 @@ describe("skills curator cli", () => {
       expect(mocks.acquireGatewayLock).toHaveBeenCalledWith({
         allowInTests: true,
         port: 18789,
-        role: "skill-workshop-apply",
+        role: "sqlite-maintenance",
         timeoutMs: 250,
       });
       expect(mocks.releaseGatewayLock).toHaveBeenCalledTimes(3);
@@ -338,23 +362,6 @@ describe("skills curator cli", () => {
     expect(mocks.releaseGatewayLock).not.toHaveBeenCalled();
     expect(mocks.defaultRuntime.error).toHaveBeenCalledTimes(3);
     expect(mocks.defaultRuntime.error).toHaveBeenCalledWith(gatewayError.message);
-  });
-
-  it("releases offline Gateway ownership when the local curator action throws", async () => {
-    mocks.callGateway.mockRejectedValue(createGatewayTransportError("closed"));
-
-    await expect(
-      createProgram().parseAsync(["skills", "curator", "pin", "daily-brief", "--json"], {
-        from: "user",
-      }),
-    ).rejects.toThrow("__exit__:1");
-
-    // The retired local action always throws, so the lock must still be handed back.
-    expect(mocks.acquireGatewayLock).toHaveBeenCalledOnce();
-    expect(mocks.releaseGatewayLock).toHaveBeenCalledOnce();
-    expect(mocks.defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Skill lifecycle curation is retired"),
-    );
   });
 
   it.each([

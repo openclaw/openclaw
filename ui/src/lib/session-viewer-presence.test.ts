@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { GatewayPendingRequests } from "../../../packages/gateway-client/src/pending-request.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { sessionViewerPresenceForGateway } from "./session-viewer-presence.ts";
@@ -67,6 +68,35 @@ function createGatewayHarness() {
   };
 }
 
+function createPendingGatewayHarness() {
+  const harness = createGatewayHarness();
+  const ids: string[] = [];
+  const retired: string[] = [];
+  const pending = new GatewayPendingRequests({
+    createRequestId: () => "viewer",
+    nowMs: () => Date.now(),
+    onTiming: ({ errorCode }) => {
+      if (errorCode) {
+        retired.push(errorCode);
+      }
+    },
+  });
+  harness.request.mockImplementation((method, params, options) =>
+    pending.request({ send: () => undefined }, method, params, {
+      ...options,
+      onSent: (id) => ids.push(id),
+    }),
+  );
+  return {
+    ...harness,
+    pending,
+    retired,
+    acknowledge(index: number) {
+      pending.handleResponse({ type: "res", id: ids[index]!, ok: true, payload: {} });
+    },
+  };
+}
+
 async function flushSync() {
   await Promise.resolve();
   await Promise.resolve();
@@ -79,6 +109,108 @@ afterEach(() => {
 });
 
 describe("session viewer presence store", () => {
+  it("retires lost acknowledgments and retries the final clear before detaching", async () => {
+    vi.useFakeTimers();
+    const harness = createPendingGatewayHarness();
+    const store = sessionViewerPresenceForGateway(harness.gateway);
+    const owner = {};
+    try {
+      store.watch(owner, ["agent:main:visible"]);
+      await flushSync();
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(harness.pending.hasPending).toBe(false);
+      expect(harness.retired).toEqual(["CLIENT_TIMEOUT"]);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(harness.request).toHaveBeenCalledTimes(2);
+      harness.acknowledge(1);
+      await flushSync();
+      expect(harness.pending.hasPending).toBe(false);
+
+      store.unwatch(owner);
+      await flushSync();
+      expect(harness.unsubscribe).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(harness.pending.hasPending).toBe(false);
+      harness.acknowledge(0);
+      harness.acknowledge(2);
+      await flushSync();
+      expect(harness.unsubscribe).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(harness.request).toHaveBeenCalledTimes(4);
+      expect(harness.request.mock.calls[3]?.[1]).toEqual({ sessionKeys: [] });
+      harness.acknowledge(3);
+      await flushSync();
+      expect(harness.unsubscribe).toHaveBeenCalledOnce();
+      expect(harness.pending.hasPending).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      harness.setSnapshot({ ...harness.gateway.snapshot, phase: "stopped", hello: null });
+      store.unwatch(owner);
+      harness.pending.flush(new Error("test complete"));
+      await flushSync();
+    }
+  });
+
+  it.each(["membership", "hello", "client", "unavailable"] as const)(
+    "retires a pending declaration on %s without reviving stale retries",
+    async (change) => {
+      vi.useFakeTimers();
+      const harness = createPendingGatewayHarness();
+      const store = sessionViewerPresenceForGateway(harness.gateway);
+      const owner = {};
+      try {
+        store.watch(owner, ["agent:main:visible"]);
+        await flushSync();
+        const firstSignal = harness.request.mock.calls[0]?.[2]?.signal;
+
+        // Same-signature snapshots and visibility events must keep this attempt.
+        harness.setSnapshot({ ...harness.gateway.snapshot });
+        document.dispatchEvent(new Event("visibilitychange"));
+        await flushSync();
+        expect(harness.request).toHaveBeenCalledOnce();
+        expect(firstSignal?.aborted).toBe(false);
+
+        if (change === "membership") {
+          store.watch(owner, ["agent:main:replacement"]);
+        } else {
+          harness.setSnapshot({
+            ...harness.gateway.snapshot,
+            ...(change === "hello" ? { hello: createHello() } : {}),
+            ...(change === "client"
+              ? { client: { request: harness.request } as unknown as GatewayBrowserClient }
+              : {}),
+            ...(change === "unavailable" ? { phase: "reconnecting", hello: null } : {}),
+          });
+        }
+        await flushSync();
+        expect(firstSignal?.aborted).toBe(true);
+        expect(harness.retired).toEqual(["CLIENT_ABORTED"]);
+        if (change !== "unavailable") {
+          expect(harness.request).toHaveBeenCalledTimes(2);
+          harness.acknowledge(1);
+        }
+        harness.acknowledge(0);
+        await flushSync();
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(harness.request).toHaveBeenCalledTimes(change === "unavailable" ? 1 : 2);
+        expect(harness.pending.hasPending).toBe(false);
+        store.unwatch(owner);
+        if (change !== "unavailable") {
+          harness.acknowledge(2);
+        }
+        await flushSync();
+        expect(harness.unsubscribe).toHaveBeenCalledOnce();
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        harness.setSnapshot({ ...harness.gateway.snapshot, phase: "stopped", hello: null });
+        store.unwatch(owner);
+        harness.pending.flush(new Error("test complete"));
+        await flushSync();
+      }
+    },
+  );
+
   it("declares the bounded union and replaces it as panes switch or close", async () => {
     const harness = createGatewayHarness();
     const store = sessionViewerPresenceForGateway(harness.gateway);
@@ -88,27 +220,43 @@ describe("session viewer presence store", () => {
     store.watch(firstPane, ["main"]);
     store.watch(secondPane, ["agent:main:other"]);
     await flushSync();
-    expect(harness.request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, {
-      sessionKeys: ["agent:main:main", "agent:main:other"],
-    });
+    expect(harness.request).toHaveBeenLastCalledWith(
+      SESSION_VIEWERS_SET_METHOD,
+      {
+        sessionKeys: ["agent:main:main", "agent:main:other"],
+      },
+      expect.anything(),
+    );
 
     store.watch(firstPane, ["agent:main:replacement"]);
     await flushSync();
-    expect(harness.request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, {
-      sessionKeys: ["agent:main:other", "agent:main:replacement"],
-    });
+    expect(harness.request).toHaveBeenLastCalledWith(
+      SESSION_VIEWERS_SET_METHOD,
+      {
+        sessionKeys: ["agent:main:other", "agent:main:replacement"],
+      },
+      expect.anything(),
+    );
 
     store.unwatch(secondPane);
     await flushSync();
-    expect(harness.request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, {
-      sessionKeys: ["agent:main:replacement"],
-    });
+    expect(harness.request).toHaveBeenLastCalledWith(
+      SESSION_VIEWERS_SET_METHOD,
+      {
+        sessionKeys: ["agent:main:replacement"],
+      },
+      expect.anything(),
+    );
 
     store.unwatch(firstPane);
     await flushSync();
-    expect(harness.request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, {
-      sessionKeys: [],
-    });
+    expect(harness.request).toHaveBeenLastCalledWith(
+      SESSION_VIEWERS_SET_METHOD,
+      {
+        sessionKeys: [],
+      },
+      expect.anything(),
+    );
     expect(harness.unsubscribe).toHaveBeenCalledOnce();
   });
 
@@ -124,10 +272,14 @@ describe("session viewer presence store", () => {
     store.watch(owner, ["global"]);
     await flushSync();
 
-    expect(harness.request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, {
-      agentId: "work",
-      sessionKeys: ["global"],
-    });
+    expect(harness.request).toHaveBeenLastCalledWith(
+      SESSION_VIEWERS_SET_METHOD,
+      {
+        agentId: "work",
+        sessionKeys: ["global"],
+      },
+      expect.anything(),
+    );
     store.unwatch(owner);
     await flushSync();
   });
@@ -142,16 +294,24 @@ describe("session viewer presence store", () => {
     Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
     document.dispatchEvent(new Event("visibilitychange"));
     await flushSync();
-    expect(harness.request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, {
-      sessionKeys: [],
-    });
+    expect(harness.request).toHaveBeenLastCalledWith(
+      SESSION_VIEWERS_SET_METHOD,
+      {
+        sessionKeys: [],
+      },
+      expect.anything(),
+    );
 
     Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
     document.dispatchEvent(new Event("visibilitychange"));
     await flushSync();
-    expect(harness.request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, {
-      sessionKeys: ["agent:main:visible"],
-    });
+    expect(harness.request).toHaveBeenLastCalledWith(
+      SESSION_VIEWERS_SET_METHOD,
+      {
+        sessionKeys: ["agent:main:visible"],
+      },
+      expect.anything(),
+    );
     store.unwatch(owner);
     await flushSync();
   });
@@ -163,9 +323,13 @@ describe("session viewer presence store", () => {
     store.watch(owner, ["main"]);
     await flushSync();
     expect(harness.request).toHaveBeenCalledTimes(1);
-    expect(harness.request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, {
-      sessionKeys: ["agent:main:main"],
-    });
+    expect(harness.request).toHaveBeenLastCalledWith(
+      SESSION_VIEWERS_SET_METHOD,
+      {
+        sessionKeys: ["agent:main:main"],
+      },
+      expect.anything(),
+    );
 
     harness.setSnapshot({ ...harness.gateway.snapshot, phase: "reconnecting", hello: null });
     const nextRequest = vi
@@ -180,9 +344,13 @@ describe("session viewer presence store", () => {
     });
     await flushSync();
 
-    expect(nextRequest).toHaveBeenCalledWith(SESSION_VIEWERS_SET_METHOD, {
-      sessionKeys: ["agent:work:home"],
-    });
+    expect(nextRequest).toHaveBeenCalledWith(
+      SESSION_VIEWERS_SET_METHOD,
+      {
+        sessionKeys: ["agent:work:home"],
+      },
+      expect.anything(),
+    );
     store.unwatch(owner);
     await flushSync();
   });
@@ -237,9 +405,13 @@ describe("session viewer presence store", () => {
     await vi.advanceTimersByTimeAsync(30_000);
     await flushSync();
     expect(harness.request).toHaveBeenCalledTimes(3);
-    expect(harness.request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, {
-      sessionKeys: [],
-    });
+    expect(harness.request).toHaveBeenLastCalledWith(
+      SESSION_VIEWERS_SET_METHOD,
+      {
+        sessionKeys: [],
+      },
+      expect.anything(),
+    );
     expect(harness.unsubscribe).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -287,9 +459,13 @@ describe("session viewer presence store", () => {
     await flushSync();
 
     expect(harness.request).toHaveBeenCalledTimes(5);
-    expect(harness.request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, {
-      sessionKeys: [],
-    });
+    expect(harness.request).toHaveBeenLastCalledWith(
+      SESSION_VIEWERS_SET_METHOD,
+      {
+        sessionKeys: [],
+      },
+      expect.anything(),
+    );
     expect(harness.unsubscribe).toHaveBeenCalledOnce();
   });
 });

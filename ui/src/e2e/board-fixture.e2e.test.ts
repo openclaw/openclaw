@@ -230,14 +230,19 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     }
   });
 
-  it.each([{ task: 1, user: "Map the run-status", assistant: "Tracing task events" }])(
-    "serves background task $task through both chat entry points",
-    async ({ task, user, assistant }) => {
+  it.each([
+    {
+      sessionKey: "agent:main:tax-research",
+      user: "Inspect this session.",
+      assistant: "The current state is available in the session controls.",
+    },
+  ])(
+    "serves preview session $sessionKey through both chat entry points",
+    async ({ sessionKey, user, assistant }) => {
       const page = await browser.newPage();
       try {
         await page.goto(new URL("/chat", fixtureServer.url).toString());
         await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
-        const sessionKey = `agent:openclaw-mock:subagent:mock-task-${task}`;
         const [description] = (await requestPreviewGateway(page, [
           { method: "sessions.describe", params: { key: sessionKey } },
         ])) as Array<{ session: { sessionId: string } }>;
@@ -356,7 +361,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           avatarRequests.push(request.url());
         }
       });
-      await page.goto(`${previewOrigin}/chat/main?skillLibrary=collaborator&nav=collapsed`);
+      await page.goto(`${previewOrigin}/chat/main?skillLibrary=collaborator`);
       for (const reload of [false, true]) {
         if (reload) {
           avatarRequests.length = 0;

@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements send result behavior.
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { WAMessage, WAMessageKey } from "baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";

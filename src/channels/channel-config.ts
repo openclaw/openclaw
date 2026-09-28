@@ -93,61 +93,33 @@ export function resolveChannelEntryMatchWithFallback<T>(params: {
     wildcardKey: params.wildcardKey,
   });
 
-  if (direct.entry && direct.key) {
-    return { ...direct, matchKey: direct.key, matchSource: "direct" };
-  }
-
-  const normalizeKey = params.normalizeKey;
-  if (normalizeKey) {
-    const normalizedKeys = params.keys.map((key) => normalizeKey(key)).filter(Boolean);
-    if (normalizedKeys.length > 0) {
-      for (const [entryKey, entry] of Object.entries(params.entries ?? {})) {
-        const normalizedEntry = normalizeKey(entryKey);
-        if (normalizedEntry && normalizedKeys.includes(normalizedEntry)) {
-          return {
-            ...direct,
-            entry,
-            key: entryKey,
-            matchKey: entryKey,
-            matchSource: "direct",
-          };
-        }
-      }
-    }
-  }
-
-  const parentKeys = params.parentKeys ?? [];
-  if (parentKeys.length > 0) {
-    const parent = resolveChannelEntryMatch({ entries: params.entries, keys: parentKeys });
-    if (parent.entry && parent.key) {
-      return {
-        ...direct,
-        entry: parent.entry,
-        key: parent.key,
-        parentEntry: parent.entry,
-        parentKey: parent.key,
-        matchKey: parent.key,
-        matchSource: "parent",
-      };
-    }
-    if (normalizeKey) {
-      const normalizedParentKeys = parentKeys.map((key) => normalizeKey(key)).filter(Boolean);
-      if (normalizedParentKeys.length > 0) {
+  for (const source of ["direct", "parent"] as const) {
+    const keys = source === "direct" ? params.keys : (params.parentKeys ?? []);
+    const candidate =
+      source === "direct" ? direct : resolveChannelEntryMatch({ entries: params.entries, keys });
+    let found = candidate.entry && candidate.key ? candidate : undefined;
+    const normalizeKey = params.normalizeKey;
+    if (!found && normalizeKey) {
+      const normalizedKeys = keys.map((key) => normalizeKey(key)).filter(Boolean);
+      if (normalizedKeys.length > 0) {
         for (const [entryKey, entry] of Object.entries(params.entries ?? {})) {
           const normalizedEntry = normalizeKey(entryKey);
-          if (normalizedEntry && normalizedParentKeys.includes(normalizedEntry)) {
-            return {
-              ...direct,
-              entry,
-              key: entryKey,
-              parentEntry: entry,
-              parentKey: entryKey,
-              matchKey: entryKey,
-              matchSource: "parent",
-            };
+          if (normalizedEntry && normalizedKeys.includes(normalizedEntry)) {
+            found = { entry, key: entryKey };
+            break;
           }
         }
       }
+    }
+    if (found) {
+      return {
+        ...direct,
+        entry: found.entry,
+        key: found.key,
+        ...(source === "parent" ? { parentEntry: found.entry, parentKey: found.key } : {}),
+        matchKey: found.key,
+        matchSource: source,
+      };
     }
   }
 

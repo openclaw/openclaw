@@ -17,8 +17,11 @@ import { isRecord } from "../utils.js";
 import { configIncludeOwnsAgentRosterValues } from "./agent-roster-provenance.js";
 import { containsEnvVarReference } from "./env-substitution.js";
 import { coerceConfig } from "./io.read-helpers.js";
-import type { ConfigWriteInputBasis } from "./io.types.js";
 import { createConfigIncludeOwnershipError } from "./io.write-errors.js";
+import {
+  prepareProjectedConfigWriteValues,
+  type ConfigWriteSourceProjectionParams,
+} from "./io.write-values.js";
 import { parseLegacyAgentRoster, projectLegacyAgentRosterEntries } from "./legacy.roster.js";
 import { createMergePatch } from "./merge-patch.js";
 import { normalizeAgentModelMapForConfig, normalizeAgentModelRefForConfig } from "./model-input.js";
@@ -30,6 +33,12 @@ import {
 } from "./resolution-facts.js";
 import { projectRuntimeChangesOntoSource } from "./source-value-projection.js";
 import type { OpenClawConfig } from "./types.js";
+
+export function prepareConfigWriteValues(
+  params: Parameters<typeof prepareProjectedConfigWriteValues>[0],
+) {
+  return prepareProjectedConfigWriteValues(params, projectAuthoredAgentRosterForWrite);
+}
 
 const AGENT_ROSTER_PATHS = [
   ["agents", "entries"],
@@ -247,7 +256,7 @@ function setPathValueCreatingParents(value: unknown, path: string[], nextValue: 
   const head = expectDefined(path[0], "config path head");
   const tail = path.slice(1);
   const index = parseConfigPathArrayIndex(head);
-  if (Array.isArray(value) || index !== undefined) {
+  if (Array.isArray(value) || (!isRecord(value) && index !== undefined)) {
     if (index === undefined) {
       return value;
     }
@@ -967,8 +976,6 @@ function assertCanonicalAgentRosterRetainsEntries(params: {
   );
 }
 
-type ProjectedRosterValue = { present: false } | { present: true; value: unknown };
-
 function containsAuthoredRosterReference(value: unknown, includeEnvStrings: boolean): boolean {
   if (typeof value === "string") {
     return includeEnvStrings && containsEnvVarReference(value);
@@ -1018,11 +1025,7 @@ function projectAuthoredRosterValue(params: {
   source: unknown;
   sourcePresent: boolean;
   next: unknown;
-  nextPresent: boolean;
-}): ProjectedRosterValue {
-  if (!params.nextPresent) {
-    return { present: false };
-  }
+}): unknown {
   const explicitlySet = params.explicitPaths.some((path) => pathStartsWith(params.path, path));
   if (isRecord(params.next)) {
     const authored = isRecord(params.authored) ? params.authored : {};
@@ -1034,7 +1037,7 @@ function projectAuthoredRosterValue(params: {
       if (isBlockedObjectKey(key)) {
         continue;
       }
-      const projected = projectAuthoredRosterValue({
+      value[key] = projectAuthoredRosterValue({
         authored: authored[key],
         authoredPresent: Object.hasOwn(authored, key),
         explicit: explicit[key],
@@ -1046,17 +1049,13 @@ function projectAuthoredRosterValue(params: {
         source: source[key],
         sourcePresent: Object.hasOwn(source, key),
         next: nextValue,
-        nextPresent: true,
       });
-      if (projected.present) {
-        value[key] = projected.value;
-      }
     }
-    return { present: true, value };
+    return value;
   }
   if (Array.isArray(params.next)) {
     if (explicitlySet && params.explicitPresent && Array.isArray(params.explicit)) {
-      return { present: true, value: structuredClone(params.explicit) };
+      return structuredClone(params.explicit);
     }
     const authored = Array.isArray(params.authored) ? params.authored : [];
     const explicit = Array.isArray(params.explicit) ? params.explicit : [];
@@ -1082,64 +1081,57 @@ function projectAuthoredRosterValue(params: {
       );
       return index >= 0 ? index : undefined;
     };
-    return {
-      present: true,
-      value: params.next.map((nextValue, index) => {
-        const runtimeIndex = findMatchingIndex(runtime, usedRuntimeIndexes, nextValue, index);
-        if (runtimeIndex !== undefined) {
-          usedRuntimeIndexes.add(runtimeIndex);
-        }
-        const sourceIndex = findMatchingIndex(source, usedSourceIndexes, nextValue, index);
-        if (sourceIndex !== undefined) {
-          usedSourceIndexes.add(sourceIndex);
-        }
-        const fallbackIndexAvailable =
-          !usedRuntimeIndexes.has(index) && !usedSourceIndexes.has(index);
-        const authoredIndex =
-          runtimeIndex ?? sourceIndex ?? (fallbackIndexAvailable ? index : undefined);
-        const projected = projectAuthoredRosterValue({
-          authored: authoredIndex === undefined ? undefined : authored[authoredIndex],
-          authoredPresent: authoredIndex !== undefined && authoredIndex < authored.length,
-          explicit: explicit[index],
-          explicitPresent: index < explicit.length,
-          explicitPaths: params.explicitPaths,
-          path: [...params.path, String(index)],
-          runtime:
-            runtimeIndex === undefined
-              ? fallbackIndexAvailable
-                ? runtime[index]
-                : undefined
-              : runtime[runtimeIndex],
-          runtimePresent:
-            runtimeIndex !== undefined || (fallbackIndexAvailable && index < runtime.length),
-          source:
-            sourceIndex === undefined
-              ? fallbackIndexAvailable
-                ? source[index]
-                : undefined
-              : source[sourceIndex],
-          sourcePresent:
-            sourceIndex !== undefined || (fallbackIndexAvailable && index < source.length),
-          next: nextValue,
-          nextPresent: true,
-        });
-        return projected.present ? projected.value : nextValue;
-      }),
-    };
+    return params.next.map((nextValue, index) => {
+      const runtimeIndex = findMatchingIndex(runtime, usedRuntimeIndexes, nextValue, index);
+      if (runtimeIndex !== undefined) {
+        usedRuntimeIndexes.add(runtimeIndex);
+      }
+      const sourceIndex = findMatchingIndex(source, usedSourceIndexes, nextValue, index);
+      if (sourceIndex !== undefined) {
+        usedSourceIndexes.add(sourceIndex);
+      }
+      const fallbackIndexAvailable =
+        !usedRuntimeIndexes.has(index) && !usedSourceIndexes.has(index);
+      const authoredIndex =
+        runtimeIndex ?? sourceIndex ?? (fallbackIndexAvailable ? index : undefined);
+      return projectAuthoredRosterValue({
+        authored: authoredIndex === undefined ? undefined : authored[authoredIndex],
+        authoredPresent: authoredIndex !== undefined && authoredIndex < authored.length,
+        explicit: explicit[index],
+        explicitPresent: index < explicit.length,
+        explicitPaths: params.explicitPaths,
+        path: [...params.path, String(index)],
+        runtime:
+          runtimeIndex === undefined
+            ? fallbackIndexAvailable
+              ? runtime[index]
+              : undefined
+            : runtime[runtimeIndex],
+        runtimePresent:
+          runtimeIndex !== undefined || (fallbackIndexAvailable && index < runtime.length),
+        source:
+          sourceIndex === undefined
+            ? fallbackIndexAvailable
+              ? source[index]
+              : undefined
+            : source[sourceIndex],
+        sourcePresent:
+          sourceIndex !== undefined || (fallbackIndexAvailable && index < source.length),
+        next: nextValue,
+      });
+    });
   }
   if (explicitlySet && params.explicitPresent) {
-    return { present: true, value: structuredClone(params.explicit) };
+    return structuredClone(params.explicit);
   }
   const unchangedFromRuntime =
     params.runtimePresent && isDeepStrictEqual(params.runtime, params.next);
   const unchangedFromSource = params.sourcePresent && isDeepStrictEqual(params.source, params.next);
-  return {
-    present: true,
-    value:
-      params.authoredPresent && (unchangedFromRuntime || unchangedFromSource)
-        ? structuredClone(params.authored)
-        : structuredClone(params.next),
-  };
+  return structuredClone(
+    params.authoredPresent && (unchangedFromRuntime || unchangedFromSource)
+      ? params.authored
+      : params.next,
+  );
 }
 
 function indexAgentRosterForWrite(config: unknown, legacyIdsByIndex: ReadonlyMap<number, string>) {
@@ -1407,7 +1399,7 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
   let entries: unknown = Object.fromEntries(
     Object.entries(nextEntries).map(([id, nextEntry]) => {
       const priorId = entryIdentityByNextId.get(id) ?? id;
-      const projected = projectAuthoredRosterValue({
+      const value = projectAuthoredRosterValue({
         authored: authoredEntries[priorId],
         authoredPresent: Object.hasOwn(authoredEntries, priorId),
         explicit: explicitEntries[id],
@@ -1419,9 +1411,7 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
         source: sourceEntries[priorId],
         sourcePresent: Object.hasOwn(sourceEntries, priorId),
         next: nextEntry,
-        nextPresent: true,
       });
-      const value = projected.present ? projected.value : nextEntry;
       if (isRecord(value) && isRecord(nextEntry)) {
         if (Object.hasOwn(nextEntry, "default")) {
           const sourcePath = sourcePathsByAgentId.get(normalizeAgentId(priorId));
@@ -1573,16 +1563,6 @@ export function projectAuthoredAgentRosterForWrite(params: {
   );
   return setPathValueCreatingParents(withoutLegacyRoster, ["agents", "entries"], entries);
 }
-
-type ConfigWriteSourceProjectionParams = {
-  inputBasis?: ConfigWriteInputBasis;
-  runtimeConfig: unknown;
-  sourceConfig: unknown;
-  nextConfig: unknown;
-  unsetPaths?: readonly string[][];
-  explicitSetPaths?: readonly (readonly string[])[];
-  explicitSetValueSource?: unknown;
-};
 
 export function projectConfigWriteSource(params: ConfigWriteSourceProjectionParams): unknown {
   const inputBasis = params.inputBasis ?? { kind: "runtime", config: params.runtimeConfig };
