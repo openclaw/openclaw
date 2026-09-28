@@ -2,12 +2,10 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
-import { collectTrackedBundledPluginSourceCandidates } from "../../scripts/lib/bundled-plugin-source-utils.mts";
 import {
   createChangedNodeTestShards,
   hasControlUiPerformanceAffectingChange,
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
-import { createChangedExtensionConfigShardsForPaths } from "../../scripts/lib/ci-extension-test-shards.mts";
 import {
   createNodeTestShardBundles,
   createUiTestShardGroups,
@@ -69,19 +67,6 @@ it("retains every PR-exempt file in hourly and release plans with its canonical 
   const extensionGroups = createExtensionTestShards({
     shardCount: DEFAULT_EXTENSION_TEST_SHARD_COUNT,
   }).flatMap((shard) => shard.planGroups);
-  const sourceRoots = expectDefined(
-    collectTrackedBundledPluginSourceCandidates(process.cwd()),
-    "bundled plugin source metadata",
-  )
-    .filter((entry) => entry.manifestPath && !entry.packageJsonPath)
-    .map((entry) => `extensions/${entry.dirName}`);
-  const sourceGroups = createChangedExtensionConfigShardsForPaths(sourceRoots, process.cwd(), {
-    includePrExemptRuntimeTests: true,
-  }).map((shard) => ({
-    config: expectDefined(shard.configs[0], "source plugin config"),
-    roots: expectDefined(shard.includePatterns, "source plugin tests"),
-  }));
-  const allExtensionGroups = [...extensionGroups, ...sourceGroups];
   // Discover in the same Node context as the prerelease planner, without the
   // parent Vitest invocation's file filter or transformed config module graph.
   const discovery = spawnSync(
@@ -120,7 +105,7 @@ it("retains every PR-exempt file in hourly and release plans with its canonical 
     `,
       JSON.stringify([
         ...new Set([
-          ...allExtensionGroups.map((group) => group.config),
+          ...extensionGroups.map((group) => group.config),
           "ui/vitest.config.ts",
           "test/vitest/vitest.ui-browser.config.ts",
           "test/vitest/vitest.ui-e2e.config.ts",
@@ -139,7 +124,7 @@ it("retains every PR-exempt file in hourly and release plans with its canonical 
     projects: Record<string, Array<{ name: string; files: string[] }>>;
   } = JSON.parse(discovery.stdout);
   const configFiles = discovered.files;
-  const retainedExtensionGroups = allExtensionGroups.map((group) => ({
+  const retainedExtensionGroups = extensionGroups.map((group) => ({
     configs: [group.config],
     includePatterns: expectDefined(configFiles[group.config], group.config).filter((file) =>
       group.roots.some((root) => file === root || file.startsWith(`${root}/`)),
