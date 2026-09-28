@@ -1510,11 +1510,16 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
       "published-upgrade-survivor-2026.9.4-legacy-operator-state",
       "published-upgrade-survivor-2026.9.6-legacy-operator-state",
     ]);
-    expect(plan.requiredPrepublishPluginPackages).toEqual([
-      "@openclaw/codex",
-      "@openclaw/discord",
-      "@openclaw/duckduckgo-plugin",
-    ]);
+    expect(plan.requiredPrepublishPluginPackages).toEqual(
+      expect.arrayContaining([
+        "@openclaw/codex",
+        "@openclaw/discord",
+        "@openclaw/duckduckgo-plugin",
+        "@openclaw/byteplus-provider",
+        "@openclaw/voyage-provider",
+      ]),
+    );
+    expect(plan.requiredPrepublishPluginPackages).not.toContain("@telnyx/openclaw-provider");
     expect(plan.lanes.every((lane) => lane.weight === 3)).toBe(true);
     for (const alias of ["reported-issues", "far-reaching"]) {
       expect(
@@ -1525,6 +1530,42 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
         }).lanes.map((lane) => lane.name),
       ).toContain("published-upgrade-survivor-2026.6.34-legacy-operator-state");
     }
+  });
+
+  it("stages legacy operator providers from the selected candidate catalog", () => {
+    const entry = (name: string, source = "official") => ({
+      name,
+      source,
+      openclaw: { install: { npmSpec: name } },
+    });
+    const plan = planFor({
+      selectedLaneNames: ["published-upgrade-survivor"],
+      upgradeSurvivorBaselines: "2026.7.35 2026.6.34",
+      upgradeSurvivorScenarios: "legacy-operator-state",
+      frozenTarget: {
+        mode: "inert",
+        source: {
+          readText: (relativePath) =>
+            relativePath === "scripts/lib/official-external-provider-catalog.json"
+              ? JSON.stringify({
+                  entries: [
+                    entry("@openclaw/candidate-provider"),
+                    entry("@vendor/provider", "external"),
+                  ],
+                })
+              : existsSync(relativePath)
+                ? readFileSync(relativePath, "utf8")
+                : null,
+        },
+      },
+    });
+
+    expect(plan.requiredPrepublishPluginPackages).toEqual([
+      "@openclaw/candidate-provider",
+      "@openclaw/codex",
+      "@openclaw/discord",
+      "@openclaw/duckduckgo-plugin",
+    ]);
   });
 
   it.each([

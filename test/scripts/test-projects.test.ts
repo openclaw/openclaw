@@ -2952,6 +2952,11 @@ describe("test selector native source facts", () => {
       "😀",
       "\ud83d",
       "\ude00",
+      // Failure links cross between dense ASCII rows and sparse non-ASCII edges.
+      "d😀foo",
+      "中 abc",
+      "😀xyz",
+      "é😀",
       "null\0",
       "aaa",
       "aaaa",
