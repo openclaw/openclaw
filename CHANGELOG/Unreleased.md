@@ -2,8 +2,6 @@
 
 ### Fixes
 
-- Kie: include package identity and video activity artwork in the bundled provider.
-
 - Developer tooling: split root test typechecks into four serial compiler graphs, preserving test coverage and shared Vitest context while reducing the size of each checker heap.
 
 - Codex: restore background memory narratives and isolated text completions on agent-scoped local runtimes with administrator-managed hooks, preserving managed hooks and existing native-account/proxy routing while keeping ordinary hooks and model tools isolated. (#151658)
