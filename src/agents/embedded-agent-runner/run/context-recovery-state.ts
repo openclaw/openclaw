@@ -16,6 +16,7 @@ export function createEmbeddedRunContextRecoveryState() {
     // SAFETY: The snapshot starts absent; typed accounting events supply its later values.
     currentContextSnapshot: undefined as { tokens: number | undefined } | undefined,
     lastContextBudgetStatus: undefined as EmbeddedAgentMeta["contextBudgetStatus"],
+    malformedToolCallContinuationAttempts: 0,
     overflowCompactionAttempts: 0,
     timeoutCompactionAttempts: 0,
     toolResultTruncationAttempted: false,
