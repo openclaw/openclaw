@@ -257,7 +257,7 @@
   flex: none;
 }
 
-.link-reader-hovercard__error-open {
+a.link-reader-hovercard__error-open {
   margin-inline-start: auto;
   color: var(--link);
   text-decoration: none;
