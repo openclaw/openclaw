@@ -1,13 +1,6 @@
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
-import {
-  Container,
-  Loader,
-  matchesKey,
-  ProcessTerminal,
-  Text,
-  TuiMainScreen,
-} from "@earendil-works/pi-tui";
+import { Container, Loader, matchesKey, Text, TuiMainScreen } from "@earendil-works/pi-tui";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { classifyGatewayConnectFailure } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js";
@@ -62,17 +55,17 @@ import {
   formatTuiFooter,
   sanitizeRenderableLine,
 } from "./tui-formatters.js";
+import { createTuiLastSessionRestore } from "./tui-last-session-restore.js";
 import {
   buildTuiLastSessionScopeKey,
   createRememberSessionKeyWriter,
-  readTuiLastSessionKey,
-  resolveRememberedTuiSessionKey,
   writeTuiLastSessionKey,
 } from "./tui-last-session.js";
 import { createTuiLocalCliRunner } from "./tui-local-cli.js";
 import { createLocalShellRunner } from "./tui-local-shell.js";
 import { createOverlayHandlers } from "./tui-overlays.js";
 import { createTuiPluginApprovalController } from "./tui-plugin-approvals.js";
+import { TuiProcessTerminal } from "./tui-process-terminal.js";
 import { createTuiQuestionController } from "./tui-questions.js";
 import { createSessionActions } from "./tui-session-actions.js";
 import { createTuiRunIdTracker } from "./tui-session-run-coordinator.js";
@@ -86,6 +79,7 @@ import {
 import { createTuiTaskSuggestionController } from "./tui-task-suggestions.js";
 import type {
   SessionScope,
+  TuiBoundGateway,
   TuiHistoryRunOutcome,
   TuiOptions,
   TuiResult,
@@ -108,12 +102,7 @@ type RunTuiOptions = TuiOptions & {
   ctrlCExitWindowMs?: number;
   onSubmitBurstCaptured?: (value: string) => void;
   /** Exact pre-probed remote target for an in-process setup handoff. */
-  boundGateway?: {
-    url: string;
-    token?: string;
-    password?: string;
-    tlsFingerprint?: string;
-  };
+  boundGateway?: TuiBoundGateway;
   config?: OpenClawConfig;
   title?: string;
 };
@@ -196,20 +185,14 @@ export function resolveTuiSessionKey(params: {
   sessionMainKey: string;
 }) {
   const trimmed = (params.raw ?? "").trim();
-  if (!trimmed) {
+  if (!trimmed || trimmed.toLowerCase() === "global") {
     return resolveCanonicalMainSessionKey({
       agentId: params.currentAgentId,
       mainKey: params.sessionMainKey,
       sessionScope: params.sessionScope,
     });
   }
-  const parsed = parseAgentSessionKey(trimmed);
-  if (parsed?.rest === "global") {
-    // Initial agent selection already consumed the explicit owner prefix. TUI operations
-    // need the literal sentinel so they carry that owner separately as agentId.
-    return "global";
-  }
-  if (trimmed === "global" || trimmed === "unknown") {
+  if (trimmed === "unknown") {
     return trimmed;
   }
   return toAgentStoreSessionKey({
@@ -246,7 +229,7 @@ export function resolveTuiSessionSelection(params: {
   const keepDurableBareKey =
     !parsed &&
     persistedOwner?.kind === "configured" &&
-    trimmed !== "global" &&
+    trimmed.toLowerCase() !== "global" &&
     trimmed !== "unknown" &&
     trimmed.toLowerCase() !== "main" &&
     trimmed.toLowerCase() !== mainKey;
@@ -332,30 +315,18 @@ export function resolveGatewayDisconnectState(
   const failure = classifyGatewayConnectFailure(input);
   const reasonLabel =
     failure.userMessage === "gateway unreachable" ? "closed" : failure.userMessage;
-  if (failure.kind === "pairing-required") {
-    return {
-      connectionStatus: `gateway disconnected: ${reasonLabel}`,
-      activityStatus: "device approval needed: preview latest request",
-      remediation: failure.remediation,
-    };
-  }
-  if (failure.kind === "rate-limited") {
-    return {
-      connectionStatus: `gateway disconnected: ${reasonLabel}`,
-      activityStatus: "gateway authentication temporarily rate-limited",
-      remediation: failure.remediation,
-    };
-  }
-  if (failure.kind === "identity-proxy") {
-    return {
-      connectionStatus: `gateway disconnected: ${reasonLabel}`,
-      activityStatus: "identity-aware proxy rejected connection",
-      remediation: failure.remediation,
-    };
-  }
   return {
     connectionStatus: `gateway disconnected: ${reasonLabel}`,
-    activityStatus: failure.remediation ? "gateway authentication needs attention" : "idle",
+    activityStatus:
+      failure.kind === "pairing-required"
+        ? "device approval needed: preview latest request"
+        : failure.kind === "rate-limited"
+          ? "gateway authentication temporarily rate-limited"
+          : failure.kind === "identity-proxy"
+            ? "identity-aware proxy rejected connection"
+            : failure.remediation
+              ? "gateway authentication needs attention"
+              : "idle",
     remediation: failure.remediation,
   };
 }
@@ -448,15 +419,14 @@ export function installTuiTerminalLossExitHandler(
     requestOnce();
     return true;
   });
-  const onClose = (): void => requestOnce();
-  targets.stdin?.on("end", onClose);
-  targets.stdin?.on("close", onClose);
-  targets.stdout?.on("close", onClose);
+  targets.stdin?.on("end", requestOnce);
+  targets.stdin?.on("close", requestOnce);
+  targets.stdout?.on("close", requestOnce);
   return () => {
     removeUncaughtExceptionHandler();
-    targets.stdin?.off("end", onClose);
-    targets.stdin?.off("close", onClose);
-    targets.stdout?.off("close", onClose);
+    targets.stdin?.off("end", requestOnce);
+    targets.stdin?.off("close", requestOnce);
+    targets.stdout?.off("close", requestOnce);
   };
 }
 
@@ -690,7 +660,6 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   });
   const agentDefaultId = configuredDefaultAgentId ?? initialAgentId;
   const agentNames = new Map<string, string>();
-  let rememberedSessionApplied = false;
   let connectionGeneration = 0;
   const connectionLineage = createTuiConnectionLineage();
   let remediationShown = false;
@@ -807,7 +776,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     setConsoleSubsystemFilter(["__openclaw_tui_quiet__"]);
   }
 
-  const tui = new TuiMainScreen(new ProcessTerminal());
+  const tui = new TuiMainScreen(new TuiProcessTerminal());
   const dedupeBackspace = createBackspaceDeduper();
   tui.addInputListener((data) => {
     const next = dedupeBackspace(data);
@@ -968,30 +937,6 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   // Initial selection predates controller construction, so it intentionally does not notify.
   state.sessionIdentity.sessionKey = resolveSessionSelection(initialSessionInput).key;
 
-  // Presentation-only label shown before the remembered session is remotely
-  // validated. Cleared once restoreRememberedSession confirms or rejects it.
-  let provisionalSessionLabel: string | null = null;
-
-  // Shared candidate resolution so the pre-connect label and the post-connect
-  // restore flow read the same SQLite key and apply the same eligibility rules.
-  const resolveRememberedCandidate = async (): Promise<{ key: string } | null> => {
-    const remembered = await readTuiLastSessionKey({
-      scopeKey: buildLastSessionScopeKeyFor(),
-    });
-    if (!remembered) {
-      return null;
-    }
-    const selection = resolveSessionSelection(remembered);
-    const { key, agentId } = selection;
-    if (key === state.currentSessionKey) {
-      return null;
-    }
-    if (normalizeAgentId(agentId) !== state.currentAgentId) {
-      return null;
-    }
-    return { key };
-  };
-
   const buildLastSessionScopeKeyFor = (sessionKey = state.currentSessionKey) => {
     const parsed = parseAgentSessionKey(sessionKey);
     return buildTuiLastSessionScopeKey({
@@ -1001,64 +946,32 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     });
   };
 
-  const rememberCurrentSessionKey = createRememberSessionKeyWriter({
+  const sessionMemory = createRememberSessionKeyWriter({
     buildScopeKey: buildLastSessionScopeKeyFor,
     reportFailure: (message) => {
-      chatLog.addSystem(`session memory write failed: ${message}`);
-      tui.requestRender();
+      if (exitRequested) {
+        process.stderr.write(`session memory write failed: ${message}\n`);
+      } else {
+        chatLog.addSystem(`session memory write failed: ${message}`);
+        tui.requestRender();
+      }
     },
     write: writeTuiLastSessionKey,
   });
 
-  const restoreRememberedSession = async (expectedConnectionGeneration: number) => {
-    if (initialSessionInput || rememberedSessionApplied) {
-      return;
-    }
-    const candidate = await resolveRememberedCandidate();
-    if (expectedConnectionGeneration !== connectionGeneration || exitRequested) {
-      return;
-    }
-    if (!candidate) {
-      provisionalSessionLabel = null;
-      rememberedSessionApplied = true;
-      return;
-    }
-    const rememberedKey = candidate.key;
-    const description = await client
-      .describeSession({
-        sessionKey: rememberedKey,
-        agentId: state.currentAgentId,
-      })
-      .catch(() => null);
-    if (expectedConnectionGeneration !== connectionGeneration || exitRequested) {
-      return;
-    }
-    if (!description) {
-      // A failed lookup clears the preview, but leaves restoration eligible
-      // for a later connection to validate the remembered session.
-      provisionalSessionLabel = null;
-      return;
-    }
-    // An abandoned connection must leave restoration eligible for the next handshake.
-    rememberedSessionApplied = true;
-    const restored = resolveRememberedTuiSessionKey({
-      rememberedKey,
-      currentAgentId: state.currentAgentId,
-      sessions:
-        description.session && description.session.key !== "unknown" ? [description.session] : [],
-    });
-    if (!restored || restored === state.currentSessionKey) {
-      provisionalSessionLabel = null;
-      return;
-    }
-    state.currentSessionKey = restored;
-    provisionalSessionLabel = null;
-    updateHeader();
-    updateFooter();
-  };
+  const sessionRestore = createTuiLastSessionRestore({
+    explicitSession: Boolean(initialSessionInput),
+    state,
+    buildScopeKey: buildLastSessionScopeKeyFor,
+    resolveSelection: resolveSessionSelection,
+    describeSession: (params) => client.describeSession(params),
+    ownsConnection: (generation) => generation === connectionGeneration && !exitRequested,
+  });
 
   const updateHeader = () => {
-    const sessionLabel = provisionalSessionLabel ?? formatSessionKey(state.currentSessionKey);
+    const sessionLabel = formatSessionKey(
+      sessionRestore.provisionalSessionKey ?? state.currentSessionKey,
+    );
     const agentLabel = formatAgentLabel(state.currentAgentId);
     const title = opts.title ?? "openclaw tui";
     const text = `${title} - ${client.connection.url} - agent ${agentLabel} - session ${sessionLabel}`;
@@ -1330,7 +1243,9 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     : undefined;
 
   const updateFooter = () => {
-    const sessionKeyLabel = provisionalSessionLabel ?? formatSessionKey(state.currentSessionKey);
+    const sessionKeyLabel = formatSessionKey(
+      sessionRestore.provisionalSessionKey ?? state.currentSessionKey,
+    );
     const sessionLabel = state.sessionInfo.displayName
       ? `${sessionKeyLabel} (${state.sessionInfo.displayName})`
       : sessionKeyLabel;
@@ -1407,7 +1322,13 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     setActivityStatus,
     invalidateRunOwnership: () => invalidateSessionRunOwnership(),
     clearLocalRunIds: localRunIds.clear,
-    rememberSessionKey: rememberCurrentSessionKey,
+    rememberSessionKey: sessionMemory.remember,
+    onSessionSelection: () => {
+      sessionRestore.supersede();
+      updateHeader();
+      updateFooter();
+      tui.requestRender();
+    },
   });
   const {
     refreshAgents,
@@ -1533,6 +1454,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       return;
     }
     exitRequested = true;
+    const sessionMemoryClosed = sessionMemory.close();
     authChild.close();
     // Exit owns the input boundary before transport teardown can race a buffered submit.
     disposeSubmitBurst();
@@ -1548,7 +1470,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     chatLog.dispose();
     beginTuiShutdown({
       stopCommandScopes: async () => {
-        await Promise.all([localShell.shutdown(), localCli.shutdown()]);
+        await Promise.all([localShell.shutdown(), localCli.shutdown(), sessionMemoryClosed]);
       },
       stopClient: () => client.stop(),
       stopTui: () => drainAndStopTuiSafely(tui),
@@ -1796,11 +1718,12 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       if (!ownsConnection()) {
         return;
       }
-      await restoreRememberedSession(connectedGeneration);
+      await sessionRestore.restore(connectedGeneration);
       if (!ownsConnection()) {
         return;
       }
       updateHeader();
+      updateFooter();
       updateAutocompleteProvider();
       await refreshQuestions();
       if (!ownsConnection()) {
@@ -1830,9 +1753,13 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       scheduleDynamicSlashCommandsRefresh();
       if (!state.autoMessageSent && autoMessage) {
         state.autoMessageSent = true;
-        await sendMessage(autoMessage, opts.initialMessageTimeoutMs);
-        if (!ownsConnection()) {
-          return;
+        if (resolveMessageAdmission(autoMessage).status === "blocked") {
+          chatLog.addSystem("initial message not sent — retry it after the session is ready");
+        } else {
+          await sendMessage(autoMessage, opts.initialMessageTimeoutMs);
+          if (!ownsConnection()) {
+            return;
+          }
         }
       }
       updateFooter();
@@ -1903,20 +1830,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     tui.requestRender();
   };
 
-  if (!initialSessionInput && !rememberedSessionApplied) {
-    // Pre-render read is best-effort: a corrupt or inaccessible state DB must
-    // not reject runTui() before the terminal UI and its startup-failure path
-    // are active. The post-connect restoreRememberedSession flow re-reads the
-    // key and owns the established error-handling path.
-    try {
-      const candidate = await resolveRememberedCandidate();
-      if (candidate) {
-        provisionalSessionLabel = formatSessionKey(candidate.key);
-      }
-    } catch {
-      provisionalSessionLabel = null;
-    }
-  }
+  await sessionRestore.preview();
 
   updateHeader();
   setConnectionStatus(isLocalMode ? "starting local runtime" : "connecting");

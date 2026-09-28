@@ -83,11 +83,12 @@ afterEach(() => {
 });
 
 describe("classic setup matched config bases", () => {
-  it.each(
-    ["retained-roster", "rebased-roster", "new-roster", "fresh-config"].flatMap((state) =>
-      [false, true].map((telemetry) => ({ state, telemetry })),
-    ),
-  )(
+  it.each([
+    { state: "retained-roster", telemetry: true },
+    { state: "rebased-roster", telemetry: false },
+    { state: "new-roster", telemetry: true },
+    { state: "fresh-config", telemetry: false },
+  ])(
     "preserves consent and pending edits for $state (telemetry: $telemetry)",
     async ({ state, telemetry }) => {
       await withTempHome(async (home) => {

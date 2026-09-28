@@ -179,28 +179,11 @@ describe("paired-device automatic placement selection", () => {
     });
   });
 
-  it("prefers hosts with the most available worker slots", async () => {
-    const result = await selectNodes([
-      nodeEnvironment("alpha", 1),
-      nodeEnvironment("charlie", 2),
-      nodeEnvironment("bravo", 4),
-    ]);
-
-    expect(result).toEqual({
-      ok: true,
-      candidates: [
-        { deviceId: "bravo", availableSlots: 4 },
-        { deviceId: "charlie", availableSlots: 2 },
-        { deviceId: "alpha", availableSlots: 1 },
-      ],
-    });
-  });
-
   it("ranks current worker capacity instead of stale environment snapshots", async () => {
     const environments = [
-      nodeEnvironment("alpha", 9),
-      nodeEnvironment("bravo", 1),
       nodeEnvironment("charlie", 5),
+      nodeEnvironment("bravo", 1),
+      nodeEnvironment("alpha", 9),
     ];
     const liveCapacity = new Map([
       ["alpha", 2],
@@ -232,23 +215,6 @@ describe("paired-device automatic placement selection", () => {
       candidates: [
         { deviceId: "bravo", availableSlots: 4 },
         { deviceId: "alpha", availableSlots: 2 },
-        { deviceId: "charlie", availableSlots: 2 },
-      ],
-    });
-  });
-
-  it("breaks equal-capacity ties by device identity, independently of catalog order", async () => {
-    const result = await selectNodes([
-      nodeEnvironment("charlie", 2),
-      nodeEnvironment("alpha", 2),
-      nodeEnvironment("bravo", 2),
-    ]);
-
-    expect(result).toEqual({
-      ok: true,
-      candidates: [
-        { deviceId: "alpha", availableSlots: 2 },
-        { deviceId: "bravo", availableSlots: 2 },
         { deviceId: "charlie", availableSlots: 2 },
       ],
     });

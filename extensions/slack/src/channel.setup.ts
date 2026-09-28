@@ -1,14 +1,10 @@
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { isSlackSetupAccountConfigured } from "./account-configured.js";
 import type { ResolvedSlackAccount } from "./accounts.js";
-import type { ChannelPlugin } from "./channel-api.js";
 import { slackBaseConfigAdapter } from "./config-adapter.js";
 import { SlackChannelConfigSchema } from "./config-schema.js";
 import { slackSetupContract, createSlackSetupWizardProxy } from "./setup-core.js";
 import { describeSlackSetupAccount, SLACK_CHANNEL } from "./setup-shared.js";
-
-const slackSetupWizard = createSlackSetupWizardProxy(async () => ({
-  slackSetupWizard: (await import("./setup-surface.js")).slackSetupWizard,
-}));
 
 export const slackSetupPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   id: SLACK_CHANNEL,
@@ -24,7 +20,7 @@ export const slackSetupPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     markdownCapable: true,
     preferSessionLookupForAnnounceTarget: true,
   },
-  setupWizard: slackSetupWizard,
+  setupWizard: createSlackSetupWizardProxy(() => import("./setup-surface.js")),
   capabilities: {
     chatTypes: ["direct", "channel", "thread"],
     reactions: true,
@@ -94,8 +90,8 @@ export const slackSetupPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_USER_TOKEN"].some(
         (key) => typeof env?.[key] === "string" && env[key]?.trim().length > 0,
       ),
-    isConfigured: (account) => isSlackSetupAccountConfigured(account),
-    describeAccount: (account) => describeSlackSetupAccount(account),
+    isConfigured: isSlackSetupAccountConfigured,
+    describeAccount: describeSlackSetupAccount,
   },
   setupContract: slackSetupContract,
 };

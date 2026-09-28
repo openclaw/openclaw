@@ -1,4 +1,3 @@
-/** Prepares the guarded stream runtime before prompt execution and settlement. */
 import {
   bindOwnedSessionTranscriptWrites,
   withOwnedSessionTranscriptWrites,

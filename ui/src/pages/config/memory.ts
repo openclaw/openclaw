@@ -1,5 +1,6 @@
 // Memory destination shell and its merged Settings surface.
 import { html, nothing, type TemplateResult } from "lit";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import {
   renderLearnMoreLink,
@@ -376,12 +377,12 @@ function renderAddonsSection(props: MemoryViewProps) {
 
 function renderSettingsTab(props: MemoryViewProps) {
   return html`
-    <div class="settings-page">
+    <div class="settings-page" ${shellLayoutTraits({ settingsPage: true })}>
       ${renderEngineSection(props)} ${renderAddonsSection(props)}
       <p class="settings-page__intro">${t("memoryPage.search.intro")}</p>
     </div>
     ${props.editor}
-    <div class="settings-page">
+    <div class="settings-page" ${shellLayoutTraits({ settingsPage: true })}>
       ${props.dreamingSettings}
       ${renderSettingsSection(
         { title: t("memoryPage.import.title"), description: t("memoryPage.import.description") },
@@ -401,8 +402,11 @@ function renderSettingsTab(props: MemoryViewProps) {
 
 export function renderMemory(props: MemoryViewProps) {
   return html`
-    <section class="memory-page">
-      <section class="content-header content-header--settings content-header--page hub-page-header">
+    <section class="memory-page" ${shellLayoutTraits({ memoryPage: true })}>
+      <section
+        class="content-header content-header--settings content-header--page hub-page-header"
+        ${shellLayoutTraits({ toolbarHeader: true })}
+      >
         <div class="hub-page-header__title">
           <div class="page-title">${t("tabs.memory")}</div>
           <div class="page-subtitle">

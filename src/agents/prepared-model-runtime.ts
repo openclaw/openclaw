@@ -123,8 +123,23 @@ export const loadPublishedGatewayReplyDispatchRuntime = replyDispatchPublication
 let releaseProcessLifetime: (() => void) | undefined;
 function captureModelRuntimeLifetime(): () => void {
   const assertCurrent = capturePreparedModelRuntimeLifetime();
-  releaseProcessLifetime ??= registerPreparedModelRuntimeClose(closeModelRuntime);
+  if (!releaseProcessLifetime) {
+    // Completed process teardown ends the previous refresh admission fence.
+    refreshCancellation = new AbortController();
+    releaseProcessLifetime = registerPreparedModelRuntimeClose(closeModelRuntime);
+  }
   return assertCurrent;
+}
+
+/** Seal refresh admission and cancel acquisition after every Gateway fences admission. */
+export function cancelPreparedModelRuntimeRefresh(): void {
+  if (releaseProcessLifetime && refreshCancellation.signal.aborted) {
+    return;
+  }
+  captureModelRuntimeLifetime();
+  // Fence pending publications before cancellation can reenter a provider callback.
+  refreshRequestEpoch += 1;
+  refreshCancellation.abort(new Error("prepared model runtime acquisition stopped for shutdown"));
 }
 
 async function closeModelRuntime(error: Error): Promise<void> {
@@ -244,13 +259,6 @@ async function loadPreparedModelRuntimeOwner<T>(
     if (getBlockingReplacement()) {
       continue;
     }
-    if (!activated) {
-      return await projectPublishedModelRuntimeOwner(
-        input,
-        preparedModelRuntimeLeaseContext,
-        project,
-      );
-    }
     try {
       return await projectPublishedModelRuntimeOwner(
         input,
@@ -258,7 +266,7 @@ async function loadPreparedModelRuntimeOwner<T>(
         project,
       );
     } catch (error) {
-      if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
+      if (!activated || !(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
         throw error;
       }
       // A concurrent publication boundary may retire the standalone owner between build and read.
@@ -446,6 +454,7 @@ export function markPreparedModelRuntimeSnapshotsStale(
   } = {},
 ): PreparedModelRuntimeReplacementGateId | undefined {
   captureModelRuntimeLifetime();
+  refreshCancellation.signal.throwIfAborted();
   const previousCancellation = refreshCancellation;
   refreshCancellation = new AbortController();
   setPreparedModelRuntimeStartupStatus(undefined);

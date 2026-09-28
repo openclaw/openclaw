@@ -11,41 +11,40 @@ internal object ChatEventText {
   /** Extracts assistant reply text from a gateway chat event payload. */
   fun assistantTextFromPayload(payload: JsonObject): String? = assistantTextFromMessage(payload["message"])
 
+  /** Local stream snapshots preserve whitespace and distinguish an empty rewrite from no text. */
+  fun assistantStreamTextFromPayload(payload: JsonObject): String? = assistantTextParts(payload["message"])?.takeIf { it.isNotEmpty() }?.joinToString("\n")
+
   /** Extracts text from assistant messages while ignoring non-assistant roles. */
-  fun assistantTextFromMessage(messageEl: JsonElement?): String? {
+  fun assistantTextFromMessage(messageEl: JsonElement?): String? =
+    assistantTextParts(messageEl)
+      ?.map(String::trim)
+      ?.filter { it.isNotEmpty() }
+      ?.joinToString("\n")
+      ?.takeIf { it.isNotBlank() }
+
+  private fun assistantTextParts(messageEl: JsonElement?): List<String>? {
     val message = messageEl.asObjectOrNull() ?: return null
     val role = message["role"].asStringOrNull()
     if (role != "assistant") return null
-    return textFromContent(message["content"])
-  }
-
-  private fun textFromContent(content: JsonElement?): String? =
-    when (content) {
+    return when (val content = message["content"]) {
       is JsonPrimitive -> {
-        content.asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+        content.asStringOrNull()?.let(::listOf)
       }
 
       is JsonArray -> {
         // Gateway content can be either bare strings or text-part objects;
         // preserve part ordering when composing the spoken reply.
-        content
-          .mapNotNull(::textFromContentPart)
-          .filter { it.isNotEmpty() }
-          .joinToString("\n")
-          .takeIf { it.isNotBlank() }
+        content.mapNotNull(::textFromContentPart)
       }
 
       else -> {
         null
       }
     }
+  }
 
   private fun textFromContentPart(part: JsonElement): String? {
-    part
-      .asStringOrNull()
-      ?.trim()
-      ?.takeIf { it.isNotEmpty() }
-      ?.let { return it }
+    part.asStringOrNull()?.let { return it }
     val obj = part.asObjectOrNull() ?: return null
     val type =
       obj["type"]
@@ -54,7 +53,7 @@ internal object ChatEventText {
         ?.lowercase()
         .orEmpty()
     if (type !in visibleAssistantTextTypes) return null
-    return obj["text"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+    return obj["text"].asStringOrNull()
   }
 }
 

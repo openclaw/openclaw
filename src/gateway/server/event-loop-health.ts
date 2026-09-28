@@ -8,6 +8,7 @@ import {
   emitInternalDiagnosticEvent,
 } from "../../infra/diagnostic-events.js";
 import { runWithDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
+import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import { getTrackedWorkerCpuSources } from "../../infra/worker-cpu.js";
 
 const EVENT_LOOP_MONITOR_RESOLUTION_MS = 20;
@@ -53,6 +54,7 @@ type GatewayEventLoopHealthMonitor = {
 type EventLoopUtilizationReader = typeof performance.eventLoopUtilization;
 
 type GatewayEventLoopHealthMonitorDeps = {
+  scheduler: GatewayScheduler;
   now?: () => number;
   cpuUsage?: typeof process.cpuUsage;
   eventLoopUtilization?: EventLoopUtilizationReader;
@@ -174,8 +176,9 @@ function classifyGatewayEventLoopHealthReasons(
 }
 
 export function createGatewayEventLoopHealthMonitor(
-  deps: GatewayEventLoopHealthMonitorDeps = {},
+  deps: GatewayEventLoopHealthMonitorDeps,
 ): GatewayEventLoopHealthMonitor {
+  const { scheduler } = deps;
   const nowMs = deps.now ?? performance.now.bind(performance);
   const readCpuUsage = deps.cpuUsage ?? process.cpuUsage.bind(process);
   const readEventLoopUtilization =
@@ -252,13 +255,8 @@ export function createGatewayEventLoopHealthMonitor(
       return;
     }
     let active = true;
-    const timeout = setTimeout(() => {
-      active = false;
-    }, WORKER_CPU_SAMPLE_BUDGET_MS);
-    timeout.unref();
     cancelWorkerCpuSample = () => {
       active = false;
-      clearTimeout(timeout);
     };
     const readings = workers.map(async (worker) => {
       try {
@@ -268,7 +266,6 @@ export function createGatewayEventLoopHealthMonitor(
       }
     });
     void Promise.all(readings).then((usage) => {
-      clearTimeout(timeout);
       if (!active || nowMs() - at > WORKER_CPU_SAMPLE_BUDGET_MS) {
         return;
       }
@@ -373,8 +370,14 @@ export function createGatewayEventLoopHealthMonitor(
     }
   };
 
-  const timer = histogram ? setInterval(sample, EVENT_LOOP_MONITOR_RESOLUTION_MS) : undefined;
-  timer?.unref();
+  const samplingJob = histogram
+    ? scheduler.schedule({
+        id: "event-loop-health",
+        atMs: scheduler.now() + EVENT_LOOP_MONITOR_RESOLUTION_MS,
+        everyMs: EVENT_LOOP_MONITOR_RESOLUTION_MS,
+        run: sample,
+      })
+    : undefined;
   if (histogram) {
     captureWorkerCpu(lastWallAt);
   }
@@ -408,7 +411,7 @@ export function createGatewayEventLoopHealthMonitor(
     },
     reset,
     stop: () => {
-      clearInterval(timer);
+      samplingJob?.cancel();
       histogram = null;
       cancelWorkerCpuSample?.();
       lastWorkerCpuWindow = undefined;

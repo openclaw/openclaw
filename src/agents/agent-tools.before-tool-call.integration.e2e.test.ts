@@ -65,7 +65,6 @@ import { normalizeToolParameters } from "./agent-tools.schema.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { markCodeModeControlTool } from "./code-mode-control-tools.js";
 import { CODE_MODE_EXEC_TOOL_NAME, createCodeModeTools } from "./code-mode.js";
-import { splitSdkTools } from "./embedded-agent-runner/tool-split.js";
 import { getInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
 import type { ExtensionContext } from "./sessions/index.js";
 import { wrapToolDefinition } from "./sessions/tools/tool-definition-wrapper.js";
@@ -907,16 +906,16 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     if (!execTool) {
       throw new Error("missing code-mode exec tool");
     }
-    const { customTools } = splitSdkTools({
-      tools: [execTool],
-      sandboxEnabled: false,
-      toolHookContext: {
+    const customTools = toToolDefinitions(
+      [execTool],
+      {
         agentId: "main",
         sessionKey: "agent:main:main",
         sessionId: "session-main",
         runId: "run-main",
       },
-    });
+      undefined,
+    );
     const [def] = customTools;
     if (!def) {
       throw new Error("missing custom tool definition");
@@ -1478,16 +1477,16 @@ describe("before_tool_call hook deduplication (#15502)", () => {
         if (!execTool) {
           throw new Error("missing code-mode exec tool");
         }
-        const [def] = splitSdkTools({
-          tools: [execTool],
-          sandboxEnabled: false,
-          toolHookContext: {
+        const [def] = toToolDefinitions(
+          [execTool],
+          {
             agentId: "main",
             sessionKey: "agent:main:main",
             sessionId: "session-main",
             runId: "run-main",
           },
-        }).customTools;
+          undefined,
+        );
         if (!def) {
           throw new Error("missing custom tool definition");
         }

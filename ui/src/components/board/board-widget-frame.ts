@@ -230,10 +230,6 @@ export class BoardWidgetFrameLifecycle {
       this.suspend();
       return;
     }
-    this.resume();
-  }
-
-  private resume(): void {
     this.connect();
     this.ticketRefresh.schedule(this.host.widget(), this.host.refreshFrame());
     this.updateSandboxHost();
@@ -499,16 +495,7 @@ export class BoardWidgetFrameLifecycle {
       this.sandboxHost = null;
       return;
     }
-    const options = this.sandboxHostOptions(frame, widget);
-    if (!options) {
-      return;
-    }
-    if (!this.sandboxHost || this.sandboxHost.frame !== frame) {
-      this.sandboxHost?.dispose();
-      this.sandboxHost = new BoardWidgetSandboxHost(options);
-    } else {
-      this.sandboxHost.update(options);
-    }
+    this.syncSandboxHost(frame, widget);
   }
 
   private readonly handleVisibilityChange = (): void => {
@@ -524,9 +511,12 @@ export class BoardWidgetFrameLifecycle {
       return;
     }
     const frame = this.host.root().querySelector<HTMLIFrameElement>(".board-widget__frame");
+    if (!frame || event.source !== frame.contentWindow) {
+      return;
+    }
     const widget = this.host.widget();
     if (!this.host.active()) {
-      if (frame && event.source === frame.contentWindow && event.origin === this.sandboxOrigin) {
+      if (event.origin === this.sandboxOrigin) {
         this.sandboxHost?.handleMessage(event);
       }
       return;
@@ -538,9 +528,7 @@ export class BoardWidgetFrameLifecycle {
       nonce?: unknown;
     } | null;
     if (
-      frame &&
       widget &&
-      event.source === frame.contentWindow &&
       data?.type === WIDGET_SIZE_MESSAGE_TYPE &&
       typeof data.height === "number" &&
       Number.isFinite(data.height) &&
@@ -549,9 +537,7 @@ export class BoardWidgetFrameLifecycle {
       this.host.reportContentHeight(widget.name, data.height);
     }
     if (
-      frame &&
       widget &&
-      event.source === frame.contentWindow &&
       data?.type === WIDGET_SCROLL_MESSAGE_TYPE &&
       data.nonce === this.boardHostNonce &&
       typeof data.deltaY === "number" &&
@@ -560,25 +546,14 @@ export class BoardWidgetFrameLifecycle {
     ) {
       this.host.scrollBy(data.deltaY);
     }
-    if (
-      !frame ||
-      !widget?.viewTicket ||
-      event.source !== frame.contentWindow ||
-      event.origin !== this.sandboxOrigin
-    ) {
+    if (!widget?.viewTicket || event.origin !== this.sandboxOrigin) {
       return;
     }
-    const options = this.sandboxHostOptions(frame, widget);
-    if (!options) {
+    const sandboxHost = this.syncSandboxHost(frame, widget);
+    if (!sandboxHost) {
       return;
     }
-    if (!this.sandboxHost || this.sandboxHost.frame !== frame) {
-      this.sandboxHost?.dispose();
-      this.sandboxHost = new BoardWidgetSandboxHost(options);
-    } else {
-      this.sandboxHost.update(options);
-    }
-    this.sandboxHost.handleMessage(event);
+    sandboxHost.handleMessage(event);
     if (event.data?.type === "openclaw:widget-bridge-ready") {
       // The sandbox proxy replaces its inner iframe after the outer frame's
       // load event. Reissue per-document host state only after that replacement
@@ -586,4 +561,21 @@ export class BoardWidgetFrameLifecycle {
       this.postBoardHostState(frame);
     }
   };
+
+  private syncSandboxHost(
+    frame: HTMLIFrameElement,
+    widget: BoardWidget,
+  ): BoardWidgetSandboxHost | undefined {
+    const options = this.sandboxHostOptions(frame, widget);
+    if (!options) {
+      return undefined;
+    }
+    if (!this.sandboxHost || this.sandboxHost.frame !== frame) {
+      this.sandboxHost?.dispose();
+      this.sandboxHost = new BoardWidgetSandboxHost(options);
+    } else {
+      this.sandboxHost.update(options);
+    }
+    return this.sandboxHost;
+  }
 }

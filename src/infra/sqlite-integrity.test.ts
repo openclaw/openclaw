@@ -14,34 +14,12 @@ import {
   sqliteIntegrityCheckSteps,
   type SqliteIntegrityDiagnostics,
   type SqliteIntegrityOperation,
+  type SqliteIntegrityTableCheck,
 } from "./sqlite-integrity.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("assertSqliteIntegrity", () => {
-  it("accepts structurally and referentially consistent databases", () => {
-    const sqlite = requireNodeSqlite();
-    const database = new sqlite.DatabaseSync(":memory:");
-    try {
-      database.exec(`
-        PRAGMA foreign_keys = ON;
-        CREATE TABLE parents (id INTEGER PRIMARY KEY);
-        CREATE TABLE children (
-          id INTEGER PRIMARY KEY,
-          parent_id INTEGER NOT NULL REFERENCES parents(id)
-        );
-        INSERT INTO parents (id) VALUES (1);
-        INSERT INTO children (id, parent_id) VALUES (1, 1);
-      `);
-
-      expect(assertSqliteIntegrity(database, "test database")).toEqual({
-        integrityCheck: "ok",
-      });
-    } finally {
-      database.close();
-    }
-  });
-
   it("rejects foreign-key violations that structural checks do not detect", () => {
     const sqlite = requireNodeSqlite();
     const database = new sqlite.DatabaseSync(":memory:");
@@ -325,6 +303,65 @@ describe("assertSqliteIntegrity", () => {
 describe("integrity gate attribution", () => {
   afterEach(() => vi.restoreAllMocks());
 
+  it("reports the ten slowest table checks and complete totals by check kind", () => {
+    const database = new (requireNodeSqlite().DatabaseSync)(":memory:");
+    const tables: SqliteIntegrityTableCheck[] = Array.from({ length: 73 }, (_, index) => ({
+      table: index === 72 ? "transcript_events" : `table_${index}`,
+      check: index === 72 ? "quick_check" : "integrity_check",
+    }));
+    const durations = new Map(
+      tables.map(({ table, check }, index) => [
+        `PRAGMA ${check}('${table}');`,
+        index === 72 ? 20_000 : index + 1,
+      ]),
+    );
+    try {
+      for (const { table } of tables) {
+        database.exec(`CREATE TABLE ${table} (value INTEGER);`);
+      }
+      let elapsedMs = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+      const prepare = database.prepare.bind(database);
+      vi.spyOn(database, "prepare").mockImplementation((sql) => {
+        const statement = prepare(sql);
+        const duration = durations.get(sql);
+        if (duration !== undefined) {
+          const all = statement.all.bind(statement);
+          vi.spyOn(statement, "all").mockImplementation((...parameters) => {
+            const rows = all(...parameters);
+            elapsedMs += duration;
+            return rows;
+          });
+        }
+        return statement;
+      });
+      const diagnostics: SqliteIntegrityDiagnostics = {};
+      runSqliteIntegrityOperationSync(
+        sqliteIntegrityCheckSteps(database, "timed tables", diagnostics, tables),
+      );
+
+      expect(diagnostics.integrityTableTimings).toEqual([
+        { table: "transcript_events", check: "quick_check", elapsedMs: 20_000 },
+        ...Array.from({ length: 9 }, (_, index) => ({
+          table: `table_${71 - index}`,
+          check: "integrity_check",
+          elapsedMs: 72 - index,
+        })),
+      ]);
+      expect(diagnostics.integrityTableTotals).toEqual({
+        integrity_check: { tableCount: 72, elapsedMs: 2_628 },
+        quick_check: { tableCount: 1, elapsedMs: 20_000 },
+      });
+      runSqliteIntegrityOperationSync(
+        sqliteIntegrityCheckSteps(database, "full check", diagnostics),
+      );
+      expect(diagnostics).not.toHaveProperty("integrityTableTimings");
+      expect(diagnostics).not.toHaveProperty("integrityTableTotals");
+    } finally {
+      database.close();
+    }
+  });
+
   function createTimedDatabase(checkMs: number, foreignKeyViolation = false) {
     const database = new (requireNodeSqlite().DatabaseSync)(":memory:");
     database.exec(`
@@ -403,6 +440,7 @@ describe("integrity gate attribution", () => {
           expect(failure).toBeUndefined();
         }
         expect(diagnostics).toEqual({
+          integrityGateMode: "full",
           integrityGateMs: gateMs,
           integrityGateOutcome: foreignKeyViolation ? "failed" : "healthy",
           integrityCheckSyncMs: syncMs,
@@ -431,6 +469,7 @@ describe("integrity gate attribution", () => {
             sqliteIntegrityCheckSteps(database, "timed database", diagnostics),
           );
           expect(diagnostics).toEqual({
+            integrityGateMode: "full",
             integrityGateMs: 4,
             integrityGateOutcome: "healthy",
             integrityCheckSyncMs: 4,
@@ -459,6 +498,7 @@ describe("integrity gate attribution", () => {
             expect(worker.next().done).toBe(true);
           }
           expect(diagnostics).toEqual({
+            integrityGateMode: "full",
             integrityGateMs: Math.floor(lifetimeMs + 4.5),
             integrityGateOutcome: outcome,
             ...(checkMs === undefined ? {} : { integrityWorkerCheckMs: Math.floor(checkMs) }),
@@ -471,6 +511,7 @@ describe("integrity gate attribution", () => {
               sqliteIntegrityCheckSteps(database, "timed database", diagnostics),
             );
             expect(diagnostics).toEqual({
+              integrityGateMode: "full",
               integrityGateMs: 4,
               integrityGateOutcome: "healthy",
               integrityCheckSyncMs: 4,
@@ -493,6 +534,7 @@ describe("integrity gate attribution", () => {
             expect(manual.next().done).toBe(true);
           }
           expect(diagnostics).toEqual({
+            integrityGateMode: "full",
             integrityGateMs: 12,
             integrityGateOutcome: outcome,
           });

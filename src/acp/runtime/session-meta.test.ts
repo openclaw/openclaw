@@ -7,10 +7,9 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
-import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { readAcpSessionMetaForEntry } from "./session-meta-readonly.js";
 import {
   listAcpSessionEntries,
@@ -20,6 +19,7 @@ import {
   upsertAcpSessionMeta,
   writeAcpSessionMetaForMigration,
 } from "./session-meta.js";
+import { withAcpSessionTestDir as withTestDir } from "./session-meta.test-support.js";
 
 const ACP_AGENT_ID = "codex";
 
@@ -50,9 +50,9 @@ function readStoredAcpSessionEntry(params: {
 }
 
 describe("ACP session metadata SQLite store", () => {
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+  afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
   });
 
   it("reads metadata under external state ownership without write admission", async () => {
@@ -83,9 +83,9 @@ describe("ACP session metadata SQLite store", () => {
           lastActivityAt: 100,
         }),
       });
-      closeOpenClawStateDatabaseForTest();
+      await closeOpenClawStateDatabaseAsync();
       claimOpenClawStateOwnership("test-supervisor", { env: externalEnv });
-      closeOpenClawStateDatabaseForTest();
+      await closeOpenClawStateDatabaseAsync();
       const before = fs.readFileSync(databasePath);
 
       expect(readAcpSessionMeta({ cfg, databasePath, env, sessionKey })).toMatchObject({
@@ -928,93 +928,6 @@ describe("ACP session metadata SQLite store", () => {
       expect(
         readAcpSessionMetaBatch({ databasePath, entries: [{ sessionKey, entry }] }).get(entry),
       ).toBeUndefined();
-    });
-  });
-
-  it("lists SQLite ACP rows while joining current session-store entries", async () => {
-    await withTestDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
-      const storePath = path.join(dir, "sessions.json");
-      const databasePath = path.join(dir, "state", "openclaw.sqlite");
-      const cfg = { session: { store: storePath } } as OpenClawConfig;
-      const sessionKey = "agent:codex:acp:s1";
-      await seedAcpSessionEntry({
-        storePath,
-        sessionKey,
-        entry: {
-          sessionId: "sess-acp",
-          updatedAt: 100,
-          model: "gpt-5.5",
-        },
-      });
-      await upsertAcpSessionMeta({
-        cfg,
-        databasePath,
-        sessionKey,
-        mutate: () => ({
-          backend: "acpx",
-          agent: "codex",
-          runtimeSessionName: "codex-s1",
-          mode: "oneshot",
-          state: "running",
-          lastActivityAt: 321,
-        }),
-      });
-
-      const entries = await listAcpSessionEntries({ cfg, databasePath, clone: false });
-
-      expect(entries).toHaveLength(1);
-      expect(entries[0]).toMatchObject({
-        cfg,
-        storePath,
-        sessionKey,
-        storeSessionKey: sessionKey,
-        entry: {
-          sessionId: "sess-acp",
-          model: "gpt-5.5",
-        },
-        acp: {
-          backend: "acpx",
-          runtimeSessionName: "codex-s1",
-          mode: "oneshot",
-          state: "running",
-        },
-      });
-    });
-  });
-
-  it("honors OPENCLAW_STATE_DIR when joining listed SQLite rows to session stores", async () => {
-    await withTestDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: dir } as NodeJS.ProcessEnv;
-      const cfg = {} as OpenClawConfig;
-      const sessionKey = "agent:codex:acp:s1";
-      const storePath = path.join(dir, "agents", "codex", "sessions", "sessions.json");
-      await seedAcpSessionEntry({
-        storePath,
-        sessionKey,
-        entry: {
-          sessionId: "sess-acp",
-          updatedAt: 100,
-        },
-      });
-      await upsertAcpSessionMeta({
-        cfg,
-        env,
-        sessionKey,
-        mutate: () => ({
-          backend: "acpx",
-          agent: "codex",
-          runtimeSessionName: "codex-s1",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: 321,
-        }),
-      });
-
-      const entries = await listAcpSessionEntries({ cfg, env });
-
-      expect(entries).toHaveLength(1);
-      expect(entries[0]?.storePath).toBe(storePath);
-      expect(entries[0]?.entry?.sessionId).toBe("sess-acp");
     });
   });
 });

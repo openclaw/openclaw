@@ -79,16 +79,8 @@ function normalizeHeartbeatReply(
   const notifyFalse = stripTrailingHeartbeatNotifyFalse(stripped.text);
   notifyFalse.silent ||= isSilentReply;
   const isInternalPlaceholderOnly = isStreamErrorFallbackPlaceholderOnly(notifyFalse.text);
-  if ((stripped.shouldSkip || isInternalPlaceholderOnly) && !hasMedia) {
-    return {
-      shouldSkip: true,
-      text: "",
-      hasMedia,
-      isInternalPlaceholderOnly,
-      ...(notifyFalse.silent ? { silent: true } : {}),
-    };
-  }
-  let finalText = isInternalPlaceholderOnly ? "" : notifyFalse.text;
+  let finalText =
+    (stripped.shouldSkip && !hasMedia) || isInternalPlaceholderOnly ? "" : notifyFalse.text;
   if (responsePrefix && finalText && !finalText.startsWith(responsePrefix)) {
     finalText = `${responsePrefix} ${finalText}`;
   }

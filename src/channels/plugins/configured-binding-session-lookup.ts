@@ -1,8 +1,3 @@
-/**
- * Configured binding session lookup.
- *
- * Resolves materialized binding records from stateful target session keys.
- */
 import type { ConfiguredBindingRecordResolution } from "./binding-types.js";
 import type { CompiledConfiguredBindingRegistry } from "./configured-binding-compiler.js";
 import { listConfiguredBindingConsumers } from "./configured-binding-consumers.js";

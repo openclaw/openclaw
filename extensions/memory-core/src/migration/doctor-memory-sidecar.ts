@@ -620,7 +620,16 @@ async function collectRetiredQmdWorkspaceHomes(stateDir: string): Promise<string
     descend: (entry) => entry.depth === 1 && entry.name === normalizeAgentId(entry.name),
     include: (entry) => entry.depth === 2 && entry.kind === "directory" && entry.name === "qmd",
   });
-  return entries.map((entry) => entry.path).toSorted((left, right) => left.localeCompare(right));
+  const homes: string[] = [];
+  for (const entry of entries) {
+    // OpenClaw and standalone QMD wrote the same layout without an ownership
+    // marker. Only an empty directory is safe to retire; unreadable homes stay.
+    const children = await fs.readdir(entry.path).catch(() => undefined);
+    if (children?.length === 0) {
+      homes.push(entry.path);
+    }
+  }
+  return homes.toSorted((left, right) => left.localeCompare(right));
 }
 
 export const qmdWorkspaceStateMigration: PluginDoctorStateMigration = {
@@ -634,8 +643,7 @@ export const qmdWorkspaceStateMigration: PluginDoctorStateMigration = {
     }
     return {
       preview: homes.map(
-        (home) =>
-          `- Retired Memory Core QMD workspace: ${home} -> remove derived index, config, cache, and session-export artifacts`,
+        (home) => `- Empty retired Memory Core QMD workspace: ${home} -> remove empty directory`,
       ),
     };
   },
@@ -644,8 +652,9 @@ export const qmdWorkspaceStateMigration: PluginDoctorStateMigration = {
     const warnings: string[] = [];
     for (const home of await collectRetiredQmdWorkspaceHomes(params.stateDir)) {
       try {
-        await fs.rm(home, { recursive: true, force: true });
-        changes.push(`Removed retired Memory Core QMD workspace: ${home}`);
+        // Do not remove files added after detection by a standalone QMD process.
+        await fs.rmdir(home);
+        changes.push(`Removed empty retired Memory Core QMD workspace: ${home}`);
       } catch (err) {
         warnings.push(
           `Skipped retired Memory Core QMD workspace cleanup. Run openclaw doctor --fix to retry. ${home}: ${String(err)}`,

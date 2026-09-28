@@ -288,7 +288,10 @@ private struct ChatBubbleShape: InsettableShape {
 @MainActor
 struct ChatMessageBubble: View {
     @Environment(\.openClawAssistantUsesReadingColumn) private var usesReadingColumn
+    @Environment(\.openClawAssistantRunContent) private var isRunContent
     let message: OpenClawChatMessage
+    var liveToolCalls: [OpenClawChatPendingToolCall] = []
+    var metadata: ChatMessageMetadata?
     var sourcePreviews: [ChatSourcePreview] = []
     var sourceContextRevision = UUID()
     var sourceFaviconsEnabled = false
@@ -324,7 +327,7 @@ struct ChatMessageBubble: View {
                 .padding(.horizontal, 2)
         } else {
             HStack(alignment: .top, spacing: 8) {
-                if self.showsAssistantAvatar {
+                if self.showsAssistantAvatar, !self.isRunContent {
                     ChatAgentAvatar(
                         text: self.assistantAvatarText,
                         name: self.assistantName,
@@ -352,6 +355,8 @@ struct ChatMessageBubble: View {
     private var messageBody: some View {
         ChatMessageBody(
             message: self.message,
+            liveToolCalls: self.liveToolCalls,
+            metadata: self.metadata,
             sourcePreviews: self.sourcePreviews,
             sourceContextRevision: self.sourceContextRevision,
             sourceFaviconsEnabled: self.sourceFaviconsEnabled,
@@ -407,11 +412,14 @@ enum ChatUserMessageDisclosurePolicy {
 
 @MainActor
 private struct ChatMessageBody: View {
+    @Environment(\.openClawAssistantRunContent) private var isRunContent
     @Environment(\.openClawAssistantBubblesInCleanChrome) private var assistantBubblesInClean
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     let message: OpenClawChatMessage
+    var liveToolCalls: [OpenClawChatPendingToolCall] = []
+    var metadata: ChatMessageMetadata?
     var sourcePreviews: [ChatSourcePreview] = []
     var sourceContextRevision = UUID()
     var sourceFaviconsEnabled = false
@@ -469,8 +477,8 @@ private struct ChatMessageBody: View {
                     .padding(.horizontal, 4)
             }
 
-            if !shouldRenderBubble, let usagePresentation = self.usagePresentation {
-                self.usageLine(usagePresentation)
+            if !shouldRenderBubble {
+                self.footer
                     .padding(.horizontal, 4)
             }
         }
@@ -536,9 +544,7 @@ private struct ChatMessageBody: View {
                     resolveResource: self.inlineWidgetResourceResolver)
             }
 
-            if let usagePresentation = self.usagePresentation {
-                self.usageLine(usagePresentation)
-            }
+            self.footer
         }
         .textSelection(.enabled)
         .foregroundStyle(textColor)
@@ -590,6 +596,21 @@ private struct ChatMessageBody: View {
             textColor: textColor)
     }
 
+    @ViewBuilder
+    private var footer: some View {
+        if self.metadata != nil || self.usagePresentation != nil {
+            HStack(spacing: 8) {
+                if let metadata = self.metadata {
+                    ChatMessageMetadataView(metadata: metadata)
+                }
+                if let usage = self.usagePresentation {
+                    self.usageLine(usage)
+                }
+            }
+            .lineLimit(1)
+        }
+    }
+
     private func usageLine(_ presentation: ChatMessageUsagePresentation) -> some View {
         Text(presentation.text)
             .font(OpenClawChatTypography.caption2)
@@ -604,7 +625,8 @@ private struct ChatMessageBody: View {
     private var usesBubble: Bool {
         // Keep the guarded base condition; iOS additionally opts assistant
         // messages into bubbles via the clean-chrome environment flag.
-        self.isUser || self.style == .onboarding || !self.isClean || self.assistantBubblesInClean
+        if self.isUser { return true }
+        return !self.isRunContent && (self.style == .onboarding || !self.isClean || self.assistantBubblesInClean)
     }
 
     private var shouldRenderBubble: Bool {
@@ -618,7 +640,7 @@ private struct ChatMessageBody: View {
     private var toolActivityItems: [ChatToolActivityItem] {
         guard self.displayOptions.contains(.toolActivity) else { return [] }
         // Results normally reach us merged into the calling assistant message
-        // (OpenClawChatView.mergeToolResults); this branch is the orphan
+        // (ChatTranscriptRow.mergeToolResults); this branch is the orphan
         // fallback for results whose call is not in the preceding message.
         if self.isToolResultMessage {
             return [ChatToolActivityItem(
@@ -634,12 +656,11 @@ private struct ChatMessageBody: View {
                 activityPrepared: self.message.activity != nil)]
         }
         guard self.message.role.lowercased() == "assistant" else { return [] }
-        return ChatToolActivity.items(calls: self.toolCalls, results: self.inlineToolResults).map { item in
-            var prepared = item
-            prepared.activity = self.message.activity?.first { $0.toolCallId == item.id }
-            prepared.activityPrepared = self.message.activity != nil
-            return prepared
-        }
+        return ChatToolActivity.items(
+            calls: self.toolCalls,
+            results: self.inlineToolResults,
+            activity: self.message.activity,
+            liveTools: self.liveToolCalls)
     }
 
     private var linkPreviewURL: URL? {
@@ -838,11 +859,22 @@ private struct AttachmentRow: View {
 
     private var fallbackRow: some View {
         HStack(spacing: 8) {
-            Image(systemName: self.fallbackIcon)
-            Text(self.isAudio ? "Voice note" : self.attachmentLabel)
-                .font(OpenClawChatTypography.footnote)
-                .lineLimit(1)
-                .foregroundStyle(self.textColor)
+            Image(systemName: OpenClawChatPickerAttachmentMetadata.fileIcon(
+                mimeType: self.att.mimeType ?? "",
+                fileName: self.att.fileName ?? ""))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(self.isAudio && self.att.durationSeconds != nil && self.att.url == nil
+                    ? String(localized: "Voice note") : self.attachmentLabel)
+                    .font(OpenClawChatTypography.footnote)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .foregroundStyle(self.textColor)
+                if let sizeBytes = self.att.sizeBytes {
+                    Text(ByteCountFormatter.string(fromByteCount: Int64(sizeBytes), countStyle: .file))
+                        .font(OpenClawChatTypography.caption)
+                        .foregroundStyle(self.textColor.opacity(self.isDesktopLayout ? 0.9 : 0.72))
+                }
+            }
             if self.isAudio, let durationSeconds = self.att.durationSeconds {
                 Text(openClawVoiceNoteDurationLabel(durationSeconds))
                     .font(OpenClawChatTypography.footnote)
@@ -867,14 +899,6 @@ private struct AttachmentRow: View {
         return !value.isEmpty && kind.acceptsManagedArtifactID(value) ? value : nil
     }
 
-    private var fallbackIcon: String {
-        switch self.att.mediaKind {
-        case .audio: "waveform"
-        case .video: "video"
-        default: "paperclip"
-        }
-    }
-
     private var attachmentLabel: String {
         let values = [self.att.alt, self.att.fileName]
         return values.lazy
@@ -885,6 +909,7 @@ private struct AttachmentRow: View {
 
 @MainActor
 struct ChatTypingIndicatorBubble: View {
+    @Environment(\.openClawAssistantRunContent) private var isRunContent
     let style: OpenClawChatView.Style
     let assistantName: String?
     let assistantAvatarText: String?
@@ -896,7 +921,7 @@ struct ChatTypingIndicatorBubble: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
-            if self.showsAssistantAvatar {
+            if self.showsAssistantAvatar, !self.isRunContent {
                 ChatAgentAvatar(
                     text: self.assistantAvatarText,
                     name: self.assistantName,
@@ -1079,6 +1104,7 @@ extension EnvironmentValues {
 // swiftformat:enable environmentEntry
 
 private struct AssistantBubbleContainerStyle: ViewModifier {
+    @Environment(\.openClawAssistantRunContent) private var isRunContent
     let isClean: Bool
     let cornerRadius: CGFloat
 
@@ -1087,7 +1113,7 @@ private struct AssistantBubbleContainerStyle: ViewModifier {
 
     func body(content: Content) -> some View {
         Group {
-            if self.isClean, !self.bubblesInClean {
+            if self.isRunContent || (self.isClean && !self.bubblesInClean) {
                 content
             } else {
                 content
@@ -1106,20 +1132,32 @@ private struct AssistantBubbleContainerStyle: ViewModifier {
 }
 
 extension View {
-    fileprivate func assistantBubbleContainerStyle(isClean: Bool, cornerRadius: CGFloat = 16) -> some View {
+    func assistantBubbleContainerStyle(isClean: Bool, cornerRadius: CGFloat = 16) -> some View {
         modifier(AssistantBubbleContainerStyle(isClean: isClean, cornerRadius: cornerRadius))
             .focusable(false)
     }
 }
 
+struct ChatStreamingAssistantText {
+    let sourceText: String
+    let includesThinking: Bool
+    let segments: [AssistantTextSegment]
+
+    init(sourceText: String, includesThinking: Bool) {
+        self.sourceText = sourceText
+        self.includesThinking = includesThinking
+        self.segments = AssistantTextParser.segments(from: sourceText, includeThinking: includesThinking)
+    }
+}
+
 @MainActor
 struct ChatStreamingAssistantBubble: View {
+    @Environment(\.openClawAssistantRunContent) private var isRunContent
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
-    let text: String
+    let text: ChatStreamingAssistantText
     let markdownVariant: ChatMarkdownVariant
-    let showsReasoning: Bool
     let assistantName: String?
     let assistantAvatarText: String?
     let assistantAvatarTint: Color?
@@ -1128,7 +1166,7 @@ struct ChatStreamingAssistantBubble: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            if self.showsAssistantAvatar {
+            if self.showsAssistantAvatar, !self.isRunContent {
                 ChatAgentAvatar(
                     text: self.assistantAvatarText,
                     name: self.assistantName,
@@ -1137,14 +1175,12 @@ struct ChatStreamingAssistantBubble: View {
             }
 
             VStack(alignment: .leading, spacing: 10) {
-                ChatAssistantTextBody(
+                ChatStreamingAssistantTextBody(
                     text: self.text,
                     markdownVariant: self.markdownVariant,
-                    includesThinking: self.showsReasoning,
                     textColor: self.isDesktopLayout
                         ? OpenClawChatTheme.desktopText(in: self.colorScheme, contrast: self.colorSchemeContrast)
-                        : OpenClawChatTheme.assistantText,
-                    isComplete: false)
+                        : OpenClawChatTheme.assistantText)
             }
             .padding(self.isClean ? 4 : 12)
             .assistantBubbleContainerStyle(isClean: self.isClean)
@@ -1153,6 +1189,28 @@ struct ChatStreamingAssistantBubble: View {
             .accessibilityIdentifier("chat-streaming-assistant-body")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+@MainActor
+struct EquatableChatStreamingAssistantBubble: View {
+    let bubble: ChatStreamingAssistantBubble
+
+    var body: some View {
+        self.bubble
+    }
+}
+
+extension EquatableChatStreamingAssistantBubble: @MainActor Equatable {
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.bubble.text.sourceText == rhs.bubble.text.sourceText &&
+            lhs.bubble.text.includesThinking == rhs.bubble.text.includesThinking &&
+            lhs.bubble.markdownVariant == rhs.bubble.markdownVariant &&
+            lhs.bubble.assistantName == rhs.bubble.assistantName &&
+            lhs.bubble.assistantAvatarText == rhs.bubble.assistantAvatarText &&
+            lhs.bubble.assistantAvatarTint == rhs.bubble.assistantAvatarTint &&
+            lhs.bubble.showsAssistantAvatar == rhs.bubble.showsAssistantAvatar &&
+            lhs.bubble.isClean == rhs.bubble.isClean
     }
 }
 
@@ -1166,19 +1224,7 @@ struct ChatPendingToolsBubble: View {
     }
 
     private var items: [ChatToolActivityItem] {
-        self.toolCalls.map { call in
-            ChatToolActivityItem(
-                id: call.id,
-                name: call.name,
-                arguments: call.args,
-                details: nil,
-                resultText: nil,
-                state: call.activity == nil && !call.isComplete || call.activity?.status == "running" ? .running :
-                    call.activity?.status == "completed" ? .finished :
-                    call.activity?.status == "failed" || call.activity?.status == "blocked" ? .failed : .unavailable,
-                liveDiffStat: call.diffStat,
-                activity: call.activity)
-        }
+        self.toolCalls.map(ChatToolActivityItem.init(live:))
     }
 }
 
@@ -1202,21 +1248,8 @@ private struct ChatAssistantTextBody: View {
     let markdownVariant: ChatMarkdownVariant
     let includesThinking: Bool
     let textColor: Color
-    var isComplete: Bool = true
 
     var body: some View {
-        if self.isComplete {
-            self.completeBody
-        } else {
-            ChatStreamingAssistantTextBody(
-                text: self.text,
-                markdownVariant: self.markdownVariant,
-                includesThinking: self.includesThinking,
-                textColor: self.textColor)
-        }
-    }
-
-    private var completeBody: some View {
         let segments = AssistantTextParser.segments(from: self.text, includeThinking: self.includesThinking)
         return VStack(alignment: .leading, spacing: 10) {
             ForEach(segments) { segment in
@@ -1226,7 +1259,7 @@ private struct ChatAssistantTextBody: View {
                     variant: self.markdownVariant,
                     typography: segment.kind.markdownTypography,
                     textColor: self.textColor,
-                    isComplete: self.isComplete)
+                    isComplete: true)
             }
         }
     }
@@ -1244,12 +1277,12 @@ private struct ChatStreamingAssistantTextBody: View {
     @State private var revealLocation: Snapshot.ProseLocation?
     @State private var pendingUntil: TimeInterval?
 
-    init(text: String, markdownVariant: ChatMarkdownVariant, includesThinking: Bool, textColor: Color) {
+    init(text: ChatStreamingAssistantText, markdownVariant: ChatMarkdownVariant, textColor: Color) {
         self.markdownVariant = markdownVariant
         self.textColor = textColor
 
         let now = Date.timeIntervalSinceReferenceDate
-        let snapshot = Snapshot(text: text, includesThinking: includesThinking)
+        let snapshot = Snapshot(text: text)
         // State retains its old value across updates. Reuse this prepared input
         // when applying the delta instead of parsing the same Markdown again.
         self.inputSnapshot = snapshot
@@ -1378,10 +1411,8 @@ private struct ChatStreamingAssistantTextBody: View {
         let sourceText: String
         let includesThinking: Bool
 
-        init(text: String, includesThinking: Bool) {
-            let segments = AssistantTextParser.segments(
-                from: text,
-                includeThinking: includesThinking).map {
+        init(text: ChatStreamingAssistantText) {
+            let segments = text.segments.map {
                 Segment(
                     kind: $0.kind,
                     markdown: ChatMarkdownRenderSnapshot(
@@ -1390,8 +1421,8 @@ private struct ChatStreamingAssistantTextBody: View {
                         preparesReveal: true))
             }
             self.segments = segments
-            self.sourceText = text
-            self.includesThinking = includesThinking
+            self.sourceText = text.sourceText
+            self.includesThinking = text.includesThinking
             self.lastProseLocation = segments.indices.reversed().compactMap { segmentIndex in
                 segments[segmentIndex].markdown.lastProseIndex.map {
                     ProseLocation(segmentIndex: segmentIndex, blockIndex: $0)

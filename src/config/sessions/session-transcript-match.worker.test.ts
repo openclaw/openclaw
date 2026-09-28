@@ -51,10 +51,16 @@ it("keeps incognito matching in its process-owned store without creating disk st
     await expect(findTranscriptEvent(scope, { kind: "latest" })).resolves.toEqual({
       event: unrelated,
     });
+    await expect(
+      findSessionTranscriptArchiveEventReadOnly(scope, "private-run"),
+    ).resolves.toBeUndefined();
     await expect(fs.readdir(state.stateDir, { recursive: true })).resolves.toEqual([]);
 
     await closeOpenClawAgentDatabasesAsync(state.root);
     await expect(findTranscriptEvent(scope, { kind: "latest" })).resolves.toBeUndefined();
+    await expect(
+      findSessionTranscriptArchiveEventReadOnly(scope, "private-run"),
+    ).resolves.toBeUndefined();
     await expect(fs.readdir(state.stateDir, { recursive: true })).resolves.toEqual([]);
   });
 });
@@ -142,7 +148,7 @@ it("recovers the exact complete child answer without preventing host event progr
     };
     const latest = await read("latest-run");
     expect(latest.prepared.text).toBe("newest unrelated answer");
-    const hostSql = observeHostDataSql(state.env);
+    const hostSql = observeHostDataSql();
     const old = await read("completed-run").finally(() => hostSql.restore());
     for (const call of hostSql.calls) {
       expect(call).not.toHaveBeenCalled();

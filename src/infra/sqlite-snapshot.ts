@@ -4,7 +4,7 @@ import fsSync, { type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
+import type { BackupProgressInfo, DatabaseSync } from "node:sqlite";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/host/sqlite-vec.js";
 import {
@@ -39,6 +39,7 @@ type CreateVerifiedSqliteSnapshotOptions = {
   targetPath: string;
   /** Only in an isolated child: acquire and consume a fresh private image, including crash recovery. */
   sourceAcquisition?: { mode: "isolated-process"; stagingRoot: string };
+  onProgress?: (progress: BackupProgressInfo) => void;
   /** Final caller checks around publication; failures remove only this helper's target. */
   afterPublish?: (guard: PublishedSqliteFileGuard) => void;
   beforePublish?: () => void | Promise<void>;
@@ -546,6 +547,8 @@ export async function createVerifiedSqliteSnapshot(
     const prepared = await prepareSqliteReadOnlyLocationInProcess(
       sourcePath,
       options.sourceAcquisition.stagingRoot,
+      undefined,
+      options.onProgress,
     );
     return withPreparedSqliteSnapshot(prepared, (privateSourcePath) =>
       verifyAndPublishSqliteSnapshot(options, privateSourcePath),
@@ -584,7 +587,7 @@ async function verifyAndPublishSqliteSnapshot(
             assertSqliteIntegrity(source, options.sourcePath);
             options.validate?.(source, options.sourcePath);
             if (!privateSourcePath) {
-              await backupNodeSqliteDatabase(source, stagedPath);
+              await backupNodeSqliteDatabase(source, stagedPath, options.onProgress);
             }
           } finally {
             source.exec("ROLLBACK;");

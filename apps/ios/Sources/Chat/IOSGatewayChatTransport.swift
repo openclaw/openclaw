@@ -141,9 +141,11 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
             try await transport.requestSessionMutation(request, ifCurrentRoute: route)
         }
         return OpenClawChatNewSessionRouteLease(
-            listAgents: {
-                let data = try await request(OpenClawChatGatewayRequests.agentsList())
-                return try OpenClawChatGatewayPayloadCodec.decodeAgentsList(data)
+            loadAgents: { onUpdate in
+                try await OpenClawChatAgentsListResponse.load(
+                    request: request,
+                    isCurrent: { await transport.gateway.currentRoute() == route },
+                    onUpdate: onUpdate)
             },
             createSession: { key, label, agentID, parentSessionKey, worktree, worktreeBaseRef in
                 let createRequest = transport.createSessionRequest(
@@ -483,6 +485,11 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
     func gatewayAdvertisesMethod(_ method: String) async -> Bool? {
         guard let route = await currentSessionMutationRoute() else { return nil }
         return await self.gateway.supportsServerMethod(method, ifCurrentRoute: route)
+    }
+
+    func attachmentLimits() async -> GatewayAttachmentLimits? {
+        guard let route = await self.currentSessionMutationRoute() else { return nil }
+        return await self.gateway.currentAttachmentLimits(ifCurrentRoute: route)
     }
 
     func fetchProgressCard(sessionKey: String, agentID: String?) async throws -> ProgressCard? {

@@ -192,10 +192,6 @@ export async function readExecApprovalsPolicyReadOnlyAsync(
   }
 }
 
-export async function loadExecApprovalsAsync(): Promise<ExecApprovalsFile> {
-  return loadExecApprovals();
-}
-
 type ExecApprovalsUpdate = {
   baseHash?: string;
   update: (file: ExecApprovalsFile) => ExecApprovalsFile | null;
@@ -324,8 +320,6 @@ function enqueueExecAuthorization(
       owner.admission.identity.key !== context.admission.identity.key ||
       owner.maintenanceScope !== context.maintenanceScope ||
       owner.existingSchemaPath !== context.existingSchemaPath ||
-      owner.coordinatorRuntime.directory !== context.coordinatorRuntime.directory ||
-      owner.coordinatorRuntime.keepAlive !== context.coordinatorRuntime.keepAlive ||
       owner.environment.OPENCLAW_SUPERVISOR_MODE !== context.environment.OPENCLAW_SUPERVISOR_MODE
     ) {
       batch = undefined;

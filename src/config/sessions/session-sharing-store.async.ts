@@ -265,6 +265,7 @@ export function recordSessionParticipantInWorker(
         if (result.projectionChanged) {
           sessionChanges.emit({
             ...location,
+            scope: "session-entry",
             facts: { kind: "participants", projection: result.participants },
           });
         }
@@ -272,6 +273,7 @@ export function recordSessionParticipantInWorker(
           agentId: location.agentId,
           sessionKey: location.sessionKey,
           reason: "participants",
+          scope: "session-entry",
         });
       }
       return result.value;

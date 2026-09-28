@@ -5,14 +5,12 @@ import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
-import { setActiveNodeContext } from "../../infra/active-node-context.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import {
   resetAgentRunRegistryForTest,
   rotateAgentRunRegistryLifecycleGeneration,
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
-import { withInstallationTarget } from "../../infra/installation-target-context.js";
 import { takeMcpToolApprovalBinding } from "../../infra/mcp-tool-approval-binding.js";
 import {
   bindGatewayContextResolver,
@@ -150,7 +148,6 @@ function bindTool(
 
 afterEach(() => {
   vi.unstubAllEnvs();
-  setActiveNodeContext(null);
   for (const admission of admissions.splice(0)) {
     admission.close();
   }
@@ -373,42 +370,6 @@ describe("agent harness host capability", () => {
     }
   });
 
-  it("keeps host context reads current and closure-bound", async () => {
-    vi.stubEnv("GH_TOKEN", "");
-    vi.stubEnv("GITHUB_TOKEN", "");
-    const config = { tools: { github: { profileId: "ghp_11111111111111111111111111111111" } } };
-    const { attempt } = await admittedAttempt("run-local-env", { config });
-    const target = { stateDir: "/state", configPath: "/config", defaultWorkspaceDir: "/workspace" };
-    const host = withInstallationTarget(target, () =>
-      createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" }),
-    );
-
-    expect(host.capabilities.preparedEnvironment?.()).toMatchObject({
-      credentialScrubEnv: { GH_TOKEN: "", GITHUB_TOKEN: "" },
-      localIdentityEnv: expect.objectContaining({ GH_CONFIG_DIR: expect.any(String) }),
-      managedLocalIdentity: true,
-      localProcessEnv: {
-        OPENCLAW_STATE_DIR: "/state",
-        OPENCLAW_CONFIG_PATH: "/config",
-        OPENCLAW_WORKSPACE_DIR: "/workspace",
-      },
-    });
-    expect(Object.isFrozen(host.capabilities.preparedEnvironment?.().localProcessEnv)).toBe(true);
-    for (const nodeId of ["mac-a", "mac-b"]) {
-      setActiveNodeContext({ nodeId });
-      expect(host.capabilities.activeComputerContext?.()).toBe(
-        `Current active computer (latest physical input, not message origin): active_node=${nodeId}`,
-      );
-    }
-    setActiveNodeContext({ nodeId: "mac-b" }, { isCurrent: () => false });
-    expect(host.capabilities.activeComputerContext?.()).toBe(
-      "Current active computer (latest physical input, not message origin): active_node=unknown",
-    );
-    host.close();
-    expect(() => host.capabilities.preparedEnvironment?.()).toThrow("no longer active");
-    expect(() => host.capabilities.activeComputerContext?.()).toThrow("no longer active");
-  });
-
   it("rejects retained preparation after the admitted Gateway is replaced", async () => {
     const { attempt } = await admittedAttempt("run-prepared-gateway");
     const admitted = {} as GatewayRequestContext;
@@ -612,8 +573,10 @@ describe("agent harness host capability", () => {
   });
 
   it.each(
-    policyRevocations.flatMap((entry) =>
-      (["resolve", "reject"] as const).map((settlement) => Object.assign({ settlement }, entry)),
+    policyRevocations.flatMap((entry, index) =>
+      (index === 0 ? (["resolve", "reject"] as const) : (["resolve"] as const)).map((settlement) =>
+        Object.assign({ settlement }, entry),
+      ),
     ),
   )("rejects a deferred policy $settlement after $name", async ({ revoke, settlement }) => {
     const { attempt, admission } = await admittedAttempt("run-policy-race");

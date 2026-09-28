@@ -58,7 +58,25 @@ function scanSuccessRequest(logPath) {
       line: lineNumber,
       bodyTail: tailText(bodyText, RESPONSE_PREVIEW_BYTES),
     });
-    if (!success && bodyText.includes("OPENCLAW_SCHEMA_E2E_OK")) {
+    // Activity recaps quote the marker too; select the agent turn independently
+    // of the web_search tool and reasoning settings that this assertion checks.
+    const input = entry.body?.input;
+    const prompt = /^(?:\[[^\]\r\n]+\] )?Return exactly OPENCLAW_SCHEMA_E2E_OK\.$/u;
+    const isSuccessPrompt = (text) => typeof text === "string" && prompt.test(text.trim());
+    const hasSuccessPrompt =
+      typeof input === "string"
+        ? isSuccessPrompt(input)
+        : Array.isArray(input) &&
+          input.some(
+            (item) =>
+              item?.role === "user" &&
+              (isSuccessPrompt(item.content) ||
+                (Array.isArray(item.content) &&
+                  item.content.some(
+                    (part) => part?.type === "input_text" && isSuccessPrompt(part.text),
+                  ))),
+          );
+    if (!success && entry.body?.model === "gpt-5" && hasSuccessPrompt) {
       success = entry;
     }
   });

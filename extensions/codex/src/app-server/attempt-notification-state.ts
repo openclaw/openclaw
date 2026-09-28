@@ -1,7 +1,5 @@
 import { readCodexNotificationItem } from "./attempt-notifications.js";
 import { itemName } from "./event-projector-items.js";
-import { isCodexNotificationForTurn } from "./notification-correlation.js";
-import { readCodexTurnCompletedNotification } from "./protocol-validators.js";
 import type { CodexServerNotification } from "./protocol.js";
 
 type CodexExecutionPhase =
@@ -38,17 +36,4 @@ export function reportCodexExecutionNotification(params: {
     tool,
     itemId: item.id,
   });
-}
-
-/** Returns true when a notification ends the current app-server turn. */
-export function isTerminalCodexTurnNotificationForTurn(params: {
-  notification: CodexServerNotification;
-  threadId: string;
-  turnId: string;
-}): boolean {
-  return (
-    params.notification.method === "turn/completed" &&
-    isCodexNotificationForTurn(params.notification.params, params.threadId, params.turnId) &&
-    readCodexTurnCompletedNotification(params.notification.params) !== undefined
-  );
 }

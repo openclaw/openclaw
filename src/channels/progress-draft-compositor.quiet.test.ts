@@ -359,7 +359,7 @@ describe("createChannelProgressDraftCompositor quiet drafts", () => {
   );
 
   it.each(["failed", "error", "blocked"])(
-    "shows explicit %s status and retains only protected outcomes",
+    "flushes explicit %s status and retains only protected outcomes",
     async (status) => {
       const update = vi.fn();
       const progress = createTestProgressDraftCompositor({
@@ -385,9 +385,7 @@ describe("createChannelProgressDraftCompositor quiet drafts", () => {
           progressText: "Check access",
         });
         expect(update.mock.lastCall?.[0]).toContain("Check access");
-        if (status !== "failed") {
-          expect(update.mock.lastCall?.[1]).toMatchObject({ flush: true });
-        }
+        expect(update.mock.lastCall?.[1]).toMatchObject({ flush: true });
         for (let index = 0; index < 5; index++) {
           await progress.pushToolEvent({
             name: "read",

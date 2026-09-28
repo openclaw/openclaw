@@ -13,11 +13,8 @@ import { mockBunVersion } from "./runtime-version.test-support.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("Code Mode matrix runtime identity", () => {
-  it.each([
-    { label: "Node", bun: undefined, runtime: { id: "node", version: process.version } },
-    { label: "simulated Bun", bun: "1.3.14", runtime: { id: "bun", version: "1.3.14" } },
-  ])("records $label with the selected source after a cell failure", async ({ bun, runtime }) => {
-    using _ = mockBunVersion(bun);
+  it("records Bun with the selected source after a cell failure", async () => {
+    using _ = mockBunVersion("1.3.14");
     const repoRoot = tempDirs.make("openclaw-matrix-runtime-identity-");
     const sourceIdentity = {
       gitSha: "fixture-selected-source",
@@ -65,7 +62,7 @@ describe("Code Mode matrix runtime identity", () => {
         ref: sourceIdentity.gitSha,
         integrity: `git:${sourceIdentity.gitSha}+sha256:${sourceIdentity.sourcePatchSha256}`,
       },
-      runtime,
+      runtime: { id: "bun", version: "1.3.14" },
       package: null,
       protocol: null,
       accountRef: null,

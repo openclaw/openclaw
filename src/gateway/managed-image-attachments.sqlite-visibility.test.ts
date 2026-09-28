@@ -55,7 +55,7 @@ function message(id: string, parentId: string | null, content: unknown) {
   return { type: "message", id, parentId, timestamp, message: { role: "assistant", content } };
 }
 
-function fixture(messageId = "attached") {
+async function fixture(messageId = "attached") {
   const sessionId = `managed-visibility-${randomUUID()}`;
   const sessionKey = `agent:main:${sessionId}`;
   const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
@@ -69,7 +69,7 @@ function fixture(messageId = "attached") {
   const originalPath = path.join(mediaRoot, MANAGED_OUTGOING_ORIGINALS_SUBDIR, mediaId);
   fs.mkdirSync(path.dirname(originalPath), { recursive: true });
   fs.writeFileSync(originalPath, body);
-  insertManagedImageRecord(
+  await insertManagedImageRecord(
     {
       attachmentId,
       sessionKey,
@@ -154,7 +154,7 @@ afterEach(async () => {
 
 describe("managed attachment SQLite visibility", () => {
   it("does not decode every unrelated payload when resolving one attachment", async () => {
-    const f = fixture();
+    const f = await fixture();
     const marker = "managed-membership-wide-payload";
     const text = marker + "x".repeat(16 * 1024);
     const unrelated = Array.from({ length: 40 }, (_, index) =>
@@ -184,7 +184,7 @@ describe("managed attachment SQLite visibility", () => {
   });
 
   it.each([" padded-id ", "   "])("preserves raw message ID %j", async (messageId) => {
-    const f = fixture(messageId);
+    const f = await fixture(messageId);
     await seed(f, [message(messageId, null, [f.block])]);
     const full = await readSessionMessagesWithSourceAsync(f.scope, {
       mode: "full",
@@ -200,7 +200,7 @@ describe("managed attachment SQLite visibility", () => {
   it.each(["active", "archive"] as const)(
     "preserves %s ID-less rows with an existing projected message ID",
     async (source) => {
-      const f = fixture();
+      const f = await fixture();
       const event = {
         type: "message",
         message: {
@@ -224,7 +224,7 @@ describe("managed attachment SQLite visibility", () => {
   );
 
   it("falls back to archives only when no live row projects a message", async () => {
-    const f = fixture();
+    const f = await fixture();
     archive(f);
     await seed(f, [
       { type: "message", id: "null", parentId: null, message: null },
@@ -242,7 +242,7 @@ describe("managed attachment SQLite visibility", () => {
     ["unrelated", 1_100],
     ["unrelated", 999],
   ] as const)("accepts JavaScript-readable %s JSON at depth %i", async (kind, depth) => {
-    const f = fixture();
+    const f = await fixture();
     const deep = JSON.parse("[".repeat(depth) + "0" + "]".repeat(depth));
     const other = message("other", null, "other");
     const attached = message(f.messageId, "other", [f.block]);
@@ -255,7 +255,7 @@ describe("managed attachment SQLite visibility", () => {
   });
 
   it("preserves archive duplicates and full-reader oversized recovery", async () => {
-    const f = fixture();
+    const f = await fixture();
     await seed(f, []);
     // Parentless duplicate records remain in the archive's flat selected history.
     const { parentId: _parent, ...attached } = message(f.messageId, null, [f.block]);
@@ -290,7 +290,7 @@ describe("managed attachment SQLite visibility", () => {
   });
 
   it("validates the admitted generation on both matching and missing IDs", async () => {
-    const f = fixture();
+    const f = await fixture();
     await seed(f, [message(f.messageId, null, [f.block])]);
     const admitted = await appendSessionTranscriptMessageByIdentity({
       ...f.scope,
@@ -324,7 +324,7 @@ describe("managed attachment SQLite visibility", () => {
   });
 
   it("keeps validation, presence and selected content on one snapshot across a writer", async () => {
-    const f = fixture();
+    const f = await fixture();
     const other = message("other", null, "snapshot writer trigger");
     const attached = message(f.messageId, "other", [f.block]);
     await seed(f, [other, attached]);
@@ -384,7 +384,7 @@ describe("managed attachment SQLite visibility", () => {
   it.each(["fresh-message", "reset-only", "inactive-branch"] as const)(
     "rechecks archive membership after the active history becomes %s",
     async (kind) => {
-      const f = fixture();
+      const f = await fixture();
       await seed(f, []);
       const archivePath = archive(f);
       const archiveBefore = fs.readFileSync(archivePath);
@@ -425,8 +425,8 @@ describe("managed attachment SQLite visibility", () => {
   ] as const)(
     "ignores NUL-corrupt history outside the visible range: $location",
     async ({ location, retainedCount }) => {
-      const f = fixture();
-      const corrupt = location === "other-session" ? fixture("hidden") : f;
+      const f = await fixture();
+      const corrupt = location === "other-session" ? await fixture("hidden") : f;
       const hidden = message("hidden", null, "hidden history");
       if (location === "other-session") {
         await seed(corrupt, [hidden]);
@@ -469,7 +469,7 @@ describe("managed attachment SQLite visibility", () => {
   ] as const)(
     "retains records when $fault history JSON has $corruption",
     async ({ fault, corruption }) => {
-      const f = fixture();
+      const f = await fixture();
       const unrelated = message("unrelated", "first", "unrelated content");
       const attached = message(f.messageId, "unrelated", [f.block]);
       await seed(f, [

@@ -17,6 +17,7 @@ import {
   getPluginMetadataSnapshotCache,
 } from "../plugins/plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { overlayPluginNativeAdmissions } from "../plugins/plugin-native-admission-state.js";
 import { createPluginSourceCaptureRoot } from "../plugins/plugin-source-capture-directory.js";
 import { captureProviderSyntheticAuthFacts } from "../plugins/provider-runtime.js";
 import type { PreparedSyntheticAuthFacts } from "../plugins/provider-synthetic-auth.js";
@@ -98,6 +99,7 @@ export type PreparedModelWorkerResult =
               snapshot: ModelCatalogSnapshot;
               runtimeModels: Map<string, Model[]>;
               providerExpiries: Map<string, number>;
+              hookRows: Map<string, Set<string>>;
               configuredRuntimeModels: PreparedModelRuntimeCatalogFacts["configuredRuntimeModels"];
               providerAuthLabels: ModelCatalogAuthLabels;
             }
@@ -393,6 +395,8 @@ export function createPreparedModelCatalogWorkerInput(params: {
       : serializeConfigResolutionFacts(sourceConfigForSecrets);
   const { normalizePluginId: _normalizePluginId, ...pluginMetadataSnapshot } =
     params.pluginMetadataSnapshot;
+  const cache = getPluginMetadataSnapshotCache(params.pluginMetadataSnapshot);
+  const index = overlayPluginNativeAdmissions(pluginMetadataSnapshot.index, cache);
   const value: Omit<PreparedModelCatalogWorkerInput, "generationFingerprint"> = {
     input,
     sourceConfigForSecrets,
@@ -405,7 +409,14 @@ export function createPreparedModelCatalogWorkerInput(params: {
       configuredRuntimeModels: params.agentFacts.configuredRuntimeModels,
     },
     preferBuiltPluginArtifacts: params.preferBuiltPluginArtifacts === true,
-    pluginMetadataSnapshot,
+    pluginMetadataSnapshot: {
+      ...pluginMetadataSnapshot,
+      index,
+      registryIndex:
+        pluginMetadataSnapshot.registryIndex === pluginMetadataSnapshot.index
+          ? index
+          : overlayPluginNativeAdmissions(pluginMetadataSnapshot.registryIndex, cache),
+    },
   };
   return { ...value, generationFingerprint: fingerprintPreparedModelCatalogGeneration(value) };
 }
@@ -421,6 +432,7 @@ type PreparedModelCatalogWorker = Readonly<{
     Pick<PreparedModelRuntimeCatalogFacts, "modelCatalog" | "configuredRuntimeModels"> & {
       runtimeModels: Map<string, Model[]>;
       providerExpiries: Map<string, number>;
+      hookRows: Map<string, Set<string>>;
     }
   >;
 }>;
@@ -685,6 +697,7 @@ export function createPreparedModelCatalogWorker(
         configuredRuntimeModels: message.configuredRuntimeModels,
         runtimeModels: message.runtimeModels,
         providerExpiries: message.providerExpiries,
+        hookRows: message.hookRows,
       };
     },
     loadAuth: async ({ providerIds, profileIds }) => {

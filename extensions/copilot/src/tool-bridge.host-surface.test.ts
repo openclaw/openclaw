@@ -4,7 +4,7 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCopilotTestHostCapabilities } from "./host-capability.test-support.js";
-import { createCopilotToolBridge } from "./tool-bridge.js";
+import { createCopilotToolBridge, makeInvocation } from "./tool-bridge.test-support.js";
 
 const mocks = vi.hoisted(() => ({ publicFactory: vi.fn(() => []) }));
 vi.mock("openclaw/plugin-sdk/agent-harness", () => ({
@@ -27,21 +27,13 @@ describe("Copilot host-owned tool construction", () => {
       }
       return textToolResult("HOST_PINNED_READER");
     });
-    type HostCapabilities = ReturnType<typeof createCopilotTestHostCapabilities>;
-    const createToolSurface = vi.fn<NonNullable<HostCapabilities["createToolSurface"]>>(() => [
-      reader,
-    ]);
-    const bindToolSurface = vi.fn<HostCapabilities["bindToolSurface"]>(() => {
+    const createToolSurface = vi.fn(() => [reader]);
+    const bindToolSurface = vi.fn(() => {
       throw new Error("Host-created tools must not be rebound");
     });
     const skillsSnapshot = { prompt: "", skills: [{ name: "manual" }], resolvedSkills: [] };
     const bridge = await createCopilotToolBridge({
-      agentId: "main",
-      modelProvider: "github-copilot",
-      modelId: "test-model",
-      sessionId: "session-1",
       workspaceDir: "/workspace",
-      spawnWorkspaceDir: undefined,
       attemptParams: {
         config: { tools: { toolSearch: false } },
         codeModeOverride: false,
@@ -63,12 +55,7 @@ describe("Copilot host-owned tool construction", () => {
     expect(bridge.sourceTools).toContain(reader);
     const sdkReader = bridge.promptToolPolicy.apply().tools.find((tool) => tool.name === "read");
     expect(sdkReader?.handler).toBeTypeOf("function");
-    const invocation = {
-      sessionId: "session-1",
-      toolCallId: "read-1",
-      toolName: "read",
-      arguments: {},
-    };
+    const invocation = makeInvocation({ toolName: "read", toolCallId: "read-1", arguments: {} });
     const result = await sdkReader!.handler!({}, invocation);
     expect(result).toMatchObject({
       resultType: "success",
@@ -86,11 +73,6 @@ describe("Copilot host-owned tool construction", () => {
   it("does not silently fall back to the public factory when host construction is unavailable", async () => {
     await expect(
       createCopilotToolBridge({
-        agentId: "main",
-        modelProvider: "github-copilot",
-        modelId: "test-model",
-        sessionId: "session-1",
-        spawnWorkspaceDir: undefined,
         attemptParams: {
           codeModeOverride: false,
           hostCapabilities: createCopilotTestHostCapabilities(),

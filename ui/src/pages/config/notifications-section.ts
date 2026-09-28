@@ -4,6 +4,7 @@ import type {
   WebPushNotificationPreferences,
 } from "../../../../packages/gateway-protocol/src/schema/push.js";
 import type { NativeNotificationsPermission } from "../../app/native-notifications.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderSettingsRow,
@@ -40,7 +41,6 @@ const WEB_PUSH_CATEGORIES = [
   ["agentQuestion", () => t("configView.notifications.agentQuestion")],
   ["humanMentioned", () => t("configView.notifications.humanMentioned")],
   ["scheduledTaskFailed", () => t("configView.notifications.scheduledTaskFailed")],
-  ["backgroundTaskFailed", () => t("configView.notifications.backgroundTaskFailed")],
 ] as const;
 
 function minutesToTime(value: number): string {
@@ -353,7 +353,7 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
             : nothing;
 
     return html`
-      <div class="settings-page">
+      <div class="settings-page" ${shellLayoutTraits({ settingsPage: true })}>
         <section class="settings-section" id=${COMMUNICATION_SETTINGS_TARGET_IDS.notifications}>
           <div class="settings-section__header">
             <h2 class="settings-section__heading">${t("configView.notifications.nativeTitle")}</h2>
@@ -418,7 +418,7 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
   const push = props.webPush;
   if (!push) {
     return html`
-      <div class="settings-page">
+      <div class="settings-page" ${shellLayoutTraits({ settingsPage: true })}>
         <section class="settings-section" id=${COMMUNICATION_SETTINGS_TARGET_IDS.notifications}>
           <div class="settings-section__header">
             <h2 class="settings-section__heading">${t("configView.notifications.title")}</h2>
@@ -517,7 +517,7 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
       : nothing;
 
   return html`
-    <div class="settings-page">
+    <div class="settings-page" ${shellLayoutTraits({ settingsPage: true })}>
       <section class="settings-section" id=${COMMUNICATION_SETTINGS_TARGET_IDS.notifications}>
         <div class="settings-section__header">
           <h2 class="settings-section__heading">${t("configView.notifications.title")}</h2>

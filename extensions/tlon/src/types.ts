@@ -23,6 +23,7 @@ export type TlonResolvedAccount = {
   enabled: boolean;
   configured: boolean;
   mediaMaxBytes?: number;
+  requireMentionInBotThreads?: boolean;
   ship: string | null;
   url: string | null;
   code: string | null;
@@ -124,6 +125,7 @@ export function resolveTlonAccount(
     name: merged.name ?? null,
     enabled: merged.enabled !== false,
     configured,
+    requireMentionInBotThreads: merged.requireMentionInBotThreads,
     mediaMaxBytes: resolveChannelMediaMaxBytes({
       cfg,
       accountId: resolvedAccountId,

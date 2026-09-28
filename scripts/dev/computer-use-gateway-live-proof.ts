@@ -1,7 +1,18 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  readlink,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -21,24 +32,39 @@ import {
 import { killProcessTree } from "../../src/process/kill-tree.js";
 
 const { values } = parseArgs({
-  options: { artifacts: { type: "string" }, help: { type: "boolean", short: "h" } },
+  options: {
+    artifacts: { type: "string" },
+    runtime: { type: "string" },
+    help: { type: "boolean", short: "h" },
+  },
   strict: true,
 });
 if (values.help) {
   console.log(
-    "Usage: node --import ./scripts/tsx.mjs scripts/dev/computer-use-gateway-live-proof.ts --artifacts <empty-dir>\nLinux only. Requires the built checkout, installed CUA driver artifacts, TigerVNC, XFCE, D-Bus, and Mousepad. Starts an isolated Gateway; needs no model credentials.",
+    "Usage: node --import ./scripts/tsx.mjs scripts/dev/computer-use-gateway-live-proof.ts --artifacts <empty-dir> [--runtime <executable>]\nLinux only. Requires the built checkout, installed CUA driver artifacts, TigerVNC, XFCE, D-Bus, and Mousepad. Starts an isolated Gateway; needs no model credentials.\n--runtime starts the built Gateway on that executable; run it with no `node` on PATH. The proof fails if the Gateway or its computer helper runs on another executable, or any owned process runs Node.",
   );
   process.exit(0);
 }
 assert.equal(process.platform, "linux", "This proof requires an isolated Linux host");
 assert(values.artifacts, "--artifacts is required");
 const artifacts = path.resolve(values.artifacts);
+const runtime = values.runtime ? await realpath(path.resolve(values.runtime)) : undefined;
+if (runtime) {
+  for (const directory of (process.env.PATH ?? "").split(path.delimiter).filter(Boolean)) {
+    const node = path.join(directory, "node");
+    const found = await access(node, constants.X_OK).then(
+      () => true,
+      () => false,
+    );
+    assert(!found, `--runtime proves a Node-free Gateway; remove ${node} from PATH`);
+  }
+}
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 await mkdir(artifacts, { recursive: true, mode: 0o700 });
 assert.equal((await readdir(artifacts)).length, 0, "Artifact directory must be empty");
 
 type JsonRecord = Record<string, unknown>;
-type ProcessIdentity = { pid: number; startTime: string; state: string };
+type ProcessIdentity = { pid: number; startTime: string; state: string; executable: string };
 const records = (value: unknown): JsonRecord[] =>
   Array.isArray(value)
     ? value.flatMap((entry) => {
@@ -84,7 +110,8 @@ async function processIdentity(pid: number): Promise<ProcessIdentity | undefined
       .trim()
       .split(/\s+/u);
     assert(fields[19], "Linux process stat did not include its start time");
-    return { pid, state: fields[0]!, startTime: fields[19] };
+    const executable = await readlink(`/proc/${pid}/exe`).catch(() => "");
+    return { pid, state: fields[0]!, startTime: fields[19], executable };
   } catch (error) {
     if (record(error)?.code === "ENOENT") {
       return undefined;
@@ -300,11 +327,17 @@ try {
     await mkdir(directory, { recursive: true, mode: 0o700 });
   }
   phase("starting isolated Gateway with managed desktop and no node");
-  child = spawn(process.execPath, ["scripts/run-node.mjs", "gateway", "run"], {
-    cwd: repoRoot,
-    env,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  child = runtime
+    ? spawn(runtime, ["openclaw.mjs", "gateway", "run"], {
+        cwd: repoRoot,
+        env,
+        stdio: ["ignore", "pipe", "pipe"],
+      })
+    : spawn(process.execPath, ["scripts/run-node.mjs", "gateway", "run"], {
+        cwd: repoRoot,
+        env,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
   const appendLog = (chunk: Buffer) => {
     logs = (logs + chunk.toString("utf8")).slice(-2 * 1024 * 1024);
   };
@@ -434,6 +467,17 @@ try {
   evidence.typedMarkerReadBack = true;
   const helpers = (await captureProcesses()).filter((entry) => entry.computer);
   assert.equal(helpers.length, 1, "Expected one owned Gateway computer helper");
+  assert(child.pid);
+  evidence.gatewayRuntime = (await processIdentity(child.pid))?.executable;
+  evidence.helperRuntime = helpers[0]!.executable;
+  if (runtime) {
+    assert.equal(evidence.gatewayRuntime, runtime, "Gateway did not run on the selected runtime");
+    assert.equal(
+      evidence.helperRuntime,
+      runtime,
+      "Computer helper did not run on the Gateway runtime",
+    );
+  }
   const helperTree = [helpers[0]!, ...(await descendants(helpers[0]!.pid))];
   const oldGeneration = execution.generation;
   phase("typed marker verified; closing native helper and checking generation fencing");
@@ -515,6 +559,11 @@ try {
         }
       }
     }
+  }
+  const executables = [...new Set([...ownedProcesses.values()].map((entry) => entry.executable))];
+  evidence.processExecutables = executables.toSorted();
+  if (runtime && executables.some((executable) => path.basename(executable) === "node")) {
+    failures.push("A Gateway process ran on Node");
   }
   process.off("SIGINT", onInterrupt);
   process.off("SIGTERM", onInterrupt);

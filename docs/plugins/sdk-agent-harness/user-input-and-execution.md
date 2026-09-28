@@ -183,6 +183,18 @@ the capability on every selected attempt. Compatibility is type-level only:
 current harness code must not add a runtime path that operates without the
 host capability.
 
+Compaction implementations use `AgentHarnessCompactParams<2>` (and the private
+native bridge's `AgentHarnessNativeCompactionParams<2>`) with a host-created view
+of `assertActive` and `retainSourceAuthority`. Core retains the originating source
+through preparation, queueing, native completion, and cleanup. The registered
+`AgentHarness.compact` and `AgentHarnessV2.compact` callback signatures remain
+unchanged. Validate the supplied capability at that callback boundary before
+loading or calling the version 2 implementation. Omitting the type argument keeps
+the legacy parameter shape; selecting `2` requires the host capability through
+the existing SDK type names. The adapters do not require a new runtime SDK export. An older
+host that omits it receives an actionable failure before native work; absence
+never becomes System authority. The capability's runtime version remains `1`.
+
 Native harnesses that need PI-like compact tool routing should use
 `createAgentHarnessToolSurfaceRuntime(...)` from
 `openclaw/plugin-sdk/agent-harness-tool-runtime`. It owns

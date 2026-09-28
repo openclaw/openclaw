@@ -3,12 +3,13 @@ package ai.openclaw.app.voice
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.isAndroidRealtimeRelayModelSupported
+import ai.openclaw.app.node.asObjectOrNull
+import ai.openclaw.app.node.asStringOrNull
 import ai.openclaw.app.normalizeMainKey
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
-import kotlinx.serialization.json.contentOrNull
 import java.util.Locale
 
 internal enum class TalkModeRoute {
@@ -97,18 +98,10 @@ internal object TalkModeGatewayConfigParser {
   }
 }
 
-private fun JsonElement?.asStringOrNull(): String? =
-  this
-    ?.let { element ->
-      element as? JsonPrimitive
-    }?.contentOrNull
-
 private fun JsonElement?.asBooleanOrNull(): Boolean? {
   val primitive = this as? JsonPrimitive ?: return null
   return primitive.booleanOrNull
 }
-
-private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
 
 internal fun normalizeSpeechLocaleTag(value: String?): String? {
   val candidate =

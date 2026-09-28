@@ -8,7 +8,7 @@ import type { SecretInputMode } from "./provider-auth-types.js";
 import type { ProviderAuthOptionBag } from "./provider-external-auth.types.js";
 import type { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
 
-export type ProviderAuthKind = "oauth" | "api_key" | "token" | "device_code" | "custom";
+type ProviderAuthKind = "oauth" | "api_key" | "token" | "device_code" | "custom";
 
 type ProviderAuthSecretStorage = {
   /** Final persistence target. The inline credential remains available for staged validation. */

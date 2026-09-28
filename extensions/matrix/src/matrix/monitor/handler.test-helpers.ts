@@ -409,6 +409,36 @@ export function createMatrixHandlerTestHarness(
   };
 }
 
+export function createMatrixReactionTestHarness(params?: {
+  cfg?: unknown;
+  dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
+  allowFrom?: string[];
+  storeAllowFrom?: string[];
+  targetSender?: string;
+  isDirectMessage?: boolean;
+  senderName?: string;
+  client?: NonNullable<Parameters<typeof createMatrixHandlerTestHarness>[0]>["client"];
+}) {
+  return createMatrixHandlerTestHarness({
+    cfg: params?.cfg,
+    dmPolicy: params?.dmPolicy,
+    allowFrom: params?.allowFrom,
+    readAllowFromStore: vi.fn(async () => params?.storeAllowFrom ?? []),
+    client: {
+      getEvent: async (_roomId, eventId) =>
+        createMatrixTextMessageEvent({
+          eventId,
+          sender: params?.targetSender ?? "@bot:example.org",
+          body: "Bot response",
+          originServerTs: 0,
+        }),
+      ...params?.client,
+    },
+    isDirectMessage: params?.isDirectMessage,
+    getMemberDisplayName: async () => params?.senderName ?? "sender",
+  });
+}
+
 export function createMatrixTextMessageEvent(params: {
   eventId: string;
   sender?: string;

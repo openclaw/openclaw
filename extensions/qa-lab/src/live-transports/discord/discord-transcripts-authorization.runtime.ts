@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { requestDiscord } from "@openclaw/discord/api.js";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import {
   discordQaScenarioSupport,
   type DiscordQaScenarioImplementation,
@@ -74,9 +75,7 @@ async function waitForDiscordVoiceDisconnect(params: {
     } catch (error) {
       lastError = formatErrorMessage(error);
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 500);
-    });
+    await sleep(500);
   }
   throw new Error(
     `SUT bot did not leave Discord voice channel ${params.channelId} (last channel=${lastChannelId ?? "none"}${

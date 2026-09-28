@@ -177,25 +177,29 @@ describe("setup-pnpm-store-cache ensure-node", () => {
     }
   });
 
-  it("repairs PATH from the toolcache when setup-node leaves an old node active", () => {
+  it.each([
+    { active: "20.20.0", requested: "24.16.0" },
+    { active: "24.22.0", requested: "24.21.0" },
+  ])("repairs PATH from active Node $active to requested $requested", ({ active, requested }) => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-ensure-node-"));
     try {
       const activeBin = join(root, "active", "bin");
-      writeFakeNode(activeBin, "20.20.0");
-      const toolcacheBin = join(root, "toolcache", "node", "24.16.0", "x64", "bin");
-      const toolcacheNode = writeFakeNode(toolcacheBin, "24.16.0");
+      writeFakeNode(activeBin, active);
+      const toolcacheBin = join(root, "toolcache", "node", requested, "x64", "bin");
+      const toolcacheNode = writeFakeNode(toolcacheBin, requested);
       writeFakeNode(
         join(root, "toolcache", "node", "26.1.0", "x64", "lib", "node_modules", "bundled", "bin"),
-        "24.16.0",
+        requested,
       );
-      const result = runEnsureNode(root, "24.16.0", {
+      const result = runEnsureNode(root, requested, {
         PATH: `${activeBin}:${process.env.PATH ?? ""}`,
+        OPENCLAW_NODE_TOOLCHAIN_ROOT: join(root, "missing-owned-toolchain"),
         RUNNER_TOOL_CACHE: join(root, "toolcache"),
       });
 
       expect(result.status).toBe(0);
-      expect(result.stdout).toContain(`Using Node 24.16.0 from ${toolcacheNode}`);
-      expect(result.stdout).toContain(`${toolcacheNode}\n24.16.0`);
+      expect(result.stdout).toContain(`Using Node ${requested} from ${toolcacheNode}`);
+      expect(result.stdout).toContain(`${toolcacheNode}\n${requested}`);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

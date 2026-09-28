@@ -40,8 +40,8 @@ function parseQueueDirectiveArgs(raw: string): {
   rawDrop?: string;
   hasOptions: boolean;
 } {
-  const len = raw.length;
   let i = skipDirectiveArgPrefix(raw);
+  const argsStart = i;
   let consumed = i;
   let queueMode: QueueMode | undefined;
   let queueReset = false;
@@ -53,16 +53,9 @@ function parseQueueDirectiveArgs(raw: string): {
   let rawCap: string | undefined;
   let rawDrop: string | undefined;
   let hasOptions = false;
-  const takeToken = (): string | null => {
-    const res = takeDirectiveToken(raw, i);
-    i = res.nextIndex;
-    return res.token;
-  };
-  for (;;) {
-    if (i >= len) {
-      break;
-    }
-    const token = takeToken();
+  while (i < raw.length) {
+    const { token, nextIndex } = takeDirectiveToken(raw, i);
+    i = nextIndex;
     if (!token) {
       break;
     }
@@ -103,7 +96,7 @@ function parseQueueDirectiveArgs(raw: string): {
       consumed = i;
       continue;
     }
-    if (consumed === skipDirectiveArgPrefix(raw) && !queueReset && !hasOptions) {
+    if (consumed === argsStart && !queueReset && !hasOptions) {
       rawMode = token;
       consumed = i;
     }
@@ -126,21 +119,14 @@ function parseQueueDirectiveArgs(raw: string): {
 }
 
 /** Extracts and removes a `/queue` directive from message text. */
-export function extractQueueDirective(body?: string): Omit<
+export function extractQueueDirective(rawBody?: string): Omit<
   ReturnType<typeof parseQueueDirectiveArgs>,
   "consumed"
 > & {
   cleaned: string;
   hasDirective: boolean;
 } {
-  if (!body) {
-    return {
-      cleaned: "",
-      hasDirective: false,
-      queueReset: false,
-      hasOptions: false,
-    };
-  }
+  const body = rawBody ?? "";
   const re = /(?<!\S)\/queue(?=$|\s|:)/i;
   const match = re.exec(body);
   if (!match) {

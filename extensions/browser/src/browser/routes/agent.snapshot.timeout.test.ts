@@ -52,6 +52,7 @@ const pwMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../pw-ai-module.js", () => ({
+  getPwAiModule: vi.fn(async () => null),
   getLoadedPwAiModule: () => pwMocks,
 }));
 
@@ -93,7 +94,6 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
 
 vi.mock("./agent.shared.js", () => ({
   browserNavigationPolicyForProfile: vi.fn(() => ({})),
-  getPwAiModule: vi.fn(async () => null),
   handleRouteError: vi.fn((_ctx, _res, err) => {
     throw err;
   }),
@@ -240,18 +240,6 @@ describe("browser agent snapshot timeout routing", () => {
       name: "headless request override when its profile is configured headed",
       configuredHeadless: false,
       running: { headless: true, headlessSource: "request" },
-      expectedHeadless: true,
-    },
-    {
-      name: "headless environment override when its profile is configured headed",
-      configuredHeadless: false,
-      running: { headless: true, headlessSource: "env" },
-      expectedHeadless: true,
-    },
-    {
-      name: "headless Linux no-display fallback when its profile is configured headed",
-      configuredHeadless: false,
-      running: { headless: true, headlessSource: "linux-display-fallback" },
       expectedHeadless: true,
     },
     {

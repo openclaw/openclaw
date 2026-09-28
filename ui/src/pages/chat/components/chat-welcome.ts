@@ -5,6 +5,8 @@ import type {
   SessionsListResult,
 } from "../../../api/types.ts";
 import { renderAgentIdentityAvatar } from "../../../components/identity-avatar-view.ts";
+import { renderKbd } from "../../../components/kbd.ts";
+// Control UI chat module implements chat welcome behavior.
 import { t } from "../../../i18n/index.ts";
 import "../../../components/openclaw-mascot.ts";
 import { registerCommandPaletteEnglish } from "../../../i18n/locales/en-command-palette.ts";
@@ -184,8 +186,8 @@ function renderWelcomeHero(
   const name = props.assistantName || "Assistant";
   const hint =
     props.hint ??
-    html`${t("chat.welcome.hintBeforeShortcut")}
-      <kbd>/</kbd> ${t("chat.welcome.hintAfterShortcut")}`;
+    html`${t("chat.welcome.hintBeforeShortcut")} ${renderKbd("/")}
+    ${t("chat.welcome.hintAfterShortcut")}`;
   return html`
     <div class="agent-chat__welcome-identity">
       <span class="agent-chat__welcome-avatar" role="img" aria-label=${name}>

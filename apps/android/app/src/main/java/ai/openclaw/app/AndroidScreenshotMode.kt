@@ -13,6 +13,7 @@ enum class AndroidScreenshotScene(
 ) {
   Home("home", HomeDestination.Connect),
   Chat("chat", HomeDestination.Chat),
+  Browser("browser", HomeDestination.Chat),
   Attention("attention", HomeDestination.Chat),
   AttentionExpiry("attention-expiry", HomeDestination.Chat),
   Sources("sources", HomeDestination.Chat),

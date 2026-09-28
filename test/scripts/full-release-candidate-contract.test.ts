@@ -6,11 +6,13 @@ import {
   buildFullReleaseCandidateRequest,
   candidateRequestSha256,
   canonicalFullReleaseCandidateRequestJson,
-  fullReleaseCandidateArtifactName,
   validateFullReleaseCandidateBinding,
   validateFullReleaseCandidateRequest,
 } from "../../scripts/full-release-candidate-contract.mjs";
-import { resolveCandidateBinding } from "../../scripts/lib/full-release-candidate-reuse.mjs";
+import {
+  candidateArtifactJsonFromBinding,
+  resolveCandidateBinding,
+} from "../../scripts/lib/full-release-candidate-reuse.mjs";
 import {
   canonicalTestJson,
   canonicalTestSha256,
@@ -64,13 +66,6 @@ function replaceBindingRequest(
 }
 
 describe("full release candidate contract", () => {
-  it("uses the canonical request digest directly in the evidence artifact name", () => {
-    const requestSha256 = "a".repeat(64);
-    expect(fullReleaseCandidateArtifactName(requestSha256)).toBe(
-      `full-release-candidate-v2-${requestSha256}`,
-    );
-  });
-
   it("canonicalizes equivalent request inputs and expands effective policy", () => {
     const request = buildFullReleaseCandidateRequest(fullReleaseCandidateRequestInput());
     const reordered = Object.fromEntries(
@@ -146,6 +141,35 @@ describe("full release candidate contract", () => {
     }
   });
 
+  it("validates retained v1 request and manifest digests without rewriting them", () => {
+    const currentManifest = fullReleaseCandidateManifestFixture();
+    const { packagePublished: _packagePublished, ...requestFields } = currentManifest.request;
+    const request = {
+      ...requestFields,
+      schema: "openclaw.full-release-candidate-request/v1" as const,
+    };
+    const requestSha256 = canonicalTestSha256(request);
+    const retainedManifest = { ...currentManifest, request, requestSha256 };
+    const currentBinding = fullReleaseCandidateBindingFixture();
+    const binding = {
+      ...currentBinding,
+      request,
+      requestSha256,
+      evidenceArtifact: {
+        ...currentBinding.evidenceArtifact,
+        name: `full-release-candidate-v2-${requestSha256}`,
+      },
+      manifestSha256: canonicalTestSha256(retainedManifest),
+    };
+
+    expect(validateFullReleaseCandidateBinding(binding)).toEqual(binding);
+    expect(candidateRequestSha256(request)).toBe(requestSha256);
+    expect(() => validateFullReleaseCandidateRequest(request)).toThrow("schema is invalid");
+    expect(() => candidateArtifactJsonFromBinding(binding)).toThrow(
+      "retained v1 candidate evidence cannot supply package provenance",
+    );
+  });
+
   it.each([
     ["repository", { repository: "openclaw/fork" }],
     ["target SHA", { targetSha: "4".repeat(40) }],
@@ -199,14 +223,6 @@ describe("full release candidate contract", () => {
         contractVersions: { ...request.contractVersions, sharedImage: 2 },
       }),
     ).toThrow("contract versions are invalid");
-  });
-
-  it("validates one canonical binding across the request, plan, producer, and artifacts", () => {
-    const value = manifest();
-    const binding = fullReleaseCandidateBindingFixture();
-    expect(validateFullReleaseCandidateBinding(binding)).toEqual(binding);
-    expect(binding.request).toEqual(value.request);
-    expect(binding.manifestSha256).toBe(canonicalTestSha256(value));
   });
 
   it("runs request, manifest, and binding commands through their subprocess boundary", () => {

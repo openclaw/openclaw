@@ -38,8 +38,11 @@ function placementSnapshot(reconciling: readonly string[]): WorkerSessionPlaceme
   return {
     placements: new Map(),
     moves: new Map(),
+    pendingResults: new Map(),
+    workspaceJournalOwnerSessionIds: new Set(),
     environments: new Map(),
     workspaceResultReconcilingSessionIds: new Set(reconciling),
+    workspaceRecoveryPendingSessionIds: new Set(),
   };
 }
 

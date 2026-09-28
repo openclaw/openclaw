@@ -97,49 +97,37 @@ export function publishUserProfileAuthorityChange(db: DatabaseSync, ...profileId
         .where("profile_id", "in", profileIds),
     );
   }
-  observeAuthorityLifecycle();
-  const store = changes.authorityHandles.get(db);
-  if (!store || profileIds.length === 0) {
-    return;
-  }
-  const commit = () => {
-    store.revision = {};
-    for (const profileId of profileIds) {
-      store.profiles.set(profileId, {});
-    }
-  };
-  if (!stageSqliteTransactionState(db, { stage: () => {}, rollback: () => {}, commit })) {
-    commit();
-  }
+  publishAuthorityStoreChange(db, "profiles", profileIds);
 }
 
 /** Only changed merge pointers invalidate account selection; roles and login grants do not. */
 export function publishUserProfileIdentityChange(db: DatabaseSync, ...profileIds: string[]): void {
-  observeAuthorityLifecycle();
-  const store = changes.authorityHandles.get(db);
-  if (!store || profileIds.length === 0) {
-    return;
-  }
-  const commit = () => {
-    store.identityRevision = {};
-    for (const profileId of profileIds) {
-      store.profileIdentities.set(profileId, {});
-    }
-  };
-  if (!stageSqliteTransactionState(db, { stage: () => {}, rollback: () => {}, commit })) {
-    commit();
-  }
+  publishAuthorityStoreChange(db, "profileIdentities", profileIds);
 }
 
 export function publishUserChannelIdentityAuthorityChange(db: DatabaseSync, subject: string): void {
+  publishAuthorityStoreChange(db, "channelIdentities", [subject]);
+}
+
+function publishAuthorityStoreChange(
+  db: DatabaseSync,
+  kind: "profiles" | "profileIdentities" | "channelIdentities",
+  ids: string[],
+): void {
   observeAuthorityLifecycle();
   const store = changes.authorityHandles.get(db);
-  if (!store) {
+  if (!store || ids.length === 0) {
     return;
   }
   const commit = () => {
-    store.revision = {};
-    store.channelIdentities.set(subject, {});
+    if (kind === "profileIdentities") {
+      store.identityRevision = {};
+    } else {
+      store.revision = {};
+    }
+    for (const id of ids) {
+      store[kind].set(id, {});
+    }
   };
   if (!stageSqliteTransactionState(db, { stage: () => {}, rollback: () => {}, commit })) {
     commit();

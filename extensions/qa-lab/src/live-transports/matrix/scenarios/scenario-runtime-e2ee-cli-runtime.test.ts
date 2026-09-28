@@ -6,6 +6,7 @@ import {
   createMatrixQaCliE2eeSetupRuntime,
   createMatrixQaCliSelfVerificationRuntime,
 } from "./scenario-runtime-e2ee-cli-runtime.js";
+import { createMatrixQaRecoveryCliRuntime } from "./scenario-runtime-e2ee-destructive-recovery.js";
 import { createMatrixQaE2eeTestContext } from "./scenario-runtime-e2ee.test-helpers.js";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
@@ -42,7 +43,22 @@ const constructors = [
   },
 ];
 
-describe.each(constructors)("Matrix CLI $name construction", ({ create }) => {
+const recoveryConstructor = {
+  name: "recovery",
+  create: async (context: MatrixQaScenarioContext) => {
+    const runtime = await createMatrixQaRecoveryCliRuntime({
+      accountId: "self",
+      accessToken: "test-access-token",
+      context,
+      deviceId: "TEST-DEVICE",
+      label: "recovery",
+      userId: "@self:matrix-qa.test",
+    });
+    return { ...runtime, rootDir: runtime.artifactDir };
+  },
+};
+
+describe("Matrix CLI construction", () => {
   let root: string;
   let outputDir: string;
   beforeEach(async () => {
@@ -60,57 +76,62 @@ describe.each(constructors)("Matrix CLI $name construction", ({ create }) => {
     await actual.rm(root, { recursive: true, force: true });
   });
 
-  it("removes the private config root after late environment failure while preserving output artifacts", async () => {
-    await expect(create(createMatrixQaE2eeTestContext({ outputDir }))).rejects.toThrow(
-      "require the gateway runtime environment",
-    );
-    expect(await fs.readdir(fixture.tempRoot)).toEqual([]);
-    expect((await fs.readdir(outputDir)).length).toBeGreaterThan(0);
-  });
+  it.each(constructors)(
+    "removes the private $name config root after late environment failure while preserving output artifacts",
+    async ({ create }) => {
+      await expect(create(createMatrixQaE2eeTestContext({ outputDir }))).rejects.toThrow(
+        "require the gateway runtime environment",
+      );
+      expect(await fs.readdir(fixture.tempRoot)).toEqual([]);
+      expect((await fs.readdir(outputDir)).length).toBeGreaterThan(0);
+    },
+  );
 
-  it("removes its temp root on an actual filesystem setup failure", async () => {
-    await fs.writeFile(outputDir, "not a directory");
-    await expect(
-      create(createMatrixQaE2eeTestContext({ outputDir, gatewayRuntimeEnv: {} })),
-    ).rejects.toMatchObject({ code: "ENOTDIR" });
-    expect(await fs.readdir(fixture.tempRoot)).toEqual([]);
-    expect(await fs.readFile(outputDir, "utf8")).toBe("not a directory");
-  });
+  describe.each([...constructors, recoveryConstructor])("$name", ({ create }) => {
+    it("removes its temp root on an actual filesystem setup failure", async () => {
+      await fs.writeFile(outputDir, "not a directory");
+      await expect(
+        create(createMatrixQaE2eeTestContext({ outputDir, gatewayRuntimeEnv: {} })),
+      ).rejects.toMatchObject({ code: "ENOTDIR" });
+      expect(await fs.readdir(fixture.tempRoot)).toEqual([]);
+      expect(await fs.readFile(outputDir, "utf8")).toBe("not a directory");
+    });
 
-  it("retains the original setup failure when removing the owned root also fails", async () => {
-    const setupFailure = new Error("config write failed");
-    const cleanupFailure = new Error("temp removal failed");
-    vi.mocked(fs.writeFile).mockRejectedValueOnce(setupFailure);
-    vi.mocked(fs.rm).mockRejectedValueOnce(cleanupFailure);
-    await expect(
-      create(createMatrixQaE2eeTestContext({ outputDir, gatewayRuntimeEnv: {} })),
-    ).rejects.toMatchObject({ cause: setupFailure, errors: [setupFailure, cleanupFailure] });
-  });
+    it("retains the original setup failure when removing the owned root also fails", async () => {
+      const setupFailure = new Error("config write failed");
+      const cleanupFailure = new Error("temp removal failed");
+      vi.mocked(fs.writeFile).mockRejectedValueOnce(setupFailure);
+      vi.mocked(fs.rm).mockRejectedValueOnce(cleanupFailure);
+      await expect(
+        create(createMatrixQaE2eeTestContext({ outputDir, gatewayRuntimeEnv: {} })),
+      ).rejects.toMatchObject({ cause: setupFailure, errors: [setupFailure, cleanupFailure] });
+    });
 
-  it("keeps successful private state until disposal and preserves the artifact directory", async () => {
-    const runtime = await create(
-      createMatrixQaE2eeTestContext({ outputDir, gatewayRuntimeEnv: {} }),
-    );
-    const privateRoot = path.dirname(runtime.configPath);
-    try {
-      const config = JSON.parse(await fs.readFile(runtime.configPath, "utf8"));
-      if ("fixtureToken" in config) {
-        expect(config.fixtureToken).toBe("test-config-value");
-      } else {
-        expect(config.channels.matrix.accounts.self).toMatchObject({
-          accessToken: "test-access-token",
-          initialSyncLimit: 0,
-          startupVerification: "off",
-        });
+    it("keeps successful private state until disposal and preserves the artifact directory", async () => {
+      const runtime = await create(
+        createMatrixQaE2eeTestContext({ outputDir, gatewayRuntimeEnv: {} }),
+      );
+      const privateRoot = path.dirname(runtime.configPath);
+      try {
+        const config = JSON.parse(await fs.readFile(runtime.configPath, "utf8"));
+        if ("fixtureToken" in config) {
+          expect(config.fixtureToken).toBe("test-config-value");
+        } else {
+          expect(config.channels.matrix.accounts.self).toMatchObject({
+            accessToken: "test-access-token",
+            initialSyncLimit: 0,
+            startupVerification: "off",
+          });
+        }
+        if (process.platform !== "win32") {
+          expect((await fs.stat(privateRoot)).mode & 0o777).toBe(0o700);
+          expect((await fs.stat(runtime.configPath)).mode & 0o777).toBe(0o600);
+        }
+      } finally {
+        await runtime.dispose();
       }
-      if (process.platform !== "win32") {
-        expect((await fs.stat(privateRoot)).mode & 0o777).toBe(0o700);
-        expect((await fs.stat(runtime.configPath)).mode & 0o777).toBe(0o600);
-      }
-    } finally {
-      await runtime.dispose();
-    }
-    await expect(fs.stat(privateRoot)).rejects.toMatchObject({ code: "ENOENT" });
-    expect((await fs.stat(runtime.rootDir)).isDirectory()).toBe(true);
+      await expect(fs.stat(privateRoot)).rejects.toMatchObject({ code: "ENOENT" });
+      expect((await fs.stat(runtime.rootDir)).isDirectory()).toBe(true);
+    });
   });
 });

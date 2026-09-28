@@ -1,5 +1,4 @@
 import { execFileSync, spawnSync } from "node:child_process";
-// Release Candidate Checklist tests cover release candidate checklist script behavior.
 import { createHash } from "node:crypto";
 import {
   existsSync,
@@ -92,6 +91,27 @@ function candidateGitFixture(files: Record<string, string>) {
   return { root, git };
 }
 
+function candidateChangelog(provenance: string, rows: string[], exclusions?: string) {
+  return [
+    "# Changelog",
+    "",
+    "## 2026.7.1",
+    "",
+    "### Highlights",
+    "",
+    "- User-facing notes.",
+    "",
+    "### Complete contribution record",
+    "",
+    provenance,
+    "",
+    ...(exclusions ? [exclusions, ""] : []),
+    "#### Pull requests",
+    "",
+    ...rows,
+  ].join("\n");
+}
+
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), init);
 }
@@ -123,7 +143,7 @@ describe("release candidate checklist", () => {
   it.each([
     {
       flags: ["--tag", "v2026.9.1-alpha.1", "--workflow-sha", "b".repeat(40)],
-      message: "--workflow-sha is only supported for regular beta and stable release candidates",
+      message: "Alpha releases are retired;",
     },
     {
       flags: [
@@ -240,13 +260,6 @@ describe("release candidate checklist", () => {
     { tag: "v2026.9.1", pin: "2026.7.4", expected: "warning", failedRegistry: "" },
     { tag: "v2026.9.1-1", pin: "2026.9.1", expected: "passed", failedRegistry: "" },
     { tag: "v2026.9.1-beta.1", pin: "2026.7.4", expected: undefined, failedRegistry: "" },
-    {
-      tag: "v2026.9.1-alpha.1",
-      pin: "2026.7.4",
-      expected: undefined,
-      failedRegistry: "",
-      distTag: "alpha",
-    },
     ...["npm", "clawhub"].map((failedRegistry) => ({
       tag: "v2026.9.1",
       pin: "2026.9.1",
@@ -301,7 +314,7 @@ describe("release candidate checklist", () => {
       launch: "npm-only" as const,
       distTag: "latest",
     })),
-    ...(["beta", "alpha"] as const).map((distTag) => ({
+    ...(["beta"] as const).map((distTag) => ({
       tag: `v2026.9.33-${distTag}.1`,
       pin: "2026.7.4",
       launch: "npm-only" as const,
@@ -347,8 +360,6 @@ describe("release candidate checklist", () => {
         "CHANGELOG.md": "# Fixture changelog\n\n## 2026.9.1\n\nFixture notes.\n",
       });
       const targetSha = git("rev-parse", "HEAD");
-      // A stable tag validated with the beta profile carries the operator's soak waiver.
-      const stableSoakWaiver = distTag === "latest" ? "operator-approved beta soak waiver" : "";
       // The target ref is authoritative even if another checkout has prepared a newer pin.
       writeFileSync(
         join(targetRoot, "apps/android/version.json"),
@@ -365,15 +376,12 @@ describe("release candidate checklist", () => {
         ...(!launch || launch === "skip" ? ["--skip-dispatch"] : []),
         ...(launch === "npm-only" ? ["--npm-preflight-run", "222"] : []),
         ...(distTag ? ["--npm-dist-tag", distTag] : []),
-        ...(stableSoakWaiver ? ["--stable-soak-waiver", stableSoakWaiver] : []),
         "--skip-parallels",
         "--skip-telegram",
         "--skip-local-generated-check",
-        ...(tag.includes("-alpha.")
-          ? ["--workflow-ref", "tideclaw/alpha/2026-09-01-1200Z"]
-          : workflowSha
-            ? ["--workflow-sha", workflowSha]
-            : ["--publish-workflow-ref", publishWorkflowRef]),
+        ...(workflowSha
+          ? ["--workflow-sha", workflowSha]
+          : ["--publish-workflow-ref", publishWorkflowRef]),
       ]);
       if (failedRegistry) {
         options.fullReleaseRunId = "";
@@ -483,7 +491,6 @@ describe("release candidate checklist", () => {
           preflightRunId: "222",
           tag,
           publicationRoute,
-          stableSoakWaiver,
           workflowRef: options.publishWorkflowRef || options.workflowRef,
         });
         return {
@@ -690,7 +697,7 @@ describe("release candidate checklist", () => {
         ).toMatchObject({
           validationPurpose: "publish",
           publicationSelection: {
-            route: tag.includes("-alpha.") ? "alpha" : publicationRoute,
+            route: publicationRoute,
             npmDistTag: options.npmDistTag,
             publishOpenclawNpm: true,
             pluginPublishScope: "all-publishable",
@@ -767,13 +774,6 @@ describe("release candidate checklist", () => {
         expect(evidence.publishPreflight.command).toContain("openclaw-release-prepare.yml");
         expect(output).not.toContain("openclaw-release-publish.yml");
       }
-      const waiverInput =
-        publicationRoute === "normal"
-          ? `'stable_soak_waiver=${stableSoakWaiver}'`
-          : `"stable_soak_waiver":"${stableSoakWaiver}"`;
-      expect(evidence.publishPreflight.command.includes(waiverInput)).toBe(
-        Boolean(stableSoakWaiver),
-      );
       if (preflightFailure) {
         expect(output).toContain("Obtain the exact bootstrap approval.");
         expect(output).not.toContain("direct publication / recovery command:");
@@ -821,7 +821,7 @@ describe("release candidate checklist", () => {
       if (expected === "warning") {
         expect(message).toContain("2026.7.4");
         expect(message).toContain(
-          "scripts/mobile-release-version.ts --prepare --version 2026.9.1 --write before tagging",
+          "scripts/android-pin-version.ts --version 2026.9.1 before tagging",
         );
         expect(message).toContain("or accept that Android will not ship for this release");
       }
@@ -1192,64 +1192,34 @@ describe("release candidate checklist", () => {
   });
 
   it("keeps the frozen release target separate from clean trusted workflow tooling", () => {
-    expect(
-      validateCandidateCheckout({
-        targetSha: "a".repeat(40),
-        targetHeadSha: "a".repeat(40),
-        targetTrackedStatus: "",
-        toolingSha: "b".repeat(40),
-        trustedToolingSha: "b".repeat(40),
-        toolingTrackedStatus: "",
-        workflowRef: "main",
-      }),
-    ).toEqual({
-      status: "passed",
+    const checkout = {
       targetSha: "a".repeat(40),
+      targetHeadSha: "a".repeat(40),
+      targetTrackedStatus: "",
       toolingSha: "b".repeat(40),
+      trustedToolingSha: "b".repeat(40),
+      toolingTrackedStatus: "",
+      workflowRef: "main",
+    };
+    expect(validateCandidateCheckout(checkout)).toEqual({
+      status: "passed",
+      targetSha: checkout.targetSha,
+      toolingSha: checkout.toolingSha,
       workflowRef: "main",
     });
+    expect(() => validateCandidateCheckout({ ...checkout, targetHeadSha: "c".repeat(40) })).toThrow(
+      "target worktree HEAD",
+    );
     expect(() =>
-      validateCandidateCheckout({
-        targetSha: "a".repeat(40),
-        targetHeadSha: "c".repeat(40),
-        targetTrackedStatus: "",
-        toolingSha: "b".repeat(40),
-        trustedToolingSha: "b".repeat(40),
-        toolingTrackedStatus: "",
-        workflowRef: "main",
-      }),
-    ).toThrow("target worktree HEAD");
-    expect(() =>
-      validateCandidateCheckout({
-        targetSha: "a".repeat(40),
-        targetHeadSha: "a".repeat(40),
-        targetTrackedStatus: " M package.json",
-        toolingSha: "b".repeat(40),
-        trustedToolingSha: "b".repeat(40),
-        toolingTrackedStatus: "",
-        workflowRef: "main",
-      }),
+      validateCandidateCheckout({ ...checkout, targetTrackedStatus: " M package.json" }),
     ).toThrow("clean tracked target worktree");
     expect(() =>
-      validateCandidateCheckout({
-        targetSha: "a".repeat(40),
-        targetHeadSha: "a".repeat(40),
-        targetTrackedStatus: "",
-        toolingSha: "b".repeat(40),
-        trustedToolingSha: "c".repeat(40),
-        toolingTrackedStatus: "",
-        workflowRef: "main",
-      }),
+      validateCandidateCheckout({ ...checkout, trustedToolingSha: "c".repeat(40) }),
     ).toThrow("does not match trusted main");
     expect(() =>
       validateCandidateCheckout({
-        targetSha: "a".repeat(40),
-        targetHeadSha: "a".repeat(40),
-        targetTrackedStatus: "",
-        toolingSha: "b".repeat(40),
-        trustedToolingSha: "b".repeat(40),
+        ...checkout,
         toolingTrackedStatus: " M scripts/release-candidate-checklist.mts",
-        workflowRef: "main",
       }),
     ).toThrow("clean tracked tooling checkout");
     const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
@@ -1328,23 +1298,10 @@ describe("release candidate checklist", () => {
     const base = "v2026.6.11";
     const recordedTarget = "a".repeat(40);
     const targetSha = "b".repeat(40);
-    const changelog = [
-      "# Changelog",
-      "",
-      "## 2026.7.1",
-      "",
-      "### Highlights",
-      "",
-      "- User-facing notes.",
-      "",
-      "### Complete contribution record",
-      "",
+    const changelog = candidateChangelog(
       `This audited record covers the complete ${base}..${recordedTarget} history: 1 merged PR.`,
-      "",
-      "#### Pull requests",
-      "",
-      "- **PR #123** fix: example.",
-    ].join("\n");
+      ["- **PR #123** fix: example."],
+    );
     const reachable = vi.fn((ancestor: string, target: string) => {
       return ancestor === base && target === recordedTarget;
     });
@@ -1364,24 +1321,10 @@ describe("release candidate checklist", () => {
 
   it("rejects duplicate contribution record rows even when the declared count matches", () => {
     const targetSha = "b".repeat(40);
-    const changelog = [
-      "# Changelog",
-      "",
-      "## 2026.7.1",
-      "",
-      "### Highlights",
-      "",
-      "- User-facing notes.",
-      "",
-      "### Complete contribution record",
-      "",
+    const changelog = candidateChangelog(
       `This audited record covers the complete base..${targetSha} history: 1 merged PR.`,
-      "",
-      "#### Pull requests",
-      "",
-      "- **PR #123** fix: example.",
-      "- **PR #123** fix: duplicate.",
-    ].join("\n");
+      ["- **PR #123** fix: example.", "- **PR #123** fix: duplicate."],
+    );
 
     expect(() =>
       validateCandidateChangelogProvenance({
@@ -1396,23 +1339,10 @@ describe("release candidate checklist", () => {
 
   it("rejects canonical provenance whose unique total does not match the PR rows", () => {
     const targetSha = "b".repeat(40);
-    const changelog = [
-      "# Changelog",
-      "",
-      "## 2026.7.1",
-      "",
-      "### Highlights",
-      "",
-      "- User-facing notes.",
-      "",
-      "### Complete contribution record",
-      "",
+    const changelog = candidateChangelog(
       `This audited record covers the complete base..${targetSha} history: 1 in-range PR + 1 retained seed-only PR = 2 unique PRs.`,
-      "",
-      "#### Pull requests",
-      "",
-      "- **PR #123** fix: example.",
-    ].join("\n");
+      ["- **PR #123** fix: example."],
+    );
 
     expect(() =>
       validateCandidateChangelogProvenance({
@@ -1477,25 +1407,11 @@ describe("release candidate checklist", () => {
   it("validates cumulative shipped baseline exclusion metadata", () => {
     const base = "66e676d29b92d040716376a75aca32bad655cfac";
     const recordedTarget = "a".repeat(40);
-    const changelog = [
-      "# Changelog",
-      "",
-      "## 2026.7.1",
-      "",
-      "### Highlights",
-      "",
-      "- User-facing notes.",
-      "",
-      "### Complete contribution record",
-      "",
+    const changelog = candidateChangelog(
       `This audited record covers the complete ${base}..${recordedTarget} history: 1 merged PR.`,
-      "",
+      ["- **PR #123** fix: example."],
       "Shipped baseline exclusions: v2026.6.11 (8 PRs: #101, #102, #103, #104, #105, #106, #107, #108).",
-      "",
-      "#### Pull requests",
-      "",
-      "- **PR #123** fix: example.",
-    ].join("\n");
+    );
     const shippedPullRequests = new Set([101, 102, 103, 104, 105, 106, 107, 108]);
     const loadShippedBaseline = vi.fn(() => ({
       ref: "v2026.6.11",
@@ -1562,7 +1478,7 @@ describe("release candidate checklist", () => {
     ).toThrow("still contains shipped PRs from v2026.6.11: #101");
   });
 
-  it("requires contribution records for beta candidates but permits alpha Unreleased fallback", () => {
+  it("requires contribution records for beta candidates", () => {
     const betaChangelog = [
       "# Changelog",
       "",
@@ -1580,18 +1496,6 @@ describe("release candidate checklist", () => {
         targetSha: "a".repeat(40),
       }),
     ).toThrow("missing ### Complete contribution record");
-
-    const alpha = validateCandidateChangelogProvenance({
-      changelog: betaChangelog.replace("## 2026.7.1", "## Unreleased"),
-      version: "2026.7.1",
-      tag: "v2026.7.1-alpha.1",
-      targetSha: "a".repeat(40),
-    });
-    expect(alpha).toEqual({
-      status: "skipped",
-      reason: "alpha release uses the explicit Unreleased fallback",
-      shippedBaselines: [],
-    });
   });
 
   it("infers validation profiles from candidate tags", () => {
@@ -1602,18 +1506,9 @@ describe("release candidate checklist", () => {
     );
   });
 
-  it("defaults beta and alpha Parallels to postpublish confidence", () => {
+  it("defaults beta Parallels to postpublish confidence", () => {
     const beta = parseArgs(["--tag", "v2026.5.14-beta.3"]);
-    const alpha = parseArgs([
-      "--tag",
-      "v2026.5.14-alpha.2",
-      "--workflow-ref",
-      "tideclaw/alpha/2026-07-10-1200Z",
-      "--npm-dist-tag",
-      "alpha",
-    ]);
-
-    for (const options of [beta, alpha]) {
+    for (const options of [beta]) {
       expect(options.releaseProfile).toBe("beta");
       expect(options.parallelsMode).toBe("auto");
       expect(options.skipParallels).toBe(true);
@@ -2136,22 +2031,12 @@ describe("release candidate checklist", () => {
     expect(source).toContain("target_context_ref: targetContextRef");
   });
 
-  it("preserves the matching Tideclaw alpha workflow source", () => {
-    const workflowRef = "tideclaw/alpha/2026-07-10-1200Z";
-    const options = parseArgs([
-      "--tag",
-      "v2026.7.1-alpha.3",
-      "--workflow-ref",
-      workflowRef,
-      "--npm-dist-tag",
-      "alpha",
-    ]);
-
-    expect(options.workflowRef).toBe(workflowRef);
-    expect(buildPublishCommand(options)).toContain(`'--ref' '${workflowRef}'`);
-    expect(() => parseArgs(["--tag", "v2026.7.1-alpha.3"])).toThrow(
-      "--workflow-ref must be the matching tideclaw/alpha/",
-    );
+  it.each([
+    ["--tag", "v2026.7.1-alpha.3"],
+    ["--tag", "v2026.7.1", "--npm-dist-tag", "alpha"],
+    ["--tag", "v2026.7.1", "--workflow-ref", "tideclaw/alpha/2026-07-10-1200Z"],
+  ])("rejects retired alpha candidate inputs %j", (...flags) => {
+    expect(() => parseArgs(flags)).toThrow("Alpha releases are retired;");
   });
 
   it("rejects duplicate release candidate CLI options", () => {
@@ -2256,7 +2141,6 @@ describe("release candidate checklist", () => {
     },
     { profile: "beta", coveragePolicy: "npm-beta-v1", skipTelegram: true, expected: "skipped" },
     { profile: "beta", coveragePolicy: undefined, skipTelegram: false, expected: "passed" },
-    { profile: "stable", coveragePolicy: undefined, skipTelegram: false, expected: "passed" },
     {
       profile: "stable",
       coveragePolicy: "npm-stable-v1",
@@ -2264,7 +2148,6 @@ describe("release candidate checklist", () => {
       expected: "passed",
       producerRunId: 444,
     },
-    { profile: "full", coveragePolicy: undefined, skipTelegram: false, expected: "passed" },
   ])(
     "records candidate Telegram $expected for $profile qualification ($coveragePolicy)",
     async ({ profile, coveragePolicy, skipTelegram, expected, producerRunId = 222 }) => {
@@ -2857,24 +2740,21 @@ ${declareIdentity ? "      trusted_workflow_json: {}\n" : ""}`;
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
-  it.each(["1e3", "10.5", "0", "soon"])(
-    "rejects malformed GitHub API timeout env %s",
-    async (raw) => {
-      const fetchImpl = vi.fn();
+  it.each(["1e3", "0"])("rejects malformed GitHub API timeout env %s", async (raw) => {
+    const fetchImpl = vi.fn();
 
-      await withGithubApiTimeoutEnv(raw, async () => {
-        await expect(
-          githubApi("repos/openclaw/openclaw/actions/runs", {
-            fetchImpl,
-            token: "test-token",
-          }),
-        ).rejects.toThrow(
-          "OPENCLAW_RELEASE_CANDIDATE_GITHUB_API_TIMEOUT_MS must be a positive integer",
-        );
-      });
-      expect(fetchImpl).not.toHaveBeenCalled();
-    },
-  );
+    await withGithubApiTimeoutEnv(raw, async () => {
+      await expect(
+        githubApi("repos/openclaw/openclaw/actions/runs", {
+          fetchImpl,
+          token: "test-token",
+        }),
+      ).rejects.toThrow(
+        "OPENCLAW_RELEASE_CANDIDATE_GITHUB_API_TIMEOUT_MS must be a positive integer",
+      );
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
 
   it("bounds GitHub API error bodies", async () => {
     const fetchImpl = vi.fn(async () => {

@@ -1,11 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-// OpenAI Responses shared helpers map runtime messages, tools, and stream events.
 import type {
   ResponseCreateParamsStreaming,
-  ResponseInput,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
+import { prepareModelRequestBody } from "../transports/model-request-body.js";
 import {
   buildOpenAIResponsesReasoningReplayMetadata,
   suppressOpenAIResponsesCompaction,
@@ -17,10 +16,10 @@ import { ResponsesStreamFailure } from "../transports/openai-responses-debug.js"
 import {
   createOpenAIResponsesAssistantOutput,
   createResponsesStreamWithEncryptedContentRetry,
-  convertProviderResponsesMessages,
 } from "../transports/openai-responses-replay-internal.js";
 import { hasOnlyResponsesFunctionTools } from "../transports/openai-responses-stream-errors.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
+import type { ResponsesStreamOptions } from "../transports/openai-responses-stream-types-internal.js";
 import { createOpenAIProviderAcceptanceHook } from "../transports/openai-transport-shared.js";
 import {
   failTransportStream,
@@ -44,25 +43,11 @@ import {
 } from "./openai-request-reasoning.js";
 import { convertResponsesToolPayload } from "./openai-responses-tools.js";
 
-interface OpenAIResponsesStreamOptions {
-  serviceTier?: ResponseCreateParamsStreaming["service_tier"];
-  resolveServiceTier?: (
-    responseServiceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
-    requestServiceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
-  ) => ResponseCreateParamsStreaming["service_tier"] | undefined;
-  applyServiceTierPricing?: (
-    usage: Usage,
-    serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
-  ) => void;
-}
+type OpenAIResponsesStreamOptions = Pick<
+  ResponsesStreamOptions,
+  "serviceTier" | "resolveServiceTier" | "applyServiceTierPricing"
+>;
 
-interface ConvertResponsesMessagesOptions {
-  includeSystemPrompt?: boolean;
-  replayResponsesItemIds?: boolean;
-  sessionId?: string;
-  authProfileId?: string;
-  replayMode?: OpenAIResponsesReplayMode;
-}
 export { convertResponsesToolPayload };
 
 type ResponsesRequestOptions = {
@@ -106,23 +91,9 @@ type ResponsesCommonParamsOptions = Pick<StreamOptions, "maxTokens" | "temperatu
 
 type ResponsesLifecycleRequest = OpenAIResponsesRequestParams;
 
-// =============================================================================
-// Message conversion
-// =============================================================================
-
-export function convertResponsesMessages<TApi extends Api>(
-  model: Model<TApi>,
-  context: Context,
-  allowedToolCallProviders: ReadonlySet<string>,
-  options?: ConvertResponsesMessagesOptions,
-): ResponseInput {
-  return convertProviderResponsesMessages(model, context, allowedToolCallProviders, options);
-}
+export { convertProviderResponsesMessages as convertResponsesMessages } from "../transports/openai-responses-replay-internal.js";
 
 export const createResponsesAssistantOutput = createOpenAIResponsesAssistantOutput;
-
-// Stream lifecycle
-// =============================================================================
 
 export function applyResponsesServiceTierPricing(
   usage: Usage,
@@ -231,6 +202,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
   try {
     const model = params.resolveRequestModel?.(params.model) ?? params.model;
     const client = params.createClient(model);
+    const encodeBody = prepareModelRequestBody(options);
     const buildRequest = async (replayMode: OpenAIResponsesReplayMode) => {
       let request = params.buildParams(model, replayMode);
       const nextRequest = await options?.onPayload?.(request, model);
@@ -253,6 +225,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
         signal: firstEvent.signal,
       },
       model,
+      encodeBody,
       buildFullHistoryRequest: () => buildRequest("full-history"),
       onCompactionRejected: (checkpoint) =>
         suppressOpenAIResponsesCompaction(output, model, options, checkpoint),

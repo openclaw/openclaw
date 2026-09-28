@@ -1,6 +1,4 @@
 import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
-import { zoomMeetingStatusAccessSource } from "./zoom-meetings-status-access-source.js";
-import { zoomMeetingStatusPageSource } from "./zoom-meetings-status-page-source.js";
 
 type MeetingStatusPreludeParams = Parameters<
   typeof MeetingPlatformAdapter.createStatusPreludeSource
@@ -67,7 +65,11 @@ export function zoomMeetingStatusPreludeSource(params: MeetingStatusPreludeParam
       await waitForUi();
     }
   }
-  ${zoomMeetingStatusPageSource()}
+  const pageText = text(document.body);
+  const pageTextLower = pageText.toLowerCase();
+  const lobbyWaiting = Boolean(first(selectors.lobby)) ||
+    /host will let you in soon|waiting for the host to start|someone will let you in shortly|waiting for someone to let you in|when someone admits you|you.?re in the lobby|we.?ve let people in the meeting know you.?re waiting/i.test(pageTextLower);
+
   const devicesDisabled = Boolean(!allowMicrophone && (dismissedDevicePrompt || (priorMeeting?.identity === expectedIdentity && (!sessionId || priorMeeting?.sessionId === sessionId) && priorMeeting?.devicesDisabled === true)));
   // Zoom replaces the meeting URL after admission; retain only an adopted in-call control.
   // Lobby ownership remains durable because host admission has no bounded wait.
@@ -155,10 +157,27 @@ export function zoomMeetingStatusPreludeSource(params: MeetingStatusPreludeParam
   }
   const microphone = first(selectors.microphone) || findTextButton(/mute|unmute|microphone/i);
   let microphoneState = identityVerified ? (toggleState(microphone, "microphone") || (devicesDisabled ? "off" : undefined)) : undefined;
+  const refreshMicrophoneState = async () => {
+    await waitForUi();
+    const currentMicrophone = first(selectors.microphone) || findTextButton(/mute|unmute|microphone/i);
+    microphoneState = toggleState(currentMicrophone, "microphone");
+  };
   const camera = first(selectors.camera) || findTextButton(/camera|video/i);
   let cameraState = identityVerified ? (toggleState(camera, "camera") || (devicesDisabled ? "off" : undefined)) : undefined;
   let controlManualAction;
-  ${zoomMeetingStatusAccessSource()}
+  const passcodeInput = firstRaw(selectors.passcode);
+  const passcodeRequired = Boolean(passcodeInput) &&
+    /meeting passcode|enter (?:the )?passcode|invalid passcode|incorrect passcode/i.test(
+      pageText + " " + label(passcodeInput)
+    );
+  const captchaRequired = Boolean(firstRaw(selectors.captcha)) ||
+    /complete (?:the )?captcha|security check|verify (?:that )?you(?:'re| are) (?:a )?human/i.test(pageTextLower);
+  if (identityVerified && !inCall && passcodeRequired) {
+    controlManualAction = manualActionFor("zoom-passcode-required", "Enter the Zoom meeting passcode in the OpenClaw browser profile, then retry joining.");
+  } else if (identityVerified && !inCall && captchaRequired) {
+    controlManualAction = manualActionFor("zoom-captcha-required", "Complete Zoom's security check in the OpenClaw browser profile, then retry joining.");
+  }
+
   if (
     canMutateSession &&
     identityVerified &&
@@ -252,25 +271,19 @@ export function zoomMeetingStatusPreludeSource(params: MeetingStatusPreludeParam
     if (!audioInputRouted) {
       if (canMutateSession && microphoneState === "on") {
         microphone.click();
-        await waitForUi();
-        const currentMicrophone = first(selectors.microphone) || findTextButton(/mute|unmute|microphone/i);
-        microphoneState = toggleState(currentMicrophone, "microphone");
+        await refreshMicrophoneState();
       }
       notes.push("The virtual audio input will be selected from Zoom's in-call audio controls.");
     } else if (canMutateSession && microphoneState === "off") {
       microphone.click();
-      await waitForUi();
-      const currentMicrophone = first(selectors.microphone) || findTextButton(/mute|unmute|microphone/i);
-      microphoneState = toggleState(currentMicrophone, "microphone");
+      await refreshMicrophoneState();
       if (microphoneState === "on") {
         notes.push("Unmuted the Zoom microphone after verifying the virtual audio input.");
       }
     }
   } else if (canMutateSession && identityVerified && !allowMicrophone && microphoneState === "on") {
       microphone.click();
-      await waitForUi();
-      const currentMicrophone = first(selectors.microphone) || findTextButton(/mute|unmute|microphone/i);
-      microphoneState = toggleState(currentMicrophone, "microphone");
+      await refreshMicrophoneState();
       if (microphoneState === "off") {
         notes.push("Muted the Zoom microphone for observe-only mode.");
       }
@@ -278,21 +291,15 @@ export function zoomMeetingStatusPreludeSource(params: MeetingStatusPreludeParam
   if (identityVerified && inCall && allowMicrophone) {
     if (!selectedMicrophoneLabel() && canMutateSession && microphoneState === "on") {
       microphone?.click();
-      await waitForUi();
-      const currentMicrophone = first(selectors.microphone) || findTextButton(/mute|unmute|microphone/i);
-      microphoneState = toggleState(currentMicrophone, "microphone");
+      await refreshMicrophoneState();
     }
     audioInputRouted = await ensureVirtualAudioInput();
     if (audioInputRouted && canMutateSession && microphoneState === "off") {
       microphone?.click();
-      await waitForUi();
-      const currentMicrophone = first(selectors.microphone) || findTextButton(/mute|unmute|microphone/i);
-      microphoneState = toggleState(currentMicrophone, "microphone");
+      await refreshMicrophoneState();
     } else if (!audioInputRouted && canMutateSession && microphoneState === "on") {
       microphone?.click();
-      await waitForUi();
-      const currentMicrophone = first(selectors.microphone) || findTextButton(/mute|unmute|microphone/i);
-      microphoneState = toggleState(currentMicrophone, "microphone");
+      await refreshMicrophoneState();
       if (microphoneState === "off") {
         notes.push("Muted the Zoom microphone because the virtual audio input could not be reverified.");
       }

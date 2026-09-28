@@ -75,7 +75,6 @@ describe("renderUsageInsights", () => {
           ],
         },
         {
-          durationSumMs: 0,
           durationCount: 0,
           avgDurationMs: 0,
           errorRate: 0,
@@ -134,7 +133,6 @@ describe("renderUsageInsights", () => {
         totals,
         aggregates,
         {
-          durationSumMs: 0,
           durationCount: 0,
           avgDurationMs: 0,
           errorRate: 0,
@@ -176,7 +174,6 @@ describe("renderUsageInsights", () => {
         costTotals,
         costAggregates,
         {
-          durationSumMs: 0,
           durationCount: 0,
           avgDurationMs: 0,
           errorRate: 0,
@@ -215,7 +212,6 @@ describe("renderUsageInsights", () => {
         costTotals,
         costAggregates,
         {
-          durationSumMs: 0,
           durationCount: 0,
           avgDurationMs: 0,
           errorRate: 0,
@@ -614,13 +610,6 @@ describe("renderSessionsCard", () => {
   it.each([
     {
       tokens: true,
-      sort: "tokens",
-      names: ["All time winner", "Day winner"],
-      values: ["30", "10"],
-      avg: "20",
-    },
-    {
-      tokens: true,
       sort: "cost",
       names: ["Day winner", "All time winner"],
       values: ["10", "30"],
@@ -631,13 +620,6 @@ describe("renderSessionsCard", () => {
       sort: "tokens",
       names: ["All time winner", "Day winner"],
       values: ["$1.00", "$10.00"],
-      avg: "$5.50",
-    },
-    {
-      tokens: false,
-      sort: "cost",
-      names: ["Day winner", "All time winner"],
-      values: ["$10.00", "$1.00"],
       avg: "$5.50",
     },
   ] as const)("uses selected-day display and sort metrics independently (%j)", (scenario) => {

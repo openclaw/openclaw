@@ -205,50 +205,37 @@ function mergeTranscriptPolicy(
     return basePolicy;
   }
 
-  return {
+  const merged = {
     ...basePolicy,
     ...(policy.sanitizeMode != null ? { sanitizeMode: policy.sanitizeMode } : {}),
-    ...(typeof policy.sanitizeToolCallIds === "boolean"
-      ? { sanitizeToolCallIds: policy.sanitizeToolCallIds }
-      : {}),
-    ...(policy.toolCallIdMode ? { toolCallIdMode: policy.toolCallIdMode as ToolCallIdMode } : {}),
+    ...(policy.toolCallIdMode ? { toolCallIdMode: policy.toolCallIdMode } : {}),
     ...(policy.duplicateToolCallIdStyle
       ? { duplicateToolCallIdStyle: policy.duplicateToolCallIdStyle }
-      : {}),
-    ...(typeof policy.preserveNativeAnthropicToolUseIds === "boolean"
-      ? { preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds }
-      : {}),
-    ...(typeof policy.repairToolUseResultPairing === "boolean"
-      ? { repairToolUseResultPairing: policy.repairToolUseResultPairing }
-      : {}),
-    ...(typeof policy.preserveSignatures === "boolean"
-      ? { preserveSignatures: policy.preserveSignatures }
-      : {}),
-    ...(typeof policy.appendOnlyRuntimeContext === "boolean"
-      ? { appendOnlyRuntimeContext: policy.appendOnlyRuntimeContext }
       : {}),
     ...(policy.sanitizeThoughtSignatures
       ? { sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures }
       : {}),
-    ...(typeof policy.dropThinkingBlocks === "boolean"
-      ? { dropThinkingBlocks: policy.dropThinkingBlocks }
-      : {}),
-    ...(typeof policy.dropReasoningFromHistory === "boolean"
-      ? { dropReasoningFromHistory: policy.dropReasoningFromHistory }
-      : {}),
     ...(typeof policy.applyAssistantFirstOrderingFix === "boolean"
       ? { applyGoogleTurnOrdering: policy.applyAssistantFirstOrderingFix }
       : {}),
-    ...(typeof policy.validateGeminiTurns === "boolean"
-      ? { validateGeminiTurns: policy.validateGeminiTurns }
-      : {}),
-    ...(typeof policy.validateAnthropicTurns === "boolean"
-      ? { validateAnthropicTurns: policy.validateAnthropicTurns }
-      : {}),
-    ...(typeof policy.allowSyntheticToolResults === "boolean"
-      ? { allowSyntheticToolResults: policy.allowSyntheticToolResults }
-      : {}),
   };
+  for (const key of [
+    "sanitizeToolCallIds",
+    "preserveNativeAnthropicToolUseIds",
+    "repairToolUseResultPairing",
+    "preserveSignatures",
+    "appendOnlyRuntimeContext",
+    "dropThinkingBlocks",
+    "dropReasoningFromHistory",
+    "validateGeminiTurns",
+    "validateAnthropicTurns",
+    "allowSyntheticToolResults",
+  ] as const) {
+    if (typeof policy[key] === "boolean") {
+      merged[key] = policy[key];
+    }
+  }
+  return merged;
 }
 
 const transcriptPolicyCache = new WeakMap<OpenClawConfig, Map<string, TranscriptPolicy>>();

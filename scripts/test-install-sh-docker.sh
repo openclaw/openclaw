@@ -58,16 +58,6 @@ resolve_default_smoke_platform() {
     return
   fi
   host_arch="$(uname -m)"
-  if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
-    case "$host_arch" in
-      arm64 | aarch64)
-        printf "linux/arm64"
-        return
-        ;;
-    esac
-    printf "linux/amd64"
-    return
-  fi
   case "$host_arch" in
     arm64 | aarch64)
       printf "linux/arm64"
@@ -406,11 +396,13 @@ process.stdout.write(packageJson.version);
 prepare_update_tarball() {
   local pack_json_file
   local baseline_pack_json_file
+  local baseline_pack_dir
   local -a package_args
   local package_tgz
   local packed_update_version
   pack_json_file="${UPDATE_DIR}/pack.json"
   baseline_pack_json_file="${UPDATE_DIR}/baseline-pack.json"
+  baseline_pack_dir="${UPDATE_DIR}/baseline"
   if [[ -n "$FROZEN_PAYLOAD_DIR" ]]; then
     # The producer already built and normalized candidate bytes inside an isolated pinned image.
     # Privileged consumers only copy the verified artifact; they never build or import candidate code.
@@ -420,7 +412,7 @@ prepare_update_tarball() {
     UPDATE_TGZ_FILE="candidate.tgz"
   elif [[ -n "$UPDATE_PACKAGE_SPEC" ]]; then
     echo "==> Pack update tgz from spec: $UPDATE_PACKAGE_SPEC"
-    quiet_npm pack "$UPDATE_PACKAGE_SPEC" --json --pack-destination "$UPDATE_DIR" >"$pack_json_file"
+    quiet_npm pack "$UPDATE_PACKAGE_SPEC" --json --min-release-age=0 --pack-destination "$UPDATE_DIR" >"$pack_json_file"
     normalize_npm_pack_json_file "$pack_json_file"
   else
     echo "==> Build local release artifacts for update smoke"
@@ -478,9 +470,12 @@ process.stdout.write(last.version);
   fi
 
   echo "==> Pack baseline tgz: ${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}"
-  quiet_npm pack "${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}" --json --pack-destination "$UPDATE_DIR" >"$baseline_pack_json_file"
+  # The repo .npmrc dependency cooldown must not hide a days-old published baseline.
+  mkdir -p "$baseline_pack_dir"
+  quiet_npm pack "${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}" --json --min-release-age=0 --pack-destination "$baseline_pack_dir" >"$baseline_pack_json_file"
   normalize_npm_pack_json_file "$baseline_pack_json_file"
   BASELINE_TGZ_FILE="$(read_pack_tarball_filename "$baseline_pack_json_file")"
+  BASELINE_TGZ_FILE="baseline/$BASELINE_TGZ_FILE"
   UPDATE_BASELINE_VERSION="$(
     node -e '
 const raw = require("node:fs").readFileSync(process.argv[1], "utf8") || "[]";

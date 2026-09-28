@@ -28,7 +28,8 @@ export type ResolvedGatewayAuth = {
   trustedProxy?: GatewayTrustedProxyConfig;
 };
 
-function mergeGatewayAuthConfig(
+/** Merge sparse runtime auth overrides without erasing configured values. */
+export function mergeGatewayAuthConfig(
   base: GatewayAuthConfig | null | undefined,
   override: GatewayAuthConfig | null | undefined,
 ): GatewayAuthConfig {

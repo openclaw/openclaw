@@ -114,22 +114,14 @@ export async function loadPreparedGatewayModelCatalogSnapshot(
 ): Promise<PreparedGatewayModelCatalogSnapshot> {
   for (;;) {
     let loaded: Awaited<ReturnType<typeof loadGatewayModelCatalogOwnerSnapshot>>;
-    try {
-      loaded = await loadGatewayModelCatalogOwnerSnapshot(params);
-    } catch (error) {
-      if (error instanceof PreparedModelRuntimePublicationSupersededError) {
-        continue;
-      }
-      throw error;
-    }
-    const { candidate, owner } = loaded;
     let refreshedAuth: Awaited<ReturnType<typeof loadPreparedModelRuntimeAuth>>;
     try {
+      loaded = await loadGatewayModelCatalogOwnerSnapshot(params);
       refreshedAuth = params?.refreshAuth
         ? await loadPreparedModelRuntimeAuth(
-            candidate,
+            loaded.candidate,
             params.authScope ?? {
-              providerIds: owner.modelCatalog.entries.map((entry) => entry.provider),
+              providerIds: loaded.owner.modelCatalog.entries.map((entry) => entry.provider),
             },
           )
         : undefined;
@@ -141,6 +133,7 @@ export async function loadPreparedGatewayModelCatalogSnapshot(
       }
       throw error;
     }
+    const { owner } = loaded;
     return {
       ...projectGatewayModelCatalogSnapshot(owner),
       authModes: refreshedAuth?.authModes ?? owner.authModes,

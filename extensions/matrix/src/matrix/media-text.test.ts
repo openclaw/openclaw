@@ -4,13 +4,11 @@ import { summarizeMatrixMessageContextEvent } from "./monitor/context-summary.js
 import type { MatrixRawEvent } from "./monitor/types.js";
 
 describe("Matrix media kind resolution", () => {
-  it.each(["toString", "constructor", "valueOf", "__proto__"])(
-    "treats msgtype %s as a non-media message",
-    (msgtype) => {
-      expect(resolveMatrixMessageAttachment({ body: "report.pdf", msgtype })).toBeUndefined();
-      expect(formatMatrixMessageText({ body: "report.pdf", msgtype })).toBe("report.pdf");
-    },
-  );
+  it("treats an inherited prototype property as a non-media message", () => {
+    const content = { body: "report.pdf", msgtype: "__proto__" };
+    expect(resolveMatrixMessageAttachment(content)).toBeUndefined();
+    expect(formatMatrixMessageText(content)).toBe("report.pdf");
+  });
 
   it("summarizes a remote event with an Object.prototype msgtype as plain text", () => {
     const event: MatrixRawEvent = {

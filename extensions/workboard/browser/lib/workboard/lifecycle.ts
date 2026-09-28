@@ -3,8 +3,7 @@ import { normalizeSessionKeyForUiComparison } from "../sessions/session-key.ts";
 import { isFailedSessionStatus, staleSessionState, workboardCardSessionKey } from "./card-state.ts";
 import { isReservedSessionKey } from "./session-links.ts";
 import type { WorkboardSessionResolution } from "./session-resolution.ts";
-import { sessionUpdatedAtValue, taskLifecycleSourceUpdatedAt } from "./task-links.ts";
-import type { WorkboardCard, WorkboardLifecycle, WorkboardTaskSummary } from "./types.ts";
+import type { WorkboardCard, WorkboardLifecycle } from "./types.ts";
 
 export function findWorkboardSession(
   card: WorkboardCard,
@@ -28,46 +27,9 @@ export function findWorkboardSession(
 export function getWorkboardLifecycle(
   card: WorkboardCard,
   sessions: readonly GatewaySessionRow[],
-  task?: WorkboardTaskSummary,
   resolution?: WorkboardSessionResolution,
 ): WorkboardLifecycle {
   const session = findWorkboardSession(card, sessions, resolution);
-  if (task) {
-    switch (task.status) {
-      case "queued":
-      case "running":
-        if (
-          session &&
-          (session.abortedLastRun ||
-            session.status === "done" ||
-            isFailedSessionStatus(session.status))
-        ) {
-          break;
-        }
-        return {
-          session,
-          state: "running",
-          targetStatus: "running",
-          sourceUpdatedAt: taskLifecycleSourceUpdatedAt(task),
-        };
-      case "completed":
-        return {
-          session,
-          state: "succeeded",
-          targetStatus: "review",
-          sourceUpdatedAt: taskLifecycleSourceUpdatedAt(task),
-        };
-      case "failed":
-      case "cancelled":
-      case "timed_out":
-        return {
-          session,
-          state: "failed",
-          targetStatus: "blocked",
-          sourceUpdatedAt: taskLifecycleSourceUpdatedAt(task),
-        };
-    }
-  }
   if (!workboardCardSessionKey(card)) {
     return { session: null, state: "unlinked" };
   }
@@ -83,44 +45,19 @@ export function getWorkboardLifecycle(
     };
   }
   if (session.status === "queued") {
-    return {
-      session,
-      state: "queued",
-      targetStatus: "todo",
-      sourceUpdatedAt: sessionUpdatedAtValue(session),
-    };
+    return { session, state: "queued" };
   }
   if (staleSessionState(session)) {
-    return {
-      session,
-      state: "stale",
-      targetStatus: "running",
-      sourceUpdatedAt: sessionUpdatedAtValue(session),
-    };
+    return { session, state: "stale" };
   }
   if (session.hasActiveRun === true || session.status === "running") {
-    return {
-      session,
-      state: "running",
-      targetStatus: "running",
-      sourceUpdatedAt: sessionUpdatedAtValue(session),
-    };
+    return { session, state: "running" };
   }
   if (session.abortedLastRun || isFailedSessionStatus(session.status)) {
-    return {
-      session,
-      state: "failed",
-      targetStatus: "blocked",
-      sourceUpdatedAt: sessionUpdatedAtValue(session),
-    };
+    return { session, state: "failed" };
   }
   if (session.status === "done") {
-    return {
-      session,
-      state: "succeeded",
-      targetStatus: "review",
-      sourceUpdatedAt: sessionUpdatedAtValue(session),
-    };
+    return { session, state: "succeeded" };
   }
   return { session, state: "idle" };
 }

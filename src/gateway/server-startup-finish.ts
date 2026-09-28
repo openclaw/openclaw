@@ -131,7 +131,6 @@ export async function finishGatewayStartup(params: {
     preauthConnectionBudget,
     releaseStartupAccountStarts,
     cronReconciliation,
-    postReadyState,
     cronStartState,
     prepareReloadCandidate,
     configSnapshot,
@@ -219,6 +218,7 @@ export async function finishGatewayStartup(params: {
         return;
       }
       const activated = gatewayRuntimeServices.activateGatewayScheduledServices({
+        scheduler: runtime.scheduler,
         minimalTestGateway,
         cfgAtStart,
         deps,
@@ -244,6 +244,7 @@ export async function finishGatewayStartup(params: {
     startupTrace.measure("runtime.post-attach", () =>
       loadGatewayStartupPostAttachModule().then(({ startGatewayPostAttachRuntime }) =>
         startGatewayPostAttachRuntime({
+          scheduler: runtime.scheduler,
           minimalTestGateway,
           updateCanary: opts.updateCanary,
           cfgAtStart,
@@ -425,15 +426,14 @@ export async function finishGatewayStartup(params: {
     });
   };
   const tlsRenewal = startGatewayTlsRenewal({
+    scheduler: runtime.scheduler,
     runtime: gatewayTls,
     servers: runtime.httpServers,
     enabled: cfgAtStart.gateway?.reload?.mode !== "off",
-    isClosing: () => lifecycle.closePreludeStarted,
-    onRenewed: async () => {
-      await runtimeState.discovery?.update({
+    onRenewed: async () =>
+      runtimeState.discovery?.update({
         gatewayTlsFingerprintSha256: gatewayTls.fingerprintSha256,
-      });
-    },
+      }),
     log: log.child("tls"),
   });
   if (tlsRenewal) {
@@ -442,6 +442,7 @@ export async function finishGatewayStartup(params: {
   let appliedCustomPluginUiEnabled =
     gatewayPluginConfigAtStart.gateway?.controlUi?.experimental?.customPlugins === true;
   const configReloaderParams: Parameters<typeof startManagedGatewayConfigReloader>[0] = {
+    scheduler: runtime.scheduler,
     onReloadEnabledChange: tlsRenewal?.setEnabled,
     configRevisionProjector: gatewayRequestContext.configRevisionProjector,
     resolveGatewayContext: resolvePluginGatewayContext,
@@ -613,12 +614,11 @@ export async function finishGatewayStartup(params: {
   });
   if (!minimalTestGateway) {
     const gatewayRuntimeServices = await loadScheduledServicesModule();
-    postReadyState.maintenanceTimer = gatewayRuntimeServices.scheduleGatewayPostReadyMaintenance({
+    gatewayRuntimeServices.scheduleGatewayPostReadyMaintenance({
+      scheduler: runtime.scheduler,
+      signal: runtime.connectionWork.signal,
       delayMs: POST_READY_MAINTENANCE_DELAY_MS,
       isClosing: () => lifecycle.closePreludeStarted,
-      onStarted: () => {
-        postReadyState.maintenanceTimer = null;
-      },
       startMaintenance: async () => {
         await params.waitForPostReadyWork();
         if (lifecycle.closePreludeStarted) {
@@ -663,6 +663,8 @@ export async function finishGatewayStartup(params: {
     ];
     registerGatewayLifetimeSidecars(
       gatewayRuntimeServices.scheduleGatewayIdleTask({
+        id: "maintenance:retained-plugin-generations",
+        scheduler: runtime.scheduler,
         delayMs: RETAINED_PLUGIN_CLEANUP_DELAY_MS,
         retryDelayMs: RETAINED_PLUGIN_CLEANUP_DELAY_MS,
         isClosing: () => lifecycle.closePreludeStarted,
@@ -678,6 +680,8 @@ export async function finishGatewayStartup(params: {
     );
     registerGatewayLifetimeSidecars(
       gatewayRuntimeServices.scheduleGatewayIdleTask({
+        id: "maintenance:sqlite-snapshots",
+        scheduler: runtime.scheduler,
         delayMs: RETAINED_PLUGIN_CLEANUP_DELAY_MS,
         retryDelayMs: RETAINED_PLUGIN_CLEANUP_DELAY_MS,
         isClosing: () => lifecycle.closePreludeStarted,

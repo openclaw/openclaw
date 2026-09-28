@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeRestartRecoveryEntryFields } from "../config/sessions/restart-recovery-state.js";
 import {
   ensureSessionStorePromptBlobsForPersistence,
@@ -94,11 +95,6 @@ const loadTrajectoryCleanupRuntime = createLazyRuntimeModule(
   () => import("../trajectory/cleanup.js"),
 );
 
-function normalizeRecordKey(value: string): string | undefined {
-  const key = value.trim();
-  return key.length > 0 ? key : undefined;
-}
-
 function normalizeOptionalDeliveryContext(value: unknown): DeliveryContext | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -168,7 +164,7 @@ function normalizeLegacyPluginState(
   let changed = false;
   const normalizedState: Record<string, Record<string, PluginJsonValue>> = {};
   for (const [rawPluginId, rawPluginState] of Object.entries(state)) {
-    const pluginId = normalizeRecordKey(rawPluginId);
+    const pluginId = normalizeOptionalString(rawPluginId);
     if (!pluginId || !isRecord(rawPluginState)) {
       changed = true;
       continue;
@@ -176,7 +172,7 @@ function normalizeLegacyPluginState(
     changed ||= pluginId !== rawPluginId;
     const normalizedPluginState: Record<string, PluginJsonValue> = {};
     for (const [rawNamespace, rawValue] of Object.entries(rawPluginState)) {
-      const namespace = normalizeRecordKey(rawNamespace);
+      const namespace = normalizeOptionalString(rawNamespace);
       const value = normalizeValue(rawValue);
       if (!namespace || value === undefined) {
         changed = true;

@@ -8,34 +8,27 @@ type RuntimeGroupPolicyResolution = {
   providerMissingFallbackApplied: boolean;
 };
 
-type RuntimeGroupPolicyParams = {
+type ResolveProviderRuntimeGroupPolicyParams = {
   providerConfigPresent: boolean;
   groupPolicy?: GroupPolicy;
   defaultGroupPolicy?: GroupPolicy;
-  configuredFallbackPolicy?: GroupPolicy;
-  missingProviderFallbackPolicy?: GroupPolicy;
 };
 
 /**
  * Resolve the effective group policy for a channel/provider runtime.
  * Missing provider config can fail closed separately from configured providers.
  */
-function resolveRuntimeGroupPolicy(params: RuntimeGroupPolicyParams): RuntimeGroupPolicyResolution {
-  const configuredFallbackPolicy = params.configuredFallbackPolicy ?? "open";
-  const missingProviderFallbackPolicy = params.missingProviderFallbackPolicy ?? "allowlist";
+function resolveRuntimeGroupPolicy(
+  params: ResolveProviderRuntimeGroupPolicyParams,
+  configuredFallbackPolicy: GroupPolicy,
+): RuntimeGroupPolicyResolution {
   const groupPolicy = params.providerConfigPresent
     ? (params.groupPolicy ?? params.defaultGroupPolicy ?? configuredFallbackPolicy)
-    : (params.groupPolicy ?? missingProviderFallbackPolicy);
+    : (params.groupPolicy ?? "allowlist");
   const providerMissingFallbackApplied =
     !params.providerConfigPresent && params.groupPolicy === undefined;
   return { groupPolicy, providerMissingFallbackApplied };
 }
-
-type ResolveProviderRuntimeGroupPolicyParams = {
-  providerConfigPresent: boolean;
-  groupPolicy?: GroupPolicy;
-  defaultGroupPolicy?: GroupPolicy;
-};
 
 type GroupPolicyDefaultsConfig = {
   channels?: {
@@ -66,13 +59,7 @@ export const GROUP_POLICY_BLOCKED_LABEL = {
 export function resolveOpenProviderRuntimeGroupPolicy(
   params: ResolveProviderRuntimeGroupPolicyParams,
 ): RuntimeGroupPolicyResolution {
-  return resolveRuntimeGroupPolicy({
-    providerConfigPresent: params.providerConfigPresent,
-    groupPolicy: params.groupPolicy,
-    defaultGroupPolicy: params.defaultGroupPolicy,
-    configuredFallbackPolicy: "open",
-    missingProviderFallbackPolicy: "allowlist",
-  });
+  return resolveRuntimeGroupPolicy(params, "open");
 }
 
 /**
@@ -82,13 +69,7 @@ export function resolveOpenProviderRuntimeGroupPolicy(
 export function resolveAllowlistProviderRuntimeGroupPolicy(
   params: ResolveProviderRuntimeGroupPolicyParams,
 ): RuntimeGroupPolicyResolution {
-  return resolveRuntimeGroupPolicy({
-    providerConfigPresent: params.providerConfigPresent,
-    groupPolicy: params.groupPolicy,
-    defaultGroupPolicy: params.defaultGroupPolicy,
-    configuredFallbackPolicy: "allowlist",
-    missingProviderFallbackPolicy: "allowlist",
-  });
+  return resolveRuntimeGroupPolicy(params, "allowlist");
 }
 
 const MAX_WARNED_MISSING_PROVIDER_GROUP_POLICY_KEYS = 4096;

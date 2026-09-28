@@ -9,6 +9,8 @@ import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { describePlatform } from "../lib/platform-label.ts";
 import {
   presenceMatchesProfile,
+  presenceViewerActivity,
+  presenceViewerLastActivity,
   presenceUserLabel,
   type PresenceViewer,
 } from "../lib/presence-users.ts";
@@ -86,9 +88,9 @@ function sessionIdentity(key: string, agentId: string, input: PersonCardInput): 
   return `${scope}\u0000${canonical}`;
 }
 
-function observedTimestamp(values: (number | undefined)[], order: "first" | "last") {
+function firstObservedTimestamp(values: (number | undefined)[]) {
   const known = values.filter((value): value is number => value !== undefined);
-  return known.length ? (order === "first" ? Math.min(...known) : Math.max(...known)) : undefined;
+  return known.length ? Math.min(...known) : undefined;
 }
 
 function elapsed(
@@ -249,14 +251,9 @@ export function renderPersonActivityCard(input: PersonCardInput) {
   const observed = user.entries !== undefined;
   const offline = user.entries?.length === 0;
   const entries = user.entries ?? [];
-  const onlineSince = observedTimestamp(
-    entries.map((entry) => entry.onlineSince),
-    "first",
-  );
-  const lastActivityAt = observedTimestamp(
-    entries.map((entry) => entry.lastActivityAt),
-    "last",
-  );
+  const onlineSince = firstObservedTimestamp(entries.map((entry) => entry.onlineSince));
+  const lastActivityAt = presenceViewerLastActivity(user);
+  const activity = presenceViewerActivity(user);
   const where = connections(user);
   const zones = [
     ...new Set(entries.flatMap((entry) => (entry.timeZone?.trim() ? [entry.timeZone.trim()] : []))),
@@ -295,7 +292,9 @@ export function renderPersonActivityCard(input: PersonCardInput) {
       observed
         ? html` <span
             class="person-activity-card__status ${
-              offline ? "person-activity-card__status--offline" : ""
+              offline
+                ? "person-activity-card__status--offline"
+                : `person-activity-card__status--${activity}`
             }"
             ><span aria-hidden="true"></span>${
               offline
@@ -303,7 +302,7 @@ export function renderPersonActivityCard(input: PersonCardInput) {
                 : onlineSince === undefined
                   ? t("presence.rosterTitle")
                   : html`${t("presence.card.onlineFor")} ${elapsed(onlineSince, "minute-compact")}`
-            }</span
+            }${!offline && activity !== "unknown" ? html` · ${t(activity === "active" ? "presence.active" : "presence.idle")}` : nothing}</span
           >`
         : nothing,
     )}

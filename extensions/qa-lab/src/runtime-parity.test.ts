@@ -658,19 +658,6 @@ describe("runtime parity", () => {
     expect(cell.runtimeErrorClass).toBe("timeout");
   });
 
-  it("keeps planned mock calls diagnostic instead of promoting them to runtime calls", async () => {
-    const cell = await captureRuntimeParityWithMockRequests({
-      requests: [{ plannedToolName: "read_file", plannedToolArgs: { path: "README.md" } }],
-    });
-
-    expect(cell.toolCalls).toEqual([]);
-    expect(cell.providerPlanToolCalls).toHaveLength(1);
-    expect(cell.providerPlanToolCalls?.[0]).toMatchObject({
-      tool: "read_file",
-      errorClass: "tool-result-missing",
-    });
-  });
-
   it("records resolved mock calls as provider-plan evidence", async () => {
     const cell = await captureRuntimeParityWithMockRequests({
       requests: [
@@ -728,6 +715,13 @@ describe("runtime parity", () => {
   it("does not classify planned-only provider evidence as a runtime failure", async () => {
     const cell = await captureRuntimeParityWithMockRequests({
       requests: [{ plannedToolName: "read_file", plannedToolArgs: { path: "README.md" } }],
+    });
+
+    expect(cell.toolCalls).toEqual([]);
+    expect(cell.providerPlanToolCalls).toHaveLength(1);
+    expect(cell.providerPlanToolCalls?.[0]).toMatchObject({
+      tool: "read_file",
+      errorClass: "tool-result-missing",
     });
 
     const result = await runRuntimeParityScenario({
