@@ -14,7 +14,7 @@ import { redactCodeModeCatalogIds, type CodeModeCatalogProjection } from "./code
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import type { CodeModeReplyLease } from "./code-mode-program-data.js";
 import type { CodeModeResultsAccess } from "./code-mode-results.js";
-import { CODE_MODE_RESUME_MARGIN_MS, type PendingBridgeRequest } from "./code-mode-runtime.js";
+import { CODE_MODE_EXEC_YIELD_MARGIN_MS, type PendingBridgeRequest } from "./code-mode-runtime.js";
 import { readCodeModeSkill } from "./code-mode-skills.js";
 import { createCodeModeToolApiFile } from "./code-mode-tool-api.js";
 import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
@@ -335,7 +335,7 @@ export async function runBridgeRequest(params: {
           // Late sequential calls yield sooner so their process handle returns in this call.
           input = {
             ...input,
-            yieldMs: Math.max(1, Math.floor(params.remainingMs) - CODE_MODE_RESUME_MARGIN_MS),
+            yieldMs: Math.max(1, Math.floor(params.remainingMs) - CODE_MODE_EXEC_YIELD_MARGIN_MS),
           };
         }
         value = await params.runtime.callExactValue(binding.id, input, {

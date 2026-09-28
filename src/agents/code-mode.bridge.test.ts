@@ -208,7 +208,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
     expect(details).toMatchObject({
       status: "completed",
       value: [
-        { command: "default", yieldMs: 9_750 },
+        { command: "default", yieldMs: 9_500 },
         { command: "explicit", yieldMs: 4_000 },
         { command: "background", background: true },
       ],
@@ -251,7 +251,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
 
     expect(details).toMatchObject({
       status: "completed",
-      value: { command: "late", yieldMs: 150 },
+      value: { command: "late", yieldMs: 1 },
     });
     expect(consumeBudget.execute).toHaveBeenCalledOnce();
     expect(shell.execute).toHaveBeenCalledOnce();
