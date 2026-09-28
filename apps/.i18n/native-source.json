@@ -857,7 +857,6 @@
     {"id":"native.android.3d0398264938eb5f","source":"Monitoring · $sessionCount threads","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt"}]},
     {"id":"native.android.9bb0d79f7deba6f7","source":"Monitoring · 1 scheduled job","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt"}]},
     {"id":"native.android.371847d33fbd7ba3","source":"Monitoring · 1 thread","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt"}]},
-    {"id":"native.android.e9acea3bb711db78","source":"More","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarContent.kt"}]},
     {"id":"native.android.e238a849f3745e16","source":"More phases not shown","surface":"android","sites":[{"kind":"resource-string","path":"apps/android/wear/src/main/res/values/strings.xml"}]},
     {"id":"native.android.a5beb359c71ff68c","source":"Motion","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt"}]},
     {"id":"native.android.fd275f26d40a8063","source":"Motion Activity","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/PermissionRequester.kt"}]},

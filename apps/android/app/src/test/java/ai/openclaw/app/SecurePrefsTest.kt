@@ -188,6 +188,32 @@ class SecurePrefsTest {
   }
 
   @Test
+  fun legacySidebarPreferencesDropSettingsAndPreserveOtherPinsAndOrder() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    for (
+    (storedPins, expectedPins) in
+    listOf(
+      """["settings","threads","work"]""" to listOf("threads", "work"),
+      """["settings"]""" to listOf("home", "threads", "skills", "work"),
+    )
+    ) {
+      plainPrefs
+        .edit()
+        .clear()
+        .putString("sidebar.pageOrder", """["threads","settings","home","work","skills"]""")
+        .putString("sidebar.visiblePages", storedPins)
+        .commit()
+
+      val prefs = testPrefs(context)
+
+      assertEquals(listOf("threads", "home", "work", "skills"), prefs.sidebarPageOrder.value.take(4))
+      assertFalse("settings" in prefs.sidebarPageOrder.value)
+      assertEquals(expectedPins, prefs.sidebarVisiblePages.value)
+    }
+  }
+
+  @Test
   fun cameraAndAudioInputPreferencesDefaultAndPersist() {
     val context = RuntimeEnvironment.getApplication()
     val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)

@@ -21,7 +21,7 @@ The official Android app is available on [Google Play](https://play.google.com/s
   - Protocols: [Gateway protocol](/gateway/protocol) (nodes + control plane).
 - Select an agent in the sidebar to view its credential status in **Settings → Providers & Models**. The page updates when the Gateway publishes model, credential, or config changes. Use **Refresh** to recheck model availability.
 - The sidebar marks sessions waiting for an answer or approval, including inactive sessions and collapsed groups. Tap the attention icon, hover over it, or focus it with a keyboard to read the oldest pending request and the count of additional requests of the same kind. The indicator clears when requests resolve, are canceled, or expire. Question previews never include answer drafts.
-- The sidebar and recent Threads view keep cron sessions and system-created probes out of ordinary chat lists, without changing saved pins. The selected conversation stays reachable; named work and human-created background conversations remain visible. Open **Threads → Automations** to find and reopen automation and system conversations, including previously pinned chats. This is a view filter, not a saved setting. **Sidebar → More → Automations** shows scheduled jobs and their recent run summaries. Other sessions without creation metadata remain visible rather than being classified from their titles.
+- The sidebar and recent Threads view keep cron sessions and system-created probes out of ordinary chat lists, without changing saved pins. The selected conversation stays reachable; named work and human-created background conversations remain visible. Open **Threads → Automations** to find and reopen automation and system conversations, including previously pinned chats. This is a view filter, not a saved setting. **Sidebar → Pages pencil → Automations** shows scheduled jobs and their recent run summaries. Other sessions without creation metadata remain visible rather than being classified from their titles.
 - **Settings → OpenClaw** opens a dedicated Gateway settings assistant when the operator connection has `operator.admin` and the Gateway supports `openclaw.chat`. Its setup conversation stays separate from ordinary Chat, redacts secret replies locally, and moves to Chat only after you tap **Open Chat**.
 
 Its reply field switches to masked input for secret prompts. Tap it again if a prompt change closes the keyboard. Android sends sensitive replies without trimming them and clears unsent drafts when you leave this page or background the app.
@@ -42,12 +42,12 @@ location, screen, or notification commands to the same phone. Android can
 suspend the secondary connections after the app leaves the foreground.
 
 The sidebar defaults to **Home → Threads → Skills → Overview**. Existing
-personalized orders and pinned pages are preserved; **Pages → Edit pinned items →
+personalized orders and pinned work pages are preserved; **Pages pencil → Edit pinned items →
 Reset pinned items** restores these defaults. The **Settings** gear beside the
-Gateway selector opens all settings, including while offline. Settings remains
-available in the Pages menu if you want to pin it explicitly.
+Gateway selector opens all settings, including while offline. Settings stays in
+the footer rather than the Pages menu or pin editor.
 
-Use **More** below the pinned pages to open Agents, Automations, Usage, Skills,
+Use the **pencil beside Pages** to open Agents, Automations, Usage, Skills,
 Skill Workshop, Dreaming, Terminal, or Desktop (when available). Pin the pages
 you use often with **Edit pinned items**. These work pages also remain reachable
 through search; Settings focuses on this phone, connections, configuration, and
