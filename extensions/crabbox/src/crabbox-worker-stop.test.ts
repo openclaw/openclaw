@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  commandResult,
-  createWarmProvider,
-  LEASE_ID,
-  PROFILE,
-} from "./crabbox-worker-warm-image.test-support.js";
+import { commandResult } from "./crabbox-worker-provider.test-support.js";
+import { createWarmProvider, LEASE_ID, PROFILE } from "./crabbox-worker-warm-image.test-support.js";
 
 const lease = { leaseId: LEASE_ID, profile: { ...PROFILE, warmImage: false } };
 

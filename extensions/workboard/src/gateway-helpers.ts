@@ -2,6 +2,7 @@ import { WORKBOARD_STATUSES, type WorkboardCard } from "@openclaw/workboard-cont
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { asRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawPluginApi } from "../api.js";
 import { redactClaimToken, redactDispatchResult } from "./card-redaction.js";
 import {
@@ -107,11 +108,7 @@ function readOptionalPositiveInteger(value: unknown, fieldName: string): number 
 }
 
 export function readPatch(params: Record<string, unknown>): Record<string, unknown> {
-  const patch = params.patch;
-  if (patch && typeof patch === "object" && !Array.isArray(patch)) {
-    return patch as Record<string, unknown>;
-  }
-  return params;
+  return isRecord(params.patch) ? params.patch : params;
 }
 
 export function assertNoCursorAdvance(params: Record<string, unknown>) {
@@ -189,14 +186,7 @@ export function createWorkboardDispatchHandler(params: {
   ) => {
     try {
       const cardId = options.directCard ? readId(requestParams) : undefined;
-      const boardId =
-        requestParams && typeof requestParams === "object" && "boardId" in requestParams
-          ? requestParams.boardId
-          : undefined;
-      const rawMaxStarts =
-        requestParams && typeof requestParams === "object" && "maxStarts" in requestParams
-          ? requestParams.maxStarts
-          : undefined;
+      const { boardId, maxStarts: rawMaxStarts } = asRecord(requestParams);
       if (!options.supportsMaxStarts && rawMaxStarts !== undefined) {
         throw new Error("maxStarts requires workboard.cards.dispatchWithOptions.");
       }

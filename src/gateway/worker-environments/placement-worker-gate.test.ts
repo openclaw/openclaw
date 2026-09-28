@@ -1,14 +1,11 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
 import { MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS } from "./placement-session-tool-operations.js";
 import {
@@ -27,19 +24,15 @@ const ENVIRONMENT_ID = "environment-worker-gate";
 const OWNER_EPOCH = 7;
 
 describe("worker session placement gate", () => {
+  const tempDirs = useStateDatabaseTempDirs();
   let root: string;
   let database: OpenClawStateDatabase;
   let store: WorkerSessionPlacementStore;
 
-  beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-gate-"));
+  beforeEach(() => {
+    root = tempDirs.make("openclaw-worker-gate-");
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     store = createWorkerSessionPlacementStore({ database });
-  });
-
-  afterEach(async () => {
-    await closeStateDatabaseForTest();
-    await fs.rm(root, { recursive: true, force: true });
   });
 
   function activate(executionMode: "worker-turn" | "remote-exec" = "worker-turn") {

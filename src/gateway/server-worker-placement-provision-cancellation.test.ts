@@ -617,7 +617,7 @@ describe("dispatch Stop before provider allocation", () => {
   it.each([
     "replaced",
     "archived",
-    "archived-behind-exclusive",
+    "archived-behind-same-session-destroy",
     "shutdown",
     "closed-ingress",
     "started-failure",
@@ -628,7 +628,6 @@ describe("dispatch Stop before provider allocation", () => {
       const releaseDestroy = createDeferredCore();
       const exclusiveEntered = createDeferredCore();
       const releaseExclusive = createDeferredCore();
-      const admissionChecked = createDeferredCore();
       const invalidOwner = reason === "replaced" || reason.startsWith("archived");
       const destroy = vi.fn(
         async ({
@@ -663,13 +662,7 @@ describe("dispatch Stop before provider allocation", () => {
         worktree: { id: "workspace" },
         ...(reason.startsWith("archived") ? { archivedAt: 1 } : {}),
       };
-      let admissionReads = 0;
-      moveDestinationMocks.resolveCanonicalSession.mockImplementation(() => {
-        if (++admissionReads >= 2) {
-          admissionChecked.resolve();
-        }
-        return entry;
-      });
+      moveDestinationMocks.resolveCanonicalSession.mockReturnValue(entry);
       if (reason === "started-failure") {
         vi.mocked(support.testState.bootstrapWorker).mockRejectedValueOnce(
           new Error("Bootstrap failed"),
@@ -692,8 +685,13 @@ describe("dispatch Stop before provider allocation", () => {
         isStopping: () => false,
       });
       let exclusive: Promise<unknown> = Promise.resolve();
-      if (reason === "archived-behind-exclusive") {
-        await support.seedReady("environment-prior-exclusive");
+      if (reason === "archived-behind-same-session-destroy") {
+        const previous = await support.seedReady("environment-prior-exclusive");
+        await environments.attachSession({
+          environmentId: previous.environmentId,
+          ownerEpoch: previous.ownerEpoch,
+          sessionId: REQUEST.sessionId,
+        });
         exclusive = runtime.dispatchService.forceDestroyEnvironment("environment-prior-exclusive");
         await Promise.race([
           exclusiveEntered.promise,
@@ -725,8 +723,7 @@ describe("dispatch Stop before provider allocation", () => {
         },
       );
       try {
-        if (reason === "archived-behind-exclusive") {
-          await admissionChecked.promise;
+        if (reason === "archived-behind-same-session-destroy") {
           await setImmediate();
           expect(destroy).toHaveBeenCalledExactlyOnceWith({
             leaseId: "lease:environment-prior-exclusive",

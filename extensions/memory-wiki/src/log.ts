@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { listMemoryWikiPagePaths } from "./bounded-walk.js";
 
 type MemoryWikiLogEntry = {
@@ -67,37 +68,20 @@ export async function loadMemoryWikiVaultIdentity(
   for (const line of raw.split(/\r?\n/)) {
     try {
       const parsed = JSON.parse(line) as MemoryWikiLogEntry;
-      const candidateVaultGeneration = parsed.details?.[VAULT_GENERATION_FIELD];
-      if (
-        !vaultGeneration &&
-        typeof candidateVaultGeneration === "string" &&
-        candidateVaultGeneration.trim()
-      ) {
-        vaultGeneration = candidateVaultGeneration.trim();
-      }
-      const candidateReservationId = parsed.details?.[COMPILED_CACHE_RESERVATION_ID_FIELD];
-      const normalizedReservationId =
-        typeof candidateReservationId === "string" && candidateReservationId.trim()
-          ? candidateReservationId.trim()
-          : undefined;
-      const candidateCompiledCachePublicationId =
-        parsed.details?.[COMPILED_CACHE_PUBLICATION_ID_FIELD];
-      if (
-        typeof candidateCompiledCachePublicationId === "string" &&
-        candidateCompiledCachePublicationId.trim()
-      ) {
+      vaultGeneration ??= normalizeOptionalString(parsed.details?.[VAULT_GENERATION_FIELD]) ?? null;
+      const normalizedReservationId = normalizeOptionalString(
+        parsed.details?.[COMPILED_CACHE_RESERVATION_ID_FIELD],
+      );
+      const candidateCompiledCachePublicationId = normalizeOptionalString(
+        parsed.details?.[COMPILED_CACHE_PUBLICATION_ID_FIELD],
+      );
+      if (candidateCompiledCachePublicationId) {
         const candidateParent = parsed.details?.[COMPILED_CACHE_PARENT_PUBLICATION_ID_FIELD];
         const normalizedParent =
-          candidateParent === null
-            ? null
-            : typeof candidateParent === "string" && candidateParent.trim()
-              ? candidateParent.trim()
-              : undefined;
-        const candidateSourceGeneration = parsed.details?.[COMPILED_CACHE_SOURCE_GENERATION_FIELD];
-        const normalizedSourceGeneration =
-          typeof candidateSourceGeneration === "string" && candidateSourceGeneration.trim()
-            ? candidateSourceGeneration.trim()
-            : undefined;
+          candidateParent === null ? null : normalizeOptionalString(candidateParent);
+        const normalizedSourceGeneration = normalizeOptionalString(
+          parsed.details?.[COMPILED_CACHE_SOURCE_GENERATION_FIELD],
+        );
         // A commit must reference both the prior publication and a reservation
         // already present in the log; it cannot recreate either after rollback.
         if (
@@ -105,7 +89,7 @@ export async function loadMemoryWikiVaultIdentity(
           normalizedReservationId === compiledCacheReservationId &&
           normalizedSourceGeneration
         ) {
-          compiledCachePublicationId = candidateCompiledCachePublicationId.trim();
+          compiledCachePublicationId = candidateCompiledCachePublicationId;
           compiledCacheSourceGeneration = normalizedSourceGeneration;
         }
       } else if (normalizedReservationId) {

@@ -149,11 +149,7 @@ export async function finishAlreadyCurrentUpdate(
       timeoutMs: params.updateStepTimeoutMs,
     });
     for (const warning of pluginWarnings) {
-      if (params.opts.json) {
-        defaultRuntime.error(warning.message);
-      } else {
-        defaultRuntime.log(warning.message);
-      }
+      defaultRuntime[params.opts.json ? "error" : "log"](warning.message);
     }
     await inspectUpdateDatabaseContexts({
       ...inspection,

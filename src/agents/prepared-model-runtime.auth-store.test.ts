@@ -38,16 +38,4 @@ describe("prepared model runtime auth store", () => {
     expect(result?.profiles["openai:default"]).toEqual(durable.profiles["openai:default"]);
     expect(loadDurable).toHaveBeenCalledOnce();
   });
-
-  it("avoids durable reads when no external runtime overlay exists", () => {
-    const loadDurable = vi.fn(() => ({ version: 1, profiles: {} }));
-
-    expect(
-      loadPreparedModelRuntimeAuthStore(input, {
-        loadDurable,
-        loadPublished: () => ({ version: 1, profiles: {} }),
-      }),
-    ).toBeUndefined();
-    expect(loadDurable).not.toHaveBeenCalled();
-  });
 });

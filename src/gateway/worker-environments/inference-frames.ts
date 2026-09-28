@@ -56,11 +56,7 @@ export function validFrameBytes(
   validate: (data: unknown) => boolean,
 ): number | null {
   const measured = boundedJsonUtf8Bytes(frame, WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES);
-  if (
-    measured.complete &&
-    measured.bytes <= WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES &&
-    validate(frame)
-  ) {
+  if (measured.complete && validate(frame)) {
     return measured.bytes;
   }
   return null;
