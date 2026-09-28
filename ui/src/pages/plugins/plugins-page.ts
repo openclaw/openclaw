@@ -12,6 +12,7 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import {
   loadPluginDiscoveryDetail,
   uninstallPlugin,
@@ -107,7 +108,7 @@ class PluginsPage extends OpenClawLightDomElement {
   private readonly mcpLogin = new PluginMcpLoginController(this, this.gateway, {
     getDetail: () => this.detail,
     getName: (pluginId) => this.result?.plugins.find((plugin) => plugin.id === pluginId)?.name,
-    canSignIn: () => this.accessBlockedReason() === null,
+    canSignIn: () => canCallGatewayMethod(this.gateway.snapshot, "mcp.authLogin", "operator.admin"),
     refresh: (pluginId) => this.showDetails(pluginId),
   });
   private readonly discovery = new PluginDiscoveryController(this, {
@@ -623,7 +624,7 @@ class PluginsPage extends OpenClawLightDomElement {
     return renderPluginsPage({
       mcpLogin: this.mcpLogin.render(),
       mcpLoginBusy: this.mcpLogin.busy,
-      canMcpLogin: this.accessBlockedReason() === null,
+      canMcpLogin: canCallGatewayMethod(this.gateway.snapshot, "mcp.authLogin", "operator.admin"),
       help: this.help,
       context: this.context,
       routeData: this.routeData,

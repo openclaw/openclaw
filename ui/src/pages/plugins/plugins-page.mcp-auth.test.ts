@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { i18n } from "../../i18n/index.ts";
 import type { PluginsInspectResult } from "../../lib/plugins/index.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   createClient,
@@ -25,9 +26,20 @@ describe("plugin MCP sign-in", () => {
   });
   afterEach(resetPluginsPageTestState);
 
-  async function setup(handler: (method: string, params: unknown) => Promise<unknown>) {
+  async function setup(
+    handler: (method: string, params: unknown) => Promise<unknown>,
+    advertiseMcpLogin = true,
+  ) {
     const { client, request } = createClient(handler);
     const harness = createGateway(client);
+    if (advertiseMcpLogin) {
+      harness.emit(client, true, {
+        hello: gatewayHelloForMethods([
+          ...(harness.gateway.snapshot.hello?.features?.methods ?? []),
+          "mcp.authLogin",
+        ]),
+      });
+    }
     const result = createResult(createPlugin({ enabled: true, state: "enabled" }));
     const route = createPluginsRouteData(
       harness.gateway,
@@ -162,6 +174,24 @@ describe("plugin MCP sign-in", () => {
       expect(page.querySelector('[aria-label="Connect workboard-mcp"]')).toBeNull(),
     );
     expect(page.querySelector(".plugin-capabilities")?.textContent).toContain("Connected");
+  });
+
+  it("disables Connect and refuses sign-in when the gateway does not advertise MCP OAuth", async () => {
+    const { page, request } = await setup(
+      async (method) =>
+        method === "mcp.authLogin"
+          ? { done: true, status: "done" }
+          : createInspectResult({
+              mcpAuth: [{ serverName: "workboard-mcp", state: "requires-authorization" }],
+            }),
+      false,
+    );
+    const button = page.querySelector<HTMLButtonElement>('[aria-label="Connect workboard-mcp"]')!;
+    expect.soft(button.disabled).toBe(true);
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await page.updateComplete;
+    expect(request.mock.calls.filter(([method]) => method === "mcp.authLogin")).toHaveLength(0);
+    expect(window.open).not.toHaveBeenCalled();
   });
 
   it.each(["navigation", "reconnect"])(
