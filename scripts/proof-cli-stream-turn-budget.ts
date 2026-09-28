@@ -22,7 +22,11 @@
  *  3. recovered-lines — the same recovery for the 20,000-line budget.
  *  4. retention-flat  — 32 MiB pushed AFTER the budget is spent emits zero new
  *                       assistant text and grows the heap by a tiny fraction of
- *                       the bytes streamed. Pins that memory is still bounded.
+ *                       the bytes streamed. The post-budget traffic is the shape
+ *                       that makes tool tracking grow: a distinct, never-repeated
+ *                       tool id per iteration plus one tool block whose
+ *                       `content_block_stop` never arrives. Pins that the bound
+ *                       holds and that it does not cost the progress signal.
  *  5. subagent-exempt — 3x both budgets streamed as forwarded subagent traffic
  *                       (`parent_tool_use_id` set), which the parent lane
  *                       discards. Pins that no budget is spent and the parent's
@@ -56,11 +60,25 @@ const FINAL_ANSWER = "Report written to ~/reports/theseus-research/context-epide
 function forceGarbageCollection(): void {
   setFlagsFromString("--expose-gc");
   try {
-    (runInNewContext("gc") as () => void)();
+    const gc = runInNewContext("gc") as () => void;
+    // Twice: one pass can leave a large transient graph uncollected, which
+    // inflates a baseline sample and then hides real retention as a negative
+    // delta. A silently non-discriminating retention gate is worse than none.
+    gc();
+    gc();
   } finally {
     setFlagsFromString("--no-expose-gc");
   }
 }
+
+/**
+ * Module-level keep-alive. A parser held only in a function local is dead once
+ * the loop that feeds it ends, and V8 will collect it — together with the tool
+ * tracker whose retention the measurement below is trying to observe. Without
+ * this, `retention-flat` reports a flat heap even against a build with no bound
+ * at all, which is a green assertion that cannot fail.
+ */
+const retainedForMeasurement: unknown[] = [];
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
@@ -201,17 +219,108 @@ function scenarioUnknowable(): void {
   console.log(`[unknowable-raw] still fails as designed: ${errorText}`);
 }
 
+/** A tool call with an id no other frame reuses: the unbounded-ids case. */
+function uniqueToolUseFrame(index: number): string {
+  return JSON.stringify({
+    type: "assistant",
+    parent_tool_use_id: null,
+    session_id: SESSION_ID,
+    message: {
+      id: `msg_proof_${index}`,
+      content: [
+        {
+          type: "tool_use",
+          id: `toolu_proof_unique_${index}`,
+          name: "Bash",
+          input: { command: `echo ${index}` },
+        },
+      ],
+    },
+  });
+}
+
+function uniqueToolResultFrame(index: number): string {
+  return JSON.stringify({
+    type: "user",
+    parent_tool_use_id: null,
+    session_id: SESSION_ID,
+    message: {
+      content: [{ type: "tool_result", tool_use_id: `toolu_proof_unique_${index}`, content: "ok" }],
+    },
+  });
+}
+
+/** Argument fragments for a tool block whose `content_block_stop` never arrives. */
+function unfinishedToolInputFrame(chars: number): string {
+  return JSON.stringify({
+    type: "stream_event",
+    parent_tool_use_id: null,
+    session_id: SESSION_ID,
+    event: {
+      type: "content_block_delta",
+      index: 99,
+      delta: { type: "input_json_delta", partial_json: "u".repeat(chars) },
+    },
+  });
+}
+
+function unfinishedToolStartFrame(): string {
+  return JSON.stringify({
+    type: "stream_event",
+    parent_tool_use_id: null,
+    session_id: SESSION_ID,
+    event: {
+      type: "content_block_start",
+      index: 99,
+      content_block: { type: "tool_use", id: "toolu_proof_never_stops", name: "Write", input: {} },
+    },
+  });
+}
+
 function scenarioRetentionFlat(): void {
-  const assistantDeltas: string[] = [];
-  const parser = createParser(assistantDeltas);
+  let assistantDeltaCount = 0;
+  let toolStartCount = 0;
+  let toolResultCount = 0;
+  // Counted, never retained: holding the delivered payloads here would measure
+  // this harness's own arrays instead of the parser's retention.
+  const parser = createCliJsonlStreamingParser({
+    backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+    providerId: "claude-cli",
+    onAssistantDelta: () => {
+      assistantDeltaCount += 1;
+    },
+    onToolUseStart: () => {
+      toolStartCount += 1;
+    },
+    onToolResult: () => {
+      toolResultCount += 1;
+    },
+  });
+  retainedForMeasurement.push(parser);
   overflowRawCharBudget(parser);
-  const deltasAtOverflow = assistantDeltas.length;
+  const deltasAtOverflow = assistantDeltaCount;
+  // A tool block that opens before exhaustion and never stops, so nothing but
+  // the tracker's own bound limits its argument fragments.
+  parser.push(`${unfinishedToolStartFrame()}\n`);
   forceGarbageCollection();
   const heapAtOverflow = process.memoryUsage().heapUsed;
 
   let streamedAfter = 0;
+  let uniqueToolCalls = 0;
+  let unfinishedArgumentChars = 0;
+  const argumentFragmentChars = 1024;
+  const unfinishedArgumentLine = unfinishedToolInputFrame(argumentFragmentChars);
   for (let index = 0; streamedAfter < 32 * 1024 * 1024; index += 1) {
-    const chunk = `${textDeltaFrame(`late ${index} `)}\n${toolResultFrame(index, 96_000)}\n`;
+    // Every post-budget iteration adds a tool id the tracker has never seen and
+    // another slab of arguments to a block that will never be closed — the two
+    // shapes that make post-budget tool tracking grow without limit.
+    const chunk =
+      `${textDeltaFrame(`late ${index} `)}\n` +
+      `${uniqueToolUseFrame(index)}\n` +
+      `${uniqueToolResultFrame(index)}\n` +
+      `${unfinishedArgumentLine}\n`;
+    uniqueToolCalls += 1;
+    unfinishedArgumentChars += argumentFragmentChars;
     streamedAfter += chunk.length;
     parser.push(chunk);
   }
@@ -219,15 +328,28 @@ function scenarioRetentionFlat(): void {
   const heapGrowth = process.memoryUsage().heapUsed - heapAtOverflow;
 
   assert(
-    assistantDeltas.length === deltasAtOverflow,
-    `retention-flat: ${assistantDeltas.length - deltasAtOverflow} assistant delta(s) assembled after the budget was spent`,
+    assistantDeltaCount === deltasAtOverflow,
+    `retention-flat: ${assistantDeltaCount - deltasAtOverflow} assistant delta(s) assembled after the budget was spent`,
+  );
+  // Both bounds must actually engage, or the measurement proves nothing.
+  assert(
+    uniqueToolCalls > 4096,
+    `retention-flat: only ${uniqueToolCalls} unique tool ids streamed; the tracked-id bound never engaged`,
   );
   assert(
-    heapGrowth < streamedAfter / 4,
-    `retention-flat: heap grew ${heapGrowth} bytes while streaming ${streamedAfter} post-budget bytes; retention is not flat`,
+    unfinishedArgumentChars > 8 * 1024 * 1024,
+    `retention-flat: only ${unfinishedArgumentChars} argument chars streamed to the unfinished block; the buffered-argument bound never engaged`,
+  );
+  assert(
+    toolStartCount >= uniqueToolCalls && toolResultCount >= uniqueToolCalls,
+    `retention-flat: only ${toolStartCount} start(s)/${toolResultCount} result(s) for ${uniqueToolCalls} post-budget tool calls; bounding the state must not cost the progress signal`,
+  );
+  assert(
+    heapGrowth < streamedAfter / 8,
+    `retention-flat: heap grew ${heapGrowth} bytes while streaming ${streamedAfter} post-budget bytes across ${uniqueToolCalls} unique tool calls and ${unfinishedArgumentChars} argument chars on an unfinished tool block; retention is not flat`,
   );
   console.log(
-    `[retention-flat] streamed ${streamedAfter} post-budget bytes; heap delta ${heapGrowth} bytes; 0 new assistant deltas`,
+    `[retention-flat] streamed ${streamedAfter} post-budget bytes across ${uniqueToolCalls} unique tool call(s) and ${unfinishedArgumentChars} argument chars on a never-stopping tool block; heap delta ${heapGrowth} bytes; ${toolStartCount} tool start(s) still reported; 0 new assistant deltas`,
   );
 }
 
@@ -385,10 +507,12 @@ function scenarioProgressPastBudget(): void {
   );
 }
 
+// Retention runs first: a heap baseline taken after the other scenarios carries
+// their transient graphs and can mask the growth this measures.
+scenarioRetentionFlat();
 scenarioRecovered("recovered-raw", overflowRawCharBudget);
 scenarioRecovered("recovered-lines", overflowLineBudget);
 scenarioUnknowable();
-scenarioRetentionFlat();
 scenarioSubagentExempt();
 scenarioProgressPastBudget();
 console.log("All runtime assertions passed.");

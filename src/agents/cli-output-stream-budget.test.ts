@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CliToolResultDelta, CliToolUseStartDelta } from "./cli-output-contracts.js";
+import { createToolUseTracker, dispatchClaudeCliStreamingToolEvent } from "./cli-output-events.js";
 import { CLI_STREAM_JSON_OUTPUT_LIMITS } from "./cli-output-stream-limits.js";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
 
@@ -151,5 +152,169 @@ describe("CLI stream-json turn budget and forwarded subagent traffic", () => {
     parser.finish();
 
     expect(assistantDeltas).toEqual([]);
+  });
+});
+
+/** A genuine parent record whose nested payload also carries the field. */
+function parentTextLineWithNestedSubagentId(text: string) {
+  return JSON.stringify({
+    type: "stream_event",
+    event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } },
+    tool_use_result: { forwarded: [{ type: "assistant", parent_tool_use_id: "toolu_nested" }] },
+    parent_tool_use_id: null,
+  });
+}
+
+describe("raw-line exemption agrees with decoded top-level ownership", () => {
+  it("charges and assembles a parent record that nests a subagent parent tool id", () => {
+    const { parser, assistantDeltas } = createRecordingParser();
+
+    parser.push(`${parentTextLineWithNestedSubagentId("assembled")}\n`);
+    // The line is parent traffic, so the parent lane assembles it. Accounting
+    // has to agree: exempting it would spend nothing while it still produces
+    // parent output.
+    expect(assistantDeltas.join("")).toBe("assembled");
+
+    parser.push(
+      `${parentTextLineWithNestedSubagentId("x")}\n`.repeat(
+        CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnLines + 1,
+      ),
+    );
+    parser.push(`${terminalResultLine("recovered")}\n`);
+    parser.finish();
+
+    expect(parser.getOutputTruncationText()).toContain("JSONL output exceeded 20000 lines");
+  });
+});
+
+const CLAUDE_TOOL_BACKEND = {
+  backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+  providerId: "claude-cli",
+} as const;
+
+function dispatchToTracker(
+  tracker: ReturnType<typeof createToolUseTracker>,
+  parsed: Record<string, unknown>,
+  sinks?: {
+    onToolUseStart?: (d: CliToolUseStartDelta) => void;
+    onToolResult?: (d: CliToolResultDelta) => void;
+  },
+) {
+  dispatchClaudeCliStreamingToolEvent({
+    ...CLAUDE_TOOL_BACKEND,
+    parsed,
+    tracker,
+    ...(sinks?.onToolUseStart ? { onToolUseStart: sinks.onToolUseStart } : {}),
+    ...(sinks?.onToolResult ? { onToolResult: sinks.onToolResult } : {}),
+  });
+}
+
+describe("tool use tracker retention bounds", () => {
+  it("keeps reporting every repeated tool call while bounding retained ids", () => {
+    const tracker = createToolUseTracker();
+    const starts: string[] = [];
+    const results: string[] = [];
+    const total = 20_000;
+
+    for (let index = 0; index < total; index += 1) {
+      const toolCallId = `toolu_repeat_${index}`;
+      dispatchToTracker(
+        tracker,
+        {
+          type: "assistant",
+          message: {
+            content: [
+              { type: "tool_use", id: toolCallId, name: "Bash", input: { command: "true" } },
+            ],
+          },
+        },
+        { onToolUseStart: (tool) => starts.push(tool.toolCallId) },
+      );
+      dispatchToTracker(
+        tracker,
+        {
+          type: "user",
+          message: { content: [{ type: "tool_result", tool_use_id: toolCallId, content: "ok" }] },
+        },
+        { onToolResult: (result) => results.push(result.toolCallId) },
+      );
+    }
+
+    // Progress reporting is preserved: every call still produced both events.
+    expect(starts).toHaveLength(total);
+    expect(results).toHaveLength(total);
+    // Retention is not: the tracker holds a bounded window, not the whole turn.
+    expect(tracker.startedIds.size).toBeLessThanOrEqual(4096);
+    expect(tracker.nameById.size).toBeLessThanOrEqual(4096);
+    expect(tracker.resultDeliveredIds.size).toBeLessThanOrEqual(4096);
+    expect(tracker.startedIds.has(`toolu_repeat_${total - 1}`)).toBe(true);
+  });
+
+  it("bounds buffered arguments of a tool call whose stop never arrives", () => {
+    const tracker = createToolUseTracker();
+    const starts: CliToolUseStartDelta[] = [];
+    const chunk = "a".repeat(512 * 1024);
+    const chunks = 24; // 12 MiB streamed against an 8 MiB bound.
+
+    dispatchToTracker(tracker, {
+      type: "stream_event",
+      event: {
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "tool_use",
+          id: "toolu_unfinished",
+          name: "Write",
+          input: { path: "x" },
+        },
+      },
+    });
+    for (let index = 0; index < chunks; index += 1) {
+      dispatchToTracker(tracker, {
+        type: "stream_event",
+        event: {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "input_json_delta", partial_json: chunk },
+        },
+      });
+    }
+
+    const buffered = [...tracker.pendingByIndex.values()].reduce(
+      (sum, pending) =>
+        sum + pending.inputJsonParts.reduce((parts, part) => parts + part.length, 0),
+      0,
+    );
+    expect(buffered).toBeLessThanOrEqual(8 * 1024 * 1024);
+    expect(buffered).toBeLessThan(chunk.length * chunks);
+    expect(tracker.pendingInputChars).toBeLessThanOrEqual(8 * 1024 * 1024);
+
+    // The bound costs the streamed arguments, never the progress signal: the
+    // block still settles into a start event when its stop finally arrives.
+    dispatchToTracker(
+      tracker,
+      { type: "stream_event", event: { type: "content_block_stop", index: 0 } },
+      { onToolUseStart: (tool) => starts.push(tool) },
+    );
+    expect(starts.map((tool) => [tool.toolCallId, tool.name])).toEqual([
+      ["toolu_unfinished", "Write"],
+    ]);
+    expect(tracker.pendingByIndex.size).toBe(0);
+    expect(tracker.pendingInputChars).toBe(0);
+  });
+
+  it("bounds pending tool blocks that never stop", () => {
+    const tracker = createToolUseTracker();
+    for (let index = 0; index < 1_000; index += 1) {
+      dispatchToTracker(tracker, {
+        type: "stream_event",
+        event: {
+          type: "content_block_start",
+          index,
+          content_block: { type: "tool_use", id: `toolu_pending_${index}`, name: "Bash" },
+        },
+      });
+    }
+    expect(tracker.pendingByIndex.size).toBeLessThanOrEqual(256);
   });
 });

@@ -26,11 +26,8 @@ import {
   type createToolUseTracker,
   dispatchClaudeCliStreamingToolEvent,
 } from "./cli-output-events.js";
-import {
-  decodeCliRecords,
-  isClaudeSubagentJsonlLine,
-  readClaudeAttributedSubagentProgressId,
-} from "./cli-output-records.js";
+import { isClaudeSubagentJsonlLine } from "./cli-output-jsonl-scan.js";
+import { decodeCliRecords, readClaudeAttributedSubagentProgressId } from "./cli-output-records.js";
 import { streamJsonOutputLimitErrorText } from "./cli-output-stream-limits.js";
 
 function streamJsonOutputTruncationText(kind: "raw" | "lines", limit: number): string {

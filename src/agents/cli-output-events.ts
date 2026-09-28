@@ -27,6 +27,8 @@ type PendingToolUse = {
   name: string;
   kind: CliToolUseStartDelta["kind"];
   inputJsonParts: string[];
+  /** Set once buffering stopped, so the partial join is never parsed. */
+  inputJsonDropped?: boolean;
   /**
    * Complete input carried on `content_block_start`. Some CLI backends send the
    * whole tool input there and never emit `input_json_delta` chunks, so without
@@ -41,7 +43,79 @@ type ToolUseTracker = {
   nameById: Map<string, string>;
   startedIds: Set<string>;
   resultDeliveredIds: Set<string>;
+  pendingInputChars: number;
 };
+
+// Nothing else bounds this tracker. Its dedup ids grow once per distinct tool
+// call and its `input_json_delta` fragments accumulate until a matching
+// `content_block_stop` arrives, so a turn that streams tool calls indefinitely —
+// or one unfinished call that streams arguments indefinitely — retains the whole
+// stream. The cumulative turn budget used to cap that indirectly; it no longer
+// does, because an exhausted budget keeps the parser watching for the terminal
+// result instead of abandoning the turn. These caps are the direct bound.
+//
+// Eviction is FIFO and its worst case is a re-emitted start or result for a tool
+// that last appeared thousands of calls earlier; unbounded growth instead
+// retains every tool id and argument fragment for the life of the process.
+const MAX_TRACKED_TOOL_IDS = 4096;
+const MAX_PENDING_TOOL_BLOCKS = 256;
+// Matches the per-turn raw-character budget: buffered tool arguments may not
+// outgrow the traffic a whole turn is allowed to be charged for.
+const MAX_PENDING_TOOL_INPUT_CHARS = 8 * 1024 * 1024;
+
+function evictOldestUntilBounded(entries: Set<string> | Map<string, string>, max: number): void {
+  while (entries.size > max) {
+    const oldest = entries.keys().next();
+    if (oldest.done) {
+      return;
+    }
+    entries.delete(oldest.value);
+  }
+}
+
+function releasePendingToolUse(tracker: ToolUseTracker, index: number): PendingToolUse | undefined {
+  const pending = tracker.pendingByIndex.get(index);
+  if (!pending) {
+    return undefined;
+  }
+  tracker.pendingByIndex.delete(index);
+  for (const part of pending.inputJsonParts) {
+    tracker.pendingInputChars -= part.length;
+  }
+  return pending;
+}
+
+function beginPendingToolUse(
+  tracker: ToolUseTracker,
+  index: number,
+  pending: PendingToolUse,
+): void {
+  releasePendingToolUse(tracker, index);
+  tracker.pendingByIndex.set(index, pending);
+  for (const oldestIndex of tracker.pendingByIndex.keys()) {
+    if (tracker.pendingByIndex.size <= MAX_PENDING_TOOL_BLOCKS) {
+      break;
+    }
+    releasePendingToolUse(tracker, oldestIndex);
+  }
+}
+
+function appendPendingToolInput(tracker: ToolUseTracker, index: number, partial: string): void {
+  const pending = tracker.pendingByIndex.get(index);
+  if (!pending || pending.inputJsonDropped) {
+    return;
+  }
+  if (tracker.pendingInputChars + partial.length > MAX_PENDING_TOOL_INPUT_CHARS) {
+    // A truncated fragment list cannot parse anyway, so release it and fall
+    // back to the `content_block_start` snapshot when the block finally stops.
+    tracker.pendingInputChars -= pending.inputJsonParts.reduce((sum, part) => sum + part.length, 0);
+    pending.inputJsonParts.length = 0;
+    pending.inputJsonDropped = true;
+    return;
+  }
+  pending.inputJsonParts.push(partial);
+  tracker.pendingInputChars += partial.length;
+}
 
 export function createToolUseTracker(): ToolUseTracker {
   return {
@@ -49,6 +123,7 @@ export function createToolUseTracker(): ToolUseTracker {
     nameById: new Map(),
     startedIds: new Set(),
     resultDeliveredIds: new Set(),
+    pendingInputChars: 0,
   };
 }
 
@@ -65,7 +140,9 @@ function emitToolStartOnce(
     return;
   }
   tracker.startedIds.add(toolCallId);
+  evictOldestUntilBounded(tracker.startedIds, MAX_TRACKED_TOOL_IDS);
   tracker.nameById.set(toolCallId, name);
+  evictOldestUntilBounded(tracker.nameById, MAX_TRACKED_TOOL_IDS);
   onToolUseStart?.({ toolCallId, name, kind, args });
 }
 
@@ -81,6 +158,7 @@ function emitToolResultOnce(
     return;
   }
   tracker.resultDeliveredIds.add(toolCallId);
+  evictOldestUntilBounded(tracker.resultDeliveredIds, MAX_TRACKED_TOOL_IDS);
   onToolResult?.({
     toolCallId,
     name: tracker.nameById.get(toolCallId) ?? "",
@@ -283,7 +361,7 @@ export function dispatchClaudeCliStreamingToolEvent(params: {
         const toolCallId = typeof block.id === "string" ? block.id.trim() : "";
         const name = typeof block.name === "string" ? block.name.trim() : "";
         if (toolCallId && name) {
-          tracker.pendingByIndex.set(event.index, {
+          beginPendingToolUse(tracker, event.index, {
             toolCallId,
             name,
             kind: block.type,
@@ -302,13 +380,12 @@ export function dispatchClaudeCliStreamingToolEvent(params: {
       isRecord(event.delta)
     ) {
       if (event.delta.type === "input_json_delta" && typeof event.delta.partial_json === "string") {
-        tracker.pendingByIndex.get(event.index)?.inputJsonParts.push(event.delta.partial_json);
+        appendPendingToolInput(tracker, event.index, event.delta.partial_json);
       }
       return;
     }
     if (event.type === "content_block_stop" && typeof event.index === "number") {
-      const pending = tracker.pendingByIndex.get(event.index);
-      tracker.pendingByIndex.delete(event.index);
+      const pending = releasePendingToolUse(tracker, event.index);
       if (pending) {
         // Delta presence, not key count, decides the winner: a no-argument call
         // arrives as an explicit `{}` delta, so keying on key count would let the
