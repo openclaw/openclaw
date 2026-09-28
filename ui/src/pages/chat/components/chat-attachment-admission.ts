@@ -1,5 +1,7 @@
-// Admit batches before base64 encoding to avoid disconnecting every pane with WS 1009.
-// Resizable sources reserve their per-file ceiling until preparation completes.
+// Per-file ceilings come from policy.attachments; one send's total must also fit a
+// single frame (maxBatchBytes from policy.maxPayload). Checking at intake names the file
+// instead of failing after the whole batch is base64-encoded. Resizable sources reserve
+// their per-file ceiling until preparation completes.
 import { resolveChatAttachmentFrameBudgetBytes } from "../../../../../src/shared/chat-attachment-frame-budget.ts";
 import type { GatewayHelloOk } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
