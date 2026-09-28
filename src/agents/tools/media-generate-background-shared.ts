@@ -155,11 +155,17 @@ async function wakeMediaGenerationTaskCompletionWithRetry(params: {
   while (outcome.status === "pending") {
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) {
-      // Pending means the handoff was already accepted into the durable
-      // session-delivery queue (or is settling into it), so delivery survives
-      // this caller. Surface a distinguishable outcome instead of a generic
-      // error so the scheduler does not record a false delivery failure.
-      throw new MediaGenerationCompletionHandoffPendingTimeoutError();
+      if (outcome.queueOwned === true) {
+        // The durable session-delivery queue positively accepted the handoff,
+        // so delivery survives this caller. Surface a distinguishable outcome
+        // instead of a generic error so the scheduler does not record a false
+        // delivery failure.
+        throw new MediaGenerationCompletionHandoffPendingTimeoutError();
+      }
+      // Any other pending handoff (refused admission, transient read failure,
+      // unconfirmed settling) owns nothing durable: fail closed so blocked
+      // retention and failure recording still run.
+      throw new Error("media completion did not settle before the handoff deadline");
     }
     // Queue admission and an owned continuation can both be transient. Keep the
     // operation live until delivery, permanent refusal, or the bounded deadline.

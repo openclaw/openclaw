@@ -543,7 +543,7 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
         recordTaskProgress: vi.fn(),
         completeTaskRun: vi.fn(),
         failTaskRun: vi.fn(),
-        wakeTaskCompletion: vi.fn(async () => ({ status: "pending" as const })),
+        wakeTaskCompletion: vi.fn(async () => ({ status: "pending" as const, queueOwned: true })),
       };
       scheduleImageCompletion({
         lifecycle,

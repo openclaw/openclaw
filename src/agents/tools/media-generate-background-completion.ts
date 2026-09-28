@@ -87,7 +87,11 @@ export async function retainBlockedMediaCompletion(params: {
 
 export type MediaGenerationCompletionWakeOutcome =
   | { status: "delivered" }
-  | { status: "pending" }
+  // queueOwned is true only when the durable session-delivery queue positively
+  // accepted the handoff (disposition session_queued). A deadline expired on a
+  // queue-owned pending handoff defers; any other pending handoff must still
+  // fail closed so blocked-completion retention and failure recording run.
+  | { status: "pending"; queueOwned?: boolean }
   | { status: "permanent_failure" };
 
 export function retainBlockedMediaReferences(
@@ -191,7 +195,7 @@ export async function wakeMediaGenerationTaskCompletion(params: {
       return { status: "permanent_failure" };
     }
     log.warn("Media completion requester could not be read", { runId: handle.runId, error });
-    return { status: "pending" };
+    return { status: "pending", queueOwned: false };
   }
   if (!requesterEntry || !isSourceCurrent()) {
     return { status: "permanent_failure" };
@@ -256,12 +260,11 @@ export async function wakeMediaGenerationTaskCompletion(params: {
   if (delivery.delivered) {
     return { status: "delivered" };
   }
-  if (
-    delivery.disposition === "session_queued" ||
-    delivery.disposition === "retryable" ||
-    delivery.reason === "completion_handoff_pending"
-  ) {
-    return { status: "pending" };
+  if (delivery.disposition === "session_queued") {
+    return { status: "pending", queueOwned: true };
+  }
+  if (delivery.disposition === "retryable" || delivery.reason === "completion_handoff_pending") {
+    return { status: "pending", queueOwned: false };
   }
   if (delivery.disposition === "ambiguous") {
     log.warn("Media generation completion delivery stopped after terminal fallback", {
