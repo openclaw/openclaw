@@ -232,7 +232,10 @@ describe("authenticated request mutation custody", () => {
       setRuntimeConfigSnapshot(committedConfig);
       const client = createOperatorWsClient();
       client.authenticatedUserId = identity;
-      client.authPolicyGeneration = resolveGatewayAuthPolicyGeneration(committedConfig, identity);
+      client.authPolicy = captureGatewayAuthPolicy(committedConfig, {
+        role: "operator",
+        verifiedIdentity: identity,
+      });
       client.internal = { operatorRoleActor: { kind: "operator", profileId: profile.id } };
       const context = createDirectChatContext({
         getRuntimeConfig: () => committedConfig,
