@@ -1088,7 +1088,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/agents/embedded-agent-runner/run.compaction-runtime.test.ts",
   "src/agents/embedded-agent-runner/run.harness-auth-failover.test.ts",
   "src/agents/embedded-agent-runner/run.incomplete-turn.classification.test.ts",
-  "src/agents/embedded-agent-runner/run.incomplete-turn.error-recovery.test.ts",
   "src/agents/embedded-agent-runner/run.inherited-auth-owner.test.ts",
   "src/agents/embedded-agent-runner/run.overflow-compaction.loop.test.ts",
   "src/agents/embedded-agent-runner/run.overflow-compaction.misc-owners.test.ts",
