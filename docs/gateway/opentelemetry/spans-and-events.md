@@ -86,8 +86,8 @@ output messages and, for the built-in runtime, the `openclaw.tool.execution`
 span (`gen_ai.tool.call.arguments`). CLI backends do not export tool arguments,
 so their message-tool text is not captured on any span. Earlier narration in
 the turn ("Checking now…") is never reported as the final response: a message
-that ended in a tool call is not final, and CLI turns that return several
-results record only the last one. Text the
+that ended in a tool call is not final, and CLI turns record only the final
+message, never the cumulative reply text. Text the
 model did not write is never captured, even when it was delivered to the chat:
 plugin hook replies (`before_dispatch`, `before_agent_reply`), no-visible-reply
 fallbacks, continuation statuses, failure texts, and Gateway restart notices.
