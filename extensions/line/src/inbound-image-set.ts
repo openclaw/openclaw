@@ -162,5 +162,5 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>() {
     };
   };
 
-  return { admit, enterLane, isBusy: (laneKey) => laneChain.has(laneKey) };
+  return { admit, enterLane, isBusy: (laneKey: string) => laneChain.has(laneKey) };
 }

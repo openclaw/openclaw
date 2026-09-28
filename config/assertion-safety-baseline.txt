@@ -503,7 +503,7 @@ extensions/line/src/gateway.ts	1
 extensions/line/src/markdown-to-line.ts	7
 extensions/line/src/monitor-durable.ts	1
 extensions/line/src/monitor.ts	1
-extensions/line/src/outbound.ts	6
+extensions/line/src/outbound.ts	5
 extensions/line/src/send.ts	1
 extensions/line/src/setup-core.ts	1
 extensions/line/src/webhook-spool.ts	2
@@ -695,7 +695,6 @@ extensions/msteams/src/feedback-invoke.ts	2
 extensions/msteams/src/file-consent.ts	1
 extensions/msteams/src/graph.ts	2
 extensions/msteams/src/inbound.ts	1
-extensions/msteams/src/media-helpers.ts	1
 extensions/msteams/src/messenger.ts	1
 extensions/msteams/src/monitor-handler/inbound-dispatch.ts	1
 extensions/msteams/src/monitor-handler/inbound-facts.ts	1
@@ -712,7 +711,6 @@ extensions/msteams/src/sdk-proactive.ts	3
 extensions/msteams/src/sdk.ts	7
 extensions/msteams/src/setup-surface.ts	7
 extensions/msteams/src/sqlite-state.ts	1
-extensions/msteams/src/token-response.ts	2
 extensions/msteams/src/user-agent.ts	1
 extensions/mxc/src/fs-bridge.ts	1
 extensions/nextcloud-talk/src/approval-auth.ts	1
