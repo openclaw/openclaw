@@ -35,7 +35,7 @@ describe("lobster pet variants", () => {
     let shinies = 0;
     const total = 20_000;
     const neutralDate = new Date("2026-07-15T12:00:00");
-    expect(LOBSTER_PET_PALETTES).toHaveLength(45);
+    expect(LOBSTER_PET_PALETTES).toHaveLength(46);
     for (let seed = 0; seed < total; seed++) {
       const look = createLobsterPetLook(seed, neutralDate);
       counts.set(look.palette.id, (counts.get(look.palette.id) ?? 0) + 1);
@@ -50,6 +50,7 @@ describe("lobster pet variants", () => {
       "clawnstantine",
       "clawdia",
       "clawiestardust",
+      "taylorpinch",
       "clawtron",
       "selene",
       "geode",
@@ -89,7 +90,7 @@ describe("lobster pet variants", () => {
     const retroWeight = expectDefined(weights.get("retro"), "retro weight");
     const totalWeight = [...weights.values()].reduce((sum, weight) => sum + weight, 0);
     const crimsonWeight = expectDefined(weights.get("crimson"), "crimson weight");
-    expect(totalWeight).toBeCloseTo(82.15, 10);
+    expect(totalWeight).toBeCloseTo(83.15, 10);
     expect(crimsonWeight / totalWeight).toBeGreaterThan(0.25);
     expect(goldenRetroWeight).toBeLessThan(retroWeight);
     for (const [paletteId, weight] of weights) {
@@ -106,6 +107,7 @@ describe("lobster pet variants", () => {
     ["clawnstantine", "Clawnstantine"],
     ["clawdia", "Clawdia"],
     ["clawiestardust", "Clawie Stardust"],
+    ["taylorpinch", "Taylor Pinch"],
   ] as const)(
     "keeps %s's signature name and art without random accessories or freckles",
     (id, name) => {

@@ -18,6 +18,7 @@ export const LOBSTER_PALETTE_WEIGHTS = [
   [{ id: "clawnstantine", shell: "#7546a0", claw: "#a576c4" }, 1],
   [{ id: "clawdia", shell: "#6dbbe9", claw: "#a6dafa" }, 1],
   [{ id: "clawiestardust", shell: "#f4ddd1", claw: "#e76545" }, 1],
+  [{ id: "taylorpinch", shell: "#efcc78", claw: "#d5485c" }, 1],
   [{ id: "clawtron", shell: "#8d99a6", claw: "#a2aeba" }, 1],
   [{ id: "selene", shell: "#c9ced8", claw: "#d8dde5" }, 1],
   [{ id: "geode", shell: "#6b6474", claw: "#7d7588" }, 1],
