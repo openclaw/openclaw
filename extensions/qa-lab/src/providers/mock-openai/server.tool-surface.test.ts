@@ -33,7 +33,9 @@ describe("mock tool surface dispatch", () => {
     const input: unknown[] = [
       {
         role: "system",
-        content: [{ type: "input_text", text: "Use session_status to inspect the current session." }],
+        content: [
+          { type: "input_text", text: "Use session_status to inspect the current session." },
+        ],
       },
       makeUserInput(
         "Telegram current session_status QA check. Call session_status with sessionKey set to current, then reply with the exact QA marker and resolved session key.",
