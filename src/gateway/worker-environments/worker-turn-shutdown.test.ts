@@ -116,18 +116,24 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
     destroy: vi.fn(async () => environment),
   };
   const resolveWorkspace = async () => ({ kind: "local" as const, path: accepted });
-  const execute = (store: typeof placements, runId: string) =>
-    fixture
-      .createWorkerSessionTurnPlacementProvider({
-        environments,
-        placements: store,
-        resolveWorkspace,
-      })
-      .executeTurn(
-        { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId },
-        fixture.turn(runId),
-        unexpected,
-      );
+  const execute = async (store: typeof placements, runId: string) => {
+    const turn = fixture.turn(runId);
+    try {
+      return await fixture
+        .createWorkerSessionTurnPlacementProvider({
+          environments,
+          placements: store,
+          resolveWorkspace,
+        })
+        .executeTurn(
+          { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId },
+          turn,
+          unexpected,
+        );
+    } finally {
+      turn.preparedRunAdmission.close();
+    }
+  };
   const attempt = runWithGatewayIndependentRootWorkAdmission(() =>
     execute(placements, "interrupted-turn"),
   ).catch((error: unknown) => error);
