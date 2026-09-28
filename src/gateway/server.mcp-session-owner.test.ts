@@ -1,13 +1,18 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
 import { readAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { resolveBootstrapContextForRun } from "../agents/bootstrap-files.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
 import { callInProcessGatewayToolWithCreation } from "../agents/tools/in-process-gateway.js";
+import { createPersonalInstructionsTool } from "../agents/tools/personal-instructions-tool.js";
 import { resolveCommandAuthorization } from "../auto-reply/command-auth.js";
 import { prepareChannelRunAdmission } from "../auto-reply/reply/channel-run-admission.js";
 import { buildInboundUserContextPrefix } from "../auto-reply/reply/inbound-meta.js";
+import { getRequesterProfile } from "../auto-reply/requester-profile.js";
 import { installDiscordRegistryHooks } from "../auto-reply/test-helpers/command-auth-registry-fixture.js";
 import {
   readChannelContextAdmissionEvidence,
@@ -16,11 +21,13 @@ import {
 import { withAdminIngress } from "../channels/message-access/operator-authority.test-support.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { sessionPersonalProfileId } from "../config/sessions/session-entry-provenance.js";
 import {
   bindGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { isSessionPersonalBootstrapTurn } from "../sessions/session-participant-input.js";
+import { setUserProfileRole } from "../state/user-profiles.js";
 import { withLocalGatewayRequestScope } from "./local-request-context.js";
 import {
   activateMcpLoopbackClientGrantCapture,
@@ -77,16 +84,18 @@ it("assigns and reads back a created session through admitted non-owner Discord 
           commandAuthorized: true,
         });
         expect(senderIsOwner).toBe(false);
-        const admission = prepareChannelRunAdmission({
-          cfg,
-          runId: "assignment-run",
-          agentId: "main",
-          ingressKind: "channel",
-          boundary: "auto-reply.agent-runner",
-          evidence: readChannelContextAdmissionEvidence(turn),
-          onAdmitted: (context) =>
-            bindGatewayContextResolver(context, readChannelContextGatewayContextResolver(turn)),
-        });
+        const prepareTurn = (source: typeof turn, runId: string) =>
+          prepareChannelRunAdmission({
+            cfg,
+            runId,
+            agentId: "main",
+            ingressKind: "channel",
+            boundary: "auto-reply.agent-runner",
+            evidence: readChannelContextAdmissionEvidence(source),
+            onAdmitted: (context) =>
+              bindGatewayContextResolver(context, readChannelContextGatewayContextResolver(source)),
+          });
+        const admission = prepareTurn(turn, "assignment-run");
         const admittedRunContext = await admission.admit("gateway", "assignment-execution");
         expect(readAdmittedRunOperatorAuthority(admittedRunContext)).toBeUndefined();
         await withGatewayToolCallerIdentity(
@@ -143,6 +152,7 @@ it("assigns and reads back a created session through admitted non-owner Discord 
           method: "tools/list" | "tools/call",
           ownerId = metadata.requester_profile.id,
           toolName = "sessions",
+          targetSessionKey = targetKey,
         ) => {
           const response = await fetch("http://127.0.0.1:" + runtime.port + "/mcp", {
             method: "POST",
@@ -164,7 +174,7 @@ it("assigns and reads back a created session through admitted non-owner Discord 
                           ? { search: targetKey }
                           : {
                               action: "assign_owner",
-                              sessionKey: targetKey,
+                              sessionKey: targetSessionKey,
                               ownerType: "human",
                               ownerId,
                             },
@@ -218,8 +228,68 @@ it("assigns and reads back a created session through admitted non-owner Discord 
               },
             ],
           });
+          const next = fixture.admins[1]!.profile;
+          expect(next.id).not.toBe(profile.id);
+          const personalDir = path.join(state.workspaceDir, "users", next.id);
+          await fs.mkdir(personalDir, { recursive: true });
+          await fs.writeFile(path.join(state.workspaceDir, "USER.md"), "Shared preferences.");
+          await fs.writeFile(path.join(personalDir, "USER.md"), "Assignee preferences.");
+          expect(
+            await request(grant.token, false, "tools/call", next.id, "sessions", sessionKey),
+          ).toMatchObject({ result: { isError: false } });
+          const assigned = loadSessionEntry({ agentId: "main", sessionKey });
+          expect(assigned).toMatchObject({
+            owner: { actor: { type: "human", id: next.id } },
+            createdActor: { type: "agent", id: "main" },
+            visibility: "shared",
+          });
+
+          const nextTurn = await fixture.context(fixture.admins[0]!.identity.senderId);
+          expect(nextTurn.SessionKey).toBe(sessionKey);
+          expect(isSessionPersonalBootstrapTurn(nextTurn)).toBe(true);
+          expect(getRequesterProfile(nextTurn)?.id).toBe(profile.id);
+          expect(
+            resolveCommandAuthorization({ cfg, ctx: nextTurn, commandAuthorized: true })
+              .senderIsOwner,
+          ).toBe(false);
+          const nextAdmission = prepareTurn(nextTurn, "assignment-followup");
+          try {
+            const nextContext = await nextAdmission.admit(
+              "gateway",
+              "assignment-followup-execution",
+            );
+            expect(readAdmittedRunOperatorAuthority(nextContext)).toBeUndefined();
+            // Match the external-turn selection before exercising the real bootstrap owner.
+            const bootstrap = await resolveBootstrapContextForRun({
+              workspaceDir: state.workspaceDir,
+              config: cfg,
+              sessionKey,
+              bootstrapUserProfileId: sessionPersonalProfileId(assigned),
+            });
+            expect(
+              bootstrap.contextFiles
+                .filter((file) => file.path.endsWith("USER.md"))
+                .map((file) => file.content),
+            ).toEqual(["Shared preferences.", "Assignee preferences."]);
+            await expect(
+              withGatewayToolCallerIdentity(
+                createAdmittedGatewayToolCallerIdentity({
+                  admittedRunContext: nextContext,
+                  agentId: "main",
+                  sessionKey,
+                }),
+                () =>
+                  createPersonalInstructionsTool("main").execute("no-borrowed-profile", {
+                    action: "get",
+                  }),
+              ),
+            ).rejects.toThrow(
+              "Personal instructions require a live authenticated Gateway user turn",
+            );
+          } finally {
+            nextAdmission.close();
+          }
           const before = loadSessionEntry(scope)?.owner;
-          const next = ensureProfileForEmail("other-requester@example.test");
           const denied = await request(attach.token, true, "tools/call", next.id);
           expect(denied).toMatchObject({
             result: {

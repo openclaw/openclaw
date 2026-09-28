@@ -87,7 +87,10 @@ export async function waitForReliabilityWorkerExit(
   });
 }
 
-function assertReliabilityForcedExit(exit: ReliabilityWorkerExit, workerLabel: string): void {
+export function assertReliabilityForcedExit(
+  exit: ReliabilityWorkerExit,
+  workerLabel: string,
+): void {
   if (exit.code === 0) {
     throw new Error(`${workerLabel} exited cleanly before forced termination.`);
   }
