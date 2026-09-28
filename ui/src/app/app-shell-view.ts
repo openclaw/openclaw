@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { isSettingsNavigationRoute, isSettingsTakeover } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { APP_ROUTE_IDS } from "../app-routes.ts";
@@ -290,7 +291,6 @@ export function renderApplicationShell(host: ShellViewHost) {
     onRefresh: host.refreshControlUi,
     onNavigate: host.navigate,
   };
-  const layout = host.shellLayout.current;
   const navigationContent =
     settingsTakeover || embedNavigation
       ? renderLazySettingsSidebar(host, {
@@ -508,18 +508,8 @@ export function renderApplicationShell(host: ShellViewHost) {
           activeRoute === "custodian" ? "content--custodian" : ""
         } ${activeRoute === "workboard" ? "content--workboard" : ""} ${
           pageActionsBlocked ? "content--actions-blocked" : ""
-        } ${layout.pluginEmbed ? "content--plugin-embed" : ""} ${
-          layout.hubHeader ? "content--hub-header" : ""
-        } ${layout.toolbarHeader ? "content--toolbar-header" : ""} ${
-          layout.workbench ? "content--workbench" : ""
-        } ${layout.settingsPage ? "content--settings-page" : ""} ${
-          layout.settingsWide ? "content--settings-wide" : ""
-        } ${layout.settingsWorkspace ? "content--settings-workspace" : ""} ${
-          layout.memoryPage ? "content--memory-page" : ""
-        } ${layout.logsPage ? "content--logs-page" : ""} ${
-          layout.activityPage ? "content--activity-page" : ""
-        } ${layout.terminalPage ? "content--terminal-page" : ""}"
-        @openclaw-shell-layout=${host.shellLayout.handleChange}
+        } ${host.shellLayout.className}"
+        ${ref(host.shellLayout.contentRef)}
         .tabIndex=${-1}
         @mousedown=${beginNativeWindowDragFromTopInset}
         ?inert=${(!nativeEmbed && pageActionsBlocked) || (mobileNavLayout && navDrawerOpen)}

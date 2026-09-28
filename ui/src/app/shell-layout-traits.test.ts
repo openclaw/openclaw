@@ -1,4 +1,5 @@
 import { html, LitElement, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ShellLayoutController,
@@ -11,6 +12,7 @@ class LayoutPage extends LitElement {
   showPrimary = true;
   showHeader = false;
   removeAfterRender = false;
+  inspectPrimary: (element: Element | undefined) => void = () => {};
 
   protected override createRenderRoot() {
     return this;
@@ -18,7 +20,7 @@ class LayoutPage extends LitElement {
 
   protected override render() {
     return html`
-      ${this.showPrimary ? html`<section ${shellLayoutTraits(this.traits)}>Page</section>` : nothing}
+      ${this.showPrimary ? html`<section ${shellLayoutTraits(this.traits)} ${ref(this.inspectPrimary)}>Page</section>` : nothing}
       ${this.showHeader ? html`<header ${shellLayoutTraits({ hubHeader: true })}>Hub</header>` : nothing}
     `;
   }
@@ -39,15 +41,8 @@ class LayoutShell extends LitElement {
   }
 
   protected override render() {
-    const traits = this.layout.current;
     return html`
-      <main
-        @openclaw-shell-layout=${this.layout.handleChange}
-        ?data-embed=${traits.pluginEmbed}
-        ?data-hub=${traits.hubHeader}
-        ?data-toolbar=${traits.toolbarHeader}
-        ?data-workbench=${traits.workbench}
-      ></main>
+      <main class="content ${this.layout.className}" ${ref(this.layout.contentRef)}></main>
       <aside></aside>
     `;
   }
@@ -87,9 +82,16 @@ async function updatePage(page: LayoutPage, shell: LayoutShell) {
 }
 
 function activeLayout(content: HTMLElement) {
-  return ["embed", "hub", "toolbar", "workbench"].filter((name) =>
-    content.hasAttribute(`data-${name}`),
-  );
+  return (
+    [
+      ["embed", "content--plugin-embed"],
+      ["hub", "content--hub-header"],
+      ["toolbar", "content--toolbar-header"],
+      ["workbench", "content--workbench"],
+    ] as const
+  )
+    .filter(([, className]) => content.classList.contains(className))
+    .map(([name]) => name);
 }
 
 afterEach(() => {
@@ -133,12 +135,9 @@ describe("shell layout publication", () => {
 
     page.remove();
     // No shell navigation or requestUpdate: the detached page must retire its facts.
-    await shell.updateComplete;
     expect(activeLayout(content)).toEqual([]);
 
     content.append(page);
-    await Promise.resolve();
-    await shell.updateComplete;
     expect(activeLayout(content)).toEqual(["embed"]);
   });
 
@@ -147,28 +146,22 @@ describe("shell layout publication", () => {
     const page = createPage({ pluginEmbed: true });
     content.append(page);
     await updatePage(page, shell);
-    const published = vi.fn();
-    shell.addEventListener("openclaw-shell-layout", published);
     const shellUpdate = vi.spyOn(shell, "requestUpdate");
 
     page.traits = { pluginEmbed: true, toolbarHeader: false };
     await updatePage(page, shell);
-    expect(published).not.toHaveBeenCalled();
     expect(shellUpdate).not.toHaveBeenCalled();
     expect(activeLayout(content)).toEqual(["embed"]);
 
     page.traits = { toolbarHeader: true };
     await updatePage(page, shell);
-    expect(published).toHaveBeenCalledOnce();
     expect(shellUpdate).toHaveBeenCalledOnce();
     expect(activeLayout(content)).toEqual(["toolbar"]);
   });
 
-  it("fences a page removed between its first render and its queued publication", async () => {
+  it("clears facts when a page removes itself after its first render", async () => {
     const { shell, content } = await mountShell();
     const page = createPage({ pluginEmbed: true });
-    const published = vi.fn();
-    page.addEventListener("openclaw-shell-layout", published);
     page.removeAfterRender = true;
     content.append(page);
     await page.updateComplete;
@@ -177,14 +170,37 @@ describe("shell layout publication", () => {
 
     await Promise.resolve();
     await shell.updateComplete;
-    expect(published).not.toHaveBeenCalled();
     expect(activeLayout(content)).toEqual([]);
 
     content.append(page);
     await Promise.resolve();
     await shell.updateComplete;
-    expect(published).toHaveBeenCalledOnce();
     expect(activeLayout(content)).toEqual(["embed"]);
+  });
+
+  it("applies layout before the reporter is inserted or measured and clears it on disconnect", async () => {
+    const { shell, content } = await mountShell();
+    const style = document.createElement("style");
+    style.textContent = ".content--plugin-embed { padding-left: 16px; }";
+    shell.append(style);
+    const page = createPage({ pluginEmbed: true });
+    const observations: { connected: boolean; padding: string }[] = [];
+    page.inspectPrimary = (element) => {
+      if (element) {
+        observations.push({
+          connected: element.isConnected,
+          padding: getComputedStyle(content).paddingLeft,
+        });
+      }
+    };
+    content.append(page);
+    await page.updateComplete;
+    expect(observations).toEqual([{ connected: false, padding: "16px" }]);
+
+    page.remove();
+    expect(content.classList.contains("content--plugin-embed")).toBe(false);
+    await shell.updateComplete;
+    expect(content.classList.contains("content--plugin-embed")).toBe(false);
   });
 
   it("keeps sibling dock facts out of content, including a page moved out of content", async () => {
@@ -205,5 +221,8 @@ describe("shell layout publication", () => {
     page.traits = { toolbarHeader: true };
     await updatePage(page, shell);
     expect(activeLayout(content)).toEqual([]);
+
+    content.append(page);
+    expect(activeLayout(content)).toEqual(["toolbar"]);
   });
 });
