@@ -403,7 +403,7 @@ export function* filterSessionEntries(
     ) {
       continue;
     }
-    if (effectiveOwner) {
+    if (effectiveOwner && opts.includeOwnerSessionCounts !== "only") {
       addSessionOwnerFacetIdentity(ownerFacet, effectiveOwner);
     }
     if (creatorId && entry.createdActor?.id !== creatorId) {

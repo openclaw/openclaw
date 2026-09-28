@@ -2555,6 +2555,19 @@ openclaw-settings-save-indicator:empty {
   border-radius: var(--radius-md);
 }
 
+.sidebar-online__list--large > .sidebar-online__row {
+  content-visibility: auto;
+  /* Two scaled text lines plus block padding; remember measured rows when skipped. */
+  contain-intrinsic-block-size: auto calc(8px + 37.2px * var(--control-ui-text-scale));
+}
+
+.sidebar-online__list--large > .sidebar-online__row:focus-within,
+.sidebar-online__list--large
+  > .sidebar-online__row:has(> .sidebar-online__person[aria-expanded="true"]) {
+  /* Keep the focus ring and the portaled person card's anchor outside paint containment. */
+  content-visibility: visible;
+}
+
 .sidebar-online__person {
   flex: 1;
   display: grid;
@@ -2713,6 +2726,10 @@ openclaw-settings-save-indicator:empty {
 }
 
 @media (hover: none), (pointer: coarse) {
+  .sidebar-online__list--large > .sidebar-online__row {
+    contain-intrinsic-block-size: auto max(44px, calc(8px + 37.2px * var(--control-ui-text-scale)));
+  }
+
   .sidebar-online__person {
     min-height: 44px;
   }

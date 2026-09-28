@@ -59,6 +59,17 @@ function* selectSessionEntries(
   params: SessionListFilterParams & { defaultLimit?: number },
 ): SynchronousWork<SessionEntrySelection> {
   const { ownerEntries, entries: filtered, ...facets } = yield* filterSessionEntries(params);
+  if (params.opts.includeOwnerSessionCounts === "only") {
+    return {
+      ...facets,
+      entries: [],
+      ownerCount: 0,
+      totalCount: filtered.length,
+      offset: 0,
+      nextOffset: null,
+      hasMore: false,
+    };
+  }
   const limit = resolveOptionalIntegerOption(params.opts.limit, { min: 1 }) ?? params.defaultLimit;
   const offset = resolveNonNegativeIntegerOption(params.opts.offset, 0);
   const windowLimit = resolveSessionsListWindowLimit(limit, offset);
@@ -142,7 +153,7 @@ function buildSessionsListResult(
     offset: list.offset > 0 ? list.offset : undefined,
     nextOffset: list.nextOffset,
     hasMore: list.hasMore,
-    owners: list.ownerFacet,
+    ...(opts.includeOwnerSessionCounts === "only" ? {} : { owners: list.ownerFacet }),
     ...(list.ownerSessionCounts ? { ownerSessionCounts: list.ownerSessionCounts } : {}),
     involvingProfileId: list.involvingProfileId,
     ...(list.activityPulse ? { activityPulse: list.activityPulse } : {}),
@@ -390,6 +401,15 @@ export function prepareProjectedSessionList(params: {
       ? createVisibleActiveSessionRunProjector(
           context,
           projection.state.rowContext.projectedAgentRuns,
+          {
+            indexProjectedCandidates:
+              !exactKey &&
+              Boolean(
+                opts.includeOwnerSessionCounts ||
+                opts.activeOnly ||
+                opts.activityPulseSince !== undefined,
+              ),
+          },
         )
       : undefined,
   );
@@ -417,13 +437,17 @@ export function prepareProjectedSessionList(params: {
       };
       sessionListCandidates.set(prepared.entries, cached);
     }
-    const sortBy = opts.sortBy ?? "updatedAt";
-    candidates = cached.orders.get(sortBy);
-    if (!candidates) {
-      candidates = runSynchronousWork(
-        sortAndLimitSessionEntries(cached.entries, undefined, sortBy),
-      );
-      cached.orders.set(sortBy, candidates);
+    if (opts.includeOwnerSessionCounts === "only") {
+      candidates = cached.entries;
+    } else {
+      const sortBy = opts.sortBy ?? "updatedAt";
+      candidates = cached.orders.get(sortBy);
+      if (!candidates) {
+        candidates = runSynchronousWork(
+          sortAndLimitSessionEntries(cached.entries, undefined, sortBy),
+        );
+        cached.orders.set(sortBy, candidates);
+      }
     }
   }
   const filters: SessionListFilterParams = {

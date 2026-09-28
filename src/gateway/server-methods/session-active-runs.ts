@@ -178,6 +178,8 @@ export function resolveVisibleActiveSessionRunState(params: {
   defaultAgentId?: string;
   trackedActiveRuns?: readonly TrackedActiveSessionRun[];
   projectedAgentRunIndex?: ProjectedAgentRunIndex;
+  /** Request-scoped negative lookup from the same prepared projection index. */
+  projectedRunCandidate?: boolean;
   includeTerminalPersistence?: boolean;
 }): VisibleActiveSessionRunState {
   const sessionId = params.sessionId?.trim();
@@ -244,13 +246,19 @@ export function resolveVisibleActiveSessionRunState(params: {
         directSubagent.schedulerSlotId ?? directSubagent.runId,
         directSubagent,
       ));
-  const projectedRunState = resolveProjectedAgentRunProgressState({
-    sessionKeys: [params.requestedKey, params.canonicalKey],
-    ...(sessionId ? { sessionId } : {}),
-    ...(resolvedAgentId ? { agentId: resolvedAgentId } : {}),
-    ...(params.defaultAgentId ? { defaultAgentId: params.defaultAgentId } : {}),
-    ...(params.projectedAgentRunIndex ? { index: params.projectedAgentRunIndex } : {}),
-  });
+  const projectedRunState =
+    params.projectedRunCandidate === false
+      ? undefined
+      : resolveProjectedAgentRunProgressState({
+          sessionKeys:
+            params.requestedKey === params.canonicalKey
+              ? [params.canonicalKey]
+              : [params.requestedKey, params.canonicalKey],
+          sessionId: sessionId || undefined,
+          agentId: resolvedAgentId || undefined,
+          defaultAgentId: params.defaultAgentId || undefined,
+          index: params.projectedAgentRunIndex,
+        });
   const embeddedRunState =
     sessionId === undefined
       ? undefined
@@ -295,7 +303,26 @@ export function resolveVisibleActiveSessionRunState(params: {
 export function createVisibleActiveSessionRunProjector(
   context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>,
   projectedAgentRunIndex = buildProjectedAgentRunIndex(),
+  options: { indexProjectedCandidates?: boolean } = {},
 ) {
+  // Over-approximate by unqualified identity: misses are definitive, while hits
+  // still go through the canonical agent/ownerless and queue-state resolver.
+  // Only roster scans amortize this setup; keyed reads and event publication
+  // retain direct lookups instead of copying every projected run identity.
+  const projectedKeys = options.indexProjectedCandidates
+    ? new Set(projectedAgentRunIndex.ownerlessSessionKeys.keys())
+    : undefined;
+  const projectedIds = options.indexProjectedCandidates
+    ? new Set(projectedAgentRunIndex.ownerlessSessionIds.keys())
+    : undefined;
+  if (projectedKeys && projectedIds) {
+    for (const identity of projectedAgentRunIndex.sessionKeys.keys()) {
+      projectedKeys.add(identity.slice(identity.indexOf("\0") + 1));
+    }
+    for (const identity of projectedAgentRunIndex.sessionIds.keys()) {
+      projectedIds.add(identity.slice(identity.indexOf("\0") + 1));
+    }
+  }
   const byKey = new Map<string, TrackedActiveSessionRun[]>();
   const byId = new Map<string, TrackedActiveSessionRun[]>();
   for (const run of collectTrackedActiveSessionRuns(context)) {
@@ -313,19 +340,38 @@ export function createVisibleActiveSessionRunProjector(
   return (
     params: Omit<
       Parameters<typeof resolveVisibleActiveSessionRunState>[0],
-      "context" | "trackedActiveRuns" | "projectedAgentRunIndex" | "includeTerminalPersistence"
+      | "context"
+      | "trackedActiveRuns"
+      | "projectedAgentRunIndex"
+      | "projectedRunCandidate"
+      | "includeTerminalPersistence"
     >,
-  ) =>
-    resolveVisibleActiveSessionRunState({
-      ...params,
+  ) => {
+    const canonical = byKey.get(params.canonicalKey);
+    const requested =
+      params.requestedKey === params.canonicalKey ? undefined : byKey.get(params.requestedKey);
+    const session = params.sessionId ? byId.get(params.sessionId.trim()) : undefined;
+    // Most roster rows have no tracked run. Avoid rebuilding empty sets and
+    // dynamic object shapes for every row while retaining all independent owners.
+    const trackedActiveRuns =
+      !requested && !session
+        ? (canonical ?? [])
+        : [...new Set([...(canonical ?? []), ...(requested ?? []), ...(session ?? [])])];
+    return resolveVisibleActiveSessionRunState({
+      requestedKey: params.requestedKey,
+      canonicalKey: params.canonicalKey,
+      sessionId: params.sessionId,
+      agentId: params.agentId,
+      defaultAgentId: params.defaultAgentId,
       context,
       projectedAgentRunIndex,
-      trackedActiveRuns: [
-        ...new Set([
-          ...(byKey.get(params.canonicalKey) ?? []),
-          ...(byKey.get(params.requestedKey) ?? []),
-          ...(byId.get(params.sessionId?.trim() ?? "") ?? []),
-        ]),
-      ],
+      projectedRunCandidate:
+        projectedKeys && projectedIds
+          ? projectedKeys.has(params.canonicalKey) ||
+            projectedKeys.has(params.requestedKey) ||
+            (params.sessionId !== undefined && projectedIds.has(params.sessionId.trim()))
+          : undefined,
+      trackedActiveRuns,
     });
+  };
 }

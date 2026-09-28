@@ -116,6 +116,20 @@ it("counts caller-visible open ownership and direct running work across agents b
       const prepares = vi.spyOn(DatabaseSync.prototype, "prepare");
       for (const offset of [0, 3, 100]) {
         const result = await listSessions({ client, context, request: { ...request, offset } });
+        const summary = await listSessions({
+          client,
+          context,
+          request: { ...request, offset, includeOwnerSessionCounts: "only" },
+        });
+        expect(summary).toMatchObject({
+          count: 0,
+          sessions: [],
+          totalCount: result.totalCount,
+          hasMore: false,
+          nextOffset: null,
+          ownerSessionCounts: expected(8, 2),
+        });
+        expect(summary).not.toHaveProperty("owners");
         expect(result).toHaveProperty("ownerSessionCounts.length", 2);
         for (const [index, count] of expected(8, 2).entries()) {
           expect(result).toHaveProperty(["ownerSessionCounts", index, "open"], count.open);

@@ -195,6 +195,19 @@ and encoding keep their existing runtime behavior.
 
 ## Benchmarks
 
+<Accordion title="Session owner counts (50 synthetic viewers)">
+
+Compare complete ownership counts with and without the normal session-row and owner-facet payload:
+
+```bash
+OPENCLAW_BENCH_SESSION_VIEWERS=1 OPENCLAW_BENCH_OWNER_SESSION_COUNTS=1 pnpm test src/gateway/session-list-viewers.perf.test.ts --maxWorkers=1
+OPENCLAW_BENCH_SESSION_VIEWERS=1 OPENCLAW_BENCH_OWNER_SESSION_COUNTS=only pnpm test src/gateway/session-list-viewers.perf.test.ts --maxWorkers=1
+```
+
+The opt-in fixture has 50 distinct viewers and 5,000 synthetic sessions (2,300 unarchived), including access-scoped drafts. It reports warmed in-process `sessions.list` handler latency, p95, thread CPU, and serialized response bytes. It does not measure network transport or live Gateway capacity; this fixture has no active runs. The benchmark remains skipped in ordinary test runs.
+
+</Accordion>
+
 <Accordion title="Session history (scripts/bench-session-history.ts)">
 
 Measure SQLite history pages and the Gateway's bounded history reader with

@@ -85,8 +85,9 @@ export const SessionsListParamsSchema = closedObject({
    * Include complete per-profile ownership counts over caller-visible matching sessions before
    * pagination. Open counts only unarchived sessions; running excludes queued and descendant work.
    * All list filters still apply; omit agentId for a cross-agent summary.
+   * "only" omits session rows and the owners facet; pagination does not apply to the summary.
    */
-  includeOwnerSessionCounts: Type.Optional(Type.Boolean()),
+  includeOwnerSessionCounts: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("only")])),
   spawnedBy: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
   search: Type.Optional(Type.String()),

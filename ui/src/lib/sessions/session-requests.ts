@@ -118,13 +118,15 @@ export function buildSessionListParams(options: SessionListOptions = {}): Sessio
   for (const key of [
     "includeDerivedTitles",
     "includeLastMessage",
-    "includeOwnerSessionCounts",
     "ownerFirst",
     "involvingMe",
   ] as const) {
     if (options[key] === true) {
       params[key] = true;
     }
+  }
+  if (options.includeOwnerSessionCounts) {
+    params.includeOwnerSessionCounts = options.includeOwnerSessionCounts;
   }
   if (options.archivedFilter === "archived") {
     params.archived = true;

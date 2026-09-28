@@ -1,5 +1,5 @@
 // Tests gateway active-run matching by logical session key and backing id.
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { EmbeddedAgentQueueHandle } from "../../agents/embedded-agent-runner/run-state.js";
 import {
   abortEmbeddedAgentRun,
@@ -183,8 +183,15 @@ it("keeps prebuilt active-run indexes in parity with per-row scans", () => {
     agentId: "main",
     sessionId: "session-projected",
   });
+  registerAgentRunContext("projected-ownerless-index", {
+    projectSessionActive: true,
+    sessionKey: "incident-index",
+    sessionId: "ownerless-index-id",
+  });
   try {
-    const project = createVisibleActiveSessionRunProjector(context);
+    const project = createVisibleActiveSessionRunProjector(context, undefined, {
+      indexProjectedCandidates: true,
+    });
     const cases = [
       { requestedKey: "agent:main:main", canonicalKey: "agent:main:main" },
       { requestedKey: "agent:main:projected", canonicalKey: "agent:main:projected" },
@@ -200,6 +207,28 @@ it("keeps prebuilt active-run indexes in parity with per-row scans", () => {
         defaultAgentId: "main",
       },
       { requestedKey: "agent:main:missing", canonicalKey: "agent:main:missing" },
+      { requestedKey: "incident-index", canonicalKey: "incident-index", defaultAgentId: "main" },
+      {
+        requestedKey: "agent:work:other",
+        canonicalKey: "agent:work:other",
+        sessionId: "session-projected",
+      },
+      {
+        requestedKey: "agent:main:by-id",
+        canonicalKey: "agent:main:by-id",
+        sessionId: "ownerless-index-id",
+        defaultAgentId: "main",
+      },
+      {
+        requestedKey: "agent:main:alias",
+        canonicalKey: "agent:main:main",
+        sessionId: "session-main",
+      },
+      {
+        requestedKey: "agent:main:main",
+        canonicalKey: "agent:main:alias",
+        sessionId: " session-main ",
+      },
     ];
     for (const activeCase of cases) {
       expect(project(activeCase)).toEqual(
@@ -209,6 +238,45 @@ it("keeps prebuilt active-run indexes in parity with per-row scans", () => {
   } finally {
     clearAgentRunContext("projected-key");
     clearAgentRunContext("projected-id");
+    clearAgentRunContext("projected-ownerless-index");
+  }
+});
+
+it("does not let an empty prepared index hide a retained embedded owner", () => {
+  const key = "agent:main:embedded-after-projection";
+  const sessionId = "embedded-after-projection";
+  const project = createVisibleActiveSessionRunProjector({}, undefined, {
+    indexProjectedCandidates: true,
+  });
+  const query = { requestedKey: key, canonicalKey: key, sessionId, agentId: "main" };
+  const handle: EmbeddedAgentQueueHandle = {
+    abort: () => undefined,
+    isAborted: () => false,
+    isCompacting: () => false,
+    isStreaming: () => true,
+    queueMessage: async () => undefined,
+  };
+  expect(project(query)).toEqual({ active: false, runIds: [] });
+  setActiveEmbeddedRun(sessionId, handle, key);
+  try {
+    expect(project(query)).toEqual({ active: true });
+  } finally {
+    clearActiveEmbeddedRun(sessionId, handle, key);
+  }
+  expect(project(query)).toEqual({ active: false, runIds: [] });
+});
+
+it("does not traverse projected run identities for keyed reads", () => {
+  const index = buildProjectedAgentRunIndex();
+  const keys = vi.spyOn(index.sessionKeys, "keys");
+  const query = { requestedKey: "agent:main:idle", canonicalKey: "agent:main:idle" };
+  try {
+    expect(createVisibleActiveSessionRunProjector({}, index)(query).active).toBe(false);
+    expect(keys).not.toHaveBeenCalled();
+    createVisibleActiveSessionRunProjector({}, index, { indexProjectedCandidates: true })(query);
+    expect(keys).toHaveBeenCalledOnce();
+  } finally {
+    keys.mockRestore();
   }
 });
 

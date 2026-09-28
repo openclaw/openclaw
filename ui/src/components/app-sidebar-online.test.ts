@@ -204,7 +204,7 @@ describe("sidebar people workload", () => {
     expect(summaryRequest).toHaveBeenCalledOnce();
     expect(request).toHaveBeenCalledWith("sessions.list", {
       configuredAgentsOnly: true,
-      includeOwnerSessionCounts: true,
+      includeOwnerSessionCounts: "only",
       limit: 1,
       includeGlobal: false,
       includeUnknown: false,

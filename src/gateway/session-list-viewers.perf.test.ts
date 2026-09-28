@@ -3,6 +3,7 @@ import { performance } from "node:perf_hooks";
 import { queryObjects } from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, test, vi } from "vitest";
+import type { SessionsListParams } from "../../packages/gateway-protocol/src/schema/sessions-list.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
@@ -60,6 +61,12 @@ test.skipIf(process.env.OPENCLAW_BENCH_SESSION_VIEWERS !== "1")(
         viewer(ensureProfileForEmail(`viewer-${index}@example.com`).id),
       );
       const includePeople = process.env.OPENCLAW_BENCH_SESSION_PEOPLE === "1";
+      const ownerCounts =
+        process.env.OPENCLAW_BENCH_OWNER_SESSION_COUNTS === "only"
+          ? "only"
+          : process.env.OPENCLAW_BENCH_OWNER_SESSION_COUNTS === "1"
+            ? true
+            : undefined;
       const store: Record<string, SessionEntry> = Object.fromEntries(
         Array.from({ length: 5_000 }, (_, index) => [
           `agent:main:viewer-row-${index}`,
@@ -92,21 +99,31 @@ test.skipIf(process.env.OPENCLAW_BENCH_SESSION_VIEWERS !== "1")(
       writeResidentEntries(store);
       const release = retainSessionListForegroundWork();
       const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-      const opts = includePeople
+      const opts: SessionsListParams = ownerCounts
         ? {
-            archived: "all" as const,
-            includeGlobal: true,
-            includeUnknown: true,
-            includePeople: true,
+            includeOwnerSessionCounts: ownerCounts,
+            configuredAgentsOnly: true,
             excludeSubagents: true,
-            includeActivitySummary: true,
-            includeDerivedTitles: true,
-            sortBy: "activity" as const,
-            limit: 100,
+            excludeCron: true,
+            excludeSystem: true,
+            limit: 1,
           }
-        : { limit: 60, ownerFirst: true, excludeCron: true, excludeSystem: true };
+        : includePeople
+          ? {
+              archived: "all" as const,
+              includeGlobal: true,
+              includeUnknown: true,
+              includePeople: true,
+              excludeSubagents: true,
+              includeActivitySummary: true,
+              includeDerivedTitles: true,
+              sortBy: "activity" as const,
+              limit: 100,
+            }
+          : { limit: 60, ownerFirst: true, excludeCron: true, excludeSystem: true };
       const context = bindSessionRowProjection(requestContext(cfg), () => projection);
       const rpcSamples: number[] = [];
+      let responseBytes = 0;
       const rpc = async (client: GatewayClient) => {
         let replied = false;
         await sessionReadHandlers["sessions.list"]!({
@@ -119,7 +136,7 @@ test.skipIf(process.env.OPENCLAW_BENCH_SESSION_VIEWERS !== "1")(
             if (!ok) {
               throw new Error("sessions.list benchmark failed");
             }
-            JSON.stringify(result);
+            responseBytes = Buffer.byteLength(JSON.stringify(result));
             replied = true;
           },
         });
@@ -206,7 +223,12 @@ test.skipIf(process.env.OPENCLAW_BENCH_SESSION_VIEWERS !== "1")(
               },
             };
             const result = await listProjectedSessions({ projection, client, opts, diagnostics });
-            expect(result.count).toBeGreaterThanOrEqual(60);
+            if (ownerCounts) {
+              expect(result.count).toBe(ownerCounts === "only" ? 0 : 1);
+              expect(result.ownerSessionCounts?.length).toBeGreaterThan(1);
+            } else {
+              expect(result.count).toBeGreaterThanOrEqual(60);
+            }
             const serialize = performance.now();
             JSON.stringify(result);
             phases.set("serialize", (phases.get("serialize") ?? 0) + performance.now() - serialize);
@@ -246,6 +268,11 @@ test.skipIf(process.env.OPENCLAW_BENCH_SESSION_VIEWERS !== "1")(
             JSON.stringify({
               rows: 5_000,
               includePeople,
+              includeOwnerSessionCounts: ownerCounts,
+              responseBytes,
+              rpcP95Ms: rpcSamples.toSorted((a, b) => a - b)[
+                Math.ceil(rpcSamples.length * 0.95) - 1
+              ],
               liveRows: 2_300,
               viewers: clients.length,
               calls: samples.length,

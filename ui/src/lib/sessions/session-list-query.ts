@@ -333,7 +333,7 @@ export function isPrimarySessionListQuery(options: SessionListScope): boolean {
     !query.search &&
     !query.ownerId &&
     query.involvingMe !== true &&
-    query.includeOwnerSessionCounts !== true &&
+    !query.includeOwnerSessionCounts &&
     query.excludeSubagents !== true &&
     query.excludeCron !== true &&
     query.excludeSystem !== true &&

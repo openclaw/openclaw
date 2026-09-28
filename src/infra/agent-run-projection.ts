@@ -49,6 +49,13 @@ export function resolveAgentRunProjectionProgressState(
   },
   index: ProjectedAgentRunIndex,
 ): ProjectedAgentRunState | undefined {
+  const hasKeys = index.sessionKeys.size > 0;
+  const hasIds = index.sessionIds.size > 0;
+  const hasOwnerlessKeys = index.ownerlessSessionKeys.size > 0;
+  const hasOwnerlessIds = index.ownerlessSessionIds.size > 0;
+  if (!hasKeys && !hasIds && !hasOwnerlessKeys && !hasOwnerlessIds) {
+    return undefined;
+  }
   let agentId = params.agentId;
   if (agentId === undefined) {
     for (const key of params.sessionKeys) {
@@ -68,11 +75,16 @@ export function resolveAgentRunProjectionProgressState(
     agentPrefix === projectedRunIdentity(params.defaultAgentId, "");
   let status: ProjectedAgentRunState | undefined;
   for (const sessionKey of params.sessionKeys) {
-    status = mergeProjectedAgentRunStates(status, index.sessionKeys.get(agentPrefix + sessionKey));
+    if (hasKeys) {
+      status = mergeProjectedAgentRunStates(
+        status,
+        index.sessionKeys.get(agentPrefix + sessionKey),
+      );
+    }
     if (status === "running") {
       return status;
     }
-    if (mayAdoptOwnerless) {
+    if (mayAdoptOwnerless && hasOwnerlessKeys) {
       status = mergeProjectedAgentRunStates(status, index.ownerlessSessionKeys.get(sessionKey));
       if (status === "running") {
         return status;
@@ -80,11 +92,13 @@ export function resolveAgentRunProjectionProgressState(
     }
   }
   if (params.sessionId !== undefined) {
-    status = mergeProjectedAgentRunStates(
-      status,
-      index.sessionIds.get(agentPrefix + params.sessionId),
-    );
-    if (mayAdoptOwnerless) {
+    if (hasIds) {
+      status = mergeProjectedAgentRunStates(
+        status,
+        index.sessionIds.get(agentPrefix + params.sessionId),
+      );
+    }
+    if (mayAdoptOwnerless && hasOwnerlessIds) {
       status = mergeProjectedAgentRunStates(
         status,
         index.ownerlessSessionIds.get(params.sessionId),

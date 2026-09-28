@@ -17750,7 +17750,7 @@ public struct SessionsListParams: Codable, Sendable {
     public let profilerelation: [String: AnyCodable]?
     public let involvingprofileid: String?
     public let includepeople: Bool?
-    public let includeownersessioncounts: Bool?
+    public let includeownersessioncounts: AnyCodable?
     public let spawnedby: String?
     public let agentid: String?
     public let search: String?
@@ -17788,7 +17788,7 @@ public struct SessionsListParams: Codable, Sendable {
         profilerelation: [String: AnyCodable]? = nil,
         involvingprofileid: String? = nil,
         includepeople: Bool? = nil,
-        includeownersessioncounts: Bool? = nil,
+        includeownersessioncounts: AnyCodable? = nil,
         spawnedby: String? = nil,
         agentid: String? = nil,
         search: String? = nil,

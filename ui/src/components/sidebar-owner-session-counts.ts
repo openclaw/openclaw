@@ -6,7 +6,7 @@ import type {
 } from "../lib/sessions/session-capability.ts";
 
 const QUERY = {
-  includeOwnerSessionCounts: true,
+  includeOwnerSessionCounts: "only",
   limit: 1,
   includeDerivedTitles: false,
   includeLastMessage: false,

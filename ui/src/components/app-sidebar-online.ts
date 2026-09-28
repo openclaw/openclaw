@@ -133,7 +133,9 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
                   </button>`,
                 )}
               </div>
-              <div class="sidebar-online__list">
+              <div
+                class="sidebar-online__list ${onlineUsers.length > 50 ? "sidebar-online__list--large" : ""}"
+              >
                 ${repeat(users, presenceUserKey, (user) => {
                   const activityState = presenceViewerActivity(user);
                   const workload = countsFor(user);
