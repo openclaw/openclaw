@@ -1,6 +1,5 @@
 /** Shared cron operation invariants used across lifecycle, CRUD, and manual runs. */
 import { clearCronJobActive, type CronActiveJobMarker } from "../active-jobs.js";
-import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import { cronStreamScheduleKey } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
@@ -8,16 +7,8 @@ import { markServiceCronJobActive } from "./run-receipts.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 import type { CronServiceState } from "./state.js";
 import { ensureLoadedForOperation } from "./store.js";
+import type { IsolatedAgentSetupTimeoutResult } from "./timer-execution-timeout.js";
 import { maybeNotifyIsolatedAgentSetupTimeout } from "./timer-notifications.js";
-import type { IsolatedAgentSetupTimeoutSignal } from "./timer.js";
-
-/** Resolves the effective agent using explicit job identity before configured defaults. */
-export function resolveEffectiveJobAgentId(
-  job: { agentId?: string | null; sessionKey?: string | null },
-  defaultAgentId: string | undefined,
-): string {
-  return resolveCronJobEffectiveAgentId(job, defaultAgentId);
-}
 
 export function markManualCronJobActive(
   state: CronServiceState,
@@ -42,11 +33,7 @@ export function clearManualCronJobActive(
 
 export function maybeNotifyManualIsolatedSetupTimeout(
   state: CronServiceState,
-  result: {
-    jobId: string;
-    job: CronJob;
-    isolatedAgentSetupTimeout?: IsolatedAgentSetupTimeoutSignal;
-  },
+  result: IsolatedAgentSetupTimeoutResult,
 ): boolean {
   if (!result.isolatedAgentSetupTimeout || state.manualSetupTimeoutNotified) {
     return false;

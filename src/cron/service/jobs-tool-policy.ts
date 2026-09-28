@@ -212,34 +212,14 @@ export function consumeRuntimeAuthorityMutationOptions(
   };
 }
 
-function stampScheduledToolPolicy(
-  job: CronStoredJob,
-  scheduledToolPolicy: CronScheduledToolPolicy | null | undefined,
-): void {
-  if (
-    !cronJobUsesToolRuntime(job) ||
-    job.payload.toolsAllow === undefined ||
-    scheduledToolPolicy === null
-  ) {
-    delete job.scheduledToolPolicy;
-    return;
-  }
-  const policy = scheduledToolPolicy ?? createTrustedCronScheduledToolPolicy();
-  if (
-    policy.mode === "account" &&
-    (job.owner?.sessionKey !== policy.ownerSessionKey ||
-      job.owner?.accountId !== policy.ownerAccountId)
-  ) {
-    throw new Error("scheduled account policy must match the persisted job owner");
-  }
-  job.scheduledToolPolicy = structuredClone(policy);
-}
-
-function reconcileScheduledToolPolicy(params: {
+/** Reconciles the scheduled policy, capture provenance, and exec pin as one cap-authority unit. */
+export function reconcileToolsAllowAuthority(params: {
   job: CronStoredJob;
   previouslyUsedToolRuntime: boolean;
   explicitlyMutatesToolsAllow: boolean;
   scheduledToolPolicy?: CronScheduledToolPolicy | null;
+  toolsAllowProvenance?: CronToolsAllowProvenance;
+  toolsAllowExecTarget?: CronToolsAllowExecTarget;
 }): void {
   const { job } = params;
   const current = resolveCronScheduledToolPolicy({
@@ -255,31 +235,47 @@ function reconcileScheduledToolPolicy(params: {
     } else {
       delete job.scheduledToolPolicy;
     }
-    return;
-  }
-  if (current) {
+  } else if (current) {
     job.scheduledToolPolicy = current;
-    return;
+  } else {
+    delete job.scheduledToolPolicy;
+    if (params.explicitlyMutatesToolsAllow || !params.previouslyUsedToolRuntime) {
+      const scheduledToolPolicy = params.scheduledToolPolicy;
+      if (
+        !cronJobUsesToolRuntime(job) ||
+        job.payload.toolsAllow === undefined ||
+        scheduledToolPolicy === null
+      ) {
+        delete job.scheduledToolPolicy;
+      } else {
+        const policy = scheduledToolPolicy ?? createTrustedCronScheduledToolPolicy();
+        if (
+          policy.mode === "account" &&
+          (job.owner?.sessionKey !== policy.ownerSessionKey ||
+            job.owner?.accountId !== policy.ownerAccountId)
+        ) {
+          throw new Error("scheduled account policy must match the persisted job owner");
+        }
+        job.scheduledToolPolicy = structuredClone(policy);
+      }
+    }
   }
-  delete job.scheduledToolPolicy;
-  if (params.explicitlyMutatesToolsAllow || !params.previouslyUsedToolRuntime) {
-    stampScheduledToolPolicy(job, params.scheduledToolPolicy);
-  }
-}
 
-/**
- * Stamps or clears the restrict-only exec pin alongside the cap it was
- * captured with. The pin exists only while the job grants canonical `exec`
- * from a creator surface whose exec capability was host-pinned; explicit cap
- * rewrites without that server-verified fact clear it, falling back to the
- * baseline unpinned exec policy.
- */
-function reconcileToolsAllowExecTarget(params: {
-  job: CronStoredJob;
-  explicitlyMutatesToolsAllow: boolean;
-  toolsAllowExecTarget?: CronToolsAllowExecTarget;
-}): void {
-  const { job } = params;
+  if (params.explicitlyMutatesToolsAllow) {
+    if (
+      cronJobUsesToolRuntime(job) &&
+      job.payload.toolsAllow !== undefined &&
+      params.toolsAllowProvenance?.version === 1 &&
+      params.toolsAllowProvenance.source === "final-executable-surface"
+    ) {
+      job.toolsAllowProvenance = structuredClone(params.toolsAllowProvenance);
+    } else {
+      delete job.toolsAllowProvenance;
+    }
+  }
+
+  // The restrict-only exec pin belongs to its captured cap. An explicit cap
+  // rewrite without a server-verified pin restores the baseline exec policy.
   if (!cronJobUsesToolRuntime(job) || job.payload.toolsAllow === undefined) {
     delete job.toolsAllowExecTarget;
     delete job.toolsAllowExecTargetRequirement;
@@ -301,26 +297,6 @@ function reconcileToolsAllowExecTarget(params: {
     delete job.toolsAllowExecTarget;
     delete job.toolsAllowExecTargetRequirement;
   }
-}
-
-function reconcileToolsAllowProvenance(params: {
-  job: CronStoredJob;
-  explicitlyMutatesToolsAllow: boolean;
-  toolsAllowProvenance?: CronToolsAllowProvenance;
-}): void {
-  if (!params.explicitlyMutatesToolsAllow) {
-    return;
-  }
-  if (
-    cronJobUsesToolRuntime(params.job) &&
-    params.job.payload.toolsAllow !== undefined &&
-    params.toolsAllowProvenance?.version === 1 &&
-    params.toolsAllowProvenance.source === "final-executable-surface"
-  ) {
-    params.job.toolsAllowProvenance = structuredClone(params.toolsAllowProvenance);
-    return;
-  }
-  delete params.job.toolsAllowProvenance;
 }
 
 /** Reconciles runtime-owned opaque authority with the mutation that owns this write. */
@@ -362,18 +338,4 @@ export function reconcileRuntimeAuthority(params: {
       delete params.job.runtimeAuthority;
     }
   }
-}
-
-/** Reconciles the scheduled policy, capture provenance, and exec pin as one cap-authority unit. */
-export function reconcileToolsAllowAuthority(params: {
-  job: CronStoredJob;
-  previouslyUsedToolRuntime: boolean;
-  explicitlyMutatesToolsAllow: boolean;
-  scheduledToolPolicy?: CronScheduledToolPolicy | null;
-  toolsAllowProvenance?: CronToolsAllowProvenance;
-  toolsAllowExecTarget?: CronToolsAllowExecTarget;
-}): void {
-  reconcileScheduledToolPolicy(params);
-  reconcileToolsAllowProvenance(params);
-  reconcileToolsAllowExecTarget(params);
 }
