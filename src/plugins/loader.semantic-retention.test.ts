@@ -151,26 +151,30 @@ it.each(["manifest", "config", "install record", "entry policy"] as const)(
   },
 );
 
-it("retains an untracked plugin across Control UI rebuilds without duplicating provenance warnings", () => {
+it("retains an untracked plugin across Control UI rebuilds, not declaration changes, without duplicate warnings", () => {
   useNoBundledPlugins();
   const plugin = writePlugin({
     id: "ui-retention",
     registration: `api.registerGatewayMethod('ui-retention.probe', ({respond}) => respond(true, 'available'));`,
   });
   const writeManifest = (
-    build: string,
+    build: string | undefined,
     configSchema: Record<string, unknown> = { type: "object" },
   ) => {
     const assetDir = `dist/control-ui/${build}`;
-    fs.mkdirSync(path.join(plugin.dir, assetDir), { recursive: true });
-    fs.writeFileSync(path.join(plugin.dir, assetDir, "index.js"), "export {};\n");
-    fs.writeFileSync(path.join(plugin.dir, assetDir, "index.css"), ":root { color: blue; }\n");
+    if (build) {
+      fs.mkdirSync(path.join(plugin.dir, assetDir), { recursive: true });
+      fs.writeFileSync(path.join(plugin.dir, assetDir, "index.js"), "export {};\n");
+      fs.writeFileSync(path.join(plugin.dir, assetDir, "index.css"), ":root { color: blue; }\n");
+    }
     fs.writeFileSync(
       path.join(plugin.dir, "openclaw.plugin.json"),
       JSON.stringify({
         id: plugin.id,
         configSchema,
-        controlUi: { entry: `${assetDir}/index.js`, styles: [`${assetDir}/index.css`] },
+        ...(build
+          ? { controlUi: { entry: `${assetDir}/index.js`, styles: [`${assetDir}/index.css`] } }
+          : {}),
       }),
     );
   };
@@ -220,7 +224,18 @@ it("retains an untracked plugin across Control UI rebuilds without duplicating p
     expect.soft(next.plugins.find((entry) => entry.id === plugin.id)).toBe(record);
     expect.soft(next.gatewayHandlers["ui-retention.probe"]).toBe(handler);
   }
-  writeManifest("build-b", { type: "object", properties: { label: { type: "string" } } });
+  // Declaration presence decides whether the browser catalog serves the record at all.
+  let current = record;
+  for (const build of [undefined, "build-c"]) {
+    writeManifest(build);
+    const next = load();
+    const replaced = next.plugins.find((entry) => entry.id === plugin.id);
+    expect(replaced).not.toBe(current);
+    expect(replaced?.controlUi?.entry).toBe(build && `dist/control-ui/${build}/index.js`);
+    assert(replaced);
+    current = replaced;
+  }
+  writeManifest("build-c", { type: "object", properties: { label: { type: "string" } } });
   const changed = load();
-  expect(changed.plugins.find((entry) => entry.id === plugin.id)).not.toBe(record);
+  expect(changed.plugins.find((entry) => entry.id === plugin.id)).not.toBe(current);
 });
