@@ -13,6 +13,7 @@ import {
   validateUsersSetDisplayNameParams,
   validateUsersSetRoleParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveGatewayPersonalToolParticipant } from "../../agents/tools/gateway-caller-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   getCanonicalUserPreferences,
@@ -76,6 +77,26 @@ function profileError(error: unknown) {
   return errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error));
 }
 
+function preparePersonalPreferences(client: GatewayRequestHandlerOptions["client"]) {
+  const unavailable =
+    "Personal settings are unavailable in this turn. Ask in your own Control UI turn with a new message.";
+  try {
+    const participant = resolveGatewayPersonalToolParticipant(
+      client?.internal?.agentRuntimeIdentity,
+      { requireSingleParticipant: true },
+    );
+    return () => {
+      try {
+        participant?.assertCurrent();
+      } catch {
+        throw new Error(unavailable);
+      }
+    };
+  } catch {
+    throw new Error(unavailable);
+  }
+}
+
 export const usersHandlers: GatewayRequestHandlers = {
   ...usersAuthConnectHandlers,
   ...usersChannelIdentityHandlers,
@@ -131,7 +152,9 @@ export const usersHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      const assertCurrent = preparePersonalPreferences(client);
       const preferences = await getCanonicalUserPreferences(profileId, params.keys);
+      assertCurrent();
       sessionMutationAuthorization?.assertCurrent();
       if (!preferences) {
         respond(false, undefined, authenticatedProfileUnavailableError());
@@ -159,8 +182,10 @@ export const usersHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      const assertCurrent = preparePersonalPreferences(client);
       const result = await setCanonicalUserPreferences(profileId, params.entries, {
         expectedEntries: params.expectedEntries,
+        assertCurrent,
       });
       if (!result) {
         respond(false, undefined, authenticatedProfileUnavailableError());

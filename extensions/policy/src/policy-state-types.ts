@@ -2,6 +2,9 @@ import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 // Policy plugin evidence types.
 import type { coerceSecretRef } from "openclaw/plugin-sdk/secret-input";
 
+/** Mutable during construction; collectors publish the readonly evidence contract. */
+export type PolicyEvidenceBuilder<T> = { -readonly [Key in keyof T]: T[Key] };
+
 export type PolicyAttestation = {
   readonly checkedAt: string;
   readonly policy?: {

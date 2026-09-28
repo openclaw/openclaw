@@ -21,14 +21,11 @@ import {
   readLaunch,
 } from "./crabbox-worker-node-enrollment.test-support.js";
 import { resolveCrabboxProvisionProfile } from "./crabbox-worker-profile.js";
+import { commandResult } from "./crabbox-worker-provider.test-support.js";
 import { SCRUB_WORKER_STATE } from "./crabbox-worker-warm-image-scrub.js";
 import { openCrabboxWarmImageStore } from "./crabbox-worker-warm-image-store.js";
 import { createCrabboxWarmImageManager } from "./crabbox-worker-warm-image.js";
-import {
-  PROFILE,
-  commandResult,
-  checkpointResult,
-} from "./crabbox-worker-warm-image.test-support.js";
+import { PROFILE, checkpointResult } from "./crabbox-worker-warm-image.test-support.js";
 
 const cleanups: Array<() => Promise<void> | void> = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanupDirectories) => {
