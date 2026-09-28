@@ -408,6 +408,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
       }
       respond(true, {
         provider,
+        outcome: "stored",
         id: designed.id,
         name: designed.name,
         mimeType: designed.mimeType,
@@ -457,6 +458,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
       }
       respond(true, {
         provider,
+        outcome: "stored",
         id: replicated.id,
         name: replicated.name,
         mimeType: replicated.mimeType,

@@ -23921,36 +23921,6 @@ public struct TtsDesignVoiceParams: Codable, Sendable {
     }
 }
 
-public struct TtsDesignVoiceResult: Codable, Sendable {
-    public let provider: String
-    public let id: String
-    public let name: String?
-    public let mimetype: String?
-    public let audiobase64: String
-
-    public init(
-        provider: String,
-        id: String,
-        name: String? = nil,
-        mimetype: String? = nil,
-        audiobase64: String)
-    {
-        self.provider = provider
-        self.id = id
-        self.name = name
-        self.mimetype = mimetype
-        self.audiobase64 = audiobase64
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case provider
-        case id
-        case name
-        case mimetype = "mimeType"
-        case audiobase64 = "audioBase64"
-    }
-}
-
 public struct TtsReplicateVoiceParams: Codable, Sendable {
     public let provider: String
     public let displayname: String
@@ -23986,36 +23956,6 @@ public struct TtsReplicateVoiceParams: Codable, Sendable {
         case sourcemimetype = "sourceMimeType"
         case consentmimetype = "consentMimeType"
         case modelid = "modelId"
-    }
-}
-
-public struct TtsReplicateVoiceResult: Codable, Sendable {
-    public let provider: String
-    public let id: String
-    public let name: String?
-    public let mimetype: String?
-    public let audiobase64: String?
-
-    public init(
-        provider: String,
-        id: String,
-        name: String? = nil,
-        mimetype: String? = nil,
-        audiobase64: String? = nil)
-    {
-        self.provider = provider
-        self.id = id
-        self.name = name
-        self.mimetype = mimetype
-        self.audiobase64 = audiobase64
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case provider
-        case id
-        case name
-        case mimetype = "mimeType"
-        case audiobase64 = "audioBase64"
     }
 }
 
@@ -24062,6 +24002,7 @@ public struct TtsSpeakResult: Codable, Sendable {
 public struct TtsVoiceOption: Codable, Sendable {
     public let id: String
     public let name: String?
+    public let stored: Bool?
     public let category: String?
     public let description: String?
     public let locale: String?
@@ -24070,6 +24011,7 @@ public struct TtsVoiceOption: Codable, Sendable {
     public init(
         id: String,
         name: String? = nil,
+        stored: Bool? = nil,
         category: String? = nil,
         description: String? = nil,
         locale: String? = nil,
@@ -24077,6 +24019,7 @@ public struct TtsVoiceOption: Codable, Sendable {
     {
         self.id = id
         self.name = name
+        self.stored = stored
         self.category = category
         self.description = description
         self.locale = locale
@@ -31546,6 +31489,328 @@ public enum ToolsGitHubConfigureParams: Codable, Sendable {
         switch self {
         case .managed(let value): try value.encode(to: encoder)
         case .inherit(let value): try value.encode(to: encoder)
+        }
+    }
+}
+
+public struct TtsDesignVoiceResultStored: Codable, Sendable {
+    public let provider: String
+    public let outcome: String
+    public let id: String
+    public let name: String?
+    public let mimetype: String?
+    public let audiobase64: String
+
+    public init(
+        provider: String,
+        id: String,
+        name: String? = nil,
+        mimetype: String? = nil,
+        audiobase64: String
+    )
+    {
+        self.provider = provider
+        self.outcome = "stored"
+        self.id = id
+        self.name = name
+        self.mimetype = mimetype
+        self.audiobase64 = audiobase64
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case provider
+        case outcome
+        case id
+        case name
+        case mimetype = "mimeType"
+        case audiobase64 = "audioBase64"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["provider", "outcome", "id", "name", "mimeType", "audioBase64"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for TtsDesignVoiceResultStored: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.provider = try container.decode(String.self, forKey: .provider)
+        let decodedOutcome = try container.decode(String.self, forKey: .outcome)
+        guard decodedOutcome == "stored" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .outcome,
+                in: container,
+                debugDescription: "Expected outcome to equal stored"
+            )
+        }
+        self.outcome = "stored"
+        self.id = try container.decode(String.self, forKey: .id)
+        self.name = try container.decodeIfPresent(String.self, forKey: .name)
+        self.mimetype = try container.decodeIfPresent(String.self, forKey: .mimetype)
+        self.audiobase64 = try container.decode(String.self, forKey: .audiobase64)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(provider, forKey: .provider)
+        try container.encode("stored", forKey: .outcome)
+        try container.encode(id, forKey: .id)
+        try container.encodeIfPresent(name, forKey: .name)
+        try container.encodeIfPresent(mimetype, forKey: .mimetype)
+        try container.encode(audiobase64, forKey: .audiobase64)
+    }
+}
+
+public struct TtsDesignVoiceResultUncertain: Codable, Sendable {
+    public let provider: String
+    public let outcome: String
+    public let message: String
+
+    public init(
+        provider: String,
+        message: String
+    )
+    {
+        self.provider = provider
+        self.outcome = "uncertain"
+        self.message = message
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case provider
+        case outcome
+        case message
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["provider", "outcome", "message"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for TtsDesignVoiceResultUncertain: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.provider = try container.decode(String.self, forKey: .provider)
+        let decodedOutcome = try container.decode(String.self, forKey: .outcome)
+        guard decodedOutcome == "uncertain" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .outcome,
+                in: container,
+                debugDescription: "Expected outcome to equal uncertain"
+            )
+        }
+        self.outcome = "uncertain"
+        self.message = try container.decode(String.self, forKey: .message)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(provider, forKey: .provider)
+        try container.encode("uncertain", forKey: .outcome)
+        try container.encode(message, forKey: .message)
+    }
+}
+
+public enum TtsDesignVoiceResult: Codable, Sendable {
+    case stored(TtsDesignVoiceResultStored)
+    case uncertain(TtsDesignVoiceResultUncertain)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "outcome"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "stored": self = try .stored(TtsDesignVoiceResultStored(from: decoder))
+        case "uncertain": self = try .uncertain(TtsDesignVoiceResultUncertain(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown TtsDesignVoiceResult discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .stored(let value): try value.encode(to: encoder)
+        case .uncertain(let value): try value.encode(to: encoder)
+        }
+    }
+}
+
+public struct TtsReplicateVoiceResultStored: Codable, Sendable {
+    public let provider: String
+    public let outcome: String
+    public let id: String
+    public let name: String?
+    public let mimetype: String?
+    public let audiobase64: String?
+
+    public init(
+        provider: String,
+        id: String,
+        name: String? = nil,
+        mimetype: String? = nil,
+        audiobase64: String? = nil
+    )
+    {
+        self.provider = provider
+        self.outcome = "stored"
+        self.id = id
+        self.name = name
+        self.mimetype = mimetype
+        self.audiobase64 = audiobase64
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case provider
+        case outcome
+        case id
+        case name
+        case mimetype = "mimeType"
+        case audiobase64 = "audioBase64"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["provider", "outcome", "id", "name", "mimeType", "audioBase64"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for TtsReplicateVoiceResultStored: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.provider = try container.decode(String.self, forKey: .provider)
+        let decodedOutcome = try container.decode(String.self, forKey: .outcome)
+        guard decodedOutcome == "stored" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .outcome,
+                in: container,
+                debugDescription: "Expected outcome to equal stored"
+            )
+        }
+        self.outcome = "stored"
+        self.id = try container.decode(String.self, forKey: .id)
+        self.name = try container.decodeIfPresent(String.self, forKey: .name)
+        self.mimetype = try container.decodeIfPresent(String.self, forKey: .mimetype)
+        self.audiobase64 = try container.decodeIfPresent(String.self, forKey: .audiobase64)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(provider, forKey: .provider)
+        try container.encode("stored", forKey: .outcome)
+        try container.encode(id, forKey: .id)
+        try container.encodeIfPresent(name, forKey: .name)
+        try container.encodeIfPresent(mimetype, forKey: .mimetype)
+        try container.encodeIfPresent(audiobase64, forKey: .audiobase64)
+    }
+}
+
+public struct TtsReplicateVoiceResultUncertain: Codable, Sendable {
+    public let provider: String
+    public let outcome: String
+    public let message: String
+
+    public init(
+        provider: String,
+        message: String
+    )
+    {
+        self.provider = provider
+        self.outcome = "uncertain"
+        self.message = message
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case provider
+        case outcome
+        case message
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["provider", "outcome", "message"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for TtsReplicateVoiceResultUncertain: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.provider = try container.decode(String.self, forKey: .provider)
+        let decodedOutcome = try container.decode(String.self, forKey: .outcome)
+        guard decodedOutcome == "uncertain" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .outcome,
+                in: container,
+                debugDescription: "Expected outcome to equal uncertain"
+            )
+        }
+        self.outcome = "uncertain"
+        self.message = try container.decode(String.self, forKey: .message)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(provider, forKey: .provider)
+        try container.encode("uncertain", forKey: .outcome)
+        try container.encode(message, forKey: .message)
+    }
+}
+
+public enum TtsReplicateVoiceResult: Codable, Sendable {
+    case stored(TtsReplicateVoiceResultStored)
+    case uncertain(TtsReplicateVoiceResultUncertain)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "outcome"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "stored": self = try .stored(TtsReplicateVoiceResultStored(from: decoder))
+        case "uncertain": self = try .uncertain(TtsReplicateVoiceResultUncertain(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown TtsReplicateVoiceResult discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .stored(let value): try value.encode(to: encoder)
+        case .uncertain(let value): try value.encode(to: encoder)
         }
     }
 }
