@@ -554,7 +554,7 @@ export function createGatewayWorkerPlacementRuntime(
         if (stopped || placementIdleSuspend.current) {
           return;
         }
-        // Reclaim owns an exclusive placement fence after reconciliation releases it.
+        // Each reclaim reserves its own session after the recovery pass.
         await trackOperation(
           placementIdleSuspend,
           publishPlacementChanges(() => placementIdleSweep.sweep()),
