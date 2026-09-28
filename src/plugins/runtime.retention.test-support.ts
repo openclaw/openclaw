@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { setImmediate as scheduleImmediate } from "node:timers";
 import { setImmediate } from "node:timers/promises";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -24,8 +25,13 @@ async function collect() {
   assert.ok(gc, "The retention child requires --expose-gc");
   const control = new WeakRef({ unowned: true });
   for (let pass = 0; pass < 8; pass += 1) {
-    await setImmediate();
-    gc();
+    // JavaScriptCore's promise-microtask stack can retain completed async values.
+    await new Promise<void>((resolve) => {
+      scheduleImmediate(() => {
+        gc();
+        resolve();
+      });
+    });
   }
   assert.equal(control.deref(), undefined, "Unowned control must collect");
 }

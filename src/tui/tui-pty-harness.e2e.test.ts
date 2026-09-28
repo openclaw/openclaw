@@ -157,6 +157,7 @@ describe("TUI PTY harness", { concurrent: false }, () => {
         );
         const targetOutput = targetRows.join(" ");
         expect(targetOutput).toContain("deliver:on");
+        expect(targetOutput).not.toContain(" | fast | ");
         expect(targetOutput).not.toContain("fast:auto");
         expect(targetOutput).not.toContain("verbose full");
         expect(targetOutput).not.toContain("trace:raw");
