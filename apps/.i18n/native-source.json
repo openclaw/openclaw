@@ -1237,7 +1237,6 @@
     {"id":"native.android.f7e999851098e998","source":"Reconnect","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt"}]},
     {"id":"native.android.51ddbd933bd8779b","source":"Reconnect gateway","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt"}]},
     {"id":"native.android.4d0e9d09ae24c5de","source":"Reconnect the Gateway in OpenClaw on the paired phone.","surface":"android","sites":[{"kind":"resource-string","path":"apps/android/wear/src/main/res/values/strings.xml"}]},
-    {"id":"native.android.74858bba0e68cc10","source":"Reconnect the app to reopen this gateway page.","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/ui/ControlUiWebView.kt"}]},
     {"id":"native.android.14e93535c32de1b6","source":"Reconnect to continue","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt"}]},
     {"id":"native.android.b40b57bc02ec76fe","source":"Reconnect to load the full message.","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageDisclosure.kt"}]},
     {"id":"native.android.6221c4f0434a88e4","source":"Reconnect with operator.admin access to review and change Gateway settings.","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SystemAgentSettingsScreen.kt"}]},

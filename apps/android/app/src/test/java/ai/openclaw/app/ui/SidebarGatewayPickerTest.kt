@@ -33,7 +33,6 @@ import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Rect
-import android.net.Uri
 import android.provider.Settings
 import android.view.ViewGroup
 import android.view.inspector.WindowInspector
@@ -255,7 +254,7 @@ class SidebarGatewayPickerTest {
 
   @Test
   @Config(sdk = [31], qualifiers = "w412dp-h820dp-mdpi")
-  fun dualCatalogTerminalActionPreservesChatWhileOpeningNativeSetup() = assertNativeCatalogStart(dualCapability = true)
+  fun dualCatalogTerminalActionOpensGatewaySetup() = assertNativeCatalogStart(dualCapability = true)
 
   private fun assertNativeCatalogStart(dualCapability: Boolean) {
     model.enterScreenshotFixtureMode(AndroidScreenshotScene.CompletedWork)
@@ -293,15 +292,7 @@ class SidebarGatewayPickerTest {
           .flatMap { it.descendants }
           .filterIsInstance<WebView>()
           .single()
-      assertEquals(
-        "${AndroidScreenshotFixture.controlUiBaseUrl}/new?agent=main&catalog=codex",
-        Uri
-          .parse(shadowOf(webView).lastLoadedUrl)
-          .buildUpon()
-          .fragment(null)
-          .build()
-          .toString(),
-      )
+      assertEquals("${AndroidScreenshotFixture.controlUiBaseUrl}/new?agent=main&catalog=codex", shadowOf(webView).lastLoadedUrl)
       assertEquals(originalSession, model.chatSessionKey.value)
       assertFalse(model.chatSessionCreating.value)
       webView.webViewClient.doUpdateVisitedHistory(webView, "${AndroidScreenshotFixture.controlUiBaseUrl}/terminal/native-session", false)
@@ -316,15 +307,7 @@ class SidebarGatewayPickerTest {
           .flatMap { it.descendants }
           .filterIsInstance<WebView>()
           .single()
-      assertEquals(
-        "${AndroidScreenshotFixture.controlUiBaseUrl}/terminal/native-session",
-        Uri
-          .parse(shadowOf(restored).lastLoadedUrl)
-          .buildUpon()
-          .fragment(null)
-          .build()
-          .toString(),
-      )
+      assertEquals("${AndroidScreenshotFixture.controlUiBaseUrl}/terminal/native-session", shadowOf(restored).lastLoadedUrl)
     }
   }
 

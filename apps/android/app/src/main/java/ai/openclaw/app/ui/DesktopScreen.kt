@@ -30,7 +30,7 @@ internal fun DesktopScreen(
   ) {
     val page = controlPage
     if (isConnected && page != null) {
-      // GatewayControlPage equality includes its native operator owner and the accepted TLS pin.
+      // GatewayControlPage equality includes credentials and the accepted TLS pin.
       key(page, source, session) {
         ControlUiWebView(
           page = page,
@@ -47,7 +47,7 @@ internal fun DesktopScreen(
   }
 }
 
-/** Builds the desktop focus route without putting gateway credentials in the URL. */
+/** Builds the desktop focus route; credentials stay in ControlUiWebView's startup script. */
 internal fun desktopUrl(
   baseUrl: String,
   source: String? = null,

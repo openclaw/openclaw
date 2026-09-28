@@ -485,7 +485,6 @@ dependencies {
   testImplementation(libs.kotlinx.coroutines.test)
   testImplementation(libs.mockwebserver)
   testImplementation(libs.robolectric)
-  testImplementation(project(":test-support"))
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testRuntimeOnly(libs.junit.platform.launcher)
   testRuntimeOnly(libs.junit.vintage.engine)
@@ -644,9 +643,4 @@ androidComponents {
       dependsOn(stripTask)
     }
   }
-}
-
-// Platform support is a test dependency, so its lint belongs to the app's test gate.
-tasks.named("ktlintCheck") {
-  dependsOn(":test-support:ktlintCheck")
 }
