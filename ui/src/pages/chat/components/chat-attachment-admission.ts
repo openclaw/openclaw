@@ -1,8 +1,5 @@
-// All composer intake enforces per-file policy.attachments ceilings and one
-// send's total maxBatchBytes, derived from policy.maxPayload. Otherwise the
-// browser refuses only after encoding the batch; an oversized frame it does
-// not refuse is dropped by the Gateway with 1009 for every pane. Empty files fail admission.
-// Resizable sources reserve their prepared ceiling and face strict admission after preparation.
+// Admit batches before base64 encoding to avoid disconnecting every pane with WS 1009.
+// Resizable sources reserve their per-file ceiling until preparation completes.
 import { resolveChatAttachmentFrameBudgetBytes } from "../../../../../src/shared/chat-attachment-frame-budget.ts";
 import type { GatewayHelloOk } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
@@ -46,10 +43,6 @@ function skippedFilesMessage(messageKey: string, names: readonly string[]): stri
       .join(", "),
     more: names.length > 3 ? ` +${names.length - 3}` : "",
   });
-}
-
-function attachmentsTooLargeMessage(names: readonly string[]): string {
-  return skippedFilesMessage("chat.attachments.tooLarge", names);
 }
 
 function skippedFilesToast(messageKey: string, skipped: readonly File[]): void {
@@ -146,6 +139,9 @@ export function attachmentBatchRejection(
 ): string | undefined {
   const oversized = oversizedAttachmentBatch(attachments, resolveChatAttachmentLimits(policy));
   return oversized.length > 0
-    ? attachmentsTooLargeMessage(oversized.map((attachment) => attachment.fileName ?? ""))
+    ? skippedFilesMessage(
+        "chat.attachments.tooLarge",
+        oversized.map((attachment) => attachment.fileName ?? ""),
+      )
     : undefined;
 }

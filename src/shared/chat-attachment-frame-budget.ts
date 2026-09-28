@@ -1,7 +1,5 @@
-// A chat.send frame carries attachments as base64 (4/3 expansion) plus the
-// JSON envelope and message text. Advertising more than one WS frame can carry
-// lets the client encode a payload the server hard-drops with 1009 for every
-// pane — the exact failure the hello-ok policy exists to prevent.
+// Reserve room for the chat.send JSON envelope and message text before
+// accounting for base64's 4/3 expansion.
 const WS_FRAME_ENVELOPE_SLACK_BYTES = 256 * 1024;
 
 export function resolveChatAttachmentFrameBudgetBytes(maxPayloadBytes: number): number {
