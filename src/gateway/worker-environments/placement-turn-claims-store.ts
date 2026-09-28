@@ -87,13 +87,23 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
                 claim: { ...claim, placementGeneration: input.input.claim.placementGeneration },
               },
             }
-          : {
-              type: input.type,
-              input: {
-                nowMs: input.input.nowMs,
-                claim: { ...claim, placementGeneration: input.input.claim.placementGeneration },
-              },
-            };
+          : input.type === "placementTurns.handoffRuntimeRefreshResult"
+            ? {
+                type: input.type,
+                input: {
+                  nowMs: input.input.nowMs,
+                  claim: { ...claim, placementGeneration: input.input.claim.placementGeneration },
+                  expectedGeneration: input.input.expectedGeneration,
+                  gatewayInstanceId: input.input.gatewayInstanceId,
+                },
+              }
+            : {
+                type: input.type,
+                input: {
+                  nowMs: input.input.nowMs,
+                  claim: { ...claim, placementGeneration: input.input.claim.placementGeneration },
+                },
+              };
     const close =
       command.type === "placementTurns.release" || command.type === "placementTurns.releaseIfOwned"
         ? prepareWorkerTurnClaimClosed(runtime.path, command.input.claim)
@@ -164,6 +174,9 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
         }
         if (!granted || admission?.settlement?.kind === "completed") {
           publication?.rollback();
+        } else if (command.type === "placementTurns.handoffRuntimeRefreshResult") {
+          // An uncertain handoff requires fresh recovery authority; never replay its write.
+          publication?.invalidate();
         } else {
           if (command.type === "placementTurns.recoverWorkspace") {
             // An unchanged claim does not prove its result fence committed. Recovery
@@ -265,6 +278,25 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
         },
         assertCurrent,
       );
+    },
+    async handoffRuntimeRefreshResult(
+      input: Omit<
+        PlacementTurnClaimWorkerOperations["placementTurns.handoffRuntimeRefreshResult"]["input"],
+        "nowMs"
+      >,
+      assertCurrent?: () => void,
+    ) {
+      const receipt = await execute(
+        {
+          type: "placementTurns.handoffRuntimeRefreshResult",
+          input: { ...input, nowMs: runtime.now?.() ?? Date.now() },
+        },
+        assertCurrent,
+      );
+      if (!receipt.placement) {
+        throw new Error("Worker runtime refresh handoff receipt is missing its placement");
+      }
+      return receipt.placement;
     },
     async claimTurn(input: Parameters<Claims["claimTurn"]>[0], assertCurrent?: () => void) {
       const receipt = await execute(

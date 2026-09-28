@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   openOpenClawStateDatabase,
@@ -97,6 +97,34 @@ describe("worker session placement gate", () => {
   function bindingFor(claim: Awaited<ReturnType<typeof preclaim>>) {
     return claim;
   }
+
+  it("rejects an identical claim readmitted while runtime refresh hands off its result", async () => {
+    const claim = await preclaim("run-refresh-handoff");
+    store.markWorkspaceResultPending(claim);
+    const gate = createWorkerSessionPlacementGate(store, { rejectExistingWorkerClaims: true });
+    const handoff = store.handoffRuntimeRefreshResult.bind(store);
+    vi.spyOn(store, "handoffRuntimeRefreshResult").mockImplementationOnce(async (...args) => {
+      const placement = await handoff(...args);
+      store.acceptWorkspaceResult(claim);
+      store.completeWorkspaceResultAndReleaseTurn(claim);
+      const replacement = await store.claimTurn({ ...SESSION, ...claim });
+      store.markWorkspaceResultPending(replacement);
+      store.handoffWorkspaceResultRecovery(replacement);
+      return placement;
+    });
+
+    await expect(
+      gate.prepareWorkerRuntimeRefresh({
+        sessionId: claim.sessionId,
+        environmentId: ENVIRONMENT_ID,
+        ownerEpoch: OWNER_EPOCH,
+      }),
+    ).rejects.toThrow("turn recovery owner");
+    expect(store.validateTurnClaim(claim)).toBe(true);
+    expect(store.listPendingWorkspaceResults()).toMatchObject([
+      { claimId: claim.claimId, recoveryRequestedAtMs: expect.any(Number) },
+    ]);
+  });
 
   it.each(["missing result", "live reclaim", "live turn", "move"] as const)(
     "rejects draining runtime refresh with %s",

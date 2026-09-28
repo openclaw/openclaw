@@ -98,8 +98,8 @@ export function createWorkerProviderOwnerLifecycle(
     options.onOwnerStopped?.(record.environmentId);
     const sessionId = record.attachedSessionIds.length === 1 ? record.attachedSessionIds[0] : null;
     if (sessionId && !runtimeRefresh) {
-      // Transfer an exact pending-result owner before credential revocation makes its
-      // same-lifecycle worker permanently unreachable to recovery.
+      // Runtime refresh hands off eligible results before capturing placement authority.
+      // Other revocations transfer custody before making the old process unreachable.
       options.placementStore?.prepareWorkspaceResultOwnerRevocation(
         { sessionId, environmentId: record.environmentId, ownerEpoch: record.ownerEpoch },
         new Error(record.lastError ?? "Cloud worker owner revoked before workspace recovery"),
