@@ -124,10 +124,6 @@
   font-family: var(--mono);
 }
 
-:root[data-theme-mode="light"] .config-diff__item {
-  background: white;
-}
-
 .config-diff__path {
   font-weight: 600;
   color: var(--text);
