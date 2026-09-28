@@ -44,6 +44,7 @@ export async function runOwnedDistArtifactEntry(script: string, args: string[]) 
 export async function acquireDistArtifactOwnership(
   rootDir: string,
   wait = false,
+  signal?: AbortSignal,
 ): Promise<FileLockHandle> {
   const directory = resolveDistArtifactLockPath(fs.realpathSync(rootDir));
   const ownerPath = path.join(directory, "owner.json");
@@ -52,38 +53,64 @@ export async function acquireDistArtifactOwnership(
   let lock: FileLockHandle;
   try {
     fs.mkdirSync(directory, { recursive: true });
-    lock = await acquireFileLock(ownerPath, {
-      lockPath: ownerPath,
-      // Explicit release owns cleanup; detached children can outlive their parent.
-      retainOnExit: true,
-      lockRoot: await openLockRoot(directory),
-      payload: () => ({ pid: process.pid, startedAt: new Date().toISOString() }),
-      timeoutMs: wait ? Number.POSITIVE_INFINITY : 0,
-      retry: { minTimeout: LOCK_POLL_MS, maxTimeout: LOCK_POLL_MS, factor: 1 },
-      staleRecovery: "fail-closed",
-      shouldReclaim: ({ payload }) => {
-        owner = payload;
-        // fs-safe rechecks the observed owner before failing closed, never reclaiming it.
-        const pid = payload && typeof payload === "object" && "pid" in payload ? payload.pid : null;
-        if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid <= 1 || pid > 0x7fffffff) {
-          return true;
+    const lockRoot = await openLockRoot(directory);
+    while (true) {
+      signal?.throwIfAborted();
+      try {
+        lock = await acquireFileLock(ownerPath, {
+          lockPath: ownerPath,
+          // Explicit release owns cleanup; detached children can outlive their parent.
+          retainOnExit: true,
+          lockRoot,
+          payload: () => ({ pid: process.pid, startedAt: new Date().toISOString() }),
+          timeoutMs: wait ? LOCK_POLL_MS : 0,
+          retry: { minTimeout: LOCK_POLL_MS, maxTimeout: LOCK_POLL_MS, factor: 1 },
+          staleRecovery: "fail-closed",
+          shouldReclaim: ({ payload }) => {
+            owner = payload;
+            // fs-safe rechecks the observed owner before failing closed, never reclaiming it.
+            const pid =
+              payload && typeof payload === "object" && "pid" in payload ? payload.pid : null;
+            if (
+              typeof pid !== "number" ||
+              !Number.isSafeInteger(pid) ||
+              pid <= 1 ||
+              pid > 0x7fffffff
+            ) {
+              return true;
+            }
+            try {
+              process.kill(pid, 0);
+            } catch {
+              return true;
+            }
+            if (fs.existsSync(path.join(directory, "unjoined"))) {
+              return true;
+            }
+            if (!reportedWait) {
+              console.error(`[dist artifacts] waiting for checkout ownership: ${directory}`);
+              reportedWait = true;
+            }
+            return false;
+          },
+        });
+        break;
+      } catch (error) {
+        if (
+          !wait ||
+          !error ||
+          typeof error !== "object" ||
+          !("code" in error) ||
+          error.code !== "file_lock_timeout"
+        ) {
+          throw error;
         }
-        try {
-          process.kill(pid, 0);
-        } catch {
-          return true;
-        }
-        if (fs.existsSync(path.join(directory, "unjoined"))) {
-          return true;
-        }
-        if (!reportedWait) {
-          console.error(`[dist artifacts] waiting for checkout ownership: ${directory}`);
-          reportedWait = true;
-        }
-        return false;
-      },
-    });
+      }
+    }
   } catch (error) {
+    if (signal?.aborted && error === signal.reason) {
+      throw error;
+    }
     if (!fs.existsSync(ownerPath)) {
       throw new Error(
         `Could not acquire ${directory}: ${String(error)}. Resolve this filesystem error and retry before stopping the Gateway.`,
@@ -113,13 +140,19 @@ export async function acquireDistArtifactOwnership(
 }
 
 /** The callback must join every writer/reader before returning, including on failure. */
-export const withDistArtifactOwnership: WithDistArtifactOwnership = async (rootDir, run) => {
+export const withDistArtifactOwnership: WithDistArtifactOwnership = async (
+  rootDir,
+  run,
+  signal,
+) => {
   const directory = resolveDistArtifactLockPath(fs.realpathSync(rootDir));
   if (directory === inheritedOwnershipPath) {
+    signal?.throwIfAborted();
     return await run();
   }
-  const lock = await acquireDistArtifactOwnership(rootDir, true);
+  const lock = await acquireDistArtifactOwnership(rootDir, true, signal);
   try {
+    signal?.throwIfAborted();
     return await run();
   } catch (error) {
     retainUnjoinedDistArtifactWork(directory, error);
