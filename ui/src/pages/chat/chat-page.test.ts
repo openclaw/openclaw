@@ -169,6 +169,7 @@ describe("chat page split layout host", () => {
     page.data = { sessionKey: "main" };
     document.body.append(page);
     await page.updateComplete;
+    expect(page.querySelector(".chat-split-view--active-cell")).toBeNull();
 
     const classicPane = itemAt(
       page.querySelectorAll<RenderedPane>("openclaw-chat-pane"),
@@ -181,6 +182,7 @@ describe("chat page split layout host", () => {
     const splitPanes = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
     expect(splitPanes).toHaveLength(2);
     expect(splitPanes[0]).toBe(classicPane);
+    expect(page.querySelector(".chat-split-view--active-cell")).not.toBeNull();
     expect(classicPane.classList.contains("chat-split-view__pane")).toBe(true);
     const addedPane = itemAt(splitPanes, 1, "added split pane");
     addedPane.onClosePane?.(addedPane.paneId);
@@ -193,6 +195,7 @@ describe("chat page split layout host", () => {
     );
     expect(survivingPane).toBe(classicPane);
     expect(survivingPane.classList.contains("chat-split-view__pane")).toBe(false);
+    expect(page.querySelector(".chat-split-view--active-cell")).toBeNull();
   });
 
   it.each([
@@ -282,6 +285,7 @@ describe("chat page split layout host", () => {
     expect(activePaneId).not.toBe(first.paneId);
     page.presented = false;
     await page.updateComplete;
+    expect(page.querySelector(".chat-split-view--active-cell")).toBeNull();
     navigation.replace.mockClear();
 
     first.onFocusPane?.(first.paneId);

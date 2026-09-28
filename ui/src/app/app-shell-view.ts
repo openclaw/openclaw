@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { classMap } from "lit/directives/class-map.js";
 import { isSettingsNavigationRoute, isSettingsTakeover } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { APP_ROUTE_IDS } from "../app-routes.ts";
@@ -52,6 +53,7 @@ import { readGatewayOperatorAccess } from "./operator-access.ts";
 import { isDesktopPanelAvailable, isHomePanelAvailable } from "./panel-availability.ts";
 import { NAV_WIDTH_MAX, NAV_WIDTH_MIN, normalizeCatalogOpenTarget } from "./settings.ts";
 import { renderCollapsedHomeToggle } from "./shell-assistant-toggles.ts";
+import type { ShellLayoutController } from "./shell-layout-traits.ts";
 
 type SettingsSidebarHost = Parameters<typeof renderLazySettingsSidebar>[0];
 
@@ -65,6 +67,8 @@ export interface ShellViewHost
   readonly onboardingMemoryImportElement: OptionalCustomElement;
   readonly nativeHistoryState: NativeHistoryState;
   readonly navDrawerOpen: boolean;
+  navResizing: boolean;
+  readonly shellLayout: ShellLayoutController;
   readonly navigationSidebar: HTMLElement;
   readonly onboardingMode: boolean;
   readonly routeState: ShellRouteState;
@@ -264,6 +268,30 @@ export function renderApplicationShell(host: ShellViewHost) {
   }
   const embedNavigation =
     nativeEmbed && !(nativeEmbedHost()?.surface === "conversation" && activeRoute === "chat");
+  const collapsedControls =
+    !nativeEmbed && navCollapsed && !onboarding && !settingsTakeover && !mobileNavLayout;
+  const shellConnectionStatus =
+    (navigationSurfaceHidden ||
+      (settingsTakeover
+        ? host.settingsSidebarRenderer === null
+        : !isOptionalElementDefined(APP_SIDEBAR_ELEMENT))) &&
+    !nativeEmbed &&
+    !onboarding &&
+    !initialConnection
+      ? connectionStatus
+      : null;
+  const floatingUpdateCard = {
+    navigationSurfaceHidden,
+    mobileNavLayout,
+    onboarding,
+    compact: mergedChatChrome && !controlUiRefreshRequired,
+    statusBanner: overlaySnapshot.updateStatusBanner,
+    updateRun: overlaySnapshot.updateRun,
+    refreshRequired: controlUiRefreshRequired,
+    onRefresh: host.refreshControlUi,
+    onNavigate: host.navigate,
+  };
+  const layout = host.shellLayout.current;
   const navigationContent =
     settingsTakeover || embedNavigation
       ? renderLazySettingsSidebar(host, {
@@ -341,7 +369,11 @@ export function renderApplicationShell(host: ShellViewHost) {
         mergedChatChrome ? "shell--merged-chat-chrome" : ""
       } ${navDrawerOpen ? "shell--nav-drawer-open" : ""} ${
         onboarding ? "shell--onboarding" : ""
-      } ${nativeEmbed ? "shell--embed" : ""} ${embedSettings ? "shell--embed-settings" : ""} ${settingsTakeover ? "shell--settings" : ""}"
+      } ${nativeEmbed ? "shell--embed" : ""} ${embedSettings ? "shell--embed-settings" : ""} ${settingsTakeover ? "shell--settings" : ""} ${
+        collapsedControls && homePanelAvailable ? "shell--home-control" : ""
+      } ${shellConnectionStatus ? "shell--connection-status" : ""} ${
+        floatingSidebarAttentionVisible(floatingUpdateCard) ? "shell--floating-attention" : ""
+      } ${host.navResizing ? "shell--nav-resizing" : ""}"
       style=${`--shell-nav-expanded-width: ${navigationSnapshot.navWidth}px`}
       @theme-change=${(event: CustomEvent<ThemeModeChangeDetail>) => host.handleThemeChange(event)}
     >
@@ -380,7 +412,7 @@ export function renderApplicationShell(host: ShellViewHost) {
             ></openclaw-app-topbar>`
       }
       ${
-        !nativeEmbed && navCollapsed && !onboarding && !settingsTakeover && !mobileNavLayout
+        collapsedControls
           ? html`
               <div class="shell-chrome-controls">
                 <openclaw-tooltip
@@ -459,6 +491,12 @@ export function renderApplicationShell(host: ShellViewHost) {
                 .maxRatio=${NAV_WIDTH_MAX / shellWidth}
                 aria-valuetext=${`${navigationSnapshot.navWidth} pixels`}
                 title=${t("nav.resize")}
+                @resize-start=${() => {
+                  host.navResizing = true;
+                }}
+                @resize-end=${() => {
+                  host.navResizing = false;
+                }}
                 @resize=${(event: CustomEvent<{ splitRatio: number }>) =>
                   host.resizeNavigation(event.detail.splitRatio)}
               ></resizable-divider>
@@ -467,9 +505,25 @@ export function renderApplicationShell(host: ShellViewHost) {
       }
       <main
         id="control-ui-main"
-        class="content ${chatLikeRoute ? "content--chat" : ""} ${
-          activeRoute === "custodian" ? "content--custodian" : ""
-        } ${activeRoute === "workboard" ? "content--workboard" : ""}"
+        class=${classMap({
+          content: true,
+          "content--chat": chatLikeRoute,
+          "content--custodian": activeRoute === "custodian",
+          "content--workboard": activeRoute === "workboard",
+          "content--actions-blocked": pageActionsBlocked,
+          "content--plugin-embed": Boolean(layout.pluginEmbed),
+          "content--hub-header": Boolean(layout.hubHeader),
+          "content--toolbar-header": Boolean(layout.toolbarHeader),
+          "content--workbench": Boolean(layout.workbench),
+          "content--settings-page": Boolean(layout.settingsPage),
+          "content--settings-wide": Boolean(layout.settingsWide),
+          "content--settings-workspace": Boolean(layout.settingsWorkspace),
+          "content--memory-page": Boolean(layout.memoryPage),
+          "content--logs-page": Boolean(layout.logsPage),
+          "content--activity-page": Boolean(layout.activityPage),
+          "content--terminal-page": Boolean(layout.terminalPage),
+        })}
+        @openclaw-shell-layout=${host.shellLayout.handleChange}
         .tabIndex=${-1}
         @mousedown=${beginNativeWindowDragFromTopInset}
         ?inert=${(!nativeEmbed && pageActionsBlocked) || (mobileNavLayout && navDrawerOpen)}
@@ -490,17 +544,7 @@ export function renderApplicationShell(host: ShellViewHost) {
               </div>`
             : nothing
         }
-        ${renderFloatingUpdateCard({
-          navigationSurfaceHidden,
-          mobileNavLayout,
-          onboarding,
-          compact: mergedChatChrome && !controlUiRefreshRequired,
-          statusBanner: overlaySnapshot.updateStatusBanner,
-          updateRun: overlaySnapshot.updateRun,
-          refreshRequired: controlUiRefreshRequired,
-          onRefresh: host.refreshControlUi,
-          onNavigate: host.navigate,
-        })}
+        ${renderFloatingUpdateCard(floatingUpdateCard)}
         ${embedNavigation ? navigationContent : nothing}
         <openclaw-router-outlet
           ?inert=${pageActionsBlocked || reloadRequired}
@@ -513,17 +557,10 @@ export function renderApplicationShell(host: ShellViewHost) {
         ></openclaw-router-outlet>
       </main>
       ${
-        (navigationSurfaceHidden ||
-          (settingsTakeover
-            ? host.settingsSidebarRenderer === null
-            : !isOptionalElementDefined(APP_SIDEBAR_ELEMENT))) &&
-        !nativeEmbed &&
-        !onboarding &&
-        connectionStatus &&
-        !initialConnection
+        shellConnectionStatus
           ? html`<div class="shell-connection-status">
               ${renderGatewayStatus({
-                kind: connectionStatus,
+                kind: shellConnectionStatus,
                 lastError: gatewaySnapshot.lastError,
                 onRetry: callbacks.retryGateway,
               })}

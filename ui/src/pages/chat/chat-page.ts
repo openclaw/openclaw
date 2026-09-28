@@ -672,6 +672,7 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
   ) {
     return renderChatPageSplitLayout(layout, {
       narrow: this.narrow,
+      activePaneId: splitMode && this.conversationPresented ? layout.activePaneId : undefined,
       renderPane: (column, pane, weight) =>
         renderChatPagePaneCell({
           active: this.conversationPresented && pane.id === layout.activePaneId,
