@@ -527,7 +527,11 @@ export function readRequiredMergeChecks(repo, head, policy, { includeCheckIdenti
     const matches = [
       ...boundChecks,
       ...(app !== null && boundChecks.length === 0 ? [{ state: "EXPECTED" }] : []),
-      ...matchingStatuses.map((status) => ({ state: status.state.toUpperCase() })),
+      ...matchingStatuses.map((status) =>
+        includeCheckIdentity
+          ? { state: status.state.toUpperCase(), statusId: status.id }
+          : { state: status.state.toUpperCase() },
+      ),
     ];
     for (const match of matches.length > 0 ? matches : [{ state: "EXPECTED" }]) {
       rows.push({ name: context, bucket: bucket(match.state), ...match });

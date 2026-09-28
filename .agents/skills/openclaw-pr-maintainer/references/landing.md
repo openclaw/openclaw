@@ -206,6 +206,18 @@ Retain these additional fields:
   successful `pr-fail-fast` job's `jobId` and cancellation-step number `step`.
   This records inspected cancellation provenance, never passing coverage.
 
+For the existing Node matrix's native fail-fast (including fork PRs whose monitor
+is skipped), use `cancellation.kind: "matrix-fail-fast"` and
+`workflowJob: "checks-node-core-test-nondist-shard"` instead of monitor `jobId`/`step`.
+Add `members`, the exact `{ jobId, name }` bindings for every admitted failed root
+and cancelled row. Retain the tested workflow blob locally. The verifier requires
+that workflow to match the baseline, use the existing preflight matrix/name wiring,
+enable PR fail-fast, and have no `continue-on-error`. GitHub's job API omits matrix
+ownership; membership and cancellation cause remain explicitly inspected operator
+attestations supported by the named artifacts, not facts inferred from prefixes.
+Either mechanism refuses cancelled jobs with failed steps or missing step evidence;
+those cannot be hidden as collateral cancellation.
+
 The tool verifies live run/attempt/PR/head identities, complete job accounting,
 the current effective GitHub Actions gate check-run, and source/artifact hashes.
 A fork run with an empty GitHub PR association must match the current PR's exact
@@ -220,6 +232,17 @@ failure before changed code is reached can also qualify. Describe unknowns
 honestly—for example, an initial bind collision need not invent an occupant.
 Other required checks and exactly one `security-fast` job must pass. The outcome and completion
 comment retain the exception without turning failed or cancelled CI into green.
+
+The same-name Security Review commit status remains a separate gate. Admission
+binds it to a successful protected-main publisher attempt and the exact PR/head
+enforcement step, verifies the publisher's checked-out sources against the current
+owner, and reads complete current statuses. The existing security owner interprets
+its CI-only failure/success/waiting projection, requires current independent guard
+clearance when rollout applies, and revalidates approval and PR/rollout identity.
+Historical green guard statuses alone are insufficient. Missing, stale, foreign,
+failed, or changed clearance blocks admission; only the identified combined status
+may be excused with the attributed Actions CI gate. These facts are obtained live,
+not supplied as an operator security waiver. Ordinary merge behavior is unchanged.
 
 ### Completed-evidence follow-through
 

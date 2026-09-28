@@ -6,7 +6,10 @@ import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts"
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createMergeGitFixtureFactory } from "./pr-merge-fixture-git.test-support.js";
-import { createPriorCiFixtureState } from "./pr-merge-prior-ci.test-support.js";
+import {
+  createPriorCiFixtureState,
+  priorCiSecurityFixtureSource,
+} from "./pr-merge-prior-ci.test-support.js";
 import { landingSnapshotQuery } from "./pr-merge-snapshot.test-support.js";
 import { validReview, writeReviewArtifacts } from "./pr-review-artifact-fixture.js";
 
@@ -271,6 +274,7 @@ export function createMergeOutcomeFixtureHarness() {
       "gh.mjs",
       `
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 const [route,...args]=process.argv.slice(2);
 const file=process.env.FIXTURE_STATE;
@@ -365,7 +369,9 @@ const advanceMain=()=>{
   git(["--git-dir="+process.env.FIXTURE_REMOTE,"update-ref","refs/heads/main",next,parent]);
   s.mainAdvances.push(next);
 };
-if(args[0]==="browse") out(s.repo.url);
+${priorCiSecurityFixtureSource}
+if(securityResponse()) {}
+else if(args[0]==="browse") out(s.repo.url);
 else if(args[0]==="repo") out(args.includes("--jq")?s.repo.nameWithOwner:s.repo);
 else if(args[0]==="api"&&args.includes("rate_limit")) out({resources:{graphql:{remaining:0,limit:5000,reset:1900000000},core:{remaining:4999,limit:5000,reset:1900000000}}});
 else if(args[0]==="api"&&args.some(arg=>new RegExp("^repos/[^/]+/[^/]+$").test(arg))) {
@@ -414,7 +420,7 @@ else if(args[0]==="api"&&args.includes("repos/fixture/repo/pulls/123")) {
     merge_commit_sha:s.pr.mergeCommit?.oid??null,draft:s.pr.isDraft,
     auto_merge:s.pr.autoMergeRequest?{merge_method:s.pr.autoMergeRequest.mergeMethod.toLowerCase()}:null,
     head:{sha:s.pr.headRefOid,ref:s.pr.headRefName,repo:s.priorCi.enabled?{...s.repoAuthority,...s.priorCi.sourceRepository}:s.repoAuthority},base:{ref:s.pr.baseRefName,sha:main(),repo:s.repoAuthority},
-    user:{login:s.pr.author.login,type:s.pr.author.__typename},
+    user:{id:1001,login:s.pr.author.login,type:s.pr.author.__typename},created_at:"2026-09-20T00:00:00Z",
     mergeable:s.pr.mergeable==="UNKNOWN"?null:s.pr.mergeable==="MERGEABLE",
     mergeable_state:s.pooledMergeBlocked&&!args.includes("--include")?"blocked":s.pr.mergeStateStatus.toLowerCase()};
   out(args.includes("--include")?"HTTP/2.0 200 OK\\n\\n"+JSON.stringify(record):record);
@@ -884,7 +890,7 @@ fi
             "123",
             head,
             state().operator,
-            base,
+            git(["--git-dir=" + remote, "rev-parse", "refs/heads/main"]),
           ],
           { cwd: worktree, env, encoding: "utf8" },
         );

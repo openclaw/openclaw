@@ -1,10 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync } from "node:fs";
+import { parse } from "yaml";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
 import { runBelongsToPullRequest } from "../verify-pr-hosted-gates.mts";
 import { parseGithubResponse } from "./gh-api-preflight.mjs";
 import { execPrGh, execPrGhJson } from "./github.mjs";
+import { verifyPriorCiSecurity } from "./merge-prior-ci-security.mjs";
 import { readMergePolicy, readRequiredMergeChecks } from "./merge-rest.mjs";
 
 const oid = /^[0-9a-f]{40}$/;
@@ -118,7 +120,58 @@ function verifyUnchangedEvidence(path, expected) {
   return { evidenceSha256: expected };
 }
 
-function verifyPreExistingFailure(evidence, run, jobs, checks, main) {
+function verifyMatrixCancellation(evidence, run, cancellation, members) {
+  const workflowJob = "checks-node-core-test-nondist-shard";
+  requireEvidence(
+    run.event === "pull_request" &&
+      cancellation.workflowJob === workflowJob &&
+      cancellation.jobId === undefined &&
+      cancellation.step === undefined,
+    "matrix cancellation requires the existing PR Node matrix owner",
+  );
+  const workflowPath = ".github/workflows/ci.yml";
+  const baseline = git(["rev-parse", `${evidence.priorHead}:${workflowPath}`])
+    .toString("utf8")
+    .trim();
+  const workflowBlob = git(["rev-parse", `${evidence.testedMerge}:${workflowPath}`])
+    .toString("utf8")
+    .trim();
+  requireEvidence(
+    oid.test(workflowBlob) && workflowBlob === baseline,
+    "matrix cancellation workflow changed in the tested PR merge",
+  );
+  const workflow = parse(git(["show", `${evidence.testedMerge}:${workflowPath}`]).toString("utf8"));
+  const owner = workflow?.jobs?.[workflowJob];
+  requireEvidence(
+    owner?.name === "${{ matrix.check_name || 'checks-node-core-test-nondist-shard' }}" &&
+      Array.isArray(owner.needs) &&
+      owner.needs.includes("preflight") &&
+      owner.strategy?.matrix ===
+        "${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}" &&
+      [true, "${{ github.event_name == 'pull_request' }}"].includes(
+        owner.strategy?.["fail-fast"],
+      ) &&
+      [undefined, false].includes(owner["continue-on-error"]),
+    "the tested workflow must enable the existing PR matrix fail-fast contract",
+  );
+  // GitHub jobs omit their matrix owner. Membership and cause remain inspected
+  // operator attestations; exact names/IDs bind them without inferring from prefixes.
+  requireEvidence(
+    Array.isArray(cancellation.members) &&
+      cancellation.members.length === members.length &&
+      new Set(cancellation.members.map((member) => member?.jobId)).size === members.length &&
+      cancellation.members.every(
+        (member) =>
+          positiveInteger(member?.jobId) &&
+          nonempty(member.name) &&
+          members.some((job) => job.id === member.jobId && job.name === member.name),
+      ),
+    "matrix membership bindings must name every admitted root and cancelled job exactly",
+  );
+  return { ...cancellation, workflowBlob };
+}
+
+async function verifyPreExistingFailure(evidence, run, jobs, checks, main, repositoryId) {
   verifyFailureArtifacts(evidence);
   const references = (entry) =>
     nonempty(entry?.reason) &&
@@ -152,7 +205,12 @@ function verifyPreExistingFailure(evidence, run, jobs, checks, main) {
     "all current-attempt jobs must have complete, matching terminal identities",
   );
   const gates = jobs.filter((job) => job.name === "openclaw/ci-gate");
-  const current = checks.filter((check) => check.name === "openclaw/ci-gate");
+  const current = checks.filter(
+    (check) =>
+      check.name === "openclaw/ci-gate" &&
+      positiveInteger(check.checkRunId) &&
+      check.publisherId === 15368,
+  );
   requireEvidence(
     gates.length === 1 &&
       current.length === 1 &&
@@ -165,15 +223,15 @@ function verifyPreExistingFailure(evidence, run, jobs, checks, main) {
         `https://api.github.com/repos/${evidence.repository}/check-runs/${current[0].checkRunId}`,
     "selected failed attempt must own the currently effective CI gate check-run",
   );
-  requireEvidence(
-    checks.every((check) => check.bucket === "pass" || check === current[0]),
-    "pre-existing CI authority does not waive other required checks, including security",
-  );
   const security = jobs.filter((job) => job.name === "security-fast");
   requireEvidence(
     security.length === 1 && security[0].conclusion === "success",
     "security-fast must pass independently",
   );
+  const combined = checks.filter(
+    (check) => check.name === "openclaw/ci-gate" && positiveInteger(check.statusId),
+  );
+  requireEvidence(combined.length === 1, "current combined CI/security status is required");
   const failed = jobs.filter(
     (job) => ["failure", "timed_out"].includes(job.conclusion) && job !== gates[0],
   );
@@ -236,41 +294,85 @@ function verifyPreExistingFailure(evidence, run, jobs, checks, main) {
     "the failed CI aggregate needs inspected attribution to the admitted root failures",
   );
   const cancelled = jobs.filter((job) => job.conclusion === "cancelled" && job !== gates[0]);
+  let matrixCancellation;
   if (cancelled.length > 0) {
     const cancellation = evidence.cancellation;
-    const owner = jobs.find((job) => job.id === cancellation?.jobId);
     requireEvidence(
       causedByRoots(cancellation) &&
         Array.isArray(cancellation.jobIds) &&
         JSON.stringify(cancellation.jobIds.toSorted((a, b) => a - b)) ===
-          JSON.stringify(cancelled.map((job) => job.id).toSorted((a, b) => a - b)) &&
-        owner?.name === "pr-fail-fast" &&
-        owner.conclusion === "success" &&
-        positiveInteger(cancellation.step) &&
-        Array.isArray(owner.steps) &&
-        owner.steps.some(
-          (step) =>
-            step.number === cancellation.step &&
-            step.name === "Cancel remaining PR work after a failure" &&
-            step.status === "completed" &&
-            step.conclusion === "success",
-        ),
+          JSON.stringify(cancelled.map((job) => job.id).toSorted((a, b) => a - b)),
       "all cancelled jobs require explicit inspected fail-fast provenance; cancellation is not passing coverage",
     );
+    requireEvidence(
+      cancelled.every(
+        (job) =>
+          Array.isArray(job.steps) &&
+          job.steps.every(
+            (step) =>
+              !["failure", "timed_out", "action_required", "startup_failure"].includes(
+                step.conclusion,
+              ),
+          ),
+      ),
+      "cancelled jobs must not hide failed steps or omit step evidence",
+    );
+    if (cancellation.kind === "matrix-fail-fast") {
+      matrixCancellation = verifyMatrixCancellation(evidence, run, cancellation, [
+        ...failed,
+        ...cancelled,
+      ]);
+    } else {
+      const owner = jobs.find((job) => job.id === cancellation.jobId);
+      requireEvidence(
+        [undefined, "pr-fail-fast"].includes(cancellation.kind) &&
+          owner?.name === "pr-fail-fast" &&
+          owner.conclusion === "success" &&
+          positiveInteger(cancellation.step) &&
+          Array.isArray(owner.steps) &&
+          owner.steps.some(
+            (step) =>
+              step.number === cancellation.step &&
+              step.name === "Cancel remaining PR work after a failure" &&
+              step.status === "completed" &&
+              step.conclusion === "success",
+          ),
+        "all cancelled jobs require explicit inspected fail-fast provenance; cancellation is not passing coverage",
+      );
+    }
   } else {
     requireEvidence(
       evidence.cancellation === undefined,
       "cancellation attribution has no matching jobs",
     );
   }
+  const securityReview = await verifyPriorCiSecurity({
+    repository: evidence.repository,
+    repositoryId,
+    pr: evidence.pr,
+    head: evidence.head,
+    main,
+    statusId: combined[0].statusId,
+  });
+  requireEvidence(
+    checks.every(
+      (check) =>
+        check.bucket === "pass" ||
+        check === current[0] ||
+        (check === combined[0] && check.statusId === securityReview.combinedStatusId),
+    ),
+    "pre-existing CI authority does not waive other required checks, including security",
+  );
   return {
     failures,
     cancelledJobIds: cancelled.map((job) => job.id).toSorted((a, b) => a - b),
     gateCheckRunId: current[0].checkRunId,
+    securityReview,
+    ...(matrixCancellation ? { cancellation: matrixCancellation } : {}),
   };
 }
 
-function verifyPriorCiAdmin({ evidencePath, repository, pr, head, actor, main }) {
+async function verifyPriorCiAdmin({ evidencePath, repository, pr, head, actor, main }) {
   const evidence = readEvidence(evidencePath, repository, pr, head);
   const repo = {
     nameWithOwner: repository,
@@ -479,7 +581,7 @@ function verifyPriorCiAdmin({ evidencePath, repository, pr, head, actor, main })
     includeCheckIdentity: preExisting(evidence),
   });
   const failureProof = preExisting(evidence)
-    ? verifyPreExistingFailure(evidence, run, jobs, checks, main)
+    ? await verifyPreExistingFailure(evidence, run, jobs, checks, main, authority.id)
     : undefined;
   if (!preExisting(evidence)) {
     requireEvidence(
@@ -520,7 +622,7 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
         : mode === "unchanged"
           ? verifyUnchangedEvidence(...args)
           : mode === "verify"
-            ? verifyPriorCiAdmin({
+            ? await verifyPriorCiAdmin({
                 evidencePath: args[0],
                 repository: args[1],
                 pr: Number(args[2]),
