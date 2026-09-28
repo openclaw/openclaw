@@ -13,7 +13,7 @@ import {
   type OpenClawTestInstance,
 } from "../../test/helpers/openclaw-test-instance.js";
 import { isProcessAlive, waitForPidFile } from "../../test/helpers/process-wait.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { reloadSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
@@ -889,6 +889,11 @@ async function startGatewayModeTui(
     shared.mockModel.releaseFirstResponse(scenario.modelId);
     try {
       if (controlClientConnected) {
+        await withTestTimeout(
+          controlClient.waitForReady(),
+          LOCAL_STARTUP_TIMEOUT_MS,
+          "Gateway case control client did not reconnect before cleanup",
+        );
         for (const key of sessionKeys) {
           await controlClient.abortChat({ sessionKey: key });
         }
