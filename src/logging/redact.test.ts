@@ -94,6 +94,36 @@ describe("large benign text", () => {
   });
 });
 
+describe("non-secret environment references", () => {
+    it("does not mask a process.env reference captured after a secret-looking key", () => {
+      const text = "const token = process.env.OPENCLAW_GATEWAY_TOKEN;";
+      expect(redactSensitiveText(text, { mode: "tools" })).toBe(text);
+    });
+
+    it("does not mask os.environ / os.getenv / getenv references", () => {
+      for (const text of [
+        'const key = os.environ["OPENAI_API_KEY"];',
+        'const key = os.environ.get("OPENAI_API_KEY");',
+        'token = os.getenv("DISCORD_BOT_TOKEN")',
+        'secret = getenv("SERVICE_SECRET")',
+        'token = process.env["SERVICE_TOKEN"]',
+      ]) {
+        expect(redactSensitiveText(text, { mode: "tools" })).toBe(text);
+      }
+    });
+
+    it("still masks literal assignment values and vendor tokens", () => {
+      expect(redactSensitiveText("MY_TOKEN=supersecretvalue123456", { mode: "tools" })).not.toContain(
+        "supersecretvalue123456",
+      );
+      const maskedToken = redactSensitiveText(
+        "token=ghp_abcdefghijklmnopqrstuvwxyz012345",
+        { mode: "tools" },
+      );
+      expect(maskedToken).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz012345");
+    });
+  });
+
 describe("default redact pattern ownership", () => {
   it("getDefaultRedactPatterns exposes the serializable string pattern table", () => {
     expect(defaults).toEqual(DEFAULT_REDACT_STRING_PATTERNS);
