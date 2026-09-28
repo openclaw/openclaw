@@ -1,8 +1,8 @@
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   deleteSessionEntry,
+  patchSessionEntry,
   resolveStorePath,
-  upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -26,9 +26,14 @@ export async function seedRunSessionOwnerForTest(
     env: { ...process.env },
   };
   await withSessionHistoryBudgetSweepsForTest(async () => {
-    await upsertSessionEntry({
+    const entry = { sessionId, updatedAt: Date.now(), ...options };
+    await patchSessionEntry({
       ...scope,
-      entry: { sessionId, updatedAt: Date.now(), ...options },
+      fallbackEntry: entry,
+      replaceEntry: true,
+      // Synthetic owners must not start logical maintenance in later fake-clock windows.
+      skipMaintenance: true,
+      update: () => entry,
     });
     seededSessionOwnersForTest.push({ ...scope, expectedSessionId: sessionId });
   });
