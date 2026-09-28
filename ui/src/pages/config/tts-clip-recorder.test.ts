@@ -55,4 +55,26 @@ describe("TTS clip recorder", () => {
     expect(stopTrack).toHaveBeenCalled();
     expect(close).toHaveBeenCalled();
   });
+
+  it("stops the opened microphone when AudioContext fails to start", async () => {
+    vi.stubGlobal(
+      "AudioContext",
+      class {
+        constructor() {
+          throw new Error("audio context failed");
+        }
+      },
+    );
+    const { RealtimeTalkInputController } = await import("../chat/talk/input.ts");
+    const stopTrack = vi.fn();
+    const stop = vi.spyOn(RealtimeTalkInputController.prototype, "stop");
+    vi.spyOn(RealtimeTalkInputController.prototype, "open").mockResolvedValue({
+      getTracks: () => [{ stop: stopTrack }],
+    } as unknown as MediaStream);
+    const recorder = new TtsClipRecorder();
+    await expect(recorder.start({ deviceId: "mic-1" })).rejects.toThrow(/audio context failed/);
+    expect(stopTrack).toHaveBeenCalled();
+    expect(stop).toHaveBeenCalled();
+    expect(recorder.recording).toBe(false);
+  });
 });

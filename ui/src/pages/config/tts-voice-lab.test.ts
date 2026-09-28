@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   isGoogleVoiceStoreBusy,
   isGoogleVoiceStoreInternal,
+  isGoogleVoiceStoreUncertain,
   isStoredSpeechVoice,
+  storedVoiceMatchingName,
   shouldAcceptMicStart,
   shouldClearCreateErrorOnClose,
   voiceLabCanSubmit,
@@ -68,5 +70,32 @@ describe("TTS voice lab", () => {
         ),
       ),
     ).toBe(true);
+  });
+
+  it("locks Store after an uncertain 503 until the list is reconciled", () => {
+    const busy = new Error(
+      "ProviderHttpError: Google voices request failed (503): The service is currently unavailable. [code=UNAVAILABLE]",
+    );
+    expect(isGoogleVoiceStoreUncertain(busy)).toBe(true);
+    expect(isGoogleVoiceStoreUncertain(new Error("request timeout"))).toBe(true);
+    expect(isGoogleVoiceStoreUncertain(new Error("invalid consent audio"))).toBe(false);
+    expect(
+      voiceLabSubmitBlock({
+        name: "Bobby",
+        consentMs: 10_900,
+        sourceMs: 12_000,
+        connected: true,
+        storeUncertain: true,
+      }),
+    ).toBe("storeUncertain");
+    expect(
+      storedVoiceMatchingName(
+        [
+          { id: "Kore", category: "prebuilt" },
+          { id: "voice_abc", name: "Bobby", category: "replicated" },
+        ],
+        "Bobby",
+      )?.id,
+    ).toBe("voice_abc");
   });
 });

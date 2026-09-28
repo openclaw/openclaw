@@ -317,6 +317,19 @@ function staticGoogleVoices(): SpeechVoiceOption[] {
   return GOOGLE_PREBUILT_VOICES.map((voice) => ({ id: voice, name: voice }));
 }
 
+function mergeGoogleVoiceCatalog(project: SpeechVoiceOption[]): SpeechVoiceOption[] {
+  const seen = new Set<string>();
+  const merged: SpeechVoiceOption[] = [];
+  for (const voice of [...project, ...staticGoogleVoices()]) {
+    if (seen.has(voice.id)) {
+      continue;
+    }
+    seen.add(voice.id);
+    merged.push(voice);
+  }
+  return merged;
+}
+
 export function createGoogleSpeechVoiceMethods(deps: GoogleVoiceMethodDeps): {
   listVoices: (req: SpeechListVoicesRequest) => Promise<SpeechVoiceOption[]>;
   designVoice: (req: SpeechDesignVoiceRequest) => Promise<SpeechDesignVoiceResult>;
@@ -345,12 +358,14 @@ export function createGoogleSpeechVoiceMethods(deps: GoogleVoiceMethodDeps): {
         return staticGoogleVoices();
       }
       try {
-        return await listGoogleProjectVoices({
-          apiKey: transport.apiKey,
-          baseUrl: transport.baseUrl,
-          request: transport.request,
-          timeoutMs: req.timeoutMs ?? 30_000,
-        });
+        return mergeGoogleVoiceCatalog(
+          await listGoogleProjectVoices({
+            apiKey: transport.apiKey,
+            baseUrl: transport.baseUrl,
+            request: transport.request,
+            timeoutMs: req.timeoutMs ?? 30_000,
+          }),
+        );
       } catch {
         return staticGoogleVoices();
       }

@@ -25,11 +25,12 @@ import {
   type TtsRecordedClip,
 } from "./tts-clip-recorder.ts";
 import {
-  isGoogleVoiceStoreBusy,
   isGoogleVoiceStoreInternal,
+  isGoogleVoiceStoreUncertain,
   isStoredSpeechVoice,
   shouldAcceptMicStart,
   shouldClearCreateErrorOnClose,
+  storedVoiceMatchingName,
   voiceLabSubmitBlock,
   type StoredSpeechVoice,
 } from "./tts-voice-lab-state.ts";
@@ -75,6 +76,7 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
   @state() private level = 0;
   @state() private createError: string | null = null;
   @state() private creating = false;
+  @state() private storeUncertain = false;
   @state() private storedPreview: ReplicateGatewayResult | null = null;
   private readonly recorder = new TtsClipRecorder();
   private elapsedTimer: ReturnType<typeof setInterval> | undefined;
@@ -132,7 +134,7 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
     void this.stopRecording();
     this.pending = null;
     this.dialogOpen = false;
-    if (shouldClearCreateErrorOnClose(this.creating)) {
+    if (shouldClearCreateErrorOnClose(this.creating) && !this.storeUncertain) {
       this.createError = null;
     }
   };
@@ -248,6 +250,7 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
       consentMs: this.consent?.durationMs ?? 0,
       sourceMs: this.source?.durationMs ?? 0,
       connected: Boolean(client),
+      storeUncertain: this.storeUncertain,
     });
     if (!client || this.creating || !this.consent || !this.source || block) {
       this.createError = t(`ttsVoiceLab.${block ?? "createError"}`);
@@ -255,6 +258,7 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
     }
     this.creating = true;
     this.createError = null;
+    this.storeUncertain = false;
     try {
       const result = await client.request<ReplicateGatewayResult>("tts.replicateVoice", {
         provider: GOOGLE_PROVIDER,
@@ -267,11 +271,31 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
       this.storedPreview = result;
       this.voicesTask.run();
     } catch (error) {
-      this.createError = isGoogleVoiceStoreBusy(error)
-        ? t("ttsVoiceLab.googleBusy")
-        : isGoogleVoiceStoreInternal(error)
-          ? t("ttsVoiceLab.googleInternal")
-          : formatUiError(error);
+      if (isGoogleVoiceStoreUncertain(error)) {
+        this.createError = t("ttsVoiceLab.storeUncertain");
+        try {
+          const listed = await client.request<VoicesGatewayResult>("tts.voices", {
+            provider: GOOGLE_PROVIDER,
+          });
+          const voices = Array.isArray(listed) ? listed : (listed.voices ?? []);
+          const match = storedVoiceMatchingName(voices, this.displayName);
+          if (match) {
+            this.storeUncertain = false;
+            this.storedPreview = { id: match.id, name: match.name };
+            this.createError = null;
+            this.voicesTask.run();
+            return;
+          }
+        } catch {
+          // Listing failed; keep the uncertain lock so Store cannot POST again.
+        }
+        this.storeUncertain = true;
+        this.voicesTask.run();
+        return;
+      }
+      this.createError = isGoogleVoiceStoreInternal(error)
+        ? t("ttsVoiceLab.googleInternal")
+        : formatUiError(error);
     } finally {
       this.creating = false;
     }
@@ -363,6 +387,7 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
       consentMs: this.consent?.durationMs ?? 0,
       sourceMs: this.source?.durationMs ?? 0,
       connected: Boolean(this.client),
+      storeUncertain: this.storeUncertain,
     });
     const canSubmit = !this.creating && submitBlock === null;
     return html`

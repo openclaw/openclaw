@@ -50,31 +50,37 @@ export class TtsClipRecorder {
     this.startGeneration = generation;
     this.onLevel = options.onLevel;
     const input = new RealtimeTalkInputController(() => undefined);
-    const media = await input.open(options.deviceId);
-    if (generation !== this.startGeneration) {
-      media.getTracks().forEach((track) => track.stop());
-      input.stop();
-      throw new TtsClipRecorderCancelledError();
+    let media: MediaStream | undefined;
+    let context: AudioContext | undefined;
+    try {
+      media = await input.open(options.deviceId);
+      if (generation !== this.startGeneration) {
+        throw new TtsClipRecorderCancelledError();
+      }
+      context = new AudioContext({ sampleRate: TTS_CLIP_TARGET_SAMPLE_RATE_HZ });
+      if (context.state === "suspended") {
+        await context.resume();
+      }
+      if (generation !== this.startGeneration) {
+        throw new TtsClipRecorderCancelledError();
+      }
+      this.input = input;
+      this.context = context;
+      this.chunks = [];
+      this.pump = new RealtimeTalkPcmInputPump();
+      this.pump.start(media, context, (samples) => {
+        this.chunks.push(new Float32Array(samples));
+        this.onLevel?.(peakLevel(samples));
+      });
+      this.startedAtMs = Date.now();
+    } catch (error) {
+      if (this.input !== input) {
+        media?.getTracks().forEach((track) => track.stop());
+        input.stop();
+        void context?.close();
+      }
+      throw error;
     }
-    const context = new AudioContext({ sampleRate: TTS_CLIP_TARGET_SAMPLE_RATE_HZ });
-    if (context.state === "suspended") {
-      await context.resume();
-    }
-    if (generation !== this.startGeneration) {
-      media.getTracks().forEach((track) => track.stop());
-      input.stop();
-      void context.close();
-      throw new TtsClipRecorderCancelledError();
-    }
-    this.input = input;
-    this.context = context;
-    this.chunks = [];
-    this.pump = new RealtimeTalkPcmInputPump();
-    this.pump.start(media, context, (samples) => {
-      this.chunks.push(new Float32Array(samples));
-      this.onLevel?.(peakLevel(samples));
-    });
-    this.startedAtMs = Date.now();
   }
 
   async stop(): Promise<TtsRecordedClip> {

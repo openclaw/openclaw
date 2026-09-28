@@ -81,15 +81,16 @@ describe("Google project voices", () => {
       providerConfig: { apiKey: "google-test-key" },
       timeoutMs: 5_000,
     });
-    expect(voices).toEqual([
-      {
-        id: "voice_stored",
-        name: "Dry Lab Assistant",
-        category: "prompted",
-        locale: "en-US",
-      },
+    expect(voices?.[0]).toEqual({
+      id: "voice_stored",
+      name: "Dry Lab Assistant",
+      category: "prompted",
+      locale: "en-US",
+    });
+    expect(voices?.filter((voice) => voice.id === "Achernar")).toEqual([
       { id: "Achernar", name: "Achernar", category: "prebuilt" },
     ]);
+    expect(voices?.some((voice) => voice.id === "Kore")).toBe(true);
     const firstUrl = String(fetchWithTimeoutMock.mock.calls[0]?.[0]);
     const secondUrl = String(fetchWithTimeoutMock.mock.calls[1]?.[0]);
     expect(firstUrl).toContain("/v1beta/voices?");
@@ -229,9 +230,12 @@ describe("Google project voices", () => {
       providerConfig: { apiKey: "***" },
       timeoutMs: 5_000,
     });
-    expect(voices).toEqual([
-      { id: "voice_stored", name: "Dry Lab Assistant", category: "prompted" },
-    ]);
+    expect(voices?.[0]).toEqual({
+      id: "voice_stored",
+      name: "Dry Lab Assistant",
+      category: "prompted",
+    });
+    expect(voices?.some((voice) => voice.id === "Kore")).toBe(true);
     expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(2);
   });
 

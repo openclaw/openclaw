@@ -2061,6 +2061,8 @@ export const en: TranslationMap & {
     needName: "Type a voice name. The field starts empty and is not pre-filled.",
     googleBusy:
       "Google's voice-clone API is unavailable. Your recordings were sent. Prompted voices still work — describe a voice instead, or retry clone later.",
+    storeUncertain:
+      "Google may already have stored this voice. Store stays locked so a second clone is not sent. Check Custom voices for the new id.",
     googleInternal:
       "Google's voice-clone API failed after receiving the clips. This is not a 24 kHz recording problem. Prompted voices still work — describe a voice instead, or retry clone later.",
     needConsent: "Record the consent sentence before storing.",
