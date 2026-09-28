@@ -17,12 +17,8 @@ import type {
 } from "../../state/openclaw-state-db.generated.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import { drainWorkerSessionPlacement } from "./placement-drain.js";
-import {
-  isForceAbandonedWorkerPlacement,
-  normalizeEpoch,
-  required,
-  type WorkerSessionPlacementRecord,
-} from "./placement-record.js";
+import { normalizeEpoch, required, type WorkerSessionPlacementRecord } from "./placement-record.js";
+import { assertWorkerPlacementMoveSource } from "./placement-request-preconditions.js";
 import { getRequired, query, transitionValues } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import { publishPlacementTurnClaimState } from "./placement-turn-authority.js";
@@ -431,15 +427,11 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
           return { intent: existing, placement: getRequired(db, sessionId), joined: true };
         }
         const current = getRequired(db, sessionId);
-        if (
-          (current.state !== "active" &&
-            !(abandonSource && isForceAbandonedWorkerPlacement(current))) ||
-          current.generation !== source.generation ||
-          current.environmentId !== source.environmentId ||
-          current.activeOwnerEpoch !== source.ownerEpoch
-        ) {
-          throw new Error(`Cannot move stale worker placement for session ${sessionId}`);
-        }
+        assertWorkerPlacementMoveSource(current, {
+          sessionId,
+          source,
+          ...(abandonSource ? { abandonSource: true } : {}),
+        });
         if (current.state === "active") {
           requireExactAttachedEnvironment(db, { sessionId, ...source });
         }

@@ -9,12 +9,16 @@ import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import type {
   WorkerPlacementDispatchAdmission,
+  WorkerPlacementDispatchRequest,
   WorkerPlacementCancellationTarget,
+  WorkerPlacementMoveRequest,
 } from "./service-contract.js";
 
 export type WorkerPlacementDrain = (
-  params: Parameters<WorkerPlacementDispatchAdmission>[0] & {
-    action: "dispatch" | "move";
+  params: (
+    | { action: "dispatch"; request: WorkerPlacementDispatchRequest }
+    | { action: "move"; request: WorkerPlacementMoveRequest }
+  ) & {
     authorize?: () => void;
     signal?: AbortSignal;
   },
@@ -308,7 +312,7 @@ export function coordinateWorkerPlacementDispatch(
           request,
           async (signal) => {
             signal?.throwIfAborted();
-            const drained = await drain?.({ ...request, action: "dispatch", authorize, signal });
+            const drained = await drain?.({ request, action: "dispatch", authorize, signal });
             try {
               signal?.throwIfAborted();
               const admission = reserveSessions([request.sessionId]);
@@ -392,7 +396,7 @@ export function coordinateWorkerPlacementDispatch(
             signal?.throwIfAborted();
             const drained = request.abandonSource
               ? undefined
-              : await drain?.({ ...request, action: "move", authorize, signal });
+              : await drain?.({ request, action: "move", authorize, signal });
             try {
               signal?.throwIfAborted();
               const admission = reserveSessions([request.sessionId]);

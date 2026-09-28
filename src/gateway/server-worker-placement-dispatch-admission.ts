@@ -9,6 +9,10 @@ import {
 } from "../sessions/session-lifecycle-admission.js";
 import type { WorkerPlacementSessionRuntime } from "./server-worker-placement-reclaim.js";
 import type { WorkerPlacementDrain } from "./worker-environments/placement-dispatch-coordinator.js";
+import {
+  assertWorkerPlacementDispatchSource,
+  assertWorkerPlacementMoveSource,
+} from "./worker-environments/placement-request-preconditions.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import {
   WorkerPlacementAdmissionTargetError,
@@ -16,40 +20,56 @@ import {
 } from "./worker-environments/service-contract.js";
 
 export function createGatewayWorkerPlacementDrain(
-  placements: Pick<WorkerSessionPlacementStore, "waitForTurnClaimRelease">,
+  placements: Pick<
+    WorkerSessionPlacementStore,
+    "waitForTurnClaimRelease" | "prepareRuntimeRefresh"
+  >,
   loadSessionRuntime: () => Promise<WorkerPlacementSessionRuntime>,
 ): WorkerPlacementDrain {
-  return async ({ sessionId, sessionKey, agentId, action, authorize, signal }) => {
+  return async (params) => {
+    const { request, action, authorize, signal } = params;
+    const { sessionId, sessionKey, agentId } = request;
     signal?.throwIfAborted();
     const runtime = await racePromiseWithAbortSignal(loadSessionRuntime(), signal);
-    const target = runtime.resolveGatewaySessionStoreTargetWithStore({
-      cfg: getRuntimeConfig(),
-      key: sessionKey,
-      agentId,
-      clone: false,
-      exactRead: true,
-    });
-    const lifecycle = {
-      scope: target.storePath,
-      identities: [sessionKey, target.canonicalKey, ...target.storeKeys, sessionId],
-    };
-    signal?.throwIfAborted();
-    // Interrupting by key must never reach a session that replaced this one.
-    if (
-      runtime.resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys)
-        ?.sessionId !== sessionId
-    ) {
-      throw new WorkerPlacementAdmissionTargetError(
-        `Session ${sessionKey} changed before cloud worker ${action === "move" ? "placement move" : "dispatch"}. Retry.`,
-      );
-    }
-    authorize?.();
-    // Fence ingress without a mutex so targeted result recovery can still release the claim.
-    const release = closeSessionWorkAdmissions({
-      ...lifecycle,
-      reason: new Error("Session work admission interrupted"),
-    });
+    const prepared = await placements.prepareRuntimeRefresh(sessionId);
+    let release: (() => void) | undefined;
     try {
+      signal?.throwIfAborted();
+      const target = runtime.resolveGatewaySessionStoreTargetWithStore({
+        cfg: getRuntimeConfig(),
+        key: sessionKey,
+        agentId,
+        clone: false,
+        exactRead: true,
+      });
+      const lifecycle = {
+        scope: target.storePath,
+        identities: [sessionKey, target.canonicalKey, ...target.storeKeys, sessionId],
+      };
+      // Interrupting by key must never reach a session that replaced this one.
+      if (
+        runtime.resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys)
+          ?.sessionId !== sessionId
+      ) {
+        throw new WorkerPlacementAdmissionTargetError(
+          `Session ${sessionKey} changed before cloud worker ${action === "move" ? "placement move" : "dispatch"}. Retry.`,
+        );
+      }
+      authorize?.();
+      if (params.action === "move") {
+        // A retry may interrupt the same draining owner; intent conflicts stay durable.
+        assertWorkerPlacementMoveSource(prepared.placement, params.request, {
+          allowDraining: true,
+        });
+      } else {
+        assertWorkerPlacementDispatchSource(prepared.placement, params.request);
+      }
+      // Fence ingress without a mutex so targeted result recovery can still release the claim.
+      prepared.assertCurrent();
+      release = closeSessionWorkAdmissions({
+        ...lifecycle,
+        reason: new Error("Session work admission interrupted"),
+      });
       const { released } = startSessionWorkAdmissionInterruption(lifecycle);
       if (
         !(await waitForSessionWorkAdmissionRelease(
@@ -69,8 +89,10 @@ export function createGatewayWorkerPlacementDrain(
       signal?.throwIfAborted();
       return { release };
     } catch (error) {
-      release();
+      release?.();
       throw error;
+    } finally {
+      prepared.release();
     }
   };
 }

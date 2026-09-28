@@ -76,7 +76,7 @@ describe("worker placement dispatch coordinator", () => {
         successor === "dispatch" ? coordinated.dispatch(REQUEST) : coordinated.move(MOVE_REQUEST);
       const sessionDrains = () =>
         drain.mock.calls
-          .filter(([request]) => request.sessionId === REQUEST.sessionId)
+          .filter(([params]) => params.request.sessionId === REQUEST.sessionId)
           .map(([request]) => request.action);
       try {
         await coordinated.dispatch({ ...REQUEST, sessionId: "unrelated" });
