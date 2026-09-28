@@ -3,10 +3,6 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { extnameFromAnyPath } from "@openclaw/media-core/file-name";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-export { asFiniteNumber as asNumber } from "@openclaw/normalization-core/number-coercion";
-export { asRecord } from "@openclaw/normalization-core/record-coerce";
-export { readStringValue } from "@openclaw/normalization-core/string-coerce";
-export { asBoolean } from "../utils/boolean.js";
 
 function normalizeMediaExtension(value: string): string | undefined {
   const raw = (value.startsWith(".") ? value.slice(1) : value).toLowerCase();

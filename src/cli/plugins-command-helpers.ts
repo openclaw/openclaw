@@ -7,8 +7,6 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
 export { quietPluginJsonLogger } from "./plugins-json-logger.js";
 
-type HookInternalEntryLike = Record<string, unknown> & { enabled?: boolean };
-
 export function createPluginInstallLogger(runtime: RuntimeEnv = defaultRuntime): {
   info: (msg: string) => void;
   warn: (msg: string) => void;
@@ -33,7 +31,7 @@ export function enableInternalHookEntries(
   config: OpenClawConfig,
   hookNames: string[],
 ): OpenClawConfig {
-  const entries = { ...config.hooks?.internal?.entries } as Record<string, HookInternalEntryLike>;
+  const entries = { ...config.hooks?.internal?.entries };
 
   for (const hookName of hookNames) {
     entries[hookName] = {
