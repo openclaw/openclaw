@@ -367,7 +367,7 @@ async function startPresentationApi(
 function isCompletionUserText(text: string): boolean {
   return (
     text.includes("Internal task completion event") ||
-    text.includes("[Subagent Context] Every subagent spawned from this session has now settled")
+    text.includes("[Subagent Context] Every subagent in this batch has now settled")
   );
 }
 

@@ -6,8 +6,6 @@ import type { NodeWorkerLaunchReceipt, NodeWorkerLaunchStore } from "./node-work
 import { inspectNodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
 import {
   nodeWorkerReceiptMatchesOwner,
-  type NodeWorkerActiveOwnership,
-  type NodeWorkerObservedTerminal,
   type NodeWorkerStopState,
 } from "./node-worker-supervisor-ownership.js";
 import {
@@ -16,8 +14,6 @@ import {
   signalOwnedNodeWorkerTree,
   waitForOwnedNodeWorkerTreeDeath,
 } from "./node-worker-tree-control.js";
-import { reconcileNodeWorkerTurnCancellation } from "./node-worker-turn-lifecycle.js";
-import type { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
 
 const STOP_GRACE_MS = 1_000;
 const FORCE_STOP_WAIT_MS = 4_000;
@@ -278,44 +274,4 @@ async function recoverNodeWorkerLaunch(params: {
       throw error;
     }
   }
-}
-
-/** Persist the observed owner outcome before releasing its physical slot. */
-export function reconcileNodeWorkerTerminal(
-  context: {
-    active: Map<string, NodeWorkerActiveOwnership>;
-    turns: NodeWorkerTurnStore;
-    capacity: NodeWorkerCapacity;
-  },
-  active: NodeWorkerObservedTerminal,
-): Promise<NodeWorkerLaunchReceipt> {
-  if (active.reconciliation) {
-    return active.reconciliation;
-  }
-  const operation = (async () => {
-    await reconcileNodeWorkerTurnCancellation(active, context.turns);
-    const receipt = await context.capacity.finish({
-      launchId: active.launchId,
-      planHash: active.planHash,
-      supervisor: active.supervisor,
-      worker: active.worker,
-      ...active.outcome,
-    });
-    if (receipt.state === "pending" || receipt.state === "running") {
-      throw new Error(`node worker launch ${active.launchId} terminal state was not persisted`);
-    }
-    active.turn?.settle();
-    active.turn = undefined;
-    if (context.active.get(active.launchId) === active) {
-      context.active.delete(active.launchId);
-    }
-    return receipt;
-  })();
-  const pending = operation.finally(() => {
-    if (active.reconciliation === pending) {
-      active.reconciliation = undefined;
-    }
-  });
-  active.reconciliation = pending;
-  return pending;
 }

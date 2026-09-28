@@ -85,8 +85,9 @@ export const WorkerSlotSummarySchema = Type.Refine(
   closedObject({
     total: Type.Integer({ minimum: 1, maximum: 1_024 }),
     available: Type.Integer({ minimum: 0, maximum: 1_024 }),
+    reclaimableIdle: Type.Optional(Type.Integer({ minimum: 0, maximum: 2 })),
   }),
-  (slots) => slots.available <= slots.total,
+  (slots) => slots.available + (slots.reclaimableIdle ?? 0) <= slots.total,
   (slots) => `available worker slots ${slots.available} exceed total ${slots.total}`,
 );
 
