@@ -1093,10 +1093,4 @@
   .chat-thread {
     min-height: 40vh;
   }
-
-  /* An attached typing shelf uses the pane-relative footer budget. The legacy
-     viewport floor must not push its editor below a short conversation. */
-  .chat-main__conversation:has(openclaw-chat-typing-shelf[data-typing-active]) > .chat-thread {
-    min-height: 0;
-  }
 }

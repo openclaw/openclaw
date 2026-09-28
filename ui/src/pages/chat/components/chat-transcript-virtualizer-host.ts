@@ -253,7 +253,16 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
           instance,
           callback,
         ),
-      measureElement: measureTranscriptRow,
+      measureElement: (element, entry, instance) => {
+        const size = measureTranscriptRow(element, entry, instance);
+        if (
+          element.dataset.virtualRowKey === "presence:typing" &&
+          instance.itemSizeCache.get("presence:typing") !== size
+        ) {
+          this.endAnchor.clear();
+        }
+        return size;
+      },
       rangeExtractor: (range) =>
         this.prependAnchor.extractRange(range, this.rowIndexesByKey, this.focusedRowKey),
       // Virtual distance omits real padding, pinning readers ~80px up past scroll.ts's follow-lock.
@@ -734,6 +743,12 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
 
   private syncRows(nextKeys: readonly string[]): void {
     const virtualizer = this.virtualizerController.getVirtualizer();
+    const typingAdded =
+      !this.rowIndexesByKey.has("presence:typing") && nextKeys.includes("presence:typing");
+    // Remote typing is presence, not a local request to move the viewport.
+    if (typingAdded) {
+      this.endAnchor.clear();
+    }
     this.rowKeys = Object.freeze(nextKeys);
     const rowIndexesByKey = new Map(this.rowKeys.map((key, index) => [key, index]));
     this.rowIndexesByKey = rowIndexesByKey;

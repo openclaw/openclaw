@@ -97,20 +97,6 @@
   flex-shrink: 0;
 }
 
-/* Manual Peek uses the existing pane-relative footer budget, rather than
-   compressing both the preview and the nonshrinking editor below their content. */
-.chat-footer:has(.agent-chat__typing-shelf[data-mode="peek"]) {
-  flex-shrink: 0;
-}
-
-/* The attached shelf yields its preview space before the editor leaves the pane. */
-.chat-footer
-  .agent-chat__composer-shell
-  > .agent-chat__typing-compose:has(openclaw-chat-typing-shelf[data-typing-active]) {
-  flex: 0 1 auto;
-  min-height: 0;
-}
-
 /* One surface, no internal rules. Separation inside the composer is carried by
    luminance alone — a slightly lifted control/dropdown ground against the page
    canvas — so the frame never stacks a strong border, an inner divider and a
@@ -120,7 +106,6 @@
 .chat-footer,
 .agent-chat__composer-shell,
 .agent-chat__input {
-  --chat-composer-editor-inset-inline: 14px;
   --chat-composer-radius: calc(20px * var(--openclaw-corner-radius-scale));
   --chat-composer-surface: var(--popover);
   --chat-composer-light-outline: rgb(0 0 0 / 6%);
@@ -197,6 +182,7 @@
      composer out — and owned here so the editor's inset is one decision for
      every composer that uses this surface. The resting stature is unaffected:
      the surface's own floor is taller than the editor plus these insets. */
+  --chat-composer-editor-inset-inline: 14px;
   --chat-composer-editor-inset-block: 6px;
   --chat-attachment-hit-slop: calc(var(--chat-composer-editor-inset-block) * 2);
   /* The editor is a reading and writing surface, not a compact form field, so it
@@ -997,20 +983,6 @@
 
   .agent-chat__input:has(.agent-chat__attach-menu[open]) {
     overflow: visible;
-  }
-
-  .agent-chat__typing-compose .agent-chat__input {
-    flex-shrink: 1;
-  }
-
-  .agent-chat__typing-compose .agent-chat__composer-lede {
-    flex: 0 1 auto;
-    min-height: 0;
-    overflow-y: auto;
-  }
-
-  .agent-chat__typing-compose .agent-chat__composer-input-row {
-    flex-shrink: 0;
   }
 
   .agent-chat__composer-footer {

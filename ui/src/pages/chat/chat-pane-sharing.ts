@@ -20,16 +20,15 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { CHAT_COMPOSER_TEXTAREA_SELECTOR } from "./chat-pane-shared.ts";
 import { ChatPaneSharingActions } from "./chat-pane-sharing-actions.ts";
-import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
+import { selectedChatSessionRow } from "./chat-state-route.ts";
 import {
   typingActorIdForSessionMessage,
   type ChatTypingActorState,
   type ChatTypingActorView,
-  type ChatTypingPreviewDemand,
+  type ChatTypingOverflow,
 } from "./chat-typing-presence.ts";
-import { composerDraftKey } from "./components/chat-composer-state.ts";
 import { canManageChatSessionSharing } from "./components/chat-session-sharing.ts";
-import type { ChatTypingShelf } from "./components/chat-typing-shelf.ts";
+import { lockChatScroll } from "./scroll.ts";
 
 const TYPING_ACTIVE_MS = 2_500;
 const TYPING_DRAFT_ACTIVE_MS = 10_000;
@@ -42,9 +41,7 @@ export abstract class ChatPaneSharing extends ChatPaneSharingActions {
   // Every mutation below refreshes it; reconnect, route, and teardown clear it.
   private readonly typingActiveIds = new Set<string>();
   private typingViews: ChatTypingActorView[] = [];
-  protected typingCount = 0;
-  protected typingContextVersion = 0;
-  protected typingPreviewDemand: ChatTypingPreviewDemand = "automatic";
+  protected typingOverflow?: ChatTypingOverflow;
   private typingRequestTimer?: number;
   private typingRequestSentAt?: number;
   private pendingTypingRequest?: () => void;
@@ -396,10 +393,6 @@ export abstract class ChatPaneSharing extends ChatPaneSharingActions {
     this.typingTimers.clear();
     this.typingActors.clear();
     this.typingActiveIds.clear();
-    this.typingContextVersion += 1;
-    this.typingPreviewDemand = "automatic";
-    // The composer scope and its demand callback must be replaced by the pane.
-    this.requestUpdate();
     this.refreshTypingPresentation();
   }
 
@@ -460,6 +453,10 @@ export abstract class ChatPaneSharing extends ChatPaneSharingActions {
       this.refreshTypingPresentation();
       return;
     }
+    if (!this.typingActors.has(event.actor.id) && state.chatHasAutoScrolled) {
+      // Retire queued and native follow before the new remote draft changes the transcript.
+      lockChatScroll(state, "remote-input");
+    }
     const activeMs = event.preview ? TYPING_DRAFT_ACTIVE_MS : TYPING_ACTIVE_MS;
     const now = Date.now();
     const idleDeadline = now + TYPING_DRAFT_IDLE_MS;
@@ -493,8 +490,19 @@ export abstract class ChatPaneSharing extends ChatPaneSharingActions {
         // Keep one cancellable timer for active, draft, and exit phases. The
         // animation finishes inside the idle limit, even after a delayed timer.
         if (!actor.paused) {
-          actor.paused = true;
-          this.typingActiveIds.delete(event.actor.id);
+          // Timers for the same input burst fire as separate tasks. Retire all
+          // already-idle active peers before projecting the bounded overflow,
+          // rather than shifting its avatar sample once per expired peer.
+          for (const id of this.typingActiveIds) {
+            const peer = this.typingActors.get(id);
+            if (
+              peer?.preview &&
+              peer.retireAt - TYPING_DRAFT_IDLE_MS + TYPING_DRAFT_ACTIVE_MS <= Date.now()
+            ) {
+              peer.paused = true;
+              this.typingActiveIds.delete(id);
+            }
+          }
         }
         const untilExit = remaining - TYPING_DRAFT_EXIT_MS;
         if (untilExit <= 0) {
@@ -537,69 +545,58 @@ export abstract class ChatPaneSharing extends ChatPaneSharingActions {
     return this.typingActors.delete(id);
   }
 
-  protected setTypingPreviewDemand(demand: ChatTypingPreviewDemand): void {
-    if (this.typingPreviewDemand === demand) {
-      return;
-    }
-    this.typingPreviewDemand = demand;
-    this.refreshTypingPresentation(true);
-  }
-
-  private refreshTypingPresentation(force = false): void {
+  private refreshTypingPresentation(): void {
     const views: ChatTypingActorView[] = [];
-    const count = this.typingActiveIds.size;
-    const all = this.typingPreviewDemand === "all";
-    // The active index, not retained drafts, owns membership and active-arrival
-    // order. Hidden mode never projects preview text; Peek is deliberately all.
+    // The first two actors retain the original preview slots and draft lifecycle.
+    for (const [id, actor] of this.typingActors) {
+      views.push({
+        id,
+        label: actor.label,
+        ...(actor.preview ? { preview: actor.preview } : {}),
+        ...(actor.paused ? { paused: true } : {}),
+        ...(actor.exitDurationMs !== undefined ? { exitDurationMs: actor.exitDurationMs } : {}),
+      });
+      if (views.length === 2) {
+        break;
+      }
+    }
+    // Overflow is a projection of active typing only. Paused previews retain
+    // their own timers but never keep the shared row or its avatars alive.
+    let activeOverflow = 0;
     for (const id of this.typingActiveIds) {
+      if (id === views[0]?.id || id === views[1]?.id) {
+        continue;
+      }
       const actor = this.typingActors.get(id);
       if (!actor) {
         continue;
       }
-      const preview =
-        all || (this.typingPreviewDemand === "automatic" && views.length < 3)
-          ? actor.preview
-          : undefined;
-      const prior = this.typingViews[views.length];
-      views.push(
-        prior?.id === id && prior.label === actor.label && prior.preview === preview
-          ? prior
-          : { id, label: actor.label, ...(preview ? { preview } : {}) },
-      );
-      if (!all && views.length === 5) {
-        break;
+      activeOverflow += 1;
+      if (views.length < 7) {
+        views.push({ id, label: actor.label });
       }
     }
+    const overflow: ChatTypingOverflow | undefined =
+      activeOverflow > 5 ? { several: true } : undefined;
     if (
-      !force &&
-      this.typingCount === count &&
       views.length === this.typingViews.length &&
-      views.every((view, index) => view === this.typingViews[index])
+      views.every((view, index) => {
+        const previous = this.typingViews[index];
+        return (
+          previous?.id === view.id &&
+          previous.label === view.label &&
+          previous.preview === view.preview &&
+          previous.paused === view.paused &&
+          previous.exitDurationMs === view.exitDurationMs
+        );
+      }) &&
+      overflow?.several === this.typingOverflow?.several
     ) {
       return;
     }
     this.typingViews = views;
-    this.typingCount = count;
-    const state = this.state;
-    const shelf = this.querySelector<ChatTypingShelf>("openclaw-chat-typing-shelf");
-    const scope =
-      state &&
-      `${composerDraftKey({ currentAgentId: resolveChatAgentId(state), sessionKey: state.sessionKey })}:${this.typingContextVersion}`;
-    if (
-      this.isConnected &&
-      document.visibilityState !== "hidden" &&
-      this.hasMultipleIdentities() &&
-      shelf?.paneId === this.presentationId &&
-      shelf.scope === scope
-    ) {
-      shelf.actors = views;
-      shelf.count = count;
-      shelf.previewDemand = this.typingPreviewDemand;
-    } else {
-      // An unmounted, hidden, or changing composer still needs the next pane
-      // render to supply the projection and install its current scope.
-      this.requestUpdate();
-    }
+    this.typingOverflow = overflow;
+    this.requestUpdate();
   }
 
   protected typingActorViews(): ChatTypingActorView[] {

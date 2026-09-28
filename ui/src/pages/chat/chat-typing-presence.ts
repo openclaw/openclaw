@@ -12,11 +12,14 @@ export type ChatTypingActorState = {
   exitDurationMs?: number;
 };
 
-export type ChatTypingActorView = Pick<ChatTypingActorState, "label" | "preview"> & {
+export type ChatTypingActorView = Omit<ChatTypingActorState, "retireAt"> & {
   id: string;
 };
 
-export type ChatTypingPreviewDemand = "automatic" | "hidden" | "all";
+export type ChatTypingOverflow = {
+  // More than five active overflow collaborators share the bounded avatar sample.
+  several: true;
+};
 
 export function typingActorIdForSessionMessage(
   payload: unknown,

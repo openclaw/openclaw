@@ -71,6 +71,7 @@ import type {
   ChatTranscriptSession,
   TranscriptHeader,
 } from "./chat-transcript-session.ts";
+import { renderChatTypingIndicator } from "./chat-typing-indicator.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 
@@ -256,7 +257,9 @@ export function projectChatTranscript(
     }).then(completeLoad, () => completeLoad(null));
   };
   const hasRealtimeTalkConversation = (props.realtimeTalkConversation?.length ?? 0) > 0;
-  const isEmpty = chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation;
+  const hasTypingActors = (props.typingActors?.length ?? 0) > 0;
+  const isEmpty =
+    chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation && !hasTypingActors;
   transcript.setContentReady(!props.loading);
   // 1:1 exchanges do not need an avatar gutter; group threads keep it to identify
   // multiple voices. The capped sessions list may omit the selected row, so absent
@@ -287,7 +290,7 @@ export function projectChatTranscript(
     activeSession?.classification === "subagent" || isSubagentSessionKey(props.sessionKey)
       ? "none"
       : defaultAvatarPlacement;
-  const showLoadingSkeleton = props.loading && chatItems.length === 0;
+  const showLoadingSkeleton = props.loading && chatItems.length === 0 && !hasTypingActors;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
   const activeContinuationByGroupKey = new Map<
@@ -558,6 +561,14 @@ export function projectChatTranscript(
       key: "turn-recap",
       content: renderTurnRecapRow(turnRecap),
     });
+  }
+  const typingIndicator = renderChatTypingIndicator(
+    props.typingActors,
+    avatarPlacement,
+    props.typingOverflow,
+  );
+  if (typingIndicator) {
+    transcriptRows.push({ kind: "content", key: "presence:typing", content: typingIndicator });
   }
   // Deferred palettes apply leaf branding after the preference snapshot.
   const appliedBranding = currentThemeBranding();

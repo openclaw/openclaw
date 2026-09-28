@@ -374,7 +374,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       currentAgentId,
       !catalogKey && !sessionParticipationBlocked,
     );
-    const typingContextVersion = this.typingContextVersion;
     const props: ChatProps = {
       transcript: this.transcript,
       paneId: this.presentationId,
@@ -495,14 +494,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       onOpenDictationSettings: () => this.context.navigate("model-setup"),
       suggestionComposer: suggestionViewer,
       typingActors: multiIdentity ? this.typingActorViews() : [],
-      typingCount: multiIdentity ? this.typingCount : 0,
-      typingContextVersion: this.typingContextVersion,
-      typingPreviewDemand: this.typingPreviewDemand,
-      onTypingPreviewDemand: (demand) => {
-        if (typingContextVersion === this.typingContextVersion) {
-          this.setTypingPreviewDemand(demand);
-        }
-      },
+      typingOverflow: multiIdentity ? this.typingOverflow : undefined,
       onTypingChange: typingEnabled
         ? (typing, preview) => this.sendTypingState(typing, preview)
         : undefined,

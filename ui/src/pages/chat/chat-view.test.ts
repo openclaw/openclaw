@@ -632,34 +632,75 @@ function renderModelControls(
   return container;
 }
 
-describe("composer-attached typing shelf", () => {
-  it("places active typing with the input, not in transcript rows", () => {
-    const container = renderChatView({
-      typingActors: [{ id: "ayaan", label: "Ayaan", preview: "Available preview" }],
-      typingCount: 1,
-    });
-    const shelf = container.querySelector("openclaw-chat-typing-shelf");
-    expect(shelf).not.toBeNull();
-    expect(shelf?.closest(".agent-chat__typing-compose")).not.toBeNull();
-    expect(shelf?.closest(".agent-chat__input")).toBeNull();
-    expect(container.querySelector('[data-virtual-row-key="presence:typing"]')).toBeNull();
+describe("chat typing status", () => {
+  it.each([
+    {
+      actors: [{ id: "ayaan", label: "Ayaan" }],
+      expectedText: "Ayaan is typing…",
+      expectedAvatars: 1,
+    },
+    {
+      actors: [
+        { id: "ayaan", label: "Ayaan" },
+        { id: "liam", label: "Liam" },
+        { id: "maya", label: "Maya" },
+        { id: "zoe", label: "Zoe" },
+      ],
+      expectedText: "Ayaan, Liam, Maya, Zoe are typing…",
+      expectedAvatars: 4,
+    },
+  ])("renders $expectedText in the transcript", ({ actors, expectedText, expectedAvatars }) => {
+    const container = renderChatView({ typingActors: actors });
+    const indicator = container.querySelector(".agent-chat__typing-indicator--outside");
+
+    expect(indicator?.closest('[data-virtual-row-key="presence:typing"]')).not.toBeNull();
+    expect(indicator?.closest(".agent-chat__composer-shell")).toBeNull();
+    expect(indicator?.querySelectorAll("[role=img]")).toHaveLength(expectedAvatars);
+    expect(indicator?.querySelectorAll(".agent-chat__typing-state")).toHaveLength(
+      Math.min(2, actors.length),
+    );
+    expect(
+      indicator?.querySelector(".agent-chat__typing-bubble")?.getAttribute("aria-hidden"),
+    ).toBe("true");
+    expect(indicator?.textContent).toContain(expectedText);
   });
-  it("keeps real notices and outbox above the attached shelf and input", () => {
+
+  it("anchors the run error and queue to the composer without moving transcript presence", () => {
     const container = renderChatView({
       typingActors: [{ id: "ayaan", label: "Ayaan" }],
-      typingCount: 1,
       runError: { summary: "Gateway unavailable" },
       queue: [{ id: "queued", text: "Try again", createdAt: 1 }],
     });
-    const shell = requireElement(container, ".agent-chat__composer-shell", "composer");
-    const shelf = requireElement(container, "openclaw-chat-typing-shelf", "typing shelf");
-    const queue = requireElement(container, ".chat-queue", "outbox");
-    expect(queue.closest(".agent-chat__composer-shell")).toBe(shell);
-    expect(container.querySelector(".chat-error__content")?.textContent).toContain(
-      "Gateway unavailable",
+    const indicator = requireElement(
+      container,
+      ".agent-chat__typing-indicator--outside",
+      "typing status",
     );
-    expect(shelf.closest(".agent-chat__typing-compose")).not.toBeNull();
-    expect(shelf.closest(".agent-chat__input")).toBeNull();
+
+    const typingRow = indicator.closest('[data-virtual-row-key="presence:typing"]');
+    if (!typingRow) {
+      throw new Error("expected typing transcript row");
+    }
+    const error = requireElement(container, ".chat-error__content", "run error");
+    const shell = requireElement(container, ".agent-chat__composer-shell", "composer shell");
+    const queue = requireElement(container, ".chat-queue", "composer queue");
+    expect(error.textContent).toContain("Gateway unavailable");
+    expect(error.closest(".agent-chat__composer-notices")).not.toBeNull();
+    expect(typingRow.compareDocumentPosition(shell)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(queue.closest(".agent-chat__composer-shell")).toBe(shell);
+    expect(
+      queue.compareDocumentPosition(requireElement(shell, ".agent-chat__input", "composer")),
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  it("keeps transcript typing status with the model setup composer", () => {
+    const container = renderChatView({
+      canSend: false,
+      modelSetupRequired: true,
+      typingActors: [{ id: "ayaan", label: "Ayaan" }],
+    });
+
+    expect(container.querySelector(".agent-chat__typing-indicator--outside")).not.toBeNull();
   });
 });
 

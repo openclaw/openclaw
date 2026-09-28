@@ -55,7 +55,7 @@ import { createPageState } from "./chat-state-page.ts";
 import type {
   ChatTypingActorState,
   ChatTypingActorView,
-  ChatTypingPreviewDemand,
+  ChatTypingOverflow,
 } from "./chat-typing-presence.ts";
 import type { ChatProps } from "./chat-view.ts";
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
@@ -137,9 +137,7 @@ export type TestChatPane = HTMLElement & {
   clearTypingActorForSessionMessage: (payload: unknown) => void;
   pruneTypingActors: () => void;
   typingActors: Map<string, ChatTypingActorState>;
-  typingCount: number;
-  typingContextVersion: number;
-  setTypingPreviewDemand: (demand: ChatTypingPreviewDemand) => void;
+  typingOverflow?: ChatTypingOverflow;
   clearTypingActors: () => void;
   typingActorViews: () => ChatTypingActorView[];
   sendTypingState: (typing: boolean, preview?: string) => void;

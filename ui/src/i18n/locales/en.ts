@@ -3222,12 +3222,8 @@ export const en: TranslationMap & {
       typing: "{name} is typing…",
       typingMany: "{names} are typing…",
       typingSeveral: "Several people are typing…",
-      typingPreviews: "Live typing previews",
-      peekTypingPreviews: "Peek",
-      hideTypingPreviews: "Hide",
       typingOthers: "{count} others",
       otherCollaborators: "Other collaborators",
-      draftsGroup: "Drafts",
       typingDraftState: "is typing...",
       pausedDraftState: "Draft",
       state: {

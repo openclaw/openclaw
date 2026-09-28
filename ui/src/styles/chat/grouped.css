@@ -1018,125 +1018,63 @@ img.chat-avatar {
   color: hsl(var(--chat-sender-hue) 60% 36%);
 }
 
-/* The shelf shares the real composer surface; its disclosure stays below previews. */
-.agent-chat__typing-compose {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-.agent-chat__typing-compose:has(> openclaw-chat-typing-shelf[data-typing-active])
-  > .agent-chat__input {
-  border-start-start-radius: 0;
-  border-start-end-radius: 0;
-}
-openclaw-chat-typing-shelf {
-  display: flex;
-  flex-direction: column;
-  flex: 0 1 auto;
-  min-height: 41px;
-  min-width: 0;
-}
-/* Keep the empty live region available to assistive tech without a visible box. */
-openclaw-chat-typing-shelf:not([data-typing-active]) {
-  min-height: 0;
-}
-.agent-chat__typing-shelf {
-  display: flex;
-  flex-direction: column;
-  flex: 1 1 auto;
-  min-height: 0;
-  min-width: 0;
-  padding-inline: var(--chat-composer-editor-inset-inline);
-  border: 1px solid var(--chat-composer-hairline);
-  border-bottom: 0;
-  border-radius: var(--chat-composer-radius) var(--chat-composer-radius) 0 0;
-  background: color-mix(in srgb, var(--chat-composer-surface) 78%, transparent);
-}
-.agent-chat__typing-window {
-  flex: 0 1 auto;
-  min-height: 0;
-  max-block-size: 156px;
-  overflow: hidden;
-  overscroll-behavior: contain;
-  scrollbar-width: thin;
-}
-.agent-chat__typing-shelf:is([data-mode="folded"], [data-mode="hidden"])
-  .agent-chat__typing-window {
-  max-block-size: 0;
-}
-.agent-chat__typing-shelf[data-mode="peek"] .agent-chat__typing-window {
-  min-block-size: min(64px, 12cqh);
-  max-block-size: min(280px, 40dvh);
-  overflow-y: auto;
-}
-.agent-chat__typing-content {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  padding-block: 8px;
-}
-.agent-chat__typing-preview {
+/* Ephemeral drafts share sent-turn geometry, typography, and identity tint. */
+.agent-chat__typing-indicator {
   display: grid;
-  grid-template-columns: minmax(0, 72px) minmax(0, 1fr);
-  align-items: baseline;
-  gap: 10px;
-  padding-block: 6px;
-}
-.agent-chat__typing-preview + .agent-chat__typing-preview {
-  border-top: 1px solid var(--border-muted);
-}
-.agent-chat__typing-author {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-  color: var(--muted);
-}
-.agent-chat__typing-copy {
-  min-width: 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-size: var(--chat-text-size);
-  line-height: 1.5;
-  color: var(--text);
-}
-.agent-chat__typing-toggle {
-  display: flex;
-  flex-shrink: 0;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  min-height: 40px;
-  padding: 8px 0;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  text-align: start;
-  font: inherit;
-}
-.agent-chat__typing-toggle:hover {
-  color: var(--text);
-}
-.agent-chat__typing-action {
-  font-size: 12px;
-  flex-shrink: 0;
-}
-.agent-chat__typing-chevron {
-  display: inline-flex;
-  flex-shrink: 0;
-}
-.agent-chat__typing-chevron svg {
-  width: 16px;
-  height: 16px;
-}
-@media (max-width: 560px) {
-  .agent-chat__typing-preview {
-    grid-template-columns: minmax(0, 56px) minmax(0, 1fr);
-    gap: 8px;
-  }
 }
 
+.agent-chat__typing-row {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  opacity: 1;
+  transition:
+    grid-template-rows var(--duration-normal) var(--ease-out),
+    opacity var(--duration-normal) linear;
+}
+
+.agent-chat__typing-row-content {
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Fade the text before closing its space so glyphs never get visibly squeezed.
+   The lifecycle supplies the remaining exit budget and owns final removal. */
+.agent-chat__typing-row[data-exiting] {
+  grid-template-rows: minmax(0, 0fr);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity calc(var(--chat-typing-exit-duration) * 0.4) linear,
+    grid-template-rows calc(var(--chat-typing-exit-duration) * 0.6)
+      calc(var(--chat-typing-exit-duration) * 0.4) var(--ease-in-out);
+}
+
+.chat-group.user.chat-group--typing .chat-bubble {
+  background: color-mix(in srgb, var(--chat-bubble-background) 65%, var(--bg));
+}
+
+.agent-chat__typing-state {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.agent-chat__typing-overflow {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  min-width: 0;
+  min-height: 28px;
+  padding: 4px 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+/* The stack starts at the shared avatar edge and takes only its intrinsic width. */
 .agent-chat__typing-identities {
   display: flex;
   align-items: center;
@@ -1159,11 +1097,13 @@ openclaw-chat-typing-shelf:not([data-typing-active]) {
   box-shadow: 0 0 0 1px var(--bg);
 }
 
+.agent-chat__typing-overflow--no-avatars {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .agent-chat__typing-summary {
-  flex: 1;
-  font-size: 12px;
-  line-height: 20px;
   min-width: 0;
+  min-block-size: 2lh;
   container-type: inline-size;
   overflow-wrap: anywhere;
 }
@@ -1201,6 +1141,74 @@ openclaw-chat-typing-shelf:not([data-typing-active]) {
 
   .agent-chat__typing-text[data-typing] .agent-chat__typing-name {
     color: inherit;
+  }
+}
+
+.agent-chat__typing-preview-text {
+  display: block;
+  white-space: pre-wrap;
+}
+
+.agent-chat__typing-preview-text::after {
+  content: "";
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-inline-start: 2px;
+  background: currentColor;
+  vertical-align: -0.12em;
+  animation: chat-typing-pulse 1s step-end infinite;
+}
+
+.agent-chat__typing-preview-text[data-paused]::after {
+  animation: none;
+  opacity: 0;
+}
+
+.agent-chat__typing-bubble {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: calc(var(--chat-text-size) * 1.5);
+  color: var(--muted);
+}
+
+.agent-chat__typing-bubble > span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: chat-typing-pulse 1.2s ease-in-out infinite;
+}
+
+.agent-chat__typing-bubble > span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.agent-chat__typing-bubble > span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes chat-typing-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-chat__typing-row,
+  .agent-chat__typing-row[data-exiting] {
+    transition: none;
+  }
+
+  .agent-chat__typing-row[data-exiting] {
+    grid-template-rows: minmax(0, 1fr);
+    opacity: 1;
+  }
+
+  .agent-chat__typing-preview-text::after,
+  .agent-chat__typing-bubble > span {
+    animation: none;
   }
 }
 

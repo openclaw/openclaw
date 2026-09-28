@@ -141,7 +141,7 @@ describeShimmer("Control UI shimmer", () => {
             '</style><div style="padding:16px;width:360px"><span id="preview">A</span>' +
             '<span class="agent-chat__typing-state agent-chat__typing-text" data-typing>is typing…</span>' +
             '<span id="draft" class="agent-chat__typing-state agent-chat__typing-text">Draft</span>' +
-            '<div class="agent-chat__typing-toggle"><span class="agent-chat__typing-identities">' +
+            '<div class="agent-chat__typing-overflow"><span class="agent-chat__typing-identities">' +
             '<span class="agent-chat__typing-person">C</span>'.repeat(count) +
             '</span><span class="agent-chat__typing-summary"><span class="agent-chat__typing-text" data-typing><bdi class="agent-chat__typing-name">Camila</bdi> is typing…</span></span></div>' +
             '<span class="agent-chat__typing-text" data-typing>Several people are typing…</span></div>',
@@ -202,65 +202,5 @@ describeShimmer("Control UI shimmer", () => {
         expect(text.fill).not.toBe("rgba(0, 0, 0, 0)");
       }
     });
-  });
-  it("keeps a crowded short editor reachable while the manual shelf yields space", async () => {
-    await withBrowserPage(
-      browser.newPage({ viewport: { width: 900, height: 500 } }),
-      async (page) => {
-        await page.setContent(
-          "<style>" +
-            [
-              "base",
-              "chat/startup-layout",
-              "chat/message-layout",
-              "chat/grouped",
-              "chat/composer-surface",
-            ]
-              .map((name) => readStyleSheet("ui/src/styles/" + name + ".css"))
-              .join("\n") +
-            '</style><div class="chat" style="position:absolute;inset:56px 0 0;height:calc(100% - 56px)"><div class="chat-main__conversation"><div class="chat-thread"><div style="height:1000px">History</div></div><div class="chat-footer"><div class="agent-chat__composer-shell"><div class="chat-footer__context"><div style="height:200px">Outbox</div></div><div class="agent-chat__typing-compose"><openclaw-chat-typing-shelf data-typing-active><span class="agent-chat__typing-status sr-only" role="status" aria-live="polite" aria-atomic="true"></span><div class="agent-chat__typing-shelf" data-mode="peek"><div class="agent-chat__typing-window"><div class="agent-chat__typing-content" style="height:1000px">Full previews</div></div><button class="agent-chat__typing-toggle">Hide</button></div></openclaw-chat-typing-shelf><div class="agent-chat__input"><div class="agent-chat__composer-lede"><div style="height:180px;flex-shrink:0">Reply, mentions and attachments</div></div><div class="agent-chat__composer-input-row"><div class="agent-chat__composer-combobox"><textarea style="height:48px">Local draft</textarea></div></div><div class="agent-chat__composer-footer"><button>Send</button></div></div></div></div></div></div></div>',
-        );
-        const measure = () =>
-          page.evaluate(() => {
-            const input = document.querySelector("textarea");
-            const panel = document.querySelector(".agent-chat__typing-window");
-            const shelf = document.querySelector("openclaw-chat-typing-shelf");
-            const editor = document.querySelector(".agent-chat__input");
-            const conversation = document.querySelector(".chat-main__conversation");
-            if (!input || !conversation) {
-              throw new Error("Missing layout fixture");
-            }
-            return {
-              input: input.getBoundingClientRect().toJSON(),
-              panel: panel?.getBoundingClientRect().height,
-              shelfHeight: shelf?.getBoundingClientRect().height,
-              editorRadius: editor ? getComputedStyle(editor).borderTopLeftRadius : null,
-              scroll: conversation.scrollTop,
-              viewport: innerHeight,
-            };
-          });
-        const peek = await measure();
-        expect(peek.input.bottom).toBeLessThanOrEqual(peek.viewport);
-        expect(peek.input.top).toBeGreaterThanOrEqual(56);
-        expect(peek.panel).toBeGreaterThan(0);
-        expect(peek.panel).toBeLessThanOrEqual(200);
-        expect(peek.shelfHeight).toBeGreaterThan(0);
-        expect(peek.editorRadius).toBe("0px");
-        expect(peek.scroll).toBe(0);
-        await page.locator("openclaw-chat-typing-shelf").evaluate((e) => {
-          const status = e.querySelector(".agent-chat__typing-status");
-          if (!status) {
-            throw new Error("Missing persistent typing announcement");
-          }
-          e.removeAttribute("data-typing-active");
-          e.replaceChildren(status);
-        });
-        const empty = await measure();
-        expect(empty.shelfHeight).toBe(0);
-        expect(empty.editorRadius).not.toBe("0px");
-        expect(empty.input.bottom).toBe(peek.input.bottom);
-        expect(empty.scroll).toBe(0);
-      },
-    );
   });
 });
