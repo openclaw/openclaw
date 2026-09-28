@@ -82,11 +82,7 @@ import {
 } from "../cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { resolveNativeCliAuthIdentity } from "../cli-credentials.js";
-import {
-  buildCliSessionDriftNote,
-  hashCliSessionText,
-  resolveCliSessionReuse,
-} from "../cli-session.js";
+import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
 import {
   claudeCliSessionTranscriptHasContent,
   claudeCliSessionTranscriptHasOrphanedToolUse,
@@ -238,20 +234,6 @@ function resetCliRunnerPrepareTestDeps(): void {
   Object.assign(prepareDeps, defaultPrepareDeps);
 }
 
-function shouldSkipLocalCliCredentialEpoch(params: {
-  authEpochMode?: CliBackendAuthEpochMode;
-  authProfileId?: string;
-  authCredential?: AuthProfileCredential;
-  preparedExecution?: CliBackendPreparedExecution | null;
-}): boolean {
-  return Boolean(
-    params.authEpochMode === "profile-only" &&
-    params.authProfileId &&
-    params.authCredential &&
-    params.preparedExecution,
-  );
-}
-
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cliRunnerPrepareTestApi")] = {
     resetCliRunnerPrepareTestDeps,
@@ -261,59 +243,7 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   };
 }
 
-type CliAuthProfileResolutionFailure =
-  | { kind: "unmaterialized" }
-  | { kind: "resolved-as-other"; resolvedProfileId: string };
-
-function describeCliAuthProfileResolutionFailure(
-  profileId: string,
-  failure: CliAuthProfileResolutionFailure,
-): string {
-  switch (failure.kind) {
-    case "resolved-as-other":
-      return `selected auth profile "${profileId}" resolved as "${failure.resolvedProfileId}"`;
-    case "unmaterialized":
-      return `could not materialize selected auth profile "${profileId}"`;
-  }
-  return failure satisfies never;
-}
-
-function buildCliAuthProfileResolutionError(params: {
-  backendId: string;
-  profileId: string;
-  provider: string;
-  agentDir: string;
-  failure: CliAuthProfileResolutionFailure;
-}): CliAuthProfilePreparationError {
-  const loginCommand = buildOAuthRefreshFailureLoginCommand(params.provider, {
-    profileId: params.profileId,
-  });
-  const reason = describeCliAuthProfileResolutionFailure(params.profileId, params.failure);
-  return new CliAuthProfilePreparationError({
-    message: `CLI backend "${params.backendId}" ${reason}. Re-authenticate with: ${loginCommand}. OpenClaw did not start the run.`,
-    profileId: params.profileId,
-    provider: params.provider,
-    agentDir: params.agentDir,
-  });
-}
-
 /** Builds the complete context required to execute a CLI-backed agent run. */
-function shouldResolveAuthProfileForExecution(params: {
-  policy?: BundledCliBackendAuthPolicy;
-  authCredential?: AuthProfileCredential;
-}): boolean {
-  if (!params.policy) {
-    return false;
-  }
-  if (!params.authCredential) {
-    return params.policy.strictSelectedProfile;
-  }
-  if (params.authCredential.type === "oauth") {
-    return params.policy.oauthRefreshOwner === "core";
-  }
-  return params.authCredential.type === "api_key" || params.authCredential.type === "token";
-}
-
 export async function prepareCliRunContext(
   inputParams: RunCliAgentParams,
 ): Promise<PreparedCliRunContext> {
