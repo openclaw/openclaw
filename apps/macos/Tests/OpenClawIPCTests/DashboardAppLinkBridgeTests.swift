@@ -7,18 +7,59 @@ import WebKit
 @MainActor
 private final class DashboardAppLinkRecorder: NSObject, WKScriptMessageHandler {
     var urls: [String] = []
+    private var waiter: CheckedContinuation<Void, Never>?
 
     func userContentController(_: WKUserContentController, didReceive message: WKScriptMessage) {
         #expect(message.world === DashboardAppLinkMessageHandler.world)
         #expect(message.frameInfo.isMainFrame)
         if let url = message.body as? String { self.urls.append(url) }
+        self.waiter?.resume()
+        self.waiter = nil
+    }
+
+    func waitForMessage() async {
+        guard self.urls.isEmpty else { return }
+        await withCheckedContinuation { self.waiter = $0 }
+    }
+}
+
+/// Resumes after WebKit finishes the dashboard load. WebKit publishes `isLoading`
+/// and calls the controller's `didFinish` in the same main-thread turn, so the
+/// controller has settled before the waiting task resumes. No wall-clock deadline:
+/// shared main-actor load in the native suite cannot fail this wait.
+@MainActor
+private final class DashboardLoadCompletion {
+    private var sawLoading = false
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var observation: NSKeyValueObservation?
+
+    func wait(for webView: WKWebView, _ start: () -> Void) async {
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+            self.observation = webView.observe(\.isLoading, options: [.new]) { [weak self] webView, _ in
+                MainActor.assumeIsolated { self?.update(isLoading: webView.isLoading) }
+            }
+            start()
+        }
+        self.observation = nil
+    }
+
+    private func update(isLoading: Bool) {
+        guard !isLoading else {
+            self.sawLoading = true
+            return
+        }
+        guard self.sawLoading else { return }
+        self.continuation?.resume()
+        self.continuation = nil
     }
 }
 
 @Suite(.serialized)
 @MainActor
 struct DashboardAppLinkBridgeTests {
-    @Test(arguments: ["_self", "_blank"])
+    // Event waits have no deadline of their own; the limit only bounds a lost event.
+    @Test(.timeLimit(.minutes(2)), arguments: ["_self", "_blank"])
     func `native app-link activation is isolated from page scripts`(_ target: String) async throws {
         let server = try await DashboardHTTPFixture.start(
             html: "<html><body><a id='launch' href='openclaw://dashboard' target='\(target)'>Open</a></body></html>")
@@ -39,10 +80,10 @@ struct DashboardAppLinkBridgeTests {
             recorder,
             contentWorld: DashboardAppLinkMessageHandler.world,
             name: DashboardAppLinkMessageHandler.name)
-        controller.show(url: server.url(), auth: auth)
-        try await self.waitUntil {
-            !controller.webView.isLoading && controller.canDeliverNativeCommands
+        await DashboardLoadCompletion().wait(for: controller.webView) {
+            controller.show(url: server.url(), auth: auth)
         }
+        #expect(controller.canDeliverNativeCommands)
         let pageHasHandler = try await controller.webView.callAsyncJavaScript(
             "return typeof window.webkit.messageHandlers.openclawAppLink !== 'undefined';",
             in: nil, contentWorld: .page) as? Bool
@@ -69,15 +110,7 @@ struct DashboardAppLinkBridgeTests {
             isARepeat: false,
             keyCode: 36))
         controller.webView.keyDown(with: enter)
-        try await self.waitUntil { !recorder.urls.isEmpty }
+        await recorder.waitForMessage()
         #expect(recorder.urls == ["openclaw://dashboard"])
-    }
-
-    private func waitUntil(_ condition: () -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(5)
-        while !condition() {
-            guard ContinuousClock.now < deadline else { throw URLError(.timedOut) }
-            try await Task.sleep(for: .milliseconds(10))
-        }
     }
 }
