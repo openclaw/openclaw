@@ -128,4 +128,14 @@ describe("Phase E maintainer policy", () => {
     expect(source).toContain("RemoveOwnedFwpm(accounts)");
     expect(source).not.toMatch(/FwpmFilter(?:Create|Enum)|FwpmSubLayer(?:Create|Enum)/);
   });
+  it("normalizes and re-verifies owned filesystem security through retained handles", async () => {
+    const source = await import("node:fs/promises").then((fs) =>
+      fs.readFile(new URL("../native/phase-e-maintainer.cc", import.meta.url), "utf8"),
+    );
+    expect(source).toContain("NormalizeOwnedSecurity(HANDLE object)");
+    expect(source).toContain("SetSecurityInfo(object,SE_FILE_OBJECT");
+    expect(source).toContain("GetSecurityInfo(object,SE_FILE_OBJECT");
+    expect(source).toContain("SE_DACL_PROTECTED");
+    expect(source).toContain("FILE_FLAG_OPEN_REPARSE_POINT");
+  });
 });
