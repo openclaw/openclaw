@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { ok, type Result } from "@openclaw/normalization-core/result";
 import {
   ErrorCodes,
   errorShape,
@@ -21,6 +21,7 @@ import type {
   PrepareGatewaySessionLifecycle,
   PreparedGatewaySessionLifecycle,
 } from "../session-create-service.types.js";
+import { invalidSessionRequest } from "../session-request-error.js";
 import { hasExplicitSessionName, resolveExplicitSessionName } from "../session-title-state.js";
 import {
   prepareSessionWorktree,
@@ -49,11 +50,8 @@ export function resolveSessionRepositoryCreation(
   const url = normalizeSessionProjectGitUrl(params.repository.url);
   const ref = params.repository.ref?.trim();
   if (!url || (ref !== undefined && (!ref || ref.startsWith("-") || /\s|\0/u.test(ref)))) {
-    return err(
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "Use a GitHub repository URL and a nonempty branch, tag, or commit ref.",
-      ),
+    return invalidSessionRequest(
+      "Use a GitHub repository URL and a nonempty branch, tag, or commit ref.",
     );
   }
   if (
@@ -66,19 +64,13 @@ export function resolveSessionRepositoryCreation(
     params.worktreeName ||
     params.catalogId
   ) {
-    return err(
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "sessions.create repository cannot be combined with local workspace or catalog options.",
-      ),
+    return invalidSessionRequest(
+      "sessions.create repository cannot be combined with local workspace or catalog options.",
     );
   }
   if (hasInitialTurn) {
-    return err(
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "Create the repository session without an initial turn, dispatch it with sessions.dispatch, then send the message with sessions.send.",
-      ),
+    return invalidSessionRequest(
+      "Create the repository session without an initial turn, dispatch it with sessions.dispatch, then send the message with sessions.send.",
     );
   }
   return ok({ url, ...(ref ? { ref } : {}) });
@@ -97,20 +89,13 @@ export function prepareSessionRepositoryWorkspace(
       (!target.entry.repositoryWorkspaceId ||
         target.entry.repositoryWorkspaceId !== existing?.workspaceId)
     ) {
-      return err(
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "repository source requires a new repository session",
-        ),
-      );
+      return invalidSessionRequest("repository source requires a new repository session");
     }
     if (
       existing &&
       (existing.url !== repository.url || existing.requestedRef !== (repository.ref ?? null))
     ) {
-      return err(
-        errorShape(ErrorCodes.INVALID_REQUEST, "session repository source cannot be changed"),
-      );
+      return invalidSessionRequest("session repository source cannot be changed");
     }
     assertCurrent();
     const workspace = store.create({

@@ -5,18 +5,15 @@
 
 set -euo pipefail
 
-# Configuration
 SUBSYSTEM="ai.openclaw"
 DEFAULT_LEVEL="info"
 
-# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Function to handle sudo password errors
 handle_sudo_error() {
     echo -e "\n${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${YELLOW}⚠️  Password Required for Log Access${NC}"
@@ -32,20 +29,18 @@ handle_sudo_error() {
     exit 1
 }
 
-# Default values
 STREAM_MODE=false
-TIME_RANGE="5m"  # Default to last 5 minutes
+TIME_RANGE="5m"
 CATEGORY=""
 LOG_LEVEL="$DEFAULT_LEVEL"
 SEARCH_TEXT=""
 OUTPUT_FILE=""
 ERRORS_ONLY=false
-TAIL_LINES=50  # Default number of lines to show
+TAIL_LINES=50
 SHOW_TAIL=true
 STYLE_JSON=false
 LIST_CATEGORIES=false
 
-# Function to show usage
 show_usage() {
     cat << EOF
 clawlog - OpenClaw Logging Utility
@@ -121,11 +116,9 @@ TIME FORMATS:
 EOF
 }
 
-# Function to list categories
 list_categories() {
     echo -e "${BLUE}Fetching VibeTunnel log categories from the last hour...${NC}\n"
 
-    # Get unique categories from recent logs
     log show --predicate "subsystem == \"$SUBSYSTEM\"" --last 1h 2>/dev/null | \
         grep -E "category: \"[^\"]+\"" | \
         sed -E 's/.*category: "([^"]+)".*/\1/' | \
@@ -145,7 +138,6 @@ escape_predicate_literal() {
     printf '%s' "$value"
 }
 
-# Parse command line arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
         -h|--help)
@@ -157,28 +149,18 @@ while [[ $# -gt 0 ]]; do
             SHOW_TAIL=false
             shift
             ;;
-        -n|--lines)
+        -n|--lines|-l|--last|-c|--category|-s|--search|-o|--output)
             if [[ $# -lt 2 ]]; then
                 echo -e "${RED}Error: $1 requires a value${NC}" >&2
                 exit 1
             fi
-            TAIL_LINES="$2"
-            shift 2
-            ;;
-        -l|--last)
-            if [[ $# -lt 2 ]]; then
-                echo -e "${RED}Error: $1 requires a value${NC}" >&2
-                exit 1
-            fi
-            TIME_RANGE="$2"
-            shift 2
-            ;;
-        -c|--category)
-            if [[ $# -lt 2 ]]; then
-                echo -e "${RED}Error: $1 requires a value${NC}" >&2
-                exit 1
-            fi
-            CATEGORY="$2"
+            case $1 in
+                -n|--lines) TAIL_LINES="$2" ;;
+                -l|--last) TIME_RANGE="$2" ;;
+                -c|--category) CATEGORY="$2" ;;
+                -s|--search) SEARCH_TEXT="$2" ;;
+                -o|--output) OUTPUT_FILE="$2" ;;
+            esac
             shift 2
             ;;
         -e|--errors)
@@ -188,22 +170,6 @@ while [[ $# -gt 0 ]]; do
         -d|--debug)
             LOG_LEVEL="debug"
             shift
-            ;;
-        -s|--search)
-            if [[ $# -lt 2 ]]; then
-                echo -e "${RED}Error: $1 requires a value${NC}" >&2
-                exit 1
-            fi
-            SEARCH_TEXT="$2"
-            shift 2
-            ;;
-        -o|--output)
-            if [[ $# -lt 2 ]]; then
-                echo -e "${RED}Error: $1 requires a value${NC}" >&2
-                exit 1
-            fi
-            OUTPUT_FILE="$2"
-            shift 2
             ;;
         --server)
             CATEGORY="ServerOutput"
@@ -239,21 +205,17 @@ if [[ "$LIST_CATEGORIES" == true ]]; then
     exit 0
 fi
 
-# Build the predicate
 PREDICATE="subsystem == \"$SUBSYSTEM\""
 
-# Add category filter if specified
 if [[ -n "$CATEGORY" ]]; then
     ESCAPED_CATEGORY=$(escape_predicate_literal "$CATEGORY")
     PREDICATE="$PREDICATE AND category == \"$ESCAPED_CATEGORY\""
 fi
 
-# Add error filter if specified
 if [[ "$ERRORS_ONLY" == true ]]; then
     PREDICATE="$PREDICATE AND (eventType == \"error\" OR messageType == \"error\" OR eventMessage CONTAINS \"ERROR\" OR eventMessage CONTAINS \"[31m\")"
 fi
 
-# Add search filter if specified
 if [[ -n "$SEARCH_TEXT" ]]; then
     ESCAPED_SEARCH_TEXT=$(escape_predicate_literal "$SEARCH_TEXT")
     PREDICATE="$PREDICATE AND eventMessage CONTAINS[c] \"$ESCAPED_SEARCH_TEXT\""
@@ -262,23 +224,19 @@ fi
 # Build the command as argv array to avoid shell eval injection
 LOG_CMD=(sudo log)
 if [[ "$STREAM_MODE" == true ]]; then
-    # Streaming mode
     LOG_CMD+=(stream --predicate "$PREDICATE" --level "$LOG_LEVEL" --info)
 
     echo -e "${GREEN}Streaming VibeTunnel logs continuously...${NC}"
     echo -e "${YELLOW}Press Ctrl+C to stop${NC}\n"
 else
-    # Show mode
     LOG_CMD+=(show --predicate "$PREDICATE")
 
-    # Add log level for show command
     if [[ "$LOG_LEVEL" == "debug" ]]; then
         LOG_CMD+=(--debug)
     else
         LOG_CMD+=(--info)
     fi
 
-    # Add time range
     LOG_CMD+=(--last "$TIME_RANGE")
 
     if [[ "$STYLE_JSON" == false ]]; then
@@ -288,7 +246,6 @@ else
             echo -e "${GREEN}Showing all logs from the past $TIME_RANGE${NC}"
         fi
 
-        # Show applied filters
         if [[ "$ERRORS_ONLY" == true ]]; then
             echo -e "${RED}Filter: Errors only${NC}"
         fi
@@ -298,7 +255,7 @@ else
         if [[ -n "$SEARCH_TEXT" ]]; then
             echo -e "${YELLOW}Search: \"$SEARCH_TEXT\"${NC}"
         fi
-        echo ""  # Empty line for readability
+        echo ""
     fi
 fi
 
@@ -341,7 +298,6 @@ if sudo -n /usr/bin/log show --last 1s 2>&1 | grep -q "password"; then
     handle_sudo_error
 fi
 
-# Execute the command
 if [[ -n "$OUTPUT_FILE" ]]; then
     echo -e "${BLUE}Exporting logs to: $OUTPUT_FILE${NC}\n"
     if [[ "$SHOW_TAIL" == true ]] && [[ "$STREAM_MODE" == false ]]; then
@@ -350,7 +306,6 @@ if [[ -n "$OUTPUT_FILE" ]]; then
         "${LOG_CMD[@]}" > "$OUTPUT_FILE" 2>&1
     fi
 
-    # Check if file was created and has content
     if [[ -s "$OUTPUT_FILE" ]]; then
         LINE_COUNT=$(wc -l < "$OUTPUT_FILE" | tr -d ' ')
         echo -e "${GREEN}✓ Exported $LINE_COUNT lines to $OUTPUT_FILE${NC}"
@@ -358,9 +313,7 @@ if [[ -n "$OUTPUT_FILE" ]]; then
         echo -e "${YELLOW}⚠ No logs found matching the criteria${NC}"
     fi
 else
-    # Run interactively
     if [[ "$SHOW_TAIL" == true ]] && [[ "$STREAM_MODE" == false ]]; then
-        # Apply tail for non-streaming mode
         "${LOG_CMD[@]}" 2>&1 | tail -n "$TAIL_LINES"
         echo -e "\n${YELLOW}Showing last $TAIL_LINES lines. Use --all or -n to see more.${NC}"
     else

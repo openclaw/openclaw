@@ -1,5 +1,6 @@
 import pLimit from "p-limit";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../packages/gateway-protocol/src/schema/primitives.js";
+import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type {
@@ -51,8 +52,7 @@ type SubscriptionDeps = {
   ) => Promise<ControlUiSessionPrRead | undefined>;
   isConnectionActive?: (connId: string) => boolean;
   load?: LoadSessionPullRequests;
-  setTimer?: typeof globalThis.setTimeout;
-  clearTimer?: typeof globalThis.clearTimeout;
+  scheduler: GatewayScheduler;
 };
 
 type ControlUiSessionPullRequestSubscriptions = {
@@ -147,7 +147,7 @@ export function createControlUiSessionPullRequestSubscriptions(
   };
   const subscriptions = new Map<string, Map<string, Watched>>();
   const replacements = new Set<Promise<void>>();
-  const replacementGenerations = new Map<string, object>();
+  const replacementGenerations = new Map<string, { retainedKeys: ReadonlySet<string> }>();
   const pendingAdmissions = new Map<string, Set<() => boolean>>();
   const keyStates = new Map<string, WatchedKeyState>();
   const inflight = new Map<
@@ -160,8 +160,7 @@ export function createControlUiSessionPullRequestSubscriptions(
       demands: Set<() => boolean>;
     }
   >();
-  const setTimer = deps.setTimer ?? globalThis.setTimeout;
-  const clearTimer = deps.clearTimer ?? globalThis.clearTimeout;
+  const scheduler = deps.scheduler;
   const limit = pLimit(CONTROL_UI_SESSION_PR_LOAD_CONCURRENCY);
   const customLoad = deps.load;
   const load = customLoad ?? loadSessionPullRequests;
@@ -172,7 +171,7 @@ export function createControlUiSessionPullRequestSubscriptions(
     customLoad
       ? operation(() => {}, target.identity)
       : withControlUiSessionPrSource(target.readSource, operation);
-  let timer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  let pollJob: GatewayScheduledJob | undefined;
   const scope = new AsyncWorkScope();
   let stopPromise: Promise<void> | undefined;
 
@@ -242,7 +241,11 @@ export function createControlUiSessionPullRequestSubscriptions(
     if (scope.isClosing || subscription?.get(sessionKey) !== watched) {
       return undefined;
     }
-    if (!watched || !target || deps.isConnectionActive?.(connId) === false) {
+    if (deps.isConnectionActive?.(connId) === false) {
+      unsubscribe(connId);
+      return undefined;
+    }
+    if (!watched || !target) {
       subscription?.delete(sessionKey);
       const state = keyStates.get(sessionKey);
       state?.connIds.delete(connId);
@@ -250,12 +253,9 @@ export function createControlUiSessionPullRequestSubscriptions(
       if (subscription?.size === 0) {
         // Pruning an old watch does not retire a newer replacement still preparing its keys.
         subscriptions.delete(connId);
-        if (deps.isConnectionActive?.(connId) === false) {
-          replacementGenerations.delete(connId);
-        }
-        if (subscriptions.size === 0 && timer !== null) {
-          clearTimer(timer);
-          timer = null;
+        if (subscriptions.size === 0) {
+          pollJob?.cancel();
+          pollJob = undefined;
         }
       }
       return undefined;
@@ -313,15 +313,18 @@ export function createControlUiSessionPullRequestSubscriptions(
           const delay = refresh
             ? (state.refreshedAt ?? -Infinity) +
               CONTROL_UI_SESSION_PR_REFRESH_INTERVAL_MS -
-              Date.now()
+              scheduler.now()
             : 0;
           if (delay > 0) {
             // Retain the source before this wait, without occupying a loader slot.
             await new Promise<void>((resolve) => {
-              const refreshTimer = setTimer(resolve, delay);
-              refreshTimer.unref?.();
+              const refreshJob = scheduler.schedule({
+                id: `control-ui-session-pr-refresh:${sessionKey}`,
+                delayMs: delay,
+                run: resolve,
+              });
               state.cancelRefresh = () => {
-                clearTimer(refreshTimer);
+                refreshJob.cancel();
                 resolve();
               };
             });
@@ -337,7 +340,7 @@ export function createControlUiSessionPullRequestSubscriptions(
               return UNAVAILABLE_SNAPSHOT;
             }
             if (refresh) {
-              state.refreshedAt = Date.now();
+              state.refreshedAt = scheduler.now();
             }
             const snapshot = await load(
               { ...state.target.params, ...(refresh ? { refresh: true } : {}) },
@@ -498,14 +501,15 @@ export function createControlUiSessionPullRequestSubscriptions(
   };
 
   const schedulePoll = () => {
-    if (scope.isClosing || timer !== null || subscriptions.size === 0) {
+    if (scope.isClosing || pollJob || subscriptions.size === 0) {
       return;
     }
-    timer = setTimer(() => {
-      timer = null;
-      void pollNow().finally(schedulePoll);
-    }, CONTROL_UI_SESSION_PR_POLL_INTERVAL_MS);
-    timer.unref?.();
+    pollJob = scheduler.schedule({
+      id: "control-ui-session-pr-poll",
+      atMs: scheduler.now() + CONTROL_UI_SESSION_PR_POLL_INTERVAL_MS,
+      everyMs: CONTROL_UI_SESSION_PR_POLL_INTERVAL_MS,
+      run: pollNow,
+    });
   };
 
   const pollNow = (): Promise<void> => {
@@ -554,7 +558,9 @@ export function createControlUiSessionPullRequestSubscriptions(
       return Promise.resolve();
     }
     // A fresh identity cannot revive retired work when a connection ID is reused.
-    const generation = {};
+    const previousGeneration = replacementGenerations.get(normalizedConnId);
+    const retainedKeys = new Set(sessionKeys.filter((key) => keyStates.has(key)));
+    const generation = { retainedKeys };
     replacementGenerations.set(normalizedConnId, generation);
     // Reserve retained-key intent in call order; an older preparation cannot overwrite it later.
     for (const key of sessionKeys) {
@@ -566,13 +572,16 @@ export function createControlUiSessionPullRequestSubscriptions(
     const isCurrentReplacement = () =>
       !scope.isClosing && replacementGenerations.get(normalizedConnId) === generation;
     const replacement = scope.track(async () => {
-      const retainedKeys = new Set(sessionKeys.filter((key) => keyStates.has(key)));
       for (const key of retainedKeys) {
         const admissions = pendingAdmissions.get(key) ?? new Set<() => boolean>();
         admissions.add(isCurrentReplacement);
         pendingAdmissions.set(key, admissions);
       }
       try {
+        // Install successor interest before retiring the previous preparation.
+        for (const key of previousGeneration?.retainedKeys ?? []) {
+          retireKeyStateIfUnused(key, keyStates.get(key));
+        }
         const previousSubscription = subscriptions.get(normalizedConnId);
         const subscription = new Map<string, Watched>();
         for (const key of sessionKeys) {
@@ -691,10 +700,13 @@ export function createControlUiSessionPullRequestSubscriptions(
       }
     });
     replacements.add(replacement);
-    void replacement.then(
-      () => replacements.delete(replacement),
-      () => replacements.delete(replacement),
-    );
+    const releaseReplacement = () => {
+      replacements.delete(replacement);
+      if (replacementGenerations.get(normalizedConnId) === generation) {
+        replacementGenerations.delete(normalizedConnId);
+      }
+    };
+    void replacement.then(releaseReplacement, releaseReplacement);
     return replacement;
   };
 
@@ -703,12 +715,16 @@ export function createControlUiSessionPullRequestSubscriptions(
     if (!normalizedConnId) {
       return;
     }
+    const generation = replacementGenerations.get(normalizedConnId);
     replacementGenerations.delete(normalizedConnId);
     removeMemberships(normalizedConnId, subscriptions.get(normalizedConnId));
     subscriptions.delete(normalizedConnId);
-    if (subscriptions.size === 0 && timer !== null) {
-      clearTimer(timer);
-      timer = null;
+    for (const key of generation?.retainedKeys ?? []) {
+      retireKeyStateIfUnused(key, keyStates.get(key));
+    }
+    if (subscriptions.size === 0) {
+      pollJob?.cancel();
+      pollJob = undefined;
     }
   };
 
@@ -717,10 +733,8 @@ export function createControlUiSessionPullRequestSubscriptions(
       return stopPromise;
     }
     scope.beginClose();
-    if (timer !== null) {
-      clearTimer(timer);
-      timer = null;
-    }
+    pollJob?.cancel();
+    pollJob = undefined;
     subscriptions.clear();
     replacementGenerations.clear();
     replacements.clear();

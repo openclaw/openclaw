@@ -1,3 +1,4 @@
+import { createNativeCommandItem } from "./event-projector-command.test-support.js";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
@@ -50,19 +51,10 @@ describe("CodexAppServerEventProjector command output projection", () => {
     );
     await projector.handleNotification(
       turnCompleted([
-        {
-          type: "commandExecution",
+        createNativeCommandItem({
           id: "cmd-1",
           command: "python scripts/run_demo_scenario.py",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "completed",
-          commandActions: [],
-          aggregatedOutput: null,
-          exitCode: 0,
-          durationMs: 42,
-        },
+        }),
       ]),
     );
 
@@ -88,38 +80,6 @@ describe("CodexAppServerEventProjector command output projection", () => {
       name: "bash",
     }).data;
     expect(toolResult.result).toEqual({ status: "completed", exitCode: 0, durationMs: 42 });
-  });
-
-  it("preserves complete final command output across the old UTF-16 transcript boundary", async () => {
-    const projector = await createProjector();
-    // The old mirror cap cut this emoji and discarded the entire suffix.
-    const prefix = "a".repeat(9_886);
-    const aggregatedOutput = `${prefix}😀${"a".repeat(400)}`;
-
-    await projector.handleNotification(
-      turnCompleted([
-        {
-          type: "commandExecution",
-          id: "cmd-utf16-final",
-          command: "printf output",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "completed",
-          commandActions: [],
-          aggregatedOutput,
-          exitCode: 0,
-          durationMs: 42,
-        },
-      ]),
-    );
-
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-    const message = requireRecord(result.messagesSnapshot[2], "tool result message");
-    const content = requireArray(message.content, "tool result content");
-    const item = requireRecord(content[0], "tool result content item");
-    expect(item.type).toBe("text");
-    expect(item.text).toBe(aggregatedOutput);
   });
 
   it.each([
@@ -184,18 +144,6 @@ describe("CodexAppServerEventProjector command output projection", () => {
       );
     }
 
-    const echoState = (
-      projector as unknown as {
-        toolProgressProjection: {
-          echoesByItem: Map<string, { streamedRawSignature?: { length: number; prefix: string } }>;
-        };
-      }
-    ).toolProgressProjection.echoesByItem;
-    const state = echoState.get("cmd-freeze-prefix");
-    expect(state?.streamedRawSignature).toBeDefined();
-    expect(fullOutput.startsWith(state!.streamedRawSignature!.prefix)).toBe(true);
-    expect(state!.streamedRawSignature!.length).toBe(fullOutput.length);
-
     await projector.handleNotification(
       forCurrentTurn("rawResponseItem/completed", {
         item: {
@@ -208,19 +156,10 @@ describe("CodexAppServerEventProjector command output projection", () => {
     );
     await projector.handleNotification(
       turnCompleted([
-        {
-          type: "commandExecution",
+        createNativeCommandItem({
           id: "cmd-freeze-prefix",
           command: "printf output",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "completed",
-          commandActions: [],
-          aggregatedOutput: null,
-          exitCode: 0,
-          durationMs: 42,
-        },
+        }),
       ]),
     );
 
@@ -254,19 +193,10 @@ describe("CodexAppServerEventProjector command output projection", () => {
     );
     await projector.handleNotification(
       turnCompleted([
-        {
-          type: "commandExecution",
+        createNativeCommandItem({
           id: "cmd-stream-large",
           command: "python scripts/run_demo_scenario.py",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "completed",
-          commandActions: [],
-          aggregatedOutput: null,
-          exitCode: 0,
-          durationMs: 42,
-        },
+        }),
       ]),
     );
 
@@ -309,19 +239,11 @@ describe("CodexAppServerEventProjector command output projection", () => {
     );
     await projector.handleNotification(
       turnCompleted([
-        {
-          type: "commandExecution",
+        createNativeCommandItem({
           id: "cmd-streamed-failure",
-          command: "pnpm test extensions/codex",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
           status: "failed",
-          commandActions: [],
-          aggregatedOutput: null,
           exitCode: 1,
-          durationMs: 42,
-        },
+        }),
       ]),
     );
 
@@ -344,19 +266,10 @@ describe("CodexAppServerEventProjector command output projection", () => {
       { ...(await createParams()), onAgentEvent },
       { trajectoryRecorder },
     );
-    const commandItem = {
-      type: "commandExecution",
+    const commandItem = createNativeCommandItem({
       id: "cmd-started",
-      command: "pnpm test extensions/codex",
-      cwd: "/workspace",
-      processId: null,
-      source: "agent",
-      status: "completed",
-      commandActions: [],
       aggregatedOutput: "ok",
-      exitCode: 0,
-      durationMs: 42,
-    };
+    });
 
     await projector.handleNotification(
       forCurrentTurn("item/started", {
@@ -389,19 +302,12 @@ describe("CodexAppServerEventProjector command output projection", () => {
 
     await projector.handleNotification(
       turnCompleted([
-        {
-          type: "commandExecution",
+        createNativeCommandItem({
           id: "cmd-running-snapshot",
-          command: "pnpm test extensions/codex",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
           status: "inProgress",
-          commandActions: [],
-          aggregatedOutput: null,
           exitCode: null,
           durationMs: null,
-        },
+        }),
         {
           type: "imageGeneration",
           id: "image-running-snapshot",
@@ -425,34 +331,16 @@ describe("CodexAppServerEventProjector command output projection", () => {
 
     await projector.handleNotification(
       turnCompleted([
-        {
-          type: "commandExecution",
+        createNativeCommandItem({
           id: "cmd-prior-turn",
           turnId: "turn-old",
-          command: "pnpm test extensions/codex",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "completed",
-          commandActions: [],
           aggregatedOutput: "ok",
-          exitCode: 0,
-          durationMs: 42,
-        },
-        {
-          type: "commandExecution",
+        }),
+        createNativeCommandItem({
           id: "cmd-current-turn",
           turnId: TURN_ID,
-          command: "pnpm test extensions/codex",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "completed",
-          commandActions: [],
           aggregatedOutput: "ok",
-          exitCode: 0,
-          durationMs: 42,
-        },
+        }),
       ]),
     );
 

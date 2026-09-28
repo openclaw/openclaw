@@ -21,6 +21,7 @@ import {
   createRealtimeTalkEventEmitter,
   steerRealtimeTalkActiveConsult,
   shouldAutoControlRealtimeVoiceAgentText,
+  shouldInterruptRealtimeTalkControlResponse,
   type RealtimeTalkTransport,
   type RealtimeTalkTransportContext,
   type RealtimeTalkTransportStartResult,
@@ -137,8 +138,6 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       isDescribeViewActive: () =>
         this.videoFramesActive && this.hasSentVideoFrame && this.camera.hasUsableTrack(),
       sendResult: (callId, name, result) => this.sendToolResult(callId, name, result),
-      sendControlSpeechMessage: (message) => this.sendControlSpeechMessage(message),
-      stopOutputForSuppressedControl: (result) => this.stopOutputForSuppressedControl(result),
     });
     this.camera = new RealtimeTalkCameraController({
       acquire: (deviceId, signal) => openRealtimeTalkCamera(deviceId, { signal }),
@@ -667,14 +666,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   }
 
   private stopOutputForSuppressedControl(result: unknown): void {
-    if (!result || typeof result !== "object") {
-      return;
-    }
-    const record = result as Record<string, unknown>;
-    if (
-      record.ok === true &&
-      (record.mode === "cancel" || (record.suppress === true && record.mode !== "steer"))
-    ) {
+    if (shouldInterruptRealtimeTalkControlResponse(result)) {
       this.stopOutput();
     }
   }

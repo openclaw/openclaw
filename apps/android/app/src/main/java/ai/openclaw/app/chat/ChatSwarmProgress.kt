@@ -1,8 +1,8 @@
 package ai.openclaw.app.chat
 
-import kotlinx.serialization.json.JsonElement
+import ai.openclaw.app.asJsonStringOrNull
+import ai.openclaw.app.node.asObjectOrNull
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 
 private const val MAX_TRACKED_SWARM_GROUPS = 10_000
 private const val MAX_TRACKED_SWARM_CHILDREN = 100_000
@@ -104,19 +104,19 @@ internal fun chatSwarmEventBelongsToParent(
 ): Boolean {
   val source = payload["session"].asObjectOrNull() ?: payload
   val explicitParent =
-    normalizedSwarmValue(source["parentSessionKey"].asStringOrNull())
-      ?: normalizedSwarmValue(source["spawnedBy"].asStringOrNull())
+    normalizedSwarmValue(source["parentSessionKey"].asJsonStringOrNull())
+      ?: normalizedSwarmValue(source["spawnedBy"].asJsonStringOrNull())
   if (explicitParent != null) return matchesParent(explicitParent)
 
-  val kind = normalizedSwarmValue(payload["kind"].asStringOrNull())
+  val kind = normalizedSwarmValue(payload["kind"].asJsonStringOrNull())
   if (kind == "phase" || kind == "log") {
-    val sessionKey = normalizedSwarmValue(payload["sessionKey"].asStringOrNull()) ?: return false
+    val sessionKey = normalizedSwarmValue(payload["sessionKey"].asJsonStringOrNull()) ?: return false
     return matchesParent(sessionKey)
   }
 
   val groupId =
-    normalizedSwarmValue(payload["swarmGroupId"].asStringOrNull())
-      ?: normalizedSwarmValue(source["swarmGroupId"].asStringOrNull())
+    normalizedSwarmValue(payload["swarmGroupId"].asJsonStringOrNull())
+      ?: normalizedSwarmValue(source["swarmGroupId"].asJsonStringOrNull())
       ?: return false
   if (!groupId.startsWith("swarm:")) return false
   val generatedParent = groupId.removePrefix("swarm:").substringBeforeLast(':', missingDelimiterValue = "")
@@ -142,9 +142,9 @@ internal class ChatSwarmActivityTracker {
 
   fun observe(payload: JsonObject): Boolean {
     val source = payload["session"].asObjectOrNull() ?: payload
-    val groupId = normalized(payload["swarmGroupId"].asStringOrNull()) ?: normalized(source["swarmGroupId"].asStringOrNull()) ?: return false
-    val kind = normalized((if ("kind" in payload) payload["kind"] else source["kind"]).asStringOrNull())
-    val text = normalized((if ("text" in payload) payload["text"] else source["text"]).asStringOrNull())
+    val groupId = normalizedSwarmValue(payload["swarmGroupId"].asJsonStringOrNull()) ?: normalizedSwarmValue(source["swarmGroupId"].asJsonStringOrNull()) ?: return false
+    val kind = normalizedSwarmValue((if ("kind" in payload) payload["kind"] else source["kind"]).asJsonStringOrNull())
+    val text = normalizedSwarmValue((if ("text" in payload) payload["text"] else source["text"]).asJsonStringOrNull())
     if ((kind == "phase" || kind == "log") && text != null) {
       if (kind == "phase") {
         val rankKey = phaseRankKey(groupId, text)
@@ -158,13 +158,13 @@ internal class ChatSwarmActivityTracker {
       return true
     }
 
-    val childKey = normalized(source["key"].asStringOrNull()) ?: normalized(payload["sessionKey"].asStringOrNull()) ?: return true
-    val explicitPhase = normalized(source["swarmPhase"].asStringOrNull()) ?: normalized(payload["swarmPhase"].asStringOrNull())
+    val childKey = normalizedSwarmValue(source["key"].asJsonStringOrNull()) ?: normalizedSwarmValue(payload["sessionKey"].asJsonStringOrNull()) ?: return true
+    val explicitPhase = normalizedSwarmValue(source["swarmPhase"].asJsonStringOrNull()) ?: normalizedSwarmValue(payload["swarmPhase"].asJsonStringOrNull())
     if (explicitPhase != null) {
       setBounded(phaseByChild, childKey, explicitPhase, MAX_TRACKED_SWARM_CHILDREN)
       return true
     }
-    if (payload["reason"].asStringOrNull() == "create" && childKey !in phaseByChild) {
+    if (payload["reason"].asJsonStringOrNull() == "create" && childKey !in phaseByChild) {
       currentPhaseByGroup[groupId]?.let { phase ->
         setBounded(phaseByChild, childKey, phase, MAX_TRACKED_SWARM_CHILDREN)
       }
@@ -174,7 +174,7 @@ internal class ChatSwarmActivityTracker {
 
   fun decorate(rows: List<ChatSessionEntry>): List<ChatSessionEntry> =
     rows.map { row ->
-      val groupId = normalized(row.swarmGroupId) ?: return@map row
+      val groupId = normalizedSwarmValue(row.swarmGroupId) ?: return@map row
       val phase = phaseByChild[row.key] ?: row.swarmPhase
       row.copy(
         swarmPhase = phase,
@@ -187,8 +187,6 @@ internal class ChatSwarmActivityTracker {
     groupId: String,
     phase: String,
   ): String = "${groupId.length}:$groupId$phase"
-
-  private fun normalized(value: String?): String? = value?.trim()?.takeIf(String::isNotEmpty)
 
   private fun <V> setBounded(
     values: LinkedHashMap<String, V>,
@@ -234,33 +232,25 @@ internal fun buildChatSwarmGroups(
 
   return byGroup
     .map { (groupId, entries) ->
-      val phases = linkedMapOf<String, Triple<String?, Int, MutableList<ChatSwarmDot>>>()
-      entries.forEach { entry ->
-        val phaseKey = entry.phase ?: ""
-        val existing = phases[phaseKey]
-        if (existing == null) {
-          phases[phaseKey] = Triple(entry.phase, entry.phaseRank, mutableListOf(entry.dot))
-        } else {
-          existing.third += entry.dot
-          phases[phaseKey] = Triple(existing.first, minOf(existing.second, entry.phaseRank), existing.third)
-        }
-      }
+      val phases = entries.groupBy { it.phase.orEmpty() }
+      val phaseRanks = phases.mapValues { (_, bucket) -> bucket.minOf(Entry::phaseRank) }
       val projectedPhases =
         phases
           .map { (key, bucket) ->
+            val phaseDots = bucket.map(Entry::dot)
             val dots =
-              if (bucket.third.size > MAX_RENDERED_SWARM_DOTS_PER_PHASE) {
-                bucket.third.sortedBy(ChatSwarmDot::status)
+              if (phaseDots.size > MAX_RENDERED_SWARM_DOTS_PER_PHASE) {
+                phaseDots.sortedBy(ChatSwarmDot::status)
               } else {
-                bucket.third
+                phaseDots
               }
             ChatSwarmPhase(
               key = key,
-              title = bucket.first,
+              title = bucket.first().phase,
               dots = dots.take(MAX_RENDERED_SWARM_DOTS_PER_PHASE),
               hidden = (dots.size - MAX_RENDERED_SWARM_DOTS_PER_PHASE).coerceAtLeast(0),
             )
-          }.sortedWith(compareBy<ChatSwarmPhase> { phases[it.key]?.second ?: Int.MAX_VALUE }.thenBy(ChatSwarmPhase::key))
+          }.sortedWith(compareBy<ChatSwarmPhase> { phaseRanks.getValue(it.key) }.thenBy(ChatSwarmPhase::key))
       val dots = entries.map(Entry::dot)
       ChatSwarmGroup(
         groupId = groupId,
@@ -295,10 +285,3 @@ private fun belongsToParent(
   val parts = groupId.split(':')
   return parts.size > 2 && matchesParent(parts.drop(1).dropLast(1).joinToString(":"))
 }
-
-private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
-
-private fun JsonElement?.asStringOrNull(): String? =
-  (this as? JsonPrimitive)
-    ?.takeIf { it.isString }
-    ?.content

@@ -1,8 +1,3 @@
-/**
- * Configured binding built-in registration.
- *
- * Registers core configured binding consumers exactly when the registry needs them.
- */
 import { acpConfiguredBindingConsumer } from "./acp-configured-binding-consumer.js";
 import { registerConfiguredBindingConsumer } from "./configured-binding-consumers.js";
 

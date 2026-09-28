@@ -34,7 +34,7 @@ import {
 import { formatForLog } from "../ws-log.js";
 import { respondUnavailableOnThrow } from "./response.js";
 import { inferSpeechMimeType } from "./speech-mime.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 function yieldBeforeTtsStatusSetup(): Promise<void> {
@@ -58,6 +58,16 @@ function resolveTtsGatewayStatusFacts(cfg: OpenClawConfig) {
     configuredByProvider,
   });
   return { configuredByProvider, provider, settings, speechProviders };
+}
+
+function setTtsEnabledHandler(enabled: boolean): GatewayRequestHandler {
+  return async ({ respond, context }) => {
+    await respondUnavailableOnThrow(respond, async () => {
+      const config = resolveTtsConfig(context.getRuntimeConfig());
+      setTtsEnabled(resolveTtsPrefsPath(config), enabled);
+      respond(true, { enabled });
+    });
+  };
 }
 
 /** Gateway request handlers for TTS status, preference mutation, and synthesis. */
@@ -101,24 +111,8 @@ export const ttsHandlers: GatewayRequestHandlers = {
       });
     });
   },
-  "tts.enable": async ({ respond, context }) => {
-    await respondUnavailableOnThrow(respond, async () => {
-      const cfg = context.getRuntimeConfig();
-      const config = resolveTtsConfig(cfg);
-      const prefsPath = resolveTtsPrefsPath(config);
-      setTtsEnabled(prefsPath, true);
-      respond(true, { enabled: true });
-    });
-  },
-  "tts.disable": async ({ respond, context }) => {
-    await respondUnavailableOnThrow(respond, async () => {
-      const cfg = context.getRuntimeConfig();
-      const config = resolveTtsConfig(cfg);
-      const prefsPath = resolveTtsPrefsPath(config);
-      setTtsEnabled(prefsPath, false);
-      respond(true, { enabled: false });
-    });
-  },
+  "tts.enable": setTtsEnabledHandler(true),
+  "tts.disable": setTtsEnabledHandler(false),
   "tts.convert": async ({ params, respond, context }) => {
     const text = normalizeOptionalString(params.text) ?? "";
     if (!text) {

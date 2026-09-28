@@ -3,7 +3,6 @@ import {
   type WorkboardCard,
   type WorkboardStatus,
 } from "@openclaw/workboard-contract";
-// Workboard plugin module implements command behavior.
 import type { OpenClawPluginApi } from "../api.js";
 import { resolveWorkboardCardByIdOrPrefix } from "./card-lookup.js";
 import {
@@ -67,30 +66,20 @@ function formatCardDetails(card: WorkboardCard): string {
   return lines.join("\n");
 }
 
-function normalizeTitle(tokens: string[]): string {
-  return tokens.join(" ").trim();
-}
-
 function isWorkboardStatus(value: string): value is WorkboardStatus {
   return (WORKBOARD_STATUSES as readonly string[]).includes(value);
-}
-
-function canMutateWorkboard(params: {
-  senderIsOwner?: boolean;
-  gatewayClientScopes?: readonly string[];
-}): boolean {
-  const scopes = params.gatewayClientScopes;
-  if (scopes) {
-    return scopes.includes(ADMIN_SCOPE) || scopes.includes(WRITE_SCOPE);
-  }
-  return params.senderIsOwner === true;
 }
 
 function requireWriteAccess(params: {
   senderIsOwner?: boolean;
   gatewayClientScopes?: readonly string[];
 }): { text: string; isError: true } | undefined {
-  if (canMutateWorkboard(params)) {
+  const scopes = params.gatewayClientScopes;
+  if (
+    scopes
+      ? scopes.includes(ADMIN_SCOPE) || scopes.includes(WRITE_SCOPE)
+      : params.senderIsOwner === true
+  ) {
     return undefined;
   }
   return {
@@ -142,12 +131,14 @@ async function handleWorkboardCommand(params: {
     const { card, error } = resolveWorkboardCardByIdOrPrefix(cards, id);
     return card ? { text: formatCardDetails(card) } : { text: error, isError: true };
   }
-  if (action === "create") {
+  if (action === "create" || action === "move" || action === "dispatch") {
     const accessError = requireWriteAccess(params);
     if (accessError) {
       return accessError;
     }
-    const title = normalizeTitle(rest);
+  }
+  if (action === "create") {
+    const title = rest.join(" ").trim();
     if (!title) {
       return { text: "Usage: /workboard create <title>", isError: true };
     }
@@ -162,10 +153,6 @@ async function handleWorkboardCommand(params: {
     return { text: `Created ${card.id.slice(0, 8)} ${card.title}` };
   }
   if (action === "move") {
-    const accessError = requireWriteAccess(params);
-    if (accessError) {
-      return accessError;
-    }
     const id = rest[0];
     const statusIndex = rest.indexOf("--status");
     const status = statusIndex >= 0 ? rest[statusIndex + 1] : undefined;
@@ -195,10 +182,6 @@ async function handleWorkboardCommand(params: {
     };
   }
   if (action === "dispatch") {
-    const accessError = requireWriteAccess(params);
-    if (accessError) {
-      return accessError;
-    }
     const workspaceAccess = params.workspaceAccess ?? { unrestricted: true };
     const result = await dispatchAndStartWorkboardCards({
       store: params.store,

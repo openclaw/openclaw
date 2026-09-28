@@ -34,10 +34,7 @@ export function peekAdjustedParamsForToolCall(toolCallId: string, runId?: string
 
 /** Consume whether policy prevented the target tool from starting. */
 export function consumePreExecutionBlockedToolCall(toolCallId: string, runId?: string): boolean {
-  const key = buildAdjustedParamsKey({ runId, toolCallId });
-  const blocked = preExecutionBlockedToolCallIds.has(key);
-  preExecutionBlockedToolCallIds.delete(key);
-  return blocked;
+  return preExecutionBlockedToolCallIds.delete(buildAdjustedParamsKey({ runId, toolCallId }));
 }
 
 /** Snapshot whether policy prevented execution without stealing cleanup from the tool owner. */
@@ -83,10 +80,7 @@ export function recordStructuredReplaySafeToolCall(toolCallId: string, runId?: s
 }
 
 export function consumeStructuredReplaySafeToolCall(toolCallId: string, runId?: string): boolean {
-  const key = buildAdjustedParamsKey({ runId, toolCallId });
-  const replaySafe = structuredReplaySafeToolCallIds.has(key);
-  structuredReplaySafeToolCallIds.delete(key);
-  return replaySafe;
+  return structuredReplaySafeToolCallIds.delete(buildAdjustedParamsKey({ runId, toolCallId }));
 }
 
 /** Mark a call whose loop policy was already admitted with its whole assistant batch. */
@@ -96,10 +90,7 @@ export function recordBatchAdmittedToolCall(toolCallId: string, runId?: string):
 
 /** Consume whole-batch loop admission while leaving the remaining tool policies intact. */
 export function consumeBatchAdmittedToolCall(toolCallId: string, runId?: string): boolean {
-  const key = buildAdjustedParamsKey({ runId, toolCallId });
-  const admitted = batchAdmittedToolCallIds.has(key);
-  batchAdmittedToolCallIds.delete(key);
-  return admitted;
+  return batchAdmittedToolCallIds.delete(buildAdjustedParamsKey({ runId, toolCallId }));
 }
 
 /** Release exact batch-admission markers for prepared calls suppressed by steering. */

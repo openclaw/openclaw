@@ -9,8 +9,11 @@ import type {
   RequiredNodeCommand,
   RuntimeTargetIssue,
   WorkerExecutionMode,
+  WorkerMachineOption,
+  WorkerOperatingSystem,
   WorkerSlotSummary,
 } from "../../../../packages/gateway-protocol/src/schema/environments.ts";
+import { parseWorkerSlotSummary } from "../../../../src/shared/node-list-parse.js";
 
 export type DraftBranches = {
   repoRoot: string;
@@ -40,21 +43,8 @@ export type DraftCloudProfile = {
   operatingSystems?: DraftOperatingSystem[];
 };
 
-export type DraftOperatingSystem = {
-  id: string;
-  label: string;
-  default?: boolean;
-  disabledReason?: string;
-};
-
-export type DraftMachineOption = {
-  id: string;
-  label: string;
-  os?: string;
-  cpu?: number;
-  memoryGb?: number;
-  default?: boolean;
-};
+export type DraftOperatingSystem = WorkerOperatingSystem;
+export type DraftMachineOption = WorkerMachineOption;
 
 export type DraftEnvironment = {
   id: string;
@@ -258,26 +248,6 @@ function isEnvironmentStatus(value: unknown): value is EnvironmentStatus {
   return typeof value === "string" && ENVIRONMENT_STATUSES.has(value);
 }
 
-function isSafeInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value);
-}
-
-function readWorkerSlots(value: unknown): WorkerSlotSummary | undefined {
-  if (
-    !isRecord(value) ||
-    Object.keys(value).some((key) => key !== "total" && key !== "available") ||
-    !isSafeInteger(value.total) ||
-    !isSafeInteger(value.available)
-  ) {
-    return undefined;
-  }
-  const total = value.total;
-  const available = value.available;
-  return total >= 1 && total <= 1_024 && available >= 0 && available <= total
-    ? { total, available }
-    : undefined;
-}
-
 function readRequiredNodeCommand(value: unknown): RequiredNodeCommand | undefined {
   if (!isRecord(value) || Object.keys(value).some((key) => key !== "command" && key !== "state")) {
     return undefined;
@@ -346,7 +316,7 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
       const lastSeenAtMs = normalizeTimestamp(environment.lastSeenAtMs);
       const lastSeenReason = normalizeOptionalString(environment.lastSeenReason);
       const issues = readRuntimeTargetIssues(environment.issues);
-      const workerSlots = readWorkerSlots(environment.workerSlots);
+      const workerSlots = parseWorkerSlotSummary(environment.workerSlots);
       return [
         {
           id,

@@ -1,7 +1,40 @@
-// Node list parsing helpers normalize node inventory records from CLI output.
-import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { NodeListNode, PairedNode, PairingList, PendingRequest } from "./node-list-types.js";
+
+export const NODE_WORKER_CAPACITY_MAX = 1_024;
+
+export function availableWorkerSlots(capacity: NonNullable<NodeListNode["workerSlots"]>): number {
+  return capacity.available + (capacity.reclaimableIdle ?? 0);
+}
+
+export function parseWorkerSlotSummary(
+  value: unknown,
+): NonNullable<NodeListNode["workerSlots"]> | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const keys = Object.keys(value);
+  const { total, available, reclaimableIdle } = value;
+  return keys.every((key) => key === "total" || key === "available" || key === "reclaimableIdle") &&
+    keys.includes("total") &&
+    keys.includes("available") &&
+    typeof total === "number" &&
+    typeof available === "number" &&
+    Number.isSafeInteger(total) &&
+    Number.isSafeInteger(available) &&
+    total >= 1 &&
+    total <= NODE_WORKER_CAPACITY_MAX &&
+    available >= 0 &&
+    available <= total &&
+    (reclaimableIdle === undefined ||
+      (typeof reclaimableIdle === "number" &&
+        Number.isSafeInteger(reclaimableIdle) &&
+        reclaimableIdle >= 0 &&
+        reclaimableIdle <= Math.min(2, total - available)))
+    ? { total, available, ...(reclaimableIdle === undefined ? {} : { reclaimableIdle }) }
+    : null;
+}
 
 // pending/paired rows are blind-cast from a permissive pairing file, so any scalar can be
 // non-string. CLI renderers call `.trim()`/`sanitizeTerminalText` on them (these rows bypass

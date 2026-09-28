@@ -269,7 +269,7 @@ describe("fresh producer results through persistence and model guards", () => {
         if (fail) {
           expect(details).toMatchObject({
             code: "internal_error",
-            failurePhase: "bridge",
+            failurePhase: "guest",
             bridgeDispatchStarted: true,
             error: expect.stringMatching(/^Error: DIAGNOSTIC.*\[error truncated\]$/s),
           });

@@ -13,9 +13,9 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
-import prettyMilliseconds from "pretty-ms";
 import { stripLeadingPackageManagerSeparator } from "../../lib/arg-utils.mts";
 import { resolveProviderConfig } from "../../lib/cross-os-release-checks/config.ts";
+import { formatDurationElapsed } from "../../lib/format-duration.mts";
 import {
   die,
   ensureValue,
@@ -558,13 +558,10 @@ function formatDuration(durationMs: number): string {
     return "0ms";
   }
   const roundedMs = Math.round(durationMs);
-  if (roundedMs < 1000) {
-    return prettyMilliseconds(roundedMs);
-  }
-  return prettyMilliseconds(Math.round(durationMs / 1000) * 1000, {
-    hideYear: true,
-    unitCount: 2,
-  });
+  return formatDurationElapsed(
+    roundedMs < 1000 ? roundedMs : Math.round(durationMs / 1000) * 1000,
+    { showYears: false, unitCount: 2 },
+  );
 }
 
 function readHarnessCheckoutVersion(): string {
@@ -710,7 +707,7 @@ export class NpmUpdateSmoke {
     say(`Run fresh npm baseline: ${this.packageSpec}`);
     say(`Platforms: ${[...this.options.platforms].join(",")}`);
     say(`Run dir: ${this.runDir}`);
-    await this.runFreshBaselines();
+    await this.runFreshInstalls("fresh");
 
     await this.prepareUpdateTarget();
     say(`Run same-guest openclaw update to ${this.updateTargetEffective}`);
@@ -718,7 +715,7 @@ export class NpmUpdateSmoke {
 
     if (this.freshTargetSpec) {
       say(`Run fresh target npm install: ${this.freshTargetSpec}`);
-      await this.runFreshTargetInstalls();
+      await this.runFreshInstalls("fresh-target");
     }
 
     const summaryPath = await this.writeSummary();
@@ -730,75 +727,40 @@ export class NpmUpdateSmoke {
     }
   }
 
-  private async runFreshBaselines(): Promise<void> {
+  private async runFreshInstalls(phase: "fresh" | "fresh-target"): Promise<void> {
+    const packageSpec = phase === "fresh" ? this.packageSpec : this.freshTargetSpec;
     const jobs: Job[] = [];
-    if (this.options.platforms.has("macos")) {
-      jobs.push(this.spawnFresh("macOS", "macos", this.macosFreshArgs()));
-    }
-    if (this.options.platforms.has("windows")) {
-      jobs.push(this.spawnFresh("Windows", "windows", ["--vm", this.windowsVm]));
-    }
-    if (this.options.platforms.has("linux")) {
-      jobs.push(
-        this.spawnFresh("Linux", "linux", ["--vm", this.linuxVm], {
-          OPENCLAW_PARALLELS_LINUX_DISABLE_BONJOUR: "1",
-        }),
-      );
-    }
-    await this.finishFreshJobs("fresh", "fresh baseline", jobs, this.freshStatus);
-  }
-
-  private async runFreshTargetInstalls(): Promise<void> {
-    const jobs: Job[] = [];
-    if (this.options.platforms.has("macos")) {
+    for (const [platform, label, vm] of [
+      ["macos", "macOS", this.macosVm],
+      ["windows", "Windows", this.windowsVm],
+      ["linux", "Linux", this.linuxVm],
+    ] as const) {
+      if (!this.options.platforms.has(platform)) {
+        continue;
+      }
       jobs.push(
         this.spawnFresh(
-          "macOS",
-          "macos",
-          this.macosFreshArgs(),
-          {},
-          this.freshTargetSpec,
-          "fresh-target",
+          label,
+          platform,
+          [
+            "--vm",
+            vm,
+            ...(platform === "macos" && this.options.macosSnapshotHint
+              ? ["--snapshot-hint", this.options.macosSnapshotHint]
+              : []),
+          ],
+          platform === "linux" ? { OPENCLAW_PARALLELS_LINUX_DISABLE_BONJOUR: "1" } : {},
+          packageSpec,
+          phase,
         ),
       );
     }
-    if (this.options.platforms.has("windows")) {
-      jobs.push(
-        this.spawnFresh(
-          "Windows",
-          "windows",
-          ["--vm", this.windowsVm],
-          {},
-          this.freshTargetSpec,
-          "fresh-target",
-        ),
-      );
-    }
-    if (this.options.platforms.has("linux")) {
-      jobs.push(
-        this.spawnFresh(
-          "Linux",
-          "linux",
-          ["--vm", this.linuxVm],
-          {
-            OPENCLAW_PARALLELS_LINUX_DISABLE_BONJOUR: "1",
-          },
-          this.freshTargetSpec,
-          "fresh-target",
-        ),
-      );
-    }
-    await this.finishFreshJobs("fresh-target", "fresh target", jobs, this.freshTargetStatus);
-  }
-
-  private macosFreshArgs(): string[] {
-    return [
-      "--vm",
-      this.macosVm,
-      ...(this.options.macosSnapshotHint
-        ? ["--snapshot-hint", this.options.macosSnapshotHint]
-        : []),
-    ];
+    await this.finishFreshJobs(
+      phase,
+      phase === "fresh" ? "fresh baseline" : "fresh target",
+      jobs,
+      phase === "fresh" ? this.freshStatus : this.freshTargetStatus,
+    );
   }
 
   private async finishFreshJobs(

@@ -1,4 +1,5 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 
 export const normalizeTranscriptTimestamp = asFiniteNumber;
 
@@ -23,10 +24,7 @@ export function normalizeRecentTranscriptLimit(limit: number | undefined): numbe
 export function readPreferredUpstreamUserText(message: {
   __openclaw?: unknown;
 }): string | null | undefined {
-  const meta =
-    message["__openclaw"] && typeof message["__openclaw"] === "object"
-      ? (message["__openclaw"] as Record<string, unknown>)
-      : undefined;
+  const meta = asOptionalObjectRecord(message["__openclaw"]);
   if (typeof meta?.upstreamUserText === "string") {
     return meta.upstreamUserText.trim();
   }

@@ -107,7 +107,10 @@ suite.define(() => {
         expect((await gateway.getRequests("sessions.list", rosterMatch)).length).toBeGreaterThan(
           listRequests,
         );
-        await page.getByText(unrelatedLabel, { exact: true }).waitFor();
+        await page
+          .locator(`.sidebar-recent-session[data-session-key="${unrelatedKey}"]`)
+          .getByText(unrelatedLabel, { exact: true })
+          .waitFor();
         expect(await childRequestCount()).toBe(1);
         expect(await alert.count()).toBe(1);
         expect(await alert.evaluate((node, original) => node === original, mountedAlert)).toBe(

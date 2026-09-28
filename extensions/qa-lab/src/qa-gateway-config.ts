@@ -1,10 +1,10 @@
-// Qa Lab helper module supports qa gateway config behavior.
 import { OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   normalizeQaProviderMode,
+  remapModelRefForForcedRuntime,
   splitQaModelRef,
   type QaProviderMode,
 } from "./model-selection.js";
@@ -17,7 +17,7 @@ import {
 } from "./providers/shared/session-observer-registry.js";
 import type { QaThinkingLevel } from "./qa-thinking.js";
 import type { QaTransportGatewayConfig } from "./qa-transport.js";
-import type { RuntimeId } from "./runtime-parity.js";
+import type { RuntimeId } from "./runtime-id.js";
 
 export { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-thinking.js";
 
@@ -39,11 +39,6 @@ export function mergeQaControlUiAllowedOrigins(extraOrigins?: string[]) {
     .map((origin) => origin.trim())
     .filter((origin) => origin.length > 0);
   return uniqueStrings([...DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS, ...normalizedExtra]);
-}
-
-function remapQaMockModelRefForCodex(modelRef: string) {
-  const split = splitQaModelRef(modelRef);
-  return split?.provider === "mock-openai" ? `openai/${split.model}` : modelRef;
 }
 
 function buildQaModelSelection(primaryModel: string, alternateModel: string) {
@@ -87,12 +82,10 @@ export function buildQaGatewayConfig(params: {
       primaryModel: params.primaryModel,
       alternateModel: params.alternateModel,
     });
-  const primaryModel = usesCodexMockAppServer
-    ? remapQaMockModelRefForCodex(normalizedPrimaryModel)
-    : normalizedPrimaryModel;
-  const alternateModel = usesCodexMockAppServer
-    ? remapQaMockModelRefForCodex(normalizedAlternateModel)
-    : normalizedAlternateModel;
+  const remapModel = (modelRef: string) =>
+    remapModelRefForForcedRuntime({ modelRef, providerMode, forcedRuntime: params.forcedRuntime });
+  const primaryModel = remapModel(normalizedPrimaryModel);
+  const alternateModel = remapModel(normalizedAlternateModel);
   const modelProviderIds = [primaryModel, alternateModel]
     .map((ref) => splitQaModelRef(ref)?.provider)
     .filter((providerValue): providerValue is string => Boolean(providerValue));
@@ -193,7 +186,8 @@ export function buildQaGatewayConfig(params: {
   const gatewayModels: ReturnType<typeof provider.buildGatewayModels> =
     usesCodexMockAppServer && codexMockOpenAiCatalog
       ? {
-          mode: "merge" as const,
+          // Synthetic credentials must not enter live provider catalog discovery.
+          mode: "replace" as const,
           providers: {
             openai: {
               ...codexMockOpenAiCatalog,

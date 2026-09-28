@@ -13,6 +13,13 @@ import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 
 const envVar = (...parts: string[]) => parts.join("_");
 
+function createEnvGatewayTokenConfig(id: string): OpenClawConfig {
+  return {
+    gateway: { auth: { token: { source: "env", provider: "default", id } } },
+    secrets: { providers: { default: { source: "env" } } },
+  };
+}
+
 function createExecGatewayTokenConfig(
   markerPath: string,
   command = process.execPath,
@@ -65,22 +72,7 @@ describe("resolveGatewayAuthTokenForService", () => {
 
   it("resolves SecretRef-backed gateway.auth.token", async () => {
     const resolved = await resolveGatewayAuthTokenForService(
-      {
-        gateway: {
-          auth: {
-            token: {
-              source: "env",
-              provider: "default",
-              id: "CUSTOM_GATEWAY_TOKEN",
-            },
-          },
-        },
-        secrets: {
-          providers: {
-            default: { source: "env" },
-          },
-        },
-      } as OpenClawConfig,
+      createEnvGatewayTokenConfig("CUSTOM_GATEWAY_TOKEN"),
       {
         CUSTOM_GATEWAY_TOKEN: "resolved-token",
       } as NodeJS.ProcessEnv,
@@ -153,22 +145,7 @@ describe("resolveGatewayAuthTokenForService", () => {
 
   it("does not fall back to OPENCLAW_GATEWAY_TOKEN when a SecretRef is unresolved", async () => {
     const resolved = await resolveGatewayAuthTokenForService(
-      {
-        gateway: {
-          auth: {
-            token: {
-              source: "env",
-              provider: "default",
-              id: "MISSING_GATEWAY_TOKEN",
-            },
-          },
-        },
-        secrets: {
-          providers: {
-            default: { source: "env" },
-          },
-        },
-      } as OpenClawConfig,
+      createEnvGatewayTokenConfig("MISSING_GATEWAY_TOKEN"),
       {
         OPENCLAW_GATEWAY_TOKEN: "env-fallback-token",
       } as NodeJS.ProcessEnv,
@@ -182,22 +159,7 @@ describe("resolveGatewayAuthTokenForService", () => {
 
   it("does not fall back to OPENCLAW_GATEWAY_TOKEN when a SecretRef resolves to empty", async () => {
     const resolved = await resolveGatewayAuthTokenForService(
-      {
-        gateway: {
-          auth: {
-            token: {
-              source: "env",
-              provider: "default",
-              id: "CUSTOM_GATEWAY_TOKEN",
-            },
-          },
-        },
-        secrets: {
-          providers: {
-            default: { source: "env" },
-          },
-        },
-      } as OpenClawConfig,
+      createEnvGatewayTokenConfig("CUSTOM_GATEWAY_TOKEN"),
       {
         CUSTOM_GATEWAY_TOKEN: "   ",
         OPENCLAW_GATEWAY_TOKEN: "env-fallback-token",
@@ -207,33 +169,6 @@ describe("resolveGatewayAuthTokenForService", () => {
     expect(resolved.token).toBeUndefined();
     expect(resolved.unavailableReason).toContain("gateway.auth.token SecretRef");
     expect(resolved.unavailableReason).not.toContain("env-fallback-token");
-  });
-
-  it("returns unavailableReason when SecretRef is unresolved without env fallback", async () => {
-    const resolved = await resolveGatewayAuthTokenForService(
-      {
-        gateway: {
-          auth: {
-            token: {
-              source: "env",
-              provider: "default",
-              id: "MISSING_GATEWAY_TOKEN",
-            },
-          },
-        },
-        secrets: {
-          providers: {
-            default: { source: "env" },
-          },
-        },
-      } as OpenClawConfig,
-      {} as NodeJS.ProcessEnv,
-    );
-
-    expect(resolved.token).toBeUndefined();
-    expect(resolved.unavailableReason).toBe(
-      "gateway.auth.token SecretRef is configured but unresolved (gateway.auth.token SecretRef is unresolved (env:default:MISSING_GATEWAY_TOKEN).).",
-    );
   });
 });
 

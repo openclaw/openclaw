@@ -3,10 +3,12 @@ import {
   isRecord,
   normalizeOptionalString as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { QaParitySuiteSummary } from "./agentic-parity-report.js";
+import { escapeTableCell } from "./report.js";
+import type { RuntimeId } from "./runtime-id.js";
 import {
   runtimeParityCellStatus,
   normalizeRuntimePair,
-  type RuntimeId,
   type RuntimeParityDrift,
   type RuntimeParityResult,
 } from "./runtime-parity.js";
@@ -19,27 +21,13 @@ import {
 } from "./runtime-tool-metadata.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
-type QaToolCoverageSuiteScenario = {
-  name: string;
-  status: "pass" | "fail" | "skip";
-  runtimeParity?: RuntimeParityResult;
-};
-
-export type QaToolCoverageSuiteSummary = {
-  scenarios: QaToolCoverageSuiteScenario[];
-  run?: {
-    runtimePair?: [RuntimeId, RuntimeId] | null;
-  };
-};
-
 type QaToolCoverageStatus = "pass" | "fail" | "skip" | "missing" | "not-run";
 type QaToolCoverageDrift = RuntimeParityDrift | "not-run";
-type QaToolCoverageBucket = QaRuntimeToolBucket;
 
 type QaToolCoverageRow = {
   tool: string;
   runtimeToolName?: string;
-  bucket: QaToolCoverageBucket;
+  bucket: QaRuntimeToolBucket;
   expectedLayer: QaRuntimeToolExpectedLayer;
   capabilityLayer: QaRuntimeCapabilityLayer;
   required: boolean;
@@ -148,7 +136,7 @@ function readScenarioRuntimeToolName(scenario: QaSeedScenarioWithSource): string
 }
 
 function summaryByScenarioId(
-  summary: QaToolCoverageSuiteSummary | undefined,
+  summary: QaParitySuiteSummary | undefined,
 ): Map<string, RuntimeParityResult> {
   const byScenarioId = new Map<string, RuntimeParityResult>();
   for (const scenario of summary?.scenarios ?? []) {
@@ -169,9 +157,7 @@ function mergeScenarioResults(
   if (scenarioResults.length === 0) {
     return undefined;
   }
-  const failingResult =
-    scenarioResults.find((result) => !PASSING_DRIFTS.has(result.drift)) ?? scenarioResults[0];
-  return failingResult;
+  return scenarioResults.find((result) => !PASSING_DRIFTS.has(result.drift)) ?? scenarioResults[0];
 }
 
 function summarizeRuntimeToolCalls(
@@ -258,7 +244,7 @@ function coverageFailureForRow(row: QaToolCoverageRow): string | undefined {
 
 export function buildQaToolCoverageReport(params: {
   scenarios: readonly QaSeedScenarioWithSource[];
-  summary?: QaToolCoverageSuiteSummary;
+  summary?: QaParitySuiteSummary;
   runtimePair?: [RuntimeId, RuntimeId];
   generatedAt?: string;
 }): QaToolCoverageReport {
@@ -352,8 +338,4 @@ export function renderQaToolCoverageMarkdownReport(report: QaToolCoverageReport)
   }
 
   return `${lines.join("\n").trimEnd()}\n`;
-}
-
-function escapeTableCell(value: string): string {
-  return value.replace(/\\/gu, "\\\\").replace(/\|/gu, "\\|").replace(/\s+/gu, " ").trim();
 }

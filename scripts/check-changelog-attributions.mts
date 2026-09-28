@@ -6,53 +6,17 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { changelogFormat, isReleaseChangelogPath } from "./lib/release-changelog.mjs";
 
-/**
- * Exact handles that changelog thanks entries must not credit.
- */
-const FORBIDDEN_CHANGELOG_THANKS_HANDLES = new Set([
-  "codex",
-  "openclaw",
-  "steipete",
-  "clawsweeper",
-  "openclaw-clawsweeper",
-  "clawsweeper[bot]",
-  "openclaw-clawsweeper[bot]",
-]);
-/**
- * Handle prefixes that identify forbidden changelog thanks credits.
- */
-const FORBIDDEN_CHANGELOG_THANKS_HANDLE_PREFIXES = ["app/"];
-/**
- * Handle suffixes that identify forbidden changelog thanks credits.
- */
-const FORBIDDEN_CHANGELOG_THANKS_HANDLE_SUFFIXES = ["[bot]"];
-/**
- * Handles that require an explicit human credit instead.
- */
+const FORBIDDEN_INTERNAL_THANKS_HANDLES = new Set(["codex", "openclaw", "steipete"]);
 const CHANGELOG_THANKS_REQUIRE_HUMAN_CREDIT_HANDLES = new Set([
   "clawsweeper",
   "openclaw-clawsweeper",
-  "clawsweeper[bot]",
-  "openclaw-clawsweeper[bot]",
 ]);
-/**
- * Handle prefixes that require explicit human credit instead.
- */
-const CHANGELOG_THANKS_REQUIRE_HUMAN_CREDIT_HANDLE_PREFIXES = ["app/"];
-/**
- * Handle suffixes that require explicit human credit instead.
- */
-const CHANGELOG_THANKS_REQUIRE_HUMAN_CREDIT_HANDLE_SUFFIXES = ["[bot]"];
 
 const THANKS_PATTERN = /\bThanks\b/iu;
 const THANKED_HANDLE_PATTERN = /@([-_/A-Za-z0-9]+(?:\[bot\])?)/giu;
 type ThanksOptions = { strictBotHandle?: boolean; docsMirror?: boolean };
 
-/**
- * Reports whether a handle is forbidden in changelog thanks text.
- */
 export function isForbiddenChangelogThanksHandle(handle: string, options: ThanksOptions = {}) {
-  const { strictBotHandle = false } = options;
   const normalized = handle.toLowerCase();
   // Approved docs mirrors retain every verified human, including the maintainer.
   // Initial notes, frozen accounting, and PR-author queries keep their existing policy.
@@ -63,42 +27,21 @@ export function isForbiddenChangelogThanksHandle(handle: string, options: Thanks
     // Empty/null input is not a GitHub handle, but the shell query path may pass it through.
     return true;
   }
-  if (
-    FORBIDDEN_CHANGELOG_THANKS_HANDLES.has(normalized) ||
-    FORBIDDEN_CHANGELOG_THANKS_HANDLE_PREFIXES.some((prefix) => normalized.startsWith(prefix)) ||
-    FORBIDDEN_CHANGELOG_THANKS_HANDLE_SUFFIXES.some((suffix) => normalized.endsWith(suffix))
-  ) {
-    return true;
-  }
-  if (strictBotHandle) {
-    // PR-author checks should not reject a real human whose login merely contains a bot keyword.
-    return false;
-  }
-  return false;
-}
-
-/**
- * Reports whether a handle needs a separate human credit.
- */
-export function requiresExplicitHumanChangelogThanks(handle: string) {
-  const normalized = handle.toLowerCase();
-  if (normalized === "" || normalized === "null") {
-    return false;
-  }
   return (
-    CHANGELOG_THANKS_REQUIRE_HUMAN_CREDIT_HANDLES.has(normalized) ||
-    CHANGELOG_THANKS_REQUIRE_HUMAN_CREDIT_HANDLE_PREFIXES.some((prefix) =>
-      normalized.startsWith(prefix),
-    ) ||
-    CHANGELOG_THANKS_REQUIRE_HUMAN_CREDIT_HANDLE_SUFFIXES.some((suffix) =>
-      normalized.endsWith(suffix),
-    )
+    FORBIDDEN_INTERNAL_THANKS_HANDLES.has(normalized) ||
+    requiresExplicitHumanChangelogThanks(normalized)
   );
 }
 
-/**
- * Finds changelog lines that thank forbidden handles.
- */
+export function requiresExplicitHumanChangelogThanks(handle: string) {
+  const normalized = handle.toLowerCase();
+  return (
+    CHANGELOG_THANKS_REQUIRE_HUMAN_CREDIT_HANDLES.has(normalized) ||
+    normalized.startsWith("app/") ||
+    normalized.endsWith("[bot]")
+  );
+}
+
 export function findForbiddenChangelogThanks(content: string, options: ThanksOptions = {}) {
   return content
     .split(/\r?\n/u)
@@ -118,9 +61,6 @@ export function findForbiddenChangelogThanks(content: string, options: ThanksOpt
     .filter((violation) => violation !== null);
 }
 
-/**
- * Runs the changelog attribution check.
- */
 export async function main(argv = process.argv.slice(2)) {
   if (argv[0] === "--is-forbidden-handle") {
     process.exitCode = isForbiddenChangelogThanksHandle(argv[1] ?? "", {

@@ -13,7 +13,10 @@ import {
   isOpenClawAgentDatabasePathCurrent,
   readOpenClawAgentDatabaseIdentity,
 } from "../../state/openclaw-agent-db-identity.js";
-import { classifyOpenClawAgentDatabaseReadError } from "../../state/openclaw-agent-db-read-error.js";
+import {
+  classifyOpenClawAgentDatabaseReadError,
+  isOpenClawAgentDatabaseReadOpenFailure,
+} from "../../state/openclaw-agent-db-read-error.js";
 import {
   retainOpenClawAgentDatabaseReadOnly,
   withOpenClawAgentDatabaseReadOnly,
@@ -187,7 +190,7 @@ class SessionEntryDataReadError extends Error {
   }
 }
 
-/** Only the row operation becomes data; admission, source checks and rollback still throw. */
+/** Unreadable stores and rows become data; authority, source checks and cleanup still throw. */
 export function loadSessionEntryReadOnlyResultInScope(
   scope: SessionEntryReadScope & { databaseAgentId?: string },
   continuation?: CanonicalSessionReaderContinuation,
@@ -211,6 +214,9 @@ export function loadSessionEntryReadOnlyResultInScope(
       // Failed rollback can preserve the original exception while poisoning/closing its handle.
       error.assertSettled();
       return err(error.readError);
+    }
+    if (isOpenClawAgentDatabaseReadOpenFailure(error)) {
+      return err(error);
     }
     throw error;
   }
@@ -453,7 +459,11 @@ export function loadExactSessionEntryFromStoreReadOnly(
 }
 
 /** Read requested keys through synchronous store/projection groups. */
-export type ExactSessionEntryBatchScope = Omit<SessionEntryReadScope, "sessionKey"> & {
+export type ExactSessionEntryBatchScope = Omit<
+  SessionEntryReadScope,
+  "sessionKey" | "projection"
+> & {
+  projection?: SessionEntryReadScope["projection"] | "delivery";
   sessionKeys: readonly string[];
   onReadSource?: (source: SessionEntryReadSource) => void;
 };
@@ -465,7 +475,7 @@ function groupExactSessionEntryReadRequests(scopes: readonly ExactSessionEntryBa
     string,
     {
       options: OpenClawAgentDatabaseOptions;
-      projection: SessionEntryReadScope["projection"];
+      projection: ExactSessionEntryBatchScope["projection"];
       requests: Array<{ index: number; sessionKeys: string[] }>;
     }
   >();

@@ -45,12 +45,10 @@ process.on('message', async (request) => {
   record({ kind: 'classify', text });
   if (text === 'block') Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
   if (text === 'wait') {
-    await new Promise((resolve) => {
-      const releasePath = path.join(dir, 'release');
-      const check = () => { if (fs.existsSync(releasePath)) { watcher.close(); resolve(); } };
-      const watcher = fs.watch(dir, check);
-      check();
-    });
+    const releasePath = path.join(dir, 'release');
+    while (!fs.existsSync(releasePath)) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
   }
   if (text === 'missing') { process.send({ kind: 'error', id: request.id, code: 'model-missing' }); return; }
   if (text === 'exit') process.exit(7);

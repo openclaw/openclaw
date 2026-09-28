@@ -4,7 +4,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { updateConfigMachineStateInDatabase } from "../../state/config-machine-state-write.js";
-import { readConfigMachineState } from "../../state/config-machine-state.js";
+import { readConfigMachineStateRowInDatabase } from "../../state/config-machine-state.js";
 import type { OpenClawStateDatabase as StateDatabase } from "../../state/openclaw-state-db-contract.js";
 import type { DB as OpenClawStateDatabase } from "../../state/openclaw-state-db.generated.js";
 
@@ -49,7 +49,8 @@ function experienceReviewKey(agentId: string, workspaceDir: string): string {
 }
 
 export function readSkillCuratorReviewStatusInDatabase(database: StateDatabase) {
-  const state = readConfigMachineState<SkillCuratorState>("skills.curatorState", { database });
+  const row = readConfigMachineStateRowInDatabase(database.db, "skills.curatorState");
+  const state: SkillCuratorState | undefined = row ? JSON.parse(row.value_json) : undefined;
   return {
     lastAttemptAtMs: state?.lastAttemptAtMs ?? null,
     lastSuccessAtMs: state?.lastSuccessAtMs ?? null,

@@ -47,15 +47,15 @@ export async function loadGatewayDiagnostics(
     : Promise.resolve({ models: [] });
   const lanesRequest = loadCommandLaneDiagnostics(client, signal);
   const [status, health, models, heartbeat, laneDiagnostics] = await Promise.all([
-    client.request("status", {}, { signal }),
-    client.request("health", {}, { signal }),
+    client.request<StatusSummary>("status", {}, { signal }),
+    client.request<HealthSnapshot>("health", {}, { signal }),
     modelsRequest,
     client.request("last-heartbeat", {}, { signal }),
     lanesRequest,
   ]);
   return {
-    status: status as StatusSummary,
-    health: health as HealthSnapshot,
+    status,
+    health,
     models: models.models,
     heartbeat,
     ...laneDiagnostics,

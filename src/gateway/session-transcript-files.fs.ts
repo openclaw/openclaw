@@ -3,6 +3,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import {
@@ -18,7 +20,7 @@ import {
 } from "../config/sessions/paths.js";
 import { resolveRealpathOrAbsolute as canonicalizePathForComparison } from "../infra/boundary-path.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { readFileWindowFully } from "../infra/file-read.js";
+import { openLocalFileSafely } from "../infra/fs-safe.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
@@ -41,9 +43,6 @@ const resetArchiveDiscoveryCache = new Map<
     archives: ResetArchiveCandidate[];
   }
 >();
-function clearSessionTranscriptResetArchiveDiscoveryCache(): void {
-  resetArchiveDiscoveryCache.clear();
-}
 
 function classifySessionTranscriptCandidate(
   sessionId: string,
@@ -121,23 +120,12 @@ async function resetArchiveHeaderMatchesSessionId(
   // Compressed archives must be probed through the materialized JSONL cache:
   // a raw prefix read of zstd bytes never matches a session header, which
   // would silently drop every compressed archive from fallback history.
-  let probePath: string;
   try {
-    probePath = materializeSessionArchiveForRead(archivePath);
-  } catch {
-    return false;
-  }
-  const stat = await fs.promises.stat(probePath).catch(() => null);
-  if (!stat?.isFile()) {
-    return false;
-  }
-  const handle = await fs.promises.open(probePath, "r").catch(() => null);
-  if (!handle) {
-    return false;
-  }
-  try {
+    await using opened = await openLocalFileSafely({
+      filePath: materializeSessionArchiveForRead(archivePath),
+    });
     const buffer = Buffer.alloc(64 * 1024);
-    const bytesRead = await readFileWindowFully(handle, buffer, 0);
+    const bytesRead = await readFileWindowFully(opened.handle, buffer, 0);
     const lines = buffer.toString("utf-8", 0, bytesRead).split(/\r?\n/);
     for (const line of lines) {
       const trimmed = line.trim();
@@ -145,19 +133,11 @@ async function resetArchiveHeaderMatchesSessionId(
         continue;
       }
       const record = JSON.parse(trimmed) as unknown;
-      return (
-        Boolean(record) &&
-        typeof record === "object" &&
-        !Array.isArray(record) &&
-        (record as { type?: unknown; id?: unknown }).type === "session" &&
-        (record as { type?: unknown; id?: unknown }).id === sessionId
-      );
+      return isRecord(record) && record.type === "session" && record.id === sessionId;
     }
     return false;
   } catch {
     return false;
-  } finally {
-    await handle.close().catch(() => undefined);
   }
 }
 
@@ -232,7 +212,7 @@ async function resolveLatestResetArchiveForTranscriptAsync(
 function transcriptArchiveIdentity(
   sessionId: string,
   transcriptPath: string,
-): { key: string; requireSessionHeader: boolean } | undefined {
+): { key: string; requireSessionHeader: boolean } {
   const generatedSessionId = extractGeneratedTranscriptSessionId(transcriptPath);
   return {
     key: path.basename(transcriptPath),
@@ -257,9 +237,6 @@ export async function resolveSessionTranscriptResetArchiveCandidatesAsync(
     agentId,
   )) {
     const identity = transcriptArchiveIdentity(sessionId, candidate);
-    if (!identity) {
-      continue;
-    }
     candidatesByIdentity.set(identity.key, [
       ...(candidatesByIdentity.get(identity.key) ?? []),
       { path: candidate, requireSessionHeader: identity.requireSessionHeader },
@@ -292,7 +269,7 @@ function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string 
   const ts = formatSessionArchiveTimestamp();
   const archived = `${filePath}.${reason}.${ts}`;
   fs.renameSync(filePath, archived);
-  clearSessionTranscriptResetArchiveDiscoveryCache();
+  resetArchiveDiscoveryCache.clear();
   // Notify the session transcript subscribers (memory index, sessions-history
   // HTTP, etc.) that a mutation landed on a session-owned path. Without this
   // emit the memory sync's incremental path never learns the new archive
@@ -331,19 +308,9 @@ export function archiveSessionTranscriptPaths(opts: {
   return archived;
 }
 
-export function archiveSessionTranscripts(opts: {
-  sessionId: string;
-  storePath: string | undefined;
-  sessionFile?: string;
-  agentId?: string;
-  reason: "reset" | "deleted";
-  /**
-   * When true, only archive files resolved under the session store directory.
-   * This prevents maintenance operations from mutating paths outside the agent sessions dir.
-   */
-  restrictToStoreDir?: boolean;
-  onArchiveError?: (err: unknown, sourcePath: string) => void;
-}): string[] {
+export function archiveSessionTranscripts(
+  opts: Parameters<typeof archiveSessionTranscriptsDetailed>[0],
+): string[] {
   return archiveSessionTranscriptsDetailed(opts).map((entry) => entry.archivedPath);
 }
 

@@ -7,12 +7,13 @@ import {
   getRegistryWorktreeProvisionedStateInDatabase,
   listLiveRegistryWorktreeIdsInDatabase,
   listRegistryWorktreesInDatabase,
+  type WorktreeRegistryListOptions,
 } from "./registry-read.kernel.js";
 import type { ManagedWorktreeRecord, ProvisionedFileState } from "./types.js";
 
 export type WorktreeRegistryReadOperations = {
   "worktrees.get": { input: { id: string }; output: ManagedWorktreeRecord | undefined };
-  "worktrees.list": { input: undefined; output: ManagedWorktreeRecord[] };
+  "worktrees.list": { input: WorktreeRegistryListOptions; output: ManagedWorktreeRecord[] };
   "worktrees.liveIds": { input: undefined; output: string[] };
   "worktrees.provisionedPaths": { input: { id: string }; output: string[] | undefined };
   "worktrees.provisionedState": {
@@ -50,7 +51,7 @@ export function executeWorktreeRegistryReadCommand(
     return getRegistryWorktreeInDatabase(database, command.input.id);
   }
   if (command.type === "worktrees.list") {
-    return listRegistryWorktreesInDatabase(database);
+    return listRegistryWorktreesInDatabase(database, command.input);
   }
   if (command.type === "worktrees.liveIds") {
     return listLiveRegistryWorktreeIdsInDatabase(database);

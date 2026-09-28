@@ -19,10 +19,6 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 
 const secretResolveLoader = createLazyImportLoader(() => import("../secrets/resolve.js"));
 
-function loadSecretResolve() {
-  return secretResolveLoader.load();
-}
-
 const ENV_SOURCE_LABEL_RE = /(?:^|:\s)([A-Z][A-Z0-9_]*)$/;
 
 type SecretRefChoice = "env" | "store" | "provider"; // pragma: allowlist secret
@@ -71,11 +67,7 @@ export function resolveRefFallbackInput(params: {
   env?: NodeJS.ProcessEnv;
 }): { ref: SecretRef; resolvedValue: string } {
   const fallbackEnvVar =
-    params.preferredEnvVar ??
-    getProviderEnvVarsCore(params.provider, {
-      config: params.config,
-      includeUntrustedWorkspacePlugins: false,
-    }).find((candidate) => normalizeOptionalString(candidate) !== undefined);
+    params.preferredEnvVar ?? resolveDefaultProviderEnvVar(params.provider, params.config);
   if (!fallbackEnvVar) {
     throw new Error(
       `No default environment variable mapping found for provider "${params.provider}". Set a provider-specific env var, or re-run setup in an interactive terminal to configure a ref.`,
@@ -270,7 +262,7 @@ async function promptProviderSecretRefForSetup(params: {
   };
 
   try {
-    const { resolveSecretRefString } = await loadSecretResolve();
+    const { resolveSecretRefString } = await secretResolveLoader.load();
     const resolvedValue = await resolveSecretRefString(ref, {
       config: params.config,
       env: params.env ?? process.env,
@@ -362,7 +354,7 @@ export async function promptSecretRefForSetup(params: {
         }),
         id,
       };
-      const { resolveSecretRefString } = await loadSecretResolve();
+      const { resolveSecretRefString } = await secretResolveLoader.load();
       const resolvedValue = await resolveSecretRefString(ref, {
         config: params.config,
         env: params.env ?? process.env,

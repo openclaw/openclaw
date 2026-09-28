@@ -128,20 +128,13 @@ export type { SetupInferenceFailureStatus };
 export type SetupInferenceStatus = "ok" | SetupInferenceFailureStatus;
 
 export type ActivateSetupInferenceResult =
-  | {
-      ok: true;
-      modelTarget?: "utility";
-      modelRef: string;
-      latencyMs: number;
+  | (Extract<VerifySetupInferenceResult, { ok: true }> & {
       lines: string[];
       gatewayRestartRequired?: true;
-    }
-  | {
-      ok: false;
-      status: SetupInferenceFailureStatus;
-      error: string;
+    })
+  | (Extract<VerifySetupInferenceResult, { ok: false }> & {
       disposition?: SetupInferenceActivationRejection["disposition"];
-    };
+    });
 
 /**
  * The config commit may have happened, so callers must verify current setup
@@ -178,18 +171,14 @@ export type VerifySetupInferenceResult =
     };
 
 export type CompleteSetupInferenceResult =
-  | { ok: true; modelRef: string; latencyMs: number; text: string }
-  | { ok: false; status: SetupInferenceFailureStatus; error: string };
+  | (Omit<Extract<VerifySetupInferenceResult, { ok: true }>, "modelTarget"> & { text: string })
+  | Extract<VerifySetupInferenceResult, { ok: false }>;
 
 export type BoundVerifySetupInferenceResult =
-  | {
-      ok: true;
-      modelTarget?: "utility";
-      modelRef: string;
-      latencyMs: number;
+  | (Extract<VerifySetupInferenceResult, { ok: true }> & {
       binding: SystemAgentVerifiedInferenceBinding;
-    }
-  | { ok: false; status: SetupInferenceFailureStatus; error: string };
+    })
+  | Extract<VerifySetupInferenceResult, { ok: false }>;
 
 export type ActivateSetupInferenceParams = {
   kind: SetupInferenceKind | "api-key" | "provider-auth";
@@ -271,17 +260,9 @@ export async function waitForProviderAuth<T>(
   }
 }
 
-type SetupInferenceRunEmbeddedAgent = (
-  params: Parameters<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>[0] & {
-    onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;
-    authProfileStateMode?: "read-write" | "read-only";
-    preparedModelRuntimeMode?: "isolated-read-only";
-  },
-) => ReturnType<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>;
-
 export type ActivateSetupInferenceDeps = {
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
-  runEmbeddedAgent?: SetupInferenceRunEmbeddedAgent;
+  runEmbeddedAgent?: typeof import("../agents/embedded-agent.js").runEmbeddedAgent;
   runCliAgent?: typeof import("../agents/cli-runner.js").runCliAgent;
   ensureCodexRuntimePlugin?: typeof import("../commands/codex-runtime-plugin-install.js").ensureCodexRuntimePluginForModelSelection;
   transformConfigWithPendingPluginInstalls?: typeof import("../plugins/install-record-commit.js").transformConfigWithPendingPluginInstalls;
@@ -324,18 +305,7 @@ export function toSavedAuthSetupKind(profileId: string): SavedAuthSetupInference
 }
 
 export function parseSavedAuthSetupProfileId(kind: string): string | undefined {
-  if (!kind.startsWith(SAVED_AUTH_SETUP_KIND_PREFIX)) {
-    return undefined;
-  }
-  const encoded = kind.slice(SAVED_AUTH_SETUP_KIND_PREFIX.length);
-  if (!encoded) {
-    return undefined;
-  }
-  try {
-    return decodeURIComponent(encoded) || undefined;
-  } catch {
-    return undefined;
-  }
+  return parseEncodedSetupKind(kind, SAVED_AUTH_SETUP_KIND_PREFIX);
 }
 
 export function parseInferenceRef(modelRef: string): { provider: string; model: string } {
@@ -346,15 +316,15 @@ export function parseInferenceRef(modelRef: string): { provider: string; model: 
 }
 
 export function parseProviderAutoSetupChoiceId(kind: string): string | undefined {
-  if (!kind.startsWith(PROVIDER_AUTO_SETUP_KIND_PREFIX)) {
-    return undefined;
-  }
-  const encoded = kind.slice(PROVIDER_AUTO_SETUP_KIND_PREFIX.length);
-  if (!encoded) {
+  return parseEncodedSetupKind(kind, PROVIDER_AUTO_SETUP_KIND_PREFIX);
+}
+
+function parseEncodedSetupKind(kind: string, prefix: string): string | undefined {
+  if (!kind.startsWith(prefix)) {
     return undefined;
   }
   try {
-    return decodeURIComponent(encoded) || undefined;
+    return decodeURIComponent(kind.slice(prefix.length)) || undefined;
   } catch {
     return undefined;
   }

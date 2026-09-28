@@ -1,5 +1,4 @@
 /** Parses, clones, verifies, and installs plugin packages from Git specs. */
-import "../infra/fs-safe-defaults.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
@@ -19,6 +18,7 @@ import {
   resolvePackageDirInstallTransaction,
 } from "../infra/install-package-dir.js";
 import { withInstallWorkspace } from "../infra/install-source-utils.js";
+import { resolveNpmCommand } from "../infra/npm-command.js";
 import {
   createSafeNpmInstallArgs,
   createSafeNpmInstallEnv,
@@ -454,15 +454,14 @@ export async function installPluginFromGitSpec(
     if (!params.dryRun) {
       params.logger?.info?.("Installing plugin dependencies with npm…");
       const install = await runCommandWithTimeout(
-        [
-          "npm",
-          ...createSafeNpmInstallArgs({
+        resolveNpmCommand(
+          createSafeNpmInstallArgs({
             omitDev: true,
             loglevel: "error",
             noAudit: true,
             noFund: true,
           }),
-        ],
+        ),
         {
           cwd: repoDir,
           timeoutMs: resolveInstallWorkTimeoutMs(

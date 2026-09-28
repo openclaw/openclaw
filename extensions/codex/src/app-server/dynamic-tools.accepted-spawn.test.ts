@@ -32,18 +32,42 @@ afterEach(() => {
 });
 
 describe("Codex accepted child receipts", () => {
-  it.each([true, false, undefined])(
-    "preserves accepted child completion intent (%s)",
-    async (expectsCompletionMessage) => {
+  it.each([
+    { expectsCompletionMessage: true, presentation: {} },
+    {
+      expectsCompletionMessage: false,
+      presentation: { sessionUrl: "https://openclaw.example/chat/main/work", label: "Review" },
+    },
+    { expectsCompletionMessage: undefined, presentation: {} },
+  ])(
+    "preserves an accepted sessions_spawn after result middleware strips its details ($expectsCompletionMessage)",
+    async ({ expectsCompletionMessage, presentation }) => {
       // Preserve #96833: an accepted spawn is a successful tool call, even
       // when its child does not owe a completion message.
       const onAgentToolResult = vi.fn();
+      const registry = createEmptyPluginRegistry();
+      const handler = vi.fn(async (event: { result: AgentToolResult<unknown> }) => ({
+        result: {
+          ...event.result,
+          content: [{ type: "text" as const, text: "Child launch recorded." }],
+          details: {},
+        },
+      }));
+      registry.agentToolResultMiddlewares.push({
+        pluginId: "result-compactor",
+        pluginName: "Result Compactor",
+        rawHandler: handler,
+        handler,
+        runtimes: ["codex"],
+        source: "test",
+      });
+      setActivePluginRegistry(registry);
       const bridge = createSpawnBridge(
-        textToolResult("Accepted: launching child session to scan logs.", {
+        textToolResult("Accepted: launching child session.", {
           status: "accepted",
-          runId: "run_5f3a9c",
-          childSessionKey: "child-7b21",
-          mode: "run",
+          runId: "run_compacted",
+          childSessionKey: "child-compacted",
+          ...presentation,
           ...(expectsCompletionMessage !== undefined ? { expectsCompletionMessage } : {}),
         }),
       );
@@ -52,7 +76,7 @@ describe("Codex accepted child receipts", () => {
         {
           threadId: "thread-1",
           turnId: "turn-1",
-          callId: "call-accepted",
+          callId: "call-compacted",
           namespace: null,
           tool: "sessions_spawn",
           arguments: { task: "scan logs" },
@@ -60,69 +84,21 @@ describe("Codex accepted child receipts", () => {
         { onAgentToolResult },
       );
 
-      expect(result.success).toBe(true);
-      expect(result.contentItems).toEqual([
-        { type: "inputText", text: "Accepted: launching child session to scan logs." },
-      ]);
+      expect(toCodexDynamicToolProtocolResponse(result)).toEqual({
+        success: true,
+        contentItems: [{ type: "inputText", text: "Child launch recorded." }],
+      });
       expect(onAgentToolResult).toHaveBeenCalledWith(
         expect.objectContaining({ toolName: "sessions_spawn", isError: false }),
       );
       expect(bridge.telemetry.acceptedSessionSpawns).toEqual([
         {
-          runId: "run_5f3a9c",
-          childSessionKey: "child-7b21",
+          runId: "run_compacted",
+          childSessionKey: "child-compacted",
           expectsCompletionMessage: expectsCompletionMessage === true,
+          ...presentation,
         },
       ]);
     },
   );
-
-  it("preserves an accepted sessions_spawn after result middleware strips its details", async () => {
-    const registry = createEmptyPluginRegistry();
-    const handler = vi.fn(async (event: { result: AgentToolResult<unknown> }) => ({
-      result: {
-        ...event.result,
-        content: [{ type: "text" as const, text: "Child launch recorded." }],
-        details: {},
-      },
-    }));
-    registry.agentToolResultMiddlewares.push({
-      pluginId: "result-compactor",
-      pluginName: "Result Compactor",
-      rawHandler: handler,
-      handler,
-      runtimes: ["codex"],
-      source: "test",
-    });
-    setActivePluginRegistry(registry);
-    const bridge = createSpawnBridge(
-      textToolResult("Accepted: launching child session.", {
-        status: "accepted",
-        runId: "run_compacted",
-        childSessionKey: "child-compacted",
-        expectsCompletionMessage: true,
-      }),
-    );
-
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-compacted",
-      namespace: null,
-      tool: "sessions_spawn",
-      arguments: { task: "scan logs" },
-    });
-
-    expect(toCodexDynamicToolProtocolResponse(result)).toEqual({
-      success: true,
-      contentItems: [{ type: "inputText", text: "Child launch recorded." }],
-    });
-    expect(bridge.telemetry.acceptedSessionSpawns).toEqual([
-      {
-        runId: "run_compacted",
-        childSessionKey: "child-compacted",
-        expectsCompletionMessage: true,
-      },
-    ]);
-  });
 });

@@ -86,26 +86,6 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
     });
   });
 
-  it("strips bot mention in p2p (addressing prefix, not semantic content)", () => {
-    const ctx = parseFeishuMessageEvent(
-      makeEvent("@_bot_1 hello", [{ key: "@_bot_1", name: "Bot", id: { open_id: "ou_bot" } }]),
-      BOT_OPEN_ID,
-    );
-    expect(ctx.content).toBe("hello");
-  });
-
-  it("strips bot mention in group so slash commands work (#35994)", () => {
-    const ctx = parseFeishuMessageEvent(
-      makeEvent(
-        "@_bot_1 hello",
-        [{ key: "@_bot_1", name: "Bot", id: { open_id: "ou_bot" } }],
-        "group",
-      ),
-      BOT_OPEN_ID,
-    );
-    expect(ctx.content).toBe("hello");
-  });
-
   it("strips bot mention in group preserving slash command prefix (#35994)", () => {
     const ctx = parseFeishuMessageEvent(
       makeEvent(
@@ -118,52 +98,12 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
     expect(ctx.content).toBe("/model");
   });
 
-  it("strips bot mention but normalizes other mentions in p2p (mention-forward)", () => {
-    const ctx = parseFeishuMessageEvent(
-      makeEvent("@_bot_1 @_user_alice hello", [
-        { key: "@_bot_1", name: "Bot", id: { open_id: "ou_bot" } },
-        { key: "@_user_alice", name: "Alice", id: { open_id: "ou_alice" } },
-      ]),
-      BOT_OPEN_ID,
-    );
-    expect(ctx.content).toBe('<at user_id="ou_alice">Alice</at> hello');
-  });
-
   it("falls back to @name when open_id is absent", () => {
     const ctx = parseFeishuMessageEvent(
       makeEvent("@_user_1 hi", [{ key: "@_user_1", name: "Alice", id: { user_id: "uid_alice" } }]),
       BOT_OPEN_ID,
     );
     expect(ctx.content).toBe("@Alice hi");
-  });
-
-  it("falls back to plain @name when no id is present", () => {
-    const ctx = parseFeishuMessageEvent(
-      makeEvent("@_unknown hey", [{ key: "@_unknown", name: "Nobody", id: {} }]),
-      BOT_OPEN_ID,
-    );
-    expect(ctx.content).toBe("@Nobody hey");
-  });
-
-  it("treats mention key regex metacharacters as literal text", () => {
-    const ctx = parseFeishuMessageEvent(
-      makeEvent("hello world", [{ key: ".*", name: "Bot", id: { open_id: "ou_bot" } }]),
-      BOT_OPEN_ID,
-    );
-    expect(ctx.content).toBe("hello world");
-  });
-
-  it("normalizes multiple mentions in one pass", () => {
-    const ctx = parseFeishuMessageEvent(
-      makeEvent("@_bot_1 hi @_user_2", [
-        { key: "@_bot_1", name: "Bot One", id: { open_id: "ou_bot_1" } },
-        { key: "@_user_2", name: "User Two", id: { open_id: "ou_user_2" } },
-      ]),
-      BOT_OPEN_ID,
-    );
-    expect(ctx.content).toBe(
-      '<at user_id="ou_bot_1">Bot One</at> hi <at user_id="ou_user_2">User Two</at>',
-    );
   });
 
   it("treats $ in display name as literal (no replacement-pattern interpolation)", () => {

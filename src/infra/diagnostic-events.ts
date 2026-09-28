@@ -1,4 +1,3 @@
-// Defines and sanitizes runtime diagnostic event payloads.
 import { randomUUID } from "node:crypto";
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -657,7 +656,6 @@ export type DiagnosticHarnessRunOutcome = "completed" | "aborted" | "timed_out" 
 
 type DiagnosticHarnessRunBaseEvent = DiagnosticBaseEvent &
   DiagnosticRunScopeFields & {
-    type: "harness.run.started" | "harness.run.completed" | "harness.run.error";
     harnessId: string;
     pluginId?: string;
   };
@@ -690,7 +688,6 @@ export type DiagnosticHarnessRunErrorEvent = DiagnosticHarnessRunBaseEvent & {
 };
 
 type DiagnosticModelCallBaseEvent = DiagnosticBaseEvent & {
-  type: "model.call.started" | "model.call.completed" | "model.call.error";
   runId: string;
   agentId?: string;
   callId: string;
@@ -1159,16 +1156,10 @@ function dispatchDiagnosticEvent(
             createDiagnosticMetadataForListener(metadata),
           );
         } catch (err) {
-          const errorMessage =
-            err instanceof Error
-              ? (err.stack ?? err.message)
-              : typeof err === "string"
-                ? err
-                : String(err);
+          const errorMessage = err instanceof Error ? (err.stack ?? err.message) : String(err);
           console.error(
             `[diagnostic-events] listener error type=${enriched.type} seq=${enriched.seq}: ${errorMessage}`,
           );
-          // Ignore listener failures.
         }
       }
     }
@@ -1202,16 +1193,10 @@ function dispatchDiagnosticEvent(
           );
         }
       } catch (err) {
-        const errorMessage =
-          err instanceof Error
-            ? (err.stack ?? err.message)
-            : typeof err === "string"
-              ? err
-              : String(err);
+        const errorMessage = err instanceof Error ? (err.stack ?? err.message) : String(err);
         console.error(
           `[diagnostic-events] trusted listener error type=${enriched.type} seq=${enriched.seq}: ${errorMessage}`,
         );
-        // Ignore listener failures.
       }
     }
   } finally {
@@ -1381,7 +1366,8 @@ function emitDiagnosticEventWithTrust(
   const prepareTracePropagation =
     trusted && !options.queuedPhase && shouldPrepareDiagnosticTracePropagation(enriched);
 
-  if (options.queuedPhase || ASYNC_DIAGNOSTIC_EVENT_TYPES.has(enriched.type)) {
+  const queued = options.queuedPhase || ASYNC_DIAGNOSTIC_EVENT_TYPES.has(enriched.type);
+  if (queued) {
     if (state.asyncQueue.length >= MAX_ASYNC_DIAGNOSTIC_EVENTS) {
       if (!trusted || !PRIORITY_ASYNC_DIAGNOSTIC_EVENT_TYPES.has(enriched.type)) {
         noteAsyncDiagnosticDrop(state, { event: enriched, metadata, privateData, hostPluginId });
@@ -1393,14 +1379,6 @@ function emitDiagnosticEventWithTrust(
       }
     }
     state.asyncQueue.push({ event: enriched, metadata, privateData, hostPluginId });
-    if (prepareTracePropagation) {
-      prepareDiagnosticTracePropagation(
-        cloneDiagnosticValueForListener(enriched),
-        createDiagnosticMetadataForListener(metadata),
-      );
-    }
-    scheduleAsyncDiagnosticDrain(state);
-    return;
   }
 
   if (prepareTracePropagation) {
@@ -1409,7 +1387,11 @@ function emitDiagnosticEventWithTrust(
       createDiagnosticMetadataForListener(metadata),
     );
   }
-  dispatchDiagnosticEvent(state, enriched, metadata, privateData, { hostPluginId });
+  if (queued) {
+    scheduleAsyncDiagnosticDrain(state);
+  } else {
+    dispatchDiagnosticEvent(state, enriched, metadata, privateData, { hostPluginId });
+  }
 }
 
 function isToolExecutionEventInput(
@@ -1430,9 +1412,11 @@ function dispatchTrustedToolExecutionEvent(
   state.toolExecutionSeq += 1;
   let enriched: TrustedToolExecutionEvent;
   try {
-    enriched = deepFreezeDiagnosticValue(
-      structuredClone({ ...event, seq: state.toolExecutionSeq, ts: Date.now() }),
-    ) as TrustedToolExecutionEvent;
+    enriched = cloneDiagnosticValueForListener({
+      ...event,
+      seq: state.toolExecutionSeq,
+      ts: Date.now(),
+    });
   } catch (error) {
     console.error(
       `[diagnostic-events] tool execution clone error type=${event.type}: ${String(error)}`,
@@ -1556,13 +1540,11 @@ export function emitTrustedDiagnosticEventWithPrivateData(
   }
   // Plugin-facing emitters may provide trusted private content, but host attribution
   // is reserved for the object-identity provenance consumed above.
-  const sanitized = {
-    ...(privateData as DiagnosticEventPrivateData & { hostPluginId?: unknown }),
-  } as Record<string, unknown>;
-  delete sanitized.hostPluginId;
+  const sanitized = { ...privateData };
+  Reflect.deleteProperty(sanitized, "hostPluginId");
   emitDiagnosticEventWithTrust(event, true, {
     coreModelRequestLifecycle,
-    privateData: sanitized as DiagnosticEventPrivateData,
+    privateData: sanitized,
   });
 }
 

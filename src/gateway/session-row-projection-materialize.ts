@@ -2,6 +2,7 @@ import { performance } from "node:perf_hooks";
 import { listAgentIds, withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { projectGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
+import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import { readCommittedSessionEntryCache } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { readExactSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-read.js";
 import { resolveSessionKeyBySessionId } from "../config/sessions/session-accessor.sqlite-entry.js";
@@ -19,6 +20,7 @@ import { readSessionRowFacts } from "./server-methods/session-placement-read-pro
 import { readSessionListSelectionFacts } from "./session-list-target.js";
 import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
 import * as records from "./session-row-projection-record.js";
+import type { prepareSessionRowScopes } from "./session-row-scope.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { deriveSessionTitle, type SessionChildLink } from "./session-utils-core.js";
@@ -287,23 +289,61 @@ function readIncognitoSessionRow(params: {
 
 /** Resident identities use indexes; private identities remain exact process-local reads. */
 export function findSessionRowById(
-  query: { sessionId: string; agentId?: string; storePath?: string },
+  query: { sessionId: string; agentId?: string; storePath?: string; federated?: boolean },
   owner: {
     disposed: boolean;
     lookup: (query: records.Lookup) => records.Row | undefined;
     matching: (query: records.Query, kind?: string) => records.Row[];
+    scope: ReturnType<typeof prepareSessionRowScopes>;
   },
-) {
-  if (
-    !query.agentId ||
-    !query.storePath ||
-    !isIncognitoOpenClawAgentSqlitePath(query.storePath, { agentId: query.agentId })
-  ) {
-    return owner.matching({ ...query, key: query.sessionId }, "id");
+): records.Row[] {
+  if (owner.disposed) {
+    return [];
   }
-  const key = !owner.disposed && resolveSessionKeyBySessionId(query);
-  const row = key ? owner.lookup({ ...query, agentId: query.agentId, key }) : undefined;
-  return row?.entry?.sessionId === query.sessionId ? [row] : [];
+  if (
+    query.agentId &&
+    query.storePath &&
+    isIncognitoOpenClawAgentSqlitePath(query.storePath, { agentId: query.agentId })
+  ) {
+    const key = resolveSessionKeyBySessionId(query);
+    if (!key || (query.federated && isInternalSessionEffectsKey(key))) {
+      return [];
+    }
+    const row = owner.lookup({ ...query, agentId: query.agentId, key });
+    return row?.entry?.sessionId === query.sessionId &&
+      (!query.federated || row.entry.incognito === true)
+      ? [row]
+      : [];
+  }
+  const candidates = owner.matching({ ...query, key: query.sessionId }, "id");
+  if (!query.federated) {
+    return candidates;
+  }
+  // Select each key's physical winner before matching its ID. A shadowed row
+  // must not resurrect an old run mapping that the combined store would hide.
+  const selected = candidates.length
+    ? [...new Set(candidates.map((row) => row.key))].flatMap((key) => {
+        const paths = owner.scope.select(query).paths;
+        const row = records.first(
+          owner
+            .matching({ ...query, key })
+            .filter((candidate) => paths.has(candidate.storeTarget.storePath)),
+          paths.keys(),
+        );
+        return row?.entry?.sessionId === query.sessionId ? [row] : [];
+      })
+    : [];
+  // Process-held private stores keep their existing exact native reader;
+  // private rows never enter the resident index or a new cache.
+  for (const store of listOpenIncognitoAgentDatabases()) {
+    if (
+      (!query.agentId || query.agentId === store.agentId) &&
+      (!query.storePath || query.storePath === store.storePath)
+    ) {
+      selected.push(...findSessionRowById({ ...query, ...store }, owner));
+    }
+  }
+  return selected;
 }
 
 export function lookupSessionRow(

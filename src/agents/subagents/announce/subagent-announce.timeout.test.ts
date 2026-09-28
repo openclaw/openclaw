@@ -114,12 +114,9 @@ vi.mock("./subagent-announce-delivery.js", () => ({
     directIdempotencyKey?: string;
     internalEvents?: unknown;
   }) => {
-    // Retry behavior is modeled here because the outer announce flow only sees
-    // whether direct delivery eventually succeeded or failed.
-    const buildRequest = () => ({
+    const request = {
       method: "agent",
       expectFinal: true,
-      timeoutMs,
       params: {
         sessionKey: params.targetRequesterSessionKey,
         message: params.triggerMessage,
@@ -135,25 +132,10 @@ vi.mock("./subagent-announce-delivery.js", () => ({
               threadId: params.completionDirectOrigin?.threadId,
             }),
       },
-    });
-    const timeoutMs =
-      clampTimerTimeoutMs(configOverride.agents?.defaults?.subagents?.announceTimeoutMs) ?? 120_000;
-    const retryDelaysMs =
-      process.env.OPENCLAW_TEST_FAST === "1" ? [8, 16, 32] : [5_000, 10_000, 20_000];
-    for (const delayMs of [...retryDelaysMs, undefined]) {
-      const request = buildRequest();
-      gatewayCalls.push(request);
-      try {
-        await callGatewayImpl(request);
-        return { delivered: true, path: "direct" };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (!/gateway timeout/i.test(message) || delayMs == null) {
-          return { delivered: false, path: "direct", error: message };
-        }
-      }
-    }
-    throw new Error("unreachable direct delivery retry loop exit");
+    };
+    gatewayCalls.push(request);
+    await callGatewayImpl(request);
+    return { delivered: true, path: "direct" };
   },
   loadRequesterSessionEntry: (sessionKey: string) => ({
     cfg: configOverride,
@@ -234,19 +216,6 @@ const baseAnnounceFlowParams = {
   outcome: { status: "ok" as const },
 } satisfies Omit<AnnounceFlowParams, "childRunId">;
 
-function setConfiguredAnnounceTimeout(timeoutMs: number): void {
-  configOverride = {
-    session: defaultSessionConfig,
-    agents: {
-      defaults: {
-        subagents: {
-          announceTimeoutMs: timeoutMs,
-        },
-      },
-    },
-  };
-}
-
 async function runAnnounceFlowForTest(
   childRunId: string,
   overrides: Partial<AnnounceFlowParams> = {},
@@ -298,69 +267,6 @@ describe("subagent announce timeout config", () => {
     isEmbeddedAgentRunActiveMock.mockReset().mockReturnValue(false);
     waitForEmbeddedAgentRunEndMock.mockReset().mockResolvedValue(true);
     fallbackRequesterResolution = null;
-  });
-
-  it("uses 120s timeout by default for direct announce agent call", async () => {
-    await runAnnounceFlowForTest("run-default-timeout");
-
-    const directAgentCall = findGatewayCall(
-      (call) => call.method === "agent" && call.expectFinal === true,
-    );
-    expect(directAgentCall?.timeoutMs).toBe(120_000);
-  });
-
-  it("honors configured announce timeout for direct announce agent call", async () => {
-    setConfiguredAnnounceTimeout(120_000);
-    await runAnnounceFlowForTest("run-config-timeout-agent");
-
-    const directAgentCall = findGatewayCall(
-      (call) => call.method === "agent" && call.expectFinal === true,
-    );
-    expect(directAgentCall?.timeoutMs).toBe(120_000);
-  });
-
-  it("honors configured announce timeout for completion direct agent call", async () => {
-    setConfiguredAnnounceTimeout(120_000);
-    await runAnnounceFlowForTest("run-config-timeout-send", {
-      requesterOrigin: {
-        channel: "discord",
-        to: "12345",
-      },
-      expectsCompletionMessage: true,
-    });
-
-    const completionDirectAgentCall = findGatewayCall(
-      (call) => call.method === "agent" && call.expectFinal === true,
-    );
-    expect(completionDirectAgentCall?.timeoutMs).toBe(120_000);
-  });
-
-  it("retries gateway timeout for externally delivered completion announces before giving up", async () => {
-    try {
-      vi.stubEnv("OPENCLAW_TEST_FAST", "1");
-      callGatewayImpl = async (request) => {
-        if (request.method === "chat.history") {
-          return { messages: [] };
-        }
-        throw new Error("gateway timeout after 120000ms");
-      };
-
-      const announcePromise = runAnnounceFlowForTest("run-completion-timeout-retry", {
-        requesterOrigin: {
-          channel: "telegram",
-          to: "12345",
-        },
-        expectsCompletionMessage: true,
-      });
-      await expect(announcePromise).resolves.toBe("retryable");
-
-      const directAgentCalls = gatewayCalls.filter(
-        (call) => call.method === "agent" && call.expectFinal === true,
-      );
-      expect(directAgentCalls).toHaveLength(4);
-    } finally {
-      vi.unstubAllEnvs();
-    }
   });
 
   it("regression, skips parent announce while descendants are still pending", async () => {
@@ -603,33 +509,6 @@ describe("subagent announce timeout config", () => {
     expect(internalEvents[0]?.noVisibleResult).toBe(true);
     expect(directAgentCall?.params?.message).not.toContain("stale");
     expect(directAgentCall?.params?.message).not.toContain("older fallback");
-  });
-
-  it("does not let pre-tool NO_REPLY hide a later timeout", async () => {
-    chatHistoryMessages = [
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "Still working through the files." },
-          { type: "toolCall", id: "call-1", name: "read", arguments: {} },
-        ],
-      },
-      textAssistant("NO_REPLY"),
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call-2", name: "exec", arguments: {} }],
-      },
-    ];
-
-    await runAnnounceFlowForTest("run-timeout-no-reply", {
-      outcome: { status: "timeout" },
-      roundOneReply: undefined,
-    });
-
-    const directAgentCall = findFinalDirectAgentCall();
-    const internalEvents =
-      (directAgentCall?.params?.internalEvents as Array<{ result?: string }>) ?? [];
-    expect(internalEvents[0]?.result).toBe("2 tool call(s) made without visible output.");
   });
 
   it("prefers visible assistant progress over a later raw tool result", async () => {

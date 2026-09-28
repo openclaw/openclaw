@@ -14,7 +14,7 @@ import {
   type QaTransportAdapterFactory,
   type QaTransportId,
 } from "./qa-transport-registry.js";
-import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
+import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
 import type { QaSuiteGatewayHeapSnapshot, QaSuiteGatewayRssSample } from "./suite-artifacts.js";
 import { waitForQaHttpReady } from "./suite-http-readiness.js";
@@ -101,15 +101,7 @@ export function resolveQaSuiteTransportReadyTimeoutMs(
   ) {
     return Math.floor(explicitTimeoutMs);
   }
-  const raw = env.OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS;
-  if (!raw) {
-    return 120_000;
-  }
-  const parsed = parseStrictPositiveInteger(raw);
-  if (parsed === undefined) {
-    return 120_000;
-  }
-  return parsed;
+  return parseStrictPositiveInteger(env.OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS) ?? 120_000;
 }
 
 export function writeQaSuiteProgress(enabled: boolean, message: string) {
@@ -296,7 +288,7 @@ export function requireQaSuiteStartLab(startLab: QaSuiteStartLabFn | undefined):
 }
 
 export function shouldRunQaSuiteWithIsolatedScenarioWorkers(params: {
-  scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
+  scenarios: QaSeedScenarioWithSource[];
   concurrency: number;
   lab?: QaLabServerHandle;
   startLab?: QaSuiteStartLabFn;
@@ -326,13 +318,11 @@ const QA_IMAGE_UNDERSTANDING_LARGE_PNG_BASE64 =
 const QA_IMAGE_UNDERSTANDING_VALID_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAALklEQVR4nO3OoQEAAAyDsP7/9HYGJgJNdtuVDQAAAAAAACAHxH8AAAAAAACAHvBX0fhq85dN7QAAAABJRU5ErkJggg==";
 
-export type QaSuiteResult = Omit<QaSuiteBaseResult, "scenarios"> & {
-  scenarios: QaSuiteScenarioResult[];
-};
+export type QaSuiteResult = QaSuiteBaseResult;
 
 export async function runQaSuiteScenarioDefinitionForRuntime(
   env: QaSuiteEnvironment,
-  scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number],
+  scenario: QaSeedScenarioWithSource,
 ) {
   return await runQaSuiteScenarioDefinition({
     env,
@@ -350,8 +340,6 @@ export async function runQaSuiteScenarioDefinitionForRuntime(
   });
 }
 
-type QaGatewayHandle = QaGatewayChild;
-
 export function buildQaSuiteRuntimeMetrics(params: {
   startedAt: Date;
   finishedAt: Date;
@@ -363,47 +351,38 @@ export function buildQaSuiteRuntimeMetrics(params: {
   gatewayHeapSnapshots?: QaSuiteGatewayHeapSnapshot[];
 }): QaSuiteSummaryJson["metrics"] {
   const wallMs = Math.max(1, params.finishedAt.getTime() - params.startedAt.getTime());
-  const gatewayProcessRssSamples = params.gatewayProcessRssSamples ?? [];
-  const gatewayHeapSnapshots = params.gatewayHeapSnapshots ?? [];
-  const gatewayProcessRssPeakBytes =
-    gatewayProcessRssSamples.length > 0
-      ? Math.max(...gatewayProcessRssSamples.map((sample) => sample.gatewayProcessRssBytes))
-      : params.gatewayProcessRssStartBytes === null || params.gatewayProcessRssEndBytes === null
-        ? null
-        : Math.max(params.gatewayProcessRssStartBytes, params.gatewayProcessRssEndBytes);
-  const gatewayHeapSnapshotMetrics =
-    gatewayHeapSnapshots.length === 0 ? {} : { gatewayHeapSnapshots };
-  const rssMetrics =
-    params.gatewayProcessRssStartBytes === null || params.gatewayProcessRssEndBytes === null
-      ? gatewayHeapSnapshotMetrics
-      : {
-          gatewayProcessRssStartBytes: params.gatewayProcessRssStartBytes,
-          gatewayProcessRssEndBytes: params.gatewayProcessRssEndBytes,
-          gatewayProcessRssDeltaBytes:
-            params.gatewayProcessRssEndBytes - params.gatewayProcessRssStartBytes,
-          ...(gatewayProcessRssPeakBytes === null
-            ? {}
-            : {
-                gatewayProcessRssPeakBytes,
-                gatewayProcessRssPeakDeltaBytes:
-                  gatewayProcessRssPeakBytes - params.gatewayProcessRssStartBytes,
-              }),
-          ...(gatewayProcessRssSamples.length === 0 ? {} : { gatewayProcessRssSamples }),
-          ...gatewayHeapSnapshotMetrics,
-        };
-  if (params.gatewayProcessCpuStartMs === null || params.gatewayProcessCpuEndMs === null) {
-    return { wallMs, ...rssMetrics };
+  const metrics: NonNullable<QaSuiteSummaryJson["metrics"]> = { wallMs };
+  if (params.gatewayProcessCpuStartMs !== null && params.gatewayProcessCpuEndMs !== null) {
+    const gatewayProcessCpuMs = Math.max(
+      0,
+      params.gatewayProcessCpuEndMs - params.gatewayProcessCpuStartMs,
+    );
+    Object.assign(metrics, {
+      gatewayProcessCpuMs,
+      gatewayCpuCoreRatio: Math.round((gatewayProcessCpuMs / wallMs) * 1000) / 1000,
+    });
   }
-  const gatewayProcessCpuMs = Math.max(
-    0,
-    params.gatewayProcessCpuEndMs - params.gatewayProcessCpuStartMs,
-  );
-  return {
-    wallMs,
-    gatewayProcessCpuMs,
-    gatewayCpuCoreRatio: Math.round((gatewayProcessCpuMs / wallMs) * 1000) / 1000,
-    ...rssMetrics,
-  };
+  if (params.gatewayProcessRssStartBytes !== null && params.gatewayProcessRssEndBytes !== null) {
+    const gatewayProcessRssSamples = params.gatewayProcessRssSamples ?? [];
+    const gatewayProcessRssPeakBytes =
+      gatewayProcessRssSamples.length > 0
+        ? Math.max(...gatewayProcessRssSamples.map((sample) => sample.gatewayProcessRssBytes))
+        : Math.max(params.gatewayProcessRssStartBytes, params.gatewayProcessRssEndBytes);
+    Object.assign(metrics, {
+      gatewayProcessRssStartBytes: params.gatewayProcessRssStartBytes,
+      gatewayProcessRssEndBytes: params.gatewayProcessRssEndBytes,
+      gatewayProcessRssDeltaBytes:
+        params.gatewayProcessRssEndBytes - params.gatewayProcessRssStartBytes,
+      gatewayProcessRssPeakBytes,
+      gatewayProcessRssPeakDeltaBytes:
+        gatewayProcessRssPeakBytes - params.gatewayProcessRssStartBytes,
+      ...(gatewayProcessRssSamples.length > 0 ? { gatewayProcessRssSamples } : {}),
+    });
+  }
+  if (params.gatewayHeapSnapshots?.length) {
+    metrics.gatewayHeapSnapshots = params.gatewayHeapSnapshots;
+  }
+  return metrics;
 }
 
 function sanitizeQaHeapCheckpointLabel(label: string) {
@@ -427,7 +406,7 @@ async function listGatewayHeapSnapshotFiles(tempRoot: string) {
 }
 
 export async function captureGatewayHeapSnapshotCheckpoint(params: {
-  gateway: Pick<QaGatewayHandle, "tempRoot" | "pid" | "signalProcess" | "call">;
+  gateway: Pick<QaGatewayChild, "tempRoot" | "pid" | "signalProcess" | "call">;
   outputDir: string;
   label: string;
 }): Promise<QaSuiteGatewayHeapSnapshot | undefined> {

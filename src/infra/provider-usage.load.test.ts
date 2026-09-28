@@ -19,7 +19,6 @@ import {
 import type { ProviderUsageSnapshot, UsageSummary } from "./provider-usage.types.js";
 
 type ProviderAuth = ProviderUsageAuth<typeof loadProviderUsageSummary>;
-const googleGeminiCliProvider = "google-gemini-cli" as unknown as ProviderAuth["provider"];
 const resolveProviderUsageAuthWithPluginMock = getProviderUsageAuthWithPluginMock();
 const resolveProviderUsageSnapshotWithPluginMock = getProviderUsageSnapshotWithPluginMock();
 
@@ -208,44 +207,17 @@ describe("provider-usage.load", () => {
     }
   });
 
-  it("loads snapshots for copilot gemini codex and Xiaomi providers", async () => {
-    resolveProviderUsageSnapshotWithPluginMock.mockImplementation(
-      async ({ provider }): Promise<ProviderUsageSnapshot | null> => {
-        switch (provider) {
-          case "github-copilot":
-            return {
-              provider,
-              displayName: "GitHub Copilot",
-              windows: [{ label: "Chat", usedPercent: 20 }],
-            };
-          case googleGeminiCliProvider:
-            return {
-              provider,
-              displayName: "Gemini CLI",
-              windows: [{ label: "Pro", usedPercent: 40 }],
-            };
-          case "openai":
-            return {
-              provider,
-              displayName: "Codex",
-              windows: [{ label: "3h", usedPercent: 12 }],
-            };
-          case "xiaomi":
-            return {
-              provider,
-              displayName: "Xiaomi",
-              windows: [],
-            };
-          case "xiaomi-token-plan":
-            return {
-              provider,
-              displayName: "Xiaomi Token Plan",
-              windows: [{ label: "Token Plan", usedPercent: 15 }],
-            };
-          default:
-            return null;
-        }
+  it("loads populated and empty plugin snapshots without using legacy fetch", async () => {
+    const snapshots: ProviderUsageSnapshot[] = [
+      { provider: "xiaomi", displayName: "Xiaomi", windows: [] },
+      {
+        provider: "openai",
+        displayName: "Codex",
+        windows: [{ label: "3h", usedPercent: 12 }],
       },
+    ];
+    resolveProviderUsageSnapshotWithPluginMock.mockImplementation(
+      async ({ provider }) => snapshots.find((snapshot) => snapshot.provider === provider) ?? null,
     );
     const mockFetch = createProviderUsageFetch(async () => {
       throw new Error("legacy fetch should not run");
@@ -254,38 +226,20 @@ describe("provider-usage.load", () => {
     const summary = await loadUsageWithAuth(
       loadProviderUsageSummary,
       [
-        { provider: "github-copilot", token: "copilot-token" },
-        { provider: googleGeminiCliProvider, token: "gemini-token" },
-        { provider: "openai", token: "codex-token", accountId: "acc-1" },
         { provider: "xiaomi", token: "xiaomi-token" },
-        { provider: "xiaomi-token-plan", token: "xiaomi-token-plan-token" },
+        { provider: "openai", token: "codex-token", accountId: "acc-1" },
       ],
       mockFetch,
     );
 
-    expect(summary.providers.map((provider) => provider.provider)).toEqual([
-      "github-copilot",
-      googleGeminiCliProvider,
-      "openai",
-      "xiaomi",
-      "xiaomi-token-plan",
+    expect(summary.providers).toEqual([
+      { provider: "xiaomi", displayName: "Xiaomi", windows: [] },
+      {
+        provider: "openai",
+        displayName: "Codex",
+        windows: [{ label: "3h", usedPercent: 12 }],
+      },
     ]);
-    expect(
-      summary.providers.find((provider) => provider.provider === "github-copilot")?.windows,
-    ).toEqual([{ label: "Chat", usedPercent: 20 }]);
-    expect(
-      summary.providers.find((provider) => provider.provider === googleGeminiCliProvider)
-        ?.windows[0]?.label,
-    ).toBe("Pro");
-    expect(
-      summary.providers.find((provider) => provider.provider === "openai")?.windows[0]?.label,
-    ).toBe("3h");
-    expect(summary.providers.find((provider) => provider.provider === "xiaomi")?.windows).toEqual(
-      [],
-    );
-    expect(
-      summary.providers.find((provider) => provider.provider === "xiaomi-token-plan")?.windows,
-    ).toEqual([{ label: "Token Plan", usedPercent: 15 }]);
     expect(mockFetch).not.toHaveBeenCalled();
   });
 

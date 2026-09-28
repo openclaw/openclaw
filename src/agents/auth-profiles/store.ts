@@ -6,6 +6,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { projectModelProviderConfig } from "../../config/model-provider-config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -447,20 +448,16 @@ function mergeRuntimeExternalProfileState(params: {
       continue;
     }
     const nextCredential = merged.profiles[profileId];
-    if (nextCredential) {
-      if (
-        mergedRuntimeProfileIds.has(profileId) ||
-        isDeepStrictEqual(nextCredential, existingCredential)
-      ) {
-        mergedRuntimeProfileIds.add(profileId);
-        activeRuntimeProfileIds.add(profileId);
-        if (existingRuntimeExternalCliProfileIds.has(profileId)) {
-          mergedRuntimeExternalCliProfileIds.add(profileId);
-        }
-      }
+    if (
+      nextCredential &&
+      !mergedRuntimeProfileIds.has(profileId) &&
+      !isDeepStrictEqual(nextCredential, existingCredential)
+    ) {
       continue;
     }
-    merged.profiles[profileId] = existingCredential;
+    if (!nextCredential) {
+      merged.profiles[profileId] = existingCredential;
+    }
     mergedRuntimeProfileIds.add(profileId);
     activeRuntimeProfileIds.add(profileId);
     if (existingRuntimeExternalCliProfileIds.has(profileId)) {
@@ -1221,32 +1218,19 @@ export function createAuthProfileStoreRuntime(
     );
     const keptProfileIds = new Set(Object.keys(localStore.profiles));
     const keptOrderProfileIds = new Set(keptProfileIds);
-    for (const profileId of params.options?.preserveStateProfileIds ?? []) {
-      const normalizedProfileId = profileId.trim();
-      if (normalizedProfileId) {
-        keptProfileIds.add(normalizedProfileId);
-        keptOrderProfileIds.add(normalizedProfileId);
-      }
+    for (const profileId of normalizeUniqueStringEntries(params.options?.preserveStateProfileIds)) {
+      keptProfileIds.add(profileId);
+      keptOrderProfileIds.add(profileId);
     }
     for (const profileIds of Object.values(params.persistedStores.localStore?.order ?? {})) {
       for (const profileId of profileIds) {
         keptOrderProfileIds.add(profileId);
       }
     }
-    for (const profileId of params.options?.preserveOrderProfileIds ?? []) {
-      const normalizedProfileId = profileId.trim();
-      if (normalizedProfileId) {
-        keptOrderProfileIds.add(normalizedProfileId);
-      }
+    for (const profileId of normalizeUniqueStringEntries(params.options?.preserveOrderProfileIds)) {
+      keptOrderProfileIds.add(profileId);
     }
-    const prunedOrderProfileIds = new Set<string>();
-    for (const profileId of params.options?.pruneOrderProfileIds ?? []) {
-      const normalizedProfileId = profileId.trim();
-      if (normalizedProfileId) {
-        prunedOrderProfileIds.add(normalizedProfileId);
-      }
-    }
-    for (const profileId of prunedOrderProfileIds) {
+    for (const profileId of normalizeUniqueStringEntries(params.options?.pruneOrderProfileIds)) {
       keptOrderProfileIds.delete(profileId);
     }
     for (const profileId of keptProfileIds) {

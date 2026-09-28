@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
   PICKED,
   WORKSPACE,
@@ -349,9 +350,15 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       await mobileModelSettings.click();
       await expect.poll(() => page.locator(".chat-controls__model-menu").isVisible()).toBe(true);
+      const capturedModelOption = page
+        .locator(".chat-controls__model-picker[open] [data-chat-model-option]")
+        .first();
+      if (captureUiProofEnabled) {
+        await revealChatModelOption(capturedModelOption);
+      }
       await captureProjectUiProof(suite, page, "mobile-new-session-model-open.png", {
         surface: page.locator('.chat-controls__model-picker wa-popup [part="popup"]'),
-        content: [page.locator("[data-chat-model-option]").first()],
+        content: [capturedModelOption],
       });
       expect(
         await page
@@ -364,7 +371,7 @@ suite.define(() => {
       await expect.poll(() => page.locator(".chat-controls__effort-menu").isVisible()).toBe(true);
       await captureProjectUiProof(suite, page, "mobile-new-session-effort-open.png", {
         surface: page.locator('.chat-controls__effort-picker wa-popup [part="popup"]'),
-        content: [page.locator('[data-chat-thinking-slider="true"]')],
+        content: [fastMode],
       });
       await page.keyboard.press("Escape");
       await page.setViewportSize({ width: 1280, height: 900 });
@@ -402,7 +409,7 @@ suite.define(() => {
       await expect.poll(() => localEnvironment.isVisible()).toBe(true);
       expect(await localEnvironment.getAttribute("aria-pressed")).toBe("true");
       await captureProjectUiProof(suite, page, "new-session-environment-search.png", {
-        surface: whereSelect.locator('wa-popup [part="popup"]'),
+        surface: whereSelect.locator('wa-popup.popover > [part="popup"]'),
         content: [environmentSearch],
       });
       await page.keyboard.press("Escape");
@@ -425,7 +432,7 @@ suite.define(() => {
         "Projects",
       );
       await captureProjectUiProof(suite, page, "new-session-project-menu-label.png", {
-        surface: projectSelect.locator('wa-popup [part="popup"]'),
+        surface: projectSelect.locator('wa-popup.popover > [part="popup"]'),
         content: [projectSelect.getByRole("button", { name: "Browse folders" })],
       });
       await projectSelect.getByRole("button", { name: "Browse folders" }).click();
@@ -455,7 +462,7 @@ suite.define(() => {
         "Checkout",
       );
       await captureProjectUiProof(suite, page, "new-session-checkout-menu-label.png", {
-        surface: checkoutSelect.locator('wa-popup [part="popup"]'),
+        surface: checkoutSelect.locator('wa-popup.popover > [part="popup"]'),
         content: [checkoutSelect.locator(".new-session-page__menu-title").first()],
       });
       const currentCheckout = checkoutSelect.locator('[data-value="checkout"]');
@@ -488,6 +495,7 @@ suite.define(() => {
       // Pointer light-dismiss still retires the unified popover after its
       // asynchronous hide animation completes.
       await checkoutTrigger.click();
+      await checkoutSelect.getByLabel("Name", { exact: true }).fill("release-proof");
       const afterPointerHide = checkoutSelect.evaluate(
         (element) =>
           new Promise<void>((resolve) => {
@@ -496,6 +504,21 @@ suite.define(() => {
       );
       await page.locator(".agent-chat__welcome h2").click();
       await afterPointerHide;
+      await expect.poll(() => checkoutSelect.getAttribute("open")).toBeNull();
+      await pollLocatorText(checkoutTrigger.locator(".new-session-page__trigger-label")).toBe(
+        "Worktree · release-proof",
+      );
+      expect(await checkoutTrigger.getAttribute("aria-label")).toBe(
+        "Checkout: Worktree · release-proof",
+      );
+      expect(await checkoutTrigger.getAttribute("title")).toBe(
+        "Checkout: Worktree · release-proof",
+      );
+      await checkoutTrigger.click();
+      expect(await checkoutSelect.getByLabel("Name", { exact: true }).inputValue()).toBe(
+        "release-proof",
+      );
+      await page.keyboard.press("Escape");
       await expect.poll(() => checkoutSelect.getAttribute("open")).toBeNull();
 
       const message = page.locator(".new-session-page__message");
@@ -507,6 +530,7 @@ suite.define(() => {
         agentId: "main",
         message: "fix the flaky test",
         worktree: true,
+        worktreeName: "release-proof",
         cwd: PICKED,
       });
       expect(createRequest.params).not.toHaveProperty("worktreeBaseRef");

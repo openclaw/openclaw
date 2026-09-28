@@ -56,6 +56,7 @@ async function createRealSession(
   const transport = new StdioClientTransport({
     command: options.command,
     args: options.args,
+    env: options.env,
     stderr: "pipe",
   });
   const client = new Client(

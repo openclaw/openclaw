@@ -349,30 +349,26 @@ export function registerCronEditCommand(cron: Command) {
             ),
           );
 
-          const hasFailureAlertAfter = typeof opts.failureAlertAfter === "string";
-          const hasFailureAlertChannel = typeof opts.failureAlertChannel === "string";
-          const hasFailureAlertTo = typeof opts.failureAlertTo === "string";
-          const hasFailureAlertCooldown = typeof opts.failureAlertCooldown === "string";
           const hasFailureAlertIncludeSkipped =
             typeof opts.failureAlertIncludeSkipped === "boolean";
           const hasFailureAlertExcludeSkipped =
             typeof opts.failureAlertExcludeSkipped === "boolean";
-          const hasFailureAlertMode = typeof opts.failureAlertMode === "string";
-          const hasFailureAlertAccountId = typeof opts.failureAlertAccountId === "string";
           if (hasFailureAlertIncludeSkipped && hasFailureAlertExcludeSkipped) {
             throw new CronCliError(
               "Use either --failure-alert-include-skipped or --failure-alert-exclude-skipped.",
             );
           }
           const hasFailureAlertFields =
-            hasFailureAlertAfter ||
-            hasFailureAlertChannel ||
-            hasFailureAlertTo ||
-            hasFailureAlertCooldown ||
+            [
+              "failureAlertAfter",
+              "failureAlertChannel",
+              "failureAlertTo",
+              "failureAlertCooldown",
+              "failureAlertMode",
+              "failureAlertAccountId",
+            ].some((key) => typeof opts[key] === "string") ||
             hasFailureAlertIncludeSkipped ||
-            hasFailureAlertExcludeSkipped ||
-            hasFailureAlertMode ||
-            hasFailureAlertAccountId;
+            hasFailureAlertExcludeSkipped;
           const failureAlertFlag =
             typeof opts.failureAlert === "boolean" ? opts.failureAlert : undefined;
           if (failureAlertFlag === false && hasFailureAlertFields) {
@@ -384,20 +380,19 @@ export function registerCronEditCommand(cron: Command) {
             patch.failureAlert = false;
           } else if (failureAlertFlag === true || hasFailureAlertFields) {
             const failureAlert: Record<string, unknown> = {};
-            if (hasFailureAlertAfter) {
+            if (typeof opts.failureAlertAfter === "string") {
               failureAlert.after = parseCronIntegerOption(
                 opts.failureAlertAfter,
                 "--failure-alert-after",
               );
             }
-            if (hasFailureAlertChannel) {
+            if (typeof opts.failureAlertChannel === "string") {
               failureAlert.channel = normalizeOptionalLowercaseString(opts.failureAlertChannel);
             }
-            if (hasFailureAlertTo) {
-              const to = normalizeOptionalString(opts.failureAlertTo) ?? "";
-              failureAlert.to = to ? to : undefined;
+            if (typeof opts.failureAlertTo === "string") {
+              failureAlert.to = normalizeOptionalString(opts.failureAlertTo);
             }
-            if (hasFailureAlertCooldown) {
+            if (typeof opts.failureAlertCooldown === "string") {
               let cooldownMs: number;
               try {
                 cooldownMs = parseDurationMs(String(opts.failureAlertCooldown));
@@ -409,7 +404,7 @@ export function registerCronEditCommand(cron: Command) {
             if (hasFailureAlertIncludeSkipped || hasFailureAlertExcludeSkipped) {
               failureAlert.includeSkipped = hasFailureAlertIncludeSkipped;
             }
-            if (hasFailureAlertMode) {
+            if (typeof opts.failureAlertMode === "string") {
               const mode = normalizeOptionalLowercaseString(opts.failureAlertMode);
               if (mode !== "announce" && mode !== "webhook") {
                 throw new CronCliError(
@@ -418,9 +413,8 @@ export function registerCronEditCommand(cron: Command) {
               }
               failureAlert.mode = mode;
             }
-            if (hasFailureAlertAccountId) {
-              const accountId = normalizeOptionalString(opts.failureAlertAccountId) ?? "";
-              failureAlert.accountId = accountId ? accountId : undefined;
+            if (typeof opts.failureAlertAccountId === "string") {
+              failureAlert.accountId = normalizeOptionalString(opts.failureAlertAccountId);
             }
             patch.failureAlert = failureAlert;
           }

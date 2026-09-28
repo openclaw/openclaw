@@ -33,14 +33,6 @@ describe("Checkout chip state", () => {
     {
       destination: "remote",
       worktree: true,
-      worktreeAvailable: true,
-      headBranch: "main",
-      baseRef: "main",
-      label: "New worktree from main",
-    },
-    {
-      destination: "remote",
-      worktree: true,
       worktreeAvailable: false,
       baseRef: "",
       label: "New worktree",
@@ -72,20 +64,6 @@ describe("Checkout chip state", () => {
     {
       destination: "local",
       worktree: true,
-      worktreeAvailable: true,
-      baseRef: "release",
-      label: "New worktree from release",
-    },
-    {
-      destination: "local",
-      worktree: true,
-      worktreeAvailable: true,
-      baseRef: "",
-      label: "New worktree",
-    },
-    {
-      destination: "local",
-      worktree: true,
       worktreeAvailable: false,
       baseRef: "",
       label: "New worktree",
@@ -93,7 +71,59 @@ describe("Checkout chip state", () => {
   ] as const)(
     "$destination worktree=$worktree available=$worktreeAvailable: $label",
     ({ label, ...params }) => {
-      expect(resolveCheckoutChip(params)).toEqual(label === null ? null : { label });
+      expect(resolveCheckoutChip({ worktreeName: "", ...params })).toEqual(
+        label === null ? null : { label },
+      );
+    },
+  );
+
+  it.each([
+    {
+      destination: "local",
+      worktree: true,
+      name: " release-proof ",
+      label: "Worktree · release-proof",
+    },
+    {
+      destination: "remote",
+      worktree: true,
+      name: "release-proof",
+      label: "Worktree · release-proof",
+    },
+    { destination: "local", worktree: true, name: "   ", label: "New worktree from main" },
+    { destination: "local", worktree: false, name: "release-proof", label: "main" },
+    {
+      destination: "cloud",
+      worktree: true,
+      name: "release-proof",
+      label: "Worktree · release-proof",
+    },
+    {
+      destination: "cloud",
+      worktree: true,
+      repository: true,
+      name: "release-proof",
+      label: "From main",
+    },
+    {
+      destination: "remote",
+      worktree: false,
+      repository: true,
+      name: "release-proof",
+      label: "Remote checkout from main",
+    },
+  ] as const)(
+    "labels $destination checkout with name=$name: $label",
+    ({ name, label, ...params }) => {
+      expect(
+        resolveCheckoutChip({
+          worktreeAvailable: true,
+          headBranch: "main",
+          baseRef: "main",
+          worktreeName: name,
+          ...params,
+        }),
+      ).toEqual({ label });
     },
   );
 

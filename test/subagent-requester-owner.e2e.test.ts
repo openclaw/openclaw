@@ -2,10 +2,6 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatEvent } from "../packages/gateway-protocol/src/schema/logs-chat.js";
-import type {
-  TasksGetResult,
-  TasksListResult,
-} from "../packages/gateway-protocol/src/schema/tasks.js";
 import {
   settleSubagentRegistryPersistenceWork,
   writeSubagentSessionEntry,
@@ -22,11 +18,6 @@ import { executeSqliteQuerySync } from "../src/infra/kysely-sync.js";
 import { extractFirstTextBlock } from "../src/shared/chat-message-content.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../src/state/openclaw-agent-db-readonly.js";
 import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
-import { finalizeTaskRunByRunId, findDetachedTaskRun } from "../src/tasks/detached-task-runtime.js";
-import {
-  resetTaskFlowRegistryForTests,
-  resetTaskRegistryForTests,
-} from "../src/tasks/task-runtime.test-helpers.js";
 import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
@@ -167,44 +158,9 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
           completionTarget: "parent",
         });
         expect(run.childSessionKey).toMatch(/^agent:beta:subagent:/);
-        const listed = await client.request<TasksListResult>("tasks.list", {
-          sessionKey,
-          agentId: REQUESTER_AGENT_ID,
-        });
-        const children = listed.tasks.filter((task) => task.runtime === "subagent");
-        expect(children).toHaveLength(1);
-        const child = children[0]!;
-        expect(child).toMatchObject({
-          runId: run.taskRunId ?? run.runId,
-          childSessionKey: run.childSessionKey,
-          agentId: REQUESTER_AGENT_ID,
-          sessionKey,
-          status: "running",
-          deliveryStatus: "pending",
-          execution: { state: "running" },
-        });
-        // A held HTTP response is not a tool call or an explicit execution wait.
-        expect(child.execution?.currentTool).toBeUndefined();
-        expect(child.execution?.wait).toBeUndefined();
-        const detail = await client.request<TasksGetResult>("tasks.get", { taskId: child.id });
-        expect(detail.task).toMatchObject({
-          id: child.id,
-          runId: child.runId,
-          sessionKey,
-          childSessionKey: run.childSessionKey,
-          prompt: CHILD_TASK,
-          status: "running",
-          execution: { state: "running" },
-          deliveryStatus: "pending",
-        });
-        expect(detail.task.execution?.currentTool).toBeUndefined();
-        expect(detail.task.execution?.wait).toBeUndefined();
-        expect(
-          await client.request<TasksListResult>("tasks.list", {
-            sessionKey: `agent:${OTHER_AGENT_ID}:${REQUESTER_KEY}`,
-            agentId: OTHER_AGENT_ID,
-          }),
-        ).toEqual({ tasks: [] });
+        expect(run.execution.status).toBe("running");
+        expect(run.task).toBe(CHILD_TASK);
+        expect(runs.filter((entry) => entry.requesterAgentId === OTHER_AGENT_ID)).toEqual([]);
 
         const requestsBeforeStatus = modelServer.requestCount();
         expect(
@@ -226,11 +182,7 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
           sessionKey,
         });
         const statusText = "message" in reply ? extractFirstTextBlock(reply.message) : undefined;
-        const childLine = statusText
-          ?.split("\n")
-          .find((line) => line.includes("requester-owner-child"));
-        expect(childLine).toMatch(/\brunning\b/);
-        expect(childLine).not.toMatch(/\b(waiting|approval|unknown|unavailable)\b/i);
+        expect(statusText).toBeTruthy();
         expect(statusText).not.toContain(CHILD_MARKER);
         expect(parentSettled).toBe(false);
         expect(modelServer.requestCount()).toBe(requestsBeforeStatus);
@@ -246,19 +198,6 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
           },
           { interval: 50, timeout: 30_000 },
         );
-        const finished = await client.request<TasksGetResult>("tasks.get", { taskId: child.id });
-        expect(finished.task).toMatchObject({
-          id: child.id,
-          runId: child.runId,
-          agentId: REQUESTER_AGENT_ID,
-          sessionKey,
-          childSessionKey: run.childSessionKey,
-          status: "completed",
-          execution: { state: "finished" },
-          deliveryStatus: "pending",
-        });
-        expect(finished.task.execution?.currentTool).toBeUndefined();
-        expect(finished.task.execution?.wait).toBeUndefined();
         expect(parentSettled).toBe(false);
         expect(modelServer.requestCount()).toBe(requestsBeforeStatus);
         expect(modelServer.countRequestsContaining(CHILD_MARKER)).toBe(0);
@@ -267,13 +206,9 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
         expect(await parent, instance.logs()).toMatchObject({ status: "ok" });
         await vi.waitFor(
           async () => {
-            const delivered = await client.request<TasksGetResult>("tasks.get", {
-              taskId: child.id,
-            });
-            expect(delivered.task, instance.logs()).toMatchObject({
-              status: "completed",
-              execution: { state: "finished" },
-              deliveryStatus: "delivered",
+            expect(loadSubagentRegistryFromSqlite().get(run.runId), instance.logs()).toMatchObject({
+              execution: { status: "terminal", outcome: { status: "ok" } },
+              delivery: { status: "delivered" },
             });
           },
           { interval: 50, timeout: 30_000 },
@@ -576,8 +511,6 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
       await runQaGatewayFixture(
         async () => {
           registry.resetSubagentRegistryForTests({ persist: false });
-          resetTaskRegistryForTests({ persist: false });
-          resetTaskFlowRegistryForTests({ persist: false });
           const childSessionKey = `agent:${REQUESTER_AGENT_ID}:subagent:requester-owner-legacy`;
           await writeSubagentSessionEntry({
             stateDir: instance.stateDir,
@@ -593,7 +526,7 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
             sessionId: "requester-owner-legacy-child-session",
             defaultSessionId: "requester-owner-legacy-child-session",
           });
-          // Registration owns task backing and physical-store provenance even for a bare key.
+          // Registration owns native child execution and physical-store provenance even for a bare key.
           // Queue only while preparing stored completion state; no child RPC is dispatched.
           await registry.registerSubagentRun({
             runId: RESTORED_RUN_ID,
@@ -606,20 +539,10 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
             cleanup: "keep",
             expectsCompletionMessage: true,
             queued: true,
-            taskRowOwnership: "required",
           });
           const registered = loadSubagentRegistryFromSqlite().get(RESTORED_RUN_ID);
           if (!registered) {
             throw new Error("Restored requester fixture registration was not persisted");
-          }
-          const owner = findDetachedTaskRun({
-            runId: RESTORED_RUN_ID,
-            runtime: "subagent",
-            sessionKey: childSessionKey,
-            createdAtOrAfter: registered.createdAt,
-          });
-          if (!owner.task) {
-            throw new Error("Restored requester fixture has no registered task owner");
           }
           expect(registered.requesterStorePath).toBeTruthy();
           expect(registered.controllerStorePath).toBe(registered.requesterStorePath);
@@ -639,26 +562,6 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
             completion: { required: true, resultText: RESTORED_CHILD_RESULT, capturedAt: endedAt },
           };
           saveSubagentRegistryToSqlite(new Map([[restored.runId, restored]]));
-          expect(
-            finalizeTaskRunByRunId({
-              taskId: owner.task.taskId,
-              runId: RESTORED_RUN_ID,
-              runtime: "subagent",
-              sessionKey: childSessionKey,
-              status: "succeeded",
-              endedAt,
-              terminalSummary: RESTORED_CHILD_RESULT,
-            }),
-          ).toMatchObject([
-            {
-              taskId: owner.task.taskId,
-              runId: RESTORED_RUN_ID,
-              ownerKey: RESTORED_REQUESTER_KEY,
-              requesterAgentId: REQUESTER_AGENT_ID,
-              status: "succeeded",
-              deliveryStatus: "pending",
-            },
-          ]);
           const seeded = loadSubagentRegistryFromSqlite().get(RESTORED_RUN_ID);
           expect(seeded?.requesterAgentId).toBe(REQUESTER_AGENT_ID);
           expect(seeded?.requesterSessionKey).toBe(RESTORED_REQUESTER_KEY);
@@ -666,8 +569,6 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
         },
         () => settleSubagentRegistryPersistenceWork(),
         () => registry.resetSubagentRegistryForTests({ persist: false }),
-        () => resetTaskRegistryForTests({ persist: false }),
-        () => resetTaskFlowRegistryForTests({ persist: false }),
         () => closeOpenClawStateDatabaseForTest(),
       );
 

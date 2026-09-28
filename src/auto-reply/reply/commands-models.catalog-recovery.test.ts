@@ -10,14 +10,17 @@ import * as preparedCatalog from "../../agents/prepared-model-catalog.js";
 import {
   getPreparedModelRuntimeAuthStore,
   bindPreparedModelRuntimeAuth,
+  setPreparedModelFullCatalogAuth,
 } from "../../agents/prepared-model-runtime-auth.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePublicationSupersededError,
 } from "../../agents/prepared-model-runtime.errors.js";
+import * as preparedRuntime from "../../agents/prepared-model-runtime.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import type { ReplyPayload } from "../types.js";
 import { buildPreparedModelsProviderData } from "./commands-models-catalog.js";
 import { handleModelsCommand, resolveModelsCommandReply } from "./commands-models.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
@@ -96,6 +99,74 @@ afterEach(() => {
 });
 
 describe("/models browse catalog recovery", () => {
+  it("replies with known models while acquisition is held and includes newly published rows next time", async () => {
+    const pendingCatalog: ModelCatalogSnapshot = {
+      entries: [{ provider: "anthropic", id: "claude-opus-4-5", name: "Known model" }],
+      routeVariants: [],
+      pendingProviders: ["anthropic"],
+    };
+    const refreshedCatalog: ModelCatalogSnapshot = {
+      entries: [
+        ...pendingCatalog.entries,
+        { provider: "anthropic", id: "claude-sonnet-4-6", name: "Discovered model" },
+      ],
+      routeVariants: [],
+    };
+    catalogMocks.authStore = {
+      version: 1,
+      profiles: {
+        "anthropic:default": {
+          type: "api_key",
+          provider: "anthropic",
+          key: "synthetic-catalog-key",
+        },
+      },
+    };
+    catalogMocks.authModes = { anthropic: "api_key" };
+    catalogMocks.readSnapshot.mockReturnValue(pendingCatalog);
+    const acquisition = createDeferred<ModelCatalogSnapshot>();
+    let completedCatalog: ModelCatalogSnapshot | undefined;
+    catalogMocks.getPreparedOwner.mockReturnValue({
+      readFullModelCatalog: () => completedCatalog,
+      loadFullModelCatalog: async () => {
+        completedCatalog = await acquisition.promise;
+        return completedCatalog;
+      },
+    });
+    const owner = await preparedCatalog.loadPublishedPreparedModelCatalogOwnerSnapshot({
+      config: staleCfg,
+    });
+    setPreparedModelFullCatalogAuth(refreshedCatalog, {
+      authStore: catalogMocks.authStore,
+      authModes: catalogMocks.authModes,
+      providerAuthLabels: new Map(),
+    });
+    vi.mocked(preparedCatalog.loadPublishedPreparedModelCatalogOwnerSnapshot).mockRestore();
+    vi.spyOn(preparedRuntime, "getPreparedModelRuntimeSnapshot").mockReturnValue(owner);
+    vi.spyOn(preparedRuntime, "prepareModelRuntimeSnapshot").mockResolvedValue(owner);
+    vi.useFakeTimers();
+    try {
+      const params = { cfg: staleCfg, agentId: "main", commandBodyNormalized: "/models anthropic" };
+      let reply: ReplyPayload | null | undefined;
+      const first = resolveModelsCommandReply(params).then((result) => {
+        reply = result;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(reply?.text).toContain("- anthropic/claude-opus-4-5");
+      expect(reply?.text).toContain("anthropic: checking models…");
+      expect(reply?.text).not.toContain("claude-sonnet-4-6");
+      acquisition.resolve(refreshedCatalog);
+      await first;
+      await vi.advanceTimersByTimeAsync(0);
+      const next = await resolveModelsCommandReply(params);
+      expect(next?.text).toContain("- anthropic/claude-sonnet-4-6");
+      expect(next?.text).not.toContain("checking models");
+    } finally {
+      acquisition.resolve(refreshedCatalog);
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     { commandBodyNormalized: "/models", choice: "- anthropic (1)" },
     { commandBodyNormalized: "/models anthropic", choice: "- anthropic/claude-opus-4-5" },

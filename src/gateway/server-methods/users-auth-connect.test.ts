@@ -21,9 +21,8 @@ import { broadcastChatMetadataChanged } from "../server-chat-metadata-lifecycle.
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 import { usersHandlers } from "./users.js";
 
-const getUserProfileListItem = vi.hoisted(() => vi.fn());
 const resolveUserProfileId = vi.hoisted(() => vi.fn());
-const ensureProfileForEmail = vi.hoisted(() => vi.fn());
+const prepareUserProfileSelectionAuthority = vi.hoisted(() => vi.fn());
 const connectUserModelAccount = vi.hoisted(() => vi.fn());
 const listUserProfileAuthLinks = vi.hoisted(() => vi.fn());
 const listUserModelAccounts = vi.hoisted(() => vi.fn());
@@ -42,12 +41,15 @@ vi.mock("../../state/user-profiles.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../state/user-profiles.js")>();
   return {
     ...actual,
-    ensureProfileForEmail,
-    getUserProfileListItem,
-    resolveUserProfileId,
     getUserProfileRole: () => null,
   };
 });
+vi.mock("../../state/user-channel-identity-operations.js", () => ({
+  prepareUserProfileSelectionAuthority,
+}));
+vi.mock("../../state/user-profile-email.js", () => ({
+  ensureProfileIdForEmail: async () => "profile-1",
+}));
 vi.mock("../../state/user-model-accounts.js", () => ({
   connectUserModelAccount,
   listUserProfileAuthLinks,
@@ -261,13 +263,16 @@ beforeEach(async () => {
         return links;
       },
     );
-  getUserProfileListItem.mockImplementation((id: string) => ({
-    id,
-    displayName: "Ada",
-    emails: [],
-  }));
   resolveUserProfileId.mockImplementation((id: string) => id);
-  ensureProfileForEmail.mockReturnValue({ id: "profile-1" });
+  prepareUserProfileSelectionAuthority.mockImplementation(async (reference: string) => {
+    const profileId = resolveUserProfileId(reference);
+    return {
+      profileId,
+      isCurrent: () =>
+        resolveUserProfileId(reference) === profileId &&
+        resolveUserProfileId(profileId) === profileId,
+    };
+  });
   listPersonalAccountAuthChoices.mockReturnValue([
     {
       pluginId: "openai",
@@ -399,7 +404,7 @@ describe("users model-account connection lifecycle", () => {
         undefined,
         expect.objectContaining({ code: "FORBIDDEN" }),
       );
-      expect(getUserProfileListItem).not.toHaveBeenCalled();
+      expect(prepareUserProfileSelectionAuthority).not.toHaveBeenCalled();
       expect(runAuth).not.toHaveBeenCalled();
       expect(writes).toEqual([]);
       expect(linksByOwner.size).toBe(0);
@@ -1019,7 +1024,7 @@ describe("users model-account connection lifecycle", () => {
         undefined,
         expect.objectContaining({ code: "INVALID_REQUEST" }),
       );
-      expect(getUserProfileListItem).not.toHaveBeenCalled();
+      expect(prepareUserProfileSelectionAuthority).not.toHaveBeenCalled();
       expect(resolvePersonalAccountAuthMethod).not.toHaveBeenCalled();
       expect(listUserProfileAuthLinks).not.toHaveBeenCalled();
       expect(setUserProfileAuthLink).not.toHaveBeenCalled();

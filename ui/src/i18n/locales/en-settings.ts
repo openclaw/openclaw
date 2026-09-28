@@ -639,7 +639,18 @@ const enSettings = {
       noProviders: "No providers are available to connect.",
       discover: "On this Gateway",
       description: "Save credentials for this agent. Choose the active model separately.",
+      setupDescription:
+        "Choose how to connect. Verifying an API key or token can also set this agent's active model.",
       done: "Provider credentials saved.",
+      missingSelection:
+        "The account selected for {model} is no longer available. Connect or choose an account to use with this model.",
+      chooseAccount: "Choose account",
+      useAccount: "Use this account",
+      useAccountDescription:
+        "Test {model} with this account and use it for this agent's default. Conversations with their own account selection keep it.",
+      activated: "Account verified and selected for this agent's default model.",
+      selectionChanged:
+        "The selected model or account changed. Close this dialog and choose again.",
       finishing: "Credentials are being saved. Wait for the result.",
       sessionExpired:
         "This sign-in session ended. Close this dialog and refresh Models to check the result.",
@@ -858,7 +869,7 @@ const enSettings = {
       controlUiCommit: "Control UI commit",
       builtAt: "Built",
       installedAt: "Installed",
-      installedAtUnknown: "Unknown · recorded after the next successful update",
+      installedAtUnknown: "Unknown",
       lastCommitAt: "Last commit",
       installKind: "Install type",
       policyTitle: "Update policy",
@@ -1311,7 +1322,6 @@ const enSettings = {
       agentQuestion: "Agent question",
       humanMentioned: "Someone mentions me",
       scheduledTaskFailed: "Scheduled task failed",
-      backgroundTaskFailed: "Background task failed",
       lockScreenDetail: "Lock-screen detail",
       lockScreenDetailHint: "Private hides names; detailed content is sanitized.",
       private: "Private",
@@ -1402,6 +1412,9 @@ const enSettings = {
       showTaskProgress: "Show task progress cards",
       showTaskProgressHint:
         "Show task progress in the chat composer. Hiding it does not stop the agent or clear saved progress. Dashboard widgets and session previews are unchanged.",
+      openLinksExternally: "Open links outside OpenClaw",
+      openLinksExternallyHint: "Use your browser instead of the OpenClaw built-in browser.",
+      openLinksExternallyStorage: "Saved in this browser only.",
       collapseTaskProgress: "Collapse task progress by default on desktop",
       collapseTaskProgressHint:
         "On desktop, start task progress collapsed. It can expand when the response finishes if you are at the end of the chat. A manual close keeps it collapsed for that session. On mobile, task progress always starts collapsed and only opens when you open it manually.",

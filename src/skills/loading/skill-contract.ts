@@ -15,6 +15,8 @@ export interface Skill {
   contentHash?: string;
   filePath: string;
   baseDir: string;
+  /** Discovery provenance for collision diagnostics, never read authority. */
+  discoveryRoot?: { path: string; worktree: boolean };
   /** Assigned by Gateway discovery, never accepted from the workspace provider. */
   fileHost?: "gateway" | "workspace";
   /** @deprecated Ignored; retained for API compatibility until the next Plugin SDK major. */

@@ -151,7 +151,7 @@ internal fun ProviderSignInDialog(
           if (it["executor"]?.jsonPrimitive?.content == "gateway") {
             CircularProgressIndicator()
           } else {
-            ProviderSignInAnswer(it, enabled = controlsEnabled && !state.cancelling, onAnswer = controller::answer)
+            ProviderSignInAnswer(it, enabled = controlsEnabled, onAnswer = controller::answer)
           }
         }
       }

@@ -1,10 +1,6 @@
 import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import {
-  appendBoundedChildOutput,
-  emptyBoundedChildOutput,
-  formatBoundedChildOutput,
-} from "./bounded-child-output.js";
+import { formatBoundedChildOutput } from "./bounded-child-output.js";
 import type { VoiceCallStreamExposurePath } from "./config.js";
 import {
   cleanupTailscaleExposureRoute,
@@ -68,9 +64,6 @@ function listenForChildStreamErrors(
   proc.stderr.on("error", (error) => onError("stderr", error));
 }
 
-/**
- * Tunnel configuration for exposing the webhook server.
- */
 interface TunnelConfig {
   /** Tunnel provider: ngrok, tailscale-serve, or tailscale-funnel */
   provider: "ngrok" | "tailscale-serve" | "tailscale-funnel" | "none";
@@ -88,9 +81,6 @@ interface TunnelConfig {
   ngrokDomain?: string;
 }
 
-/**
- * Result of starting a tunnel.
- */
 export interface TunnelResult {
   /** The public URL */
   publicUrl: string;
@@ -207,8 +197,7 @@ async function startNgrokTunnel(config: {
       const lines = (outputBuffer + chunk).split("\n");
       outputBuffer = lines.pop() || "";
       if (outputBuffer.length > NGROK_LOG_BUFFER_MAX_CHARS) {
-        // Same UTF-16 contract as appendBoundedChildOutput: do not leave a lone
-        // surrogate when an incomplete ngrok log line is trimmed to the ring cap.
+        // Keep incomplete ngrok log lines bounded without leaving a lone surrogate.
         outputBuffer = sliceUtf16Safe(outputBuffer, -NGROK_LOG_BUFFER_MAX_CHARS);
       }
 
@@ -221,12 +210,7 @@ async function startNgrokTunnel(config: {
     proc.stderr.on("data", (chunk: string) => {
       const combined = stderrTail + chunk;
       if (combined.includes(NGROK_ERROR_MARKER)) {
-        rejectIfPending(
-          `ngrok error: ${formatBoundedChildOutput(
-            appendBoundedChildOutput(emptyBoundedChildOutput(), combined),
-          )}`,
-          true,
-        );
+        rejectIfPending(`ngrok error: ${formatBoundedChildOutput(combined)}`, true);
       }
       stderrTail = sliceUtf16Safe(combined, -NGROK_STDERR_TAIL_MAX_CHARS);
     });
@@ -249,9 +233,6 @@ async function startNgrokTunnel(config: {
   });
 }
 
-/**
- * Start a Tailscale serve/funnel tunnel.
- */
 async function startTailscaleTunnel(config: {
   mode: "serve" | "funnel";
   port: number;
@@ -296,9 +277,6 @@ async function startTailscaleTunnel(config: {
   };
 }
 
-/**
- * Start a tunnel based on configuration.
- */
 export async function startTunnel(config: TunnelConfig): Promise<TunnelResult | null> {
   switch (config.provider) {
     case "ngrok":
@@ -310,17 +288,9 @@ export async function startTunnel(config: TunnelConfig): Promise<TunnelResult | 
       });
 
     case "tailscale-serve":
-      return startTailscaleTunnel({
-        mode: "serve",
-        port: config.port,
-        tailscalePort: config.tailscalePort ?? 443,
-        path: config.path,
-        streamPaths: config.streamPaths,
-      });
-
     case "tailscale-funnel":
       return startTailscaleTunnel({
-        mode: "funnel",
+        mode: config.provider === "tailscale-serve" ? "serve" : "funnel",
         port: config.port,
         tailscalePort: config.tailscalePort ?? 443,
         path: config.path,

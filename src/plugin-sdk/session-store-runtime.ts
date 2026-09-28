@@ -2,6 +2,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import {
   readAmbientTranscriptWatermarkFromEntry,
   resolveAmbientTranscriptWatermarkKey,
@@ -29,7 +30,6 @@ import {
   patchSessionEntryCore as patchAccessorSessionEntry,
   readSessionUpdatedAtCore as readAccessorSessionUpdatedAt,
   readTranscriptStatsSync as readAccessorTranscriptStatsSync,
-  resolveTranscriptSessionKeyBySessionId as resolveAccessorTranscriptSessionKeyBySessionId,
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
@@ -41,7 +41,6 @@ import type {
   InternalSessionEntry,
   SessionEntry,
 } from "../config/sessions/types.js";
-import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
   clearGenerationPrivateFieldsForRotatedSessionPatch,
@@ -451,14 +450,7 @@ export const readTranscriptStatsSync: (params: {
 }) => { eventCount: number; maxSeq: number; sizeBytes: number } = readAccessorTranscriptStatsSync;
 
 /** Resolves the persisted session key for one SQLite transcript identity. */
-export function resolveTranscriptSessionKeyBySessionId(params: {
-  agentId?: string;
-  env?: NodeJS.ProcessEnv;
-  sessionId: string;
-  storePath?: string;
-}): string | undefined {
-  return resolveAccessorTranscriptSessionKeyBySessionId(params);
-}
+export { resolveTranscriptSessionKeyBySessionId } from "../config/sessions/session-accessor.js";
 
 /** Patches one session entry by agent/session identity. */
 export async function patchSessionEntry(

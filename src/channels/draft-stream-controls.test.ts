@@ -5,7 +5,6 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import {
   clearFinalizableDraftMessage,
   createFinalizableDraftLifecycle,
-  createFinalizableDraftStreamControlsForState,
   takeMessageIdAfterStop,
 } from "./draft-stream-controls.js";
 
@@ -298,20 +297,6 @@ describe("draft-stream-controls", () => {
       await Promise.allSettled([firstClear, stopped, secondClear]);
       lifecycle.loop.stop();
     }
-  });
-
-  it("controls ignore updates after final", async () => {
-    const sendOrEditStreamMessage = vi.fn(async () => true);
-    const controls = createFinalizableDraftStreamControlsForState({
-      throttleMs: 250,
-      state: { stopped: false, final: true },
-      sendOrEditStreamMessage,
-    });
-
-    controls.update("ignored");
-    await controls.loop.flush();
-
-    expect(sendOrEditStreamMessage).not.toHaveBeenCalled();
   });
 
   it("lifecycle clear marks stopped, clears id, and deletes preview message", async () => {

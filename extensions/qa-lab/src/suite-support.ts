@@ -1,11 +1,9 @@
 import { parseBooleanValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaProviderMode } from "./model-selection.js";
 import type { QaTransportId } from "./qa-transport-registry.js";
-import type { QaTransportAdapter } from "./qa-transport.js";
-import type { RuntimeId } from "./runtime-parity.js";
-import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
+import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
-import { scenarioRequiresControlUi, splitModelRef } from "./suite-planning.js";
+import { scenarioRequiresControlUi } from "./suite-planning.js";
 import type { QaSuiteRunParams, QaSuiteScenarioResult, QaSuiteStartLabFn } from "./suite-types.js";
 
 /**
@@ -35,19 +33,6 @@ export async function runQaScenarioWithFlakeRetry(
   };
 }
 
-export function createQaSuiteReportNotes(params: {
-  transport: QaTransportAdapter;
-  transportArtifactNotes?: readonly string[];
-  providerMode: QaProviderMode;
-  primaryModel: string;
-  alternateModel: string;
-  fastMode: boolean;
-  concurrency: number;
-  isolatedWorkers?: boolean;
-}) {
-  return [...params.transport.createReportNotes(params), ...(params.transportArtifactNotes ?? [])];
-}
-
 export function buildQaIsolatedScenarioWorkerParams(params: {
   repoRoot: string;
   outputDir: string;
@@ -58,7 +43,7 @@ export function buildQaIsolatedScenarioWorkerParams(params: {
   primaryModel: string;
   alternateModel: string;
   fastMode: boolean;
-  scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];
+  scenario: QaSeedScenarioWithSource;
   input?: QaSuiteRunParams;
   startLab: QaSuiteStartLabFn;
 }): QaSuiteRunParams {
@@ -96,21 +81,6 @@ export function buildQaIsolatedScenarioWorkerParams(params: {
   };
 }
 
-export function remapModelRefForForcedRuntime(params: {
-  modelRef: string;
-  providerMode: QaProviderMode;
-  forcedRuntime?: RuntimeId;
-}) {
-  if (params.forcedRuntime !== "codex" || params.providerMode !== "mock-openai") {
-    return params.modelRef;
-  }
-  const split = splitModelRef(params.modelRef);
-  if (!split || split.provider !== "mock-openai") {
-    return params.modelRef;
-  }
-  return `openai/${split.model}`;
-}
-
 function appendNodeOption(raw: string | undefined, option: string) {
   const parts = (raw ?? "").split(/\s+/u).filter(Boolean);
   return parts.includes(option) ? parts.join(" ") : [...parts, option].join(" ");
@@ -135,11 +105,6 @@ export function mergeQaRuntimeEnvPatches(
   ...patches: Array<NodeJS.ProcessEnv | undefined>
 ): NodeJS.ProcessEnv | undefined {
   const merged: NodeJS.ProcessEnv = {};
-  for (const patch of patches) {
-    if (!patch) {
-      continue;
-    }
-    Object.assign(merged, patch);
-  }
+  Object.assign(merged, ...patches);
   return Object.keys(merged).length > 0 ? merged : undefined;
 }

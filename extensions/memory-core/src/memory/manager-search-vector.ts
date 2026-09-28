@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import {
   cosineSimilarity,
   decodeMemoryEmbedding,
@@ -16,14 +17,6 @@ import {
 // Bound scan batches so worker cancellation can interrupt large vectorless indexes.
 const FALLBACK_VECTOR_BATCH_SIZE = 256;
 
-function yieldToEventLoop(): Promise<void> {
-  return new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-}
-
-type SearchSource = MemorySource;
-
 function resolveProviderModels(primary: string, aliases: string[] | undefined): string[] {
   return Array.from(new Set([primary, ...(aliases ?? []).filter(Boolean)]));
 }
@@ -39,7 +32,7 @@ export async function searchVector(params: {
   ensureVectorReady: (dimensions: number) => Promise<boolean>;
   runVectorKnn?: (request: VectorKnnRequest, signal?: AbortSignal) => Promise<VectorKnnResponse>;
   runFallback: () => Promise<SearchRowResult[]>;
-  sourceFilterVec: { sql: string; params: SearchSource[] };
+  sourceFilterVec: { sql: string; params: MemorySource[] };
 }): Promise<SearchRowResult[]> {
   if (params.queryVec.length === 0 || params.limit <= 0) {
     return [];
@@ -78,7 +71,7 @@ export async function searchChunksByEmbedding(params: {
   db: DatabaseSync;
   providerModel: string;
   providerModelAliases?: string[];
-  sourceFilter: { sql: string; params: SearchSource[] };
+  sourceFilter: { sql: string; params: MemorySource[] };
   queryVec: number[];
   limit: number;
   snippetMaxChars: number;

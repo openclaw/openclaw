@@ -198,8 +198,7 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
     },
   },
   presentation: {
-    buildPendingPayload: ({ cfg, request, approvalKind, nowMs, view }) =>
-      buildPendingPayload({ cfg, request, approvalKind, nowMs, view }),
+    buildPendingPayload,
     buildResolvedResult: ({ view }) => ({
       kind: "update",
       payload: { text: buildTelegramNativeResolvedApprovalText(view) },

@@ -1,5 +1,6 @@
 // Commits detached background results into an existing conversation generation.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -9,10 +10,10 @@ import {
   type SessionTranscriptTurnPersistOptions,
 } from "../config/sessions/session-accessor.js";
 import {
-  findTranscriptEvent,
   readTranscriptEventId,
   readTranscriptEventMessage,
 } from "../config/sessions/session-accessor.sqlite-read.js";
+import { findTranscriptEvent } from "../config/sessions/session-transcript-match.js";
 import type { SessionTranscriptAssistantMessage } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
@@ -111,10 +112,7 @@ export async function commitBackgroundResultToSession(params: {
       };
       // A retry owns the original committed payload, including its managed-media IDs.
       // Restaging media would conflict with the transcript's exact replay contract.
-      const prior = await findTranscriptEvent(
-        scope,
-        (event) => readTranscriptEventMessage(event)?.idempotencyKey === idempotencyKey,
-      );
+      const prior = await findTranscriptEvent(scope, { kind: "idempotency", key: idempotencyKey });
       const priorMessage = prior && readTranscriptEventMessage(prior.event);
       const priorId = prior && readTranscriptEventId(prior.event);
       if (prior && (!priorMessage || !priorId)) {
@@ -130,20 +128,7 @@ export async function commitBackgroundResultToSession(params: {
         api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
         provider: OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
         model: AUTOMATION_RESULT_MODEL,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            total: 0,
-          },
-        },
+        usage: makeZeroUsageSnapshot(),
         stopReason: "stop",
         timestamp: Date.now(),
         idempotencyKey,

@@ -1,10 +1,10 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { resolveRootPathSync } from "../infra/boundary-path.js";
 import { FsSafeError } from "../infra/fs-safe.js";
-import { readRegularFileSync } from "../infra/regular-file.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { openPluginRootFileSync } from "./path-safety.js";
 import type {
@@ -24,7 +24,12 @@ function entryKey(relativePath: string, rejectHardlinks: boolean): string {
   return JSON.stringify([path.normalize(relativePath), rejectHardlinks]);
 }
 
-function enforceFileSize(entry: PluginFileCacheEntry, maxBytes?: number): PluginFileCacheEntry {
+function enforceFileSize(
+  entry: PluginFileCacheEntry,
+  maxBytes?: number,
+  reason: "validation" | "io" = "validation",
+  filePath?: string,
+): PluginFileCacheEntry {
   if (
     entry.ok &&
     maxBytes !== undefined &&
@@ -34,8 +39,11 @@ function enforceFileSize(entry: PluginFileCacheEntry, maxBytes?: number): Plugin
       ok: false,
       failure: {
         ok: false,
-        reason: "validation",
-        error: new FsSafeError("too-large", `File exceeds ${maxBytes} bytes: ${entry.path}`),
+        reason,
+        error: new FsSafeError(
+          "too-large",
+          `File exceeds ${maxBytes} bytes: ${filePath ?? entry.path}`,
+        ),
       },
     };
   }
@@ -350,24 +358,7 @@ function readPluginCacheRegularFile(params: {
       }
     }
   }
-  if (
-    entry.ok &&
-    params.maxBytes !== undefined &&
-    Math.max(entry.signature.size, entry.contents.length) > params.maxBytes
-  ) {
-    return {
-      ok: false,
-      failure: {
-        ok: false,
-        reason: "io",
-        error: new FsSafeError(
-          "too-large",
-          `File exceeds ${params.maxBytes} bytes: ${absolutePath}`,
-        ),
-      },
-    };
-  }
-  return entry;
+  return enforceFileSize(entry, params.maxBytes, "io", absolutePath);
 }
 
 export function readPluginCacheJsonFile(

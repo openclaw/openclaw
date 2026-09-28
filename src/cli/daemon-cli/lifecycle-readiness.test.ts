@@ -147,6 +147,45 @@ describe("Gateway service readiness", () => {
   );
 
   it.each([
+    { outcome: "channel-errors", reason: /channel health checks failed/ },
+    { outcome: "plugin-errors", reason: /plugins reported load errors/ },
+  ])("reports $outcome as a health failure instead of a timeout", async ({ outcome, reason }) => {
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+      throw new Error(`exit ${code}`);
+    });
+    runServiceRestart.mockImplementation(async (params: RestartParams) => {
+      await params.postRestartCheck?.({
+        ...createDaemonActionContext({ action: "restart", json: true }),
+        activationAccepted: true,
+        json: true,
+      });
+      return true;
+    });
+    waitForGatewayHealthyRestart.mockResolvedValue({
+      healthy: false,
+      staleGatewayPids: [],
+      runtime: { status: "running", pid: 4242 },
+      portUsage: { port: 18789, status: "busy", listeners: [{ pid: 4242 }], hints: [] },
+      waitOutcome: outcome,
+      elapsedMs: 0,
+    });
+
+    await expect(runDaemonRestart({ json: true })).rejects.toThrow("exit 1");
+
+    expect(writeJson).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        ok: false,
+        action: "restart",
+        result: "restart-health-failed",
+        error: expect.stringMatching(reason),
+        warnings: expect.arrayContaining([expect.stringMatching(reason)]),
+      }),
+    );
+    expect(JSON.stringify(writeJson.mock.calls)).not.toMatch(/timed out/);
+  });
+
+  it.each([
     { json: true, updateMarker: undefined, code: 2, result: "still-starting" },
     { json: false, updateMarker: undefined, code: 2, result: "still-starting" },
     { json: true, updateMarker: "1", code: 1, result: "restart-health-failed" },

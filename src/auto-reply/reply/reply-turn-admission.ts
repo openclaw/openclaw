@@ -1,4 +1,3 @@
-import { performance } from "node:perf_hooks";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
 import { isMainRestartRecoveryCandidate } from "../../agents/main-session-recovery/main-session-recovery-state.js";
@@ -17,18 +16,15 @@ import {
   SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE,
   SessionRestartRecoveryTombstoneError,
 } from "../../config/sessions/lifecycle.js";
+import type { SessionAdmissionDatabaseClaim } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  getDiagnosticSessionActivitySnapshot,
-  resolveRunStaleThresholdMs,
-} from "../../logging/diagnostic-run-activity.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   bindGatewayContextResolver,
@@ -36,20 +32,16 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   beginSessionWorkAdmission,
   getSessionWorkAdmissionOwnerRelease,
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
-import type { OpenClawAgentDatabaseClaim } from "../../state/openclaw-agent-db-identity.js";
-import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
 import {
   createReplyOperation,
-  expireStaleReplyOperation,
   isReplyRunSuccessorAdmissionBlocked,
-  isReplyRunEvidenceStale,
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
-  REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
   replyRunRegistry,
   ReplyRunAlreadyActiveError,
   ReplyRunFollowupAdmissionBlockedError,
@@ -63,8 +55,9 @@ import {
   waitForReplyRunSuccessorAdmission,
 } from "./reply-run-registry.js";
 import {
-  isReplyRunRecoveryBlocked,
+  expireVisibleStaleOperation,
   lifecycleAdmissionByOperation,
+  resolveVisibleActiveWaitMs,
 } from "./reply-run-registry.state.js";
 import { waitForRestartRecoveryProgress } from "./reply-turn-recovery-wait.js";
 import { createReplyTurnRotationEvidence } from "./reply-turn-rotation.js";
@@ -75,7 +68,7 @@ type ReplyTurnAdmission =
       status: "owned";
       operation: ReplyOperation;
       sessionEntry?: SessionEntry;
-      databaseClaim?: OpenClawAgentDatabaseClaim;
+      databaseClaim?: SessionAdmissionDatabaseClaim;
     }
   | {
       status: "skipped";
@@ -146,38 +139,8 @@ function isAbortSignalAborted(signal: AbortSignal | undefined): boolean {
   return signal?.aborted === true;
 }
 
-function expireVisibleStaleOperation(operation: ReplyOperation | undefined): boolean {
-  if (!operation) {
-    return false;
-  }
-  const idleMs = Date.now() - operation.lastActivityAtMs;
-  if (operation.result) {
-    return (
-      idleMs >= REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS &&
-      expireStaleReplyOperation(operation, "terminal_unreleased")
-    );
-  }
-  return isReplyRunEvidenceStale(operation) && expireStaleReplyOperation(operation, "no_activity");
-}
-
-function resolveVisibleActiveWaitMs(operation: ReplyOperation | undefined): number {
-  if (!operation || isReplyRunRecoveryBlocked(operation)) {
-    return REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS;
-  }
-  const ageMs = Date.now() - operation.lastActivityAtMs;
-  const activity = getDiagnosticSessionActivitySnapshot({
-    sessionId: operation.sessionId,
-    sessionKey: operation.key,
-  });
-  const remainingMs = operation.result
-    ? REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS - ageMs
-    : resolveRunStaleThresholdMs(activity, ageMs) - ageMs;
-  return Math.min(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS, Math.max(1, remainingMs));
-}
-
 type ReplyTurnAdmissionParams = {
   runId?: string;
-  stateAcquisitionDeadline?: () => number;
   assertRequestCurrent?: () => void;
   providerReviewAcknowledgment?: import("../../sessions/provider-review.js").ProviderReviewAcknowledgment;
   agentId?: string;
@@ -236,17 +199,22 @@ export async function admitReplyTurn(
   const waitTimeoutMs =
     params.waitTimeoutMs ??
     (params.kind === "queued_followup" ? REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS : undefined);
-  let acquisitionDeadlineMs: number | undefined;
-  let admittedDatabaseClaim: OpenClawAgentDatabaseClaim | undefined;
+  let admittedDatabaseClaim: SessionAdmissionDatabaseClaim | undefined;
+  let discardedDatabaseClaimRelease: Promise<void> | undefined;
   let owned = false;
   let admitting = true;
-  const assertDatabaseOwnerCurrent = (nextClaim?: OpenClawAgentDatabaseClaim) => {
+  const assertDatabaseOwnerCurrent = (nextClaim?: SessionAdmissionDatabaseClaim) => {
     if (
       admittedDatabaseClaim &&
       (!admittedDatabaseClaim.isCurrent() ||
         (nextClaim && nextClaim.incarnation !== admittedDatabaseClaim.incarnation))
     ) {
-      nextClaim?.release();
+      const release = nextClaim?.release();
+      if (release) {
+        discardedDatabaseClaimRelease = release;
+        // The synchronous assertion revokes now; the outer finally joins release.
+        void release.catch(() => {});
+      }
       rejectLifecycleInvalidatedWork({
         kind: params.kind,
         message: `Session store for "${params.sessionKey}" changed while starting work. Retry.`,
@@ -320,11 +288,17 @@ export async function admitReplyTurn(
         let admittedSessionEntry: InternalSessionEntry | undefined;
         let recoveryOwnerLease: MainSessionRecoveryOwnerLease | undefined;
         let interruptedBeforeOperation = false;
+        let recoveryClaimStarted = false;
         const admission = storePath
           ? await beginSessionWorkAdmission({
               scope: storePath,
               resolveGatewayContext,
               identities: [params.sessionKey],
+              storeWriterIdentities:
+                parseAgentSessionKey(params.sessionKey) &&
+                normalizeStoreSessionKey(params.sessionKey) === params.sessionKey
+                  ? [params.sessionKey]
+                  : undefined,
               signal: params.upstreamAbortSignal,
               onInterrupt: () => {
                 interruptedBeforeOperation = true;
@@ -333,6 +307,19 @@ export async function admitReplyTurn(
               },
               assertAllowed: async (signal) => {
                 assertDatabaseOwnerCurrent();
+                const assertCurrent = () => {
+                  params.assertRequestCurrent?.();
+                  assertDatabaseOwnerCurrent();
+                  if (
+                    !admitting ||
+                    interruptedBeforeOperation ||
+                    lifecycleGeneration !== getAgentEventLifecycleGeneration()
+                  ) {
+                    throw new SessionWorkStartChangedError(
+                      "Session changed while waiting for state admission.",
+                    );
+                  }
+                };
                 const current = await loadSessionEntryForAdmission(
                   {
                     agentId: params.agentId,
@@ -342,34 +329,7 @@ export async function admitReplyTurn(
                   },
                   {
                     signal,
-                    get deadlineMs() {
-                      return (acquisitionDeadlineMs ??= Math.min(
-                        params.stateAcquisitionDeadline?.() ?? Number.POSITIVE_INFINITY,
-                        performance.now() + OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-                      ));
-                    },
-                    assertCurrent: () => {
-                      params.assertRequestCurrent?.();
-                      assertDatabaseOwnerCurrent();
-                      if (
-                        !admitting ||
-                        interruptedBeforeOperation ||
-                        lifecycleGeneration !== getAgentEventLifecycleGeneration()
-                      ) {
-                        throw new SessionWorkStartChangedError(
-                          "Session changed while waiting for state admission.",
-                        );
-                      }
-                    },
-                    onWait: params.runId
-                      ? () =>
-                          emitAgentRunStatusEvent({
-                            runId: params.runId!,
-                            phase: "waiting_for_state",
-                            sessionKey: params.sessionKey,
-                            agentId: params.agentId,
-                          })
-                      : undefined,
+                    assertCurrent,
                   },
                 );
                 if (
@@ -377,18 +337,21 @@ export async function admitReplyTurn(
                   interruptedBeforeOperation ||
                   params.upstreamAbortSignal?.aborted
                 ) {
-                  current.databaseClaim.release();
+                  await current.databaseClaim.release();
                   throw new SessionWorkStartChangedError("Session changed during state admission.");
                 }
                 try {
                   params.assertRequestCurrent?.();
                 } catch (error) {
-                  current.databaseClaim.release();
+                  await current.databaseClaim.release();
                   throw error;
                 }
                 assertDatabaseOwnerCurrent(current.databaseClaim);
-                admittedDatabaseClaim?.release();
+                const previousDatabaseClaim = admittedDatabaseClaim;
                 admittedDatabaseClaim = current.databaseClaim;
+                await previousDatabaseClaim?.release();
+                signal.throwIfAborted();
+                assertCurrent();
                 const currentEntry = current.entry;
                 admittedSessionEntry = currentEntry;
                 if (expectedSessionId && !currentEntry) {
@@ -527,6 +490,9 @@ export async function admitReplyTurn(
             continue;
           }
           if (shouldClaimRecoveryOwner && recoveryOwnerRelease === undefined) {
+            // A claim can durably clear recovery state. Once it starts, a later
+            // preparation change must fail this admission instead of replaying it.
+            recoveryClaimStarted = true;
             const ownerClaim = await claimMainSessionRecoveryOwner({
               lifecycleGeneration: getAgentEventLifecycleGeneration(),
               sessionId,
@@ -540,6 +506,7 @@ export async function admitReplyTurn(
               });
             }
             recoveryOwnerLease = ownerClaim.kind === "claimed" ? ownerClaim.lease : undefined;
+            admittedSessionEntry = ownerClaim.entry;
           }
           if (interruptedBeforeOperation || isAbortSignalAborted(params.upstreamAbortSignal)) {
             rejectLifecycleInvalidatedWork({
@@ -550,6 +517,13 @@ export async function admitReplyTurn(
           }
           assertDatabaseOwnerCurrent();
           if (rotationObservation?.changed()) {
+            if (recoveryClaimStarted) {
+              rejectLifecycleInvalidatedWork({
+                kind: params.kind,
+                message: `Session "${params.sessionKey}" changed while starting work. Retry.`,
+                transientSessionChange: true,
+              });
+            }
             // A predecessor can rotate after the final row read but before this handoff.
             // Reacquire the full admission; its session ID alone grants no authority.
             throw new ReplyOperationChangedDuringAdmissionError();
@@ -604,6 +578,18 @@ export async function admitReplyTurn(
           databaseIdentity: admittedDatabaseClaim?.identity,
         };
         lifecycleAdmissionByOperation.set(operation, operationAdmission);
+        const databaseClaim = admittedDatabaseClaim;
+        const releaseWorkerDatabaseClaim =
+          databaseClaim && "kind" in databaseClaim ? () => databaseClaim.release() : undefined;
+        if (releaseWorkerDatabaseClaim) {
+          registerReplyOperationSuccessorBarrier({
+            operation,
+            sessionId,
+            sessionKeys: [params.sessionKey],
+            start: releaseWorkerDatabaseClaim,
+            deferUntilClear: true,
+          });
+        }
         if (admission) {
           // The lifecycle fence follows hooks, media work, agent execution, and
           // final delivery. Reset/delete interrupts the operation and waits until
@@ -629,14 +615,18 @@ export async function admitReplyTurn(
             // Keep immutable store correlation after releasing only this admission's lease.
             operationAdmission.lease = undefined;
             // Keep reset/delete behind durable owner release and its writer lock.
-            void releaseRecoveryOwner().then((pendingTarget) => {
-              admission.release();
-              scheduleMainSessionRecoveryPendingTarget(pendingTarget);
-            });
+            void Promise.all([releaseRecoveryOwner(), releaseWorkerDatabaseClaim?.()]).then(
+              ([pendingTarget]) => {
+                admission.release();
+                scheduleMainSessionRecoveryPendingTarget(pendingTarget);
+              },
+              (error: unknown) => {
+                log.warn(`failed to release reply database owner: ${formatErrorMessage(error)}`);
+              },
+            );
           });
         }
-        const databaseClaim = admittedDatabaseClaim;
-        if (databaseClaim) {
+        if (databaseClaim && !("kind" in databaseClaim)) {
           runAfterReplyOperationClear(operation, databaseClaim.release);
         }
         if (releaseForeground) {
@@ -740,7 +730,11 @@ export async function admitReplyTurn(
       releaseForeground?.();
     }
     if (!owned) {
-      admittedDatabaseClaim?.release();
+      try {
+        await admittedDatabaseClaim?.release();
+      } finally {
+        await discardedDatabaseClaimRelease;
+      }
     }
   }
 }

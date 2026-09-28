@@ -31,11 +31,7 @@ export function formatToolAggregateParts(
   // Group by directory and brace-collapse filenames to keep progress text short.
   const grouped: Record<string, string[]> = {};
   for (const m of filtered) {
-    if (!isPathLike(m)) {
-      rawSegments.push(m);
-      continue;
-    }
-    if (m.includes("→")) {
+    if (!isPathLike(m) || m.includes("→")) {
       rawSegments.push(m);
       continue;
     }
@@ -94,9 +90,6 @@ function splitExecFlags(meta: string): { flags: string[]; body: string } {
     .split(" · ")
     .map((part) => part.trim())
     .filter(Boolean);
-  if (parts.length === 0) {
-    return { flags: [], body: "" };
-  }
   const flags: string[] = [];
   const bodyParts: string[] = [];
   for (const part of parts) {
@@ -110,22 +103,13 @@ function splitExecFlags(meta: string): { flags: string[]; body: string } {
 }
 
 function isPathLike(value: string): boolean {
-  if (!value) {
-    return false;
-  }
-  if (value.includes(" ")) {
-    return false;
-  }
-  if (value.includes("://")) {
-    return false;
-  }
-  if (value.includes("·")) {
-    return false;
-  }
-  if (value.includes("&&") || value.includes("||")) {
-    return false;
-  }
-  return /^~?(\/[^\s]+)+$/.test(value);
+  return (
+    !value.includes("://") &&
+    !value.includes("·") &&
+    !value.includes("&&") &&
+    !value.includes("||") &&
+    /^~?(\/[^\s]+)+$/.test(value)
+  );
 }
 
 function maybeWrapMarkdown(value: string, markdown?: boolean): string {

@@ -12,6 +12,7 @@ import {
   WORKER_COMPUTER_PROTOCOL_FEATURE,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
   WORKER_PORTAL_PROTOCOL_FEATURE,
+  WORKER_PRESENCE_PROTOCOL_FEATURE,
   WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
   type WorkerSessionToolResult,
   type WorkerTranscriptCommitErrorReason,
@@ -42,6 +43,7 @@ export const HANDSHAKE = {
     WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
     WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
     WORKER_PORTAL_PROTOCOL_FEATURE,
+    WORKER_PRESENCE_PROTOCOL_FEATURE,
     WORKER_INFERENCE_PROTOCOL_FEATURE,
     WORKER_COMPUTER_PROTOCOL_FEATURE,
   ],
@@ -202,7 +204,7 @@ export function attachHarness(
         : { ok: true as const, result: { ackedSeq: LIVE_EVENT.seq } },
     ),
     startInference: vi.fn(
-      (
+      async (
         _identity: WorkerConnectionIdentity,
         _request: WorkerInferenceStartParams,
         sink: InferenceSink,
@@ -214,7 +216,7 @@ export function attachHarness(
         };
       },
     ),
-    cancelInference: vi.fn(() => ({
+    cancelInference: vi.fn(async () => ({
       ok: true as const,
       result: { status: "cancelled" as const },
     })),

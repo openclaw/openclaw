@@ -13,6 +13,7 @@ import {
   neutralizeCodexExplicitMentionSigils,
   type CodexProjectedImageGroup,
 } from "./context-engine-projection.js";
+import { joinPresentSections } from "./developer-instruction-sections.js";
 import type {
   CodexSandboxPolicy,
   CodexTurnEnvironmentParams,
@@ -39,7 +40,7 @@ type CodexCurrentSender = {
 
 function readCodexCurrentSender(params: EmbeddedRunAttemptParams): CodexCurrentSender | undefined {
   const metadata = asOptionalRecord(
-    asOptionalRecord(params.userTurnTranscriptRecorder?.message as unknown)?.["__openclaw"],
+    asOptionalRecord(params.userTurnTranscriptRecorder?.message)?.["__openclaw"],
   );
   const recorded = [
     normalizeOptionalString(metadata?.["senderId"]),
@@ -62,11 +63,6 @@ function readCodexCurrentSender(params: EmbeddedRunAttemptParams): CodexCurrentS
     ...(name ? { name: bound(name) } : {}),
     ...(username ? { username: bound(username) } : {}),
   };
-}
-
-function buildCodexCurrentSenderContextValue(params: EmbeddedRunAttemptParams): string | undefined {
-  const sender = readCodexCurrentSender(params);
-  return sender ? JSON.stringify({ sender }) : undefined;
 }
 
 export function buildCodexHistoryProvenancePrefix(
@@ -129,17 +125,13 @@ export function buildTurnStartParams(
     collaborationMode.settings.developer_instructions = null;
   }
   const useThreadPermissionProfile = options.appServer.networkProxy && !options.sandboxPolicy;
-  const currentSenderContext =
-    params.trigger === "user" ? buildCodexCurrentSenderContextValue(params) : undefined;
+  const currentSender = params.trigger === "user" ? readCodexCurrentSender(params) : undefined;
   // Codex emits only changed values and cannot retract omitted fragments from model history.
   // Always send configured-or-host context so warm threads see rollover and removed overrides.
-  let additionalContext = buildCodexTemporalAdditionalContext(params, {
-    sessionStatusAvailable: options.sessionStatusAvailable === true,
-  });
-  // Codex retains earlier fragments in history. Always state the current policy,
-  // including automatic/disabled defaults, without replacing other context entries.
-  additionalContext = {
-    ...additionalContext,
+  const additionalContext: NonNullable<CodexTurnStartParams["additionalContext"]> = {
+    ...buildCodexTemporalAdditionalContext(params, {
+      sessionStatusAvailable: options.sessionStatusAvailable === true,
+    }),
     // Codex emits changed context only. Unknown must replace a disconnected Mac's hint.
     openclaw_active_computer: {
       kind: "application",
@@ -160,18 +152,18 @@ export function buildTurnStartParams(
     },
   };
   // Untrusted context exposes authenticated attribution without promoting human-controlled labels.
-  if (currentSenderContext) {
-    additionalContext = {
-      ...additionalContext,
-      openclaw_current_sender: { kind: "untrusted", value: currentSenderContext },
+  if (currentSender) {
+    additionalContext.openclaw_current_sender = {
+      kind: "untrusted",
+      value: JSON.stringify({ sender: currentSender }),
     };
   }
   if (params.permissionChange?.notice) {
     // Application context is a developer message in Codex 0.151.0 and also
     // reaches native-preserved threads without overriding their turn settings.
-    additionalContext = {
-      ...additionalContext,
-      openclaw_permission_change: { kind: "application", value: params.permissionChange.notice },
+    additionalContext.openclaw_permission_change = {
+      kind: "application",
+      value: params.permissionChange.notice,
     };
   }
   return {
@@ -190,7 +182,7 @@ export function buildTurnStartParams(
       ),
       ...(options.explicitSkillInputs ?? []),
     ],
-    ...(additionalContext ? { additionalContext } : {}),
+    additionalContext,
     cwd: options.cwd,
     ...(options.appServer.sessionRoot
       ? { runtimeWorkspaceRoots: [options.appServer.sessionRoot] }
@@ -324,8 +316,4 @@ function buildCronCollaborationInstructions(): string {
     "Use context already provided by the runtime, but do not spend time loading or re-reading workspace bootstrap, memory, or project-doc files before executing the cron payload. Inspect those files only if the payload asks for them or the command fails and they are needed to diagnose it.",
     "Keep output concise and automation-oriented. Prefer the final command result or a short failure summary over status narration.",
   ].join("\n\n");
-}
-
-function joinPresentSections(...sections: Array<string | undefined>): string {
-  return sections.filter((section): section is string => Boolean(section?.trim())).join("\n\n");
 }

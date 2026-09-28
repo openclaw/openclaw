@@ -1,4 +1,5 @@
 import type { CacheRetention, Context, Model } from "@openclaw/llm-core";
+import { getAiTransportHost } from "../host.js";
 import { convertMessages, hasToolCallHistory } from "../openai-completions-messages.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
@@ -23,7 +24,7 @@ import {
 } from "../providers/openai-tool-projection.js";
 import { normalizeOpenAIStrictToolParameters } from "../providers/openai-tool-schema.js";
 import { withPreparedToolSchemaNormalization } from "../providers/tool-schema-normalization-cache.js";
-import { resolveOpenAIStrictToolSetting, resolveProviderEndpoint } from "./host-policy.js";
+import { resolveProviderEndpoint } from "./host-policy.js";
 import { resolveMaxTokensParam } from "./model-max-tokens-params.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import {
@@ -104,11 +105,19 @@ const OPENAI_COMPLETIONS_INPUT_TOKEN_SAFETY_MARGIN = 1.25;
 const OPENAI_COMPLETIONS_IMAGE_CHAR_ESTIMATE = 8_000;
 const MIN_USEFUL_OUTPUT_TOKENS = 16;
 
+function estimateJsonChars(value: unknown, fallback: number): number {
+  try {
+    return estimateStringChars(JSON.stringify(value));
+  } catch {
+    return fallback;
+  }
+}
+
 // Used only to bound `max_completion_tokens` below the effective context cap
 // for strict OpenAI-compatible servers (e.g. vLLM, StepFun). The CJK-aware
 // helper avoids undercounting non-Latin prompts enough to trigger server-side
-// context rejections; wrong-high here just trims output a little. Estimate the
-// final shaped payload, not the raw context, so compat transforms and dropped
+// context rejections; exhausted estimates enter the existing overflow recovery.
+// Estimate the final shaped payload, not the raw context, so compat transforms and dropped
 // replay turns are reflected in the output cap.
 function estimateOpenAICompletionsInputTokens(payload: {
   messages?: unknown;
@@ -118,18 +127,10 @@ function estimateOpenAICompletionsInputTokens(payload: {
   let adjustedChars = 0;
   adjustedChars += estimateOpenAICompletionsMessagesChars(payload.messages);
   if (Array.isArray(payload.tools) && payload.tools.length > 0) {
-    try {
-      adjustedChars += estimateStringChars(JSON.stringify(payload.tools));
-    } catch {
-      adjustedChars += 1024;
-    }
+    adjustedChars += estimateJsonChars(payload.tools, 1024);
   }
   if (payload.response_format !== undefined) {
-    try {
-      adjustedChars += estimateStringChars(JSON.stringify(payload.response_format));
-    } catch {
-      adjustedChars += 256;
-    }
+    adjustedChars += estimateJsonChars(payload.response_format, 256);
   }
   return Math.ceil(
     (adjustedChars / CHARS_PER_TOKEN_ESTIMATE) * OPENAI_COMPLETIONS_INPUT_TOKEN_SAFETY_MARGIN,
@@ -151,11 +152,7 @@ function estimateOpenAICompletionsMessagesChars(messages: unknown): number {
       adjustedChars += estimateOpenAICompletionsContentChars(record[field]);
     }
     if (record.tool_calls !== undefined) {
-      try {
-        adjustedChars += estimateStringChars(JSON.stringify(record.tool_calls));
-      } catch {
-        adjustedChars += 256;
-      }
+      adjustedChars += estimateJsonChars(record.tool_calls, 256);
     }
   }
   return adjustedChars;
@@ -183,11 +180,7 @@ function estimateOpenAICompletionsContentChars(value: unknown): number {
       adjustedChars += estimateStringChars(text);
       continue;
     }
-    try {
-      adjustedChars += estimateStringChars(JSON.stringify(block));
-    } catch {
-      adjustedChars += 256;
-    }
+    adjustedChars += estimateJsonChars(block, 256);
   }
   return adjustedChars;
 }
@@ -256,7 +249,7 @@ function convertTools(
           : undefined
         : resolveOpenAIStrictToolFlagWithDiagnostics(
             projection,
-            resolveOpenAIStrictToolSetting(model, {
+            getAiTransportHost().resolveOpenAIStrictToolSetting(model, {
               transport: "stream",
               supportsStrictMode: compat?.supportsStrictMode,
             }),
@@ -470,6 +463,26 @@ export function buildOpenAICompletionsRequest(
       params.tool_choice = toolChoice;
     }
   }
+  const isOpenRouter = compat.thinkingFormat === "openrouter";
+  // Only model metadata can declare a missing effort selector; endpoint defaults cannot.
+  const usesBinaryOpenRouterThinking =
+    isOpenRouter &&
+    (model.compat?.supportsReasoningEffort === false ||
+      model.compat?.supportedReasoningEfforts?.length === 0);
+  const simpleReasoning = options?.reasoning;
+  const requestedEffort =
+    policy.mode === "direct"
+      ? options?.reasoningEffort
+      : (options?.reasoningEffort ??
+        (simpleReasoning === "none"
+          ? "none"
+          : resolveOpenAISimpleReasoningEffort(
+              { ...model, compat: model.compat ?? undefined },
+              simpleReasoning,
+            )) ??
+        (usesBinaryOpenRouterThinking ? undefined : "high"));
+  const reasoning = resolveOpenAIRequestReasoning(model, requestedEffort);
+  const { effort, thinkingEnabled } = reasoning;
   {
     const maxTokenBudget =
       policy.mode === "direct"
@@ -511,6 +524,15 @@ export function buildOpenAICompletionsRequest(
             `effectiveContext=${effectiveContextTokens} estimatedInput=${estimatedInputTokens}`,
         );
         if (remainingBudget < MIN_USEFUL_OUTPUT_TOKENS) {
+          if (model.reasoning && thinkingEnabled !== false) {
+            throw Object.assign(
+              new Error(
+                `Context window exceeded: estimated input ${estimatedInputTokens} leaves only ` +
+                  `${remainingBudget} output tokens within the ${effectiveContextTokens}-token context.`,
+              ),
+              { code: "context_length_exceeded" },
+            );
+          }
           log.warn(
             `[completions] insufficient_output_budget provider=${model.provider} api=${model.api} ` +
               `model=${model.id} output=${clampedMaxTokens} ` +
@@ -527,26 +549,6 @@ export function buildOpenAICompletionsRequest(
       }
     }
   }
-  const isOpenRouter = compat.thinkingFormat === "openrouter";
-  // Only model metadata can declare a missing effort selector; endpoint defaults cannot.
-  const usesBinaryOpenRouterThinking =
-    isOpenRouter &&
-    (model.compat?.supportsReasoningEffort === false ||
-      model.compat?.supportedReasoningEfforts?.length === 0);
-  const simpleReasoning = options?.reasoning;
-  const requestedEffort =
-    policy.mode === "direct"
-      ? options?.reasoningEffort
-      : (options?.reasoningEffort ??
-        (simpleReasoning === "none"
-          ? "none"
-          : resolveOpenAISimpleReasoningEffort(
-              { ...model, compat: model.compat ?? undefined },
-              simpleReasoning,
-            )) ??
-        (usesBinaryOpenRouterThinking ? undefined : "high"));
-  const reasoning = resolveOpenAIRequestReasoning(model, requestedEffort);
-  const { effort, thinkingEnabled } = reasoning;
   if (isOpenRouter && model.reasoning) {
     if (usesBinaryOpenRouterThinking && thinkingEnabled !== undefined) {
       params.reasoning = { enabled: thinkingEnabled };

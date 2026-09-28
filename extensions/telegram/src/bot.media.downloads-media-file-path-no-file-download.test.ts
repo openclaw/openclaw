@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { Context } from "grammy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type * as TelegramMediaRuntime from "openclaw/plugin-sdk/media-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   apiCalls,
@@ -15,12 +16,11 @@ import {
 } from "./bot.create-telegram-bot.native-pipeline.test-support.js";
 import { mediaDownload, telegramMediaPng } from "./bot.media.native.test-utils.js";
 import { resolveMedia } from "./bot/delivery.resolve-media.js";
-import type * as TelegramMediaRuntime from "./telegram-media.runtime.js";
 
 const base = { date: 1736380800, from };
 describe("registered Telegram media and buffered context", () => {
   it("materializes file_path bytes and reports missing paths as unavailable media", async () => {
-    const bot = createBot(false);
+    const bot = await createBot(false);
     const firstId = nextTelegramTestMessageId();
     await bot.handleUpdate({
       update_id: firstId,
@@ -58,10 +58,10 @@ describe("registered Telegram media and buffered context", () => {
     publishTelegramTestConfig(cfg);
     const apiRoot = `${cfg.channels!.telegram!.apiRoot}/custom-bot-api`;
     cfg.channels!.telegram!.apiRoot = apiRoot;
-    const bot = createBot(false, true, cfg);
+    const bot = await createBot(false, true, cfg);
     apiResponses.set("getFile", { ok: true, result: { file_path: "photos/transport.png" } });
     const actual = await vi.importActual<typeof TelegramMediaRuntime>(
-      "./telegram-media.runtime.js",
+      "openclaw/plugin-sdk/media-runtime",
     );
     mediaDownload.mockImplementationOnce(actual.saveRemoteMedia);
     const sourceFetch = vi.fn<typeof fetch>(

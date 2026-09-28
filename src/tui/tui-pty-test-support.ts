@@ -28,7 +28,7 @@ export type PtyRun = {
 };
 
 export type PtyTerminalDimensions = Pick<PtyRun, "cols" | "rows">;
-type PtyTestCell = { authenticated: boolean; text: string };
+type PtyTestCell = { authenticated: boolean; text: string; linkTarget?: string };
 
 const MAX_TEST_TERMINAL_DIMENSION = 1_000;
 
@@ -54,7 +54,7 @@ export class PtyTestScreen {
     this.cells = Array.from({ length: rows }, () => this.blankRow());
   }
 
-  write(text: string, authenticated: boolean) {
+  write(text: string, authenticated: boolean, linkTarget?: string) {
     for (const part of text.split(/([\b\r\n\t])/u)) {
       if (part === "\r") {
         this.col = 0;
@@ -68,7 +68,7 @@ export class PtyTestScreen {
         this.col = Math.max(0, this.col - 1);
         this.wrapPending = false;
       } else {
-        this.writeGraphemes(part, authenticated);
+        this.writeGraphemes(part, authenticated, linkTarget);
       }
     }
   }
@@ -159,7 +159,7 @@ export class PtyTestScreen {
     this.wrapPending = false;
   }
 
-  private writeGraphemes(text: string, authenticated: boolean) {
+  private writeGraphemes(text: string, authenticated: boolean, linkTarget?: string) {
     for (const grapheme of ansi.splitGraphemes(text)) {
       if (ansi.sanitizeForLog(grapheme) !== grapheme) {
         throw new Error("unsupported terminal control in TUI PTY evidence");
@@ -181,9 +181,9 @@ export class PtyTestScreen {
       for (let col = this.col; col < this.col + width; col += 1) {
         this.clearCell(cells, col, authenticated);
       }
-      cells[this.col] = { authenticated, text: grapheme };
+      cells[this.col] = { authenticated, text: grapheme, linkTarget };
       for (let col = this.col + 1; col < this.col + width; col += 1) {
-        cells[col] = { authenticated, text: "" };
+        cells[col] = { authenticated, text: "", linkTarget };
       }
       if (this.col + width === this.cols) {
         this.col = this.cols - 1;

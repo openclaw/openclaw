@@ -33,10 +33,6 @@ export function buildMemoryEmbeddingBatches<T extends MemoryEmbeddingChunk>(
       current = [];
       currentTokens = 0;
     }
-    if (current.length === 0 && estimate > maxTokens) {
-      batches.push([chunk]);
-      continue;
-    }
     current.push(chunk);
     currentTokens += estimate;
   }
@@ -205,8 +201,4 @@ export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(par
   }
   await params.onSuccess?.(params.items, outputs);
   return outputs;
-}
-
-export function buildTextEmbeddingInputs(chunks: MemoryEmbeddingChunk[]): EmbeddingInput[] {
-  return chunks.map((chunk) => chunk.embeddingInput ?? { text: chunk.text });
 }

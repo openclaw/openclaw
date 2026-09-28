@@ -1,5 +1,4 @@
 import path from "node:path";
-import { webhookCallback } from "grammy";
 import type { Message, Update } from "grammy/types";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -23,6 +22,7 @@ import {
   apiCalls,
   commandMessage,
   createBot,
+  deliverTelegramUpdate,
   from,
   groupChat as forumChat,
   harness,
@@ -523,7 +523,7 @@ describe("Telegram registered topic recovery", () => {
           },
         },
       };
-      const bot = createBot(false, true, cfg, false, accountId);
+      const bot = await createBot(false, true, cfg, false, accountId);
       const binding: SessionBindingRecord = {
         bindingId: "registered-history-recovery",
         targetSessionKey: sessionKey,
@@ -621,16 +621,7 @@ describe("Telegram registered topic recovery", () => {
               : {}),
           },
         };
-        await webhookCallback(
-          bot,
-          "std/http",
-        )(
-          new Request("http://localhost/telegram", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify(update),
-          }),
-        );
+        await deliverTelegramUpdate(bot, update);
         expect(harness.replySpy).toHaveBeenCalledOnce();
         const observed = harness.replySpy.mock.calls[0]![0];
         const recovered = targetChat === forumChat.id;

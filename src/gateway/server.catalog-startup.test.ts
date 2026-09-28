@@ -37,12 +37,13 @@ describe("Gateway startup catalog", () => {
       bundledGeneratedAt: () => 100,
       readStoredCatalog: read,
     });
-    const pending = createDeferred<never>();
+    const pending = createDeferred();
     const stopped = new Error("fixture stops bootstrap");
     const prepare = vi
       .spyOn(bootstrap, "prepareGatewayServerBootstrap")
-      .mockImplementationOnce(() => {
-        return pending.promise;
+      .mockImplementationOnce(async () => {
+        await pending.promise;
+        throw stopped;
       });
     const startup = startGatewayServerCore(0).catch((error: unknown) => error);
     try {
@@ -65,7 +66,7 @@ describe("Gateway startup catalog", () => {
             },
       );
     } finally {
-      pending.reject(stopped);
+      pending.resolve();
       const outcome = await startup;
       prepare.mockRestore();
       setRemoteModelCatalogOverlaySourcesForTest();

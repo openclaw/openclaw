@@ -186,7 +186,10 @@ class ApprovalsPage extends OpenClawLightDomElement {
     this.loading = false;
     this.loadingMore = false;
     this.historyRefreshPending = false;
+    this.revokingGrantId = null;
     if (clearData) {
+      this.grants = [];
+      this.grantsError = null;
       this.hasLoaded = false;
       this.items = [];
       this.nextCursor = null;
@@ -247,16 +250,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
       this.loadingMore = true;
     }
     this.error = null;
-    const isCurrent = () =>
-      this.isConnected &&
-      this.connected &&
-      this.approvalsAccess &&
-      this.gatewaySource === gateway &&
-      this.context.gateway === gateway &&
-      gateway.snapshot.phase === "connected" &&
-      readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals &&
-      this.client === client &&
-      this.requestGeneration === generation;
+    const isCurrent = () => this.isCurrentRequest(client, gateway, generation);
     try {
       const result = await client.request<ApprovalHistoryResult>("approval.history", {
         ...(cursor ? { cursor } : {}),
@@ -308,23 +302,56 @@ class ApprovalsPage extends OpenClawLightDomElement {
     }
   }
 
+  private isCurrentRequest(
+    client: GatewayBrowserClient,
+    gateway: ApplicationContext["gateway"],
+    generation: number,
+  ): boolean {
+    return (
+      this.isConnected &&
+      this.connected &&
+      this.approvalsAccess &&
+      this.gatewaySource === gateway &&
+      this.context.gateway === gateway &&
+      gateway.snapshot.phase === "connected" &&
+      readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals &&
+      this.client === client &&
+      this.requestGeneration === generation
+    );
+  }
+
   private async revokeGrant(grantId: string): Promise<void> {
     const client = this.client;
-    if (!client || this.revokingGrantId !== null) {
+    const gateway = this.gatewaySource;
+    const generation = this.requestGeneration;
+    if (
+      !client ||
+      !gateway ||
+      this.revokingGrantId !== null ||
+      !this.isCurrentRequest(client, gateway, generation)
+    ) {
       return;
     }
+    const isCurrent = () => this.isCurrentRequest(client, gateway, generation);
     this.revokingGrantId = grantId;
     try {
       await client.request("exec.approval.grants.revoke", { grantId });
+      if (!isCurrent()) {
+        return;
+      }
       const nowMs = Date.now();
       this.grants = this.grants.map((grant) =>
         grant.grantId === grantId ? { ...grant, revokedAtMs: nowMs } : grant,
       );
       this.grantsError = null;
     } catch (error) {
-      this.grantsError = formatUiError(error);
+      if (isCurrent()) {
+        this.grantsError = formatUiError(error);
+      }
     } finally {
-      this.revokingGrantId = null;
+      if (isCurrent()) {
+        this.revokingGrantId = null;
+      }
     }
   }
 

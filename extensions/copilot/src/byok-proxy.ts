@@ -79,11 +79,7 @@ export async function createCopilotByokProxy(
         baseUrl: sdkBaseUrl,
         ...(proxyCredentialHeader
           ? {
-              headers: buildSdkProviderHeaders(
-                providerConfig.headers,
-                proxyCredentialHeader,
-                nonce,
-              ),
+              headers: { ...providerConfig.headers, [proxyCredentialHeader]: nonce },
             }
           : {}),
       },
@@ -281,14 +277,6 @@ function normalizeProxyRequestHeaders(
   return out;
 }
 
-function buildSdkProviderHeaders(
-  headers: ProviderConfig["headers"],
-  proxyCredentialHeader: string,
-  proxyCredential: string,
-): Record<string, string> {
-  return { ...headers, [proxyCredentialHeader]: proxyCredential };
-}
-
 function createProxyCredentialHeaderName(headers: ProviderConfig["headers"]): string {
   for (;;) {
     const name = `${PROXY_CREDENTIAL_HEADER_PREFIX}${randomBytes(12).toString("hex")}`;
@@ -369,6 +357,5 @@ function isContentEncodingHeader(key: string): boolean {
 }
 
 function trimTrailingSlash(pathname: string): string {
-  const trimmed = pathname.replace(/\/+$/, "");
-  return trimmed === "" ? "" : trimmed;
+  return pathname.replace(/\/+$/, "");
 }

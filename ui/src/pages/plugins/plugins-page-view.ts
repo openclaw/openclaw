@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import type { PluginsSkillsReadParams } from "../../../../packages/gateway-protocol/src/schema/plugin-skills.ts";
 import {
   pathForPluginCatalogEntry,
@@ -51,6 +51,7 @@ import {
 } from "./skill-preview.ts";
 
 type PluginsPageViewActions = {
+  startMcpLogin: (serverName: string) => void;
   openTool: (name: string) => void;
   openSkill: (request: PluginsSkillsReadParams) => void;
   selectHubTab: (tab: PluginsHubTab) => void;
@@ -75,6 +76,9 @@ type PluginsPageViewActions = {
 };
 
 export type PluginsPageViewModel = {
+  mcpLogin: TemplateResult;
+  mcpLoginBusy: boolean;
+  canMcpLogin: boolean;
   renderCredential?: PluginSettingsEditor["renderCredential"];
   help?: PluginHelpController;
   context: ApplicationContext;
@@ -91,6 +95,8 @@ export type PluginsPageViewModel = {
   detail: PluginsPageDetail | null;
   iconUrls: Record<string, string>;
   catalogIconUrls: Record<string, string>;
+  iconLoading?: (pluginId: string) => boolean;
+  catalogIconLoading?: (url: string) => boolean;
   pageNotice: PluginRowMessage | null;
   catalogDetail: PluginsPageCatalogDetail | null;
   installedDetailTab: InstalledPluginDetailTab;
@@ -139,6 +145,7 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
     busy: model.busy,
     messages: model.messages,
     iconUrls: model.iconUrls,
+    iconLoading: model.iconLoading,
     canMutate: model.canMutate,
     mutationBlockedReason: model.mutationBlockedReason,
     configBusy: configState.configLoading,
@@ -176,10 +183,15 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
       pluginId,
       installProgress: consentController.getActiveInstall(pluginRowKey(pluginId)),
       inspection: detail?.inspection ?? null,
+      mcpLoginBusy: model.mcpLoginBusy,
+      canMcpLogin: model.canMcpLogin,
+      onMcpLogin: actions.startMcpLogin,
+      onEditMcp: () => model.context.navigate("mcp"),
       catalog: detail?.catalog,
       inspectionError: detail?.error ?? null,
       catalogLoading: detail?.catalogLoading,
       catalogIconUrls: model.catalogIconUrls,
+      catalogIconLoading: model.catalogIconLoading,
       renderCredential: model.renderCredential,
       tools: detail?.tools,
       onOpenTool: actions.openTool,
@@ -229,7 +241,6 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
         : nothing
     }
     ${renderSettingsWorkspace(html`
-      <openclaw-plugin-manager></openclaw-plugin-manager>
       ${renderPluginRowMessage(model.pageNotice ?? undefined)}
       ${
         model.surface === "discovery"
@@ -268,6 +279,7 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
                         onContinueInstall: (request) =>
                           void consentController.install(request, `install:${catalogDetail.id}`),
                         iconUrls: model.catalogIconUrls,
+                        iconLoading: model.catalogIconLoading,
                       })
                   : renderSettingsPage(
                       renderPluginCatalogResults({
@@ -291,6 +303,8 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
                         query: discovery.query,
                         iconUrls: model.catalogIconUrls,
                         pluginIconUrls: model.iconUrls,
+                        iconLoading: model.catalogIconLoading,
+                        pluginIconLoading: model.iconLoading,
                         canInstall: model.canMutate,
                         installProgress: consentController.installProgress,
                         entryHref: (id) => pathForPluginCatalogEntry(id, context.basePath),
@@ -327,7 +341,7 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
               })
       }
     `)}
-    ${renderPluginSkillPreview(model.skillPreview)}
+    ${renderPluginSkillPreview(model.skillPreview)} ${model.mcpLogin}
     ${
       consentController.consent
         ? renderPluginConsentDialog({
@@ -338,6 +352,10 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
             iconUrl: consentController.consent.pluginId
               ? model.iconUrls[consentController.consent.pluginId]
               : undefined,
+            iconLoading: Boolean(
+              consentController.consent.pluginId &&
+              model.iconLoading?.(consentController.consent.pluginId),
+            ),
             canMutate: model.canMutate,
             mutationBlockedReason: model.mutationBlockedReason,
             busy: Object.values(model.busy).some(Boolean),

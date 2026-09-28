@@ -1,5 +1,3 @@
-// Interactive updater entrypoint: resolves current install/channel state, prompts for
-// a target channel, then delegates the actual mutation to the non-interactive updater.
 import { confirm, isCancel } from "@clack/prompts";
 import { selectStyled } from "../../../packages/terminal-core/src/prompt-select-styled.js";
 import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
@@ -17,13 +15,12 @@ import { VERSION } from "../../version.js";
 import {
   isEmptyDir,
   isGitCheckout,
-  parseTimeoutMsOrExit,
+  parseUpdateTimeoutMs,
   resolveGitInstallDir,
   resolveUpdateRoot,
   type UpdateWizardOptions,
 } from "./shared.js";
 
-/** Run the TTY-only update wizard and preserve `updateCommand` as the single update executor. */
 export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promise<void> {
   if (!process.stdin.isTTY) {
     defaultRuntime.error(
@@ -33,10 +30,7 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
     return;
   }
 
-  const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
-  if (timeoutMs === null) {
-    return;
-  }
+  const timeoutMs = parseUpdateTimeoutMs(opts.timeout);
 
   const root = await resolveUpdateRoot();
   const [updateStatus, configSnapshot] = await Promise.all([
@@ -102,16 +96,12 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
     const gitDir = resolveGitInstallDir();
     const hasGit = await isGitCheckout(gitDir);
     if (!hasGit) {
-      const dirExists = await pathExists(gitDir);
-      if (dirExists) {
-        const empty = await isEmptyDir(gitDir);
-        if (!empty) {
-          defaultRuntime.error(
-            `OPENCLAW_GIT_DIR points at a non-git directory: ${gitDir}. Set OPENCLAW_GIT_DIR to an empty folder or an openclaw checkout.`,
-          );
-          defaultRuntime.exit(1);
-          return;
-        }
+      if ((await pathExists(gitDir)) && !(await isEmptyDir(gitDir))) {
+        defaultRuntime.error(
+          `OPENCLAW_GIT_DIR points at a non-git directory: ${gitDir}. Set OPENCLAW_GIT_DIR to an empty folder or an openclaw checkout.`,
+        );
+        defaultRuntime.exit(1);
+        return;
       }
 
       const ok = await confirm({

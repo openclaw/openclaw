@@ -404,7 +404,10 @@ export async function attachAuthenticatedGatewayConnect(
       : undefined,
     usesSharedGatewayAuth: sessionUsesSharedGatewayAuth,
     sharedGatewaySessionGeneration: sessionSharedGatewaySessionGeneration,
-    authPolicyGeneration: resolveGatewayAuthPolicyGeneration(context.configSnapshot),
+    authPolicyGeneration: resolveGatewayAuthPolicyGeneration(
+      context.configSnapshot,
+      authenticatedUserId,
+    ),
     presenceKey,
     ...(authenticatedUserId ? { authenticatedUserId } : {}),
     ...(authenticatedUserIsTailscaleProvider ? { authenticatedUserIsTailscaleProvider: true } : {}),
@@ -535,6 +538,20 @@ export async function attachAuthenticatedGatewayConnect(
   handoffReceiver.value();
   setHandshakeState("connected");
   advanceHandshakePhase("session_attached");
+  // Ephemeral clients never page transcripts, so avoid starting an idle history worker for them.
+  if (role === "operator" && !isEphemeralGatewayClient(connectParams.client)) {
+    runDetachedConnectWork(
+      async () => {
+        const { prewarmGatewaySessionHistory } = await import("../../server-history-prewarm.js");
+        await prewarmGatewaySessionHistory(getRuntimeConfig(), {
+          onlyIfCold: true,
+          isCancelled: () => context.handler.connectionWork.signal.aborted,
+        });
+      },
+      (error) =>
+        logGateway.debug(`connection session history prewarm failed: ${formatForLog(error)}`),
+    );
+  }
   logWs("in", "connect", {
     connId,
     client: connectParams.client.id,
@@ -570,23 +587,28 @@ export async function attachAuthenticatedGatewayConnect(
 
   if (presenceKey) {
     const authenticatedPresenceUser = currentAuthenticatedPresenceUser();
-    upsertPresence(presenceKey, {
-      host: connectParams.client.displayName ?? connectParams.client.id ?? os.hostname(),
-      clientId: connectParams.client.id,
-      ip: isLocalClient ? undefined : reportedClientIp,
-      version: connectParams.client.version,
-      platform: connectParams.client.platform,
-      deviceFamily: connectParams.client.deviceFamily,
-      modelIdentifier: connectParams.client.modelIdentifier,
-      timeZone: connectParams.client.timeZone,
-      mode: connectParams.client.mode,
-      deviceId: device?.id,
-      roles: [role],
-      scopes,
-      instanceId: role === "node" ? (device?.id ?? instanceId) : instanceId,
-      ...(authenticatedPresenceUser ? { user: authenticatedPresenceUser } : {}),
-      reason: "connect",
-    });
+    upsertPresence(
+      presenceKey,
+      {
+        connectionId: connId,
+        host: connectParams.client.displayName ?? connectParams.client.id ?? os.hostname(),
+        clientId: connectParams.client.id,
+        ip: isLocalClient ? undefined : reportedClientIp,
+        version: connectParams.client.version,
+        platform: connectParams.client.platform,
+        deviceFamily: connectParams.client.deviceFamily,
+        modelIdentifier: connectParams.client.modelIdentifier,
+        timeZone: connectParams.client.timeZone,
+        mode: connectParams.client.mode,
+        deviceId: device?.id,
+        roles: [role],
+        scopes,
+        instanceId: role === "node" ? (device?.id ?? instanceId) : instanceId,
+        ...(authenticatedPresenceUser ? { user: authenticatedPresenceUser } : {}),
+        reason: "connect",
+      },
+      { pending: true },
+    );
   }
   if (admittedNodePairing) {
     const pairingGeneration = admittedNodePairing.generation?.key;

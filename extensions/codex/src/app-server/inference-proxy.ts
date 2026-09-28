@@ -1,4 +1,4 @@
-import { createServer, type IncomingHttpHeaders, type IncomingMessage } from "node:http";
+import { createServer, type IncomingMessage } from "node:http";
 import { Writable, type Duplex } from "node:stream";
 import { createPermitPool } from "openclaw/plugin-sdk/concurrency-runtime";
 import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
@@ -26,6 +26,12 @@ import {
   type CodexInferenceModelRequest,
 } from "./inference-dispatch.js";
 import {
+  OVERLOAD_BODY,
+  OVERLOAD_HEADERS,
+  rejectBusyUpgrade,
+  relayHeaders,
+} from "./inference-proxy-http.js";
+import {
   createUploadAdmission,
   MAX_BODY_BYTES,
   MAX_PENDING_REQUESTS,
@@ -42,27 +48,6 @@ const MAX_RESIDENTS = MAX_WEBSOCKETS + MAX_UPLOADS;
 const REQUEST_TIMEOUT_MS = 30_000;
 const HANDSHAKE_TIMEOUT_MS = 10_000;
 const IDLE_WEBSOCKET_MS = 60_000;
-const OVERLOADED = "Codex inference relay is busy; retry on a fresh connection.";
-const OVERLOAD_HEADERS = { "content-type": "application/json", "retry-after": "1" };
-const OVERLOAD_BODY = JSON.stringify({
-  type: "error",
-  status: 503,
-  // Native treats backend server_is_overloaded as terminal; local saturation must retry.
-  error: { type: "server_error", code: "inference_relay_busy", message: OVERLOADED },
-  headers: { "retry-after": "1" },
-});
-const HOP_HEADERS = new Set([
-  "connection",
-  "keep-alive",
-  "proxy-authenticate",
-  "proxy-authorization",
-  "te",
-  "trailer",
-  "transfer-encoding",
-  "upgrade",
-  "host",
-  "content-length",
-]);
 
 type ResidentTicket = {
   signal: AbortSignal;
@@ -743,28 +728,6 @@ export async function createCodexInferenceProxy(params: {
     close();
     throw error;
   }
-}
-
-function rejectBusyUpgrade(socket: Duplex) {
-  rejectWebSocketUpgrade(socket, {
-    status: 503,
-    headers: { "Retry-After": "1" },
-    body: { contentType: "application/json", text: OVERLOAD_BODY },
-  });
-}
-
-function relayHeaders(input: IncomingHttpHeaders): Record<string, string> {
-  const excluded = new Set(HOP_HEADERS);
-  for (const token of (input.connection ?? "").split(",")) {
-    excluded.add(token.trim().toLowerCase());
-  }
-  const output: Record<string, string> = {};
-  for (const [key, value] of Object.entries(input)) {
-    if (value !== undefined && !excluded.has(key.toLowerCase())) {
-      output[key.toLowerCase()] = Array.isArray(value) ? value.join(", ") : value;
-    }
-  }
-  return output;
 }
 
 export type CodexInferenceProxy = Awaited<ReturnType<typeof createCodexInferenceProxy>>;

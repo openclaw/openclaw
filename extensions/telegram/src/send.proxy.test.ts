@@ -1,6 +1,7 @@
 import { Bot } from "grammy";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as webMedia from "openclaw/plugin-sdk/web-media";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { asTelegramClientFetch } from "./client-fetch.js";
@@ -12,7 +13,6 @@ import {
   resetTelegramClientOptionsCacheForTests,
   sendMessageTelegram,
 } from "./send.js";
-import * as sendRuntime from "./send.runtime.js";
 import { useTelegramHttpFixture } from "./send.telegram-http.test-support.js";
 import * as targetWriteback from "./target-writeback.js";
 
@@ -31,8 +31,8 @@ describe("Telegram operation leases through real clients", () => {
       const entered = createDeferred<void>();
       const release = createDeferred<void>();
       if (kind === "media") {
-        const load = sendRuntime.loadWebMedia;
-        vi.spyOn(sendRuntime, "loadWebMedia").mockImplementationOnce(async (...args) => {
+        const load = webMedia.loadWebMedia;
+        vi.spyOn(webMedia, "loadWebMedia").mockImplementationOnce(async (...args) => {
           entered.resolve();
           await release.promise;
           return load(...args);

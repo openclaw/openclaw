@@ -69,6 +69,11 @@ export function ensureRemoteSkillsWatcher(params: {
           }
           if (event === "unavailable") {
             state.unavailable = true;
+          } else if (event === "available") {
+            // Recovery has already reconciled outage edits through change events.
+            // Coverage alone restores reuse without inventing a content revision.
+            state.unavailable = false;
+            return;
           }
           bumpSkillsSnapshotVersion({
             workspaceDir,

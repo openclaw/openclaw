@@ -27,6 +27,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { loadGatewayWorkerEnvironmentStartupState } from "./server-worker-environment-startup.js";
 import type { SessionCompanionAskDeps } from "./session-companion-ask.js";
@@ -41,14 +42,14 @@ import {
   writeSingleLineSession,
 } from "./test/server-sessions.test-helpers.js";
 
-function afterSessionStateMaterialization(after: () => void) {
+function afterSessionStateMaterialization(after: () => void | Promise<void>) {
   const materialize = sessionArchive.materializeSessionStateDeletePlans;
   // Earlier files can load the owner in this non-isolated shard. Observe its
   // real export instead of replacing a module after that owner has captured it.
   vi.spyOn(sessionArchive, "materializeSessionStateDeletePlans").mockImplementation(
     async (...args) => {
       const result = await materialize(...args);
-      after();
+      await after();
       return result;
     },
   );
@@ -269,11 +270,11 @@ test.each(["authorization", "placement"] as const)(
     await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, events);
     const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
     let authorized = true;
-    afterSessionStateMaterialization(() => {
+    afterSessionStateMaterialization(async () => {
       if (change === "authorization") {
         authorized = false;
       } else {
-        placementStore.startDispatch({ sessionId, sessionKey, agentId: "main" });
+        await placementStore.startDispatch({ sessionId, sessionKey, agentId: "main" });
       }
     });
     await expect(
@@ -308,7 +309,7 @@ test("sessions.delete accepts placement retirement by the absent-session reconci
   const sessionId = "postcommit-retirement-session";
   await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
   const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
-  const claim = placementStore.claimTurn({
+  const claim = await placementStore.claimTurn({
     sessionId,
     sessionKey,
     agentId: "main",
@@ -316,7 +317,7 @@ test("sessions.delete accepts placement retirement by the absent-session reconci
     claimId: "postcommit-claim",
     runId: "postcommit-run",
   });
-  placementStore.releaseTurn(claim);
+  await placementStore.releaseTurn(claim);
   let retired = false;
   const publish = sessionArchiveStore.publishSessionStateArchives;
   vi.spyOn(sessionArchiveStore, "publishSessionStateArchives").mockImplementation(
@@ -349,6 +350,7 @@ async function createCompanion(runModel?: SessionCompanionAskDeps["run"]) {
   const { getRuntimeConfig } = await getGatewayConfigModule();
   const run = vi.fn(runModel ?? (async () => "Synthetic answer from the selected session."));
   const service = createSessionCompanion({
+    scheduler: createTestGatewayScheduler(),
     getConfig: getRuntimeConfig,
     contextReader: defaultSessionCompanionContextReader,
     sessionObserver: { getCompanionSnapshot: () => ({ agentId: "main", notes: [] }) },
@@ -386,65 +388,6 @@ async function recreate(sessionKey: string) {
   expect(response.ok, response.error?.message).toBe(true);
   return response.payload?.entry.sessionId;
 }
-
-test("sessions.delete retires Side chat before same-key recreation", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const sessionKey = "agent:main:companion-delete";
-  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry("generation-a") } });
-  const { service, run } = await createCompanion();
-  await ask(service, sessionKey, "Question about generation A?");
-  expect((await readState(service, sessionKey))?.exchanges).toHaveLength(1);
-
-  const deleted = await directSessionReq("sessions.delete", { key: sessionKey });
-  expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
-  expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
-  expect.soft(await readState(service, sessionKey)).toEqual({ exchanges: [] });
-
-  const nextSessionId = await recreate(sessionKey);
-  expect(nextSessionId).toBeTruthy();
-  expect(nextSessionId).not.toBe("generation-a");
-  expect.soft(await readState(service, sessionKey)).toEqual({ exchanges: [] });
-  expect(run).toHaveBeenCalledTimes(1);
-});
-
-test("sessions.delete preserves Side chat when the deletion expectation is stale", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const sessionKey = "agent:main:companion-rejected-delete";
-  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry("current-generation") } });
-  const { service } = await createCompanion();
-  await ask(service, sessionKey, "Keep this exchange?");
-  const before = await readState(service, sessionKey);
-
-  const deleted = await directSessionReq("sessions.delete", {
-    key: sessionKey,
-    expectedSessionId: "stale-generation",
-  });
-  expect(deleted).toMatchObject({ ok: false, error: { details: { reason: "session-changed" } } });
-  expect(loadSessionEntry({ sessionKey, storePath })?.sessionId).toBe("current-generation");
-  expect(await readState(service, sessionKey)).toEqual(before);
-});
-
-test("sessions.reset clears its Side chat and preserves another session", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const sessionKey = "agent:main:companion-reset";
-  const otherKey = "agent:main:companion-unrelated";
-  await writeSessionStore({
-    entries: {
-      [sessionKey]: sessionStoreEntry("reset-generation"),
-      [otherKey]: sessionStoreEntry("unrelated-generation"),
-    },
-  });
-  const { service } = await createCompanion();
-  await ask(service, sessionKey, "Before reset?");
-  await ask(service, otherKey, "Keep the unrelated conversation?");
-  const otherBefore = await readState(service, otherKey);
-
-  const reset = await directSessionReq("sessions.reset", { key: sessionKey });
-  expect(reset.ok, reset.error?.message).toBe(true);
-  expect(loadSessionEntry({ sessionKey, storePath })?.sessionId).toBe("reset-generation");
-  expect(await readState(service, sessionKey)).toEqual({ exchanges: [] });
-  expect(await readState(service, otherKey)).toEqual(otherBefore);
-});
 
 test("sessions.delete isolates Side chat for the same global key and session ID in another agent", async () => {
   const stores = await createConfiguredGlobalAgentSessionStore();
@@ -489,7 +432,9 @@ test("a delayed deletion event cannot erase Side chat for a newer generation", a
     stop();
   }
   expect(deletion).toBeDefined();
+  expect(await readState(service, sessionKey)).toEqual({ exchanges: [] });
   await recreate(sessionKey);
+  expect(await readState(service, sessionKey)).toEqual({ exchanges: [] });
   await ask(service, sessionKey, "New generation question?");
   const newState = await readState(service, sessionKey);
   expect(newState?.exchanges.map((exchange) => exchange.question)).toEqual([

@@ -8,14 +8,14 @@ describe("FaceTime call lifecycle", () => {
     registry.create(current);
     registry.retainAlias(current, "provisional-uuid");
 
-    expect(registry.resolve("PROVISIONAL-UUID")).toBe(current);
+    expect(registry.get("PROVISIONAL-UUID")).toBe(current);
     registry.close(current);
-    expect(registry.resolve("provisional-uuid")).toBeUndefined();
+    expect(registry.get("provisional-uuid")).toBeUndefined();
 
     const successor = new FaceTimeCallInstance("successor-uuid", "active");
     registry.create(successor);
-    expect(registry.resolve("provisional-uuid")).toBeUndefined();
-    expect(registry.resolve("successor-uuid")).toBe(successor);
+    expect(registry.get("provisional-uuid")).toBeUndefined();
+    expect(registry.get("successor-uuid")).toBe(successor);
   });
 
   it("rejects a carrier command that settles after closing advances generation", async () => {

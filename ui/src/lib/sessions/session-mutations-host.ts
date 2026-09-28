@@ -27,6 +27,7 @@ export type SessionMutationsHost = PendingRowHost &
     readRevision: () => number;
     notifyCreated: (key: string, entry?: SessionCreateOutcome["entry"], agentId?: string) => void;
     clearThink: (key: string, agentId?: string | null) => void;
+    suspendThink: (key: string, agentId?: string | null) => (() => void) | undefined;
     claimPermissionProjection: (
       key: string,
       agentId?: string | null,

@@ -10,15 +10,21 @@ import {
   isScheduledTaskDefinitelyNotRunning,
   readWindowsStartupFallbackRuntimeForUpdate,
 } from "../../daemon/schtasks-runtime.js";
+import { ServiceInspectionError } from "../../daemon/service-inspection-error.js";
 import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { resolveSystemdServiceName } from "../../daemon/systemd-service-files.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { hasNodeErrorCode, isPathInside } from "../../infra/path-guards.js";
 import { probePortUsage } from "../../infra/ports-probe.js";
-import { acquireGatewayLifecycleCoordinator } from "../../infra/state-database-coordinator.js";
+import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
+import {
+  createOpenClawDatabaseMaintenanceScope,
+  type OpenClawDatabaseMaintenanceScope,
+} from "../../state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { formatCliCommand } from "../command-format.js";
 import { UpdatePreMutationError } from "./shared.js";
@@ -57,14 +63,21 @@ export async function withGatewayRuntimeArtifactPublication<T>(
   const assertCaller = params.assertCurrent;
   assertCaller();
   return await withGatewayServiceOperationLock(params.env, async (assertNative) => {
+    let processOwner: ReturnType<typeof acquireGatewayStateOwner> | undefined;
+    let maintenance: OpenClawDatabaseMaintenanceScope | undefined;
     const assertCurrent = () => {
       assertCaller();
       assertNative();
+      processOwner?.assertCurrent();
     };
     const refuse = (cause?: unknown): never => {
+      const inspectionDetail =
+        cause instanceof ServiceInspectionError && cause.reason === "windows-task-inspection-failed"
+          ? `${cause.message} `
+          : "";
       throw new UpdatePreMutationError(
         "runtime-artifact-publication",
-        `Runtime artifacts changed, but the affected Gateway is running or its offline state could not be verified. Run \`${formatCliCommand("openclaw gateway status --deep", params.env)}\`, stop the affected Gateway with \`${formatCliCommand("openclaw gateway stop", params.env)}\`, and retry the update.`,
+        `${inspectionDetail}Runtime artifacts changed, but the affected Gateway is running or its offline state could not be verified. Run \`${formatCliCommand("openclaw gateway status --deep", params.env)}\`, stop the affected Gateway with \`${formatCliCommand("openclaw gateway stop", params.env)}\`, and retry the original command.`,
         { cause },
       );
     };
@@ -278,18 +291,23 @@ export async function withGatewayRuntimeArtifactPublication<T>(
       }
       assertCurrent();
     };
-    let coordinator: ReturnType<typeof acquireGatewayLifecycleCoordinator> | undefined;
+    const publicationFailures: unknown[] = [];
+    let publicationResult!: T;
     try {
       try {
         assertCurrent();
         if (!before.disjoint) {
-          coordinator = acquireGatewayLifecycleCoordinator({
-            databasePath: before.database.real,
-            busyTimeoutMs: 0,
+          const owner = acquireGatewayStateOwner({ databasePath: before.database.real });
+          processOwner = owner;
+          maintenance = createOpenClawDatabaseMaintenanceScope({
+            schemaMaintenance: true,
+            assertOwnerCurrent: () => {
+              assertNative();
+              owner.assertCurrent();
+            },
+            assertDatabaseAccess: owner.assertDatabaseAccess,
           });
         }
-        await assertPublicationCurrent();
-        assertCurrent();
       } catch (error) {
         assertCurrent();
         if (error instanceof UpdatePreMutationError) {
@@ -297,13 +315,44 @@ export async function withGatewayRuntimeArtifactPublication<T>(
         }
         refuse(error);
       }
-      assertCurrent();
-      // The publisher joins its rollback before settling, keeping both exclusions held.
-      const result = await publish(assertPublicationCurrent);
-      assertCurrent();
-      return result;
-    } finally {
-      coordinator?.release();
+      const publishOwned = async () => {
+        try {
+          await assertPublicationCurrent();
+          assertCurrent();
+        } catch (error) {
+          assertCurrent();
+          if (error instanceof UpdatePreMutationError) {
+            throw error;
+          }
+          refuse(error);
+        }
+        // The publisher joins its rollback before settling, keeping both exclusions held.
+        const result = await publish(assertPublicationCurrent);
+        assertCurrent();
+        return result;
+      };
+      publicationResult = await (maintenance ? maintenance.run(publishOwned) : publishOwned());
+    } catch (error) {
+      publicationFailures.push(error);
     }
+    try {
+      await maintenance?.close();
+    } catch (error) {
+      if (!publicationFailures.includes(error)) {
+        publicationFailures.push(error);
+      }
+    }
+    try {
+      processOwner?.release();
+    } catch (error) {
+      if (!publicationFailures.includes(error)) {
+        publicationFailures.push(error);
+      }
+    }
+    throwSqliteLifecycleErrors(
+      publicationFailures,
+      "Runtime publication and maintenance cleanup failed.",
+    );
+    return publicationResult;
   });
 }

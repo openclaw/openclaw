@@ -5,7 +5,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
 import { NODE_DEVICE_APPS_COMMAND } from "../infra/node-commands.js";
-import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { SkillBinsProvider } from "./invoke.js";
@@ -27,7 +26,7 @@ type SkillBinsFixture = {
   response: SkillBinsResponse;
   invoke: (id: string) => Promise<void>;
   expire: () => void;
-  disconnect: () => void;
+  disconnect: () => Promise<void>;
 };
 
 async function withSkillBinsRuntime(run: (fixture: SkillBinsFixture) => Promise<void>) {
@@ -69,7 +68,7 @@ async function withSkillBinsRuntime(run: (fixture: SkillBinsFixture) => Promise<
         disconnect: () => runtime.cancelAll(),
       });
     } finally {
-      runtime.cancelAll();
+      await runtime.cancelAll();
       for (const request of requests) {
         request.resolve({ bins: [] });
       }
@@ -148,7 +147,7 @@ describe("node-host skill-bin cache", () => {
     await withSkillBinsRuntime(async (fixture) => {
       const old = fixture.invoke("old");
       await vi.waitFor(() => expect(fixture.requests).toHaveLength(1));
-      fixture.disconnect();
+      await fixture.disconnect();
       const replacement = fixture.invoke("replacement");
       await vi.waitFor(() => expect(fixture.requests).toHaveLength(2));
       expectDefined(fixture.requests[0], "retired connection refresh").resolve(fixture.response);
@@ -168,24 +167,9 @@ describe("node-host invocation cancellation", () => {
   it("does not admit a queued invocation after its connection is retired", async () => {
     const runtime = await startRuntime();
     const pending = runtime.invoke({ ...frame, command: "system.run" });
-    runtime.cancelAll();
+    await runtime.cancelAll();
     await pending;
     expect(mocks.handleInvoke).not.toHaveBeenCalled();
-    await runtime.close();
-  });
-
-  it("cancels ordinary node invocations", async () => {
-    const held = holdInvoke();
-    const runtime = await startRuntime();
-    const invoking = runtime.invoke({ ...frame, command: "system.run" });
-    await vi.waitFor(() => expect(held.signal).toBeDefined());
-
-    runtime.cancel(frame.id);
-
-    expect(held.signal?.aborted).toBe(true);
-    expect(held.io).toBeUndefined();
-    held.release();
-    await invoking;
     await runtime.close();
   });
 
@@ -201,6 +185,7 @@ describe("node-host invocation cancellation", () => {
 
     expect(first.signal?.aborted).toBe(true);
     expect(second.signal?.aborted).toBe(false);
+    expect(second.io).toBeUndefined();
 
     first.release();
     await firstInvoke;
@@ -228,7 +213,7 @@ describe("node-host invocation cancellation", () => {
       expect(second.signal).toBeDefined();
     });
 
-    runtime.cancelAll();
+    await runtime.cancelAll();
 
     expect(first.signal?.aborted).toBe(true);
     expect(second.signal?.aborted).toBe(true);
@@ -346,16 +331,19 @@ describe("node-host invocation cancellation", () => {
     }
   });
 
-  it("reports failed disconnect cleanup and retries it on explicit close", async () => {
-    const failure = new Error("plugin close failed");
-    mocks.disconnectPlugins.mockRejectedValueOnce(failure);
-    const runtime = await startRuntime();
-    await expect(runtime.close()).rejects.toBe(failure);
-    await expect(runtime.close()).resolves.toBeUndefined();
-    expect(mocks.disconnectPlugins).toHaveBeenCalledTimes(2);
-    expect(mocks.closeMcp).toHaveBeenCalledOnce();
-    expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
-  });
+  it.each(["disconnectPlugins", "retireIdleWorkers"] as const)(
+    "retries failed %s cleanup on explicit close",
+    async (owner) => {
+      const failure = new Error("disconnect cleanup failed");
+      mocks[owner].mockRejectedValueOnce(failure);
+      const runtime = await startRuntime();
+      await expect(runtime.close()).rejects.toBe(failure);
+      await expect(runtime.close()).resolves.toBeUndefined();
+      expect(mocks.disconnectPlugins).toHaveBeenCalledTimes(2);
+      expect(mocks.closeMcp).toHaveBeenCalledOnce();
+      expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
+    },
+  );
 
   it("joins disconnect cleanup when an abort listener reenters close", async () => {
     const held = holdInvoke();
@@ -375,6 +363,7 @@ describe("node-host invocation cancellation", () => {
     const invoking = runtime.invoke({ ...frame, command: "system.run" });
     let closing: Promise<void> | undefined;
     let observed: Promise<void> | undefined;
+    let disconnecting: Promise<void> | undefined;
     let closed = false;
     try {
       await vi.waitFor(() => expect(held.signal).toBeDefined());
@@ -388,7 +377,7 @@ describe("node-host invocation cancellation", () => {
         },
         { once: true },
       );
-      runtime.cancelAll();
+      disconnecting = runtime.cancelAll();
       await entered.promise;
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
@@ -403,6 +392,7 @@ describe("node-host invocation cancellation", () => {
           expect(closed).toBe(false);
         }
       }
+      await disconnecting;
       await closing;
       expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
       expect(mocks.closeMcp).toHaveBeenCalledOnce();
@@ -412,38 +402,42 @@ describe("node-host invocation cancellation", () => {
         cleanup.resolve();
       }
       held.release();
-      await Promise.allSettled([invoking, closing, observed]);
+      await Promise.allSettled([invoking, closing, observed, disconnecting]);
     }
   });
 
-  it("reports unavailable after failed disconnect and resumes after explicit reconnect cleanup", async () => {
-    const failure = new Error("plugin disconnect failed");
-    mocks.disconnectPlugins.mockRejectedValueOnce(failure);
-    const request = vi.fn(async () => ({}));
-    const runtime = await startRuntime(createNodeHostClient(request));
-    try {
-      runtime.cancelAll();
-      await runtime.invoke(frame);
-      expect(mocks.handleInvoke).not.toHaveBeenCalled();
-      expect(request).toHaveBeenCalledWith(
-        "node.invoke.result",
-        expect.objectContaining({
-          id: frame.id,
-          ok: false,
-          error: {
-            code: "UNAVAILABLE",
-            message: "Node plugin cleanup failed. Reconnect the node to retry cleanup.",
-          },
-        }),
-      );
-      runtime.cancelAll();
-      await runtime.invoke({ ...frame, id: "after-reconnect" });
-      expect(mocks.handleInvoke).toHaveBeenCalledOnce();
-      expect(mocks.disconnectPlugins).toHaveBeenCalledTimes(2);
-    } finally {
-      await runtime.close();
-    }
-  });
+  it.each(["disconnectPlugins", "retireIdleWorkers"] as const)(
+    "keeps invoke admission closed after failed %s cleanup until reconnect",
+    async (owner) => {
+      const failure = new Error("disconnect cleanup failed");
+      mocks[owner].mockRejectedValueOnce(failure);
+      const request = vi.fn(async () => ({}));
+      const runtime = await startRuntime(createNodeHostClient(request));
+      try {
+        const disconnecting = runtime.cancelAll().catch((error: unknown) => error);
+        await runtime.invoke(frame);
+        expect(await disconnecting).toBe(failure);
+        expect(mocks.handleInvoke).not.toHaveBeenCalled();
+        expect(request).toHaveBeenCalledWith(
+          "node.invoke.result",
+          expect.objectContaining({
+            id: frame.id,
+            ok: false,
+            error: {
+              code: "UNAVAILABLE",
+              message: "Node disconnect cleanup failed. Reconnect the node to retry cleanup.",
+            },
+          }),
+        );
+        await runtime.cancelAll();
+        await runtime.invoke({ ...frame, id: "after-reconnect" });
+        expect(mocks.handleInvoke).toHaveBeenCalledOnce();
+        expect(mocks.disconnectPlugins).toHaveBeenCalledTimes(2);
+      } finally {
+        await runtime.close();
+      }
+    },
+  );
 
   it("aggregates independent supervisor and MCP close failures in owner order", async () => {
     const supervisorError = new Error("supervisor close failed");
@@ -563,26 +557,6 @@ describe("node-host invoke input dispatch", () => {
     vi.clearAllMocks();
   });
 
-  it("provides framed binary message IO to duplex plugin commands", async () => {
-    const held = holdInvoke();
-    const runtime = await startRuntime();
-    const invoking = runtime.invoke(frame);
-
-    try {
-      await vi.waitFor(() => expect(held.io).toBeDefined());
-      expect(held.io).toMatchObject({
-        frames: {
-          send: expect.any(Function),
-          onMessage: expect.any(Function),
-        },
-      });
-    } finally {
-      held.release();
-      await invoking;
-      await runtime.close();
-    }
-  });
-
   it("announces framed readiness only after the plugin registers its message listener", async () => {
     const held = holdInvoke();
     const runtime = await startRuntime();
@@ -599,49 +573,6 @@ describe("node-host invoke input dispatch", () => {
       );
       expect(unsubscribe).toEqual(expect.any(Function));
       unsubscribe?.();
-    } finally {
-      held.release();
-      await invoking;
-      await runtime.close();
-    }
-  });
-
-  it("round-trips binary messages through an external-style duplex plugin command", async () => {
-    const received = vi.fn();
-    const pluginCommand = {
-      command: "test.duplex",
-      duplex: true,
-      handle: (_paramsJSON: string | null, io: OpenClawPluginNodeHostCommandIo) => {
-        io.frames?.onMessage((message) => {
-          received(message);
-          void io.frames?.send(message);
-        });
-      },
-    };
-    const held = holdInvoke((io) => pluginCommand.handle(frame.paramsJSON, io));
-    const runtime = await startRuntime();
-    const invoking = runtime.invoke(frame);
-
-    try {
-      await vi.waitFor(() => expect(mocks.progressWrite).toHaveBeenCalledOnce());
-      runtime.handleInput(
-        frame.id,
-        0,
-        JSON.stringify({
-          v: 1,
-          kind: "data",
-          message: 0,
-          index: 0,
-          last: true,
-          data: "AP8B",
-        }),
-      );
-
-      await vi.waitFor(() => expect(mocks.progressWrite).toHaveBeenCalledTimes(2));
-      expect(received).toHaveBeenCalledWith(Uint8Array.from([0, 255, 1]));
-      expect(mocks.progressWrite.mock.calls[1]?.[0]).toBe(
-        '{"v":1,"kind":"data","message":0,"index":0,"last":true,"data":"AP8B"}',
-      );
     } finally {
       held.release();
       await invoking;

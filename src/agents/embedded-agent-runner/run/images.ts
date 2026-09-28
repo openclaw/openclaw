@@ -1,4 +1,5 @@
 import path from "node:path";
+import { assertNoWindowsNetworkPath, safeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import { MAX_VIDEO_BYTES } from "@openclaw/media-core/constants";
 import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
@@ -8,7 +9,6 @@ import type {
   ProviderContext,
 } from "../../../../packages/ai/src/provider-types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../../infra/local-file-access.js";
 import type { Context, ImageContent, TextContent } from "../../../llm/types.js";
 import { redactSensitiveText } from "../../../logging/redact.js";
 import {
@@ -271,24 +271,17 @@ async function loadMediaFromRef(
   }
 }
 
-export async function detectAndLoadPromptImages(params: {
-  prompt: string;
-  userTurnTranscriptRecorder?: Pick<UserTurnTranscriptRecorder, "resolveMessage">;
-  media?: readonly MediaFact[];
-  workspaceDir: string;
-  /** Registered agent workspace, when sandbox execution uses a different directory. */
-  agentWorkspaceDir?: string;
-  model: { input?: string[] };
-  existingImages?: ImageContent[];
-  existingImageFactIndexes?: readonly ImageFactIndex[];
-  imageOrder?: PromptImageOrderEntry[];
-  mediaImageLayout?: MediaImageLayout;
-  maxBytes?: number;
-  maxDimensionPx?: number;
-  workspaceOnly?: boolean;
-  localRoots?: readonly string[];
-  sandbox?: { root: string; bridge: SandboxFsBridge };
-}): Promise<{
+export async function detectAndLoadPromptImages(
+  params: Omit<PromptMediaOptions, "provider" | "signal" | "onCurrentTurnImageFailure"> & {
+    prompt: string;
+    userTurnTranscriptRecorder?: Pick<UserTurnTranscriptRecorder, "resolveMessage">;
+    media?: readonly MediaFact[];
+    existingImages?: ImageContent[];
+    existingImageFactIndexes?: readonly ImageFactIndex[];
+    imageOrder?: PromptImageOrderEntry[];
+    mediaImageLayout?: MediaImageLayout;
+  },
+): Promise<{
   images: ImageContent[];
   imageFactIndexes: ImageFactIndex[];
   detectedRefs: MediaFileRef[];
@@ -490,6 +483,7 @@ export async function detectAndLoadPromptImages(params: {
 
 type PromptMediaOptions = {
   workspaceDir: string;
+  /** Registered agent workspace, when sandbox execution uses a different directory. */
   agentWorkspaceDir?: string;
   model: { input?: string[] };
   maxBytes?: number;
@@ -660,6 +654,9 @@ async function materializePromptMediaMessages(
         content: projectedContent,
         timestamp: message.timestamp,
         ...(message.runtimeContextCarrier ? { runtimeContextCarrier: true } : {}),
+        ...(message.runtimeContextCarrierRetained !== undefined
+          ? { runtimeContextCarrierRetained: message.runtimeContextCarrierRetained }
+          : {}),
       } as ProviderContext["messages"][number] as AgentMessage;
       continue;
     }
@@ -695,16 +692,11 @@ export async function hydratePromptMediaMessages(
 }
 
 /** Materializes one transient provider context from exact-message media facts. */
-export async function materializeProviderContext(params: {
-  context: Context;
-  signal?: AbortSignal;
-  workspaceDir: string;
-  agentWorkspaceDir?: string;
-  workspaceOnly?: boolean;
-  localRoots?: readonly string[];
-  sandbox?: { root: string; bridge: SandboxFsBridge };
-  onCurrentTurnImageFailure?: (count: number) => void;
-}): Promise<ProviderContext> {
+export async function materializeProviderContext(
+  params: Omit<PromptMediaOptions, "provider" | "model" | "maxBytes" | "maxDimensionPx"> & {
+    context: Context;
+  },
+): Promise<ProviderContext> {
   const messages = await materializePromptMediaMessages(params.context.messages as AgentMessage[], {
     workspaceDir: params.workspaceDir,
     agentWorkspaceDir: params.agentWorkspaceDir,

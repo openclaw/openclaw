@@ -38,6 +38,8 @@ type Workflow = {
     string,
     {
       if?: string;
+      needs?: string | string[];
+      outputs?: Record<string, string>;
       permissions?: Record<string, string>;
       env?: Record<string, string>;
       concurrency?: { group: string; "cancel-in-progress": boolean };
@@ -171,7 +173,8 @@ describe("security review workflow trust boundaries", () => {
       OPENCLAW_SECURITY_REVIEW_PR_NUMBER: "${{ matrix.pr }}",
       OPENCLAW_SECURITY_REVIEW_HEAD_SHA: "${{ matrix.head }}",
     });
-    for (const [name, job] of Object.entries(workflow.jobs)) {
+    for (const name of ["resolve", "review"]) {
+      const job = workflow.jobs[name]!;
       const checkouts = job.steps.filter((step) => step.uses?.startsWith("actions/checkout@"));
       expect(checkouts).toHaveLength(2);
       expect(checkouts[1]?.with).toEqual({
@@ -201,7 +204,7 @@ describe("security review workflow trust boundaries", () => {
                 name: "Setup supported Node runtime",
                 "timeout-minutes": 3,
                 uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
-                with: { "node-version": "24.19.0", "package-manager-cache": false },
+                with: { "node-version": "24.21.0", "package-manager-cache": false },
               },
             ]
           : [],
@@ -251,7 +254,8 @@ describe("security review workflow trust boundaries", () => {
   ])(
     "bounds checkout recovery ($failures failures, cancelled=$cancelled)",
     ({ failures, attempts, jobFailed, cancelled }) => {
-      for (const job of Object.values(readWorkflow("security-review").jobs)) {
+      for (const name of ["resolve", "review"]) {
+        const job = readWorkflow("security-review").jobs[name]!;
         const steps: Record<string, { outcome: string }> = {};
         let failed = false;
         let executed = 0;
@@ -355,11 +359,12 @@ describe("security review workflow trust boundaries", () => {
     },
   );
 
-  it("uses automatic PR, command, revocation, and CI completion events only", () => {
+  it("uses PR, command, revocation, CI completion, and reconciliation events", () => {
     const workflow = readWorkflow("security-review");
     expect(Object.keys(workflow.on).toSorted()).toEqual([
       "issue_comment",
       "pull_request_target",
+      "schedule",
       "workflow_run",
     ]);
     expect(workflow.on.pull_request_target?.types).toEqual(
@@ -374,6 +379,24 @@ describe("security review workflow trust boundaries", () => {
     );
     expect(workflow.on.issue_comment?.types).toEqual(["created", "edited", "deleted"]);
     expect(workflow.on.workflow_run).toEqual({ workflows: ["CI"], types: ["completed"] });
+    expect(workflow.on.schedule).toEqual([{ cron: "4-59/10 * * * *" }]);
+    const concurrency = workflow.jobs.resolve!.concurrency!;
+    expect(concurrency["cancel-in-progress"]).toBe(false);
+    const group = concurrency.group.replace(/^\$\{\{|\}\}$/gu, "");
+    for (const eventName of Object.keys(workflow.on)) {
+      for (const runId of [123, 456]) {
+        expect(
+          runInNewContext(group, {
+            github: { event_name: eventName, run_id: runId },
+            format: (template: string, value: number) => template.replace("{0}", String(value)),
+          }),
+        ).toBe(
+          eventName === "schedule"
+            ? "security-review-reconcile"
+            : `security-review-resolve-${runId}`,
+        );
+      }
+    }
     const condition = workflow.jobs.resolve!.if!.replace(/^\$\{\{|\}\}$/gu, "");
     for (const event of [
       { eventName: "pull_request_target", allowed: true },
@@ -404,6 +427,7 @@ describe("security review workflow trust boundaries", () => {
         allowed: true,
       },
       { eventName: "pull_request_target", action: "edited", changes: {}, allowed: true },
+      { eventName: "schedule", allowed: true },
       { eventName: "workflow_run", sourceEvent: "pull_request", allowed: true },
       { eventName: "workflow_run", sourceEvent: "push", allowed: false },
       { eventName: "workflow_run", sourceEvent: "workflow_dispatch", allowed: true },
@@ -450,6 +474,29 @@ describe("security review workflow trust boundaries", () => {
       });
       expect(Boolean(result), JSON.stringify(event)).toBe(event.allowed);
     }
+  });
+
+  it("fails a truncated reconciliation after the selected reviews finish", () => {
+    const workflow = readWorkflow("security-review");
+    expect(workflow.jobs.resolve!.outputs?.truncated).toBe("${{ steps.event.outputs.truncated }}");
+    const backlog = workflow.jobs["reconcile-backlog"]!;
+    expect(backlog.needs).toEqual(["resolve", "review"]);
+    expect(backlog.if).toBe("${{ always() && needs.resolve.outputs.truncated == 'true' }}");
+    expect(backlog.permissions).toEqual({});
+    for (const truncated of ["true", "false", undefined]) {
+      expect(
+        runInNewContext(backlog.if!.replace(/^\$\{\{|\}\}$/gu, ""), {
+          always: () => true,
+          needs: { resolve: { outputs: { truncated } } },
+        }),
+      ).toBe(truncated === "true");
+    }
+    const result = spawnSync("bash", ["-e", "-c", backlog.steps[0]!.run!], {
+      env: {},
+      encoding: "utf8",
+    });
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stdout).toContain("next scheduled pass continues from the same window");
   });
 
   it("limits autoscrub writes to PR events and always enforces after failures", () => {

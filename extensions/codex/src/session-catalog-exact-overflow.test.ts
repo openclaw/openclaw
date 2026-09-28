@@ -10,7 +10,6 @@ import {
   config,
   createCodexSessionCatalogControlFactory,
   createRuntime,
-  idleThread,
   pinnedConnectionMocks,
 } from "./session-catalog.test-helpers.js";
 
@@ -18,8 +17,7 @@ afterEach(() => vi.restoreAllMocks());
 
 async function remoteFixture(count: number) {
   const native = nativeCatalogFixture(count);
-  const target =
-    native.rows.at(-1) ?? idleThread({ id: "uncached", source: "cli", ephemeral: false });
+  const target = native.rows.at(-1)!;
   let activeRows: CodexThread[] = native.rows;
   const stored = new Map<string, StoredCodexCatalogEntry>();
   const state: CodexCatalogState = {
@@ -98,21 +96,18 @@ describe("exact Codex lookup beyond resident retention", () => {
     ).toBe(true);
   });
 
-  it.each([0, 1])(
-    "requires native non-archived membership even when thread/read succeeds (cached rows: %i)",
-    async (count) => {
-      const f = await remoteFixture(count);
-      expect(
-        [...f.stored.values()].some(
-          (entry) => entry.kind === "row" && entry.row.threadId === f.target.id,
-        ),
-      ).toBe(count === 1);
-      f.clearActiveRows();
-      await expect(f.control.requireEligibleThread(f.target.id)).rejects.toThrow(
-        "eligibility could not be verified",
-      );
-    },
-  );
+  it("requires fresh non-archived membership even when a cached thread/read succeeds", async () => {
+    const f = await remoteFixture(1);
+    expect(
+      [...f.stored.values()].some(
+        (entry) => entry.kind === "row" && entry.row.threadId === f.target.id,
+      ),
+    ).toBe(true);
+    f.clearActiveRows();
+    await expect(f.control.requireEligibleThread(f.target.id)).rejects.toThrow(
+      "eligibility could not be verified",
+    );
+  });
 
   it("uses fresh native membership after a remote resident row was archived", async () => {
     const f = await remoteFixture(1);

@@ -13,25 +13,22 @@ import ai.openclaw.app.canApproveGatewayDevicePairing
 import ai.openclaw.app.currentAppLanguage
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawListItem
+import ai.openclaw.app.ui.design.ClawListPanel
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawTextBadge
 import ai.openclaw.app.ui.design.ClawTheme
-import ai.openclaw.app.uppercaseFirstGraphemeOrNull
+import ai.openclaw.app.ui.design.badgeInitials
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Cloud
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -71,8 +68,11 @@ internal fun NodesDevicesSettingsScreen(
 
   SettingsDetailFrame(
     title = nativeString("Nodes & Devices"),
-    subtitle = nativeString("Live nodes, paired phones, and pending device requests."),
-    icon = Icons.Default.Cloud,
+    subtitle =
+      nativeString(
+        "Nodes are devices such as phones (including iPhone and Android), watches, and computers that offer capabilities, not agents or chat contacts. Known nodes stay listed when offline. Paired devices show Gateway access; the same device can appear in both groups. Notifications and push output are not agent conversations.",
+      ),
+    icon = SettingsRoute.NodesDevices.icon,
     onBack = onBack,
   ) {
     SettingsMetricPanel(
@@ -93,29 +93,21 @@ internal fun NodesDevicesSettingsScreen(
       )
     }
     errorText?.let {
-      ClawPanel {
-        Text(text = it, style = ClawTheme.type.body, color = ClawTheme.colors.warning)
-      }
+      SettingsMessagePanel(text = it, color = ClawTheme.colors.warning)
     }
     noticeText?.let {
-      ClawPanel {
-        Text(text = it, style = ClawTheme.type.body, color = ClawTheme.colors.success)
-      }
+      SettingsMessagePanel(text = it, color = ClawTheme.colors.success)
     }
     when {
       !isConnected -> {
-        ClawPanel {
-          Text(text = nativeString("Connect the gateway to load nodes and paired devices."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-        }
+        SettingsMessagePanel(text = nativeString("Connect the gateway to load nodes and paired devices."))
       }
 
       summary.isEmpty() && summary.devicePairingAvailable && pairingCapabilities.canManage -> {
-        ClawPanel {
-          Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(text = nativeString("No nodes or paired devices."), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-            Text(text = nativeString("Linked phones and node hosts will appear here after pairing."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-          }
-        }
+        SettingsMessagePanel(
+          title = nativeString("No nodes or paired devices."),
+          text = nativeString("Linked phones and node hosts will appear here after pairing."),
+        )
       }
 
       else -> {
@@ -172,71 +164,58 @@ private fun NodesDevicesPanel(
   }
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
     if (!summary.devicePairingAvailable || !pairingCapabilities.canManage) {
-      ClawPanel {
-        Text(text = devicePairingAdminUnavailableText(), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-      }
+      SettingsMessagePanel(text = devicePairingAdminUnavailableText())
     }
     val approvalCommands = summary.nodes.mapNotNull(::nodeApprovalCommandRow)
     if (approvalCommands.isNotEmpty()) {
-      ClawPanel {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-          Text(text = nativeString("Node approval required"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-          Text(text = nativeString("Run on the Gateway host:"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-          approvalCommands.forEach { (label, command) ->
-            Text(text = label, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
-            SelectionContainer {
-              Text(
-                text = command,
-                style = ClawTheme.type.body.copy(fontFamily = FontFamily.Monospace),
-                color = ClawTheme.colors.text,
-              )
-            }
+      ClawPanel(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(text = nativeString("Node approval required"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        Text(text = nativeString("Run on the Gateway host:"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+        approvalCommands.forEach { (label, command) ->
+          Text(text = label, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+          SelectionContainer {
+            Text(
+              text = command,
+              style = ClawTheme.type.body.copy(fontFamily = FontFamily.Monospace),
+              color = ClawTheme.colors.text,
+            )
           }
         }
       }
     }
     if (summary.pendingDevices.isNotEmpty()) {
-      NodesSection(title = nativeString("Pending Requests")) {
-        summary.pendingDevices.forEachIndexed { index, device ->
-          PendingDeviceRow(
-            device = device,
-            canApprove =
-              summary.devicePairingAvailable &&
-                canApproveGatewayDevicePairing(pairingCapabilities, callerScopes, device),
-            canReject = summary.devicePairingAvailable && pairingCapabilities.canReject,
-            actionsEnabled = pairingMutation == null,
-            onApprove = { confirmation = DevicePairingConfirmation.Approve(device) },
-            onReject = { confirmation = DevicePairingConfirmation.Reject(device) },
-          )
-          if (index != summary.pendingDevices.lastIndex) {
-            HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-          }
-        }
+      NodesSection(title = nativeString("Pending Requests"), items = summary.pendingDevices) { device ->
+        PendingDeviceRow(
+          device = device,
+          canApprove =
+            summary.devicePairingAvailable &&
+              canApproveGatewayDevicePairing(pairingCapabilities, callerScopes, device),
+          canReject = summary.devicePairingAvailable && pairingCapabilities.canReject,
+          actionsEnabled = pairingMutation == null,
+          onApprove = { confirmation = DevicePairingConfirmation.Approve(device) },
+          onReject = { confirmation = DevicePairingConfirmation.Reject(device) },
+        )
       }
     }
     if (summary.nodes.isNotEmpty()) {
-      NodesSection(title = nativeString("Nodes")) {
-        summary.nodes.forEachIndexed { index, node ->
-          NodeRow(node = node)
-          if (index != summary.nodes.lastIndex) {
-            HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-          }
-        }
+      NodesSection(title = nativeString("Nodes"), items = summary.nodes) { node ->
+        DeviceListRow(
+          badge = badgeInitials(node.displayName ?: node.id, fallback = "N"),
+          title = node.displayName ?: node.id,
+          subtitle = nodeSubtitle(node),
+          statusText = nodeStatusText(node),
+          status = nodeStatus(node),
+        )
       }
     }
     if (summary.pairedDevices.isNotEmpty()) {
-      NodesSection(title = nativeString("Paired Devices")) {
-        summary.pairedDevices.forEachIndexed { index, device ->
-          PairedDeviceRow(
-            device = device,
-            canRemove = summary.devicePairingAvailable && pairingCapabilities.canRemove,
-            actionEnabled = pairingMutation == null,
-            onRemove = { confirmation = DevicePairingConfirmation.Remove(device) },
-          )
-          if (index != summary.pairedDevices.lastIndex) {
-            HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-          }
-        }
+      NodesSection(title = nativeString("Paired Devices"), items = summary.pairedDevices) { device ->
+        PairedDeviceRow(
+          device = device,
+          canRemove = summary.devicePairingAvailable && pairingCapabilities.canRemove,
+          actionEnabled = pairingMutation == null,
+          onRemove = { confirmation = DevicePairingConfirmation.Remove(device) },
+        )
       }
     }
   }
@@ -386,9 +365,10 @@ private fun nodeApprovalCommandRow(node: GatewayNodeSummary): Pair<String, Strin
 }
 
 @Composable
-private fun NodesSection(
+private fun <T> NodesSection(
   title: String,
-  content: @Composable () -> Unit,
+  items: List<T>,
+  row: @Composable (T) -> Unit,
 ) {
   Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
     Text(
@@ -396,23 +376,8 @@ private fun NodesSection(
       style = ClawTheme.type.caption,
       color = ClawTheme.colors.textMuted,
     )
-    ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
-      Column {
-        content()
-      }
-    }
+    ClawListPanel(items = items, row = row)
   }
-}
-
-@Composable
-private fun NodeRow(node: GatewayNodeSummary) {
-  DeviceListRow(
-    badge = nodeBadge(node.displayName ?: node.id),
-    title = node.displayName ?: node.id,
-    subtitle = nodeSubtitle(node),
-    statusText = nodeStatusText(node),
-    status = nodeStatus(node),
-  )
 }
 
 @Composable
@@ -426,7 +391,7 @@ private fun PendingDeviceRow(
 ) {
   Column {
     DeviceListRow(
-      badge = nodeBadge(device.displayName ?: device.deviceId),
+      badge = badgeInitials(device.displayName ?: device.deviceId, fallback = "N"),
       title = device.displayName ?: nativeString("New device"),
       subtitle = pendingDeviceSubtitle(device),
       statusText = if (device.repair) nativeString("Repair") else nativeString("Review"),
@@ -461,7 +426,7 @@ private fun PairedDeviceRow(
 ) {
   Column {
     DeviceListRow(
-      badge = nodeBadge(device.displayName ?: device.deviceId),
+      badge = badgeInitials(device.displayName ?: device.deviceId, fallback = "N"),
       title = device.displayName ?: nativeString("Paired device"),
       subtitle = pairedDeviceSubtitle(device),
       statusText = pairedDeviceStatusText(device.tokens),
@@ -612,15 +577,6 @@ internal fun formatDeviceList(
       }
     }
   }
-
-private fun nodeBadge(value: String): String =
-  value
-    .split(' ', '-', '_')
-    .filter { it.isNotBlank() }
-    .take(2)
-    .mapNotNull { it.uppercaseFirstGraphemeOrNull() }
-    .joinToString("")
-    .ifBlank { "N" }
 
 internal fun relativeDeviceTime(
   timeMs: Long,

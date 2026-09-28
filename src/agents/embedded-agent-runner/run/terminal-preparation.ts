@@ -9,7 +9,7 @@ import type { PreparedProviderFailoverOwner } from "../../failover/provider-patt
 import { isProviderModelRerouted } from "../../provider-model-route.js";
 import type { ReplyDeliveryState } from "../../reply-completion.js";
 import { getCoreTtsAttemptResultMediaUrls } from "../../tools/tts-tool-result-provenance.js";
-import type { NormalizedUsage, UsageLike } from "../../usage.js";
+import type { NormalizedUsage } from "../../usage.js";
 import {
   hasMessagingToolDeliveryEvidence,
   resolveSourceReplyDelivery,
@@ -22,6 +22,7 @@ import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js"
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import {
   buildUsageAgentMetaFields,
+  normalizeAssistantUsageForContext,
   resolveFinalAssistantRawText,
   resolveFinalAssistantVisibleText,
   resolveReportedModelRef,
@@ -92,7 +93,7 @@ export function prepareEmbeddedRunTerminal(input: {
   const terminalAssistant = input.currentAttemptCompletedAssistant;
   const usageMeta = buildUsageAgentMetaFields({
     usageAccumulator: input.usageAccumulator,
-    latestUsage: terminalAssistant?.usage as UsageLike | undefined,
+    latestUsage: normalizeAssistantUsageForContext(terminalAssistant),
     lastRunPromptUsage: input.lastRunPromptUsage,
   });
   // A runtime can observe its model without emitting message_end. That scoped
@@ -187,11 +188,15 @@ export function prepareEmbeddedRunTerminal(input: {
       ),
     } satisfies Omit<AgentRunTerminalReceipt, "terminalDisposition">,
   });
-  // A yielded attempt ends before message_end. Its aborted tool-call assistant,
-  // not an earlier completed cycle, owns paused-turn classification.
-  const payloadAssistant = attempt.yieldDetected
-    ? attempt.lastAssistant
-    : input.currentAttemptCompletedAssistant;
+  const cleanYield = attempt.yieldDetected && input.terminalState.outcome.status === "ok";
+  // Yield cleanup can abort the tool-call assistant before message_end. The
+  // canonical successful pause owns that outcome, not the cleanup error text
+  // or an earlier completed cycle. Keep this attempt's streamed text below.
+  const payloadAssistant = cleanYield
+    ? undefined
+    : attempt.yieldDetected
+      ? attempt.lastAssistant
+      : input.currentAttemptCompletedAssistant;
   const payloads = buildEmbeddedRunPayloads({
     assistantTexts: attempt.assistantTexts,
     answerSegments: attempt.answerSegments,
@@ -202,10 +207,7 @@ export function prepareEmbeddedRunTerminal(input: {
     currentAssistant: attempt.yieldDetected ? null : (payloadAssistant ?? null),
     // A clean yield is a handoff, not a terminal tool failure. Keep the error
     // on the attempt for diagnostics without turning the pause into a warning.
-    lastToolError:
-      attempt.yieldDetected && input.terminalState.outcome.status === "ok"
-        ? undefined
-        : attempt.lastToolError,
+    lastToolError: cleanYield ? undefined : attempt.lastToolError,
     config: runParams.config,
     isCronTrigger: runParams.trigger === "cron",
     isHeartbeatTrigger: runParams.trigger === "heartbeat",

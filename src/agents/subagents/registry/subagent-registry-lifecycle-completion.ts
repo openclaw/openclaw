@@ -2,8 +2,6 @@ import { isDeepStrictEqual } from "node:util";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
-import type { DetachedTaskFindResult } from "../../../tasks/detached-task-runtime-contract.js";
-import { isProvisionalSubagentKillTask } from "../../../tasks/task-cancellation-state.js";
 import { mergeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import { peekSwarmStructuredOutput } from "../../tools/structured-output-tool.js";
 import { withSubagentOutcomeTiming } from "../announce/subagent-announce-output.js";
@@ -23,7 +21,6 @@ import type { SubagentLifecycleCompletionContext } from "./subagent-registry-lif
 import {
   freezeRunResultAtCompletion,
   refreshPendingFinalDeliveryPayload,
-  finalizeSubagentTaskRun,
 } from "./subagent-registry-lifecycle-delivery.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import {
@@ -44,26 +41,26 @@ async function loadCleanupBrowserSessionsForLifecycleEnd(): Promise<BrowserClean
   return (await browserCleanupLoader.load()).cleanupBrowserSessionsForLifecycleEnd;
 }
 
-function shouldPreservePublishedExplicitRunTimeout(params: { entry: SubagentRunRecord }): boolean {
+function shouldPreservePublishedExplicitRunTimeout(entry: SubagentRunRecord): boolean {
   if (
-    typeof params.entry.runTimeoutSeconds !== "number" ||
-    !Number.isFinite(params.entry.runTimeoutSeconds) ||
-    params.entry.runTimeoutSeconds <= 0 ||
-    params.entry.execution.outcome?.status !== "timeout" ||
-    typeof params.entry.execution.endedAt !== "number"
+    typeof entry.runTimeoutSeconds !== "number" ||
+    !Number.isFinite(entry.runTimeoutSeconds) ||
+    entry.runTimeoutSeconds <= 0 ||
+    entry.execution.outcome?.status !== "timeout" ||
+    typeof entry.execution.endedAt !== "number"
   ) {
     return false;
   }
-  const deadlineMs = resolveSubagentRunDeadlineMs(params.entry);
-  if (deadlineMs === undefined || params.entry.execution.endedAt < deadlineMs) {
+  const deadlineMs = resolveSubagentRunDeadlineMs(entry);
+  if (deadlineMs === undefined || entry.execution.endedAt < deadlineMs) {
     return false;
   }
   return (
-    params.entry.cleanupHandled === true ||
-    typeof params.entry.cleanupCompletedAt === "number" ||
-    typeof params.entry.endedHookEmittedAt === "number" ||
-    params.entry.delivery?.status === "delivered" ||
-    typeof params.entry.delivery?.announcedAt === "number"
+    entry.cleanupHandled === true ||
+    typeof entry.cleanupCompletedAt === "number" ||
+    typeof entry.endedHookEmittedAt === "number" ||
+    entry.delivery?.status === "delivered" ||
+    typeof entry.delivery?.announcedAt === "number"
   );
 }
 
@@ -95,11 +92,7 @@ function isOlderEquivalentTerminalCallback(params: {
   ) {
     return false;
   }
-  return (
-    current.status !== "error" ||
-    params.outcome.status !== "error" ||
-    current.error === params.outcome.error
-  );
+  return current.status !== "error" || current.error === params.outcome.error;
 }
 
 export async function completeSubagentRunAttempt(
@@ -114,9 +107,7 @@ export async function completeSubagentRunAttempt(
   let completionReason = completeParams.reason;
   let sessionSuperseded = false;
   let suppressSessionEffects = completeParams.suppressSessionEffects === true;
-  let suppressTaskFinalization: boolean;
   let provisionalKillSnapshot: SubagentRunRecord | undefined;
-  let postCaptureTaskResolution: DetachedTaskFindResult | undefined;
   let entrySnapshot: SubagentRunRecord | undefined;
   try {
     entry = params.runs.get(completeParams.runId);
@@ -133,6 +124,7 @@ export async function completeSubagentRunAttempt(
     suppressSessionEffects ||= context.shouldSuppressSessionEffects(entry);
     params.clearPendingLifecycleError(completeParams.runId);
     const currentEntry = entry;
+    const ownerGeneration = currentEntry.generation;
     entrySnapshot = structuredClone(entry);
     const restoreEntrySnapshot = (snapshot?: SubagentRunRecord) => {
       if (!snapshot) {
@@ -206,7 +198,7 @@ export async function completeSubagentRunAttempt(
           endedAt,
           outcome,
           interruptedAt: undefined,
-          interruptionReason: undefined,
+          interruptionReason: "gateway-restart",
           suppressSessionEffects: suppressSessionEffects ? true : undefined,
         };
         entry.completion = {
@@ -250,11 +242,7 @@ export async function completeSubagentRunAttempt(
     }
     let requestedEndedAt =
       typeof completeParams.endedAt === "number" ? completeParams.endedAt : Date.now();
-    if (
-      shouldPreservePublishedExplicitRunTimeout({
-        entry,
-      })
-    ) {
+    if (shouldPreservePublishedExplicitRunTimeout(entry)) {
       return;
     }
     const shouldDrainExistingTerminal =
@@ -353,7 +341,6 @@ export async function completeSubagentRunAttempt(
     const isSteerRestartKill =
       completeParams.reason === SUBAGENT_ENDED_REASON_KILLED &&
       entry.suppressAnnounceReason === "steer-restart";
-    suppressTaskFinalization = isSteerRestartKill;
     if (completionReason === SUBAGENT_ENDED_REASON_KILLED && !isSteerRestartKill) {
       entry.suppressAnnounceReason = "killed";
       entry.killReconciliation ??= {
@@ -368,16 +355,12 @@ export async function completeSubagentRunAttempt(
       entry.killReconciliation !== undefined
     ) {
       const killReconciliation = entry.killReconciliation;
-      const taskResolution = params.resolveSubagentTask(entry);
-      const stableTaskCancellation =
-        taskResolution.lookup === "available" &&
-        taskResolution.task?.status === "cancelled" &&
-        !isProvisionalSubagentKillTask(taskResolution.task);
+      const stableTaskCancellation = entry.killReconciliation?.taskCancellationAccepted === true;
       const cancellationEndedAt = resolveKilledSubagentTaskEndedAt(entry);
       const completionPredatesCancellation =
         typeof cancellationEndedAt === "number" && endedAt < cancellationEndedAt;
       if (stableTaskCancellation && !completionPredatesCancellation) {
-        // tasks.cancel promotes the provisional marker to durable operator
+        // Native cancellation promotes the provisional marker to durable operator
         // intent. Only an already-durable earlier completion may reopen it.
         return;
       }
@@ -460,10 +443,12 @@ export async function completeSubagentRunAttempt(
     const retainedRestartRecovery = suppressSessionEffects
       ? entry.execution.restartRecovery
       : undefined;
+    const interruptionReason = recoveryRequested ? "gateway-restart" : undefined;
     if (
       entry.execution.status !== "terminal" ||
       entry.execution.endedAt !== endedAt ||
       entry.execution.outcome !== executionOutcome ||
+      entry.execution.interruptionReason !== interruptionReason ||
       entry.execution.restartRecovery !== retainedRestartRecovery ||
       entry.execution.suppressSessionEffects !== (suppressSessionEffects ? true : undefined)
     ) {
@@ -473,7 +458,7 @@ export async function completeSubagentRunAttempt(
         endedAt,
         outcome: executionOutcome,
         interruptedAt: undefined,
-        interruptionReason: undefined,
+        interruptionReason,
         restartRecovery: retainedRestartRecovery,
         suppressSessionEffects: suppressSessionEffects ? true : undefined,
       };
@@ -529,7 +514,7 @@ export async function completeSubagentRunAttempt(
       entry.delivery?.disposition !== "intentional_non_delivery";
     if (closesAsIntentionalNonDelivery) {
       // Producer-owned empty success is a terminal fact, not a failed send.
-      // Close it before task finalization so no requester delivery can start.
+      // Close it before terminal persistence so no requester delivery can start.
       entry.delivery = {
         status: "not_required",
         disposition: "intentional_non_delivery",
@@ -548,7 +533,19 @@ export async function completeSubagentRunAttempt(
         mutated = true;
       }
     } else {
+      const executionBeforeCapture = currentEntry.execution;
       const didFreezeResult = await freezeRunResultAtCompletion(context, entry, executionOutcome);
+      // Native persistence is now the sole terminal commit. Capture must not give
+      // an old callback authority over a replacement row or a newer cancellation.
+      if (
+        params.runs.get(completeParams.runId) !== currentEntry ||
+        currentEntry.generation !== ownerGeneration ||
+        currentEntry.execution !== executionBeforeCapture ||
+        currentEntry.pauseReason === "sessions_yield" ||
+        completeParams.isRecoveryCurrent?.() === false
+      ) {
+        return;
+      }
       sessionSuperseded = context.newerGenerationOwnsSession(entry);
       if (sessionSuperseded) {
         const completion = ensureCompletionState(entry);
@@ -567,15 +564,10 @@ export async function completeSubagentRunAttempt(
       mutated = true;
     }
     if (provisionalKillSnapshot) {
-      // Keep the tombstone's superseded generation boundary through task
-      // commit. Clearing it on the canonical registry row must not let a
-      // late old-run result select a newer task sharing the session key.
-      const taskResolution = params.resolveSubagentTask(provisionalKillSnapshot);
-      postCaptureTaskResolution = taskResolution;
+      // Capture may race cancellation on this exact physical execution.
+      // Recheck the live marker before replacing the staged native outcome.
       const stableTaskCancellation =
-        taskResolution.lookup === "available" &&
-        taskResolution.task?.status === "cancelled" &&
-        !isProvisionalSubagentKillTask(taskResolution.task);
+        currentEntry.killReconciliation?.taskCancellationAccepted === true;
       const cancellationEndedAt = resolveKilledSubagentTaskEndedAt(provisionalKillSnapshot);
       const completionPredatesCancellation =
         typeof cancellationEndedAt === "number" && endedAt < cancellationEndedAt;
@@ -589,41 +581,8 @@ export async function completeSubagentRunAttempt(
       mutated = true;
     }
 
-    const opaqueTaskArbitration =
-      provisionalKillSnapshot !== undefined && postCaptureTaskResolution?.lookup === "unavailable";
-    // A steer abort ends one agent run but continues the same detached task.
-    // The successor must remain able to publish its eventual terminal state.
+    // Native cancellation and completion share this exact run generation.
     if (provisionalKillSnapshot) {
-      const finalizedTasks = await finalizeSubagentTaskRun(params, {
-        entry,
-        outcome: executionOutcome,
-        taskResolution: postCaptureTaskResolution,
-      });
-      const taskWasAbsent =
-        postCaptureTaskResolution?.lookup === "available" &&
-        postCaptureTaskResolution.task === undefined;
-      if ((!finalizedTasks || finalizedTasks.length === 0) && !taskWasAbsent) {
-        if (opaqueTaskArbitration) {
-          // The optional lookup cannot prove cancellation. Let the legacy
-          // runtime's own finalizer decide whether provider completion won.
-          return;
-        }
-        const latestTaskResolution = params.resolveSubagentTask(provisionalKillSnapshot);
-        const latestTask = latestTaskResolution.task;
-        const stableTaskCancellation =
-          latestTask?.status === "cancelled" && !isProvisionalSubagentKillTask(latestTask);
-        const cancellationEndedAt = resolveKilledSubagentTaskEndedAt(provisionalKillSnapshot);
-        const completionPredatesCancellation =
-          typeof cancellationEndedAt === "number" && endedAt < cancellationEndedAt;
-        if (stableTaskCancellation && !completionPredatesCancellation) {
-          return;
-        }
-        throw new Error("subagent task projection did not finalize");
-      }
-
-      // Task results do not auto-publish for subagents. Commit that durable,
-      // idempotent projection first: after a crash the persisted kill marker
-      // can replay it, while the inverse ordering could strand a provisional task.
       entry.browserCleanupDispatchedAt ??= currentEntry.browserCleanupDispatchedAt;
       if (currentEntry.killReconciliation?.suppressTaskDelivery === true) {
         entry.suppressCompletionDelivery = true;
@@ -637,8 +596,8 @@ export async function completeSubagentRunAttempt(
         restoreEntrySnapshot(liveBeforeCommit);
         throw error;
       }
-      // A provider result supersedes provisional cleanup only after both
-      // durable owners accept it. Rejected callbacks leave the kill tail live.
+      // A provider result supersedes provisional cleanup only after its native
+      // terminal commit. Rejected callbacks leave the kill tail live.
       context.bumpCleanupGeneration(entry);
     } else {
       try {
@@ -648,12 +607,6 @@ export async function completeSubagentRunAttempt(
       } catch (error) {
         restoreEntrySnapshot(entrySnapshot);
         throw error;
-      }
-      if (!suppressTaskFinalization) {
-        await finalizeSubagentTaskRun(params, {
-          entry,
-          outcome: executionOutcome,
-        });
       }
     }
     terminalGeneration = context.bumpTerminalGeneration(entry);

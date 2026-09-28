@@ -32,8 +32,9 @@ export function registerSignalExitBarrier(barrier: SignalExitBarrier): () => voi
 }
 
 /** Temporary artifacts remain available until other shutdown owners have drained. */
-export function registerSignalExitFinalizer(finalizer: SignalExitBarrier): void {
+export function registerSignalExitFinalizer(finalizer: SignalExitBarrier): () => void {
   activeFinalizers.add(finalizer);
+  return () => activeFinalizers.delete(finalizer);
 }
 
 let pendingSignalExitDrain: Promise<void> | undefined;

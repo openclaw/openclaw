@@ -21,12 +21,6 @@ import {
   extractLlamaServerDependencyArchive,
 } from "./llama-server-extract.js";
 
-export {
-  resolveManagedLlamaServerPaths,
-  selectLlamaServerAsset,
-  type LlamaServerAsset,
-} from "./llama-server-assets.js";
-
 const DOWNLOAD_TIMEOUT_MS = 30 * 60_000;
 const VERSION_TIMEOUT_MS = 15_000;
 // Freshly extracted macOS binaries can spend tens of seconds in Gatekeeper

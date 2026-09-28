@@ -37,7 +37,7 @@ type WorkerCredentialBrokerOptions = {
   placementStore?: WorkerSessionPlacementGate;
   now: () => number;
   isStopping: () => boolean;
-  cancelInferenceEnvironment: (environmentId: string) => void;
+  cancelInferenceEnvironment: (environmentId: string) => Promise<void>;
   inState: (record: WorkerEnvironmentRecord, ...states: WorkerEnvironmentState[]) => boolean;
   move: (
     record: WorkerEnvironmentRecord,
@@ -74,6 +74,15 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
   const credentialMaterial = (claim?: WorkerSessionTurnClaim) =>
     createWorkerCredentialMaterial(options.generateWorkerCredential, claim);
 
+  const validateTurnClaim = (claim: WorkerSessionTurnClaim): boolean =>
+    claim.owner.kind === "worker" && options.placementStore?.validateWorkerTurn(claim) === true;
+
+  const assertTurnClaim = (claim: WorkerSessionTurnClaim) => {
+    if (!validateTurnClaim(claim)) {
+      throw serviceError("invalid_state", "Worker turn credential claim is not authoritative");
+    }
+  };
+
   const grantFrom = (params: {
     credential: string;
     record: ReturnType<WorkerEnvironmentStore["getCredential"]>;
@@ -102,7 +111,7 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
   ): Promise<{ credentialHash: string; grant: MintedWorkerCredential }> => {
     const previous = store.getCredential(request.environmentId);
     if (previous) {
-      options.cancelInferenceEnvironment(request.environmentId);
+      await options.cancelInferenceEnvironment(request.environmentId);
     }
     const material = credentialMaterial(claim);
     const credential = {
@@ -112,18 +121,7 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
       sessionId: request.sessionId,
       rpcSetVersion: WORKER_RPC_SET_VERSION,
       expiresAtMs: credentialExpiry(),
-      ...(claim
-        ? {
-            assertCurrent: () => {
-              if (!validateTurnClaim(claim)) {
-                throw serviceError(
-                  "invalid_state",
-                  "Worker turn credential claim is not authoritative",
-                );
-              }
-            },
-          }
-        : {}),
+      ...(claim ? { assertCurrent: () => assertTurnClaim(claim) } : {}),
     };
     const record = await store.renewCredential(credential);
     credential.assertCurrent?.();
@@ -233,14 +231,12 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
       placementBinding?: PreparedEnvironmentPlacementBinding;
     },
   ): Promise<MintedWorkerCredential> => {
-    let stopping = options.isStopping();
-    if (stopping) {
+    if (options.isStopping()) {
       throw serviceError("invalid_state", "Worker environment service is stopping");
     }
     return withLock(request.environmentId, async () => {
       await store.ready();
-      stopping = options.isStopping();
-      if (stopping) {
+      if (options.isStopping()) {
         throw serviceError("invalid_state", "Worker environment service is stopping");
       }
       const current = store.get(request.environmentId);
@@ -301,8 +297,7 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
     binding: WorkerCredentialBinding,
     claim?: WorkerSessionTurnClaim,
   ) => {
-    const stopping = options.isStopping();
-    if (stopping) {
+    if (options.isStopping()) {
       return undefined;
     }
     const grant = pendingCredentials.get(binding.environmentId);
@@ -346,9 +341,6 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
       sessionId: claim.sessionId,
     };
   };
-
-  const validateTurnClaim = (claim: WorkerSessionTurnClaim): boolean =>
-    claim.owner.kind === "worker" && options.placementStore?.validateWorkerTurn(claim) === true;
 
   const acquireTurnCredential = (claim: WorkerSessionTurnClaim) => {
     const binding = bindingForClaim(claim);
@@ -409,18 +401,7 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
       sessionId: grant.sessionId,
       credentialHash: pending.credentialHash,
       deliveredAtMs: pending.checkedAtMs,
-      ...(grant.turnClaim
-        ? {
-            assertCurrent: () => {
-              if (!validateTurnClaim(grant.turnClaim!)) {
-                throw serviceError(
-                  "invalid_state",
-                  "Worker turn credential claim is not authoritative",
-                );
-              }
-            },
-          }
-        : {}),
+      ...(grant.turnClaim ? { assertCurrent: () => assertTurnClaim(grant.turnClaim!) } : {}),
     });
     if (pendingCredentials.get(grant.environmentId)?.deliveryId === grant.deliveryId) {
       pendingCredentials.delete(grant.environmentId);

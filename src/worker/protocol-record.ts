@@ -1,6 +1,22 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 
+export const workerProtocolIdentifier = (label: string, maxChars = 256) =>
+  z.custom<string>(
+    (value) =>
+      typeof value === "string" &&
+      value.length > 0 &&
+      value.length <= maxChars &&
+      value.trim() === value &&
+      !value.includes("\0"),
+    { error: `INVALID_REQUEST: ${label} must be a bounded non-empty identifier` },
+  );
+
+export const WorkerGatewayNamespace = workerProtocolIdentifier("gatewayNamespace").refine(
+  (value) => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(value),
+  { error: "INVALID_REQUEST: gatewayNamespace must be a safe bounded path component" },
+);
+
 export function hasExactOwnKeys(
   value: object,
   required: readonly string[],

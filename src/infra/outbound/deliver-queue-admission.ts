@@ -3,7 +3,7 @@ import { createRenderedMessageBatchPlan } from "../../channels/message/rendered-
 import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { createInitialDeliveryProducerClaim } from "../delivery-queue-sqlite-claim.js";
 import { isDeliveryRecoveryOwnedRetry } from "../delivery-recovery.shared.js";
-import { throwSqliteLifecycleErrors } from "../sqlite-coordinator.js";
+import { throwSqliteLifecycleErrors } from "../sqlite-lifecycle-errors.js";
 import type { InternalDeliverOutboundPayloadsParams } from "./deliver-contracts.js";
 import {
   collectPayloadMediaSources,
@@ -110,7 +110,12 @@ export async function stageAndEnqueueOutboundDelivery(
     {
       stateDir,
       payloads: acceptedPayloads,
-      ...(params.sessionGeneration ? { artifactFormat: "session-generation-v1" as const } : {}),
+      ...(params.deliveryCompletion?.kind === "pending-final" &&
+      params.deliveryCompletion.commandOwnerReference !== undefined
+        ? { artifactFormat: "command-owner-v1" as const }
+        : params.sessionGeneration
+          ? { artifactFormat: "session-generation-v1" as const }
+          : {}),
       // Resolved exactly as the live send resolves it: staging must neither
       // reject media the send would deliver (agent workspace sources are only
       // reachable through the agent-scoped roots) nor read more than the send may.

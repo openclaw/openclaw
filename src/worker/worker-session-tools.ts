@@ -1,20 +1,20 @@
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import {
+  PresenceQueryParamsSchema,
+  PresenceQueryResultSchema,
+} from "../../packages/gateway-protocol/src/schema/presence.js";
+import {
   WORKER_SESSION_TOOL_MAX_TEXT_LENGTH,
-  type WorkerPortalParams,
-  type WorkerPortalResponseFrame,
   WorkerPortalParamsSchema,
+  WorkerPresenceParamsSchema,
   type WorkerSessionsSendParams,
-  type WorkerSessionsSendResponseFrame,
   type WorkerSessionsSpawnParams,
   type WorkerSessionsSpawnResponseFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   SkillLibraryWorkshopSchema,
   type WorkerSkillWorkshopBinding,
-  type WorkerSkillWorkshopParams,
-  type WorkerSkillWorkshopResponseFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import type { AgentToolResult } from "../agents/runtime/index.js";
 import { SESSIONS_SEND_RESULT_GUIDANCE } from "../agents/tool-description-presets.js";
@@ -24,18 +24,15 @@ import {
   PortalOutputSchema,
   PortalToolSchema,
 } from "../agents/tools/portal-tool-contract.js";
+import { PRESENCE_TOOL_DESCRIPTION } from "../agents/tools/presence-tool-contract.js";
 import { createLibrarySkillWorkshopDescriptor } from "../agents/tools/skill-workshop-tool-library.js";
+import type { WorkerConnection } from "./worker-connection.js";
 
-type WorkerSessionRpcClient = {
-  requestSkillWorkshop?(
-    params: WorkerSkillWorkshopParams,
-  ): Promise<WorkerSkillWorkshopResponseFrame>;
-  requestSessionsSpawn(
-    params: WorkerSessionsSpawnParams,
-  ): Promise<WorkerSessionsSpawnResponseFrame>;
-  requestSessionsSend(params: WorkerSessionsSendParams): Promise<WorkerSessionsSendResponseFrame>;
-  requestPortal(params: WorkerPortalParams): Promise<WorkerPortalResponseFrame>;
-};
+type WorkerSessionRpcClient = Pick<
+  WorkerConnection,
+  "requestSessionsSpawn" | "requestSessionsSend" | "requestPortal" | "requestPresence"
+> &
+  Partial<Pick<WorkerConnection, "requestSkillWorkshop">>;
 
 function parseToolResult(frame: WorkerSessionsSpawnResponseFrame) {
   if (!frame.ok) {
@@ -75,6 +72,23 @@ export function createWorkerSessionTools(
     : undefined;
   return [
     ...(workshop ? [workshop] : []),
+    {
+      label: "Presence",
+      name: "presence",
+      description: PRESENCE_TOOL_DESCRIPTION,
+      parameters: PresenceQueryParamsSchema,
+      outputSchema: PresenceQueryResultSchema,
+      execute: async (toolCallId, raw) => {
+        if (!Value.Check(PresenceQueryParamsSchema, raw)) {
+          throw new Error("Invalid presence tool arguments");
+        }
+        const params = { ...raw, toolCallId };
+        if (!Value.Check(WorkerPresenceParamsSchema, params)) {
+          throw new Error("Presence tool arguments exceed the worker protocol limits");
+        }
+        return parseToolResult(await client.requestPresence(params));
+      },
+    },
     {
       label: "Sessions",
       name: "sessions_spawn",

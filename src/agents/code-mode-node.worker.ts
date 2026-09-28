@@ -119,13 +119,29 @@ const initializeScript = new Script(
       const finish = globalThis.__openclawNodeFinish;
       delete globalThis.__openclawNodeFinish;
       const stringify = JSON.stringify;
-      Object.defineProperty(globalThis, "__openclawNodeObserveResult", { value: (result) => {
-        result.then(value => finish(true, value), error => finish(false, stringify({
-          name: String(error?.name ?? "Error"),
-          message: String(error?.message ?? error),
-          stack: typeof error?.stack === "string" ? error.stack : "",
-        })));
-      }});
+      const string = String;
+      const encodeError = (error) => {
+        const bridgeError = __openclawIsBridgeError(error);
+        const diagnostic = (read, fallback) => {
+          try { return read(); } catch { return fallback; }
+        };
+        // Guest error properties may throw; recorded bridge identity must still reach finish.
+        const stack = diagnostic(() => error?.stack, "");
+        // Provenance records contain primitives and never inherit guest toJSON hooks.
+        return stringify({
+          __proto__: null,
+          bridgeError,
+          name: diagnostic(() => string(error?.name ?? "Error"), "Error"),
+          message: diagnostic(() => string(error?.message ?? error), "Error"),
+          stack: typeof stack === "string" ? stack : "",
+        });
+      };
+      Object.defineProperties(globalThis, {
+        __openclawNodeEncodeError: { value: encodeError },
+        __openclawNodeObserveResult: { value: (result) => {
+          result.then(value => finish(true, value), error => finish(false, encodeError(error)));
+        }},
+      });
     })();
   `,
   { filename: "openclaw-code-mode:controller.js" },
@@ -152,7 +168,7 @@ const rejectionScript = new Script(
   `(() => {
     const error = __openclawNodeRejection;
     delete globalThis.__openclawNodeRejection;
-    return JSON.stringify({name: String(error?.name ?? "Error"), message: String(error?.message ?? error), stack: typeof error?.stack === "string" ? error.stack : ""});
+    return __openclawNodeEncodeError(error);
   })()`,
   { filename: "openclaw-code-mode:controller.js" },
 );
@@ -306,10 +322,16 @@ function takeOutput(current: NodeCell): unknown[] {
 function formatGuestFailure(
   current: NodeCell,
   json: string,
-): { code: "invalid_input" | "internal_error"; error: string } {
-  // SAFETY: This worker's result observer encodes all three error fields as strings.
-  const value = JSON.parse(json) as { name: string; message: string; stack: string };
+): { code: "invalid_input" | "internal_error"; error: string; failurePhase?: "bridge" } {
+  // SAFETY: This worker's result observer encodes the error strings and bridge identity.
+  const value = JSON.parse(json) as {
+    name: string;
+    message: string;
+    stack: string;
+    bridgeError: boolean;
+  };
   if (
+    !value.bridgeError &&
     value.name === "ReferenceError" &&
     /^(?:require|module|process) is not defined$/u.test(value.message)
   ) {
@@ -317,6 +339,7 @@ function formatGuestFailure(
   }
   return {
     code: "internal_error",
+    ...(value.bridgeError ? { failurePhase: "bridge" as const } : {}),
     error: [`${value.name}: ${value.message}`, ...sourceFrames(value.stack, current.location)].join(
       "\n",
     ),
@@ -327,13 +350,14 @@ function failed(
   code: "invalid_input" | "internal_error" | "timeout",
   error: string,
   output = EMPTY_CODE_MODE_OUTPUT,
+  failurePhase?: "bridge",
 ): Extract<NodeResult, { status: "failed" }> {
   return {
     status: "failed",
     code,
     error,
     output,
-    failurePhase: code === "invalid_input" ? "input" : "guest",
+    failurePhase: failurePhase ?? (code === "invalid_input" ? "input" : "guest"),
     bridgeDispatchStarted: false,
   };
 }
@@ -440,6 +464,7 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
           failure.code,
           boundCodeModeError(failure.error, config.maxOutputBytes),
           captureCodeModeOutput(output, config.maxOutputBytes),
+          failure.failurePhase,
         );
       }
       if (current.rejections.size > 0) {
@@ -450,6 +475,7 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
           failure.code,
           boundCodeModeError(failure.error, config.maxOutputBytes),
           captureCodeModeOutput(output, config.maxOutputBytes),
+          failure.failurePhase,
         );
       }
       return {

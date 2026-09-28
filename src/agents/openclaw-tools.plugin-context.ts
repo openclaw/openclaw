@@ -22,6 +22,7 @@ export type OpenClawPluginToolOptions = {
   runId?: string;
   /** Host-bound standalone request/grant authority, never supplied by tool arguments. */
   assertInvocationCurrent?: () => void;
+  assertInputCommitAllowed?: () => void;
   agentChannel?: string;
   agentAccountId?: string;
   agentTo?: string;
@@ -101,6 +102,7 @@ export function resolveOpenClawPluginToolInputs(params: {
       config: options?.config,
       runtimeConfig,
       getRuntimeConfig,
+      assertInputCommitAllowed: options?.assertInputCommitAllowed,
       fsPolicy: options?.fsPolicy,
       workspaceDir,
       agentDir: options?.agentDir,

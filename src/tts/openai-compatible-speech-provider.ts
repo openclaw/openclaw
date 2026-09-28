@@ -98,10 +98,6 @@ function normalizeResponseFormat(params: {
   throw new Error(`Invalid ${params.providerLabel} speech responseFormat: ${next}`);
 }
 
-function responseFormatToFileExtension(format: string): `.${string}` {
-  return `.${format}`;
-}
-
 function trimTrailingBaseUrl(value: unknown, fallback: string): string {
   return (trimToUndefined(value) ?? fallback).replace(/\/+$/u, "");
 }
@@ -403,7 +399,7 @@ export function createOpenAiCompatibleSpeechProvider<
             "audio",
           ),
           outputFormat: responseFormat,
-          fileExtension: responseFormatToFileExtension(responseFormat),
+          fileExtension: `.${responseFormat}`,
           voiceCompatible: options.voiceCompatibleResponseFormats.includes(responseFormat),
         };
       } finally {

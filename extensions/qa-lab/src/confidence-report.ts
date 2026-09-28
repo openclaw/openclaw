@@ -10,6 +10,7 @@ import {
   formatGatewayLogSentinelSummary,
   type GatewayLogSentinelFinding,
 } from "./gateway-log-sentinel.js";
+import { escapeTableCell } from "./report.js";
 import {
   findQaSuiteSummaryAccountingError,
   findQaSuiteSummaryCompletionError,
@@ -27,31 +28,36 @@ const QA_CONFIDENCE_VERDICTS = [
 
 export type QaConfidenceVerdict = (typeof QA_CONFIDENCE_VERDICTS)[number];
 
-type QaConfidenceLaneKind =
-  | "qa-suite-summary"
-  | "runtime-parity-summary"
-  | "harness-parity-summary"
-  | "token-efficiency-summary"
-  | "jsonl-replay-summary"
-  | "self-test-summary"
-  | "generic-pass-summary";
+const QA_CONFIDENCE_LANE_KINDS = [
+  "qa-suite-summary",
+  "runtime-parity-summary",
+  "harness-parity-summary",
+  "token-efficiency-summary",
+  "jsonl-replay-summary",
+  "self-test-summary",
+  "generic-pass-summary",
+] as const;
+type QaConfidenceLaneKind = (typeof QA_CONFIDENCE_LANE_KINDS)[number];
 
-type QaConfidenceManifestLane = {
+type QaConfidenceLane = {
   id: string;
   title: string;
   kind: QaConfidenceLaneKind;
   artifact: string;
   required: boolean;
-  failureVerdict?: Exclude<QaConfidenceVerdict, "pass" | "environment-blocked">;
-  missingVerdict?: "environment-blocked" | "optional-gap";
-  missingReason?: string;
-  expectedTokenUsageSource?: "mock-estimate" | "live-usage";
   skipBackfillLane?: string;
   productImpact?: string;
   qaImpact?: string;
   issue?: string;
   ownerAction?: string;
   labels?: string[];
+};
+
+type QaConfidenceManifestLane = QaConfidenceLane & {
+  failureVerdict?: Exclude<QaConfidenceVerdict, "pass" | "environment-blocked">;
+  missingVerdict?: "environment-blocked" | "optional-gap";
+  missingReason?: string;
+  expectedTokenUsageSource?: "mock-estimate" | "live-usage";
 };
 
 type QaConfidenceManifest = {
@@ -62,23 +68,12 @@ type QaConfidenceManifest = {
 
 type QaConfidenceLaneStatus = "pass" | "fail" | "blocked" | "missing" | "unknown";
 
-type QaConfidenceLaneResult = {
-  id: string;
-  title: string;
-  kind: QaConfidenceLaneKind;
-  artifact: string;
+type QaConfidenceLaneResult = QaConfidenceLane & {
   artifactPath: string;
-  required: boolean;
   status: QaConfidenceLaneStatus;
   verdict?: QaConfidenceVerdict;
   details: string;
-  productImpact?: string;
-  qaImpact?: string;
-  issue?: string;
-  ownerAction?: string;
-  labels?: string[];
   skippedCount?: number;
-  skipBackfillLane?: string;
   skipBackfilled?: boolean;
 };
 
@@ -189,18 +184,11 @@ function readVerdict(value: unknown, key: string): QaConfidenceVerdict | undefin
 
 function readLaneKind(value: unknown): QaConfidenceLaneKind {
   const text = readString(value);
-  switch (text) {
-    case "qa-suite-summary":
-    case "runtime-parity-summary":
-    case "harness-parity-summary":
-    case "token-efficiency-summary":
-    case "jsonl-replay-summary":
-    case "self-test-summary":
-    case "generic-pass-summary":
-      return text;
-    default:
-      throw new Error(`unknown confidence manifest lane kind: ${text ?? "missing"}`);
+  const kind = QA_CONFIDENCE_LANE_KINDS.find((candidate) => candidate === text);
+  if (!kind) {
+    throw new Error(`unknown confidence manifest lane kind: ${text ?? "missing"}`);
   }
+  return kind;
 }
 
 function normalizeManifestLane(value: unknown): QaConfidenceManifestLane {
@@ -296,18 +284,6 @@ export async function readQaConfidenceManifestFile(
     );
   }
   return normalizeQaConfidenceManifest(payload);
-}
-
-function resolveArtifactPath(artifactRoot: string, artifact: string): string {
-  return path.isAbsolute(artifact) ? artifact : path.resolve(artifactRoot, artifact);
-}
-
-async function readJsonFile(filePath: string): Promise<unknown> {
-  return JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
-}
-
-function isMissingFileError(error: unknown): boolean {
-  return isRecord(error) && error.code === "ENOENT";
 }
 
 type QaConfidenceLaneEvaluation = {
@@ -631,13 +607,15 @@ async function evaluateLane(
   lane: QaConfidenceManifestLane,
   artifactRoot: string,
 ): Promise<QaConfidenceLaneResult> {
-  const artifactPath = resolveArtifactPath(artifactRoot, lane.artifact);
+  const artifactPath = path.isAbsolute(lane.artifact)
+    ? lane.artifact
+    : path.resolve(artifactRoot, lane.artifact);
   const base = baseLaneResult(lane, artifactPath);
   let payload: unknown;
   try {
-    payload = await readJsonFile(artifactPath);
+    payload = JSON.parse(await fs.readFile(artifactPath, "utf8")) as unknown;
   } catch (error) {
-    if (!isMissingFileError(error)) {
+    if (!isRecord(error) || error.code !== "ENOENT") {
       return {
         ...base,
         status: "unknown",
@@ -776,14 +754,6 @@ export async function buildQaConfidenceReport(params: {
   };
 }
 
-function formatVerdict(lane: QaConfidenceLaneResult): string {
-  return lane.verdict ?? "unclassified";
-}
-
-export function escapeTableCell(value: string): string {
-  return value.replace(/\\/gu, "\\\\").replace(/\|/gu, "\\|").replace(/\s+/gu, " ").trim();
-}
-
 export function renderQaConfidenceMarkdownReport(report: QaConfidenceReport): string {
   const lines = [
     `# OpenClaw QA Confidence Report - ${report.profile}`,
@@ -801,7 +771,7 @@ export function renderQaConfidenceMarkdownReport(report: QaConfidenceReport): st
   ];
   for (const lane of report.lanes) {
     lines.push(
-      `| ${escapeTableCell(lane.id)} | ${lane.status} | ${formatVerdict(lane)} | ${escapeTableCell(lane.productImpact ?? "")} | ${escapeTableCell(lane.qaImpact ?? "")} | ${escapeTableCell(lane.details)} |`,
+      `| ${escapeTableCell(lane.id)} | ${lane.status} | ${lane.verdict ?? "unclassified"} | ${escapeTableCell(lane.productImpact ?? "")} | ${escapeTableCell(lane.qaImpact ?? "")} | ${escapeTableCell(lane.details)} |`,
     );
   }
   if (report.failures.length > 0) {

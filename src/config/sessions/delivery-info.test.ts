@@ -160,7 +160,7 @@ describe("extractDeliveryInfo", () => {
 
     expect(result.deliveryContext?.to).toBe("telegram:user-123");
     expect(storeState.loadExactSessionEntryCandidatesReadOnlyBatch).toHaveBeenCalledWith([
-      expect.objectContaining({ storePath: "/tmp/sessions.json", projection: "list" }),
+      expect.objectContaining({ storePath: "/tmp/sessions.json", projection: "delivery" }),
     ]);
     expect(storeState.openSessionEntryReadView).not.toHaveBeenCalled();
   });
@@ -180,18 +180,6 @@ describe("extractDeliveryInfo", () => {
         },
       },
     );
-
-    const result = extractDeliveryInfo(sessionKey);
-
-    expect(result).toEqual({
-      deliveryContext: createTelegramUserDelivery(),
-      threadId: undefined,
-    });
-  });
-
-  it("returns deliveryContext for direct session keys", () => {
-    const sessionKey = "agent:main:telegram:dm:user-123";
-    storeState.store[sessionKey] = buildEntry(createTelegramUserDelivery());
 
     const result = extractDeliveryInfo(sessionKey);
 

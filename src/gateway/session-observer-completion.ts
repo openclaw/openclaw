@@ -30,23 +30,15 @@ export function createSessionObserverCompletion(params: {
       modelRef,
       useUtilityModel: true,
     }));
-    let failed = true;
+    let reusable = false;
     try {
       const prepared = await preparedPromise;
-      failed = false;
-      // A preparation carries an inherited runtime only because the derived utility
-      // model had no usable credential. Serve this digest from it, then drop it, so
-      // the next digest re-decides and a credential added mid-run takes effect one
-      // digest later instead of holding the borrowed CLI route for the rest of the
-      // run. A route that borrowed nothing stays memoized, so an install already on
-      // its own credential keeps the single preparation and adds no auth lookup.
-      if (prepared.agentHarnessRuntimeOverride && state.preparedPromise === preparedPromise) {
-        state.preparedPromise = undefined;
-      }
+      reusable = !prepared.agentHarnessRuntimeOverride;
       return prepared;
     } finally {
-      // Pending and successful preparation remain shared; settled failures do not.
-      if (failed && state.preparedPromise === preparedPromise) {
+      // Share pending work and successful native routes. Failed or borrowed routes
+      // re-prepare next digest so newly available credentials can restore HTTP.
+      if (!reusable && state.preparedPromise === preparedPromise) {
         state.preparedPromise = undefined;
       }
     }

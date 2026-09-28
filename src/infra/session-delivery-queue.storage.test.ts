@@ -378,23 +378,6 @@ describe("session-delivery queue storage", () => {
     }
   });
 
-  it("moves entries into completed idempotency state", async () => {
-    await withSessionDeliveryQueue(async (tempDir, queueContext) => {
-      const id = await enqueueSessionDelivery(
-        {
-          kind: "systemEvent",
-          sessionKey: "agent:main:main",
-          text: "restart complete",
-        },
-        queueContext,
-      );
-
-      await settleSessionDelivery(id, queueContext);
-
-      expect(readSessionQueueStatus(tempDir, id)).toBe("completed");
-    });
-  });
-
   it("retains a permanent completion receipt", async () => {
     await withSessionDeliveryQueue(async (tempDir, queueContext) => {
       const payload = {

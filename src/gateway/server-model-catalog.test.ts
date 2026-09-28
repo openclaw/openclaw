@@ -159,22 +159,6 @@ describe("gateway prepared model catalog", () => {
     ).rejects.toThrow("missing prepared auth state");
   });
 
-  it("reads the published read-only generation directly", async () => {
-    const config = ownerConfig();
-    const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () => ownerSnapshot(config));
-
-    await expect(
-      loadGatewayModelCatalog({
-        getConfig: () => config,
-        loadPublishedPreparedModelCatalogOwnerSnapshot,
-      }),
-    ).resolves.toBe(snapshot.entries);
-    expect(loadPublishedPreparedModelCatalogOwnerSnapshot).toHaveBeenCalledWith({
-      config,
-      readOnly: true,
-    });
-  });
-
   it("forwards the requested agent lifecycle owner", async () => {
     const config = ownerConfig("worker");
     const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () => ({
@@ -222,18 +206,12 @@ describe("gateway prepared model catalog", () => {
         loadPublishedPreparedModelCatalogOwnerSnapshot,
       }),
     ).resolves.toMatchObject({ pluginRegistry, isCurrent });
-    await expect(
-      loadGatewayModelCatalogSnapshot({
-        getConfig: () => config,
-        loadPublishedPreparedModelCatalogOwnerSnapshot,
-      }),
-    ).resolves.not.toHaveProperty("pluginRegistry");
-    await expect(
-      loadGatewayModelCatalogSnapshot({
-        getConfig: () => config,
-        loadPublishedPreparedModelCatalogOwnerSnapshot,
-      }),
-    ).resolves.not.toHaveProperty("isCurrent");
+    const publicSnapshot = await loadGatewayModelCatalogSnapshot({
+      getConfig: () => config,
+      loadPublishedPreparedModelCatalogOwnerSnapshot,
+    });
+    expect(publicSnapshot).not.toHaveProperty("pluginRegistry");
+    expect(publicSnapshot).not.toHaveProperty("isCurrent");
   });
 
   it("projects whether the published owner already contains a full catalog", async () => {

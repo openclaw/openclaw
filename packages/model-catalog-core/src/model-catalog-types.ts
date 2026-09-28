@@ -1,4 +1,3 @@
-// Shared model catalog data contracts for provider manifests and normalized rows.
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   MODEL_DATA_APIS,
@@ -259,6 +258,8 @@ export type ModelCatalogProvider = {
   defaultModel?: string;
   /** Provider-recommended small model id for short internal utility tasks. */
   defaultUtilityModel?: string;
+  /** Ordered provider shortlist reserved for picker ordering; not yet used. */
+  recommendedModels?: string[];
   models: ModelCatalogModel[];
 };
 

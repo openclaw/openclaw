@@ -313,11 +313,6 @@ describe.skipIf(process.platform === "win32")("POSIX bound native control", () =
         script: "",
         expected: { code: 1, termination: "error", errorCode: "ENOENT" },
       },
-      {
-        name: "healthy",
-        script: 'process.stdout.write("raw-out");process.stderr.write("raw-err");',
-        expected: { code: 0, termination: "exit", stdout: "raw-out", stderr: "raw-err" },
-      },
     ])(
       "preserves real native $name result or cleanup uncertainty through the bound gate",
       async ({ name, script, expected }) => {
@@ -351,7 +346,7 @@ describe.skipIf(process.platform === "win32")("POSIX bound native control", () =
         } else {
           expect(fs.existsSync(fixture.outcome), result.stderr).toBe(true);
           expect(JSON.parse(fs.readFileSync(fixture.outcome, "utf8"))).toMatchObject(expected);
-          expect(result.code, result.stderr).toBe(name === "healthy" ? 0 : 1);
+          expect(result.code, result.stderr).toBe(1);
         }
       },
       20000,

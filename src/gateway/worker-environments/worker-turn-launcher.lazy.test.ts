@@ -29,7 +29,7 @@ describe("worker turn execution loading", () => {
       "placement-drained",
       "loader-failed",
     ] as const)("retains admission and the exact claim across loading: %s", async (scenario) => {
-      fixture.seedActivePlacement(mode);
+      await fixture.seedActivePlacement(mode);
       const claimTurn = vi.spyOn(fixture.placements, "claimTurn");
       const loadStarted = createDeferredCore();
       const releaseLoad = createDeferredCore();
@@ -43,7 +43,7 @@ describe("worker turn execution loading", () => {
         }) => {
           params.onHandoff();
           params.onTerminal?.();
-          fixture.placements.releaseTurn(params.turnClaim);
+          await fixture.placements.releaseTurn(params.turnClaim);
           return { meta: { durationMs: 1 } };
         },
       );
@@ -113,7 +113,7 @@ describe("worker turn execution loading", () => {
         if (claimed?.type !== "return") {
           throw new Error("expected retained admission claim");
         }
-        const retained = claimed.value;
+        const retained = await claimed.value;
         expect(retained.owner).toEqual({
           kind: mode === "remote-exec" ? "local" : "worker",
           environmentId: placement.environmentId,
@@ -122,8 +122,8 @@ describe("worker turn execution loading", () => {
         expect(fixture.placements.validateTurnClaim(retained)).toBe(true);
         let replacement: WorkerSessionTurnClaim | undefined;
         if (scenario === "claim-replaced") {
-          fixture.placements.releaseTurn(retained);
-          replacement = fixture.placements.claimTurn({
+          await fixture.placements.releaseTurn(retained);
+          replacement = await fixture.placements.claimTurn({
             ...request,
             claimId: "replacement-claim",
             owner: retained.owner,
@@ -192,7 +192,7 @@ describe("worker turn execution loading", () => {
     ).resolves.toEqual({ meta: { durationMs: 1 } });
     expect(runLocal).toHaveBeenCalledOnce();
     expect(load).not.toHaveBeenCalled();
-    fixture.seedActivePlacement();
+    await fixture.seedActivePlacement();
     await expect(
       provider.executeTurn(request, fixture.turn(request.runId), runLocal),
     ).rejects.toMatchObject({ cause: failure });
@@ -204,7 +204,7 @@ describe("worker turn execution loading", () => {
   it.each(["current", "revoked", "loader-failed"] as const)(
     "rechecks the remote-exec placement after sandbox loading: %s",
     async (scenario) => {
-      fixture.seedActivePlacement("remote-exec");
+      await fixture.seedActivePlacement("remote-exec");
       const loadStarted = createDeferredCore();
       const releaseLoad = createDeferredCore();
       const failure = new Error("sandbox load failed");
@@ -288,7 +288,7 @@ describe("worker turn execution loading", () => {
   );
 
   it("checks sandbox eligibility before loading with an active interception", async () => {
-    fixture.seedActivePlacement("remote-exec");
+    await fixture.seedActivePlacement("remote-exec");
     const failure = new Error("sandbox load reached");
     const load = vi.fn(() => {
       throw failure;
@@ -311,14 +311,14 @@ describe("worker turn execution loading", () => {
   });
 
   it("keeps the reconciliation error constructor shared with the loaded thrower", async () => {
-    fixture.seedActivePlacement();
+    await fixture.seedActivePlacement();
     const { WorkerWorkspaceReconciliationError } = await import("./worker-turn-failure.js");
     const { recoverWorkspaceBeforeTurn } = await import("./workspace-result-finalize.js");
     const placement = fixture.placements.get(fixture.SESSION_ID);
     if (placement?.state !== "active") {
       throw new Error("expected active recovery placement");
     }
-    const claim = fixture.placements.claimTurn({
+    const claim = await fixture.placements.claimTurn({
       sessionId: fixture.SESSION_ID,
       sessionKey: fixture.SESSION_KEY,
       agentId: "main",
@@ -344,6 +344,6 @@ describe("worker turn execution loading", () => {
     });
     await expect(recovery).rejects.toBeInstanceOf(WorkerWorkspaceReconciliationError);
     await expect(recovery).rejects.toMatchObject({ cause });
-    fixture.placements.releaseTurn(claim);
+    await fixture.placements.releaseTurn(claim);
   });
 });

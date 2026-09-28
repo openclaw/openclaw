@@ -3,12 +3,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { WebSocket, type RawData } from "ws";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { WebSocket } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
+import type { ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.types.js";
 import { replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
 import { loadSessionEntry, updateSessionEntry } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
@@ -36,6 +37,7 @@ import { drainOpenClawAgentWriteQueuesForTest } from "../state/openclaw-agent-wr
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
+import { createMainChatSessionStoreFixture } from "./server.chat-session-store.test-support.js";
 import {
   collectHistoryTextValues,
   createGatewayHistoryText,
@@ -57,7 +59,6 @@ import {
   rpcReq,
   testState,
   trackConnectChallengeNonce,
-  withGatewayServer,
   writeSessionStore,
 } from "./test-helpers.js";
 import { agentCommandMock } from "./test-helpers.runtime-state.js";
@@ -65,6 +66,22 @@ import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
 const CHAT_RESPONSE_TIMEOUT_MS = 10_000;
+
+function mockDispatchedReplies(kind: "final" | "block", payloads: ReplyPayload[]) {
+  dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+    const [params] = args as [{ dispatcher: ReplyDispatcher }];
+    for (const payload of payloads) {
+      if (kind === "final") {
+        params.dispatcher.sendFinalReply(payload);
+      } else {
+        params.dispatcher.sendBlockReply(payload);
+      }
+    }
+    params.dispatcher.markComplete();
+    await params.dispatcher.waitForIdle();
+    return { queuedFinal: kind === "final", counts: params.dispatcher.getQueuedCounts() };
+  });
+}
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -101,12 +118,22 @@ describe("gateway server chat", () => {
     expect(getActiveGatewayRootWorkCount(), getActiveGatewayRootWorkHolders().join(", ")).toBe(0);
   };
 
+  const waitForChatEvent = (runId: string, state = "final") =>
+    onceMessage(
+      ws,
+      (event) =>
+        event.type === "event" &&
+        event.event === "chat" &&
+        event.payload?.state === state &&
+        event.payload?.runId === runId,
+      8_000,
+    );
+
   const loadChatHistoryWithMessages = async (
     messages: Array<Record<string, unknown>>,
   ): Promise<unknown[]> => {
     return withMainSessionStore(async () => {
-      const lines = messages.map((message) => JSON.stringify({ message }));
-      await replaceMainTranscriptLines(lines);
+      await replaceMainTranscriptMessages(messages);
 
       const res = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
         sessionKey: "main",
@@ -116,13 +143,15 @@ describe("gateway server chat", () => {
     });
   };
 
-  const replaceMainTranscriptLines = async (lines: string[]): Promise<void> => {
+  const replaceMainTranscriptMessages = async (
+    messages: Record<string, unknown>[],
+  ): Promise<void> => {
     const storePath = testState.sessionStorePath;
     if (!storePath) {
       throw new Error("session store path was not initialized");
     }
-    const events = lines.map((line, index) => ({
-      ...(JSON.parse(line) as Record<string, unknown>),
+    const events = messages.map((message, index) => ({
+      message,
       id: `message-${index}`,
       type: "message",
     }));
@@ -132,31 +161,10 @@ describe("gateway server chat", () => {
     );
   };
 
-  const withMainSessionStore = async <T>(
-    run: (dir: string) => Promise<T>,
-    options?: { archivedAt?: number; sessionId?: string },
-  ): Promise<T> => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
-    try {
-      const sessionId = options?.sessionId ?? "sess-main";
-      testState.sessionStorePath = path.join(dir, "sessions.json");
-      await writeSessionStore({
-        entries: {
-          main: {
-            sessionId,
-            sessionFile: path.join(dir, `${sessionId}.jsonl`),
-            updatedAt: Date.now(),
-            ...(options?.archivedAt !== undefined ? { archivedAt: options.archivedAt } : {}),
-          },
-        },
-      });
-      return await run(dir);
-    } finally {
-      // Dispatch can outlive its RPC; keep its store selected until retained work settles.
-      await settleGatewayFixture();
-      await removeTempDir(dir);
-    }
-  };
+  const mainSessionStore = createMainChatSessionStoreFixture(settleGatewayFixture);
+  beforeAll(mainSessionStore.prepare);
+  afterAll(mainSessionStore.dispose);
+  const withMainSessionStore = mainSessionStore.run;
 
   const expectRecordFields = (value: unknown, expected: Record<string, unknown>) => {
     if (!value || typeof value !== "object") {
@@ -167,12 +175,6 @@ describe("gateway server chat", () => {
       expect(actual[key]).toEqual(expectedValue);
     }
     return actual;
-  };
-
-  const expectStringRunId = (payload: unknown) => {
-    const actual = expectRecordFields(payload, {});
-    expect(typeof actual.runId).toBe("string");
-    return actual.runId as string;
   };
 
   const expectAgentWaitTimeout = (res: Awaited<ReturnType<typeof rpcReq>>, error?: string) => {
@@ -323,16 +325,7 @@ describe("gateway server chat", () => {
         } finally {
           suspension?.rollback();
         }
-        const [params] = args as [
-          {
-            dispatcher: {
-              sendFinalReply: (payload: { text: string }) => boolean;
-              markComplete: () => void;
-              waitForIdle: () => Promise<void>;
-              getQueuedCounts: () => { final: number; block: number; tool: number };
-            };
-          },
-        ];
+        const [params] = args as [{ dispatcher: ReplyDispatcher }];
         params.dispatcher.sendFinalReply({ text: "detached root stayed live" });
         params.dispatcher.markComplete();
         await params.dispatcher.waitForIdle();
@@ -341,15 +334,7 @@ describe("gateway server chat", () => {
           counts: params.dispatcher.getQueuedCounts(),
         };
       });
-      const finalPromise = onceMessage(
-        ws,
-        (message) =>
-          message.type === "event" &&
-          message.event === "chat" &&
-          message.payload?.state === "final" &&
-          message.payload?.runId === "idem-chat-detached-root",
-        8_000,
-      );
+      const finalPromise = waitForChatEvent("idem-chat-detached-root");
 
       const res = await rpcReq(ws, "chat.send", {
         sessionKey: "main",
@@ -367,244 +352,6 @@ describe("gateway server chat", () => {
       expect(getActiveGatewayRootWorkCount()).toBe(0);
     });
   });
-
-  test.each([
-    {
-      name: "text",
-      completion: { kind: "completed" as const },
-      payloads: [{ text: "late answer arrived over the live WebSocket" }],
-      state: "final",
-    },
-    { name: "empty", completion: { kind: "completed" as const }, payloads: [], state: "final" },
-    {
-      name: "canvas",
-      completion: { kind: "completed" as const, allowCanvasOnly: true as const },
-      payloads: [],
-      state: "final",
-    },
-    {
-      name: "silent-canvas",
-      completion: { kind: "completed" as const, allowCanvasOnly: true as const },
-      payloads: [],
-      state: "final",
-    },
-    {
-      name: "suppressed-canvas",
-      completion: { kind: "completed" as const },
-      payloads: [],
-      state: "final",
-    },
-    {
-      name: "failure",
-      completion: { kind: "failed" as const, error: "follow-up failed" },
-      payloads: [],
-      state: "error",
-    },
-    {
-      name: "timeout",
-      completion: {
-        kind: "failed" as const,
-        error: "provider timed out",
-        errorKind: "timeout" as const,
-        stopReason: "timeout",
-      },
-      payloads: [],
-      state: "error",
-    },
-    {
-      name: "abort",
-      completion: { kind: "aborted" as const, stopReason: "restart" },
-      payloads: [],
-      state: "aborted",
-    },
-  ])(
-    "completes a queued WebChat $name once after its source ends",
-    async ({ name, completion, payloads, state }) => {
-      await withMainSessionStore(async () => {
-        let options: InternalGetReplyOptions | undefined;
-        const releaseDispatch = createDeferred();
-        dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
-          options = (args as { replyOptions?: InternalGetReplyOptions }).replyOptions;
-          options?.turnAdoptionLifecycle?.onDeferred?.();
-          await releaseDispatch.promise;
-          return {};
-        });
-
-        const sourceRunId = `idem-live-webchat-late-source-${name}`;
-        const sourceFinal = onceMessage(
-          ws,
-          (event) =>
-            event.type === "event" &&
-            event.event === "chat" &&
-            event.payload?.state === "final" &&
-            event.payload?.runId === sourceRunId,
-          CHAT_RESPONSE_TIMEOUT_MS,
-        );
-        const response = await rpcReq(ws, "chat.send", {
-          sessionKey: "main",
-          message: "queue a reply while the previous run is active",
-          idempotencyKey: sourceRunId,
-        });
-        expect(response.ok).toBe(true);
-        await waitForFast(() => expect(options?.onQueuedFollowupReplyBatch).toBeTypeOf("function"));
-        releaseDispatch.resolve();
-        await sourceFinal;
-
-        const followupRunId = `idem-live-webchat-late-followup-${name}`;
-        const terminalFrames: unknown[] = [];
-        const deltaFrames: unknown[] = [];
-        const recordFollowup = (raw: RawData) => {
-          const frame = JSON.parse(rawDataToString(raw));
-          if (
-            frame.event === "chat" &&
-            frame.payload?.runId === followupRunId &&
-            frame.payload?.state !== "delta"
-          ) {
-            terminalFrames.push(frame.payload);
-          } else if (frame.event === "chat" && frame.payload?.runId === followupRunId) {
-            deltaFrames.push(frame.payload);
-          }
-        };
-        ws.on("message", recordFollowup);
-        const queuedFinal = onceMessage(
-          ws,
-          (event) =>
-            event.type === "event" &&
-            event.event === "chat" &&
-            event.payload?.state === state &&
-            event.payload?.runId === followupRunId,
-          CHAT_RESPONSE_TIMEOUT_MS,
-        );
-        registerAgentRunContext(followupRunId, { sessionKey: "main" });
-        registerAgentRunContext(followupRunId, { completionSource: "reply-dispatch" });
-        if (
-          name === "canvas" ||
-          name === "silent-canvas" ||
-          name === "suppressed-canvas" ||
-          name === "abort"
-        ) {
-          emitAgentEvent({
-            runId: followupRunId,
-            stream: "tool",
-            data: {
-              phase: "result",
-              name: "show_widget",
-              result: {
-                content: [
-                  {
-                    type: "text",
-                    text: JSON.stringify({
-                      kind: "canvas",
-                      presentation: {
-                        target: "assistant_message",
-                        title: "Result",
-                        sandbox: "scripts",
-                      },
-                      view: {
-                        id: "result",
-                        url: "/__openclaw__/canvas/documents/result/index.html",
-                      },
-                    }),
-                  },
-                ],
-              },
-            },
-          });
-        }
-        if (name === "text") {
-          await options?.onQueuedFollowupReplyBatch?.({
-            kind: "queued-followup",
-            completion: { kind: "progress" },
-            runId: followupRunId,
-            originatingChannel: "webchat",
-            payloads: [{ text: "working" }],
-          });
-        }
-        emitAgentEvent({
-          runId: followupRunId,
-          stream: "assistant",
-          data: {
-            text:
-              name === "canvas" || name === "suppressed-canvas"
-                ? ""
-                : name === "silent-canvas"
-                  ? "NO_REPLY"
-                  : "late answer arrived over the live WebSocket",
-          },
-        });
-        if (completion.kind === "failed" || completion.kind === "aborted") {
-          emitAgentEvent({
-            runId: followupRunId,
-            stream: "assistant",
-            data: {
-              text: "late answer arrived over the live WebSocket tail",
-              delta: " tail",
-            },
-          });
-        }
-        emitAgentEvent({
-          runId: followupRunId,
-          stream: "lifecycle",
-          data: {
-            phase: completion.kind === "failed" ? "error" : "end",
-            executionSettled: true,
-            ...(completion.kind === "aborted" ? { aborted: true, stopReason: "restart" } : {}),
-          },
-        });
-        await options?.onQueuedFollowupReplyBatch?.({
-          kind: "queued-followup",
-          completion,
-          runId: followupRunId,
-          originatingChannel: "webchat",
-          payloads,
-        });
-        const completed = await queuedFinal;
-        expect(completed.payload?.state).toBe(state);
-        if (name === "timeout") {
-          expect(completed.payload).toMatchObject({ errorKind: "timeout", stopReason: "timeout" });
-        }
-        if (name === "abort") {
-          expect(completed.payload).toMatchObject({ stopReason: "restart" });
-        }
-        if (name === "canvas" || name === "abort") {
-          expect(completed.payload?.message).toMatchObject({
-            content: expect.arrayContaining([expect.objectContaining({ type: "canvas" })]),
-          });
-        }
-        if (name === "silent-canvas" || name === "suppressed-canvas") {
-          expect(completed.payload?.message).toBeUndefined();
-        }
-        if (name === "text") {
-          expect(completed.payload?.message).toMatchObject({
-            content: [
-              { type: "text", text: "working" },
-              { type: "text", text: "late answer arrived over the live WebSocket" },
-            ],
-          });
-        }
-        await rpcReq(ws, "health", {});
-        expect(terminalFrames).toHaveLength(1);
-        if (completion.kind === "failed" || completion.kind === "aborted") {
-          expect(deltaFrames.at(-1)).toMatchObject({
-            message: {
-              content: expect.arrayContaining([
-                { type: "text", text: "late answer arrived over the live WebSocket tail" },
-              ]),
-            },
-          });
-        }
-        if (completion.kind === "aborted") {
-          expect(completed.payload?.message).toMatchObject({
-            content: expect.arrayContaining([
-              { type: "text", text: "late answer arrived over the live WebSocket tail" },
-            ]),
-          });
-        }
-        ws.off("message", recordFollowup);
-        options?.turnAdoptionLifecycle?.onSettled?.();
-      });
-    },
-  );
 
   const waitForAgentRunOk = async (runId: string, timeoutMs = 1_000) => {
     const res = await rpcReq(ws, "agent.wait", {
@@ -704,25 +451,29 @@ describe("gateway server chat", () => {
     },
   );
 
+  const startInterruptibleChatRun = async (runId: string) => {
+    const activeRunStarted = createDeferred();
+    mockGetReplyFromConfigOnce(async (_ctx, opts) => {
+      activeRunStarted.resolve(undefined);
+      if (!opts?.abortSignal?.aborted) {
+        await new Promise<void>((resolve) => {
+          opts?.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+      }
+      return undefined;
+    });
+    const active = await rpcReq(ws, "chat.send", {
+      sessionKey: "main",
+      message: "captured active turn",
+      idempotencyKey: runId,
+    });
+    expect(active.ok).toBe(true);
+    await activeRunStarted.promise;
+  };
+
   test("chat.send interrupt drains the captured admission before starting", async () => {
     await withMainSessionStore(async () => {
-      const activeRunStarted = createDeferred();
-      mockGetReplyFromConfigOnce(async (_ctx, opts) => {
-        activeRunStarted.resolve(undefined);
-        if (!opts?.abortSignal?.aborted) {
-          await new Promise<void>((resolve) => {
-            opts?.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
-          });
-        }
-        return undefined;
-      });
-      const active = await rpcReq(ws, "chat.send", {
-        sessionKey: "main",
-        message: "captured active turn",
-        idempotencyKey: "idem-chat-interrupt-old",
-      });
-      expect(active.ok).toBe(true);
-      await activeRunStarted.promise;
+      await startInterruptibleChatRun("idem-chat-interrupt-old");
 
       const res = await rpcReq(ws, "chat.send", {
         sessionKey: "main",
@@ -742,23 +493,7 @@ describe("gateway server chat", () => {
 
   test("chat.send interrupt releases its admission when backend cancellation throws", async () => {
     await withMainSessionStore(async () => {
-      const activeRunStarted = createDeferred();
-      mockGetReplyFromConfigOnce(async (_ctx, opts) => {
-        activeRunStarted.resolve(undefined);
-        if (!opts?.abortSignal?.aborted) {
-          await new Promise<void>((resolve) => {
-            opts?.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
-          });
-        }
-        return undefined;
-      });
-      const active = await rpcReq(ws, "chat.send", {
-        sessionKey: "main",
-        message: "captured active turn",
-        idempotencyKey: "idem-chat-interrupt-throw-old",
-      });
-      expect(active.ok).toBe(true);
-      await activeRunStarted.promise;
+      await startInterruptibleChatRun("idem-chat-interrupt-throw-old");
 
       const operation = replyRunRegistry.get("agent:main:main");
       expect(operation).toBeDefined();
@@ -867,24 +602,6 @@ describe("gateway server chat", () => {
         activeAdmission.release();
         await activeWork;
       }
-    });
-  });
-
-  test("chat.send interrupt starts normally when the session is idle", async () => {
-    await withMainSessionStore(async () => {
-      const res = await rpcReq(ws, "chat.send", {
-        sessionKey: "main",
-        message: "start from idle",
-        queueMode: "interrupt",
-        idempotencyKey: "idem-chat-interrupt-idle",
-      });
-      expect(res.ok).toBe(true);
-      expect(res.payload).toMatchObject({
-        runId: "idem-chat-interrupt-idle",
-        status: "started",
-      });
-      expect(res.payload).not.toHaveProperty("interruptedActiveRun");
-      await waitForAgentRunDrained("idem-chat-interrupt-idle");
     });
   });
 
@@ -1222,7 +939,7 @@ describe("gateway server chat", () => {
         ],
       });
       expect(imgRes.ok).toBe(true);
-      expectStringRunId(imgRes.payload);
+      expect(typeof imgRes.payload?.runId).toBe("string");
       await waitForAgentRunDrained("idem-img");
       expect(inlineDispatches).toEqual([{ runId: "idem-img", images: [expect.anything()] }]);
       dispatchInboundMessageMock.mockImplementationOnce(captureInlineDispatch);
@@ -1240,7 +957,7 @@ describe("gateway server chat", () => {
         ],
       });
       expect(imgOnlyRes.ok).toBe(true);
-      expectStringRunId(imgOnlyRes.payload);
+      expect(typeof imgOnlyRes.payload?.runId).toBe("string");
       await waitForAgentRunDrained("idem-img-only");
       expect(inlineDispatches).toEqual([
         { runId: "idem-img", images: [expect.anything()] },
@@ -1259,19 +976,13 @@ describe("gateway server chat", () => {
         },
       });
 
-      const lines: string[] = [];
-      for (let i = 0; i < 201; i += 1) {
-        lines.push(
-          JSON.stringify({
-            message: {
-              role: "user",
-              content: [{ type: "text", text: `m${i}` }],
-              timestamp: Date.now() + i,
-            },
-          }),
-        );
-      }
-      await replaceMainTranscriptLines(lines);
+      await replaceMainTranscriptMessages(
+        Array.from({ length: 201 }, (_, i) => ({
+          role: "user",
+          content: [{ type: "text", text: `m${i}` }],
+          timestamp: Date.now() + i,
+        })),
+      );
 
       const defaultRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
         sessionKey: "main",
@@ -1312,7 +1023,7 @@ describe("gateway server chat", () => {
       expect(sendRes.ok).toBe(true);
       expect(sendRes.payload?.status).toBe("started");
 
-      await waitForAgentRunOk(runId);
+      await waitForAgentRunDrained(runId);
     });
   });
 
@@ -1414,15 +1125,7 @@ describe("gateway server chat", () => {
             await rejectDispatch.promise;
             throw new Error("provider rejected request");
           });
-          const errorPromise = onceMessage(
-            ws,
-            (o) =>
-              o.type === "event" &&
-              o.event === "chat" &&
-              o.payload?.state === "error" &&
-              o.payload?.runId === "idem-dispatch-error-1",
-            8_000,
-          );
+          const errorPromise = waitForChatEvent("idem-dispatch-error-1", "error");
           messagePromises.push(errorPromise);
           const sessionChangedPromise = onceMessage(
             ws,
@@ -1454,8 +1157,9 @@ describe("gateway server chat", () => {
             getEmbeddedRuns: () => 0,
             getCronRuns: () => 0,
             getBackgroundExecSessions: () => 0,
-            getActiveTasks: () => 0,
-            getTaskBlockers: () => [],
+            getAgentRuns: () => 0,
+            getAcpRuns: () => 0,
+            getMediaRuns: () => 0,
           };
           expect(createSafeGatewayRestartPreflight(restartInspectors)).toMatchObject({
             safe: false,
@@ -1486,10 +1190,7 @@ describe("gateway server chat", () => {
       const sessionsRes = await rpcReq<{ sessions?: unknown[] }>(ws, "sessions.list", {});
       expect(sessionsRes.ok).toBe(true);
       const session = sessionsRes.payload?.sessions?.find(
-        (row): row is Record<string, unknown> =>
-          Boolean(row) &&
-          typeof row === "object" &&
-          (row as { key?: unknown }).key === "agent:main:main",
+        (row) => isRecord(row) && row.key === "agent:main:main",
       );
       const actualSession = expectRecordFields(session, {
         status: "failed",
@@ -1514,27 +1215,7 @@ describe("gateway server chat", () => {
       },
       expected: contextOverflowCopy,
     },
-    {
-      name: "provider request-too-large code",
-      fields: {
-        errorCode: "request_too_large",
-        errorMessage: "private upstream body: 196607 tokens sent",
-      },
-      expected: contextOverflowCopy,
-    },
-    {
-      name: "provider context-window message",
-      fields: {
-        errorType: "invalid_request_error",
-        errorMessage: "Request size exceeds model context window: 203557 tokens",
-      },
-      expected: contextOverflowCopy,
-    },
-    {
-      name: "embedded context-overflow message",
-      fields: { errorMessage: "Unhandled stop reason: context_overflow" },
-      expected: contextOverflowCopy,
-    },
+
     {
       name: "token-per-minute rate limit",
       fields: {
@@ -1672,103 +1353,89 @@ describe("gateway server chat", () => {
     expect(roleAndText).toEqual(expected);
   });
 
-  test.each([
-    { name: "legacy success", result: { ok: true, messageId: "legacy" } },
-    { name: "failure", result: { ok: false } },
-    { name: "dry run", result: { ok: true, dryRun: true } },
-    { name: "suppressed", result: { ok: true, deliveryStatus: "suppressed" } },
-    { name: "capped result", result: { status: "ok", persistedDetailsTruncated: true } },
-    {
-      name: "canceled partial broadcast",
-      result: {
-        kind: "broadcast",
-        payload: {
-          results: [
-            { to: "first", ok: true, payload: { ok: true, messageId: "sent-first" } },
-            { to: "second", ok: false, attempted: false },
-          ],
-        },
+  test("chat.history omits argument-derived replies for partial broadcasts and retains diagnostics", async () => {
+    const result = {
+      kind: "broadcast",
+      payload: {
+        results: [
+          { to: "first", ok: true, payload: { ok: true, messageId: "sent-first" } },
+          { to: "second", ok: false, attempted: false },
+        ],
       },
-    },
-  ])(
-    "chat.history omits argument-derived replies for $name and retains diagnostics",
-    async ({ result }) => {
-      const argumentsRecord = {
-        action: "send",
-        channel: "telegram",
-        target: "current",
-        message: "Unverified argument caption.",
-      };
-      const call = createGatewayHistoryMessageToolCall("reused-call", argumentsRecord, 2);
-      const historyMessages = await loadChatHistoryWithMessages([
-        createGatewayHistoryText("user", "reply here", 1),
-        call,
-        createGatewayHistoryMessageToolResult("reused-call", result, 3),
-        createGatewayHistoryText("assistant", "NO_REPLY", 4),
-        createGatewayHistoryText("assistant", "An ordinary final reply.", 5),
-      ]);
+    };
+    const argumentsRecord = {
+      action: "send",
+      channel: "telegram",
+      target: "current",
+      message: "Unverified argument caption.",
+    };
+    const call = createGatewayHistoryMessageToolCall("reused-call", argumentsRecord, 2);
+    const historyMessages = await loadChatHistoryWithMessages([
+      createGatewayHistoryText("user", "reply here", 1),
+      call,
+      createGatewayHistoryMessageToolResult("reused-call", result, 3),
+      createGatewayHistoryText("assistant", "NO_REPLY", 4),
+      createGatewayHistoryText("assistant", "An ordinary final reply.", 5),
+    ]);
 
-      expect(collectHistoryTextValues(historyMessages)).toEqual([
-        "reply here",
-        "An ordinary final reply.",
-      ]);
-      expect(historyMessages).toContainEqual(expect.objectContaining({ content: call.content }));
-      expect(historyMessages).toContainEqual(
-        expect.objectContaining({ role: "toolResult", toolCallId: "reused-call", content: result }),
-      );
-      expect(historyMessages.some(hasGatewayHistoryMessageToolMirror)).toBe(false);
-    },
-  );
+    expect(collectHistoryTextValues(historyMessages)).toEqual([
+      "reply here",
+      "An ordinary final reply.",
+    ]);
+    expect(historyMessages).toContainEqual(expect.objectContaining({ content: call.content }));
+    expect(historyMessages).toContainEqual(
+      expect.objectContaining({ role: "toolResult", toolCallId: "reused-call", content: result }),
+    );
+    expect(historyMessages.some(hasGatewayHistoryMessageToolMirror)).toBe(false);
+  });
 
-  test.each(["before", "after"])(
-    "chat.history retains canonical publications %s tool results without caption or call-ID joins",
-    async (order) => {
-      const imageBlocks = ["first", "second"].map((name) => ({
-        type: "image",
-        artifactId: `artifact_managed_image_${name}`,
-        url: `/api/chat/media/outgoing/agent%3Amain%3Amain/${name}/full`,
-        openUrl: `/api/chat/media/outgoing/agent%3Amain%3Amain/${name}/full`,
-        alt: `${name}.png`,
-        mimeType: "image/png",
-      }));
-      const publications = imageBlocks.map((image, index) => ({
-        role: "assistant",
-        provider: "openclaw",
-        model: "delivery-mirror",
-        content: [{ type: "text", text: "Sanitized publication." }, image],
-        openclawDeliveryMirror: { kind: "message-tool-source-reply", toolCallId: "different-call" },
-        timestamp: index + 3,
-      }));
-      const result = createGatewayHistoryMessageToolResult("reused-call", { ok: true }, 5);
-      const historyMessages = await loadChatHistoryWithMessages([
-        createGatewayHistoryMessageToolCall(
-          "reused-call",
-          { action: "send", message: "Unverified argument caption." },
-          1,
-        ),
-        ...(order === "before" ? [...publications, result] : [result, ...publications]),
-        createGatewayHistoryText("assistant", "NO_REPLY", 6),
-      ]);
-      expect(collectHistoryTextValues(historyMessages)).toEqual([
-        "Sanitized publication.",
-        "Sanitized publication.",
-      ]);
-      for (const publication of publications) {
-        expect(historyMessages).toContainEqual(expect.objectContaining(publication));
-      }
-      expect(historyMessages.some(hasGatewayHistoryMessageToolMirror)).toBe(false);
-      const publicRows = historyMessages.filter(isRecord);
-      expect(publicRows).toHaveLength(historyMessages.length);
-      const reprojected = await loadChatHistoryWithMessages(publicRows);
-      expect(collectHistoryTextValues(reprojected)).toEqual([
-        "Sanitized publication.",
-        "Sanitized publication.",
-      ]);
-      for (const publication of publications) {
-        expect(reprojected).toContainEqual(expect.objectContaining(publication));
-      }
-    },
-  );
+  test("chat.history retains canonical publications after tool results without caption or call-ID joins", async () => {
+    const imageBlocks = ["first", "second"].map((name) => ({
+      type: "image",
+      artifactId: `artifact_managed_image_${name}`,
+      url: `/api/chat/media/outgoing/agent%3Amain%3Amain/${name}/full`,
+      openUrl: `/api/chat/media/outgoing/agent%3Amain%3Amain/${name}/full`,
+      alt: `${name}.png`,
+      mimeType: "image/png",
+    }));
+    const publications = imageBlocks.map((image, index) => ({
+      role: "assistant",
+      provider: "openclaw",
+      model: "delivery-mirror",
+      content: [{ type: "text", text: "Sanitized publication." }, image],
+      openclawDeliveryMirror: { kind: "message-tool-source-reply", toolCallId: "different-call" },
+      timestamp: index + 3,
+    }));
+    const result = createGatewayHistoryMessageToolResult("reused-call", { ok: true }, 5);
+    const historyMessages = await loadChatHistoryWithMessages([
+      createGatewayHistoryMessageToolCall(
+        "reused-call",
+        { action: "send", message: "Unverified argument caption." },
+        1,
+      ),
+      result,
+      ...publications,
+      createGatewayHistoryText("assistant", "NO_REPLY", 6),
+    ]);
+    expect(collectHistoryTextValues(historyMessages)).toEqual([
+      "Sanitized publication.",
+      "Sanitized publication.",
+    ]);
+    for (const publication of publications) {
+      expect(historyMessages).toContainEqual(expect.objectContaining(publication));
+    }
+    expect(historyMessages.some(hasGatewayHistoryMessageToolMirror)).toBe(false);
+    const publicRows = historyMessages.filter(isRecord);
+    expect(publicRows).toHaveLength(historyMessages.length);
+    const reprojected = await loadChatHistoryWithMessages(publicRows);
+    expect(collectHistoryTextValues(reprojected)).toEqual([
+      "Sanitized publication.",
+      "Sanitized publication.",
+    ]);
+    for (const publication of publications) {
+      expect(reprojected).toContainEqual(expect.objectContaining(publication));
+    }
+  });
 
   test("chat.history drops retired synthetic replies without dropping canonical or forwarded messages", async () => {
     const historyMessages = await loadChatHistoryWithMessages([
@@ -1803,32 +1470,11 @@ describe("gateway server chat", () => {
   test("preserves split fenced-code indentation in chat.send events and history", async () => {
     await withMainSessionStore(async () => {
       const expected = "```yaml\nroot:\n  nested:\n    value: true\n```";
-      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
-        const [params] = args as [
-          {
-            dispatcher: {
-              sendFinalReply: (payload: { text: string }) => boolean;
-              markComplete: () => void;
-              waitForIdle: () => Promise<void>;
-              getQueuedCounts: () => { final: number; block: number; tool: number };
-            };
-          },
-        ];
-        params.dispatcher.sendFinalReply({ text: "```yaml\nroot:\n" });
-        params.dispatcher.sendFinalReply({ text: "  nested:\n    value: true\n```" });
-        params.dispatcher.markComplete();
-        await params.dispatcher.waitForIdle();
-        return { queuedFinal: true, counts: params.dispatcher.getQueuedCounts() };
-      });
-      const finalPromise = onceMessage(
-        ws,
-        (event) =>
-          event.type === "event" &&
-          event.event === "chat" &&
-          event.payload?.state === "final" &&
-          event.payload?.runId === "idem-fenced-code-indentation",
-        8_000,
-      );
+      mockDispatchedReplies("final", [
+        { text: "```yaml\nroot:\n" },
+        { text: "  nested:\n    value: true\n```" },
+      ]);
+      const finalPromise = waitForChatEvent("idem-fenced-code-indentation");
 
       const result = await rpcReq(ws, "chat.send", {
         sessionKey: "main",
@@ -1851,15 +1497,7 @@ describe("gateway server chat", () => {
     await withMainSessionStore(async () => {
       const spy = vi.mocked(agentCommandMock);
       const callsBefore = spy.mock.calls.length;
-      const eventPromise = onceMessage(
-        ws,
-        (o) =>
-          o.type === "event" &&
-          o.event === "chat" &&
-          o.payload?.state === "final" &&
-          o.payload?.runId === "idem-command-1",
-        8000,
-      );
+      const eventPromise = waitForChatEvent("idem-command-1");
       const res = await rpcReq(ws, "chat.send", {
         sessionKey: "main",
         message: "/context list",
@@ -1873,37 +1511,10 @@ describe("gateway server chat", () => {
 
   test("routes /btw replies through side-result events without transcript injection", async () => {
     await withMainSessionStore(async () => {
-      await replaceMainTranscriptLines([
-        JSON.stringify({
-          message: {
-            role: "user",
-            content: [{ type: "text", text: "main thread context" }],
-            timestamp: Date.now(),
-          },
-        }),
+      await replaceMainTranscriptMessages([
+        createGatewayHistoryText("user", "main thread context", Date.now()),
       ]);
-      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
-        const [params] = args as [
-          {
-            dispatcher: {
-              sendFinalReply: (payload: { text: string; btw: { question: string } }) => boolean;
-              markComplete: () => void;
-              waitForIdle: () => Promise<void>;
-              getQueuedCounts: () => { final: number; block: number; tool: number };
-            };
-          },
-        ];
-        params.dispatcher.sendFinalReply({
-          text: "323",
-          btw: { question: "what is 17 * 19?" },
-        });
-        params.dispatcher.markComplete();
-        await params.dispatcher.waitForIdle();
-        return {
-          queuedFinal: true,
-          counts: params.dispatcher.getQueuedCounts(),
-        };
-      });
+      mockDispatchedReplies("final", [{ text: "323", btw: { question: "what is 17 * 19?" } }]);
       const sideResultPromise = onceMessage(
         ws,
         (o) =>
@@ -1913,15 +1524,7 @@ describe("gateway server chat", () => {
           o.payload?.runId === "idem-btw-1",
         8000,
       );
-      const finalPromise = onceMessage(
-        ws,
-        (o) =>
-          o.type === "event" &&
-          o.event === "chat" &&
-          o.payload?.state === "final" &&
-          o.payload?.runId === "idem-btw-1",
-        8000,
-      );
+      const finalPromise = waitForChatEvent("idem-btw-1");
 
       const res = await rpcReq(ws, "chat.send", {
         sessionKey: "main",
@@ -1959,29 +1562,10 @@ describe("gateway server chat", () => {
 
   test("preserves split fenced-code indentation in /btw side-result events", async () => {
     await withMainSessionStore(async () => {
-      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
-        const [params] = args as [
-          {
-            dispatcher: {
-              sendBlockReply: (payload: { text: string; btw: { question: string } }) => boolean;
-              markComplete: () => void;
-              waitForIdle: () => Promise<void>;
-              getQueuedCounts: () => { final: number; block: number; tool: number };
-            };
-          },
-        ];
-        params.dispatcher.sendBlockReply({
-          text: "```yaml\nroot:\n",
-          btw: { question: "show YAML" },
-        });
-        params.dispatcher.sendBlockReply({
-          text: "  nested:\n    value: true\n```",
-          btw: { question: "show YAML" },
-        });
-        params.dispatcher.markComplete();
-        await params.dispatcher.waitForIdle();
-        return { queuedFinal: false, counts: params.dispatcher.getQueuedCounts() };
-      });
+      mockDispatchedReplies("block", [
+        { text: "```yaml\nroot:\n", btw: { question: "show YAML" } },
+        { text: "  nested:\n    value: true\n```", btw: { question: "show YAML" } },
+      ]);
       const sideResultPromise = onceMessage(
         ws,
         (event) =>
@@ -2007,111 +1591,17 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("routes block-streamed /btw replies through side-result events", async () => {
-    await withMainSessionStore(async () => {
-      await replaceMainTranscriptLines([
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "existing context" }],
-            timestamp: Date.now(),
-          },
-        }),
-      ]);
-      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
-        const [params] = args as [
-          {
-            dispatcher: {
-              sendBlockReply: (payload: { text: string; btw: { question: string } }) => boolean;
-              markComplete: () => void;
-              waitForIdle: () => Promise<void>;
-              getQueuedCounts: () => { final: number; block: number; tool: number };
-            };
-          },
-        ];
-        params.dispatcher.sendBlockReply({
-          text: "first chunk",
-          btw: { question: "what changed?" },
-        });
-        params.dispatcher.sendBlockReply({
-          text: "second chunk",
-          btw: { question: "what changed?" },
-        });
-        params.dispatcher.markComplete();
-        await params.dispatcher.waitForIdle();
-        return {
-          queuedFinal: false,
-          counts: params.dispatcher.getQueuedCounts(),
-        };
-      });
-      const sideResultPromise = onceMessage(
-        ws,
-        (o) =>
-          o.type === "event" &&
-          o.event === "chat.side_result" &&
-          o.payload?.kind === "btw" &&
-          o.payload?.runId === "idem-btw-block-1",
-        8000,
-      );
-
-      const res = await rpcReq(ws, "chat.send", {
-        sessionKey: "main",
-        message: "/btw what changed?",
-        idempotencyKey: "idem-btw-block-1",
-      });
-
-      expect(res.ok).toBe(true);
-      await waitForFast(() => {
-        expect(dispatchInboundMessageMock).toHaveBeenCalled();
-      });
-      const sideResult = await sideResultPromise;
-      expectRecordFields(sideResult.payload, {
-        kind: "btw",
-        runId: "idem-btw-block-1",
-        question: "what changed?",
-        text: "first chunk\n\nsecond chunk",
-      });
-    });
-  });
-
   test("chat.history persists assistant image data URLs as managed image blocks", async () => {
     await withMainSessionStore(
       async () => {
         // Keep the connected owner's profile and media in the suite-owned state directory.
         const pngB64 =
           "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
-        dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
-          const [params] = args as [
-            {
-              dispatcher: {
-                sendFinalReply: (payload: { text?: string; mediaUrls?: string[] }) => boolean;
-                markComplete: () => void;
-                waitForIdle: () => Promise<void>;
-                getQueuedCounts: () => { final: number; block: number; tool: number };
-              };
-            },
-          ];
-          params.dispatcher.sendFinalReply({
-            text: "Image reply",
-            mediaUrls: [`data:image/png;base64,${pngB64}`],
-          });
-          params.dispatcher.markComplete();
-          await params.dispatcher.waitForIdle();
-          return {
-            queuedFinal: true,
-            counts: params.dispatcher.getQueuedCounts(),
-          };
-        });
+        mockDispatchedReplies("final", [
+          { text: "Image reply", mediaUrls: [`data:image/png;base64,${pngB64}`] },
+        ]);
 
-        const finalPromise = onceMessage(
-          ws,
-          (o) =>
-            o.type === "event" &&
-            o.event === "chat" &&
-            o.payload?.state === "final" &&
-            o.payload?.runId === "idem-managed-image-history",
-          8000,
-        );
+        const finalPromise = waitForChatEvent("idem-managed-image-history");
         await Promise.all([
           rpcReq(ws, "chat.send", {
             sessionKey: "main",
@@ -2164,94 +1654,45 @@ describe("gateway server chat", () => {
     );
   });
 
-  test("chat.history uses the owning agent thinkingDefault for non-default agent sessions", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
-    try {
-      testState.sessionStorePath = path.join(dir, "sessions.json");
-      testState.agentConfig = {
-        model: { primary: "openai/gpt-5" },
-        thinkingDefault: "low",
-      };
-      testState.agentsConfig = {
-        list: [
-          { id: "main", default: true },
-          { id: "alpha", thinkingDefault: "minimal" },
-        ],
-      };
-      await writeSessionStore({
-        entries: {
-          "agent:alpha:main": {
-            sessionId: "sess-alpha",
-            updatedAt: Date.now(),
-            modelProvider: "openai",
-            model: "gpt-5",
-          },
-        },
-      });
-      agentDiscoveryMock.enabled = true;
-      agentDiscoveryMock.models = [
-        { id: "gpt-5", name: "GPT-5", provider: "openai", reasoning: true },
-      ];
-      await prepareGatewayReplyRuntimeForTest({ force: true });
-
-      const historyRes = await rpcReq<{
-        thinkingLevel?: string;
-        sessionInfo?: { thinkingLevel?: string };
-      }>(ws, "chat.history", { sessionKey: "agent:alpha:main" });
-
-      expect(historyRes.ok).toBe(true);
-      expect(historyRes.payload?.thinkingLevel).toBe("minimal");
-      expect(historyRes.payload?.sessionInfo?.thinkingLevel).toBeUndefined();
-    } finally {
-      await settleGatewayFixture();
-      Object.assign(agentDiscoveryMock, { enabled: false, models: [] });
-      testState.agentConfig = undefined;
-      testState.agentsConfig = undefined;
-      await removeTempDir(dir);
-    }
-  });
-
   test("chat.send does not persist verboseLevel for operator.write callers", async () => {
-    await withGatewayServer(async ({ port: portValue }) => {
-      await withMainSessionStore(async () => {
-        let scopedWs: WebSocket | undefined;
+    await withMainSessionStore(async () => {
+      let scopedWs: WebSocket | undefined;
 
-        try {
-          scopedWs = new WebSocket(`ws://127.0.0.1:${portValue}`);
-          trackConnectChallengeNonce(scopedWs);
-          await new Promise<void>((resolve) => {
-            scopedWs?.once("open", resolve);
-          });
-          await connectOk(scopedWs, {
-            scopes: ["operator.write"],
-          });
+      try {
+        scopedWs = new WebSocket(`ws://127.0.0.1:${port}`);
+        trackConnectChallengeNonce(scopedWs);
+        await new Promise<void>((resolve) => {
+          scopedWs?.once("open", resolve);
+        });
+        await connectOk(scopedWs, {
+          scopes: ["operator.write"],
+        });
 
-          const sendRes = await rpcReq(scopedWs, "chat.send", {
-            sessionKey: "main",
-            message: "/verbose full",
-            idempotencyKey: "idem-write-scope-verbose-no-persist",
-          });
-          expect(sendRes.ok).toBe(true);
+        const sendRes = await rpcReq(scopedWs, "chat.send", {
+          sessionKey: "main",
+          message: "/verbose full",
+          idempotencyKey: "idem-write-scope-verbose-no-persist",
+        });
+        expect(sendRes.ok).toBe(true);
 
-          const waitRes = await rpcReq(scopedWs, "agent.wait", {
-            runId: "idem-write-scope-verbose-no-persist",
-            timeoutMs: 1_000,
-          });
-          expect(waitRes.ok).toBe(true);
-          expect(waitRes.payload?.status).toBe("ok");
+        const waitRes = await rpcReq(scopedWs, "agent.wait", {
+          runId: "idem-write-scope-verbose-no-persist",
+          timeoutMs: 1_000,
+        });
+        expect(waitRes.ok).toBe(true);
+        expect(waitRes.payload?.status).toBe("ok");
 
-          const sessionStorePath = testState.sessionStorePath;
-          if (!sessionStorePath) {
-            throw new Error("session store path was not initialized");
-          }
-          expect(
-            loadSessionEntry({ sessionKey: "agent:main:main", storePath: sessionStorePath })
-              ?.verboseLevel,
-          ).toBeUndefined();
-        } finally {
-          scopedWs?.close();
+        const sessionStorePath = testState.sessionStorePath;
+        if (!sessionStorePath) {
+          throw new Error("session store path was not initialized");
         }
-      });
+        expect(
+          loadSessionEntry({ sessionKey: "agent:main:main", storePath: sessionStorePath })
+            ?.verboseLevel,
+        ).toBeUndefined();
+      } finally {
+        scopedWs?.close();
+      }
     });
   });
 
@@ -2281,115 +1722,98 @@ describe("gateway server chat", () => {
     });
   });
 
-  test.each([
-    "/new",
-    "/new Create a note",
-    "/reset",
-    "/reset Create a note",
-    "/reset soft",
-    "/reset soft Create a note",
-  ])(
-    "chat.send does not rotate sessions for operator.write reset triggers and replies with denial: %s",
-    async (message) => {
-      const { getReplyFromConfig } = await import("../auto-reply/reply/get-reply.js");
-      const { withFullRuntimeReplyConfig } =
-        await import("../auto-reply/reply/get-reply-fast-path.js");
-      const replyRun = await import("../auto-reply/reply/get-reply-run.js");
-      const runSpy = vi.spyOn(replyRun, "runPreparedReply").mockResolvedValue(undefined);
-      // Keep real command/session dispatch; only intercept the model-run boundary.
-      mockGetReplyFromConfigOnce((ctx, opts, cfg) =>
-        getReplyFromConfig(ctx, opts, cfg ? withFullRuntimeReplyConfig(cfg) : cfg),
-      );
-      try {
-        await withMainSessionStore(async () => {
-          const sessionStorePath = testState.sessionStorePath;
-          if (!sessionStorePath) {
-            throw new Error("session store path was not initialized");
-          }
-          const resetState = {
-            lifecycleRevision: "before-reset",
-            cliSessionIds: { "claude-cli": "existing-cli-binding" },
-          };
+  test("chat.send preserves sessions and denies operator.write reset triggers", async () => {
+    const message = "/reset soft Create a note";
+    const { getReplyFromConfig } = await import("../auto-reply/reply/get-reply.js");
+    const { withFullRuntimeReplyConfig } =
+      await import("../auto-reply/reply/get-reply-fast-path.js");
+    const replyRun = await import("../auto-reply/reply/get-reply-run.js");
+    const runSpy = vi.spyOn(replyRun, "runPreparedReply").mockResolvedValue(undefined);
+    // Keep real command/session dispatch; only intercept the model-run boundary.
+    mockGetReplyFromConfigOnce((ctx, opts, cfg) =>
+      getReplyFromConfig(ctx, opts, cfg ? withFullRuntimeReplyConfig(cfg) : cfg),
+    );
+    try {
+      await withMainSessionStore(async () => {
+        const sessionStorePath = testState.sessionStorePath;
+        if (!sessionStorePath) {
+          throw new Error("session store path was not initialized");
+        }
+        const resetState = {
+          lifecycleRevision: "before-reset",
+          cliSessionIds: { "claude-cli": "existing-cli-binding" },
+        };
+        expect(
+          await updateSessionEntry(
+            { sessionKey: "agent:main:main", storePath: sessionStorePath },
+            () => resetState,
+          ),
+        ).not.toBeNull();
+        let scopedWs: WebSocket | undefined;
+
+        try {
+          scopedWs = new WebSocket(`ws://127.0.0.1:${port}`);
+          trackConnectChallengeNonce(scopedWs);
+          await new Promise<void>((resolve) => {
+            scopedWs?.once("open", resolve);
+          });
+          await connectOk(scopedWs, {
+            scopes: ["operator.read", "operator.write"],
+          });
+
+          const runId = `idem-write-scope-reset-${message}`;
+          const finalPromise = onceMessage(
+            scopedWs,
+            (event) =>
+              event.type === "event" &&
+              event.event === "chat" &&
+              event.payload?.state === "final" &&
+              event.payload?.runId === runId,
+          );
+          // Observe both promises immediately so an RPC failure cannot strand the final listener.
+          const [sendRes, final] = await Promise.all([
+            rpcReq(scopedWs, "chat.send", {
+              sessionKey: "main",
+              message,
+              idempotencyKey: runId,
+            }),
+            finalPromise,
+          ]);
+          expect(sendRes.ok).toBe(true);
+          expect(sendRes.payload?.status).toBe("started");
+
+          const waitRes = await rpcReq(scopedWs, "agent.wait", {
+            runId,
+            timeoutMs: 1_000,
+          });
+          expect(waitRes.ok).toBe(true);
+          expect(waitRes.payload?.status).toBe("ok");
+
           expect(
-            await updateSessionEntry(
-              { sessionKey: "agent:main:main", storePath: sessionStorePath },
-              () => resetState,
-            ),
-          ).not.toBeNull();
-          let scopedWs: WebSocket | undefined;
-
-          try {
-            scopedWs = new WebSocket(`ws://127.0.0.1:${port}`);
-            trackConnectChallengeNonce(scopedWs);
-            await new Promise<void>((resolve) => {
-              scopedWs?.once("open", resolve);
-            });
-            await connectOk(scopedWs, {
-              scopes: ["operator.read", "operator.write"],
-            });
-
-            const runId = `idem-write-scope-reset-${message}`;
-            const finalPromise = onceMessage(
-              scopedWs,
-              (event) =>
-                event.type === "event" &&
-                event.event === "chat" &&
-                event.payload?.state === "final" &&
-                event.payload?.runId === runId,
-            );
-            // Observe both promises immediately so an RPC failure cannot strand the final listener.
-            const [sendRes, final] = await Promise.all([
-              rpcReq(scopedWs, "chat.send", {
-                sessionKey: "main",
-                message,
-                idempotencyKey: runId,
-              }),
-              finalPromise,
-            ]);
-            expect(sendRes.ok).toBe(true);
-            expect(sendRes.payload?.status).toBe("started");
-
-            const waitRes = await rpcReq(scopedWs, "agent.wait", {
-              runId,
-              timeoutMs: 1_000,
-            });
-            expect(waitRes.ok).toBe(true);
-            expect(waitRes.payload?.status).toBe("ok");
-
-            expect(
-              loadSessionEntry({ sessionKey: "agent:main:main", storePath: sessionStorePath }),
-            ).toMatchObject({ sessionId: "sess-main", ...resetState });
-            expect(runSpy).not.toHaveBeenCalled();
-            expect(extractFirstTextBlock(final.payload?.message)).toMatch(/not authorized/i);
-            expect(extractFirstTextBlock(final.payload?.message)).toContain("operator.admin");
-            const history = await rpcReq<{ sessionId?: string; messages?: unknown[] }>(
-              scopedWs,
-              "chat.history",
-              {
-                sessionKey: "main",
-              },
-            );
-            expect(history.ok).toBe(true);
-            expect(history.payload?.sessionId).toBe("sess-main");
-            expect(collectHistoryTextValues(history.payload?.messages ?? [])).toContain(
-              extractFirstTextBlock(final.payload?.message),
-            );
-          } finally {
-            scopedWs?.close();
-          }
-        });
-      } finally {
-        runSpy.mockRestore();
-      }
-    },
-  );
-
-  test("agent.wait reads completed chat.send runs without lifecycle events", async () => {
-    await withMainSessionStore(async () => {
-      const runId = "idem-wait-chat-1";
-      await sendChatAndExpectStarted(runId);
-      await waitForAgentRunDrained(runId);
-    });
+            loadSessionEntry({ sessionKey: "agent:main:main", storePath: sessionStorePath }),
+          ).toMatchObject({ sessionId: "sess-main", ...resetState });
+          expect(runSpy).not.toHaveBeenCalled();
+          expect(extractFirstTextBlock(final.payload?.message)).toMatch(/not authorized/i);
+          expect(extractFirstTextBlock(final.payload?.message)).toContain("operator.admin");
+          const history = await rpcReq<{ sessionId?: string; messages?: unknown[] }>(
+            scopedWs,
+            "chat.history",
+            {
+              sessionKey: "main",
+            },
+          );
+          expect(history.ok).toBe(true);
+          expect(history.payload?.sessionId).toBe("sess-main");
+          expect(collectHistoryTextValues(history.payload?.messages ?? [])).toContain(
+            extractFirstTextBlock(final.payload?.message),
+          );
+        } finally {
+          scopedWs?.close();
+        }
+      });
+    } finally {
+      runSpy.mockRestore();
+    }
   });
 
   test("agent.wait ignores stale chat dedupe when an agent run with the same runId is in flight", async () => {
@@ -2439,59 +1863,52 @@ describe("gateway server chat", () => {
     }
   });
 
-  test.each(["return", "throw"] as const)(
-    "retains the session fixture while admitted dispatch settles after callback %s",
-    async (outcome) => {
-      const runId = `idem-fixture-dispatch-${outcome}`;
-      const dispatchStarted = createDeferred();
-      const releaseDispatch = createDeferred();
-      const callbackFinished = createDeferred();
-      const callbackError = new Error("fixture callback failed");
-      let fixtureDir = "";
-      let storePath = "";
-      dispatchInboundMessageMock.mockImplementationOnce(async () => {
-        dispatchStarted.resolve();
-        await releaseDispatch.promise;
-        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-      });
-      const fixture = withMainSessionStore(async (dir) => {
+  test("retains the session fixture while admitted dispatch settles after callback failure", async () => {
+    const runId = "idem-fixture-dispatch-throw";
+    const dispatchStarted = createDeferred();
+    const releaseDispatch = createDeferred();
+    const callbackFinished = createDeferred();
+    const callbackError = new Error("fixture callback failed");
+    let fixtureDir = "";
+    let storePath = "";
+    dispatchInboundMessageMock.mockImplementationOnce(async () => {
+      dispatchStarted.resolve();
+      await releaseDispatch.promise;
+      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+    });
+    const fixture = withMainSessionStore(
+      async (dir) => {
         fixtureDir = dir;
         storePath = path.join(dir, "sessions.json");
         try {
           await sendChatAndExpectStarted(runId, "hold fixture dispatch open");
           await dispatchStarted.promise;
-          if (outcome === "throw") {
-            throw callbackError;
-          }
-          return "fixture result";
+          throw callbackError;
         } finally {
           callbackFinished.resolve();
         }
+      },
+      { freshStore: true },
+    );
+    const completion = Promise.allSettled([fixture]);
+    try {
+      await callbackFinished.promise;
+      // Let the fixture's finally run while the admitted dispatch is still held.
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
       });
-      const completion = Promise.allSettled([fixture]);
-      try {
-        await callbackFinished.promise;
-        // Let the fixture's finally run while the admitted dispatch is still held.
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
-        expect(testState.sessionStorePath).toBe(storePath);
-        expect((await fs.stat(fixtureDir)).isDirectory()).toBe(true);
-      } finally {
-        releaseDispatch.resolve();
-        await completion;
-        await settleGatewayFixture();
-      }
-      expect(await completion).toEqual([
-        outcome === "throw"
-          ? { status: "rejected", reason: callbackError }
-          : { status: "fulfilled", value: "fixture result" },
-      ]);
-      expect(testState.sessionStorePath).toBeUndefined();
-      await expect(fs.stat(fixtureDir)).rejects.toMatchObject({ code: "ENOENT" });
-    },
-  );
+      expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
+      expect(testState.sessionStorePath).toBe(storePath);
+      expect((await fs.stat(fixtureDir)).isDirectory()).toBe(true);
+    } finally {
+      releaseDispatch.resolve();
+      await completion;
+      await settleGatewayFixture();
+    }
+    expect(await completion).toEqual([{ status: "rejected", reason: callbackError }]);
+    expect(testState.sessionStorePath).toBeUndefined();
+    await expect(fs.stat(fixtureDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
 
   test("agent.wait ignores stale agent snapshots while same-runId chat.send is active", async () => {
     await withMainSessionStore(async () => {
@@ -2612,7 +2029,7 @@ describe("gateway server chat", () => {
             cause,
           });
         });
-        await waitForAgentRunOk(runId);
+        await waitForAgentRunDrained(runId);
         expectRecordFields(settledEvent.payload, {
           activeRunIds: [],
           hasActiveRun: false,

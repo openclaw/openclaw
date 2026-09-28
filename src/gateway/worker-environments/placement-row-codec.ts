@@ -297,23 +297,17 @@ export function transitionValues(
       ? null
       : patch.workspaceBaseManifestRef === undefined
         ? current.workspaceBaseManifestRef
-        : patch.workspaceBaseManifestRef === null
-          ? null
-          : required(patch.workspaceBaseManifestRef, "workspace base manifest ref"),
+        : nullableRequired(patch.workspaceBaseManifestRef, "workspace base manifest ref"),
     remote_workspace_dir: clearsWorkerMetadata
       ? null
       : patch.remoteWorkspaceDir === undefined
         ? current.remoteWorkspaceDir
-        : patch.remoteWorkspaceDir === null
-          ? null
-          : required(patch.remoteWorkspaceDir, "remote workspace directory"),
+        : nullableRequired(patch.remoteWorkspaceDir, "remote workspace directory"),
     worker_bundle_hash: clearsWorkerMetadata
       ? null
       : patch.workerBundleHash === undefined
         ? current.workerBundleHash
-        : patch.workerBundleHash === null
-          ? null
-          : required(patch.workerBundleHash, "worker bundle hash"),
+        : nullableRequired(patch.workerBundleHash, "worker bundle hash"),
     last_transcript_ack_cursor: clearsWorkerMetadata
       ? null
       : patch.lastTranscriptAckCursor === undefined
@@ -328,16 +322,12 @@ export function transitionValues(
       ? null
       : patch.recoveryError === undefined
         ? current.recoveryError
-        : patch.recoveryError === null
-          ? null
-          : required(patch.recoveryError, "recovery error"),
+        : nullableRequired(patch.recoveryError, "recovery error"),
     terminal_reason:
       to === "failed"
         ? patch.terminalReason === undefined
           ? current.terminalReason
-          : patch.terminalReason === null
-            ? null
-            : required(patch.terminalReason, "terminal reason")
+          : nullableRequired(patch.terminalReason, "terminal reason")
         : null,
     terminal_at_ms: to === "reclaimed" || to === "failed" ? (current.terminalAtMs ?? nowMs) : null,
     turn_claim_owner: null,

@@ -1,9 +1,9 @@
 // Agent database path helpers resolve per-agent persisted database paths.
 import { existsSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
+import { probePathSuffixAliasesSync, resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
 import { resolveStateDir } from "../config/paths.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { probePathSuffixAliasesSync, resolvePathPrefixSync } from "../infra/fs-safe-advanced.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 

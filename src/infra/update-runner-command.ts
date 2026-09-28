@@ -19,19 +19,6 @@ export const MAX_LOG_CHARS = 8000;
 // A run shares its heartbeat callback across steps; weak keys do not retain completed runs.
 const warnedHeartbeats = new WeakSet<() => void>();
 
-function mergeCommandEnvironments(
-  baseEnv: NodeJS.ProcessEnv | undefined,
-  overrideEnv: NodeJS.ProcessEnv | undefined,
-): NodeJS.ProcessEnv | undefined {
-  if (!baseEnv) {
-    return overrideEnv;
-  }
-  if (!overrideEnv) {
-    return baseEnv;
-  }
-  return { ...baseEnv, ...overrideEnv };
-}
-
 export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
   const { runCommand, name, argv, cwd, timeoutMs, env, progress, stepIndex, totalSteps } = opts;
   const command = argv.join(" ");
@@ -157,17 +144,19 @@ export async function buildUpdateCommandRunner(
   runCommand?: CommandRunner,
 ): Promise<{ defaultCommandEnv: NodeJS.ProcessEnv | undefined; runCommand: CommandRunner }> {
   const defaultCommandEnv = await createGlobalInstallEnv();
-  if (runCommand) {
-    return { defaultCommandEnv, runCommand };
-  }
   return {
     defaultCommandEnv,
-    runCommand: async (argv, options) =>
-      await runCommandWithTimeout(argv, {
-        ...options,
-        env: mergeCommandEnvironments(defaultCommandEnv, options.env),
-        // Package-manager trees must not outlive a timed-out updater.
-        killProcessTree: true,
-      }),
+    runCommand:
+      runCommand ??
+      (async (argv, options) =>
+        await runCommandWithTimeout(argv, {
+          ...options,
+          env:
+            defaultCommandEnv && options.env
+              ? { ...defaultCommandEnv, ...options.env }
+              : (defaultCommandEnv ?? options.env),
+          // Package-manager trees must not outlive a timed-out updater.
+          killProcessTree: true,
+        })),
   };
 }
