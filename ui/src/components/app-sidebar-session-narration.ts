@@ -628,6 +628,7 @@ export class SidebarSessionNarrationController {
     const previous = this.tools.get(key);
     if (
       previous?.name !== activity.name ||
+      previous.itemId !== activity.itemId ||
       previous.toolCallId !== activity.toolCallId ||
       previous.text !== activity.text
     ) {

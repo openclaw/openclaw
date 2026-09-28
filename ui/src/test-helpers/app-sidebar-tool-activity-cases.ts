@@ -172,4 +172,102 @@ describe("Sidebar tool activity", () => {
       controller.disconnect();
     },
   );
+
+  it.each([
+    { flag: "hideFromChannelProgress", toolCallId: undefined },
+    { flag: "suppressChannelProgress", toolCallId: undefined },
+    { flag: "hideFromChannelProgress", toolCallId: "" },
+    { flag: "suppressChannelProgress", toolCallId: "" },
+  ])("withdraws the matching item with $flag and call ID $toolCallId", ({ flag, toolCallId }) => {
+    const { controller, tools } = createToolController();
+    const emit = (itemId: string, runId: string, data: Record<string, unknown>, stream = "item") =>
+      controller.handleEvent(
+        gatewayEvent("session.tool", {
+          sessionKey: "agent:main:run",
+          runId,
+          stream,
+          data: {
+            kind: "tool",
+            itemId,
+            name: "read",
+            title: "Read",
+            phase: "update",
+            toolCallId,
+            ...data,
+          },
+        }),
+      );
+    emit("current-item", "run-2", { progressText: "Public item progress" });
+    expect(tools.at(-1)?.get("agent:main:run")?.text).toBe("Public item progress");
+    const count = tools.length;
+    emit("other-item", "run-2", { [flag]: true });
+    emit("current-item", "run-old", { [flag]: true });
+    emit("current-item", "", { [flag]: true });
+    // A raw call ID is not an item ID, even when their strings happen to match.
+    emit("current-item", "run-2", { toolCallId: "current-item", [flag]: true }, "tool");
+    expect(tools).toHaveLength(count);
+    emit("current-item", "run-2", { [flag]: true });
+    expect(tools.at(-1)?.has("agent:main:run")).toBe(false);
+    expect(tools).toHaveLength(count + 1);
+  });
+
+  it.each([
+    { toolCallId: undefined, flag: "hideFromChannelProgress" },
+    { toolCallId: "shared-call", flag: "hideFromChannelProgress" },
+    { toolCallId: "shared-call", flag: "suppressChannelProgress" },
+  ])(
+    "keeps replacement item identity with call ID $toolCallId and $flag",
+    ({ toolCallId, flag }) => {
+      const { controller, tools } = createToolController();
+      const emit = (itemId: string, hidden = false) =>
+        controller.handleEvent(
+          gatewayEvent("session.tool", {
+            sessionKey: "agent:main:run",
+            runId: "run-2",
+            stream: "item",
+            data: {
+              kind: "tool",
+              itemId,
+              name: "read",
+              title: "Read",
+              phase: "update",
+              toolCallId,
+              progressText: "Public progress",
+              [flag]: hidden,
+            },
+          }),
+        );
+      emit("old-item");
+      emit("new-item");
+      emit("old-item", true);
+      expect(tools.at(-1)?.get("agent:main:run")?.text).toBe("Public progress");
+      emit("new-item", true);
+      expect(tools.at(-1)?.has("agent:main:run")).toBe(false);
+    },
+  );
+
+  it("retains prepared item and call identity across matching item and raw-tool frames", () => {
+    const { controller, tools } = createToolController();
+    const emit = (stream: string, data: Record<string, unknown>) =>
+      controller.handleEvent(
+        gatewayEvent("session.tool", {
+          sessionKey: "agent:main:run",
+          runId: "run-2",
+          stream,
+          data,
+        }),
+      );
+    const item = { kind: "tool", itemId: "item", name: "read", title: "Read", phase: "update" };
+    emit("item", { ...item, toolCallId: "call", progressText: "Public progress" });
+    emit("tool", { name: "read", toolCallId: "call", phase: "update" });
+    const count = tools.length;
+    emit("item", { ...item, toolCallId: "other-call", hideFromChannelProgress: true });
+    expect(tools).toHaveLength(count);
+    emit("item", { ...item, hideFromChannelProgress: true });
+    expect(tools.at(-1)?.has("agent:main:run")).toBe(false);
+    emit("item", { ...item, toolCallId: "call", progressText: "Public progress" });
+    emit("item", { ...item, progressText: "New public progress" });
+    emit("tool", { toolCallId: "call", hideFromChannelProgress: true });
+    expect(tools.at(-1)?.has("agent:main:run")).toBe(false);
+  });
 });
