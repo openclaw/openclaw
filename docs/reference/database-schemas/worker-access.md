@@ -94,6 +94,14 @@ not recreate a missing file. Preparing a new database directory and quarantining
 orphaned sidecars require the existing schema-maintenance owner; later permission
 hardening never recreates a removed directory.
 
+Cached shared-state actors retain their original database-generation admission.
+The owner checks each matching actor separately from the caller: an invalid idle
+candidate retires before reuse, including after relocation or inode reuse. Active
+callbacks must settle before replacement. A current actor can serve a new schema
+scope, but a caller's ended scope still rejects with its original error.
+This prevents migrations from recreating retired paths or acquiring leases in the
+wrong database. Existing update drivers and stored schemas need no migration.
+
 Each SQLite broker worker admits up to 128 running and queued requests. A busy
 worker's admission queue does not consume another worker's request capacity;
 independent workers continue serving their databases. Requests on the same worker

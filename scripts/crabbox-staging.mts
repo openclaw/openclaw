@@ -1939,6 +1939,7 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
       source: manifest.source,
       witness: selectedWitness!,
       payloadRoot: root,
+      automatic: options.automatic,
       signal: options.signal,
     });
     if (!witness.ok) {

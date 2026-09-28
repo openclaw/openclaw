@@ -44,9 +44,13 @@ import {
   type WorkerWorkspaceRecoveryFailureReport,
 } from "./workspace-recovery.test-support.js";
 
-const runReclaimPreparation: Parameters<
-  typeof createWorkerPlacementDispatchService
->[0]["runReclaimPreparation"] = async ({ run, authorize, pendingOperations }) => {
+type DispatchOptions = Parameters<typeof createWorkerPlacementDispatchService>[0];
+
+const runReclaimPreparation: DispatchOptions["runReclaimPreparation"] = async ({
+  run,
+  authorize,
+  pendingOperations,
+}) => {
   await pendingOperations?.settled;
   return await run(authorize);
 };
@@ -56,18 +60,10 @@ export function createHarness(
   placementStore: PlacementStore,
   options: {
     environmentService?: WorkerEnvironmentService;
-    runReclaimPreparation?: Parameters<
-      typeof createWorkerPlacementDispatchService
-    >[0]["runReclaimPreparation"];
-    runReclaimBarrier?: Parameters<
-      typeof createWorkerPlacementDispatchService
-    >[0]["runReclaimBarrier"];
-    runFailedReclaimBarrier?: Parameters<
-      typeof createWorkerPlacementDispatchService
-    >[0]["runFailedReclaimBarrier"];
-    prepareGatewayMove?: Parameters<
-      typeof createWorkerPlacementDispatchService
-    >[0]["prepareGatewayMove"];
+    runReclaimPreparation?: DispatchOptions["runReclaimPreparation"];
+    runReclaimBarrier?: DispatchOptions["runReclaimBarrier"];
+    runFailedReclaimBarrier?: DispatchOptions["runFailedReclaimBarrier"];
+    prepareGatewayMove?: DispatchOptions["prepareGatewayMove"];
     failAt?: DispatchStage;
     destroyFails?: boolean;
     destroyFailureCount?: number;
@@ -84,12 +80,8 @@ export function createHarness(
     localVerifyFails?: boolean;
     resumeFails?: boolean;
     workspacePath?: string;
-    resolveWorkspace?: Parameters<
-      typeof createWorkerPlacementDispatchService
-    >[0]["resolveWorkspace"];
-    withPreparedRecovery?: Parameters<
-      typeof createWorkerPlacementDispatchService
-    >[0]["withPreparedRecovery"];
+    resolveWorkspace?: DispatchOptions["resolveWorkspace"];
+    withPreparedRecovery?: DispatchOptions["withPreparedRecovery"];
     requiresNodeEnrollment?: boolean;
     priorWorkspaceResultConflict?: { paths: string[]; stagedResultRef: string };
     priorWorkspaceResultConflictLookup?: WorkspaceResultConflictLookup;
@@ -100,24 +92,18 @@ export function createHarness(
     terminalizedReclaimError?: Error;
     environmentGeneration?: number;
     failMoveAfterBegin?: boolean;
-    runMoveBarrier?: Parameters<typeof createWorkerPlacementDispatchService>[0]["runMoveBarrier"];
+    runMoveBarrier?: DispatchOptions["runMoveBarrier"];
     recoveryBarrierError?: Error;
     isShuttingDown?: () => boolean;
-    prepareAcceptedWorkspacePublication?: Parameters<
-      typeof createWorkerPlacementDispatchService
-    >[0]["prepareAcceptedWorkspacePublication"];
-    publishAcceptedWorkspace?: Parameters<
-      typeof createWorkerPlacementDispatchService
-    >[0]["publishAcceptedWorkspace"];
+    prepareAcceptedWorkspacePublication?: DispatchOptions["prepareAcceptedWorkspacePublication"];
+    publishAcceptedWorkspace?: DispatchOptions["publishAcceptedWorkspace"];
     beforeMoveBegin?: (abandoned: { runId: string } | undefined) => Promise<void>;
     afterMoveBegin?: () => void;
     afterDestroy?: () => Promise<void> | void;
     afterReconcile?: () => Promise<void> | void;
     afterStopTunnel?: () => Promise<void> | void;
     deviceRunnerAvailable?: boolean;
-    isCurrentNodePlacement?: Parameters<
-      typeof createWorkerPlacementDispatchService
-    >[0]["isCurrentNodePlacement"];
+    isCurrentNodePlacement?: DispatchOptions["isCurrentNodePlacement"];
   } = {},
 ) {
   const reconciledManifestRef = MANIFEST_REF.replaceAll("b", "c");
@@ -200,6 +186,8 @@ export function createHarness(
     },
     abandonWorkspaceResult: (pending) => placementStore.abandonWorkspaceResult(pending),
     releaseTurn: (claim) => placementStore.releaseTurn(claim),
+    retainInterruptedTurnWorkspace: (claim, assertCurrent) =>
+      placementStore.retainInterruptedTurnWorkspace(claim, assertCurrent),
     updateWorkspaceBaseManifest: (params) => placementStore.updateWorkspaceBaseManifest(params),
     startDispatch: (params, dispatchOptions) => {
       log.push("placement:requested");

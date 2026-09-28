@@ -94,10 +94,20 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/crabbox-merge-bypass.sh"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/merge-outcome.sh"
 
 verify_prior_ci_admin() {
-  local pr="$1" head="$2" actor proof
+  local pr="$1" head="$2" actor proof review_ci
   [ "${MERGE_REPO_HOST:-}" = github.com ] || { echo "Prior-CI admin admission currently requires github.com." >&2; return 1; }
   actor=$(pr_gh_writer_login "$MERGE_REPO_HOST") || return 1
-  proof=$(node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" verify "$MERGE_ADMIN_EVIDENCE" "$MERGE_REPO_NAME" "$pr" "$head" "$actor") || return 1
+  proof=$(node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" verify "$MERGE_ADMIN_EVIDENCE" "$MERGE_REPO_NAME" "$pr" "$head" "$actor" "$PR_MAIN_SHA") || return 1
+  review_ci=$(read_prepared_ci_failure) || return 1
+  if [ "$(printf '%s\n' "$proof" | jq -r .changeKind)" = pre-existing-failure ]; then
+    [ -n "$review_ci" ] && printf '%s\n' "$review_ci" | jq -e --argjson proof "$proof" \
+      '.head == $proof.head and .runId == $proof.runId and .runAttempt == $proof.runAttempt' >/dev/null || {
+      echo "Pre-existing CI admission requires matching failed-run attribution in the prepared review." >&2; return 1;
+    }
+  elif [ -n "$review_ci" ]; then
+    echo "A failing review cannot use the prior-success conflict-resolution exception." >&2
+    return 1
+  fi
   if [ -n "$MERGE_PRIOR_CI_PROOF" ] && [ "$MERGE_PRIOR_CI_PROOF" != "$proof" ]; then
     echo "Prior-CI admin evidence or authority changed during admission; no merge requested." >&2
     return 1
@@ -230,6 +240,12 @@ merge_verify() {
   require_artifact .local/prep.env || return 1
   require_artifact .local/gates.env || return 1
   require_prepared_review "$pr" || return 1
+  local prepared_ci_failure
+  prepared_ci_failure=$(read_prepared_ci_failure) || return 1
+  if [ -n "$prepared_ci_failure" ] && [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" != true ]; then
+    echo "A prepared review with pre-existing CI failures requires explicit confirmed admin admission." >&2
+    return 1
+  fi
   local correction_authority correction_gate_oid=""
   correction_authority=$(correction_review_snapshot "$pr") || return 1
   if [ -n "$correction_authority" ]; then
@@ -378,10 +394,12 @@ merge_verify() {
   fi
 
   if [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" = true ]; then
-    # The independent verifier permits only pending/skipped normal CI, never a
-    # failed check. Repeat against the merge owner's current check observation.
-    printf '%s\n' "$checks_json" | jq -e 'all(.[]; .bucket == "pass" or
-      (.name == "openclaw/ci-gate" and (.bucket == "pending" or .bucket == "skipping")))' >/dev/null || return 1
+    # Only the independently qualified current CI failure may use the failure
+    # variant. Other checks and the original prior-green route stay strict.
+    printf '%s\n' "$checks_json" | jq -e --argjson proof "$MERGE_PRIOR_CI_PROOF" 'all(.[]; .bucket == "pass" or
+      (.name == "openclaw/ci-gate" and
+        (if $proof.changeKind == "pre-existing-failure" then (.bucket == "fail" or .bucket == "cancel")
+         else (.bucket == "pending" or .bucket == "skipping") end)))' >/dev/null || return 1
   elif [ "$failed_required" -gt 0 ]; then
     if [ "$github_pending" = true ]; then
       echo "Required checks are failing; fix them before requesting auto-merge." >&2
@@ -977,12 +995,8 @@ merge_run() {
     verify_prior_ci_admin "$pr" "$PREP_HEAD_SHA" || return 1
     merge_outcome_stable "$pr" || return 1
     # No awaited operation may replace the operator's bytes after validation.
-    node --input-type=module -e '
-      import { readFileSync, lstatSync } from "node:fs";
-      import { createHash } from "node:crypto";
-      const [path, expected] = process.argv.slice(1);
-      if (!lstatSync(path).isFile() || createHash("sha256").update(readFileSync(path)).digest("hex") !== expected) process.exit(1);
-    ' "$MERGE_ADMIN_EVIDENCE" "$(printf '%s\n' "$MERGE_PRIOR_CI_PROOF" | jq -r .evidenceSha256)" || return 1
+    node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" unchanged \
+      "$MERGE_ADMIN_EVIDENCE" "$(printf '%s\n' "$MERGE_PRIOR_CI_PROOF" | jq -r .evidenceSha256)" >/dev/null || return 1
     crabbox_final_main_sha="$observed_main"
   fi
   local intent attempt
@@ -1053,8 +1067,13 @@ merge_run() {
   local comment_body MERGE_COMPLETION_COMMENT_URL
   comment_body=$(merge_outcome_comment_body "$pr") || return 1
   if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
-    printf -v comment_body '%s\n- Prior successful CI: %s\n- Subsequent conflict changes: reviewed at `%s`; scoped validation retained as operator evidence. No current-head CI success is claimed.' \
-      "$comment_body" "$(printf '%s\n' "$MERGE_PRIOR_CI_PROOF" | jq -r .ciUrl)" "$PREP_HEAD_SHA"
+    if [ "$(printf '%s\n' "$MERGE_PRIOR_CI_PROOF" | jq -r .changeKind)" = pre-existing-failure ]; then
+      printf -v comment_body '%s\n- CI with explicitly attributed pre-existing failures: %s\n- Exact prepared head: `%s`; source attribution and independent qualification retained as operator evidence. Cancelled jobs remain unrun coverage. No current-head CI success is claimed.' \
+        "$comment_body" "$(printf '%s\n' "$MERGE_PRIOR_CI_PROOF" | jq -r .ciUrl)" "$PREP_HEAD_SHA"
+    else
+      printf -v comment_body '%s\n- Prior successful CI: %s\n- Subsequent conflict changes: reviewed at `%s`; scoped validation retained as operator evidence. No current-head CI success is claimed.' \
+        "$comment_body" "$(printf '%s\n' "$MERGE_PRIOR_CI_PROOF" | jq -r .ciUrl)" "$PREP_HEAD_SHA"
+    fi
   elif [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = "true" ]; then
     local crabbox_check_url
     local ci_gate_url
