@@ -2,6 +2,8 @@ import Foundation
 import OpenClawKit
 
 struct TalkModeGatewayConfigState {
+    /// True when values come from a successful Gateway `talk.config` response.
+    let sourcedFromGateway: Bool
     let snapshot: TalkConfigSnapshot
     let voiceId: String?
     let modelId: String?
@@ -58,6 +60,7 @@ enum TalkModeGatewayConfigParser {
         }
 
         return TalkModeGatewayConfigState(
+            sourcedFromGateway: true,
             snapshot: common,
             voiceId: resolvedVoice,
             modelId: resolvedModel,
@@ -81,6 +84,7 @@ enum TalkModeGatewayConfigParser {
         let resolvedApiKey = envApiKey?.isEmpty == false ? envApiKey : nil
 
         return TalkModeGatewayConfigState(
+            sourcedFromGateway: false,
             snapshot: TalkConfigSnapshot(
                 nil, defaultProvider: "elevenlabs", defaultSilenceTimeoutMs: defaultSilenceTimeoutMs),
             voiceId: resolvedVoice,

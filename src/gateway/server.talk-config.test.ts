@@ -151,6 +151,7 @@ describe("gateway talk.config", () => {
         providers: { [PROVIDER]: { voiceId: "voice-123", apiKey: "secret-key-abc" } },
         speechLocale: "ru-RU",
         silenceTimeoutMs: 1500,
+        idleTimeoutS: 30,
       },
       session: { mainKey: "main-test" },
       ui: { seamColor: "#112233" },
@@ -159,7 +160,7 @@ describe("gateway talk.config", () => {
       const payload = await fetchOkConfig(ws);
       expectProvider(payload?.config.talk, "voice-123", redacted);
       expect(payload?.config).toMatchObject({
-        talk: { speechLocale: "ru-RU", silenceTimeoutMs: 1500 },
+        talk: { speechLocale: "ru-RU", silenceTimeoutMs: 1500, idleTimeoutS: 30 },
         session: { mainKey: "main-test" },
         ui: { seamColor: "#112233" },
       });

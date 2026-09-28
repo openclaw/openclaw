@@ -8,6 +8,7 @@ public struct TalkConfigSnapshot: Sendable {
     public let voiceAliases: [String: String]
     public let interruptOnSpeech: Bool?
     public let silenceTimeoutMs: Int
+    public let idleTimeoutS: Int?
     public let speechLocaleID: String?
     public let realtime: TalkRealtimeConfigSnapshot
 
@@ -26,6 +27,7 @@ public struct TalkConfigSnapshot: Sendable {
         self.voiceAliases = TalkVoiceAliases.normalizedMap(selection?.config["voiceAliases"])
         self.interruptOnSpeech = talk?["interruptOnSpeech"]?.boolValue
         self.silenceTimeoutMs = TalkConfigParsing.resolvedSilenceTimeoutMs(talk, fallback: defaultSilenceTimeoutMs)
+        self.idleTimeoutS = TalkConfigParsing.resolvedIdleTimeoutS(talk)
         self.speechLocaleID = TalkConfigParsing.resolvedSpeechLocaleID(talk)
         self.realtime = TalkRealtimeConfigSnapshot(talk?["realtime"]?.dictionaryValue)
     }

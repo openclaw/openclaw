@@ -312,6 +312,8 @@ extension TalkModeRuntime {
         logger.info(
             "talk realtime ready provider=\(realtimeProvider ?? "default", privacy: .public) " +
                 "model=\(realtimeModelId ?? "default", privacy: .public)")
+        self.lastInteractionAt = Date()
+        self.startSilenceMonitor()
     }
 
     func applyRealtimeTalkConfig(
@@ -617,6 +619,7 @@ extension TalkModeRuntime {
               !self.isPaused
         else { return }
         let phase: TalkModePhase = speaking ? .speaking : .listening
+        self.lastInteractionAt = Date()
         self.phase = phase
         _ = await self.projectRealtimeRelay(relayGeneration, session) {
             TalkModeController.shared.updatePhase(phase)
@@ -629,6 +632,9 @@ extension TalkModeRuntime {
               isEnabled,
               !self.isPaused
         else { return }
+        if level > 0.01 {
+            self.lastSpeechEnergyAt = Date()
+        }
         _ = await self.projectRealtimeRelay(relayGeneration, session) {
             TalkModeController.shared.updateLevel(level)
         }
@@ -657,6 +663,7 @@ extension TalkModeRuntime {
         let text = transcript.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         guard transcript.role == "user" else { return }
+        self.lastInteractionAt = Date()
         if transcript.isFinal {
             phase = .thinking
             _ = await self.projectRealtimeRelay(relayGeneration, session) {
