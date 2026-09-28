@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
@@ -12,11 +11,9 @@ import {
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { placementTurnOwner, type WorkerPlacementExecutionMode } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
-import {
-  matchesWorkspaceResultClaim,
-  type WorkerWorkspacePendingResult,
-} from "./placement-workspace-result.js";
+import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
+import { matchesWorkspaceResultClaim } from "./placement-workspace-result.js";
+import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 
 const roots = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -40,28 +37,16 @@ async function activePlacement(
   const store = createWorkerSessionPlacementStore({ database, now: () => 1000 });
   const identity = { sessionId, agentId: "main", sessionKey: `agent:main:${sessionId}` };
   const environmentId = `environment-${sessionId}`;
-  seedAttachedPlacementEnvironment(database, { environmentId, sessionId, ownerEpoch: 7 });
-  let placement = await store.startDispatch({ ...identity, executionMode });
-  for (const step of [
-    { to: "provisioning", patch: { environmentId } },
-    { to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },
+  const placement = await advancePlacementFixtureToActive(
+    store,
+    database,
+    { ...identity, executionMode },
     {
-      to: "starting",
-      patch: {
-        workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
-        remoteWorkspaceDir: "/workspace",
-      },
+      environmentId,
+      remoteWorkspaceDir: "/workspace",
+      seedEnvironment: "before-dispatch",
     },
-    { to: "active", patch: { activeOwnerEpoch: 7 } },
-  ] as const) {
-    placement = store.transition({
-      sessionId,
-      from: placement.state,
-      expectedGeneration: placement.generation,
-      ...step,
-    });
-  }
-  assert(placement.state === "active", "Expected an active placement fixture");
+  );
   return { store, placement, identity };
 }
 

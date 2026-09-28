@@ -98,7 +98,6 @@ import {
   type ChannelKind,
   type GatewayReloadPlan,
 } from "./config-reload-plan.js";
-import { doesReloadAffectProviderAuth } from "./config-reload-recovery.js";
 import type { GatewayHotReloadApplication } from "./config-reload-status.types.js";
 import {
   createPluginLifecycleLeaseTestClock,
@@ -119,7 +118,9 @@ import {
 import { abortPendingChannelReloads } from "./server-reload-generation.js";
 import {
   captureConfigWriteListener,
+  createTestConfigRevisionProjector,
   createConfigWriteListenerRef,
+  createManagedReloadAuthFixture,
   createManagedRestartSequenceConfigs,
   createConfigWriteNotification,
   createCronRestartPlan,
@@ -199,7 +200,7 @@ function createGatewayReloadHandlers(
   const { requestRecoveryRestart, ...handlerParams } = params;
   let state = createDefaultGatewayReloadState();
   return createGatewayReloadHandlersImpl({
-    scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
+    scheduler: createTestGatewayScheduler("fake-timers"),
     getPluginRegistry: requireActivePluginChannelRegistry,
     deps: {} as never,
     broadcast: vi.fn(),
@@ -234,7 +235,7 @@ function createGatewayReloadHandlers(
 function startManagedGatewayConfigReloader(params: ManagedReloaderTestParams) {
   let state = createDefaultGatewayReloadState();
   return startManagedGatewayConfigReloaderImpl({
-    scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
+    scheduler: createTestGatewayScheduler("fake-timers"),
     getPluginRegistry: requireActivePluginChannelRegistry,
     minimalTestGateway: false,
     initialPluginInstallRecords: {},
@@ -272,10 +273,7 @@ function startManagedGatewayConfigReloader(params: ManagedReloaderTestParams) {
     commitRuntimePolicy: vi.fn(),
     acceptTerminalConfig: vi.fn(),
     ...params,
-    configRevisionProjector: params.configRevisionProjector ?? {
-      projectRawHash: (hash) => hash,
-      projectResolvedHash: (hash) => hash,
-    },
+    configRevisionProjector: params.configRevisionProjector ?? createTestConfigRevisionProjector(),
     initialSnapshotRawHash: params.initialSnapshotRawHash ?? null,
     initialAuthoredConfig: params.initialAuthoredConfig ?? {},
     initialSnapshotValid: params.initialSnapshotValid ?? true,
@@ -512,6 +510,7 @@ async function withReloadChannelManager(
   };
   setActivePluginRegistry(registry.current);
   const manager = createChannelManager({
+    scheduler: createTestGatewayScheduler(),
     getRuntimeConfig,
     getPluginRegistry: () => registry.current,
     channelLogs: {},
@@ -861,18 +860,20 @@ async function runManagedOwnershipScenario(params: {
   queueRevert: boolean;
   secretProviderChanged?: boolean;
   sharedAuthRotation?: boolean;
+  resolvedProviderRotation?: "channel" | "agent";
   /** Makes secrets activation resolve to a different object than it received. */
   resolveToDistinctConfig?: boolean;
 }) {
-  const auth = params.sharedAuthRotation
-    ? {
-        mode: "token" as const,
-        token: { source: "file" as const, provider: "default", id: "/token" },
-      }
-    : undefined;
+  const { auth, providerConfig, providerSource } = createManagedReloadAuthFixture(params);
   const initialConfig = {
+    ...providerSource,
     gateway: {
-      reload: { mode: params.sharedAuthRotation ? ("hot" as const) : ("off" as const) },
+      reload: {
+        mode:
+          params.sharedAuthRotation || params.resolvedProviderRotation
+            ? ("hot" as const)
+            : ("off" as const),
+      },
       ...(auth ? { auth } : {}),
     },
     ...(params.secretProviderChanged
@@ -881,6 +882,7 @@ async function runManagedOwnershipScenario(params: {
     hooks: { enabled: true, token: "test-token", path: "/old" },
   } satisfies OpenClawConfig;
   const configA = {
+    ...providerSource,
     gateway: {
       reload: {
         mode: params.kind === "restart" ? ("restart" as const) : ("hot" as const),
@@ -892,13 +894,18 @@ async function runManagedOwnershipScenario(params: {
       token: "test-token",
       path: params.kind === "noop" ? "/old" : "/a",
     },
-    ...(params.kind === "noop" && !params.sharedAuthRotation
+    ...(params.kind === "noop" && !params.sharedAuthRotation && !params.resolvedProviderRotation
       ? { talk: { realtime: { instructions: "updated instructions" } } }
       : {}),
     ...(params.secretProviderChanged
       ? { secrets: { providers: { default: { source: "file" as const, path: "/new" } } } }
       : {}),
     ...(params.loggingChanged ? { logging: { level: "debug" as const } } : {}),
+    ...(params.resolvedProviderRotation === "channel"
+      ? { channels: { slack: { streaming: { mode: "partial" as const } } } }
+      : params.resolvedProviderRotation === "agent"
+        ? { agents: { entries: { main: { model: "fixture/next" }, other: {} } } }
+        : {}),
   } satisfies OpenClawConfig;
   const configB = structuredClone(initialConfig);
   const snapshot = (config: OpenClawConfig) => makePreparedSecretsSnapshot(config);
@@ -918,13 +925,16 @@ async function runManagedOwnershipScenario(params: {
         createConfigWriteNotification(configB, "hash-b", 2, "runtime-b", "source-b"),
       );
     }
-    if (!params.resolveToDistinctConfig && !params.sharedAuthRotation) {
+    if (
+      !params.resolveToDistinctConfig &&
+      !params.sharedAuthRotation &&
+      !params.resolvedProviderRotation
+    ) {
       return snapshot(config);
     }
-    // Real secret resolution returns a NEW config object. Returning the input
-    // unchanged is what let a rebuild against the source candidate look correct.
     const resolved: OpenClawConfig = {
       ...config,
+      ...(params.resolvedProviderRotation ? providerConfig("synthetic-new-provider-key") : {}),
       ...(params.sharedAuthRotation
         ? { gateway: { ...config.gateway, auth: { mode: "token", token: "new-shared-token" } } }
         : {}),
@@ -932,12 +942,18 @@ async function runManagedOwnershipScenario(params: {
     resolvedConfigs.push(resolved);
     return makePreparedSecretsSnapshot(config, { config: resolved });
   });
-  const initialRuntimeConfig: OpenClawConfig = params.sharedAuthRotation
-    ? {
-        ...initialConfig,
-        gateway: { ...initialConfig.gateway, auth: { mode: "token", token: "old-shared-token" } },
-      }
-    : initialConfig;
+  const initialRuntimeConfig: OpenClawConfig = {
+    ...initialConfig,
+    ...(params.resolvedProviderRotation ? providerConfig("synthetic-old-provider-key") : {}),
+    ...(params.sharedAuthRotation
+      ? {
+          gateway: { ...initialConfig.gateway, auth: { mode: "token", token: "old-shared-token" } },
+        }
+      : {}),
+  };
+  if (params.resolvedProviderRotation) {
+    hoisted.runtimeConfig.value = initialRuntimeConfig;
+  }
   const generation = (token: string | undefined) =>
     resolveSharedGatewaySessionGeneration({ mode: "token", token, allowTailscale: false });
   const sharedState = new SharedGatewaySessionGenerationState({
@@ -1162,6 +1178,7 @@ async function withManagedChannelSecretFixture(
   const initialSnapshot = await prepare(initialSource);
   activateSecretsRuntimeSnapshot(initialSnapshot);
   const manager = createChannelManager({
+    scheduler: createTestGatewayScheduler(),
     getRuntimeConfig: () => getActiveSecretsRuntimeSnapshot()?.config ?? initialSnapshot.config,
     getPluginRegistry: requireActivePluginChannelRegistry,
     channelLogs: {},
@@ -1552,7 +1569,6 @@ describe("managed reload transaction ownership", () => {
     expect(result.startChannel).not.toHaveBeenCalled();
     expect(result.stopChannel).not.toHaveBeenCalled();
     expect(result.reloadPlugins).not.toHaveBeenCalled();
-    expect(result.setState).not.toHaveBeenCalled();
     expect(result.requestRecoveryRestart).not.toHaveBeenCalled();
     expect(result.commitRuntimePolicy).toHaveBeenCalledOnce();
     expect(result.reconcileRuntimePolicy).toHaveBeenCalledOnce();
@@ -1571,44 +1587,62 @@ describe("managed reload transaction ownership", () => {
     expect(hoisted.refreshPreparedModelRuntimeSnapshots).not.toHaveBeenCalled();
   });
 
-  it("rebuilds a no-op secret-provider publication from the resolved committed config", async () => {
-    // Regression: the rebuild used the source-derived candidate. When secret
-    // resolution yields a different object, the rebuilt owner carries an
-    // identity no reader supplies, so every strict catalog read rejects it --
-    // reviving the failure on the very fallback meant to be safe.
-    const pluginMetadataSnapshot = {} as never;
-    const result = await runManagedOwnershipScenario({
-      kind: "noop",
-      queueRevert: false,
-      secretProviderChanged: true,
-      resolveToDistinctConfig: true,
-      getPluginMetadataSnapshot: () => pluginMetadataSnapshot,
-    });
+  it.each(["secret-provider", "channel", "agent"] as const)(
+    "fences resolved provider credentials before committing a %s edit",
+    async (edit) => {
+      const plugin: ChannelPlugin = {
+        ...createChannelTestPluginBase({ id: "slack" }),
+        reload: { configPrefixes: ["channels.slack"], noopPrefixes: ["channels.slack.streaming"] },
+      };
+      setActivePluginRegistry(createTestRegistry([{ pluginId: "slack", plugin, source: "test" }]));
+      const pluginMetadataSnapshot = {} as never;
+      const result = await runManagedOwnershipScenario({
+        kind: "noop",
+        queueRevert: false,
+        secretProviderChanged: edit === "secret-provider",
+        resolvedProviderRotation: edit === "secret-provider" ? undefined : edit,
+        resolveToDistinctConfig: true,
+        getPluginMetadataSnapshot: () => pluginMetadataSnapshot,
+      });
 
-    const resolved = result.resolvedConfigs.at(-1);
-    expect(resolved).toBeDefined();
-    expect(resolved).not.toBe(result.configA);
-    expect(hoisted.advancePreparedModelRuntimeConfig).not.toHaveBeenCalled();
-    expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledOnce();
-    // Identity, not deep equality: the resolved config is a clone of the source
-    // candidate, so toHaveBeenCalledWith would match either object and prove
-    // nothing about which one the rebuild actually used.
-    const [rebuiltWith, options] = hoisted.refreshPreparedModelRuntimeSnapshots.mock.calls[0] ?? [];
-    expect(rebuiltWith).toBe(resolved);
-    expect(rebuiltWith).not.toBe(result.configA);
-    expect(options).toEqual({
-      gatewayLifecycle: true,
-      catalogMode: "static",
-      allowGatewaySubagentBinding: true,
-      pluginMetadataSnapshot,
-    });
-  });
+      expect(hoisted.markPreparedModelRuntimeSnapshotsStale).toHaveBeenCalledExactlyOnceWith(
+        "prepared model runtime owner is stale before config publication",
+        { waitForReplacement: true },
+      );
+      expect(hoisted.markPreparedModelRuntimeSnapshotsStale).toHaveBeenCalledBefore(
+        result.commitRuntimePolicy,
+      );
+      expect(hoisted.advancePreparedModelRuntimeConfig).not.toHaveBeenCalled();
+      expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledOnce();
+      const [config, options] = hoisted.refreshPreparedModelRuntimeSnapshots.mock.calls[0]!;
+      expect(config).toBe(result.resolvedConfigs.at(-1));
+      expect(config).not.toBe(result.configA);
+      expect(options).toEqual({
+        catalogMode: "static",
+        joinSupersedingPublication: true,
+        allowGatewaySubagentBinding: true,
+        pluginMetadataSnapshot,
+      });
+      if (edit !== "secret-provider") {
+        expect(config.models?.providers?.fixture?.apiKey).toBe("synthetic-new-provider-key");
+        expect(result.prepareTerminalConfig.mock.calls[0]?.[0].changedPaths).toEqual([
+          edit === "channel" ? "channels.slack.streaming.mode" : "agents.entries.main.model",
+        ]);
+      }
+      expect(result.startChannel).not.toHaveBeenCalled();
+      expect(result.stopChannel).not.toHaveBeenCalled();
+      expect(result.reloadPlugins).not.toHaveBeenCalled();
+      expect(result.requestRecoveryRestart).not.toHaveBeenCalled();
+    },
+  );
 
   it("applies a current in-process hot config", async () => {
     const result = await runManagedOwnershipScenario({ kind: "hot", queueRevert: false });
 
-    // Hot plans rebuild prepared owners. Advancing the stamp in place is reserved for no-op plans.
-    expect(hoisted.advancePreparedModelRuntimeConfig).not.toHaveBeenCalled();
+    expect(hoisted.advancePreparedModelRuntimeConfig).toHaveBeenCalledExactlyOnceWith(
+      result.configA,
+    );
+    expect(hoisted.refreshPreparedModelRuntimeSnapshots).not.toHaveBeenCalled();
     expect(result.activateRuntimeSecrets.prepareSnapshot).toHaveBeenCalledOnce();
     expect(result.commitRuntimePolicy).toHaveBeenCalledOnce();
     expect(result.acceptTerminalConfig).toHaveBeenCalledOnce();
@@ -1639,68 +1673,6 @@ describe("managed reload transaction ownership", () => {
       expect(getActiveSecretsRuntimeSnapshot()?.sourceConfig).toEqual(result.configB);
     },
   );
-});
-
-describe("prepared provider auth reload invalidation", () => {
-  it.each([
-    "auth",
-    "env.vars.OPENAI_API_KEY",
-    "models.providers.openai.api",
-    "plugins.entries.openai.enabled",
-    "secrets.providers.default.path",
-    "agent.model",
-    "agents",
-    "agents.list",
-    "agents.defaults",
-    "agents.defaults.model",
-    "agents.defaults.heartbeat",
-    "agents.defaults.heartbeat.model",
-    "agents.defaults.compaction",
-    "agents.defaults.compaction.model",
-    "agents.defaults.compaction.provider",
-    "agents.defaults.compaction.memoryFlush",
-    "agents.defaults.compaction.memoryFlush.model",
-    "agents.defaults.subagents",
-    "agents.defaults.subagents.model.primary",
-    "agents.entries",
-    "agents.entries.main.model",
-    "agents.entries.main.heartbeat.model",
-  ])("invalidates prepared auth for config path %s", (changedPath) => {
-    expect(doesReloadAffectProviderAuth(createHotTailPlan({ changedPaths: [changedPath] }))).toBe(
-      true,
-    );
-  });
-
-  it.each([
-    "agents.defaults.heartbeat.target",
-    "agents.entries.main.heartbeat.every",
-    "agents.defaults.compaction.enabled",
-    "agents.defaults.compaction.memoryFlush.enabled",
-    "agent.heartbeat",
-    "agents.entries.main.tools",
-    "agents.defaults.subagents.thinking",
-    "logging.level",
-  ])("can retain prepared auth for unrelated config path %s", (changedPath) => {
-    expect(doesReloadAffectProviderAuth(createHotTailPlan({ changedPaths: [changedPath] }))).toBe(
-      false,
-    );
-  });
-
-  it("invalidates prepared auth when plugins reload without a config path", () => {
-    expect(
-      doesReloadAffectProviderAuth(createHotTailPlan({ changedPaths: [], reloadPlugins: true })),
-    ).toBe(true);
-  });
-
-  it("retains auth-relevant changes mixed with unrelated config paths", () => {
-    expect(
-      doesReloadAffectProviderAuth(
-        createHotTailPlan({
-          changedPaths: ["logging.level", "agents.defaults.workspace"],
-        }),
-      ),
-    ).toBe(true);
-  });
 });
 
 describe("gateway hot reload model state", () => {
@@ -1986,6 +1958,7 @@ describe("gateway hot reload model state", () => {
     const logReload = { info: vi.fn(), warn: vi.fn() };
     const { applyHotReload } = createReloadHandlersForTest(logReload);
     const nextConfig = {} as OpenClawConfig;
+    setRuntimeConfigSnapshot(nextConfig, nextConfig);
 
     await applyHotReload(
       buildGatewayReloadPlan(["agents.entries.Alpha.model", "meta.lastTouchedAt"]),
@@ -2000,37 +1973,48 @@ describe("gateway hot reload model state", () => {
   });
 
   it.each([
-    "agents.defaults.compaction.model",
-    "agents.defaults.compaction.maxActiveTranscriptBytes",
-  ])("refreshes prepared model runtime without restarting subsystems: %s", async (changedPath) => {
-    const logReload = { info: vi.fn(), warn: vi.fn() };
-    const channels = { start: vi.fn(async () => new Map()), stop: vi.fn(async () => {}) };
-    const { applyHotReload, heartbeatRunner, cron } = createReloadHandlersForTest(
-      logReload,
-      channels,
-    );
-    const nextConfig = {
-      agents: {
-        defaults: {
-          compaction: {
-            model: "mock-openai/gpt-5.6-luna-new",
-            maxActiveTranscriptBytes: "10b",
+    { changedPath: "agents.defaults.compaction.model", modelChanged: true },
+    { changedPath: "agents.defaults.compaction.maxActiveTranscriptBytes", modelChanged: false },
+  ])(
+    "refreshes only changed model inputs without restarting subsystems: $changedPath",
+    async ({ changedPath, modelChanged }) => {
+      const logReload = { info: vi.fn(), warn: vi.fn() };
+      const channels = { start: vi.fn(async () => new Map()), stop: vi.fn(async () => {}) };
+      const { applyHotReload, heartbeatRunner, cron } = createReloadHandlersForTest(
+        logReload,
+        channels,
+      );
+      const nextConfig = {
+        agents: {
+          defaults: {
+            compaction: {
+              ...(modelChanged ? { model: "mock-openai/gpt-5.6-luna-new" } : {}),
+              maxActiveTranscriptBytes: "10b",
+            },
           },
         },
-      },
-    } satisfies OpenClawConfig;
+      } satisfies OpenClawConfig;
+      setRuntimeConfigSnapshot({ agents: { defaults: { compaction: {} } } });
+      await applyHotReload(buildGatewayReloadPlan([changedPath]), nextConfig);
 
-    await applyHotReload(buildGatewayReloadPlan([changedPath]), nextConfig);
-
-    expect(hoisted.markPreparedModelRuntimeSnapshotsStale).toHaveBeenCalledOnce();
-    expectPreparedModelRefresh(nextConfig);
-    expect(heartbeatRunner.updateConfig).not.toHaveBeenCalled();
-    expect(cron.stop).not.toHaveBeenCalled();
-    expect(channels.start).not.toHaveBeenCalled();
-    expect(channels.stop).not.toHaveBeenCalled();
-    expect(hoisted.reloadSessionMcpRuntimes).not.toHaveBeenCalled();
-    expect(logReload.info).toHaveBeenCalledWith(`config hot reload applied (${changedPath})`);
-  });
+      if (modelChanged) {
+        expect(hoisted.markPreparedModelRuntimeSnapshotsStale).toHaveBeenCalledOnce();
+        expectPreparedModelRefresh(nextConfig);
+      } else {
+        expect(hoisted.markPreparedModelRuntimeSnapshotsStale).not.toHaveBeenCalled();
+        expect(hoisted.refreshPreparedModelRuntimeSnapshots).not.toHaveBeenCalled();
+        expect(hoisted.advancePreparedModelRuntimeConfig).toHaveBeenCalledExactlyOnceWith(
+          nextConfig,
+        );
+      }
+      expect(heartbeatRunner.updateConfig).not.toHaveBeenCalled();
+      expect(cron.stop).not.toHaveBeenCalled();
+      expect(channels.start).not.toHaveBeenCalled();
+      expect(channels.stop).not.toHaveBeenCalled();
+      expect(hoisted.reloadSessionMcpRuntimes).not.toHaveBeenCalled();
+      expect(logReload.info).toHaveBeenCalledWith(`config hot reload applied (${changedPath})`);
+    },
+  );
 
   it("stops old cron exit watchers and reconciles rebuilt ones after cron restart", async () => {
     const order: string[] = [];
@@ -4196,7 +4180,6 @@ describe("gateway restart deferral preflight", () => {
     hoisted.activeAgentRunCount.value = 1;
     hoisted.activeEmbeddedRunSessionIds.push("session-issue-82433");
     hoisted.activeEmbeddedRunSessionKeys.push("agent:main:issue-82433");
-    hoisted.activeAgentRunCount.value = 1;
     const signalSpy = vi.fn();
     process.once("SIGUSR2", signalSpy);
     vi.useFakeTimers();
@@ -4245,7 +4228,6 @@ describe("gateway restart deferral preflight", () => {
   it("uses the default restart deferral timeout when config omits deferralTimeoutMs", async () => {
     restartTesting.resetRestartSignalState();
     const { requestGatewayRestart } = createReloadHandlersForTest();
-    hoisted.activeAgentRunCount.value = 1;
     hoisted.activeAgentRunCount.value = 1;
     const signalSpy = vi.fn();
     process.once("SIGUSR2", signalSpy);

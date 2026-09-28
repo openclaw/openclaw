@@ -567,7 +567,7 @@ async function settleCodeModeResult(params: CodeModeSettlementContext) {
       ? {
           status: result.status,
           code: result.code,
-          failurePhase: params.bridgeDispatch.started ? ("bridge" as const) : result.failurePhase,
+          failurePhase: result.failurePhase,
           bridgeDispatchStarted: params.bridgeDispatch.started,
         }
       : { status: result.status }),

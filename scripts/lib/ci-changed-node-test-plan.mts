@@ -569,27 +569,82 @@ function resolvePreciseChangedTargets(targets: readonly string[], cwd: string) {
 function createChangedTargetShards(
   targets: NonNullable<ReturnType<typeof resolvePreciseChangedTargets>>,
   names: { checkName: string; shardName: string },
+  rowBudget?: number,
 ) {
   const timings = { ...readRepoE2eFileTimings(), ...readToolingFileTimings("blacksmith") };
+  const buildModeOf = (chunk: typeof targets) =>
+    chunk.some(({ plans }) => plans.some((plan) => plan.config === E2E_VITEST_CONFIG))
+      ? "private-qa"
+      : resolveVitestPretestBuildMode([{ includePatterns: chunk.map(({ target }) => target) }]);
   const targetChunks: (typeof targets)[] = [];
-  let pendingChunk: typeof targets = [];
-  let seconds = 0;
-  for (const entry of targets) {
-    const cost = timings[entry.target] ?? 20;
-    if (
-      pendingChunk.length &&
-      (pendingChunk.length >= CHANGED_NODE_TEST_TARGETS_PER_JOB ||
-        seconds + cost > PR_NODE_TEST_SECONDS)
-    ) {
-      targetChunks.push(pendingChunk);
-      pendingChunk = [];
-      seconds = 0;
+  if (rowBudget !== undefined) {
+    const byPolicy = new Map<string, { targets: typeof targets; seconds: number; rows: number }>();
+    for (const entry of targets) {
+      const key = JSON.stringify([
+        buildModeOf([entry]),
+        SERIAL_CHANGED_TARGET_RE.test(entry.target),
+      ]);
+      const partition = byPolicy.get(key) ?? { targets: [], seconds: 0, rows: 1 };
+      partition.targets.push(entry);
+      partition.seconds += timings[entry.target] ?? 20;
+      byPolicy.set(key, partition);
     }
-    pendingChunk.push(entry);
-    seconds += cost;
-  }
-  if (pendingChunk.length) {
-    targetChunks.push(pendingChunk);
+    const partitions = [...byPolicy.values()];
+    if (partitions.length > rowBudget) {
+      throw new Error(
+        `${partitions.length} execution policies exceed the changed-target row budget of ${rowBudget}`,
+      );
+    }
+    // Highest-averages apportionment preserves at least one row per policy
+    // without spreading build preparation or serial admission across other work.
+    for (let remaining = rowBudget - partitions.length; remaining > 0; remaining -= 1) {
+      const eligible = partitions.filter((partition) => partition.rows < partition.targets.length);
+      if (eligible.length === 0) {
+        break;
+      }
+      const next = eligible.reduce((best, partition) =>
+        partition.seconds / (partition.rows + 1) > best.seconds / (best.rows + 1)
+          ? partition
+          : best,
+      );
+      next.rows += 1;
+    }
+    for (const partition of partitions) {
+      const bins: { targets: typeof targets; seconds: number }[] = Array.from(
+        { length: partition.rows },
+        () => ({ targets: [], seconds: 0 }),
+      );
+      for (const entry of partition.targets.toSorted(
+        (a, b) => (timings[b.target] ?? 20) - (timings[a.target] ?? 20),
+      )) {
+        const bin = bins.reduce((best, candidate) =>
+          candidate.seconds < best.seconds ? candidate : best,
+        );
+        bin.targets.push(entry);
+        bin.seconds += timings[entry.target] ?? 20;
+      }
+      targetChunks.push(...bins.map((bin) => bin.targets));
+    }
+  } else {
+    let pendingChunk: typeof targets = [];
+    let seconds = 0;
+    for (const entry of targets) {
+      const cost = timings[entry.target] ?? 20;
+      if (
+        pendingChunk.length &&
+        (pendingChunk.length >= CHANGED_NODE_TEST_TARGETS_PER_JOB ||
+          seconds + cost > PR_NODE_TEST_SECONDS)
+      ) {
+        targetChunks.push(pendingChunk);
+        pendingChunk = [];
+        seconds = 0;
+      }
+      pendingChunk.push(entry);
+      seconds += cost;
+    }
+    if (pendingChunk.length) {
+      targetChunks.push(pendingChunk);
+    }
   }
   return targetChunks.map((chunk, index) => {
     const suffix = targetChunks.length === 1 ? "" : `-${index + 1}`;
@@ -604,11 +659,7 @@ function createChangedTargetShards(
         chunk.reduce((sum, { target }) => sum + (timings[target] ?? 20), 0),
       ),
     };
-    const pretestBuildMode = chunk.some(({ plans }) =>
-      plans.some((plan) => plan.config === E2E_VITEST_CONFIG),
-    )
-      ? "private-qa"
-      : resolveVitestPretestBuildMode([{ includePatterns: shard.targets }]);
+    const pretestBuildMode = buildModeOf(chunk);
     if (pretestBuildMode) {
       shard.pretestBuildMode = pretestBuildMode;
     }
@@ -854,6 +905,7 @@ export function createChangedNodeTestShards(
   options: CwdOptions &
     ChangedTargetValidation & {
       runnerBackend?: string;
+      compactNodeJobCap?: number;
       releaseFastLane?: boolean;
       includeReleaseOnlyToolingShards?: boolean;
       includeReleaseOnlyRuntimeTests?: boolean;
@@ -1067,7 +1119,7 @@ export function createChangedNodeTestShards(
         }),
     );
 
-  const shards = [
+  const otherShards = [
     ...channelShards,
     ...canonicalShards.map((shard) => Object.assign({}, shard, { configs: [] })),
     ...packChangedExtensionConfigShards(
@@ -1088,16 +1140,34 @@ export function createChangedNodeTestShards(
         },
       ),
     ),
-    // Native browser files run in checks-ui, including precise changed-file plans.
-    ...createChangedTargetShards(
-      targets.filter(({ target }) => !isUiBrowserTestFile(target)),
-      {
-        checkName: "checks-node-changed",
-        shardName: "changed",
-      },
-    ),
+  ];
+  // Native browser files run in checks-ui, including precise changed-file plans.
+  const changedTargets = targets.filter(({ target }) => !isUiBrowserTestFile(target));
+  const names = { checkName: "checks-node-changed", shardName: "changed" };
+  const shards = [
+    ...otherShards,
+    ...createChangedTargetShards(changedTargets, names),
     ...boundaryShards,
   ];
   // Covered source targets keep build-artifacts ownership even with no Node rows.
-  return boundChangedNodeRows(shards, selectedTargets, options.runnerBackend, cwd);
+  const bounded = boundChangedNodeRows(shards, selectedTargets, options.runnerBackend, cwd);
+  // Time-based splitting must not make an admitted owner plan exceed the matrix
+  // budget. Retain its compact rows, including plugin work, without widening scope.
+  const cap = options.compactNodeJobCap;
+  if (cap === undefined || bounded.filter((shard) => !shard.requiresDist).length <= cap) {
+    return bounded;
+  }
+  const otherNonDistRows = [...otherShards, ...boundaryShards].filter(
+    (shard) => !shard.requiresDist,
+  ).length;
+  if (shards.filter((shard) => !shard.requiresDist).length <= cap || otherNonDistRows >= cap) {
+    return shards;
+  }
+  // Only target chunks may grow to fit the remaining rows; all other owners
+  // keep their compact execution envelopes and the workflow owns final admission.
+  return [
+    ...otherShards,
+    ...createChangedTargetShards(changedTargets, names, cap - otherNonDistRows),
+    ...boundaryShards,
+  ];
 }

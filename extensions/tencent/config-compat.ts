@@ -27,29 +27,6 @@ const TENCENT_TOKENHUB_MODEL_ALIASES: Record<TencentTokenHubManagedModelRef, str
 
 type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
 type AgentDefaultModel = AgentDefaults["model"];
-type AgentModelEntry = NonNullable<AgentDefaults["models"]>[string];
-
-function isTokenHubModelMapConfigured(models: Record<string, AgentModelEntry>): boolean {
-  return TENCENT_TOKENHUB_MANAGED_MODEL_REFS.some((ref) => Object.hasOwn(models, ref));
-}
-
-function withDefaultAlias(entry: AgentModelEntry | undefined, alias: string): AgentModelEntry {
-  return {
-    ...entry,
-    alias: entry?.alias ?? alias,
-  };
-}
-
-function needsDefaultAlias(entry: AgentModelEntry | undefined): boolean {
-  return entry?.alias === undefined;
-}
-
-function needsModelRepair(
-  models: Record<string, AgentModelEntry>,
-  ref: TencentTokenHubManagedModelRef,
-): boolean {
-  return !Object.hasOwn(models, ref) || needsDefaultAlias(models[ref]);
-}
 
 // Only the deprecated hy3-preview ref is migrated. hy3 is a GA model, and
 // hy4-preview is a preview that additionally requires the API key's
@@ -87,12 +64,15 @@ export function migrateTencentTokenHubModelDefaults(cfg: OpenClawConfig): {
   changes: string[];
 } {
   const existingModels = cfg.agents?.defaults?.models;
-  if (!existingModels || !isTokenHubModelMapConfigured(existingModels)) {
+  if (
+    !existingModels ||
+    !TENCENT_TOKENHUB_MANAGED_MODEL_REFS.some((ref) => Object.hasOwn(existingModels, ref))
+  ) {
     return { config: cfg, changes: [] };
   }
 
-  const needsModelMapRepair = TENCENT_TOKENHUB_MANAGED_MODEL_REFS.some((ref) =>
-    needsModelRepair(existingModels, ref),
+  const needsModelMapRepair = TENCENT_TOKENHUB_MANAGED_MODEL_REFS.some(
+    (ref) => !Object.hasOwn(existingModels, ref) || existingModels[ref]?.alias === undefined,
   );
   const migratedModel = migrateDefaultModel(cfg.agents?.defaults?.model);
   if (!needsModelMapRepair && !migratedModel.changed) {
@@ -101,7 +81,10 @@ export function migrateTencentTokenHubModelDefaults(cfg: OpenClawConfig): {
 
   const nextModels = { ...existingModels };
   for (const ref of TENCENT_TOKENHUB_MANAGED_MODEL_REFS) {
-    nextModels[ref] = withDefaultAlias(existingModels[ref], TENCENT_TOKENHUB_MODEL_ALIASES[ref]);
+    nextModels[ref] = {
+      ...existingModels[ref],
+      alias: existingModels[ref]?.alias ?? TENCENT_TOKENHUB_MODEL_ALIASES[ref],
+    };
   }
 
   const nextConfig: OpenClawConfig = {

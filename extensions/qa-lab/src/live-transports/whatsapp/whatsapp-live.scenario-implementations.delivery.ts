@@ -3,13 +3,13 @@ import type {
   WhatsAppQaApprovalScenarioRun,
   WhatsAppQaScenarioImplementation,
 } from "./whatsapp-live.contracts.js";
+import { callWhatsAppGatewaySend } from "./whatsapp-live.gateway.js";
 import {
-  callWhatsAppGatewaySend,
   requireWhatsAppTriggerMessageId,
   waitForScenarioObservedMessage,
   waitForWhatsAppSutReactionSequenceToTrigger,
   waitForWhatsAppSutReactionToTrigger,
-} from "./whatsapp-live.operations.js";
+} from "./whatsapp-live.observations.js";
 
 function createWhatsAppApprovalScenario(
   marker: string,

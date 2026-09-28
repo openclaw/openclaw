@@ -13,7 +13,10 @@ import {
 } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import type { SessionEntryCreationOperation } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import { readSessionEntriesFromStoreInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import { captureSessionStoreReadCandidate } from "../config/sessions/session-store-read-candidates.js";
+import {
+  captureSessionStoreReadCandidate,
+  type SessionStoreReadCandidate,
+} from "../config/sessions/session-store-read-candidates.js";
 import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
 import { withSessionHistoryWorkerReadCandidates } from "../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -45,6 +48,7 @@ import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
 type PreparedSessionSourceFacts = PreparedSessionMutationFacts & {
   /** Physical source retained by the same read custody as the sharing facts. */
   sourcePath?: string;
+  sourceAgentId?: string;
 };
 
 type ExistingSessionMutationFacts = PreparedSessionSourceFacts & {
@@ -101,10 +105,12 @@ export async function prepareSessionMutationFacts(
 ): Promise<SessionFactsRead<PreparedSessionSourceFacts>> {
   const assertRoutingCurrent = captureSessionMutationRouting(params.cfg);
   const { canonicalKey, agentId } = resolveSessionStoreIdentity(params);
+  const initialStoreKeys = [params.sessionKey.trim(), canonicalKey];
   const incognito = isIncognitoSessionKey(canonicalKey);
   const releases: Array<() => void> = [];
   let active = true;
   let beforeDiscovery = params.storageReady !== undefined;
+  let waitingForStorage = false;
   let invalidated = false;
   let facts: PreparedSessionSourceFacts | undefined;
   let creation: SessionEntryCreationOperation | undefined;
@@ -112,12 +118,47 @@ export async function prepareSessionMutationFacts(
   let assertSource: () => void;
   const selectedPaths = new Set<string>();
   const acquiringPaths = new Set<string>();
+  const acquiringReads = new Map<string, ReturnType<typeof retainPreparedSessionSharingFacts>>();
+  const initializedReads = new Set<string>();
+  const acquireSource = (sourcePath: string, sessionKeys: readonly string[]) => {
+    const identity = readDatabasePathIdentitySync(sourcePath);
+    if (identity.birthtime === undefined) {
+      return undefined;
+    }
+    acquiringPaths.add(path.resolve(sourcePath));
+    acquiringPaths.add(identity.canonicalPath);
+    for (const sessionKey of sessionKeys) {
+      const key = `${identity.key}\0${sessionKey}`;
+      if (!acquiringReads.has(key)) {
+        const retained = retainPreparedSessionSharingFacts({
+          databaseIdentity: identity.key,
+          sessionKey,
+          acquiring: true,
+        });
+        acquiringReads.set(key, retained);
+        releases.push(retained.release);
+      }
+    }
+    return identity;
+  };
   const release = () => {
     if (active) {
       active = false;
       for (const stop of releases.splice(0).toReversed()) {
         stop();
       }
+    }
+  };
+  const retainCandidate = (candidate: SessionStoreReadCandidate) => {
+    for (const pathname of new Set([candidate.path, candidate.physicalPath])) {
+      releases.push(
+        registerOpenClawAgentDatabaseReadCandidateResource({
+          ...candidate,
+          path: pathname,
+          revoke: release,
+          close: async () => release(),
+        }),
+      );
     }
   };
   const assertActive = () => {
@@ -167,9 +208,7 @@ export async function prepareSessionMutationFacts(
     if (
       change.scope === "automation" ||
       (change.agentId && change.agentId !== agentId && !change.storePath) ||
-      ![params.sessionKey, canonicalKey, ...(facts?.target?.storeKeys ?? [])].includes(
-        change.sessionKey,
-      )
+      ![...initialStoreKeys, ...(facts?.target?.storeKeys ?? [])].includes(change.sessionKey)
     ) {
       return;
     }
@@ -226,25 +265,55 @@ export async function prepareSessionMutationFacts(
   releases.push(
     sessionChanges.subscribeFacts(changed),
     onSessionIdentityMutation((change) => {
-      if (change.agentId === agentId && change.previous.sessionKeys.includes(canonicalKey)) {
+      if (
+        change.agentId === agentId &&
+        change.previous.sessionKeys.some((key) => initialStoreKeys.includes(key))
+      ) {
         invalidate();
       }
     }),
   );
-  if (params.storageReady) {
-    try {
-      await params.storageReady;
-    } catch (error) {
-      release();
-      throw error;
-    }
-    beforeDiscovery = false;
-  }
   try {
+    const parsedAgent = parseAgentSessionKey(params.sessionKey)?.agentId;
+    const discoveryInventory = incognito
+      ? undefined
+      : prepareSessionStoreTargetInventory(params.cfg, [
+          agentId,
+          ...(parsedAgent ? [parsedAgent] : []),
+        ]);
+    const candidateIdentities = (discoveryInventory?.candidates ?? []).map((candidate) => ({
+      candidate,
+      identity: readDatabasePathIdentitySync(candidate.path),
+    }));
+    const missingCandidates = candidateIdentities.filter(
+      ({ identity }) => identity.birthtime === undefined,
+    );
+    // Existing sources can publish while writer admission or inventory discovery waits.
+    // Capture their postimages now; later row reads initialize this same acquisition.
+    for (const { candidate, identity } of candidateIdentities) {
+      if (identity.birthtime !== undefined) {
+        retainCandidate(candidate);
+        acquireSource(candidate.path, initialStoreKeys);
+      }
+    }
+    if (params.storageReady) {
+      waitingForStorage = true;
+      await params.storageReady;
+      waitingForStorage = false;
+      beforeDiscovery = false;
+      for (const captured of missingCandidates) {
+        captured.identity = readDatabasePathIdentitySync(captured.candidate.path);
+      }
+    }
     assertActive();
+    // Writer admission may create an absent store; retain its admitted source afterward.
+    for (const { candidate } of missingCandidates) {
+      retainCandidate(candidate);
+      acquireSource(candidate.path, initialStoreKeys);
+    }
     let storageTarget: SessionFactsRead<PreparedSessionMutationFacts>["storageTarget"];
     let readFacts = () => facts!;
-    if (incognito) {
+    if (!discoveryInventory) {
       const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId });
       storageTarget = Object.freeze({ agentId, canonicalKey, storePath });
       let database = getOpenIncognitoAgentDatabase(agentId, storePath);
@@ -288,6 +357,7 @@ export async function prepareSessionMutationFacts(
         }
         return {
           sourcePath: storePath,
+          sourceAgentId: agentId,
           target: {
             agentId,
             canonicalKey,
@@ -301,28 +371,7 @@ export async function prepareSessionMutationFacts(
       };
       facts = readFacts();
     } else {
-      const parsedAgent = parseAgentSessionKey(params.sessionKey)?.agentId;
-      const { candidates: discoveryCandidates, ...inventory } = prepareSessionStoreTargetInventory(
-        params.cfg,
-        [agentId, ...(parsedAgent ? [parsedAgent] : [])],
-      );
-      const candidates = discoveryCandidates.flatMap((candidate) => [
-        candidate,
-        { ...candidate, path: candidate.physicalPath },
-      ]);
-      const candidateIdentities = discoveryCandidates.map((candidate) => ({
-        candidate,
-        identity: readDatabasePathIdentitySync(candidate.path).key,
-      }));
-      for (const candidate of candidates) {
-        releases.push(
-          registerOpenClawAgentDatabaseReadCandidateResource({
-            ...candidate,
-            revoke: release,
-            close: async () => release(),
-          }),
-        );
-      }
+      const { candidates: discoveryCandidates, ...inventory } = discoveryInventory;
       const registry = prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env: inventory.env });
       let assertRegistry: (() => void) | undefined;
       const members = new Map<
@@ -376,7 +425,6 @@ export async function prepareSessionMutationFacts(
             async (reads, select) => {
               for (const read of reads) {
                 assertActive();
-                const acquisitions = new Set<string>();
                 const loaded = await readSessionEntriesFromStoreInWorker(
                   {
                     agentId: read.agentId ?? agentId,
@@ -387,26 +435,8 @@ export async function prepareSessionMutationFacts(
                   },
                   (source) => {
                     assertActive();
-                    const identity = readDatabasePathIdentitySync(source.path);
-                    // Missing stores retain discovery's negative-source fence, not a row acquisition.
-                    if (identity.birthtime === undefined) {
-                      return;
-                    }
-                    const databaseIdentity = identity.key;
-                    acquiringPaths.add(path.resolve(read.storePath));
-                    acquiringPaths.add(path.resolve(source.path));
-                    for (const sessionKey of read.options.exactKeys!) {
-                      const key = `${databaseIdentity}\0${sessionKey}`;
-                      if (!retainedReads.has(key)) {
-                        const retained = retainPreparedSessionSharingFacts({
-                          databaseIdentity,
-                          sessionKey,
-                          acquiring: true,
-                        });
-                        retainedReads.set(key, retained);
-                        acquisitions.add(key);
-                        releases.push(retained.release);
-                      }
+                    if (acquireSource(source.path, read.options.exactKeys!)) {
+                      acquiringPaths.add(path.resolve(read.storePath));
                     }
                   },
                 );
@@ -419,11 +449,12 @@ export async function prepareSessionMutationFacts(
                   members.set(read.storePath, loaded.sharing);
                   for (const sessionKey of read.options.exactKeys!) {
                     const key = `${loaded.sharing.databaseIdentity}\0${sessionKey}`;
-                    const retained = retainedReads.get(key);
+                    const retained = acquiringReads.get(key);
                     if (!retained) {
                       throw new SessionMutationFactsUnavailableError();
                     }
-                    if (acquisitions.has(key)) {
+                    retainedReads.set(key, retained);
+                    if (!initializedReads.has(key)) {
                       const entry = store[sessionKey];
                       retained.initialize({
                         entry: entry ? projectSessionSharingEntry(entry) : undefined,
@@ -435,6 +466,7 @@ export async function prepareSessionMutationFacts(
                             ?.identityIds,
                         ),
                       });
+                      initializedReads.add(key);
                     }
                     const current = retained.readCurrent();
                     if (!current) {
@@ -499,6 +531,7 @@ export async function prepareSessionMutationFacts(
         };
         facts = {
           sourcePath: sharing.source.path,
+          sourceAgentId: sharing.source.agentId,
           target,
           membership: new Set(
             sharing.members.find((member) => member.sessionKey === match.key)?.identityIds,
@@ -529,6 +562,7 @@ export async function prepareSessionMutationFacts(
           }
           return {
             sourcePath: sharing.source.path,
+            sourceAgentId: sharing.source.agentId,
             target: { ...target, entry: current.entry },
             membership: current.membership,
           };
@@ -540,7 +574,7 @@ export async function prepareSessionMutationFacts(
           if (
             captureSessionStoreReadCandidate(candidate.path, candidate.scope).physicalPath !==
               candidate.physicalPath ||
-            readDatabasePathIdentitySync(candidate.path).key !== identity
+            !isDeepStrictEqual(readDatabasePathIdentitySync(candidate.path), identity)
           ) {
             throw new SessionMutationFactsUnavailableError();
           }
@@ -596,7 +630,7 @@ export async function prepareSessionMutationFacts(
     return { storageTarget, bindCreation, readCurrent, release };
   } catch (error) {
     release();
-    throw error instanceof SessionMutationFactsUnavailableError
+    throw waitingForStorage || error instanceof SessionMutationFactsUnavailableError
       ? error
       : new SessionMutationFactsUnavailableError({ cause: error });
   }

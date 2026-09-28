@@ -1,4 +1,3 @@
-// Telegram type declarations define plugin contracts.
 import type { Bot } from "grammy";
 import type { Message } from "grammy/types";
 import type {

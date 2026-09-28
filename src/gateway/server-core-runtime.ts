@@ -209,11 +209,6 @@ export async function startGatewayCoreRuntime(input: {
             ) => {
               void nodeSendToSession(sessionKey, event, payload, opts);
             },
-            skillsRefreshDelayMs: runtimeState.skillsRefreshDelayMs,
-            getSkillsRefreshTimer: () => runtimeState.skillsRefreshTimer,
-            setSkillsRefreshTimer: (timer) => {
-              runtimeState.skillsRefreshTimer = timer;
-            },
             getRuntimeConfig,
             startupTrace,
           }),

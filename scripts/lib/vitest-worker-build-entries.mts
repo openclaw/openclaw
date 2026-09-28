@@ -5,6 +5,7 @@ import { logbookSqliteBackendEntrypoint } from "../../extensions/logbook/src/sql
 import { memoryPublicationFaultEntrypoint } from "../../extensions/memory-core/src/memory/manager-publication-fault-entrypoint.test-support.ts";
 import { vectorKnnParentEntrypoint } from "../../extensions/memory-core/src/memory/manager-search-knn-runtime.test-support.ts";
 import { realtimeAudioTestEntrypoints } from "../../extensions/openai/realtime-audio-worker-entrypoints.test-support.ts";
+import { identityRepeatedTurnEntrypoint } from "../../extensions/qa-lab/src/agent-run-identity-runtime.test-support.ts";
 import { busServerShutdownEntrypoint } from "../../extensions/qa-lab/src/bus-server-runtime.test-support.ts";
 import { qaGatewayCleanupRuntimeEntrypoint } from "../../extensions/qa-lab/src/gateway-child-artifacts-runtime.test-support.ts";
 import { teamReportsSqliteBackendEntrypoint } from "../../extensions/team-reports/src/sqlite-backend-entrypoint.test-support.ts";
@@ -265,6 +266,7 @@ export const vitestWorkerBuildEntries = {
     ...Object.values(sqliteMaintenanceEntrypoints),
     ...Object.values(processProbeEntrypoints),
     busServerShutdownEntrypoint,
+    identityRepeatedTurnEntrypoint,
     vectorKnnParentEntrypoint,
     qaOtelSmokeEntrypoint,
     ...Object.values(nativeBoundaryTestEntrypoints),
@@ -354,6 +356,8 @@ export const vitestWorkerBuildEntries = {
   ]),
   // The real ulimit fixture must import its parent before imposing a file-size limit.
   "infra/sqlite-snapshot-source": "src/infra/sqlite-snapshot-source.ts",
+  "infra/package-update-activation.process.test-support":
+    "src/infra/package-update-activation.process.test-support.ts",
   // Keep provider preparation in the same compiled graph as payload rendering;
   // a source-injected plugin would miss duplicated registry scope state.
   "plugins/provider-hook-runtime": "src/plugins/provider-hook-runtime.ts",

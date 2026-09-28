@@ -12,6 +12,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../p
 import { createDeferredCore } from "../../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   handleQuestionChannelRequested,
   handleQuestionChannelResolved,
@@ -26,6 +27,8 @@ import {
   installDeliveryQueueTmpDirHooks,
   loadPendingDeliveries,
 } from "./delivery-queue.test-helpers.js";
+
+let scheduler: ReturnType<typeof createTestGatewayScheduler>;
 
 let runOutboundDeliveryInternal: typeof import("./deliver-queue.js").runOutboundDeliveryInternal;
 
@@ -48,6 +51,7 @@ function request(manager: QuestionManager, timeoutMs: number): void {
       timeoutMs,
       onResolved: handleQuestionChannelResolved,
     }),
+    scheduler,
   );
 }
 
@@ -129,6 +133,7 @@ describe("generic outbound question generation", () => {
   beforeEach(() => {
     vi.stubEnv("OPENCLAW_STATE_DIR", fixtures.tmpDir());
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    scheduler = createTestGatewayScheduler("fake-timers");
   });
 
   afterEach(() => {
@@ -156,7 +161,7 @@ describe("generic outbound question generation", () => {
   ])(
     "keeps old reactions inert for a held $delivery send after $retention",
     async ({ reuseAfterMs, skipQueue, statusLine }) => {
-      const manager = new QuestionManager();
+      const manager = new QuestionManager(scheduler);
       const { afterDeliverPayload, finalized, resolveReaction, react } =
         installQuestionAdapter(manager);
       const sendEntered = createDeferredCore();
@@ -220,7 +225,7 @@ describe("generic outbound question generation", () => {
   );
 
   it("does not bind a recovered id-only payload to a newer question generation", async () => {
-    const manager = new QuestionManager();
+    const manager = new QuestionManager(scheduler);
     const { afterDeliverPayload, finalized, resolveReaction, react } =
       installQuestionAdapter(manager);
     const deliveryId = "question-generation-recovery";
@@ -292,7 +297,7 @@ describe("generic outbound question generation", () => {
   });
 
   it("does not bind restored stable-intent custody to a newer question, while a fresh reusable intent still binds", async () => {
-    const manager = new QuestionManager();
+    const manager = new QuestionManager(scheduler);
     const { afterDeliverPayload, finalized, resolveReaction, react } =
       installQuestionAdapter(manager);
     const deliveryId = "question-generation-stable-retry";

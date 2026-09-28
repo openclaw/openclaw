@@ -125,7 +125,7 @@ describe("Codex source-bound pending input", () => {
     }
   });
 
-  it.each(["open", "closed", "reassigned"] as const)(
+  it.each(["open", "closed"] as const)(
     "guards a Codex pending-question claim across registration: %s",
     async (transition) => {
       registrations.mockClear();
@@ -188,9 +188,7 @@ describe("Codex source-bound pending input", () => {
             { isInboundUserMessage: true },
             () => {
               if (!sourceCurrent) {
-                throw new Error(
-                  transition === "reassigned" ? "source claim replaced" : "source closed",
-                );
+                throw new Error("source closed");
               }
             },
             "source-bound",

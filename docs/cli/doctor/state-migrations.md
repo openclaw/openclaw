@@ -19,6 +19,14 @@ transient runs are never restored from them.
 
 ## Legacy state migration
 
+When Doctor selects a legacy home such as `~/.clawdbot`, it drains open database
+work before moving that directory to `~/.openclaw`. It retains exclusive source
+ownership through the move and legacy alias creation, then acquires ownership at
+the resulting path before importing plugin metadata or upgrading SQLite schemas.
+An explicit `OPENCLAW_STATE_DIR` keeps its selected location. If alias creation
+fails and the move rolls back, repair continues under ownership of the original
+location and reports the rollback.
+
 `openclaw doctor --fix` owns general persistent file-to-SQLite migrations. It validates and claims each recognized source, writes and verifies canonical rows, records a migration receipt, then removes the retired source. Gateway, node-host, and local CLI startup leave general legacy repair to Doctor. Normal versioned database opening, native initialization, and recovery of valid current config remain available. The narrow [restart-notice importer](/gateway/restart-recovery#agent-requested-restarts) also serves the late update notices written by shipped June updaters, through the same migration owner and receipts.
 
 The container image entrypoint automatically runs `openclaw doctor --fix --non-interactive`
@@ -102,9 +110,10 @@ path preserves unknown deletion history; retained external stores still need Doc
 reconstruction before maintenance.
 Verified fresh SQLite setup initializes the journal normally, without a missing-history
 warning. Legacy JSON session files alone do not require journal reconstruction.
-Session SQLite import also admits ordinary historical agent databases when deletion
-history is unavailable. Recorded deletion and reconstruction holds, orphaned SQLite
-sidecars, and retained plugin inputs with import receipts remain protected.
+Session SQLite import and recovery hold existing agent databases and their sidecars
+when deletion history is unavailable, preserving legacy sources without importing
+or archiving them. Recorded deletion and reconstruction holds and retained plugin
+inputs with import receipts remain protected.
 Unreadable history does not erase readable deletion identities or recorded holds.
 `openclaw doctor --fix` reconstructs the journal and records a receipt listing the
 held database paths in the existing migration tables. Reconstruction preserves

@@ -25,8 +25,8 @@ import type {
   WorkerWorkspaceSyncResult,
 } from "./tunnel-contract.js";
 import { prepareWorkerGitHubBinding } from "./worker-github-binding.js";
+import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
-import { readActualWorkspaceManifest } from "./workspace-reconcile-core.js";
 import { requireWorkspaceResultGit } from "./workspace-result-git.js";
 
 vi.mock("./worker-github-binding.js", () => ({ prepareWorkerGitHubBinding: vi.fn() }));
@@ -101,7 +101,7 @@ async function fixture(runSetupScript = false, preparedNode = false) {
     "source",
   ]);
   const baseCommit = await requireWorkspaceResultGit(remote, ["rev-parse", "HEAD"]);
-  const base = await readActualWorkspaceManifest({ root: remote, baseCommit });
+  const base = await captureWorkspaceManifest({ root: remote, baseCommit });
   const store = getSessionRepositoryWorkspaceStore();
   databasePath = store.path;
   let current = true;
@@ -130,7 +130,7 @@ async function fixture(runSetupScript = false, preparedNode = false) {
     if (request.source.runSetupScript) {
       await fs.writeFile(path.join(remote, "setup.txt"), "setup complete\n");
     }
-    const manifest = await readActualWorkspaceManifest({ root: remote, baseCommit });
+    const manifest = await captureWorkspaceManifest({ root: remote, baseCommit });
     return {
       mode: "repository",
       remoteWorkspaceDir: remote,
@@ -156,7 +156,7 @@ async function fixture(runSetupScript = false, preparedNode = false) {
     if (request.source.kind !== "repository") {
       throw new Error("Expected repository checkpoint");
     }
-    const manifest = await readActualWorkspaceManifest({ root: remote, baseCommit });
+    const manifest = await captureWorkspaceManifest({ root: remote, baseCommit });
     const prepared = await request.source.prepareCheckpoint({
       stagingRoot: remote,
       baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
@@ -319,7 +319,7 @@ it("refuses interrupted setup recovery before credentials or worker commands are
 it("adopts completed setup, restores accepted repository edits, and retains the bound workspace on restart", async () => {
   const f = await fixture(true, true);
   await fs.writeFile(path.join(f.remote, "setup.txt"), "already prepared\n");
-  const completed = await readActualWorkspaceManifest({ root: f.remote, baseCommit: f.baseCommit });
+  const completed = await captureWorkspaceManifest({ root: f.remote, baseCommit: f.baseCommit });
   const homeDir = path.join(path.dirname(f.remote), "home");
   const manifests = path.join(homeDir, ".openclaw-worker", "manifests");
   await fs.mkdir(manifests, { recursive: true, mode: 0o700 });
@@ -422,7 +422,7 @@ it("adopts completed setup, restores accepted repository edits, and retains the 
     );
     const initialCheckpoint = f.store.get(f.repository.workspaceId)!;
     await fs.writeFile(path.join(f.remote, "tracked.txt"), "accepted session edit\n");
-    const edited = await readActualWorkspaceManifest({ root: f.remote, baseCommit: f.baseCommit });
+    const edited = await captureWorkspaceManifest({ root: f.remote, baseCommit: f.baseCommit });
     const checkpoint = await stageSessionRepositoryCheckpoint({
       workspaceId: f.repository.workspaceId,
       expectedRevision: initialCheckpoint.revision,

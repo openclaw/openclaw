@@ -27,7 +27,7 @@ import {
   handleChatAttachmentMenuSelection,
   renderChatAttachmentMenuOptions,
   renderChatAttachmentMenuTrigger,
-} from "./chat-attachments.ts";
+} from "./chat-attachment-inputs.ts";
 import {
   handleComposerLibrarySelection,
   renderComposerLibraryMenu,

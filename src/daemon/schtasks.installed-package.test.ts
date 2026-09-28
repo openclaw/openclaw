@@ -22,6 +22,7 @@ import {
   resolveInstalledCellBodyTimeoutMs,
   keys,
 } from "./schtasks.installed-package.test-support.js";
+import * as nativeObservation from "./schtasks.integration-observation.test-support.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 const candidateCheckNames = [
@@ -32,6 +33,69 @@ const candidateCheckNames = [
   "candidate migration continuation",
   "candidate gateway canary",
 ];
+
+it("retains the original failed published result before the bounded output tail", async () => {
+  const root = temporary.make("installed-update-result-");
+  const secret = "synthetic-update-result-secret";
+  const records: installedCommand.CommandRecord[] = [];
+  await expect(
+    installedCommand.run(
+      [
+        "-e",
+        `process.stdout.write(JSON.stringify({
+          status: "error", mode: "npm", reason: "primary-update-failure", durationMs: 123,
+          root: process.env.FIXTURE_SECRET,
+          steps: [{ name: "candidate check", exitCode: 1, durationMs: 12,
+            command: process.env.FIXTURE_SECRET, cwd: process.env.FIXTURE_SECRET,
+            stderrTail: "token=" + process.env.FIXTURE_SECRET,
+            failureFacts: [{ check: "runtime", code: "fixture-failure", message: "Primary check failed", privatePayload: process.env.FIXTURE_SECRET }]
+          }],
+          padding: "x".repeat(4000),
+          recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" }
+        })); process.exitCode = 1;`,
+      ],
+      {
+        SystemRoot: process.env.SystemRoot,
+        WINDIR: process.env.WINDIR,
+        HOME: root,
+        USERPROFILE: root,
+        OPENCLAW_STATE_DIR: path.join(root, "state"),
+        FIXTURE_SECRET: secret,
+      },
+      root,
+      records,
+      0,
+      undefined,
+      { commandBudget: "published-update" },
+    ),
+  ).rejects.toThrow();
+  expect(records).toHaveLength(1);
+  expect(records[0]).toMatchObject({
+    code: 1,
+    joined: true,
+    publishedUpdate: {
+      kind: "published-update",
+      status: "error",
+      reason: "primary-update-failure",
+      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      steps: [
+        {
+          name: "candidate check",
+          exitCode: 1,
+          failureFacts: [
+            { check: "runtime", code: "fixture-failure", message: "Primary check failed" },
+          ],
+        },
+      ],
+    },
+  });
+  expect(records[0]?.failureOutput?.stdout).not.toContain("primary-update-failure");
+  expect(records[0]?.publishedUpdate).not.toHaveProperty("root");
+  expect(records[0]?.publishedUpdate).not.toHaveProperty("steps.0.command");
+  expect(records[0]?.publishedUpdate).not.toHaveProperty("steps.0.cwd");
+  expect(records[0]?.publishedUpdate).not.toHaveProperty("steps.0.failureFacts.0.privatePayload");
+  expect(JSON.stringify(records)).not.toContain(secret);
+});
 
 it.each([
   { name: "candidate migration continuation", exitCode: 0 },
@@ -497,6 +561,164 @@ describe("published installed update progress", () => {
     await expect(fixture.pending).resolves.toEqual(success);
     expect(fixture.recordProgress.mock.calls.map(([phase]) => phase)).toEqual(["command:update"]);
   });
+
+  it("bounds terminal process snapshots to the current run without reporting new progress", async () => {
+    const terminal = {
+      ...recordedRun([completedStep]),
+      phase: "finished" as const,
+      status: "succeeded" as const,
+      finishedAtMs: invokedAt + 3,
+    };
+    const reader = vi
+      .spyOn(updateRunReader, "listUpdateRunsAsync")
+      .mockResolvedValue([{ ...terminal, createdAtMs: invokedAt - 1 }]);
+    const census = vi.spyOn(nativeObservation, "readRelatedProcessDiagnostics").mockReturnValue({
+      ok: true,
+      error: null,
+      truncated: false,
+      processes: [
+        {
+          ProcessId: 1234,
+          ParentProcessId: 1200,
+          CreationDate: "2026-09-26T19:40:00.0000000Z",
+          CommandLine:
+            'node openclaw.mjs update --token "synthetic-hidden-credential" ' + "x".repeat(3000),
+        },
+      ],
+    });
+    const fixture = startUpdate();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(census).not.toHaveBeenCalled();
+    expect(fixture.recordProgress).not.toHaveBeenCalled();
+    reader.mockResolvedValue([recordedRun([completedStep])]);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(fixture.recordProgress).toHaveBeenCalledTimes(1);
+    reader.mockResolvedValue([terminal]);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(census).toHaveBeenCalledTimes(1);
+    expect(fixture.recordProgress).toHaveBeenCalledTimes(1);
+    reader.mockResolvedValue([
+      {
+        ...terminal,
+        runId: "different-run",
+        steps: [{ ...completedStep, endedAtMs: invokedAt + 60_000 }],
+      },
+    ]);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(census).toHaveBeenCalledTimes(1);
+    reader.mockResolvedValue([terminal]);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(census).toHaveBeenCalledTimes(2);
+    expect(census).toHaveBeenCalledWith([
+      "synthetic-update",
+      installedPackage.packageRoot(installedTask().installRoot),
+    ]);
+    expect(fixture.recordProgress).toHaveBeenCalledTimes(1);
+    expect(fixture.observations.updateSettlementProcesses).toEqual([
+      expect.objectContaining({
+        runId: terminal.runId,
+        capturedAtMs: invokedAt + 45_000,
+        phase: "finished",
+        status: "succeeded",
+        reason: "terminal",
+        processes: [
+          expect.objectContaining({
+            pid: 1234,
+            parentPid: 1200,
+            createdAt: "2026-09-26T19:40:00.0000000Z",
+          }),
+        ],
+      }),
+      expect.objectContaining({
+        runId: terminal.runId,
+        capturedAtMs: invokedAt + 75_000,
+        phase: "finished",
+        status: "succeeded",
+        reason: "follow-up",
+      }),
+    ]);
+    const retained = JSON.stringify(fixture.observations.updateSettlementProcesses);
+    expect(retained).not.toContain("synthetic-hidden-credential");
+    expect(retained.length).toBeLessThan(5000);
+    fixture.command.resolve(JSON.stringify(success));
+    await expect(fixture.pending).resolves.toEqual(success);
+    expect(fixture.recordProgress.mock.calls.map(([phase]) => phase)).toEqual([
+      "published-update:completed-step",
+      "command:update",
+    ]);
+  });
+
+  it("captures an unfinished current run at 300 and 315 seconds without reporting progress", async () => {
+    const active = { ...recordedRun([completedStep]), phase: "verifying" as const };
+    vi.spyOn(updateRunReader, "listUpdateRunsAsync").mockResolvedValue([active]);
+    const census = vi.spyOn(nativeObservation, "readRelatedProcessDiagnostics").mockReturnValue({
+      ok: true,
+      error: null,
+      truncated: false,
+      processes: [],
+    });
+    const fixture = startUpdate();
+    await vi.advanceTimersByTimeAsync(299_999);
+    expect(census).not.toHaveBeenCalled();
+    expect(fixture.recordProgress.mock.calls.map(([phase]) => phase)).toEqual([
+      "published-update:completed-step",
+    ]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(census).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(census).toHaveBeenCalledTimes(2);
+    expect(fixture.observations.updateSettlementProcesses).toEqual([
+      expect.objectContaining({
+        runId: active.runId,
+        capturedAtMs: invokedAt + 300_000,
+        phase: "verifying",
+        status: "running",
+        reason: "elapsed-300s",
+      }),
+      expect.objectContaining({
+        capturedAtMs: invokedAt + 315_000,
+        phase: "verifying",
+        status: "running",
+        reason: "follow-up",
+      }),
+    ]);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(census).toHaveBeenCalledTimes(2);
+    expect(fixture.recordProgress).toHaveBeenCalledTimes(1);
+    fixture.command.resolve(JSON.stringify(success));
+    await expect(fixture.pending).resolves.toEqual(success);
+    expect(fixture.recordProgress.mock.calls.map(([phase]) => phase)).toEqual([
+      "published-update:completed-step",
+      "command:update",
+    ]);
+  });
+
+  it.each(["returned", "thrown"] as const)(
+    "keeps a %s process observation failure diagnostic without failing the updater",
+    async (failure) => {
+      vi.spyOn(updateRunReader, "listUpdateRunsAsync").mockResolvedValue([
+        { ...recordedRun([]), phase: "finished", status: "succeeded", finishedAtMs: invokedAt + 3 },
+      ]);
+      vi.spyOn(nativeObservation, "readRelatedProcessDiagnostics").mockImplementation(() => {
+        const error = "observation failed token=synthetic-hidden-credential";
+        if (failure === "thrown") {
+          throw new Error(error);
+        }
+        return { ok: false, error, processes: [], truncated: false };
+      });
+      const fixture = startUpdate();
+      await vi.advanceTimersByTimeAsync(45_000);
+      expect(fixture.observations.updateSettlementProcesses).toEqual([
+        expect.objectContaining({ unavailable: expect.any(String) }),
+        expect.objectContaining({ unavailable: expect.any(String) }),
+      ]);
+      expect(JSON.stringify(fixture.observations)).not.toContain("synthetic-hidden-credential");
+      expect(fixture.recordProgress).not.toHaveBeenCalled();
+      fixture.command.resolve(JSON.stringify(success));
+      await expect(fixture.pending).resolves.toEqual(success);
+      expect(fixture.recordProgress.mock.calls.map(([phase]) => phase)).toEqual(["command:update"]);
+    },
+  );
 
   it("joins an outstanding ledger read before command completion and stops future observation", async () => {
     const read = createDeferredCore<UpdateRunRecord[]>();
