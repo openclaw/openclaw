@@ -2646,6 +2646,9 @@ function installControlUiMockGateway(
   }
 
   const exposed: ControlUiMockGateway = {
+    get online() {
+      return online;
+    },
     initialRosterDelivered: false,
     closeLatest(code, reason) {
       MockWebSocket.latest?.close(code ?? 1006, reason ?? "mock close");

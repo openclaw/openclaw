@@ -1,4 +1,5 @@
 import type { Locator, Page } from "playwright";
+import type { ApplicationGatewayPhase } from "../app/gateway.ts";
 import type { MockGatewayWindow } from "./control-ui-e2e-contract.ts";
 // Loaded CI runners regularly stall real Chromium renders past 10s; the larger
 // CI budget trades failure latency, not coverage (mirrors the ui-e2e vitest
@@ -24,6 +25,7 @@ export async function waitForControlUiInitialRoster(page: Page): Promise<void> {
                 documentMode: unknown;
                 focusLocation: unknown;
                 context?: {
+                  gateway?: { snapshot: { phase: ApplicationGatewayPhase } };
                   sessions?: {
                     state: {
                       loading: boolean;
@@ -40,6 +42,18 @@ export async function waitForControlUiInitialRoster(page: Page): Promise<void> {
         }
         if (!app.hasUpdated || app.isUpdatePending || !app.runtime) {
           return false;
+        }
+        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
+        const phase = app.runtime.context?.gateway?.snapshot.phase;
+        // Offline mock reloads keep a never-opened socket in "connecting". Read
+        // its transport owner; stopped/connecting/starting alone are cold boot.
+        if (
+          gateway?.online === false ||
+          phase === "reconnecting" ||
+          phase === "offline" ||
+          phase === "reload-required"
+        ) {
+          return true;
         }
         if (
           app.runtime.documentMode ||
@@ -72,7 +86,7 @@ export async function waitForControlUiInitialRoster(page: Page): Promise<void> {
         }
         const state = app.runtime.context?.sessions?.state;
         if (
-          !(window as MockGatewayWindow).openclawControlUiE2eGateway?.initialRosterDelivered ||
+          !gateway?.initialRosterDelivered ||
           !state?.result ||
           state.loading ||
           state.resultCached ||
