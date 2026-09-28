@@ -2,6 +2,7 @@ import { resolveProviderThinkingLevel } from "../../../auto-reply/thinking.js";
 import { projectModelThinkingCompat } from "../../model-catalog-lookup.js";
 import type { AgentSessionConfig } from "../../sessions/agent-session-types.js";
 import { resolveEmbeddedCompactionThinkingLevel } from "../compaction-runtime-context.js";
+import { mapThinkingLevel } from "../utils.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 /** Keep summary policy bound to the run's config while rechecking the active model and session level. */
@@ -39,7 +40,7 @@ export function createAttemptCompactionThinkingResolver(
       agentRuntime: "openclaw",
       level,
     });
-    // Core summaries accept concrete effort, not harness Ultra or provider-native Adaptive.
-    return providerLevel === "adaptive" ? "medium" : (providerLevel ?? "off");
+    // Summaries take the chat turn's concrete conversion, so provider-native Adaptive runs as high.
+    return mapThinkingLevel(providerLevel);
   };
 }

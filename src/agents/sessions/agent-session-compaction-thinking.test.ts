@@ -92,4 +92,24 @@ describe("AgentSession threshold compaction thinking", () => {
       expect(reasoning.slice(1)).toEqual([expected, expected]);
     },
   );
+
+  it("runs adaptive summaries at the chat turn's high effort on adaptive-capable models", () => {
+    const resolveCompactionThinkingLevel = createAttemptCompactionThinkingResolver(
+      {
+        config: { agents: { defaults: { compaction: { thinkingLevel: "adaptive" } } } },
+        sessionKey: undefined,
+        sandboxSessionKey: undefined,
+      },
+      "main",
+    );
+    const claude = {
+      ...testModel,
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+      api: "anthropic-messages" as const,
+      reasoning: true,
+    };
+
+    expect(resolveCompactionThinkingLevel(claude, "low")).toBe("high");
+  });
 });
