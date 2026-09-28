@@ -108,10 +108,18 @@ struct NativeConversationViewModelTests {
         for mode in [OpenClawWebConversation.Mode.native, .web, .native] {
             fixture.model.setWebConversationMode(mode)
             _ = try await AppKitTestSupport.waitForAccessibilityElement(
-                in: window, description: "the selected conversation layout")
+                in: window, description: "the \(mode) conversation layout")
             { elements in
                 let identity = elements.first { $0.accessibilityIdentifier?() == "chat-conversation-identity" }
-                guard mode == .web else { return identity }
+                guard mode == .web else {
+                    let menu = elements.first {
+                        let role = $0.accessibilityRole?()
+                        let names = [$0.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: $0)]
+                        return (role == .button || role == .popUpButton || role == .menuButton) &&
+                            (names.contains("Thread") || names.contains("More"))
+                    }
+                    return menu == nil ? nil : identity
+                }
                 guard identity == nil, detail.window === window,
                       detail.bounds.width > 0, detail.bounds.height > 0 else { return nil }
                 return elements.first { $0.accessibilityIdentifier?() == "conversation-detail-fixture" }
@@ -119,7 +127,9 @@ struct NativeConversationViewModelTests {
             let elements = try await AppKitTestSupport.accessibilityElements(in: window)
             let toolbar = try #require(elements.first { $0.accessibilityRole?() == .toolbar })
             let controls = try await AppKitTestSupport.accessibilityElements(in: toolbar)
-            let names = controls.compactMap { AppKitTestSupport.accessibilityName(of: $0) }
+            let names = controls.flatMap {
+                [$0.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: $0)].compactMap(\.self)
+            }
             if mode == .web {
                 #expect(!names.contains("New Thread"))
                 #expect(!names.contains("Thread"))
