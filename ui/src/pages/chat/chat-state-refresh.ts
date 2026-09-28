@@ -1,5 +1,5 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { GatewaySessionRow, ModelCatalogResult } from "../../api/types.ts";
+import type { ModelCatalogResult } from "../../api/types.ts";
 import type {
   ChatMetadataResult,
   ChatMetadataRefresh,
@@ -346,11 +346,8 @@ function refreshChatSessionFacts(host: ChatPageHost, binding: ChatMetadataBindin
   );
   const reconcile = observation.captureReconcile();
   binding.sessionFactsInvalidated = false;
-  const promise = binding.client
-    .request<{ session?: GatewaySessionRow | null }>("sessions.describe", {
-      key: binding.scope.sessionKey,
-      agentId,
-    })
+  const promise = binding.sessions
+    .describe({ key: binding.scope.sessionKey, agentId }, { client: binding.client, refresh: true })
     .then((result) => {
       if (!binding.isCurrent() || binding.version !== version) {
         return;

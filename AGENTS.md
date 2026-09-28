@@ -101,6 +101,7 @@ lightweight artifact, not load the plugin's execution runtime.
 These commands apply on the host permitted by the task and its workflow; they do
 not authorize local execution or a broader test plan.
 
+- For fs-safe dependency trouble, follow [on-demand vendoring instructions](scripts/vendor-fs-safe.md); keep vendor contents local and registry dependencies as the default.
 - Restore missing dependencies in a trusted normal checkout with `pnpm install`, then retry once before diagnosing a code defect. Never reconcile a shared/worktree install while other jobs use it.
 - Run the CLI through `pnpm openclaw ...` or `pnpm dev`, never `node --import tsx src/index.ts`; the supported wrappers own build freshness and process setup.
 - Use installed `oxfmt` for formatting and the repository's `tsgo` lanes for typechecking. Inspect scope with `pnpm changed:lanes --json`; use targeted tests/checks. When avoiding worktree reconciliation, use `node scripts/check-changed.mjs` or `node scripts/run-vitest.mjs` with ready dependencies. Host restrictions still apply.

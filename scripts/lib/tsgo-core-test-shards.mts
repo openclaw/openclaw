@@ -169,11 +169,11 @@ function isChangedCiTsgoInput(file: string): boolean {
   );
 }
 
-/** Compiler inventories include erased type imports and cross-family consumers. */
-export function selectChangedCiTsgoGraphs(
+/** Admit narrowing before compiler discovery; undefined retains every canonical graph. */
+export function resolveChangedCiTsgoInputs(
   paths: readonly string[],
-  graphs: readonly { config: string; files: readonly string[] }[],
-): readonly { name: string; config: string }[] | undefined {
+  exists?: (file: string) => boolean,
+): readonly string[] | undefined {
   // Documentation and UI styles cannot change compiler inputs. Keep data and
   // configuration paths for the conservative admission below.
   const compilerPaths = paths.filter(
@@ -182,6 +182,21 @@ export function selectChangedCiTsgoGraphs(
   if (
     compilerPaths.length === 0 ||
     !compilerPaths.every(isChangedCiTsgoInput) ||
+    (exists && !paths.every(exists))
+  ) {
+    return undefined;
+  }
+  return compilerPaths;
+}
+
+/** Compiler inventories include erased type imports and cross-family consumers. */
+export function selectChangedCiTsgoGraphs(
+  paths: readonly string[],
+  graphs: readonly { config: string; files: readonly string[] }[],
+): readonly { name: string; config: string }[] | undefined {
+  const compilerPaths = resolveChangedCiTsgoInputs(paths);
+  if (
+    !compilerPaths ||
     graphs.length !== TSGO_CI_GRAPHS.length ||
     TSGO_CI_GRAPHS.some(
       (expected) => graphs.filter((graph) => graph.config === expected.config).length !== 1,

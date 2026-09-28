@@ -242,6 +242,7 @@ export class SqliteWorkerBroker {
         sqliteWorkerRequestBytes(input, options.stateContext, options.preparation),
         {
           dispatchState: opening.openDispatch,
+          signal: options.signal,
           assertCurrent: options.assertCurrent,
           maintenanceScope: options.maintenanceScope,
           createAdmission: options.createAdmission ?? options.createOpenAdmission,
@@ -387,9 +388,10 @@ export class SqliteWorkerBroker {
     return this.lifecycle.retireActor(identity);
   }
 
-  getActorIdentity(store: object): object {
+  getActorIdentity(store: object): Readonly<Pick<Actor, "key" | "databasePath">> {
     const client = this.stores.get(store);
-    if (!client || client.sealed || !client.actor.stateContext || !client.isAvailable()) {
+    // Retained facts remain readable after worker failure; dispatch owns liveness.
+    if (!client || client.sealed || !client.actor.stateContext) {
       throw new SqliteWorkerError("SQLite shared actor binding is unavailable", "closed");
     }
     return client.actor;

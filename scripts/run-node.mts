@@ -12,11 +12,16 @@ import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { getCommandArgsWithRootOptions } from "../src/infra/cli-root-options.ts";
+import { applyCliProfileEnv, parseCliProfileArgs } from "../src/cli/profile.ts";
+import {
+  getCommandArgsWithRootOptions,
+  getRootOptionAwareCommandPath,
+} from "../src/infra/cli-root-options.ts";
 import {
   distArtifactEntryArgs,
   withDistArtifactOwnership,
 } from "./lib/dist-artifact-ownership.mts";
+import { resolveLiveManagedGatewayDistFence } from "./lib/live-gateway-dist-fence.mts";
 import {
   BUILD_STAMP_FILE,
   RUNTIME_POSTBUILD_STAMP_FILE,
@@ -644,7 +649,7 @@ const formatBuildReason = (reason: BuildRequirement["reason"]) => BUILD_REASON_L
 const formatRuntimePostBuildReason = (reason: RuntimePostBuildRequirement["reason"]) =>
   RUNTIME_POSTBUILD_REASON_LABELS[reason];
 
-const refuseImmutableDeploymentMutation = async (
+const refuseImmutableDeploymentMutation = (
   deps: RunNodeDeps,
   artifactKind: "build" | "runtime",
   reason: string,
@@ -654,7 +659,7 @@ const refuseImmutableDeploymentMutation = async (
     "Replace this deployment with a complete release, then use its installed `openclaw` command or run `node openclaw.mjs ...` from that release.\n";
   deps.stderr.write(message);
   deps.outputTee?.write(message);
-  return await closeRunNodeOutputTee(deps, 1);
+  return 1;
 };
 
 const SIGNAL_EXIT_CODES = {
@@ -1345,11 +1350,9 @@ const withRunNodeBuildLock = async <T,>(deps: RunNodeDeps, callback: () => Promi
 };
 
 const withRunNodeRuntimePublication = async <T,>(deps: RunNodeDeps, publish: () => Promise<T>) => {
-  const [{ withGatewayRuntimeArtifactPublication }, { parseCliProfileArgs, applyCliProfileEnv }] =
-    await Promise.all([
-      import("../src/cli/update-cli/update-command-service-publication.ts"),
-      import("../src/cli/profile.ts"),
-    ]);
+  deps.cancellation.signal.throwIfAborted();
+  const { withGatewayRuntimeArtifactPublication } =
+    await import("../src/cli/update-cli/update-command-service-publication.ts");
   deps.cancellation.signal.throwIfAborted();
   const selected = parseCliProfileArgs([deps.execPath, "openclaw.mjs", ...deps.args]);
   if (!selected.ok) {
@@ -1397,14 +1400,30 @@ const writeRuntimePostBuildStamp = (deps: RunNodeDeps) => {
   }
 };
 
+const refuseLiveDistMutation = async (deps: RunNodeDeps) => {
+  const fence = await resolveLiveManagedGatewayDistFence(deps.cwd, { env: deps.env });
+  if (!fence.refuse) {
+    return false;
+  }
+  const message = `${fence.message}\n`;
+  deps.stderr.write(message);
+  deps.outputTee?.write(message);
+  return true;
+};
+
 const syncRuntimeArtifactsAndStamp = async (deps: RunNodeDeps) =>
   withDistArtifactOwnership(
     deps.cwd,
     async () => {
+      deps.cancellation.signal.throwIfAborted();
       if (!resolveRuntimePostBuildRequirement(deps).shouldSync) {
         return true;
       }
       return await withRunNodeRuntimePublication(deps, async () => {
+        if (await refuseLiveDistMutation(deps)) {
+          return false;
+        }
+        deps.cancellation.signal.throwIfAborted();
         const synced = await syncRuntimeArtifacts(deps);
         deps.cancellation.signal.throwIfAborted();
         if (synced) {
@@ -1422,16 +1441,44 @@ const shouldSkipWatchRuntimeSync = (deps: RunNodeDeps, requirement: RuntimePostB
   hasDirtyRuntimePostBuildInputs(deps) !== true &&
   !hasMissingRequiredRuntimePostBuildOutput(deps);
 
-const isGatewayClientCommand = (args: string[]) =>
-  args[0] === "dashboard" ||
-  (args[0] === "gateway" && (args[1] === "call" || args[1] === "status")) ||
-  (args[0] === "agent" && !args.includes("--local"));
+const resolveRunNodeCommandPath = (args: string[], depth: number) =>
+  getRootOptionAwareCommandPath(["node", "openclaw", ...args], depth);
+
+const isGatewayClientCommand = (args: string[]) => {
+  const [primary, secondary] = resolveRunNodeCommandPath(args, 2);
+  return (
+    primary === "dashboard" ||
+    (primary === "gateway" && (secondary === "call" || secondary === "status")) ||
+    (primary === "agent" && !args.includes("--local"))
+  );
+};
+
+const isGatewayRecoveryCommand = (args: string[]) => {
+  const [primary, secondary] = resolveRunNodeCommandPath(args, 2);
+  return primary === "gateway" && (secondary === "stop" || secondary === "restart");
+};
+
+const shouldFastPathExistingDistForGatewayRecovery = (deps: RunNodeDeps) =>
+  isGatewayRecoveryCommand(deps.args) &&
+  deps.env.OPENCLAW_FORCE_BUILD !== "1" &&
+  statMtime(deps.distEntry, deps.fs) != null;
 
 const shouldFastPathExistingDistForGatewayClient = (deps: RunNodeDeps) =>
   isGatewayClientCommand(deps.args) &&
   deps.env.OPENCLAW_FORCE_BUILD !== "1" &&
   statMtime(deps.distEntry, deps.fs) != null &&
   canUseStampedGatewayClientDist(deps);
+
+const shouldFastPathExistingDist = (deps: RunNodeDeps) =>
+  shouldFastPathExistingDistForGatewayRecovery(deps) ||
+  shouldFastPathExistingDistForGatewayClient(deps);
+
+const applyRunNodeCliProfile = (args: string[], env: NodeJS.ProcessEnv, execPath: string) => {
+  const parsed = parseCliProfileArgs([execPath, "openclaw", ...args]);
+  if (parsed.ok && parsed.profile) {
+    applyCliProfileEnv({ profile: parsed.profile, env });
+  }
+};
 
 const canUseStampedGatewayClientDist = (deps: RunNodeDeps) => {
   const currentHead = resolveGitHead(deps);
@@ -1492,9 +1539,12 @@ const runQaReportFromSource = (deps: RunNodeDeps, script: QaReportScript) => {
 function createRunNodeDeps(params: RunNodeMainParams) {
   const cwd = params.cwd ?? process.cwd();
   const distRoot = path.join(cwd, "dist");
+  const args = params.args ?? process.argv.slice(2);
+  const execPath = params.execPath ?? process.execPath;
   const env = params.env ? { ...params.env } : { ...process.env };
   // Select this checkout's plugins over tracked installs without changing source/dist loading.
   env.OPENCLAW_DEV_SOURCE_ROOT ??= cwd;
+  applyRunNodeCliProfile(args, env, execPath);
   const mutableState: RunNodeMutableState = {
     outputTee: null,
     runNodeProgress: undefined,
@@ -1506,9 +1556,9 @@ function createRunNodeDeps(params: RunNodeMainParams) {
     stderr: params.stderr ?? process.stderr,
     stdout: params.stdout ?? process.stdout,
     process: params.process ?? process,
-    execPath: params.execPath ?? process.execPath,
+    execPath,
     cwd,
-    args: params.args ?? process.argv.slice(2),
+    args,
     env,
     platform: params.platform ?? process.platform,
     signalProcess:
@@ -1561,17 +1611,19 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<RunNo
 
   try {
     let exitCode: RunNodeExit = 1;
-    if (shouldFastPathExistingDistForGatewayClient(deps)) {
+    if (shouldFastPathExistingDist(deps)) {
       exitCode = await runOpenClaw(deps);
       return await finishRun(exitCode);
     }
     const buildRequirement = resolveBuildRequirement(deps);
     const immutableDeployment = isImmutableGitDeployment(deps);
     if (immutableDeployment && buildRequirement.shouldBuild) {
-      return await refuseImmutableDeploymentMutation(
-        deps,
-        "build",
-        formatBuildReason(buildRequirement.reason),
+      return await finishRun(
+        refuseImmutableDeploymentMutation(
+          deps,
+          "build",
+          formatBuildReason(buildRequirement.reason),
+        ),
       );
     }
     const qaReportScript = resolveQaReportSourceScript(deps, buildRequirement);
@@ -1587,10 +1639,12 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<RunNo
     if (!buildRequirement.shouldBuild) {
       const runtimePostBuildRequirement = resolveRuntimePostBuildRequirement(deps);
       if (immutableDeployment && runtimePostBuildRequirement.shouldSync) {
-        return await refuseImmutableDeploymentMutation(
-          deps,
-          "runtime",
-          formatRuntimePostBuildReason(runtimePostBuildRequirement.reason),
+        return await finishRun(
+          refuseImmutableDeploymentMutation(
+            deps,
+            "runtime",
+            formatRuntimePostBuildReason(runtimePostBuildRequirement.reason),
+          ),
         );
       }
       if (
@@ -1617,7 +1671,7 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<RunNo
     }
 
     const buildExitCode = await withRunNodeBuildLock(deps, async () => {
-      if (shouldFastPathExistingDistForGatewayClient(deps)) {
+      if (shouldFastPathExistingDist(deps)) {
         return 0;
       }
       const lockedBuildRequirement = resolveBuildRequirement(deps);
@@ -1633,15 +1687,19 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<RunNo
         return (await syncRuntimeArtifactsAndStamp(deps)) ? 0 : 1;
       }
 
-      logRunner(
-        `Building TypeScript (dist is stale: ${lockedBuildRequirement.reason} - ${formatBuildReason(lockedBuildRequirement.reason)}).`,
-        deps,
-      );
       return await withDistArtifactOwnership(
         deps.cwd,
         () =>
-          withRunNodeRuntimePublication(deps, () =>
-            withRunNodeProgress(deps, "Building local CLI artifacts", async () => {
+          withRunNodeRuntimePublication(deps, async () => {
+            if (await refuseLiveDistMutation(deps)) {
+              return 1;
+            }
+            logRunner(
+              `Building TypeScript (dist is stale: ${lockedBuildRequirement.reason} - ${formatBuildReason(lockedBuildRequirement.reason)}).`,
+              deps,
+            );
+            return await withRunNodeProgress(deps, "Building local CLI artifacts", async () => {
+              deps.cancellation.signal.throwIfAborted();
               const build = asRunNodeChild(
                 deps.spawn(
                   deps.execPath,
@@ -1662,8 +1720,8 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<RunNo
               pipeSpawnedOutput(build, deps, { stdoutTarget: "stderr" });
               const result = await waitForSpawnedProcess(build, deps);
               return getInterruptedSpawnOutcome(result, deps.platform) ?? result.exitCode ?? 1;
-            }),
-          ),
+            });
+          }),
         deps.cancellation.signal,
       );
     });

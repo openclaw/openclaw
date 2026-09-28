@@ -37,50 +37,6 @@
       }
     },
     {
-      "id": "computer-control",
-      "origin": "known-blocker",
-      "feature": "Gateway computer control",
-      "owner": "Computer control on Bun task (src/gateway/desktop/computer-process.ts)",
-      "callSite": "src/gateway/desktop/computer-process.ts",
-      "step": null,
-      "notExercisedReason": "Linux lane has no explicitly enabled desktop computer provider."
-    },
-    {
-      "id": "chrome-mcp-user-profile",
-      "origin": "known-blocker",
-      "feature": "Managed Chrome MCP",
-      "owner": "Chrome MCP on Bun task (extensions/browser/src/browser/chrome-mcp-options.ts)",
-      "callSite": "extensions/browser/src/browser/chrome-mcp-options.ts",
-      "step": "browser",
-      "evidence": [
-        "spawn",
-        "failure"
-      ],
-      "failure": "Chrome MCP requires a Node.js executable on PATH",
-      "match": {
-        "stack": [
-          "normalizeChromeMcpOptions"
-        ]
-      }
-    },
-    {
-      "id": "tool-search-code-probe",
-      "origin": "known-blocker",
-      "feature": "Tool Search code mode",
-      "owner": "tool_search_code on Bun task (src/agents/tool-search-code-mode.ts)",
-      "callSite": "src/agents/tool-search-config.ts isToolSearchCodeModeSupported, reached from agent tool-surface preparation and Doctor collectAgentRuntimeToolSchemaFindings",
-      "step": "agent",
-      "evidence": "spawn",
-      "match": {
-        "stack": [
-          "isToolSearchCodeModeSupported"
-        ],
-        "argv": [
-          "const requiredFlag=\"--permission\""
-        ]
-      }
-    },
-    {
       "id": "node-host-auto-update-discovery",
       "origin": "known-blocker",
       "feature": "Node host updater",

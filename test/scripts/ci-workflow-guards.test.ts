@@ -6603,7 +6603,22 @@ server.listen(0, "127.0.0.1", () => {
           for (const step of [buildStep, boundaryCleanupStep]) {
             expect(evaluateWorkflowExpression(step.if, context), step.name).toBe(full);
           }
-          for (const step of [boundaryPrepareStep, bunSetup, warmStep]) {
+          for (const step of [boundaryRestoreStep, boundaryPrepareStep, boundarySaveStep]) {
+            expect(
+              evaluateWorkflowExpression(step.if, {
+                ...context,
+                runnerEnvironment: expectedRunner.startsWith("blacksmith-")
+                  ? "self-hosted"
+                  : "github-hosted",
+                steps: {
+                  "setup-node-env": { outputs: { "cache-mode": "read-write" } },
+                  "extension-package-boundary-cache": { outputs: { "cache-hit": "false" } },
+                },
+              }),
+              step.name,
+            ).toBe(expectedRunner !== "ubuntu-24.04");
+          }
+          for (const step of [bunSetup, warmStep]) {
             expect(step.if, step.name).toBeUndefined();
           }
           expect(evaluateWorkflowExpression(warmAssertionStep.if, context)).toBe(true);
@@ -9159,8 +9174,37 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       result.status,
       `${result.error?.message ?? ""}\n${result.stdout}\n${result.stderr}`,
     ).toBe(0);
-    expect(manifest).toContain("run_node=true\n");
+    expect(manifest).toContain("run_node=false\n");
     expect(manifest).toContain("run_windows=true\n");
+    const outputs = Object.fromEntries(
+      manifest
+        .trim()
+        .split("\n")
+        .map((line) => {
+          const separator = line.indexOf("=");
+          return [line.slice(0, separator), line.slice(separator + 1)];
+        }),
+    );
+    expect(
+      JSON.parse(expectDefined(outputs.checks_node_core_nondist_matrix, "Node test matrix")),
+    ).toEqual({
+      include: [],
+    });
+    expect(
+      JSON.parse(expectDefined(outputs.checks_windows_matrix, "Windows test matrix")).include
+        .length,
+    ).toBeGreaterThan(0);
+    expect(outputs.ui_test_groups_gzip_base64).toBeTruthy();
+  });
+
+  it("rejects package imports in the preflight dependency smoke", () => {
+    const { result } = runDependencyFreePreflight(
+      'import "typescript";',
+      tempDirs.make("ci-preflight-forbidden-dependency-"),
+      testNodeExecPath,
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Unexpected preflight dependency: typescript");
   });
 
   it("runs mobile protocol coverage for Node and native-only changes", () => {

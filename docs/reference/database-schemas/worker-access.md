@@ -94,13 +94,28 @@ not recreate a missing file. Preparing a new database directory and quarantining
 orphaned sidecars require the existing schema-maintenance owner; later permission
 hardening never recreates a removed directory.
 
-Cached shared-state actors retain their original database-generation admission.
-The owner checks each matching actor separately from the caller: an invalid idle
-candidate retires before reuse, including after relocation or inode reuse. Active
-callbacks must settle before replacement. A current actor can serve a new schema
-scope, but a caller's ended scope still rejects with its original error.
-This prevents migrations from recreating retired paths or acquiring leases in the
-wrong database. Existing update drivers and stored schemas need no migration.
+Cached shared-state actors retain their opening path independently of client
+aliases. Cold path binding retires vanished aliases while preserving live hardlinks;
+warm admission checks use the retained identity maps rather than polling the
+filesystem. Reuse and command admission check the actor's known opening-path
+binding even after its original client closes. An entry retains the lifecycle
+owner's physical path admission separately from the original caller's schema scope.
+Each matching actor is checked separately from the caller. A current actor can serve
+a new schema scope, but an ended caller scope still rejects with its original error.
+Each requesting caller still needs complete live admission. A retired secondary
+alias closes only its client, so healthy peers can continue while
+that client's callbacks settle. Losing the actor's opening path requires its active
+work to settle before replacement. A lazy actor retains its admitted device/inode
+key until its first writable native open. Birth time is not a long-lived incarnation
+token: Node can report ctime or zero, and healthy metadata updates can change it.
+The generic broker's supplied file-key contract is unchanged; lifecycle admission
+owns generation changes that the file key alone cannot identify. A cold open refuses
+a missing or replaced source before acquiring schema authority or creating files,
+including device identity, audit, and existing-schema lease writers. An external removal that has not yet
+reached cold path binding does not authorize recreating the actor's opening path.
+This prevents Doctor and plugin migrations from recreating retired paths or
+acquiring leases in the wrong database. Existing update
+drivers and stored schemas need no migration.
 
 Each SQLite broker worker admits up to 128 running and queued requests. A busy
 worker's admission queue does not consume another worker's request capacity;
@@ -674,6 +689,14 @@ physical target, and caller authority are unchanged. It never replays a dispatch
 operation or accepts target reassociation. Recovery callers await the result and
 recheck their live authority before admission or reply decisions.
 Transaction predicates and commit checks stay with their existing writers.
+Persistent reply admission uses that same executor for lease registration,
+initialization, and the entry read. It retains a claim on the worker's verified
+native generation while admission waits for writers, active turns, or delivery. Queued preparation retains its original target and borrows
+the executor after earlier attempts settle, so cancelling one opening does not
+retire another caller's pending admission. Clearing a reply revokes the claim
+immediately; the existing successor barrier joins its asynchronous release before
+later admission proceeds.
+Discarded reads and failed admission also join their borrowed executor release.
 Process-held incognito entries retain their native owner until its complete
 worker cutover; this does not make the whole reply path free of host SQLite.
 
