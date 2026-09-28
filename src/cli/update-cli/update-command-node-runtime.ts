@@ -15,11 +15,11 @@ import {
 } from "./update-command-executor.js";
 import { prepareUpdateCommandNativeGate } from "./update-command-native-gate.js";
 import type { PackageRuntimeRecovery } from "./update-command-node-runtime-resolution.js";
-import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
-import {
-  resolvePackageRuntimePreflight,
-  type PackageRuntimePreflight,
-} from "./update-command-service-plan.js";
+import type {
+  PackageRuntimePreflight,
+  PreManagedServiceStop,
+} from "./update-command-service-context-types.js";
+import { resolvePackageRuntimePreflight } from "./update-command-service-plan.js";
 
 /** Only a live updater may provision; discovery never reads dotenv-selected paths. */
 export function createPackageRuntimeRecovery(params: {

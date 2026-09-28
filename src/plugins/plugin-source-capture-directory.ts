@@ -17,6 +17,7 @@ import { removeTemporaryArtifacts } from "../infra/temp-artifact-cleanup.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   pluginSourceCaptureMaintenance,
+  pluginSourceCaptureStateDir,
   runInPluginSourceCaptureContext,
 } from "./plugin-source-capture-context.js";
 import { observePluginNativeLoads } from "./plugin-source-capture-native-loads.js";
@@ -582,8 +583,8 @@ function scheduleCaptureCleanup(key: string, instance: Instance): void {
 }
 
 /** Artifact custody survives until every producer and metadata owner releases it. */
-export function retainPluginSourceCaptureInstance(stateDir = resolveStateDir()) {
-  const key = path.resolve(stateDir);
+export function retainPluginSourceCaptureInstance(stateDir?: string) {
+  const key = path.resolve(stateDir ?? pluginSourceCaptureStateDir.getStore() ?? resolveStateDir());
   const maintenance = pluginSourceCaptureMaintenance.getStore();
   const scheduler = maintenance?.scheduler;
   scheduler?.signal.throwIfAborted();
@@ -682,7 +683,7 @@ export function retainPluginSourceCaptureInstance(stateDir = resolveStateDir()) 
 }
 
 /** Native snapshots become durable only after their installed-index receipt is published. */
-export function createPluginNativeCaptureRoot(stateDir = resolveStateDir()) {
+export function createPluginNativeCaptureRoot(stateDir?: string) {
   const instance = retainPluginSourceCaptureInstance(stateDir);
   try {
     const root = instance.createNativeDirectory();

@@ -43,6 +43,46 @@ const MODEL_ERROR = {
 };
 
 describe("worker inference provider runtime", () => {
+  it("reuses the Gateway's boundary cache key across calls and rotates it after a boundary", async () => {
+    const runtime = setup();
+    for (const boundaryCount of [0, 0, 2]) {
+      runtime.readPromptCacheContext.mockReturnValue({ boundaryCount });
+      const inferenceRequest = request();
+      Object.assign(inferenceRequest.options, { promptCacheKey: "worker-chosen-key" });
+      await expect(runtime.executor(params(inferenceRequest, vi.fn()))).resolves.toMatchObject({
+        type: "done",
+      });
+    }
+    expect(runtime.stream.mock.calls.map((call) => call[2]?.promptCacheKey)).toEqual([
+      `${SESSION_ID}:0`,
+      `${SESSION_ID}:0`,
+      `${SESSION_ID}:2`,
+    ]);
+    expect(runtime.stream.mock.calls.map((call) => call[2]?.sessionId)).toEqual([
+      SESSION_ID,
+      SESSION_ID,
+      SESSION_ID,
+    ]);
+  });
+
+  it("preserves an explicit Gateway cache key and refuses a missing prepared owner", async () => {
+    const runtime = setup();
+    runtime.readPromptCacheContext.mockReturnValue({
+      boundaryCount: 3,
+      promptCacheKey: " gateway-explicit-cache ",
+    });
+    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
+      type: "done",
+    });
+    expect(runtime.stream.mock.calls[0]?.[2]?.promptCacheKey).toBe("gateway-explicit-cache");
+    runtime.readPromptCacheContext.mockReturnValue(undefined);
+    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
+      type: "error",
+      reason: "session-not-attached",
+    });
+    expect(runtime.stream).toHaveBeenCalledOnce();
+  });
+
   it("prepares an approved model available only from the bundled static catalog", async () => {
     const runtime = setup(sessionEntry, { catalogOnlyModel: true });
 
@@ -317,6 +357,7 @@ describe("worker inference provider runtime", () => {
       ...inferenceRequest.options,
       signal: expect.any(AbortSignal),
       sessionId: SESSION_ID,
+      promptCacheKey: `${SESSION_ID}:0`,
       apiKey: AUTH_MARKER,
     });
     expect(emitted.map((event) => event.type)).toEqual([
@@ -791,8 +832,12 @@ describe("worker inference provider runtime", () => {
     }
   });
 
-  it("projects worker options before applying provider stream policy", async () => {
+  it("projects worker options and isolates provider policy mutations", async () => {
     const runtime = setup();
+    runtime.applyStreamPolicy.mockImplementation((_agent, _cfg, _provider, _model, options) => {
+      Object.assign(options?.thinkingBudgets ?? {}, { low: 1 });
+      return { effectiveExtraParams: {}, nativeWebSearchAllowedByToolPolicy: undefined };
+    });
     const inferenceRequest = request();
     Object.assign(inferenceRequest.options, {
       extra_body: { mode: "worker" },
@@ -807,8 +852,10 @@ describe("worker inference provider runtime", () => {
       temperature: 0.25,
       maxTokens: 256,
       reasoning: "low",
-      thinkingBudgets: { low: 96 },
+      thinkingBudgets: { low: 1 },
     });
+    expect(runtime.stream.mock.calls[0]?.[2]?.thinkingBudgets).toEqual({ low: 96 });
+    expect(inferenceRequest.options.thinkingBudgets).toEqual({ low: 96 });
   });
 
   it("preserves adaptive provider policy while lowering the core stream effort", async () => {
