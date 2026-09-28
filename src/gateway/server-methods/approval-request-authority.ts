@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   listAgentIds,
   tryResolveLegacyCompatibilityAgentId,
@@ -10,6 +11,7 @@ import { isPerAgentSessionStoreConfig } from "../../config/sessions/session-stor
 import { resolvePersistedSessionStoreOwner } from "../../config/sessions/session-store-owner.js";
 import { listConfiguredSessionStoreAgentIds } from "../../config/sessions/targets-configured-agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveGatewayAuthPolicyGeneration } from "../auth-policy.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
@@ -22,6 +24,7 @@ import {
   onOperatorRolePolicyChanged,
   resolveGatewayOperatorRoleActor,
 } from "../operator-role-policy.js";
+import { resolveSessionStoreIdentity } from "../session-store-key.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -47,6 +50,52 @@ function captureApprovalConfigPolicy(config: OpenClawConfig) {
   };
 }
 
+type ApprovalSource = { sessionKey: string | null; agentId: string | null };
+
+/**
+ * Commit facts for one resolved approval source: its route and the stores it resolves through.
+ * Shared fixed stores select an owner among co-tenants, and unconfigured owners discover
+ * through every configured store root, so those keep the matching inventory.
+ */
+function captureApprovalSourcePolicy(config: OpenClawConfig, source: ApprovalSource) {
+  const { agents, configuredStores, stores, ...policy } = captureApprovalConfigPolicy(config);
+  const { sessionKey, agentId } = source;
+  if (!sessionKey) {
+    // Approval visibility resolves no session store without a source session.
+    return policy;
+  }
+  let identity: ReturnType<typeof resolveSessionStoreIdentity> | null;
+  try {
+    identity = resolveSessionStoreIdentity({
+      cfg: config,
+      sessionKey,
+      ...(agentId ? { agentId } : {}),
+    });
+  } catch {
+    identity = null;
+  }
+  const owners = new Set(
+    [parseAgentSessionKey(sessionKey)?.agentId, agentId, identity?.agentId].flatMap((owner) =>
+      owner ? [normalizeAgentId(owner)] : [],
+    ),
+  );
+  return {
+    ...policy,
+    identity,
+    owners: [...owners].toSorted().map((owner) => {
+      const path = resolveSessionStorePathCore(config.session?.store, { agentId: owner });
+      const configured = configuredStores.includes(owner);
+      return {
+        agentId: owner,
+        listed: agents.includes(owner),
+        configured,
+        path,
+        stores: configured ? stores.filter((store) => store.path === path) : stores,
+      };
+    }),
+  };
+}
+
 /** Retain the original invocation; copying options loses its request-owner binding. */
 export function createApprovalRequestAuthority(options: GatewayRequestHandlerOptions) {
   const authority = readGatewayRequestMutationAuthority(options);
@@ -66,21 +115,53 @@ export function createApprovalRequestAuthority(options: GatewayRequestHandlerOpt
   const resolveGatewayContext = options.context.resolveGatewayContext;
   const gatewayContext = resolveGatewayContext?.() ?? options.context;
   const getConfig = readCommittedConfig ?? readRuntimeConfig;
-  const configPolicy = captureApprovalConfigPolicy(getConfig());
+  let captureConfigPolicy: (config: OpenClawConfig) => unknown = captureApprovalConfigPolicy;
+  let configPolicy = captureConfigPolicy(getConfig());
+  let boundSource: ApprovalSource | undefined;
   const accessRevision = readGatewayAccessRevision();
   let configRevoked = false;
   let closed = false;
+  const observeConfig = () => {
+    try {
+      configRevoked = !isDeepStrictEqual(configPolicy, captureConfigPolicy(getConfig()));
+    } catch {
+      configRevoked = true;
+    }
+  };
   const releaseConfig = onOperatorRolePolicyChanged((change) => {
     if (change.kind !== "config" || change.context !== gatewayContext || configRevoked) {
       return;
     }
+    // Observe every committed transition, including revoke/restore between two checks.
+    observeConfig();
+  });
+  // Until the approval source is known, any roster or store edit can change what a lookup
+  // may reach. Once bound, only that source's route and stores stay part of the fence.
+  const bindSource = (record: { sessionKey?: string | null; agentId?: string | null }) => {
+    const source = {
+      sessionKey: normalizeOptionalString(record.sessionKey) ?? null,
+      agentId: normalizeOptionalString(record.agentId) ?? null,
+    };
+    if (boundSource) {
+      configRevoked ||= !isDeepStrictEqual(boundSource, source);
+      return;
+    }
+    if (configRevoked) {
+      return;
+    }
+    // A commit whose publication has not arrived yet must not become the narrowed baseline.
+    observeConfig();
+    if (configRevoked) {
+      return;
+    }
+    boundSource = source;
+    captureConfigPolicy = (config) => captureApprovalSourcePolicy(config, source);
     try {
-      // Observe every committed transition, including revoke/restore between two checks.
-      configRevoked = !isDeepStrictEqual(configPolicy, captureApprovalConfigPolicy(getConfig()));
+      configPolicy = captureConfigPolicy(getConfig());
     } catch {
       configRevoked = true;
     }
-  });
+  };
   const assertPolicyCurrent = () => {
     const currentActor = resolveGatewayOperatorRoleActor(client);
     const legacy = method.startsWith("exec.approval.") || method.startsWith("plugin.approval.");
@@ -132,6 +213,7 @@ export function createApprovalRequestAuthority(options: GatewayRequestHandlerOpt
   };
   return {
     guard,
+    bindSource,
     assertCurrent,
     assertCommitCurrent: guard.assertCurrent,
     isCurrent: () => {

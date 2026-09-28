@@ -108,8 +108,13 @@ fail-closed settlement.
 
 Request config custody follows committed policy publications. Equivalent snapshots
 and settings unrelated to approval auth or session routing preserve the request.
-Changes to those retained policy facts permanently revoke it, including a change
-restored before the next worker check. Handler completion releases its publication
+Until the request binds its approval's source session, the retained facts include
+the whole agent roster and session store inventory. Once bound, it retains the
+routing facts plus the stores that source resolves through, so adding, removing, or
+re-storing an unrelated agent preserves it. Shared fixed stores keep their co-tenants,
+and a retired source owner keeps the inventory its store discovery scans. Changes to
+retained facts permanently revoke the request, including a change restored before
+the next worker check. Handler completion releases its publication
 listener; worker commit checks consume the retained revocation fact without loading
 config, profiles, or session rows. Native-compatible requests retain the same
 publication fence in addition to their synchronous SDK guard.
