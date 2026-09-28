@@ -2666,10 +2666,11 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-online__open-icon {
   display: inline-block;
-  width: calc(11px * var(--control-ui-text-scale));
-  height: calc(11px * var(--control-ui-text-scale));
+  /* The glyph fills about 9/10 of its box, so a 10px box matches the 9px spinner. */
+  width: calc(10px * var(--control-ui-text-scale));
+  height: calc(10px * var(--control-ui-text-scale));
   margin-inline-end: 4px;
-  vertical-align: -0.125em;
+  vertical-align: -0.03em;
 }
 
 .sidebar-online__open-icon svg {
