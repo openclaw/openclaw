@@ -175,17 +175,6 @@ type GatewayStartupTrace = {
   measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
 };
 
-function createRuntimeStore(): ChannelRuntimeStore {
-  return {
-    lifetimes: new Map(),
-    routeHandoffs: new Map(),
-    starting: new Map(),
-    stops: new Map(),
-    tasks: new Map(),
-    runtimes: new Map(),
-  };
-}
-
 type ChannelManagerOptions = {
   scheduler: GatewayScheduler;
   getRuntimeConfig: () => OpenClawConfig;
@@ -382,7 +371,14 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     if (existing) {
       return existing;
     }
-    const next = createRuntimeStore();
+    const next: ChannelRuntimeStore = {
+      lifetimes: new Map(),
+      routeHandoffs: new Map(),
+      starting: new Map(),
+      stops: new Map(),
+      tasks: new Map(),
+      runtimes: new Map(),
+    };
     channelStores.set(channelId, next);
     return next;
   };
