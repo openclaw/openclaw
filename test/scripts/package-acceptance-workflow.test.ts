@@ -4970,6 +4970,19 @@ function runReleaseChecksSummary(params: {
 }
 
 describe("package acceptance workflow", () => {
+  it("keeps manual frozen-target adaptation explicit and forwards the reusable contract", () => {
+    const workflow = readWorkflow(PACKAGE_ACCEPTANCE_WORKFLOW);
+    const name = "allow_frozen_target_scenario_omissions";
+    const input = workflow.on?.workflow_dispatch?.inputs?.[name];
+    expect(input).toEqual(workflow.on?.workflow_call?.inputs?.[name]);
+    expect(input).toMatchObject({ required: false, default: false, type: "boolean" });
+    for (const job of ["docker_acceptance", "docker_acceptance_registry", "package_telegram"]) {
+      expect(workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, job).with?.[name]).toBe(
+        "${{ inputs.allow_frozen_target_scenario_omissions || false }}",
+      );
+    }
+  });
+
   it("forwards sealed publication inputs through the canonical publish dispatch", () => {
     const workflow = readWorkflow(RELEASE_PUBLISH_WORKFLOW);
     const input = workflow.on?.workflow_dispatch?.inputs?.plugin_sdk_api_acknowledgement;

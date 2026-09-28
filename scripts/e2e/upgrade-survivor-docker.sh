@@ -116,6 +116,9 @@ NODE
   *) exit "$context_status" ;;
 esac
 openclaw_resolve_frozen_upgrade_survivor_capabilities "$ROOT_DIR"
+UPGRADE_COMPAT_ENV_ARGS+=(
+  -e "OPENCLAW_FROZEN_UPGRADE_SURVIVOR_TOOL_SEARCH_RECIPE=$OPENCLAW_FROZEN_UPGRADE_SURVIVOR_TOOL_SEARCH_RECIPE"
+)
 if [ "$UPGRADE_TARGET_TRAIN" = extended-stable ]; then
   if [ -n "${OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS:-}" ]; then
     echo "Selected extended-stable target does not support OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS with its frozen upgrade survivor runner." >&2
