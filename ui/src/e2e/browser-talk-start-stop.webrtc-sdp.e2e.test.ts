@@ -35,8 +35,7 @@ async function waitForWebRtcSdpFetch(page: Page) {
 suite.define(() => {
   it("cancels a failed OpenAI WebRTC SDP response body in the live Control UI", async () => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        heldMethods: ["chat.startup"],
+      await installMockGateway(page, {
         historyMessages: [TALK_READY_HISTORY_MESSAGE],
         methodResponses: {
           "talk.catalog": videoTalkCatalog("openai"),
@@ -53,8 +52,6 @@ suite.define(() => {
       await installWebRtcSdpFailureFixture(page);
 
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
-      await gateway.resolveDeferred("chat.startup");
       await waitForTalkReady(page);
       await expect
         .poll(() => page.locator('[data-chat-talk-capability="realtime"]').count())
@@ -89,8 +86,7 @@ suite.define(() => {
 
   it("rejects and cancels an oversized OpenAI SDP answer before peer setup", async () => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        heldMethods: ["chat.startup"],
+      await installMockGateway(page, {
         historyMessages: [TALK_READY_HISTORY_MESSAGE],
         methodResponses: {
           "talk.catalog": videoTalkCatalog("openai"),
@@ -107,8 +103,6 @@ suite.define(() => {
       await installOversizedWebRtcSdpFixture(page);
 
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
-      await gateway.resolveDeferred("chat.startup");
       await waitForTalkReady(page);
       await expect
         .poll(() => page.locator('[data-chat-talk-capability="realtime"]').count())
