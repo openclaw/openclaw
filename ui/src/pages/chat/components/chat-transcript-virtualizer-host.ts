@@ -425,8 +425,8 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       cancelAnimationFrame(this.pendingScrollFrame);
       this.pendingScrollFrame = null;
     }
+    this.threadInnerElement = null;
     if (!this.connected) {
-      this.threadInnerElement = null;
       return;
     }
     this.connected = false;
@@ -436,7 +436,6 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     for (const controller of this.controllers) {
       controller.hostDisconnected?.();
     }
-    this.threadInnerElement = null;
   }
 
   dispose(): void {
@@ -608,6 +607,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       this.virtualizerController.getVirtualizer(),
       { source, behavior },
       () => this.cancelScroll(),
+      () => this.queueConnectedRowMeasure(),
     );
     if (behavior !== "smooth") {
       this.endAnchor.capture(this.scrollElement);

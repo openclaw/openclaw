@@ -22,6 +22,7 @@ const physical = vi.hoisted(() => ({
   events: [] as unknown[],
   beforeDispatch: undefined as (() => void) | undefined,
   openGate: undefined as Promise<void> | undefined,
+  databaseAdmission: undefined as OpenClawStateWorkerContext["admission"] | undefined,
   ownerKey: Symbol("synthetic-shared-worker-owner"),
 }));
 
@@ -40,6 +41,12 @@ vi.mock("../shared/global-singleton.js", async (importOriginal) => {
 });
 
 vi.mock("./openclaw-state-db-cache.js", () => ({
+  captureOpenClawStateDatabaseReadAdmission: () => {
+    if (!physical.databaseAdmission) {
+      throw new Error("Synthetic database admission is not initialized");
+    }
+    return physical.databaseAdmission;
+  },
   getOpenClawStateDatabaseTerminalFailureAsync: async () => undefined,
   publishOpenClawStateDatabaseWorkerAdmission: () => {},
   registerOpenClawStateDatabaseAsyncResource: () => () => {},
@@ -93,6 +100,7 @@ afterEach(() => {
   physical.events = [];
   physical.beforeDispatch = undefined;
   physical.openGate = undefined;
+  physical.databaseAdmission = undefined;
 });
 
 function createLeaseFixture() {
@@ -138,6 +146,7 @@ function createLeaseFixture() {
     },
     environment: { OPENCLAW_STATE_DIR: "/synthetic" },
   };
+  physical.databaseAdmission = context.admission;
   return { maintenance, context };
 }
 

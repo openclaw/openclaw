@@ -22,7 +22,7 @@ permissions:
 
 jobs:
   qualify:
-    runs-on: xcode-27
+    runs-on: xcode-27-xlarge
     timeout-minutes: 240
     env:
       TARGET_SHA: ${{ inputs.target_sha || github.sha }}

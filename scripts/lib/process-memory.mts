@@ -203,11 +203,7 @@ function resolveCgroupMemoryLimitPaths(params: MemoryLimitParams = {}) {
     let hierarchyMetadataUnreadable = false;
     for (const mount of mounts) {
       const mountInitialPathCount = paths.length;
-      const mountRootSegments = mount.root.split("/").filter(Boolean);
-      if (mountRootSegments.length > 0 && mountRootSegments.every((segment) => segment === "..")) {
-        continue;
-      }
-      const relative = relativeCgroupPath(mount.root, cgroupPath ?? mount.root);
+      const relative = relativeCgroupPath(mount.root, cgroupPath);
       if (relative === null) {
         continue;
       }
@@ -252,7 +248,6 @@ function resolveCgroupMemoryLimitPaths(params: MemoryLimitParams = {}) {
   let sawObservedV2Root = false;
   let sawUnreadableV1HierarchyMetadata = false;
   let sawV1MemoryRecord = false;
-  let sawRejectedCgroupMapping = false;
   let sawUnresolvedCgroupLimit = false;
   for (const line of rawCgroup.split("\n")) {
     const record = /^\d+:([^:]*):(.*)$/u.exec(line);
@@ -267,7 +262,6 @@ function resolveCgroupMemoryLimitPaths(params: MemoryLimitParams = {}) {
         cgroupPath === "/" && mounts.unified.some((mount) => mount.observed && mount.root === "/");
       const resolved = addHierarchy(mounts.unified, CGROUP_V2_MEMORY_LIMIT_FILES, cgroupPath);
       sawObservedV2Mapping ||= resolved.addedObservedPath;
-      sawRejectedCgroupMapping ||= !resolved.added;
       sawUnresolvedCgroupLimit ||= !resolved.added;
     } else if (controllers.split(",").includes("memory")) {
       sawMemoryRecord = true;
@@ -279,7 +273,6 @@ function resolveCgroupMemoryLimitPaths(params: MemoryLimitParams = {}) {
         "memory.use_hierarchy",
       );
       sawUnreadableV1HierarchyMetadata ||= resolved.hierarchyMetadataUnreadable;
-      sawRejectedCgroupMapping ||= !resolved.added;
       sawUnresolvedCgroupLimit ||= !resolved.added;
     }
   }
@@ -299,7 +292,6 @@ function resolveCgroupMemoryLimitPaths(params: MemoryLimitParams = {}) {
     sawMemoryRecord,
     sawObservedV2Mapping,
     sawObservedUnconstrainedV2Root: sawObservedV2Root && !sawV1MemoryRecord,
-    sawRejectedCgroupMapping,
     sawUnresolvedCgroupLimit,
     sawUnreadableV1HierarchyMetadata,
     sawV1MemoryRecord,
@@ -325,7 +317,6 @@ function readCgroupMemoryLimitBytes(params: MemoryLimitParams = {}) {
         sawMemoryRecord: false,
         sawObservedV2Mapping: false,
         sawObservedUnconstrainedV2Root: false,
-        sawRejectedCgroupMapping: false,
         sawUnresolvedCgroupLimit: false,
         sawUnreadableV1HierarchyMetadata: false,
         sawV1MemoryRecord: false,
@@ -336,7 +327,6 @@ function readCgroupMemoryLimitBytes(params: MemoryLimitParams = {}) {
   const rlimitMemoryBytes = readProcessRlimitMemoryBytes(params);
   const constrainedMemoryBytes =
     resolvedPaths.sawV1MemoryRecord ||
-    resolvedPaths.sawRejectedCgroupMapping ||
     resolvedPaths.sawUnresolvedCgroupLimit ||
     resolvedPaths.sawUnreadableV1HierarchyMetadata
       ? 0

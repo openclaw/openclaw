@@ -288,7 +288,7 @@ describe("runtime placement observations", () => {
       );
       expect(corpusJob).toBeDefined();
       expect(handoffJob).toBeDefined();
-      // These recorded workloads exceed the shared 440s budget, including
+      // These recorded workloads exceed the shared 360s budget, including
       // preparation. Added files must not make the known reader appear cheap.
       expect(corpusJob).not.toBe(handoffJob);
     } finally {
@@ -485,15 +485,18 @@ describe("runtime placement observations", () => {
         infrastructure,
         ...(gatewayRecipient ? [] : ["test/vitest/vitest.gateway-database-workers.config.ts"]),
       ]);
-      // Synthetic recipients must not inherit production costs that split their fixture jobs.
-      const compactSpy = vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue(
-        gatewayRecipient
-          ? {
-              "agentic-gateway-server-isolated": 30,
-              "agentic-agents-core-subagents": 20,
-            }
-          : {},
+      // Keep full inventories, but make spare placement capacity independent of
+      // growing production prices. Runtime observations below supply the overload.
+      const compactCosts = new Proxy<Record<string, number>>(
+        { "agentic-gateway-server-isolated": 30, "agentic-agents-core-subagents": 20 },
+        {
+          get: (target, key) =>
+            typeof key === "string" ? (target[key] ?? 39) : Reflect.get(target, key),
+        },
       );
+      const compactSpy = vi
+        .spyOn(testTimings, "readCompactGroupTimings")
+        .mockReturnValue(compactCosts);
       const spy = vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
       const options = {
         compactMode,
@@ -557,11 +560,11 @@ describe("runtime placement observations", () => {
           includePatterns: group.includePatterns!,
           pretestBuildMode: "runtime",
           seconds: group.configs.includes(runtimeConfig)
-            ? 200
+            ? 180
             : group.includePatterns?.includes(
                   "src/infra/update-managed-service-handoff-lifecycle.test.ts",
                 )
-              ? 300
+              ? 250
               : 20,
         }));
         spy.mockImplementation((profile) => (profile === "blacksmith" ? blacksmith : []));
@@ -628,7 +631,7 @@ describe("runtime placement observations", () => {
           }
         }
         for (const job of changed) {
-          expect(job.predictedSeconds).toBeLessThanOrEqual(440);
+          expect(job.predictedSeconds).toBeLessThanOrEqual(360);
           expect(job.planConcurrency).toBe(1);
           expect(job.groups.every((group) => !isExclusiveCompactShardName(group.shard_name))).toBe(
             true,
@@ -659,11 +662,12 @@ describe("runtime placement observations", () => {
           before.map((job) => [job.checkName, job.runner, job.groups]),
         );
         const readerJob = unmeasured.find((job) =>
-          job.groups.some((group) => group.configs.includes(runtimeConfig)),
+          job.groups.some((group) => group.includePatterns?.includes(selected[0]!)),
         )!;
-        // The 300s sibling costs 261s in hybrid plus one 100s build. Unknown readers
-        // retain a positive cost instead of disappearing from that shared estimate.
-        expect(readerJob.predictedSeconds).toBeGreaterThan(361);
+        // Known siblings cost 218s + a 39s cold floor, plus one 60s build.
+        // The unknown reader still contributes positive cost within the 360s budget.
+        expect(readerJob.predictedSeconds).toBeGreaterThan(317);
+        expect(readerJob.predictedSeconds).toBeLessThanOrEqual(360);
         spy.mockImplementation((profile) =>
           profile === "blacksmith"
             ? blacksmith.map((entry) => Object.assign({}, entry, { seconds: 1_000 }))
@@ -674,7 +678,7 @@ describe("runtime placement observations", () => {
         expect(unfit.map((job) => [job.checkName, job.runner, job.groups])).toEqual(
           before.map((job) => [job.checkName, job.runner, job.groups]),
         );
-        expect(unfit.some((job) => (job.predictedSeconds ?? 0) > 440)).toBe(true);
+        expect(unfit.some((job) => (job.predictedSeconds ?? 0) > 360)).toBe(true);
       } finally {
         spy.mockRestore();
         compactSpy.mockRestore();

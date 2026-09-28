@@ -5,6 +5,10 @@ import {
 import { assertNoActiveSqliteReaders } from "../infra/sqlite-reader-lifecycle.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
 import { SQLITE_WORKER_PREPARE_COMMAND } from "../infra/sqlite-worker-contract.js";
+import {
+  assertExistingDatabaseIdentity,
+  readDatabasePathIdentitySync,
+} from "../infra/sqlite-worker-identity.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import {
@@ -81,10 +85,21 @@ function createSharedStateWorkerBackend(
   initialDatabase?: OpenClawStateDatabase,
 ): OpenClawStateWorkerBackend {
   let nativeDatabase = initialDatabase;
+  const existingIdentity = initialDatabase
+    ? undefined
+    : readDatabasePathIdentitySync(context.databasePath);
   let borrow = nativeDatabase ? retainOpenClawStateDatabase(nativeDatabase) : undefined;
   let closed = false;
+  const assertOpening = () => {
+    if (!nativeDatabase && existingIdentity) {
+      // An artifact-preserving actor can outlive its original pathname before
+      // its first writable open. Never recreate or adopt a replacement file.
+      assertExistingDatabaseIdentity(context.databasePath, existingIdentity.key);
+    }
+  };
   const open = (): OpenClawStateDatabase => {
     if (!nativeDatabase) {
+      assertOpening();
       const opened = openOpenClawStateDatabase({
         path: context.databasePath,
         env: stateDatabaseInitializationEnvironment(),
@@ -184,6 +199,7 @@ function createSharedStateWorkerBackend(
         });
       }
       if (command.type === "deviceIdentity.load") {
+        assertOpening();
         try {
           return loadOrCreateDeviceIdentity({
             path: context.databasePath,
@@ -212,6 +228,9 @@ function createSharedStateWorkerBackend(
         );
       }
       if (command.type === "stateLease.acquire") {
+        if (command.input.schemaPolicy === "existing") {
+          assertOpening();
+        }
         return acquireOpenClawStateLeaseInWorker(command.input, context.databasePath, open);
       }
       if (

@@ -219,10 +219,7 @@ const WHOLE_CONFIG_FILE_OWNERS = new Map<
     "agentic-gateway-server-isolated",
     { listFiles: () => [...gatewayServerIsolatedTestFiles, ...gatewayDatabaseWorkerTestFiles] },
   ],
-  [
-    "agentic-cli",
-    { listFiles: () => listScopedOwnerTestFiles(getCliVitestProjectOwner()), splitByFile: false },
-  ],
+  ["agentic-cli", { listFiles: () => listScopedOwnerTestFiles(getCliVitestProjectOwner()) }],
   ["agentic-cli-process", { listFiles: () => cliProcessTestFiles }],
   [
     "agentic-agents-support",

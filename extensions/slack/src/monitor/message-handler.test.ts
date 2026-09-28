@@ -750,10 +750,7 @@ describe("createSlackMessageHandler", () => {
       const second = handleTwin(secondSource);
       await vi.waitFor(() => expect(enqueueMock).toHaveBeenCalledTimes(2));
 
-      const entries = enqueueMock.mock.calls.map((call) => call[0]) as Array<
-        Record<string, unknown>
-      >;
-      await runOnFlush(entries);
+      await runOnFlush(enqueueMock.mock.calls.map(([entry]) => entry as Record<string, unknown>));
 
       await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
       expect(prepareSlackMessageMock).toHaveBeenCalledExactlyOnceWith(
@@ -843,48 +840,50 @@ describe("createSlackMessageHandler", () => {
     expect(dispatchPreparedSlackMessageMock).not.toHaveBeenCalled();
   });
 
-  it("preserves distinct messages and identities in the same debounced flush", async () => {
-    const { handler } = createHandlerWithTracker();
-    const messages = [
-      { ts: "1709000000.001779", text: "first message" },
-      { ts: "1709000000.001780", text: "second message" },
-    ] as const;
-    const handled = messages.map((message) =>
-      handler(
-        {
-          type: "message",
-          channel: "D111",
-          user: "U111",
-          ...message,
-        } as never,
-        { source: "message", awaitDispatch: true },
-      ),
-    );
-    await vi.waitFor(() => expect(enqueueMock).toHaveBeenCalledTimes(2));
+  it.each(["verified", "asserted"] as const)(
+    "preserves coalesced messages and %s sender assurance",
+    async (authentication) => {
+      const { handler } = createHandlerWithTracker();
+      const messages = [
+        { ts: "1709000000.001779", text: "first message" },
+        { ts: "1709000000.001780", text: "second message" },
+      ] as const;
+      const handled = messages.map((message, index) =>
+        handler(
+          {
+            type: "message",
+            channel: authentication === "verified" ? "D111" : "D112",
+            user: "U111",
+            ...message,
+          } as never,
+          { source: "message", senderAuthentication: index === 0 ? authentication : "verified" },
+        ),
+      );
+      await expect(Promise.all(handled)).resolves.toEqual([undefined, undefined]);
+      expect(enqueueMock).toHaveBeenCalledTimes(2);
 
-    const entries = enqueueMock.mock.calls.map((call) => call[0]) as Array<Record<string, unknown>>;
-    await runOnFlush(entries);
+      const entries = enqueueMock.mock.calls.map((call) => call[0]) as Array<
+        Record<string, unknown>
+      >;
+      await runOnFlush(entries);
 
-    await expect(Promise.all(handled)).resolves.toEqual([undefined, undefined]);
-    expect(prepareSlackMessageMock).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        message: expect.objectContaining({ text: "first message\nsecond message" }),
-      }),
-    );
-    expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(1);
-    const prepared = dispatchPreparedSlackMessageMock.mock.calls[0]?.[0] as {
-      ctxPayload: {
-        MessageSids?: string[];
-        MessageSidFirst?: string;
-        MessageSidLast?: string;
-      };
-    };
-    expect(prepared.ctxPayload).toMatchObject({
-      MessageSids: [messages[0].ts, messages[1].ts],
-      MessageSidFirst: messages[0].ts,
-      MessageSidLast: messages[1].ts,
-    });
-  });
+      expect(prepareSlackMessageMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          message: expect.objectContaining({ text: "first message\nsecond message" }),
+          opts: expect.objectContaining({ senderAuthentication: authentication }),
+        }),
+      );
+      expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          ctxPayload: expect.objectContaining({
+            MessageSids: [messages[0].ts, messages[1].ts],
+            MessageSidFirst: messages[0].ts,
+            MessageSidLast: messages[1].ts,
+          }),
+        }),
+      );
+    },
+  );
 
   it("propagates debounced dispatch failures to relay delivery", async () => {
     dispatchPreparedSlackMessageMock.mockRejectedValueOnce(new Error("dispatch failed"));

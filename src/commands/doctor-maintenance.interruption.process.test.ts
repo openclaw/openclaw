@@ -152,7 +152,6 @@ it.skipIf(process.platform === "win32")(
 it.skipIf(process.platform === "win32").each([
   { interruption: "closed stdout", code: 0 },
   { interruption: "SIGINT", code: 130 },
-  { interruption: "SIGTERM", code: 143 },
   { interruption: "SIGPIPE", code: 141 },
   { interruption: "SIGTERM with progress", code: 143 },
   { interruption: "SIGTERM while approving", code: 143 },

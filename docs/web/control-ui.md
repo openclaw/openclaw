@@ -63,6 +63,11 @@ dashboard turns collapse their narration and tool activity under **Worked for â€
 above the answer. Expanding it restores the sequence with the existing tool-call
 groups. When no run duration is available, the heading reads **Worked**.
 
+Consecutive tool activity shares one expandable log, including when background
+work resumes in a new run. Visible messages, media, and conversation markers
+keep their place and separate logs; live response text and the working indicator
+stay outside the log. Grouping changes only the presentation, not the transcript.
+
 When an incoming message causes an unstarted tool call to be skipped, its card
 and work summary show **Skipped**, including after reloading the conversation.
 Approval blocks and tool failures keep their separate outcomes.

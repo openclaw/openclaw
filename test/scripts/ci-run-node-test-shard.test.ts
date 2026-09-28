@@ -639,6 +639,47 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     },
   );
 
+  it.each(["bun-compatible", "dual"] as const)(
+    "runs native Bun PTY coverage on Bun while retaining process siblings on Node under %s",
+    async (policy) => {
+      const bunFile = "src/process/terminal-pty-bun.test.ts";
+      const nodeFile = "src/process/terminal-pty.test.ts";
+      const seen: Array<{ runtime: string | undefined; includes: string[] }> = [];
+      await expect(
+        runShardPlans(
+          [
+            {
+              kind: "group",
+              name: "process",
+              plan: {
+                configs: ["test/vitest/vitest.process.config.ts"],
+                includePatterns: [bunFile, nodeFile],
+              },
+            },
+          ],
+          {
+            env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: policy },
+            scratchDir: makeScratchDir(),
+            runChild: async (_args, env) => {
+              seen.push({
+                runtime: env.OPENCLAW_VITEST_RUNTIME,
+                includes: JSON.parse(readFileSync(env.OPENCLAW_VITEST_INCLUDE_FILE!, "utf8")),
+              });
+              return 0;
+            },
+          },
+        ),
+      ).resolves.toBe(0);
+      expect(seen).toEqual([
+        { runtime: "node", includes: policy === "dual" ? [bunFile, nodeFile] : [nodeFile] },
+        { runtime: "bun", includes: [bunFile] },
+      ]);
+      expect(resolveCiTestRuntimeSelections({ targets: [bunFile] }, policy)).toEqual(
+        policy === "dual" ? [{ runtime: "node" }, { runtime: "bun" }] : [{ runtime: "bun" }],
+      );
+    },
+  );
+
   it("intersects unit-fast glob envelopes before partitioning runtimes", () => {
     expect(
       resolveCiTestRuntimeSelections(

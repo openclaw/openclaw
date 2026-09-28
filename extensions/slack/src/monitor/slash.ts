@@ -15,7 +15,6 @@ import {
   formatCommandArgMenuTitle,
   resolveEffectiveAgentRuntime,
   resolveStoredModelOverride,
-  type ChatCommandDefinition,
   type CommandArgs,
   resolveNativeCommandSessionTargets,
 } from "openclaw/plugin-sdk/command-auth-native";
@@ -33,7 +32,6 @@ import {
 import type {
   PluginCommandCatalogDecision,
   PluginCommandNativeCandidate,
-  PluginCommandReplyOptions,
 } from "openclaw/plugin-sdk/plugin-command-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
@@ -58,12 +56,13 @@ import {
 } from "./context.js";
 import { resolveSlackDeferredActionTarget } from "./deferred-action-routing.js";
 import { authorizeSlackDirectMessage } from "./dm-auth.js";
-import { resolveSlackListenerEventScope, type SlackEventScope } from "./event-scope.js";
+import { resolveSlackListenerEventScope } from "./event-scope.js";
 import {
   createSlackExternalArgMenuStore,
   SLACK_EXTERNAL_ARG_MENU_PREFIX,
   type SlackExternalArgMenuChoice,
 } from "./external-arg-menu-store.js";
+import { resolveSlackSenderAuthentication } from "./ingress.js";
 import { resolveSlackSessionEventRoutingContext } from "./message-handler/prepare-routing.js";
 import { escapeSlackMrkdwn } from "./mrkdwn.js";
 import { isSlackChannelAllowedByPolicy } from "./policy.js";
@@ -73,6 +72,7 @@ import {
 } from "./response-url-budget.js";
 import { resolveSlackRoomContextHints } from "./room-context.js";
 import { captureSlackSessionTargetGuard } from "./session-run-targets.js";
+import type { SlackCommandInvocation } from "./types.js";
 
 const SLACK_COMMAND_ARG_ACTION_ID = "openclaw_cmdarg";
 const SLACK_COMMAND_ARG_ACTION_LISTENER = /^openclaw_cmdarg/;
@@ -380,28 +380,7 @@ export function createSlackCommandHandler(params: {
     monitor.slashCommand ?? startupAccount.config.slashCommand,
   );
 
-  return async (p: {
-    command: Pick<
-      SlackCommandMiddlewareArgs["command"],
-      "user_id" | "user_name" | "channel_id" | "channel_name"
-    > &
-      Partial<Pick<SlackCommandMiddlewareArgs["command"], "trigger_id">>;
-    threadTs?: string;
-    eventTs?: string;
-    builtInCommand?: "stop";
-    sessionTarget?: ResolvedAgentRoute;
-    onAdmitted?: () => boolean | void;
-    isSessionTargetCurrent?: () => boolean;
-    ack: SlackCommandMiddlewareArgs["ack"];
-    respond: (message: Parameters<SlackCommandMiddlewareArgs["respond"]>[0]) => Promise<unknown>;
-    responseTransport?: "response-url" | "web-api";
-    body?: unknown;
-    eventScope?: SlackEventScope;
-    prompt: string;
-    commandArgs?: CommandArgs;
-    commandDefinition?: ChatCommandDefinition;
-    pluginCommandReplyOptions?: PluginCommandReplyOptions;
-  }) => {
+  return async (p: SlackCommandInvocation) => {
     const {
       command,
       ack,
@@ -546,6 +525,7 @@ export function createSlackCommandHandler(params: {
         ctx,
         teamId: eventScope?.teamId ?? ctx.teamId,
         senderId: command.user_id,
+        senderAuthentication: p.senderAuthentication,
         senderName,
         channelType: channelType ?? "channel",
         channelId: command.channel_id,
@@ -982,6 +962,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         }),
         body,
         eventScope,
+        senderAuthentication: resolveSlackSenderAuthentication(args.context),
         ...input,
       });
     });
@@ -1219,6 +1200,7 @@ export async function registerSlackMonitorSlashCommands(params: {
       responseTransport: respond ? "response-url" : "web-api",
       body,
       eventScope,
+      senderAuthentication: resolveSlackSenderAuthentication(args.context),
       prompt,
       commandArgs,
       commandDefinition: commandDefinition ?? undefined,

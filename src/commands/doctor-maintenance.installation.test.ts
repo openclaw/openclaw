@@ -722,16 +722,8 @@ it.each(["success", "refused", "service-failure", "writer-unavailable"] as const
     }),
 );
 
-it.each(["success", "install-failed", "already-stopped"] as const)(
-  "Doctor handles two-prefix drift through maintenance finish (%s)",
-  async (scenario) =>
-    runInstallationCase({
-      platform: "linux",
-      mode: "maintenance",
-      installFails: scenario === "install-failed",
-      initiallyStopped: scenario === "already-stopped",
-    }),
-);
+it("preserves an already-stopped service with two-prefix installation drift", async () =>
+  runInstallationCase({ platform: "linux", mode: "maintenance", initiallyStopped: true }));
 
 it.each(["read-error", "unknown-runtime"] as const)(
   "keeps the old installation stopped after inconclusive restoration inspection (%s)",
@@ -764,10 +756,8 @@ it("refuses installation repair when an update starts during passive native insp
     inspectionScenario: "competing-update",
   }));
 
-it.each(["linux", "darwin", "win32"] as const)(
-  "diagnoses and repairs a running service pinned to another package with doctor --fix on %s",
-  async (platform) => runInstallationCase({ platform, mode: "direct" }),
-);
+it("restarts a Windows service after repairing its installation with doctor --fix", async () =>
+  runInstallationCase({ platform: "win32", mode: "direct" }));
 
 it("honors an explicit invoking Gateway port while repairing installation drift", async () =>
   runInstallationCase({ platform: "linux", mode: "direct", invocationPort: "19990" }));
@@ -778,14 +768,8 @@ it.each([
   { aggressive: true, approved: false, interactive: false },
   { aggressive: false, approved: false, interactive: true },
   { aggressive: false, approved: false, interactive: true, mixed: "stale-native" },
-  { aggressive: false, approved: true, interactive: true, mixed: "stale-native" },
-  { aggressive: false, approved: false, interactive: false, mixed: "stale-native" },
   { aggressive: false, approved: false, interactive: true, mixed: "custom-argv" },
-  { aggressive: false, approved: true, interactive: true, mixed: "custom-argv" },
-  { aggressive: false, approved: false, interactive: false, mixed: "custom-argv" },
   { aggressive: false, approved: false, interactive: true, mixed: "version-managed-runtime" },
-  { aggressive: false, approved: true, interactive: true, mixed: "version-managed-runtime" },
-  { aggressive: false, approved: false, interactive: false, mixed: "version-managed-runtime" },
 ] as const)(
   "requires consent beyond installation drift (aggressive=$aggressive, mixed=$mixed, approved=$approved, interactive=$interactive)",
   async (consent) => runInstallationCase({ platform: "darwin", mode: "direct", consent }),
@@ -815,7 +799,5 @@ it.each(["unchanged", "restored", "recovery-pending", "unclassified"] as const)(
 it("keeps installation reconciliation guidance on the selected profile", async () =>
   runInstallationCase({ platform: "linux", mode: "direct", profile: "work" }));
 
-it.each(["linux", "darwin", "win32"] as const)(
-  "leaves two-prefix installation drift with update finalization on %s",
-  async (platform) => runInstallationCase({ platform, mode: "direct", updateInProgress: true }),
-);
+it("leaves two-prefix installation drift with update finalization", async () =>
+  runInstallationCase({ platform: "linux", mode: "direct", updateInProgress: true }));

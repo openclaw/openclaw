@@ -10,6 +10,7 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   isMutatingNativeToolItem,
   isNonSuccessItemStatus,
@@ -215,13 +216,8 @@ export class CodexToolTranscriptProjection {
   }
 
   recordRawNativeToolItem(item: JsonObject): void {
-    const type = typeof item.type === "string" ? item.type : undefined;
-    const callId =
-      typeof item.call_id === "string"
-        ? item.call_id
-        : typeof item.callId === "string"
-          ? item.callId
-          : undefined;
+    const type = readString(item, "type");
+    const callId = readString(item, "call_id") ?? readString(item, "callId");
     if (!callId) {
       return;
     }
@@ -259,25 +255,14 @@ export class CodexToolTranscriptProjection {
       } else if (type === "function_call" && typeof item.arguments === "string") {
         try {
           const parsed: unknown = JSON.parse(item.arguments);
-          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-            const parsedArguments = parsed as Record<string, unknown>;
+          if (isJsonObject(parsed)) {
             if (item.name === "apply_patch") {
-              args = parsedArguments;
+              args = parsed;
             } else {
-              const command =
-                typeof parsedArguments.cmd === "string"
-                  ? parsedArguments.cmd
-                  : typeof parsedArguments.command === "string"
-                    ? parsedArguments.command
-                    : undefined;
+              const command = readString(parsed, "cmd") ?? readString(parsed, "command");
               const patch = readInterceptedNativePatchInput(command);
               if (patch) {
-                const workdir =
-                  typeof parsedArguments.workdir === "string"
-                    ? parsedArguments.workdir
-                    : typeof parsedArguments.cwd === "string"
-                      ? parsedArguments.cwd
-                      : undefined;
+                const workdir = readString(parsed, "workdir") ?? readString(parsed, "cwd");
                 const cwd = patch.cwd
                   ? workdir && !path.isAbsolute(patch.cwd)
                     ? path.join(workdir, patch.cwd)
@@ -666,9 +651,8 @@ export class CodexToolTranscriptProjection {
 
   private createToolResultMessage(params: ToolTranscriptResultInput) {
     const response = this.rawNativeToolOutputByCallId.get(params.id);
-    const text = response ?? params.text ?? toolResultStatusText(params);
     const message = createAgentHarnessToolResultMessage(
-      { ...params, text },
+      { ...params, text: response ?? params.text },
       this.nextTranscriptTimestamp(),
     );
     return {
@@ -694,10 +678,6 @@ function formatRetainedCommandResult(processId: string): string {
 
 function formatMissingToolResultError(params: { id: string; name: string }): string {
   return `${MISSING_TOOL_RESULT_ERROR} toolCallId=${params.id}; toolName=${params.name}`;
-}
-
-function toolResultStatusText(params: ToolTranscriptResultInput): string {
-  return params.isError ? `${params.name} failed` : `${params.name} completed`;
 }
 
 function resolveStartedAtFromDurationMs(durationMs: unknown): number | undefined {

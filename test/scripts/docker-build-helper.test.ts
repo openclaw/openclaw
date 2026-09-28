@@ -3266,8 +3266,9 @@ outer
       "send $'\\r'",
       'wait_for_log "How should I set things up?"',
       "send $'\\r'",
-      'wait_for_log "Model/auth provider"',
+      'model_auth_prompt="$(wait_for_model_auth_prompt 120)"',
       "send $'\\r'",
+      'if [ "$model_auth_prompt" = "provider-picker" ]',
       'wait_for_log "Use which detected AI?"',
       "send $'\\r'",
     ]);
@@ -6640,6 +6641,7 @@ export async function sha256File(file) {
       HELPER_PATH,
       "scripts/lib/docker-e2e-logs.sh",
       "scripts/lib/docker-e2e-container.sh",
+      "scripts/lib/docker-e2e-watchdog.mjs",
       "scripts/lib/docker-e2e-resource-diagnostics.sh",
       PREPUBLISH_PLUGIN_REGISTRY_HELPER_PATH,
     ]) {

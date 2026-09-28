@@ -29,7 +29,7 @@ type WorkerWorkspaceJournalOwner = {
   placementGeneration: number;
 };
 
-function isCurrentJournalOwner(
+export function isCurrentJournalOwner(
   db: DatabaseSync,
   placement: WorkerSessionPlacementRecord | undefined,
   owner: WorkerWorkspaceJournalOwner,

@@ -217,6 +217,94 @@ describe("update readiness generation", () => {
     },
   );
 
+  it.each(["first read", "after listener observation", "recovery"])(
+    "records expired readiness work before it settles (%s)",
+    async (phase) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      mockProcessPlatform("linux");
+      const entered = createDeferred();
+      const released = createDeferred<GatewayServiceRuntime>();
+      const service = makeGatewayService({ status: "running", pid: 8000 });
+      let readRuntime = false;
+      vi.mocked(service.readRuntime).mockImplementation(() => {
+        if (phase === "after listener observation" && !readRuntime) {
+          readRuntime = true;
+          return Promise.resolve({ status: "running", pid: 8000 });
+        }
+        entered.resolve();
+        return released.promise;
+      });
+      vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
+      const result: UpdateRunResult = { status: "ok", mode: "npm", steps: [], durationMs: 0 };
+      const onVerified = vi.fn();
+      const lateMutation = vi.fn();
+      const recoverHealth: Parameters<typeof verifyUpdatedGateway>[0]["recoverHealth"] =
+        phase === "recovery"
+          ? async (health, _reinspect, assertCurrent) => {
+              entered.resolve();
+              await released.promise;
+              assertCurrent();
+              lateMutation();
+              return { health, launchAgentRecovery: null };
+            }
+          : undefined;
+      let outcome: unknown;
+      let settled = false;
+      pendingVerification = verifyUpdatedGateway({
+        result,
+        opts: { json: true, run: { runId: "stalled-readiness", env: {} } },
+        serviceEnv: { HOME: "/synthetic-home" },
+        gatewayPort: 18789,
+        expectedVersion: "2026.9.4",
+        requireRunningService: true,
+        timeoutMs: 1_000,
+        settle: { probes: 1 },
+        signal: controller.signal,
+        onVerified,
+        recoverHealth,
+        health:
+          phase === "recovery"
+            ? {
+                healthy: false,
+                waitOutcome: "stopped-free",
+                runtime: { status: "stopped" },
+                portUsage: { port: 18789, status: "free", listeners: [], hints: [] },
+                staleGatewayPids: [],
+              }
+            : undefined,
+      }).then(
+        (value) => {
+          outcome = value;
+          settled = true;
+        },
+        (error: unknown) => {
+          outcome = error;
+          settled = true;
+        },
+      );
+      try {
+        await entered.promise;
+        monotonicClock.nowMs = 1_000;
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(settled).toBe(true);
+        expect(outcome).toMatchObject({ ok: false });
+        expect(result.steps).toContainEqual(
+          expect.objectContaining({ name: "gateway verification", exitCode: 1 }),
+        );
+        expect(onVerified).not.toHaveBeenCalled();
+        released.resolve({ status: "running", pid: 8000 });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(onVerified).not.toHaveBeenCalled();
+        expect(lateMutation).not.toHaveBeenCalled();
+      } finally {
+        controller.abort();
+        released.resolve({ status: "running", pid: 8000 });
+        await pendingVerification;
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("prefers a pending recovery observation over previously saved healthy facts", async () => {
     const result: UpdateRunResult = { status: "error", mode: "npm", steps: [], durationMs: 0 };
     await expect(
@@ -501,7 +589,7 @@ describe("update readiness generation", () => {
       if (startup !== "stable") {
         expect(result.stopReason).toBeUndefined();
       }
-      expect(recoverHealth).toHaveBeenCalledTimes(startup === "stable" ? 0 : 1);
+      expect(recoverHealth).not.toHaveBeenCalled();
       expect(updateResult.steps[0]?.exitCode).toBe(startup === "stable" ? 0 : 1);
     },
   );
@@ -679,14 +767,15 @@ describe("update readiness generation", () => {
       const result = await verification;
       const verified = unchanged && transition !== "unchanged-at-deadline";
       expect(result.ok).toBe(verified);
-      if (transition === "unchanged-at-deadline") {
-        expect(result.stopReason).toBe("gateway-readiness-pending");
-        expect(updateResult.steps[0]?.exitCode).toBe(0);
-      }
-      if (transition === "replacement-at-deadline") {
-        expect(result).toMatchObject({ ok: false, summary: "generation-changed" });
+      if (transition.endsWith("-at-deadline")) {
+        // The held HTTP read exhausted the budget; identity cannot be reread afterward.
+        expect(result).toMatchObject({ ok: false, summary: "timeout" });
         expect(result.stopReason).toBeUndefined();
         expect(updateResult.steps[0]?.exitCode).toBe(1);
+        expect(updateResult.steps[0]?.failureFacts).toContainEqual(
+          expect.objectContaining({ code: "timeout" }),
+        );
+        expect(callGateway).toHaveBeenCalledTimes(12);
       }
       if (transition === "readyz-error") {
         expect(result).toMatchObject({ ok: false, summary: "readyz-unhealthy" });

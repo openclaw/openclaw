@@ -2568,6 +2568,8 @@ describe("ci workflow guards", () => {
       expect(actual).toContain("preflight");
       expect(actual).not.toContain("ci-gate");
       expect(actual).not.toContain("check-lint-hosted-core-shard");
+      expect(actual).toContain("checks-baseline-ratchets");
+      expect(actual).not.toContain("check-plan");
       expect(Number(qualification.outputs.hybrid_hosted_base_rows)).toBe(
         Number(ordinary.outputs.hybrid_hosted_base_rows) + 2,
       );
@@ -4967,7 +4969,7 @@ describe("ci workflow guards", () => {
     expect(readFrozenAdditionalCheckRows()).toContainEqual({
       check_name: "check-additional-extension-package-boundary",
       group: "extension-package-boundary",
-      runner: "blacksmith-16vcpu-ubuntu-2404",
+      runner: "blacksmith-32vcpu-ubuntu-2404",
     });
     const runStep = additionalJob.steps.find(
       (step: WorkflowStep) => step.name === "Run additional check shard",
@@ -6589,10 +6591,10 @@ describe("ci workflow guards", () => {
     );
   });
 
-  it("gates Node fanout on selected ratchets without waiting for startup or unrelated checks", () => {
+  it("starts Node fanout after preflight while ratchets remain required by the final gate", () => {
     const workflow = readCiWorkflow();
     const nodeJob = workflow.jobs["checks-node-core-test-nondist-shard"];
-    expect(nodeJob.needs).toEqual(["preflight", "checks-baseline-ratchets"]);
+    expect(nodeJob.needs).toEqual(["preflight"]);
     expect(workflow.jobs["checks-fast-core"].needs).toEqual(["preflight"]);
     const ratchet = workflow.jobs["checks-baseline-ratchets"];
     expect(ratchet.steps.some((step: WorkflowStep) => step.name === "Check startup corpus")).toBe(
@@ -6600,7 +6602,7 @@ describe("ci workflow guards", () => {
     );
     expect(ratchet.env.CHECKOUT_BASE_SHA).toBe("${{ needs.preflight.outputs.diff_base_revision }}");
     for (const selected of ["true", "false"]) {
-      for (const result of ["success", "failure", "cancelled", "skipped"]) {
+      for (const result of ["success", "failure", "cancelled", "skipped", "in_progress"]) {
         for (const nodeSelected of ["true", "false"]) {
           for (const cancelled of [true, false]) {
             const admitted = evaluateWorkflowExpression(nodeJob.if, {
@@ -6614,11 +6616,7 @@ describe("ci workflow guards", () => {
               },
               jobResults: { "checks-baseline-ratchets": result },
             });
-            expect(admitted).toBe(
-              !cancelled &&
-                nodeSelected === "true" &&
-                (result === "success" || (selected === "false" && result === "skipped")),
-            );
+            expect(admitted).toBe(!cancelled && nodeSelected === "true");
           }
         }
       }
@@ -6632,6 +6630,15 @@ describe("ci workflow guards", () => {
         jobResults: { preflight: "failure" },
       }),
     ).toBe(false);
+    const ratchetContext = { preflightOutputs: { run_baseline_ratchets: "true" } };
+    expect(runCiGateFixture(renderCiGateEnvironment(ratchetContext)).status).toBe(0);
+    for (const result of ["failure", "cancelled", "skipped"]) {
+      expect(
+        runCiGateFixture(
+          renderCiGateEnvironment(ratchetContext, { "checks-baseline-ratchets": result }),
+        ).status,
+      ).toBe(1);
+    }
   });
 
   it("runs all baseline ratchets against the exact tested tree", () => {
@@ -9819,10 +9826,7 @@ describe("ci workflow guards", () => {
           "",
         )
         .replace(/^\((.*)\)$/u, "$1")
-        .replace(
-          /!cancelled\(\) && needs\.preflight\.result == 'success' && \(needs\.checks-baseline-ratchets\.result == 'success' \|\| \(needs\.preflight\.outputs\.run_baseline_ratchets == 'false' && needs\.checks-baseline-ratchets\.result == 'skipped'\)\) && /u,
-          "",
-        )
+        .replace(/!cancelled\(\) && needs\.preflight\.result == 'success' && /u, "")
         .replace(
           /always\(\)\s*&&\s*|!github.event.pull_request.draft\s*&&\s*|needs.preflight.result == 'success'\s*&&\s*/gu,
           "",

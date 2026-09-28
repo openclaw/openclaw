@@ -8,6 +8,7 @@ import type {
   BoardWidgetGeneratedIdentity,
   BoardWidgetPutResult,
 } from "../../packages/gateway-protocol/src/index.js";
+import { WIDGET_HTML_MAX_UTF8_BYTES } from "../../packages/gateway-protocol/src/schema/canvas.js";
 import { boardDeclarationIsSubset, normalizeBoardWidgetDeclared } from "./board-capabilities.js";
 import {
   BOARD_SIZE_PRESETS,
@@ -108,7 +109,7 @@ export interface BoardStore {
 }
 
 const BOARD_MAX_WIDGETS = 48;
-const BOARD_MAX_WIDGET_HTML_BYTES = 256 * 1024;
+const BOARD_MAX_REGISTERED_SOURCE_BYTES = 256 * 1024;
 type BoardWidgetGeneratedIdentityMarker = Pick<BoardWidgetGeneratedIdentity, "source" | "key"> & {
   kind: "generated";
 };
@@ -256,10 +257,10 @@ function validateRegisteredContent(params: BoardWidgetMaterializedPutParams): vo
   if (params.content.kind !== "registered") {
     return;
   }
-  if (Buffer.byteLength(params.content.source, "utf8") > BOARD_MAX_WIDGET_HTML_BYTES) {
+  if (Buffer.byteLength(params.content.source, "utf8") > BOARD_MAX_REGISTERED_SOURCE_BYTES) {
     throw new BoardValidationError(
       "invalid_operation",
-      `board registered widget source exceeds ${BOARD_MAX_WIDGET_HTML_BYTES} UTF-8 bytes`,
+      `board registered widget source exceeds ${BOARD_MAX_REGISTERED_SOURCE_BYTES} UTF-8 bytes`,
     );
   }
 }
@@ -277,11 +278,11 @@ export function createBoardWidgetPutSnapshot(
   validateRegisteredContent(params);
   if (
     params.content.kind === "html" &&
-    Buffer.byteLength(params.content.html, "utf8") > BOARD_MAX_WIDGET_HTML_BYTES
+    Buffer.byteLength(params.content.html, "utf8") > WIDGET_HTML_MAX_UTF8_BYTES
   ) {
     throw new BoardValidationError(
       "invalid_operation",
-      `board widget HTML exceeds ${BOARD_MAX_WIDGET_HTML_BYTES} UTF-8 bytes`,
+      `board widget HTML exceeds ${WIDGET_HTML_MAX_UTF8_BYTES} UTF-8 bytes`,
     );
   }
   let layout = normalizeBoardLayout(prior);

@@ -231,6 +231,26 @@ Channel policies and explicit command allowlists still apply, including to nativ
 
 These records use the existing shared-state identity table without changing its schema version. Older builds ignore the channel binding namespace; downgrading disables this recognition without converting the links into login accounts. Upgrading does not guess or backfill channel identities. Administrators can inspect and remove the links through the same methods after upgrading again.
 
+### Assign to me from a channel
+
+Link the sender to their existing profile with `users.linkChannelIdentity`. For
+Slack, use `channelId: "slack"`, the configured account ID, and the exact
+native user ID (for example, `senderId: "U0123456789"`). Direct Socket Mode and
+signature-verified HTTP delivery authenticate that sender; relay delivery does
+not. Discord's verified native senders use the same profile resolution.
+
+The next verified message turn includes the canonical profile ID and current display
+label as host-generated fields in the per-turn conversation info. The system
+prompt stays stable across requesters. For example, a linked person
+whose effective role includes `operator.admin` can ask, "Assign this session to
+me." The agent can call `sessions` with `action: "assign_owner"`,
+`ownerType: "human"`, and `ownerId` set to that trusted profile ID. Names, emails,
+and IDs pasted into messages do not establish the requester.
+
+A linked nonadmin sender also receives requester metadata, but the `sessions`
+tool remains owner-only. Unlinked or asserted senders receive no requester
+profile. Unlinking takes effect on subsequent turns without a restart.
+
 ## GitHub connections
 
 Open **Settings → Profile → GitHub connections** to connect **My GitHub** without changing the shared **System GitHub** account. Both accounts and their connection status remain visible together. Viewing these connections does not require selecting an agent or configuring a default agent. Connecting a credential does not change your verified GitHub sign-in identity, display name, avatar, Git co-author credit preference, or OpenClaw permissions.

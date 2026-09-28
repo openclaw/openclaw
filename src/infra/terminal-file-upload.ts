@@ -308,15 +308,13 @@ async function scanUploads(
             await assertHeld();
             try {
               await rmdir(directory);
-              state.deadlines.delete(directory);
-              continue;
             } catch (error) {
-              if (hasErrnoCode(error, "ENOENT")) {
-                state.deadlines.delete(directory);
-                continue;
+              if (!hasErrnoCode(error, "ENOENT")) {
+                throw error;
               }
-              throw error;
             }
+            state.deadlines.delete(directory);
+            continue;
           }
           bytes += usage.bytes;
         }

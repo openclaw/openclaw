@@ -8,6 +8,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resetDiagnosticEventsForTest } from "../../../infra/diagnostic-events.js";
 import { tryBeginGatewaySuspendAdmission } from "../../../process/gateway-work-admission.js";
 import {
@@ -42,7 +43,9 @@ import {
 } from "../../server-shared-auth-generation.js";
 import { GatewayClientRegistry } from "../client-registry.js";
 import { createGatewayWsTestLogger as createLogger } from "../ws-connection.test-helpers.js";
+import { disconnectDisallowedGatewayPolicyClients } from "../ws-origin-policy.js";
 import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
+import type { GatewayWsClient } from "../ws-types.js";
 import { expectAuthenticatedOwnerReconnect } from "./message-handler.owner-reconnect.test-support.js";
 import {
   BACKEND_CONNECT_PARAMS,
@@ -2517,6 +2520,33 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       });
     },
   );
+
+  it("binds handshake policy to the verified login rather than unrelated identity grants", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const harness = connectTrustedProxyUser("identity-policy", { id: "openclaw-control-ui" }, [
+        "operator.read",
+      ]);
+      await harness.whenAttached;
+      const client = harness.client as GatewayWsClient;
+      expect(client.authenticatedUserId).toBe("alice@example.com");
+      const config = structuredClone(loadConfigMock());
+      const next: OpenClawConfig = {
+        ...config,
+        gateway: {
+          ...config.gateway,
+          auth: { ...config.gateway.auth, mode: "trusted-proxy" },
+        },
+      };
+      const scopes = next.gateway!.auth!.identityScopes!;
+      scopes["other@example.test"] = ["operator.admin"];
+      disconnectDisallowedGatewayPolicyClients([client], next);
+      expect(client.invalidated).not.toBe(true);
+      const removed = structuredClone(next);
+      delete removed.gateway!.auth!.identityScopes!["alice@example.com"];
+      disconnectDisallowedGatewayPolicyClients([client], removed);
+      expect(client.invalidated).toBe(true);
+    });
+  });
 
   it("marks operator approval clients with the server runtime token", async () => {
     const harness = attachGatewayHarness({

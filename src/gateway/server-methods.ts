@@ -671,6 +671,7 @@ export async function handleGatewayRequest(
           client,
           isWebchatConnect,
           respond: respondToHandler,
+          acceptsSerializedJson: opts.acceptsSerializedJson,
           context,
           signal,
           ...(hasCurrentClientAuthority ? { hasCurrentClientAuthority } : {}),

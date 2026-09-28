@@ -247,7 +247,8 @@ The existing installed-index SQLite payload records directory membership, device
 inode, mode, size, mtime, and ctime identities, SHA-256 digests, and the initial
 generation receipt. Unchanged warm startup reuses those facts. Added, removed, or
 changed companions require admission again; ctime-only uncertainty is resolved
-with a bounded rehash. Legacy reload receipts keep their framed raw-byte value,
+with a bounded rehash, including ordinary companion files whose inodes another
+capture retains or releases. Legacy reload receipts keep their framed raw-byte value,
 so a changed receipt still requires streaming its native payloads.
 Identity reuse cannot detect an edit that preserves every recorded identity field.
 Source code outside an admitted native namespace is captured and verified separately.
