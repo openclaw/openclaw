@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
 import * as restartModule from "../infra/restart.js";
@@ -112,6 +113,52 @@ describe("gateway restart readiness preflight", () => {
       await scheduler.stop();
     }
   });
+
+  it.each(["owner", "scheduler"] as const)(
+    "does not emit a prepared retry after its %s stops",
+    async (boundary) => {
+      vi.useFakeTimers();
+      const clock = createGatewaySchedulerClock(Date.now());
+      const scheduler = createTestGatewayScheduler(clock.clock);
+      const preparing = createDeferred();
+      const prepared = createDeferred<OpenClawConfig>();
+      const requestRecoveryRestart = vi
+        .fn<NonNullable<CoordinatorOptions["params"]["requestRecoveryRestart"]>>()
+        .mockReturnValue({ status: "failed" });
+      const prepareRuntimeConfig = vi
+        .fn<() => Promise<OpenClawConfig>>()
+        .mockResolvedValueOnce({})
+        .mockImplementationOnce(() => {
+          preparing.resolve();
+          return prepared.promise;
+        });
+      const coordinator = createCoordinator({ scheduler, requestRecoveryRestart });
+      let waking: ReturnType<typeof clock.advanceBy> = undefined;
+      try {
+        coordinator.requestGatewayRestart(restartPlan, {}, { prepareRuntimeConfig });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(requestRecoveryRestart).toHaveBeenCalledOnce();
+        waking = clock.advanceBy(1_000);
+        await preparing.promise;
+        // Close after preflight's continuation, before its caller resumes emission.
+        const closing = prepared.promise.then(() => {
+          if (boundary === "owner") {
+            coordinator.stopRestartRetries();
+          } else {
+            scheduler.beginClose();
+          }
+        });
+        prepared.resolve({});
+        await Promise.all([waking, closing]);
+        expect(requestRecoveryRestart).toHaveBeenCalledOnce();
+      } finally {
+        prepared.resolve({});
+        coordinator.stopRestartRetries();
+        await scheduler.stop();
+        await waking;
+      }
+    },
+  );
 
   it.each(["owner", "scheduler"] as const)(
     "settles a retry parked by suspension when its %s stops",

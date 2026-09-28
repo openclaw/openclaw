@@ -345,6 +345,9 @@ class GatewayRestartTransaction {
               this.scheduleEmissionRetry(retry);
               return;
             }
+            if (!this.isCurrentRequest(retry.requestGeneration)) {
+              return;
+            }
             const emitResult = this.options.params.requestRecoveryRestart?.(
               retry.reason,
               retry.intent,
