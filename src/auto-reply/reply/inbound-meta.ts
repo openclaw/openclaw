@@ -11,6 +11,7 @@ import { buildDeliveryFormatPrompt } from "../../infra/outbound/delivery-format-
 import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
 import type { EnvelopeFormatOptions } from "../envelope.js";
 import { formatAgentEnvelopeTimestamp } from "../envelope.js";
+import { getRequesterProfile } from "../requester-profile.js";
 import type { TemplateContext } from "../templating.js";
 import {
   formatContextJsonBlock,
@@ -528,8 +529,8 @@ export function buildInboundMetaSystemPrompt(
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
 
-  // Keep system metadata strictly free of attacker-controlled strings (sender names, group subjects, etc.).
-  // Those belong in the user-role context blocks this module emits below.
+  // Keep human-authored strings and per-sender facts out of the stable system prefix.
+  // They belong in the user-role conversation info block below.
   // Conversation ids, per-message identifiers, and dynamic flags are also excluded here:
   // they change on turns/replies and would bust prefix-based prompt caches on providers that
   // use stable system prefixes. They are included in the user-role conversation info block instead.
@@ -570,7 +571,7 @@ export function buildInboundMetaSystemPrompt(
   return deliveryFormat ? `${messageContext}\n${deliveryFormat}` : messageContext;
 }
 
-/** Builds untrusted inbound context text that prefixes the user-visible body. */
+/** Builds per-turn context with host-generated structural facts and untrusted human content. */
 export function buildInboundUserContextPrefix(
   ctx: TemplateContext,
   envelope?: EnvelopeFormatOptions,
@@ -609,6 +610,7 @@ export function buildInboundUserContextPrefix(
   const senderE164 = normalizePromptMetadataString(ctx.SenderE164);
   const senderIdDigits = senderId?.replace(/\D/gu, "");
   const senderE164Digits = senderE164?.replace(/\D/gu, "");
+  const requester = getRequesterProfile(ctx);
   const senderIdentity = {
     id: senderId,
     name: normalizePromptMetadataString(ctx.SenderName),
@@ -620,6 +622,9 @@ export function buildInboundUserContextPrefix(
   // Keep volatile conversation/message identifiers in the user-role block so the system
   // prompt stays byte-stable across task-scoped sessions and reply turns.
   const conversationInfo = {
+    requester_profile: requester
+      ? { id: requester.id, display_name: sanitizeTranscriptField(requester.displayName) }
+      : undefined,
     chat_id: shouldIncludeConversationInfo ? normalizeOptionalString(ctx.OriginatingTo) : undefined,
     message_id: shouldIncludeConversationInfo ? resolvedMessageId : undefined,
     reply_to_id: shouldIncludeConversationInfo
@@ -653,6 +658,11 @@ export function buildInboundUserContextPrefix(
     blocks.push(
       formatContextJsonBlock(markInboundContextLabel("Conversation info:"), conversationInfo),
     );
+    if (requester) {
+      blocks.push(
+        'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.',
+      );
+    }
   }
 
   const threadStarterBody = sanitizePromptBody(ctx.ThreadStarterBody);

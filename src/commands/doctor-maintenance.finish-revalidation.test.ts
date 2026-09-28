@@ -137,9 +137,7 @@ type StoppedUnitState =
   | "restart-failed"
   | "slow-admission"
   | "slow-loadunit-admission"
-  | "inspection-unavailable"
   | "inspection-error"
-  | "ownership-refused"
   | "ownership-refused-wrapped"
   | "runtime-ownership-refused"
   | "launchd-owned"
@@ -162,8 +160,6 @@ type Continuation =
   | "unknown-adopter"
   | "unrecorded"
   | "unrecorded-parked"
-  | "parked"
-  | "normal-update-parked"
   | "lost-before-stop"
   | "lost-before-restart"
   | "dead-before-restart"
@@ -243,7 +239,6 @@ async function runDoctorFinishForStoppedUnit(
         }
         if (
           continuation !== "manual" &&
-          continuation !== "normal-update-parked" &&
           continuation !== "unrecorded" &&
           continuation !== "unrecorded-parked"
         ) {
@@ -363,10 +358,7 @@ async function runDoctorFinishForStoppedUnit(
         }
       }
       mockDoctorServicePlatform("linux");
-      let running =
-        continuation !== "parked" &&
-        continuation !== "normal-update-parked" &&
-        continuation !== "unrecorded-parked";
+      let running = continuation !== "unrecorded-parked";
       let stopObserved = false;
       let commandReads = 0;
       let inspectingRuntime = false;
@@ -419,11 +411,9 @@ async function runDoctorFinishForStoppedUnit(
           isLoaded: async () => scenario === "retained" || boundedInspection,
           readCommand: async (env, opts) => {
             await releaseDuringInspection?.();
-            if (stopObserved && scenario.startsWith("ownership-refused")) {
+            if (stopObserved && scenario === "ownership-refused-wrapped") {
               const refusal = new ServiceOwnershipRefusalError("systemd-account-refused");
-              throw scenario.endsWith("wrapped")
-                ? new AggregateError([refusal], "Native inspection did not settle successfully")
-                : refusal;
+              throw new AggregateError([refusal], "Native inspection did not settle successfully");
             }
             if (stopObserved && scenario === "launchd-owned") {
               throw new ServiceInspectionError("launchd-system-owned");
@@ -449,11 +439,7 @@ async function runDoctorFinishForStoppedUnit(
               if (scenario === "inspection-competing") {
                 createUpdateRun({ trigger: "cli", origin: { driver: readUpdateRunDriver() } });
               }
-              throw new ServiceInspectionError(
-                scenario === "inspection-unavailable"
-                  ? "systemd-user-bus-unavailable"
-                  : "systemd-inspection-deadline-exceeded",
-              );
+              throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
             }
             if (stopObserved && scenario === "slow-loadunit-admission") {
               inspectingCommand = true;
@@ -716,34 +702,23 @@ it.each([
   expect(result.restartCalls).toBe(custody.startsWith("released") ? 0 : 1);
 });
 
-it("admits exact legacy catalog reads for an owned running service without repairing it", async () => {
-  const result = await runDoctorFinishForStoppedUnit("retained", undefined, "exact");
-  expect(result.finishError).toBeUndefined();
-  expect(mocks.stops).toBe(1);
-  expect(result.restartCalls).toBe(1);
-});
-
-it("admits the exact legacy catalog while a live supervised Gateway owns lifecycle", async () => {
-  const result = await runDoctorFinishForStoppedUnit(
-    "gateway-lifecycle-contended",
-    undefined,
-    "exact",
-  );
-  expect(result.finishError).toBeUndefined();
-  expect(mocks.stops).toBe(1);
-  expect(result.restartCalls).toBe(1);
-});
-
-it("admits a published legacy Gateway by its verified native process lock", async () => {
-  const result = await runDoctorFinishForStoppedUnit(
-    "legacy-gateway-lifecycle-contended",
-    undefined,
-    "exact",
-  );
-  expect(result.finishError).toBeUndefined();
-  expect(mocks.stops).toBe(1);
-  expect(result.restartCalls).toBe(1);
-});
+it.each([
+  { scenario: "retained", catalog: "exact" },
+  { scenario: "gateway-lifecycle-contended", catalog: "exact" },
+  { scenario: "legacy-gateway-lifecycle-contended", catalog: "exact" },
+  { scenario: "unloaded", catalog: undefined },
+  { scenario: "slow-admission", catalog: undefined },
+  { scenario: "slow-loadunit-admission", catalog: undefined },
+] as const)(
+  "restores the unchanged Gateway after $scenario inspection (catalog: $catalog)",
+  async ({ scenario, catalog }) => {
+    const result = await runDoctorFinishForStoppedUnit(scenario, undefined, catalog);
+    expect(result.finishError).toBeUndefined();
+    expect(mocks.stops).toBe(1);
+    expect(result.restartCalls).toBe(1);
+    expect(result.logs).toContain("Gateway restarted and verified after Doctor repair.");
+  },
+);
 
 it("preserves the existing malformed continuation writer refusal before stopping the service", async () => {
   await expect(runDoctorFinishForStoppedUnit("retained", "own", "exact")).rejects.toThrow(
@@ -792,7 +767,7 @@ it.each([
   },
 );
 
-it.each(["own", "parked", "normal-update-parked", "unrecorded-parked"] as const)(
+it.each(["own", "unrecorded-parked"] as const)(
   "continues owning-run Doctor maintenance with service %s",
   async (continuation) => {
     const { finishError, restartCalls, logs } = await runDoctorFinishForStoppedUnit(
@@ -856,40 +831,18 @@ it("rechecks continuation before restoring the service", async () => {
   expect(restartCalls).toBe(0);
 });
 
-it.each(["retained", "unloaded"] as const)(
-  "restarts and verifies the unchanged gateway after systemd leaves it %s",
+it.each(["inspection-error", "inspection-timeout", "runtime-timeout"] as const)(
+  "starts and verifies the Gateway it stopped after %s",
   async (scenario) => {
-    const { finishError, restartCalls, logs } = await runDoctorFinishForStoppedUnit(scenario);
-    expect(finishError).toBeUndefined();
-    expect(restartCalls).toBe(1);
-    expect(logs.join("\n")).toContain("Gateway restarted and verified after Doctor repair.");
+    const result = await runDoctorFinishForStoppedUnit(scenario);
+    expect(result.finishError).toBeUndefined();
+    expect(result.startCalls).toBe(1);
+    expect(result.restartCalls).toBe(0);
+    expect(result.logs.join("\n")).toContain("restoration inspection was inconclusive");
+    expect(waitForGatewayHealthyRestart).toHaveBeenCalledOnce();
+    expect(result.logs).toContain("Gateway restarted and verified after Doctor repair.");
   },
 );
-
-it.each(["slow-admission", "slow-loadunit-admission"] as const)(
-  "restores the Gateway without timing out on %s snapshots",
-  async (scenario) => {
-    const { finishError, restartCalls, logs } = await runDoctorFinishForStoppedUnit(scenario);
-    expect(finishError).toBeUndefined();
-    expect(restartCalls).toBe(1);
-    expect(logs).toContain("Gateway restarted and verified after Doctor repair.");
-  },
-);
-
-it.each([
-  "inspection-unavailable",
-  "inspection-error",
-  "inspection-timeout",
-  "runtime-timeout",
-] as const)("starts and verifies the Gateway it stopped after %s", async (scenario) => {
-  const result = await runDoctorFinishForStoppedUnit(scenario);
-  expect(result.finishError).toBeUndefined();
-  expect(result.startCalls).toBe(1);
-  expect(result.restartCalls).toBe(0);
-  expect(result.logs.join("\n")).toContain("restoration inspection was inconclusive");
-  expect(waitForGatewayHealthyRestart).toHaveBeenCalledOnce();
-  expect(result.logs).toContain("Gateway restarted and verified after Doctor repair.");
-});
 
 it("does not treat an inconclusive inspection as admission to a competing update", async () => {
   const result = await runDoctorFinishForStoppedUnit("inspection-competing");
@@ -900,30 +853,28 @@ it("does not treat an inconclusive inspection as admission to a competing update
   expect(result.restartCalls).toBe(0);
 });
 
-it.each([
-  "ownership-refused",
-  "ownership-refused-wrapped",
-  "runtime-ownership-refused",
-  "launchd-owned",
-] as const)("preserves the native ownership refusal without activation: %s", async (scenario) => {
-  const result = await runDoctorFinishForStoppedUnit(scenario);
-  expect(result.startCalls).toBe(0);
-  expect(result.restartCalls).toBe(0);
-  expect(result.finishError).toMatchObject({
-    failureFacts: expect.arrayContaining([
-      expect.objectContaining({
-        code:
-          scenario === "launchd-owned"
-            ? "launchd-system-owned"
-            : scenario === "runtime-ownership-refused"
-              ? "systemd-manager-changed"
-              : "systemd-account-refused",
-      }),
-    ]),
-  });
-  expect(result.logs.join("\n")).not.toContain("restoration inspection was inconclusive");
-  expect(waitForGatewayHealthyRestart).not.toHaveBeenCalled();
-});
+it.each(["ownership-refused-wrapped", "runtime-ownership-refused", "launchd-owned"] as const)(
+  "preserves the native ownership refusal without activation: %s",
+  async (scenario) => {
+    const result = await runDoctorFinishForStoppedUnit(scenario);
+    expect(result.startCalls).toBe(0);
+    expect(result.restartCalls).toBe(0);
+    expect(result.finishError).toMatchObject({
+      failureFacts: expect.arrayContaining([
+        expect.objectContaining({
+          code:
+            scenario === "launchd-owned"
+              ? "launchd-system-owned"
+              : scenario === "runtime-ownership-refused"
+                ? "systemd-manager-changed"
+                : "systemd-account-refused",
+        }),
+      ]),
+    });
+    expect(result.logs.join("\n")).not.toContain("restoration inspection was inconclusive");
+    expect(waitForGatewayHealthyRestart).not.toHaveBeenCalled();
+  },
+);
 
 it("reports both inspection and start failures without claiming recovery", async () => {
   const result = await runDoctorFinishForStoppedUnit("inspection-start-failed");

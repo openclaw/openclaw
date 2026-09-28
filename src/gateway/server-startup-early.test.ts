@@ -1,7 +1,12 @@
 /**
  * Early gateway startup helper tests.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
 import { runGatewayCloseSteps } from "./server-shutdown.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
@@ -78,6 +83,8 @@ function earlyRuntimeInput(
     healthVersion: 0,
     presenceVersion: 0,
   });
+  const scheduler = overrides.scheduler ?? createTestGatewayScheduler();
+  onTestFinished(() => scheduler.stop());
   return {
     minimalTestGateway: true,
     isClosing: () => false,
@@ -95,9 +102,7 @@ function earlyRuntimeInput(
       setServices: () => {},
     }).currentClaim(),
     ...maintenanceState,
-    skillsRefreshDelayMs: 30_000,
-    getSkillsRefreshTimer: () => null,
-    setSkillsRefreshTimer: () => {},
+    scheduler,
     getRuntimeConfig: () => ({}) as never,
     ...overrides,
   };
@@ -272,15 +277,19 @@ describe("startGatewayEarlyRuntime", () => {
 
   it("does not probe remote bins or broadcast for restored watch coverage", async () => {
     const broadcast = vi.fn();
-    const setSkillsRefreshTimer = vi.fn();
+    const time = createGatewaySchedulerClock();
     const earlyRuntime = await startGatewayEarlyRuntime(
-      earlyRuntimeInput({ minimalTestGateway: false, broadcast, setSkillsRefreshTimer }),
+      earlyRuntimeInput({
+        minimalTestGateway: false,
+        broadcast,
+        scheduler: createTestGatewayScheduler(time.clock),
+      }),
     );
     try {
       const listener = mocks.registerSkillsChangeListener.mock.calls.at(-1)?.[0];
       expect(listener).toEqual(expect.any(Function));
       listener({ reason: "watch-available" });
-      expect(setSkillsRefreshTimer).not.toHaveBeenCalled();
+      await time.advanceBy(30_000);
       expect(mocks.refreshRemoteBinsForConnectedNodes).not.toHaveBeenCalled();
       expect(broadcast).not.toHaveBeenCalled();
     } finally {
@@ -288,45 +297,99 @@ describe("startGatewayEarlyRuntime", () => {
     }
   });
 
-  it("broadcasts local skill changes after the coalesced remote-bin refresh", async () => {
-    vi.useFakeTimers();
-    const broadcast = vi.fn();
-    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
-    let finishRefresh: (() => void) | undefined;
-    mocks.refreshRemoteBinsForConnectedNodes.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          finishRefresh = resolve;
-        }),
-    );
-    try {
-      await startGatewayEarlyRuntime(
+  it.each([false, true])(
+    "broadcasts the latest coalesced skill change after remote-bin refresh (fails: %s)",
+    async (fails) => {
+      const time = createGatewaySchedulerClock();
+      const broadcast = vi.fn();
+      const warn = vi.fn();
+      const refresh = createDeferredCore();
+      mocks.refreshRemoteBinsForConnectedNodes.mockReturnValueOnce(refresh.promise);
+      let config = { cron: { enabled: false } };
+      const earlyRuntime = await startGatewayEarlyRuntime(
         earlyRuntimeInput({
           minimalTestGateway: false,
           broadcast,
-          getSkillsRefreshTimer: () => refreshTimer,
-          setSkillsRefreshTimer: (timer) => {
-            refreshTimer = timer;
-          },
+          log: { ...log, warn },
+          scheduler: createTestGatewayScheduler(time.clock),
+          getRuntimeConfig: () => config,
         }),
       );
+      try {
+        const listener = mocks.registerSkillsChangeListener.mock.calls.at(-1)?.[0];
+        listener({ reason: "watch" });
+        await time.advanceBy(15_000);
+        listener({ reason: "config-change" });
+        config = { cron: { enabled: true } };
+        await time.advanceBy(15_000);
+        expect(mocks.refreshRemoteBinsForConnectedNodes).not.toHaveBeenCalled();
 
-      const listener = mocks.registerSkillsChangeListener.mock.calls.at(-1)?.[0] as
-        | ((event: { reason: "watch" }) => void)
-        | undefined;
-      listener?.({ reason: "watch" });
-      await vi.advanceTimersByTimeAsync(30_000);
+        const running = time.advanceBy(15_000);
+        expect(mocks.refreshRemoteBinsForConnectedNodes).toHaveBeenCalledExactlyOnceWith(config);
+        expect(broadcast).not.toHaveBeenCalled();
 
-      expect(mocks.refreshRemoteBinsForConnectedNodes).toHaveBeenCalledWith({});
-      expect(broadcast).not.toHaveBeenCalled();
+        if (fails) {
+          refresh.reject(new Error("probe failed"));
+        } else {
+          refresh.resolve();
+        }
+        await running;
+        expect(broadcast).toHaveBeenCalledExactlyOnceWith("skills.changed", {
+          reason: "config-change",
+        });
+        expect(warn).toHaveBeenCalledTimes(fails ? 1 : 0);
+      } finally {
+        refresh.resolve();
+        await earlyRuntime.skillsChangeUnsub();
+      }
+    },
+  );
 
-      finishRefresh?.();
-      await Promise.resolve();
-      expect(broadcast).toHaveBeenCalledWith("skills.changed", { reason: "watch" });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+  it.each([false, true])(
+    "cancels pending refreshes and joins started refreshes at shutdown (started: %s)",
+    async (started) => {
+      const time = createGatewaySchedulerClock();
+      const scheduler = createTestGatewayScheduler(time.clock);
+      const broadcast = vi.fn();
+      const refresh = createDeferredCore();
+      mocks.refreshRemoteBinsForConnectedNodes.mockReturnValueOnce(refresh.promise);
+      let closing = false;
+      const earlyRuntime = await startGatewayEarlyRuntime(
+        earlyRuntimeInput({
+          minimalTestGateway: false,
+          scheduler,
+          broadcast,
+          isClosing: () => closing,
+        }),
+      );
+      try {
+        const listener = mocks.registerSkillsChangeListener.mock.calls.at(-1)?.[0];
+        listener({ reason: "watch" });
+        const running = started ? time.advanceBy(30_000) : undefined;
+        closing = true;
+        scheduler.beginClose();
+        let stopped = false;
+        const stopping = scheduler.stop().then(() => {
+          stopped = true;
+        });
+        listener({ reason: "remote-node" });
+        listener({ reason: "watch" });
+        if (started) {
+          await Promise.resolve();
+          expect(stopped).toBe(false);
+        }
+        refresh.resolve();
+        await running;
+        await stopping;
+        await time.advanceBy(60_000);
+        expect(mocks.refreshRemoteBinsForConnectedNodes).toHaveBeenCalledTimes(started ? 1 : 0);
+        expect(broadcast).not.toHaveBeenCalled();
+      } finally {
+        refresh.resolve();
+        await earlyRuntime.skillsChangeUnsub();
+      }
+    },
+  );
 
   it("starts discovery with the current plugin registry services", async () => {
     const stop = vi.fn(async () => {});

@@ -65,6 +65,8 @@ export type GuardedFetchOptions = {
   fetchImpl?: FetchLike;
   /** Final synchronous check after transport preparation and before each request or redirect. */
   beforeRequest?: () => void | undefined;
+  /** Observes response headers for each hop, including redirects, before cleanup. */
+  onResponse?: (status: number) => void;
   init?: RequestInit;
   capture?:
     | false
@@ -364,9 +366,11 @@ function dropBodyHeaders(headers?: HeadersInit): HeadersInit | undefined {
   return nextHeaders;
 }
 
-function rewriteRedirectInitForMethod(params: {
+function rewriteRedirectInit(params: {
   init?: RequestInit;
   status: number;
+  crossOrigin: boolean;
+  allowUnsafeReplay: boolean;
 }): RequestInit | undefined {
   const { init, status } = params;
   if (!init) {
@@ -379,34 +383,18 @@ function rewriteRedirectInitForMethod(params: {
       ? currentMethod !== "GET" && currentMethod !== "HEAD"
       : (status === 301 || status === 302) && currentMethod === "POST";
 
-  if (!shouldForceGet) {
+  const shouldDropUnsafeBody =
+    params.crossOrigin &&
+    !params.allowUnsafeReplay &&
+    currentMethod !== "GET" &&
+    currentMethod !== "HEAD";
+  if (!shouldForceGet && !shouldDropUnsafeBody) {
     return init;
   }
 
   return {
     ...init,
-    method: "GET",
-    body: undefined,
-    headers: dropBodyHeaders(init.headers),
-  };
-}
-
-function rewriteRedirectInitForCrossOrigin(params: {
-  init?: RequestInit;
-  allowUnsafeReplay: boolean;
-}): RequestInit | undefined {
-  const { init, allowUnsafeReplay } = params;
-  if (!init || allowUnsafeReplay) {
-    return init;
-  }
-
-  const currentMethod = init.method?.toUpperCase() ?? "GET";
-  if (currentMethod === "GET" || currentMethod === "HEAD") {
-    return init;
-  }
-
-  return {
-    ...init,
+    ...(shouldForceGet ? { method: "GET" } : {}),
     body: undefined,
     headers: dropBodyHeaders(init.headers),
   };
@@ -665,8 +653,7 @@ async function fetchWithSsrFGuardInternal(
         method: currentInit?.method ?? "GET",
         signal: process.versions.bun ? (init.signal ?? undefined) : undefined,
         requestHeaders: currentInit?.headers as Headers | Record<string, string> | undefined,
-        requestBody:
-          (currentInit as (RequestInit & { body?: BodyInit | null }) | undefined)?.body ?? null,
+        requestBody: currentInit?.body ?? null,
         transport: "http" as const,
         flowId: params.capture === false ? undefined : params.capture?.flowId,
         meta: {
@@ -687,6 +674,7 @@ async function fetchWithSsrFGuardInternal(
         void captureAdmission.capture?.({ ...captureParams, error });
         throw error;
       }
+      params.onResponse?.(response.status);
       void captureAdmission.capture?.({ ...captureParams, response });
 
       if (isRedirectStatus(response.status)) {
@@ -705,12 +693,14 @@ async function fetchWithSsrFGuardInternal(
           nextUrl: nextParsedUrl,
           hostnameAllowlist: params.retainAuthorizationRedirectHostnameAllowlist,
         });
-        currentInit = rewriteRedirectInitForMethod({ init: currentInit, status: response.status });
-        if (nextParsedUrl.origin !== parsedUrl.origin) {
-          currentInit = rewriteRedirectInitForCrossOrigin({
-            init: currentInit,
-            allowUnsafeReplay: params.allowCrossOriginUnsafeRedirectReplay === true,
-          });
+        const crossOrigin = nextParsedUrl.origin !== parsedUrl.origin;
+        currentInit = rewriteRedirectInit({
+          init: currentInit,
+          status: response.status,
+          crossOrigin,
+          allowUnsafeReplay: params.allowCrossOriginUnsafeRedirectReplay === true,
+        });
+        if (crossOrigin) {
           currentInit = retainSafeHeadersForCrossOriginRedirect(currentInit);
           currentInit = restoreRedirectAuthorization({
             init: currentInit,

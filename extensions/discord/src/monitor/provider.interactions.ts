@@ -24,6 +24,7 @@ import {
   createExecApprovalButton,
 } from "./exec-approvals.js";
 import type { DiscordLivePolicyReader } from "./live-policy.js";
+import type { DiscordCommandArgContext } from "./native-command-ui.types.js";
 import {
   createDiscordCommandArgFallbackButton,
   createDiscordModelPickerFallbackButton,
@@ -65,6 +66,16 @@ export function createDiscordProviderInteractionSurface(params: {
   modals: Modal[];
 } {
   const createNativeCommand = params.createNativeCommand ?? createDiscordNativeCommand;
+  const commandContext: DiscordCommandArgContext = {
+    readPolicy: params.readPolicy,
+    cfg: params.cfg,
+    discordConfig: params.discordConfig,
+    accountId: params.accountId,
+    sessionPrefix: params.sessionPrefix,
+    threadBindings: params.threadBindings,
+    buildContext: params.channelRuntime?.inbound.buildContext,
+    dispatchReplyFromConfig: params.channelRuntime?.reply?.dispatchReplyFromConfig,
+  };
   const commands: DiscordCommand[] = params.commandSpecs.map((spec) => {
     if (
       params.nativeEnabled &&
@@ -83,16 +94,9 @@ export function createDiscordProviderInteractionSurface(params: {
       });
     }
     return createNativeCommand({
-      readPolicy: params.readPolicy,
+      ...commandContext,
       command: spec,
-      cfg: params.cfg,
-      discordConfig: params.discordConfig,
-      accountId: params.accountId,
-      sessionPrefix: params.sessionPrefix,
       ephemeralDefault: params.ephemeralDefault,
-      threadBindings: params.threadBindings,
-      buildContext: params.channelRuntime?.inbound.buildContext,
-      dispatchReplyFromConfig: params.channelRuntime?.reply?.dispatchReplyFromConfig,
     });
   });
 
@@ -143,18 +147,7 @@ export function createDiscordProviderInteractionSurface(params: {
       createDiscordCommandArgFallbackButton,
       createDiscordModelPickerFallbackButton,
       createDiscordModelPickerFallbackSelect,
-    ].map((create) =>
-      create({
-        readPolicy: params.readPolicy,
-        cfg: params.cfg,
-        discordConfig: params.discordConfig,
-        accountId: params.accountId,
-        sessionPrefix: params.sessionPrefix,
-        threadBindings: params.threadBindings,
-        buildContext: params.channelRuntime?.inbound.buildContext,
-        dispatchReplyFromConfig: params.channelRuntime?.reply?.dispatchReplyFromConfig,
-      }),
-    ),
+    ].map((create) => create(commandContext)),
   ];
   const activityButton = createDiscordActivityButton(
     {

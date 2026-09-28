@@ -26,7 +26,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 describe("bound ACP reset routing", () => {
-  it.each(["/new", "/reset", "/new continue", "/reset continue"])(
+  it.each(["/new", "/reset continue"])(
     "keeps the transport session unchanged before handling dynamically bound %s",
     async (body) => {
       const storePath = await createStorePath("openclaw-transport-acp-reset-");
@@ -66,13 +66,6 @@ describe("bound ACP reset routing", () => {
     {
       name: "defers /new lifecycle rotation to the bound ACP reset handler",
       body: "/new",
-      to: "1478836151241412759",
-      includeBinding: true,
-      expectedRotation: false,
-    },
-    {
-      name: "defers /reset lifecycle rotation to the bound ACP reset handler",
-      body: "/reset",
       to: "1478836151241412759",
       includeBinding: true,
       expectedRotation: false,

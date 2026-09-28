@@ -169,6 +169,40 @@ export async function drainSqliteTestAgentOwner(
   }
 }
 
+/**
+ * Wait for agent database closes a finished test scheduled without awaiting. The
+ * synchronous test closer only schedules Worker retirement; left running, a lease release
+ * overlaps the next test, and a Vitest thread cannot retire an escaped lease afterwards.
+ * A failed close stays in its owner's custody (logged, retried by the file drain).
+ */
+export async function settleSqliteTestAgentCloses(): Promise<void> {
+  const resources = (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.agentDatabaseAsyncResources")
+  ] as
+    | {
+        closing: Map<unknown, Promise<void> | undefined>;
+        selections: Map<unknown, Promise<void>>;
+      }
+    | undefined;
+  if (!resources) {
+    return;
+  }
+  const joined = new Set<Promise<void>>();
+  // A settled close can start dependent retirement; wait until nothing new is pending.
+  while (true) {
+    const pending = [...resources.closing.values(), ...resources.selections.values()].filter(
+      (operation): operation is Promise<void> => operation !== undefined && !joined.has(operation),
+    );
+    if (pending.length === 0) {
+      return;
+    }
+    for (const operation of pending) {
+      joined.add(operation);
+    }
+    await Promise.allSettled(pending);
+  }
+}
+
 /** Called only for an evaluated source generation, after successful owner drainage. */
 export function retireSqliteTestSingleton(key: symbol, testFiles: string): void {
   const globalStore = globalThis as Record<PropertyKey, unknown>;

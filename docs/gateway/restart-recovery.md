@@ -139,6 +139,15 @@ gateway stops accepting new work, then waits for active agent turns and
 background tasks to finish, up to a drain budget (5 minutes by default). Most
 restarts therefore interrupt nothing at all.
 
+Read-only RPC waits (`agent.wait`, approval decision waits, `question.waitAnswer`,
+and `device.scopes.waitUpgrade`) stop observing when their client disconnects.
+When shutdown drain begins, connected waiters receive retryable `UNAVAILABLE`
+errors with reason `gateway-restarting`, so clients can reconnect and wait again.
+These waits do not consume the stop drain budget. The underlying runs, decisions,
+and admitted writes keep their normal drain and recovery behavior. This also
+applies to update restarts once the running Gateway contains this fix; installing
+new files cannot change a wait already held by an older Gateway process.
+
 Cron shutdown gives execution cleanup and durable result writes the same cleanup
 window. Finishing the job's execution does not by itself complete the drain:
 result persistence must also settle, or the Gateway reports the remaining work
@@ -215,6 +224,11 @@ Service-child cleanup uses the remaining Gateway shutdown budget, leaving time
 for final exit bookkeeping. A forced restart drains admitted work within the same
 budget. When the restart scheduler has already exhausted its deferral budget,
 cleanup retains the 10-second reserve without starting a second drain.
+For a supervisor's SIGTERM restart, a shorter requested drain limits when active
+runs are interrupted, not when database cleanup must finish: cleanup can use the
+remaining native stop budget. The Gateway still exits before the supervisor's
+deadline. Clean database restart proof is published only after writer leases,
+checkpointing, and native connection closure settle.
 A restart without a supervisor handoff uses the existing shutdown
 deadline for cleanup. This includes foreground Gateways inside another service's
 cgroup, restarts with `OPENCLAW_NO_RESPAWN=1`, and standalone updates that must
@@ -412,9 +426,11 @@ never triggers automatic re-enablement of the rejected installation.
 
 On macOS, a terminated update helper can leave the selected Gateway LaunchAgent
 installed but unloaded and disabled across logins. `openclaw doctor` and
-`openclaw doctor --fix` diagnose this state. `--fix` leaves an already-stopped
-Gateway stopped. If the update was interrupted or installation safety is
-uncertain, rerun `openclaw update` or use Doctor and triage before starting it.
+`openclaw doctor --fix` diagnose this state. After successful standalone repair,
+`--fix` starts and verifies an already-stopped managed Gateway whose service
+targets the current installation. Update-time Doctor leaves activation with the
+updater. If the update was interrupted or installation safety is uncertain,
+rerun `openclaw update` or use Doctor and triage before starting it manually.
 Once verified, run `openclaw gateway start` (or
 `openclaw --profile <profile> gateway start`) to re-enable and start that service.
 Keep the same state/config and custom-label overrides. Doctor prints the selected
@@ -530,8 +546,10 @@ Recovery reads the interrupted turn's source before starting another run, even
 when a final reply is already pending. If the transcript cannot be read, the
 saved reply and any admitted completion claim remain available for a later
 attempt. Delegated requests and unverified internal inputs cannot resume
-automatically without surviving authority. Child-completion follow-ups still use their
-existing recovery and delivery ownership checks.
+automatically without surviving authority. Missing or invalid provenance does not
+establish a human sender for an internal claim. Legacy channel and Control UI
+turns retain their existing recovery checks. Child-completion follow-ups still use
+their existing recovery and delivery ownership checks.
 
 When a recovered turn starts with an eligible channel delivery route, OpenClaw
 sends a resumption notice to that conversation, retaining its account and topic.

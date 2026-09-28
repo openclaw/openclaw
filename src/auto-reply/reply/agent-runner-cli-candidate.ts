@@ -24,7 +24,7 @@ import type { ModelFallbackResultClassification } from "../../agents/model-fallb
 import { createAgentRunSupersededAbortError } from "../../agents/run-termination.js";
 import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import type { BlockReplyContext, ReplyPayload } from "../types.js";
@@ -163,8 +163,18 @@ export async function runCliFallbackCandidate(
         // Placement admission may wait behind an older turn. Snapshot placement,
         // permission, and native resume identity only after this turn owns it.
         const sessionEntry = sessionTarget
-          ? loadSessionEntry({ ...sessionTarget, readConsistency: "latest" })
+          ? await withSessionEntryReadOnlyInWorker(
+              sessionTarget,
+              assertSettlementCurrent,
+              async (read) => {
+                if (!read.ok) {
+                  throw read.error;
+                }
+                return read.value;
+              },
+            )
           : turn.getActiveSessionEntry();
+        assertSettlementCurrent();
         if (
           sessionTarget &&
           (sessionEntry?.sessionId !== sessionTarget.sessionId ||

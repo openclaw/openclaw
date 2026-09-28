@@ -5,6 +5,7 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { html, nothing, type TemplateResult } from "lit";
 import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { renderModelPicker } from "../../components/model-picker.ts";
 import {
   renderSettingsRow,
@@ -303,7 +304,7 @@ function renderGptLiveRow(props: TalkViewProps) {
 export function renderTalk(props: TalkViewProps) {
   return html`
     <section class="talk-page">
-      <div class="settings-page">
+      <div class="settings-page" ${shellLayoutTraits({ settingsPage: true })}>
         ${renderDeviceTalk(props.nativeDeviceSettings)}
         ${props.voiceWake ? renderVoiceWakeEditor(props.voiceWake.state, props.voiceWake.onInput, props.voiceWake.onRetry) : nothing}
         ${renderSettingsSection(

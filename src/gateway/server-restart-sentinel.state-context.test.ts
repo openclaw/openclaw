@@ -43,6 +43,7 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { scheduleRestartSentinelWakeAfterReady } from "./server-startup-restart-sentinel.js";
 
 const mocks = vi.hoisted(() => ({
   portableStateDir: "",
@@ -126,6 +127,7 @@ const gatewayLocks: Array<{ release: () => Promise<void> }> = [];
 const { scheduleRestartSentinelWake, refreshLatestUpdateRestartSentinel } =
   await import("./server-restart-sentinel.js");
 let envSnapshot: ReturnType<typeof captureEnv>;
+let scheduler: ReturnType<typeof createTestGatewayScheduler>;
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
     await Promise.all(sidecars.splice(0).map(async (sidecar) => await sidecar.stop()));
@@ -146,6 +148,8 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
 });
 
 beforeEach(() => {
+  scheduler = createTestGatewayScheduler();
+  sidecars.push(scheduler);
   envSnapshot = captureEnv([
     "OPENCLAW_STATE_DIR",
     "OPENCLAW_SUPERVISOR_MODE",
@@ -180,6 +184,82 @@ beforeEach(() => {
     ]),
   );
 });
+
+it.each(["queued", "running", "admission"] as const)(
+  "stops pending update recovery and joins its retry (%s)",
+  async (phase) => {
+    const stateDir = tempDirs.make("openclaw-restart-retry-stop-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    const pending = await writeRestartSentinel(
+      {
+        kind: "update",
+        status: "skipped",
+        ts: 123,
+        sessionKey: "agent:main:main",
+        stats: { handoffId: "pending-handoff", reason: "managed-service-handoff-started" },
+      },
+      env,
+    );
+    const readSnapshot = restartSentinel.readRestartSentinel;
+    const read = vi.spyOn(restartSentinel, "readRestartSentinel");
+    const clear = vi.spyOn(restartSentinel, "clearRestartSentinelIfRevision");
+    const clock = createGatewaySchedulerClock();
+    const retryScheduler = createTestGatewayScheduler(clock.clock);
+    const sidecar = scheduleRestartSentinelWakeAfterReady({
+      scheduler: retryScheduler,
+      deps: {},
+      log: { warn: vi.fn() },
+    });
+    sidecars.push(retryScheduler, sidecar);
+    await clock.advanceBy(750);
+    expect(retryScheduler.nextWakeAtMs).toBe(2_750);
+    const readsBeforeRetry = read.mock.calls.length;
+    const readStarted = createDeferred();
+    const releaseRead = createDeferred<typeof pending>();
+    if (phase === "running") {
+      read.mockImplementationOnce(() => {
+        readStarted.resolve();
+        return releaseRead.promise;
+      });
+    }
+    const suspension =
+      phase === "admission" ? gatewayWorkAdmission.tryBeginGatewaySuspendAdmission(() => {}) : null;
+    if (phase === "admission") {
+      expect(suspension?.commit()).toBe(true);
+    }
+    const retry = phase === "queued" ? undefined : clock.advanceBy(2_000);
+    let stopped = false;
+    let stopping: Promise<void> | undefined;
+    try {
+      if (phase === "running") {
+        await readStarted.promise;
+      }
+      stopping = Promise.resolve(sidecar.stop()).then(() => {
+        stopped = true;
+      });
+      if (phase === "running") {
+        // The initial startup timer has settled; only this retry can hold stop open.
+        for (let turn = 0; turn < 5; turn += 1) {
+          await Promise.resolve();
+        }
+        expect(stopped).toBe(false);
+      }
+    } finally {
+      releaseRead.resolve(pending);
+      await stopping;
+      await retry;
+      suspension?.release();
+      await sidecar.stop();
+    }
+    await clock.advanceBy(2_000);
+    expect(retryScheduler.nextWakeAtMs).toBeNull();
+    expect(read).toHaveBeenCalledTimes(readsBeforeRetry + (phase === "running" ? 1 : 0));
+    expect(clear).not.toHaveBeenCalled();
+    expect(mocks.sendDurableMessageBatchCore).not.toHaveBeenCalled();
+    expect(await readSnapshot(env)).toEqual(pending);
+  },
+);
 
 it.each(["absent", "maintenance"] as const)(
   "refuses legacy notice import with an %s Gateway owner",
@@ -425,7 +505,7 @@ it.each([false, true])(
       return undefined;
     });
 
-    await scheduleRestartSentinelWake({ deps: {} });
+    await scheduleRestartSentinelWake({ scheduler, signal: scheduler.signal, deps: {} });
 
     expect(mocks.hookRunner.runMessageSending).toHaveBeenCalledOnce();
     expect(await readRestartSentinel(unrelatedEnv)).toEqual(unrelated);
@@ -519,7 +599,13 @@ it.each([
       });
     }
 
-    await scheduleRestartSentinelWake({ deps: {}, context, shouldRun: () => shouldRun });
+    await scheduleRestartSentinelWake({
+      scheduler,
+      signal: scheduler.signal,
+      deps: {},
+      context,
+      shouldRun: () => shouldRun,
+    });
 
     if (replacement === "stopped") {
       expect(mocks.sendDurableMessageBatchCore).not.toHaveBeenCalled();
@@ -548,7 +634,7 @@ it.each([
           }),
         }),
       );
-      await scheduleRestartSentinelWake({ deps: {}, context });
+      await scheduleRestartSentinelWake({ scheduler, signal: scheduler.signal, deps: {}, context });
       expect(mocks.dispatchAssembledChannelTurn).toHaveBeenCalledOnce();
     }
   },
@@ -648,14 +734,13 @@ it.each([
     );
     const testMode = captureEnv(["VITEST", "NODE_ENV"]);
     const clock = createGatewaySchedulerClock();
-    const scheduler = createTestGatewayScheduler(clock.clock);
-    sidecars.push(scheduler);
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const startupScheduler = createTestGatewayScheduler(clock.clock);
+    sidecars.push(startupScheduler);
     setTestEnvValue("VITEST", "");
     setTestEnvValue("NODE_ENV", "production");
     const warn = vi.fn();
     await startGatewaySidecars({
-      scheduler,
+      scheduler: startupScheduler,
       cfg: { commands: { ownerAllowFrom: ["matrix:!operator:example"] } },
       defaultWorkspaceDir: stateDir,
       deps: {},
@@ -713,7 +798,7 @@ it.each([
         await Promise.all(sidecars.splice(0).map(async (sidecar) => await sidecar.stop()));
       }
       await fs.writeFile(sourcePath, JSON.stringify({ version: 1, payload: final }));
-      await vi.advanceTimersByTimeAsync(1);
+      await clock.advanceBy(2_000);
       await Promise.all(wakeTasks);
     }
     if (startsWithFinal || phase === "late-final") {
@@ -726,7 +811,13 @@ it.each([
       expect(await readRestartSentinel(env)).toBeNull();
       await expect(fs.stat(sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
       await fs.writeFile(sourcePath, JSON.stringify({ version: 1, payload: final }));
-      await scheduleRestartSentinelWake({ deps: {}, context, shouldRun: () => true });
+      await scheduleRestartSentinelWake({
+        scheduler: startupScheduler,
+        signal: startupScheduler.signal,
+        deps: {},
+        context,
+        shouldRun: () => true,
+      });
       expect(mocks.sendDurableMessageBatchCore).toHaveBeenCalledOnce();
       expect(mocks.dispatchAssembledChannelTurn).toHaveBeenCalledOnce();
     } else {
@@ -811,16 +902,14 @@ it.each([
       });
     const testMode = captureEnv(["VITEST", "NODE_ENV"]);
     const clock = createGatewaySchedulerClock();
-    const scheduler = createTestGatewayScheduler(clock.clock);
-    sidecars.push(scheduler);
-    // Pending-update retries retain native timers; startup uses the injected scheduler clock.
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const recoveryScheduler = createTestGatewayScheduler(clock.clock);
+    sidecars.push(recoveryScheduler);
     setTestEnvValue("VITEST", "");
     setTestEnvValue("NODE_ENV", "production");
     setTestEnvValue("OPENCLAW_SKIP_CHANNELS", "");
     setTestEnvValue("OPENCLAW_SKIP_PROVIDERS", "");
     await startGatewaySidecars({
-      scheduler,
+      scheduler: recoveryScheduler,
       cfg,
       defaultWorkspaceDir: originalRoot,
       deps: {},
@@ -838,17 +927,17 @@ it.each([
     });
     setTestEnvValue("OPENCLAW_STATE_DIR", unrelatedRoot);
     await startupCompleted.promise;
-    expect(scheduler.nextWakeAtMs).toBe(750);
+    expect(recoveryScheduler.nextWakeAtMs).toBe(750);
     testMode.restore();
     await clock.advanceBy(750);
     expect(getUpdateRun(run.runId, { env: originalEnv })?.verification.booted).toBe(true);
     expect(await readRestartSentinel(originalEnv)).not.toBeNull();
     expect(mocks.sendDurableMessageBatchCore).toHaveBeenCalledTimes(initialNoticeCount);
-    expect(vi.getTimerCount()).toBeGreaterThan(0);
+    expect(recoveryScheduler.nextWakeAtMs).toBe(2_750);
     finishUpdateRun(run.runId, { status: "succeeded" }, { env: originalEnv });
     if (phase === "stopped") {
       await Promise.all(sidecars.splice(0).map(async (sidecar) => await sidecar.stop()));
-      await vi.advanceTimersByTimeAsync(1);
+      await clock.advanceBy(2_000);
       expect(mocks.sendDurableMessageBatchCore).not.toHaveBeenCalled();
       expect(await readRestartSentinel(originalEnv)).not.toBeNull();
       expect(await readRestartSentinel(unrelatedEnv)).toEqual(unrelated);
@@ -865,7 +954,7 @@ it.each([
             },
         originalEnv,
       );
-      await vi.advanceTimersByTimeAsync(1);
+      await clock.advanceBy(2_000);
       await admittedWork.mock.results.at(-1)?.value;
       expect(mocks.sendDurableMessageBatchCore).toHaveBeenCalledTimes(initialNoticeCount);
       expect(await readRestartSentinel(originalEnv)).toEqual(replacement);
@@ -873,7 +962,7 @@ it.each([
       return;
     }
     if (phase === "terminal-before-marker") {
-      await vi.advanceTimersByTimeAsync(1);
+      await clock.advanceBy(2_000);
       await admittedWork.mock.results.at(-1)?.value;
       expect(mocks.sendDurableMessageBatchCore).toHaveBeenCalledTimes(initialNoticeCount);
       expect(await readRestartSentinel(originalEnv)).not.toBeNull();
@@ -882,7 +971,7 @@ it.each([
       { ...payload, status: "ok", stats: { runId: run.runId } },
       originalEnv,
     );
-    await vi.advanceTimersByTimeAsync(1);
+    await clock.advanceBy(2_000);
     await admittedWork.mock.results.at(-1)?.value;
     expect(mocks.sendDurableMessageBatchCore).toHaveBeenCalledTimes(initialNoticeCount + 1);
     expect(getUpdateRun(run.runId, { env: originalEnv })?.verification.noticeDelivered).toBe(true);

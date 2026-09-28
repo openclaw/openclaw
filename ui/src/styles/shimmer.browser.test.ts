@@ -131,4 +131,76 @@ describeShimmer("Control UI shimmer", () => {
       }
     });
   });
+  it("aligns intrinsic typing stacks and shimmers only active text, including names", async () => {
+    await withBrowserPage(browser.newPage({ reducedMotion: "no-preference" }), async (page) => {
+      for (const count of [1, 2, 5]) {
+        await page.setContent(
+          "<style>" +
+            readStyleSheet("ui/src/styles/base.css") +
+            readStyleSheet("ui/src/styles/chat/grouped.css") +
+            '</style><div style="padding:16px;width:360px"><span id="preview">A</span>' +
+            '<span class="agent-chat__typing-state agent-chat__typing-text" data-typing>is typing…</span>' +
+            '<span id="draft" class="agent-chat__typing-state agent-chat__typing-text">Draft</span>' +
+            '<div class="agent-chat__typing-overflow"><span class="agent-chat__typing-identities">' +
+            '<span class="agent-chat__typing-person">C</span>'.repeat(count) +
+            '</span><span class="agent-chat__typing-summary"><span class="agent-chat__typing-text" data-typing><bdi class="agent-chat__typing-name">Camila</bdi> is typing…</span></span></div>' +
+            '<span class="agent-chat__typing-text" data-typing>Several people are typing…</span></div>',
+        );
+        const result = await page.evaluate(() => {
+          const first = document.querySelector(".agent-chat__typing-person");
+          const stack = document.querySelector(".agent-chat__typing-identities");
+          const summary = document.querySelector(".agent-chat__typing-summary");
+          const preview = document.querySelector("#preview");
+          if (!first || !stack || !summary || !preview) {
+            throw new Error("Missing typing fixture");
+          }
+          return {
+            offset: first.getBoundingClientRect().x - preview.getBoundingClientRect().x,
+            gap: summary.getBoundingClientRect().x - stack.getBoundingClientRect().right,
+            width: stack.getBoundingClientRect().width,
+            animated: [...document.querySelectorAll(".agent-chat__typing-text[data-typing]")].map(
+              (e) => getComputedStyle(e).animationName,
+            ),
+            draftAnimation: getComputedStyle(document.querySelector("#draft") ?? preview)
+              .animationName,
+            nameFill: getComputedStyle(
+              document.querySelector(".agent-chat__typing-name") ?? preview,
+            ).webkitTextFillColor,
+            avatarAnimations: first.getAnimations({ subtree: true }).length,
+          };
+        });
+        expect(result.offset).toBe(0);
+        expect(result.gap).toBe(8);
+        expect(result.width).toBe(20 + (count - 1) * 14);
+        expect(result.animated).toEqual(["text-shimmer", "text-shimmer", "text-shimmer"]);
+        expect(result.draftAnimation).toBe("none");
+        expect(result.nameFill).toBe("rgba(0, 0, 0, 0)");
+        expect(result.avatarAnimations).toBe(0);
+      }
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      const staticText = await page.locator(".agent-chat__typing-text").evaluateAll((elements) =>
+        elements.map((e) => ({
+          animation: getComputedStyle(e).animationName,
+          background: getComputedStyle(e).backgroundImage,
+          fill: getComputedStyle(e).webkitTextFillColor,
+        })),
+      );
+      for (const text of staticText) {
+        expect(text.animation).toBe("none");
+        expect(text.background).toBe("none");
+        expect(text.fill).not.toBe("rgba(0, 0, 0, 0)");
+      }
+      await page.emulateMedia({ reducedMotion: "no-preference", forcedColors: "active" });
+      const forced = await page.locator(".agent-chat__typing-text").evaluateAll((elements) =>
+        elements.map((e) => ({
+          animation: getComputedStyle(e).animationName,
+          fill: getComputedStyle(e).webkitTextFillColor,
+        })),
+      );
+      for (const text of forced) {
+        expect(text.animation).toBe("none");
+        expect(text.fill).not.toBe("rgba(0, 0, 0, 0)");
+      }
+    });
+  });
 });

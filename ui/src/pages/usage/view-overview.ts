@@ -3,6 +3,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { renderAgentRowChip } from "../../components/agent-row-chip.ts";
+import { icons } from "../../components/icons.ts";
 import { renderSettingsSection, renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
@@ -101,7 +102,7 @@ function renderFilterChips(
               <span class="filter-chip-label">${t(labelKey)}: ${value}</span>
               <openclaw-tooltip .content=${t("usage.filters.remove")}>
                 <button class="filter-chip-remove" @click=${onClear} aria-label=${t(removeKey)}>
-                  ×
+                  ${icons.x}
                 </button>
               </openclaw-tooltip>
             </div>

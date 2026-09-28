@@ -45,6 +45,7 @@ import {
   openSessionWorkspacePreview,
   clearSessionWorkspacePreviews,
 } from "./components/chat-session-workspace-state.ts";
+import { isIncognitoComposerScope } from "./composer-persistence-state.ts";
 import {
   handleChatDraftChange,
   handleChatInputHistoryKey,
@@ -102,6 +103,7 @@ function cancelPendingQueuedChatInput(state: ChatPageHost, id: string): boolean 
     sessionKey: view.sessionKey,
     agentId: view.agentId,
     runId: input.runId,
+    ...(isIncognitoComposerScope(state, view) ? {} : { discardPendingInput: true }),
   }).then(async (result) => {
     if (!current()) {
       return;
@@ -192,6 +194,7 @@ export function createPageState(
   const identity = loadLocalUserIdentity();
   const appConfig = context.config.current;
   const state = {
+    uploadConfig: context.config,
     captureComposerRecoveryReload: () => {
       const options = createGatewayControlUiReloadOptions(context.gateway);
       return () => retryStaleChunkReloadWhenReachable({ timeoutMs: 0, ...options });

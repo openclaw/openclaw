@@ -19,6 +19,7 @@ import { normalizeCronRunJobId } from "../run-history.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { removeCronJobBaseSession } from "../session-reaper.js";
 import { removeStaleCronJobFamilyRows } from "../store.js";
+import type { CronStoreTransactionHooks } from "../store/transaction-hooks.types.js";
 import {
   isSystemMonitorDeclaration,
   systemOwnedDeclarationKeyNamespace,
@@ -55,7 +56,10 @@ import {
 } from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
 import { resolveCurrentDefaultAgentId, resolveEffectiveJobAgentId } from "./ops-shared.js";
-import { cronRunReceiptMutationHooks } from "./run-receipts.js";
+import {
+  cronRunReceiptMutationHooks,
+  prepareCronRunReceiptOwnerMutationHooks,
+} from "./run-receipts.js";
 import type {
   CronAddOptions,
   CronAddResult,
@@ -109,6 +113,7 @@ async function persistUpdatedJob(params: {
   nextJob: CronJob;
   persistStore: typeof persistOrRestore;
   mutationMethod: "cron.add" | "cron.update";
+  ownerHooks?: CronStoreTransactionHooks;
 }) {
   const { state, snapshot, previousJob, nextJob, persistStore } = params;
   const reservation = state.queuedRunReservationsByJobId.get(nextJob.id);
@@ -137,10 +142,6 @@ async function persistUpdatedJob(params: {
     }
   }
 
-  const defaultAgentId = resolveCurrentDefaultAgentId(state);
-  const ownerChanged =
-    resolveEffectiveJobAgentId(previousJob, defaultAgentId) !==
-    resolveEffectiveJobAgentId(nextJob, defaultAgentId);
   const triggerStateChanged =
     !isDeepStrictEqual(previousJob.trigger, nextJob.trigger) ||
     !isDeepStrictEqual(previousJob.state.triggerState, nextJob.state.triggerState) ||
@@ -166,7 +167,7 @@ async function persistUpdatedJob(params: {
       cronRunReceiptMutationHooks({
         state,
         jobId: nextJob.id,
-        ownerChanged,
+        ownerHooks: params.ownerHooks,
         triggerStateChanged,
         messageActionAuthorityChanged,
         messageSourceAuthorityChanged,
@@ -445,6 +446,12 @@ async function updateLoadedJob(params: {
     opts?.captureRuntimeAuthority !== undefined
       ? persistNativeOrRestore
       : persistOrRestore;
+  const ownerPreparation = prepareCronRunReceiptOwnerMutationHooks({
+    state,
+    previousJob: job,
+    nextJob,
+  });
+  const ownerHooks = ownerPreparation ? await ownerPreparation : undefined;
   const runtimeAuthorityMutation = consumeRuntimeAuthorityMutationOptions(opts);
   reconcileRuntimeAuthority({
     job: nextJob,
@@ -468,6 +475,7 @@ async function updateLoadedJob(params: {
     nextJob,
     persistStore,
     mutationMethod: "cron.update",
+    ownerHooks,
   });
   return nextJob;
 }

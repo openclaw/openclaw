@@ -4,6 +4,7 @@
 import "openclaw/plugin-sdk/image-generation";
 import "openclaw/plugin-sdk/media-generation-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
 import {
@@ -331,127 +332,61 @@ describe("openai image generation provider", () => {
     });
   });
 
-  it("reports configured when either OpenAI API key auth or Codex OAuth auth is available", () => {
-    isProviderApiKeyConfiguredMock.mockReturnValue(true);
-    expect(provider.isConfigured?.({ agentDir: "/tmp/agent" })).toBe(true);
-    expect(isProviderApiKeyConfiguredMock).toHaveBeenCalledWith({
-      provider: "openai",
-      agentDir: "/tmp/agent",
-    });
-
-    isProviderApiKeyConfiguredMock.mockClear();
-    isProviderApiKeyConfiguredMock.mockReturnValue(false);
-    ensureAuthProfileStoreMock.mockReturnValue(createCodexOAuthAuthStore());
-    expect(provider.isConfigured?.({ agentDir: "/tmp/agent" })).toBe(true);
-    expect(isProviderApiKeyConfiguredMock).toHaveBeenCalledWith({
-      provider: "openai",
-      agentDir: "/tmp/agent",
-    });
-
-    isProviderApiKeyConfiguredMock.mockReturnValue(false);
-    ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
-    expect(provider.isConfigured?.({ agentDir: "/tmp/agent" })).toBe(false);
-  });
-
-  it("reports configured from a config apiKey (gateway-routed openai) with no env/profile creds", () => {
-    // Config-only auth: a provider apiKey in config, with no env var and no
-    // auth profile.
-    isProviderApiKeyConfiguredMock.mockReturnValue(false);
-    ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
-
-    expect(
-      provider.isConfigured?.({
-        agentDir: "/tmp/agent",
-        cfg: openAIImageConfig({
-          baseUrl: "https://gateway.example.test/openai/v1",
-          apiKey: "gateway-token",
-        }),
-      }),
-    ).toBe(true);
-  });
-
-  it.each([["whitespace-only", "   "]])(
-    "treats a %s config apiKey as not configured",
-    (_label, apiKey) => {
-      // Blank placeholders resolve to no usable credential in the generate
-      // path, so readiness must not count them either.
-      isProviderApiKeyConfiguredMock.mockReturnValue(false);
-      ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
-
-      expect(
-        provider.isConfigured?.({
-          agentDir: "/tmp/agent",
-          cfg: openAIImageConfig({
-            baseUrl: "https://gateway.example.test/openai/v1",
-            apiKey,
-          }),
-        }),
-      ).toBe(false);
+  it.each(["none", "codex", "api-key"] as const)(
+    "selects an image-capable credential with SIWC first and %s configured",
+    async (additional) => {
+      vi.stubEnv("OPENAI_API_KEY", "");
+      const store: AuthProfileStore = {
+        version: 1,
+        profiles: {
+          "openai:siwc": {
+            type: "oauth",
+            provider: "openai",
+            authFlow: "chatgpt-token-sharing",
+            access: "siwc-access",
+            refresh: "siwc-refresh",
+            expires: Date.now() + 3_600_000,
+          },
+          ...(additional === "codex"
+            ? createCodexTokenAuthStore().profiles
+            : additional === "api-key"
+              ? createCodexApiKeyAuthStore().profiles
+              : {}),
+        },
+      };
+      const realAuth = await vi.importActual<
+        typeof import("openclaw/plugin-sdk/provider-auth-runtime")
+      >("openclaw/plugin-sdk/provider-auth-runtime");
+      resolveApiKeyForProviderMock.mockImplementation((params) =>
+        realAuth.resolveApiKeyForProvider({ ...params, provider: "openai", store }),
+      );
+      if (additional === "api-key") {
+        mockGeneratedPngResponse();
+      } else {
+        mockCodexImageStream();
+      }
+      const request = generateOpenAIImage("Draw an avatar", {
+        authStore: store,
+        cfg: { auth: { order: { openai: Object.keys(store.profiles) } } },
+      });
+      if (additional === "none") {
+        await expect(request).rejects.toThrow("OpenAI API key or Codex OAuth missing");
+        expect(postJsonRequestMock).not.toHaveBeenCalled();
+        expect(postMultipartRequestMock).not.toHaveBeenCalled();
+        return;
+      }
+      expect((await request).images).toHaveLength(1);
+      const call = jsonRequestCall();
+      expect(new Headers(call.headers).get("authorization")).toBe(
+        `Bearer ${additional === "codex" ? "codex-token" : "codex-api-key"}`,
+      );
+      expect(call.url).toBe(
+        additional === "codex"
+          ? "https://chatgpt.com/backend-api/codex/responses"
+          : "https://api.openai.com/v1/images/generations",
+      );
     },
   );
-
-  it("reports ChatGPT OAuth image auth as configured for ChatGPT routes", () => {
-    isProviderApiKeyConfiguredMock.mockReturnValue(false);
-    ensureAuthProfileStoreMock.mockReturnValue(createCodexOAuthAuthStore());
-
-    expect(
-      provider.isConfigured?.({
-        agentDir: "/tmp/agent",
-        cfg: openAIImageConfig({
-          baseUrl: "https://chatgpt.com/backend-api/codex",
-        }),
-      }),
-    ).toBe(true);
-
-    expect(
-      provider.isConfigured?.({
-        agentDir: "/tmp/agent",
-        cfg: openAIImageConfig({
-          api: "openai-chatgpt-responses",
-          baseUrl: "https://openai-compatible.example.test/v1",
-        }),
-      }),
-    ).toBe(true);
-  });
-
-  it("does not report OpenAI OAuth image auth as configured for custom OpenAI endpoints", () => {
-    vi.stubEnv("OPENAI_API_KEY", "");
-    isProviderApiKeyConfiguredMock.mockReturnValue(false);
-    ensureAuthProfileStoreMock.mockReturnValue({
-      version: 1,
-      profiles: {
-        "openai:chatgpt": {
-          type: "oauth",
-          provider: "openai",
-          access: "chatgpt-access",
-          refresh: "chatgpt-refresh",
-          expires: Date.now() + 60_000,
-        },
-      },
-    });
-
-    expect(
-      provider.isConfigured?.({
-        agentDir: "/tmp/agent",
-        cfg: openAIImageConfig({
-          baseUrl: "https://openai-compatible.example.test/v1",
-        }),
-      }),
-    ).toBe(false);
-  });
-
-  it("does not report Codex OAuth image auth as configured for non-exact public OpenAI URLs", () => {
-    isProviderApiKeyConfiguredMock.mockReturnValue(false);
-
-    expect(
-      provider.isConfigured?.({
-        agentDir: "/tmp/agent",
-        cfg: openAIImageConfig({
-          baseUrl: "https://api.openai.com/v1?proxy=1",
-        }),
-      }),
-    ).toBe(false);
-  });
 
   it("does not auto-allow local baseUrl overrides for image requests", async () => {
     mockGeneratedPngResponse();

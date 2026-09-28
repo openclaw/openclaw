@@ -35,6 +35,8 @@ export type SkillLibraryAuthority = {
   getConfig: () => OpenClawConfig;
   /** Must revalidate the admitted run/placement and request owner, synchronously at commit. */
   assertCurrent: () => void;
+  /** Additional pure, synchronous admission for client bytes; must not perform database reads. */
+  assertFileMutationAllowed?: () => void;
 };
 export type SkillLibraryRow = StateDatabase["skill_library_entries"];
 export type SkillLibraryRevisionRow = StateDatabase["skill_library_revisions"];

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
@@ -54,11 +55,6 @@ type GitCandidatePreflightResult =
       localDevBranchExists: boolean | null;
     }
   | { status: "error" | "skipped"; reason: NonNullable<UpdateRunResult["reason"]> };
-
-function normalizeDevTargetRef(value?: string | null): string | null {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : null;
-}
 
 function looksLikeFullCommitSha(value: string): boolean {
   return /^[0-9a-f]{40}$/i.test(value.trim());
@@ -115,7 +111,6 @@ async function resolveExplicitTarget(params: {
   devTargetRef: string;
   refreshedRemotes: readonly string[];
   gitRoot: string;
-  steps: UpdateStepResult[];
   step: StepFactory;
   workStep: StepFactory;
 }): Promise<string | null> {
@@ -198,7 +193,6 @@ async function resolveUpstreamCandidates(params: {
   gitRoot: string;
   needsCheckoutMain: boolean;
   refreshedRemotes: readonly string[];
-  steps: UpdateStepResult[];
   step: StepFactory;
 }): Promise<
   | {
@@ -529,7 +523,7 @@ export async function runGitCandidatePreflight(params: {
   beforeCandidate: (revision: string) => Promise<void>;
 }): Promise<GitCandidatePreflightResult> {
   const devTargetRef = params.devTarget
-    ? normalizeDevTargetRef(resolveDevUpdateTargetRevision(params.devTarget))
+    ? normalizeNullableString(resolveDevUpdateTargetRevision(params.devTarget))
     : null;
   let preflightBaseSha: string;
   let candidates: string[];

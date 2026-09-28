@@ -38,7 +38,7 @@ describe("createComputerTool schema", () => {
     expect(listNodesMock).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps an undeclared node on the exact v1 action list", () => {
+  it("keeps v1 provider actions and exposes host-owned attached desktop takeover", () => {
     expect(readActionEnum(createComputerTool())).toEqual([
       "screenshot",
       "left_click",
@@ -55,6 +55,7 @@ describe("createComputerTool schema", () => {
       "key",
       "hold_key",
       "wait",
+      "take_control",
     ]);
   });
 
@@ -69,7 +70,9 @@ describe("createComputerTool schema", () => {
         invoke: async () => undefined,
       },
     });
-    expect(readActionEnum(tool)).toEqual(actions);
+    expect(readActionEnum(tool)).toEqual(
+      actions.some((action) => action === "screenshot") ? [...actions, "take_control"] : actions,
+    );
   });
 
   it("keeps override-compatible v1 actions alongside prepared paired v2 actions", () => {

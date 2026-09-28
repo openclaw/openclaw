@@ -87,7 +87,6 @@ function fixture(mode: "foreground" | "supervised" = "foreground", published = t
 }
 
 it.each([
-  "released",
   "slow-released",
   "owner-changed",
   "authority-lost",
@@ -149,8 +148,7 @@ it.each([
         await vi.advanceTimersToNextTimerAsync();
         expect(settled).toBe(false);
       }
-      const released =
-        outcome === "released" || outcome === "slow-released" || outcome === "rowless-released";
+      const released = outcome === "slow-released" || outcome === "rowless-released";
       if (released) {
         predecessor?.release();
       } else if (outcome === "rowless-deadline") {

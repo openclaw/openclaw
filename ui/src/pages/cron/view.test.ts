@@ -350,22 +350,7 @@ describe("cron view list pane", () => {
     expect(on.querySelector('[data-test-id="cron-scheduler-banner"]')).toBeNull();
   });
 
-  it("switches between tasks and run history via the list tabs", () => {
-    const onListTabChange = vi.fn();
-    const tasks = renderView({ onListTabChange });
-    expect(tasks.querySelector(".cron-table")).not.toBeNull();
-    expect(tasks.querySelector(".cron-activity")).toBeNull();
-    tasks
-      .querySelector('[data-test-id="cron-list-tab-activity"]')
-      ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
-    expect(onListTabChange).toHaveBeenCalledWith("activity");
-
-    const activity = renderView({ listTab: "activity" });
-    expect(activity.querySelector(".cron-table")).toBeNull();
-    expect(activity.querySelector(".cron-activity")).not.toBeNull();
-  });
-
-  it("renders shared manual list tabs with active state and selection", () => {
+  it("switches the default inventory and history panels through accessible manual tabs", () => {
     const onListTabChange = vi.fn();
     const container = renderView({ onListTabChange });
     document.body.append(container);
@@ -373,14 +358,19 @@ describe("cron view list pane", () => {
     const tasks = getElement(container, '[data-test-id="cron-tab-all"]', HTMLElement);
     const activity = getElement(container, '[data-test-id="cron-list-tab-activity"]', HTMLElement);
 
+    expect(container.querySelector(".cron-table")).not.toBeNull();
+    expect(container.querySelector(".cron-activity")).toBeNull();
     expect(group.getAttribute("activation")).toBe("manual");
     expect(tasks.getAttribute("aria-selected")).toBe("true");
     expect(activity.getAttribute("aria-selected")).toBe("false");
     activity.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
-
     expect(onListTabChange).toHaveBeenCalledWith("activity");
     expect(activity.getAttribute("aria-controls")).toBe("cron-list-panel");
     container.remove();
+
+    const history = renderView({ listTab: "activity" });
+    expect(history.querySelector(".cron-table")).toBeNull();
+    expect(history.querySelector(".cron-activity")).not.toBeNull();
   });
 });
 

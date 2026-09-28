@@ -9,9 +9,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { OpenClawConfig } from "../runtime-api.js";
 
 const normalizeMattermostBaseUrl = vi.hoisted(() => vi.fn((value: string | undefined) => value));
-const hasConfiguredSecretInput = vi.hoisted(() => vi.fn((value: unknown) => Boolean(value)));
 
-vi.mock("./setup.accounts.runtime.js", () => {
+vi.mock("./mattermost/accounts.js", () => {
   const resolveAccount = (params: { cfg: OpenClawConfig; accountId?: string }) => ({
     accountId: params.accountId ?? DEFAULT_ACCOUNT_ID,
     enabled: params.cfg.channels?.mattermost?.enabled !== false,
@@ -38,12 +37,8 @@ vi.mock("./setup.accounts.runtime.js", () => {
   };
 });
 
-vi.mock("./setup.client.runtime.js", () => ({
+vi.mock("./mattermost/client.js", () => ({
   normalizeMattermostBaseUrl,
-}));
-
-vi.mock("./setup.secret-input.runtime.js", () => ({
-  hasConfiguredSecretInput,
 }));
 
 let mattermostSetupWizard: typeof import("./setup-surface.js").mattermostSetupWizard;
@@ -63,8 +58,6 @@ describe("mattermost setup", () => {
   afterEach(() => {
     normalizeMattermostBaseUrl.mockReset();
     normalizeMattermostBaseUrl.mockImplementation((value: string | undefined) => value);
-    hasConfiguredSecretInput.mockReset();
-    hasConfiguredSecretInput.mockImplementation((value: unknown) => Boolean(value));
     vi.unstubAllEnvs();
   });
 

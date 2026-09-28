@@ -125,9 +125,12 @@ export function normalizePublicationIntent(purpose, selectionJson = "") {
     ],
     "publication selection",
   );
+  if (selected.route === "alpha" || selected.npmDistTag === "alpha") {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   if (
-    !["normal", "prepared", "extended-stable", "alpha"].includes(selected.route) ||
-    !["alpha", "beta", "latest", "extended-stable"].includes(selected.npmDistTag) ||
+    !["normal", "prepared", "extended-stable"].includes(selected.route) ||
+    !["beta", "latest", "extended-stable"].includes(selected.npmDistTag) ||
     typeof selected.publishOpenclawNpm !== "boolean" ||
     !["selected", "all-publishable"].includes(selected.pluginPublishScope) ||
     !Array.isArray(selected.plugins) ||
@@ -143,10 +146,7 @@ export function normalizePublicationIntent(purpose, selectionJson = "") {
   if (selected.publishOpenclawNpm && selected.pluginPublishScope !== "all-publishable") {
     throw new Error("core publication requires all-publishable plugins");
   }
-  if (
-    (selected.route === "extended-stable") !== (selected.npmDistTag === "extended-stable") ||
-    (selected.route === "alpha") !== (selected.npmDistTag === "alpha")
-  ) {
+  if ((selected.route === "extended-stable") !== (selected.npmDistTag === "extended-stable")) {
     throw new Error("publication route and npm dist-tag disagree");
   }
   if (

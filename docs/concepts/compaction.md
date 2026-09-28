@@ -76,7 +76,13 @@ Before compacting, OpenClaw automatically reminds the agent to save important no
 
 ## Manual compaction
 
-Type `/compact` in any chat to force a compaction. Add instructions to guide the summary:
+Type `/compact` in a chat to force compaction when its runtime supports manual
+compaction. In the built-in OpenClaw runtime, add instructions to guide the
+summary, as in the example below. When manual compaction is available in native
+Codex sessions with Codex login or an API key, use bare `/compact`; focus
+instructions are not passed to Codex. Native Codex sessions using
+[Sign in with ChatGPT](/providers/openai/authentication) support automatic
+compaction, but cannot run manual `/compact`.
 
 ```text
 /compact Focus on the API design decisions

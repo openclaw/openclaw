@@ -158,7 +158,7 @@ const mocks = vi.hoisted(() => ({
   getTtsProvider: vi.fn(() => "openai"),
   listSpeechProviders: vi.fn(() => []),
   setTtsPersona: vi.fn(),
-  resolveTtsConfig: vi.fn(() => ({})),
+  resolveTtsConfig: vi.fn(() => ({ providerConfigs: {} })),
   resolveExplicitTtsOverrides: vi.fn(
     ({
       provider,
@@ -376,14 +376,6 @@ vi.mock("../commands/models/list.status-command.js", () => ({
 vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway as typeof import("../gateway/call.js").callGateway,
   randomIdempotencyKey: () => "run-1",
-}));
-
-vi.mock("../gateway/connection-details.js", () => ({
-  buildGatewayConnectionDetailsWithResolvers: vi.fn(() => ({
-    url: "ws://127.0.0.1:18789",
-    urlSource: "local loopback",
-    message: "Gateway target: ws://127.0.0.1:18789",
-  })),
 }));
 
 vi.mock("../media-understanding/runtime.js", () => ({
@@ -615,7 +607,7 @@ describe("capability cli", () => {
       .mockReset()
       .mockReturnValue({ rows: [], entries: [], conflicts: [] });
     mocks.resolveAgentDir.mockClear();
-    mocks.resolveTtsConfig.mockReset().mockReturnValue({});
+    mocks.resolveTtsConfig.mockReset().mockReturnValue({ providerConfigs: {} });
     mocks.getRuntimeConfigSourceSnapshot.mockReset().mockReturnValue(null);
     mocks.setRuntimeConfigSnapshot.mockClear();
     mocks.updateAuthProfileStoreWithLock
@@ -3622,11 +3614,8 @@ describe("capability cli", () => {
   });
 
   it("fails clearly when gateway TTS output is requested against a remote gateway", async () => {
-    const gatewayConnection = await import("../gateway/connection-details.js");
-    vi.mocked(gatewayConnection.buildGatewayConnectionDetailsWithResolvers).mockReturnValueOnce({
-      url: "wss://gateway.example.com",
-      urlSource: "config gateway.remote.url",
-      message: "Gateway target: wss://gateway.example.com",
+    mocks.loadConfig.mockReturnValue({
+      gateway: { mode: "remote", remote: { url: "wss://gateway.example.com" } },
     });
 
     await expect(

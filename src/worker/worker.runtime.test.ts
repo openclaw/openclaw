@@ -61,6 +61,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { saveExecApprovals, type ExecApprovalsFile } from "../infra/exec-approvals.js";
 import { runExec } from "../process/exec.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
+import { prepareSkillBundle } from "../skills/library/bundle.js";
 import {
   buildWorkerConnectParams,
   parseWorkerLaunchDescriptor,
@@ -1049,6 +1050,20 @@ describe("worker runtime", () => {
   it("runs a full embedded turn through remote inference, live events, and transcript commits", async () => {
     const { gateway, workspaceDir, launch } = await setup();
     await writeFile(path.join(workspaceDir, "AGENTS.md"), "worker-bootstrap-marker", "utf8");
+    const files = [
+      { path: "SKILL.md", content: "# Stable worker skill\n", encoding: "utf8" as const },
+    ];
+    launch.assignment.skillResources = {
+      version: 1,
+      skills: [
+        {
+          name: "stable",
+          description: "Worker fixture",
+          files,
+          revision: prepareSkillBundle(files).revision,
+        },
+      ],
+    };
 
     const result = await runWorkerDescriptor(launch);
 
@@ -1096,6 +1111,32 @@ describe("worker runtime", () => {
       transcriptLeafId: `leaf-${lastTranscript?.seq}`,
       transcriptNextSeq: (lastTranscript?.seq ?? 0) + 1,
     });
+
+    const firstPrompt = gateway.inferenceRequests[0]!.context.systemPrompt;
+    expect(firstPrompt).toContain("<name>stable</name>");
+    if (result.status !== "completed") {
+      throw new Error("Expected the first worker turn to complete");
+    }
+    const next = structuredClone(launch);
+    next.assignment.runId = "worker-next-run";
+    next.assignment.turnId = "worker-next-turn";
+    next.assignment.operationalRunInstance = createOperationalRunInstanceRef(next.assignment.runId);
+    next.assignment.prompt = "Continue with the same skill.";
+    next.assignment.initialMessages = gateway.acceptedTranscriptRequests.flatMap(
+      (request) => request.messages,
+    );
+    next.assignment.transcript = {
+      baseLeafId: result.transcriptLeafId,
+      nextSeq: result.transcriptNextSeq,
+    };
+    expect((await runWorkerDescriptor(next)).status).toBe("completed");
+    expect(gateway.inferenceRequests[1]!.context.systemPrompt).toBe(firstPrompt);
+    expect(
+      gateway.inferenceRequests[1]!.context.messages.slice(
+        0,
+        next.assignment.initialMessages.length,
+      ),
+    ).toEqual(next.assignment.initialMessages);
   });
 
   it.each([false, true])("uses only prepared prompt inputs (Gateway extra: %s)", async (extra) => {

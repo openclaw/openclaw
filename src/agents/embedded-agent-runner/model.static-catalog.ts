@@ -546,17 +546,16 @@ export async function loadBundledProviderStaticCatalogContextModels(
     return [];
   }
   const catalogs = await Promise.allSettled(
-    pluginIds.map(
-      async (pluginId) =>
-        await loadBundledProviderStaticCatalogModels({
-          pluginIds: [pluginId],
-          cfg: params.cfg,
-          workspaceDir: params.workspaceDir,
-          env,
-          preparedStaticProviderCatalog,
-          ...(metadataSnapshot ? { providerMetadataOwners: metadataSnapshot.owners } : {}),
-          ...(metadataSnapshot ? { pluginMetadataSnapshot: metadataSnapshot } : {}),
-        }),
+    pluginIds.map((pluginId) =>
+      loadBundledProviderStaticCatalogModels({
+        pluginIds: [pluginId],
+        cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
+        env,
+        preparedStaticProviderCatalog,
+        ...(metadataSnapshot ? { providerMetadataOwners: metadataSnapshot.owners } : {}),
+        ...(metadataSnapshot ? { pluginMetadataSnapshot: metadataSnapshot } : {}),
+      }),
     ),
   );
   return catalogs.flatMap((result) =>
@@ -581,10 +580,7 @@ function createScopedBundledProviderStaticCatalogModelResolver(
     if (!provider || !lookup.modelId.trim()) {
       return undefined;
     }
-    let pluginIds = scopedPluginIds;
-    if (!pluginIds) {
-      pluginIds = providerPluginIds.get(provider);
-    }
+    let pluginIds = scopedPluginIds ?? providerPluginIds.get(provider);
     if (!pluginIds) {
       pluginIds = resolveBundledProviderStaticCatalogPluginIds({
         provider,

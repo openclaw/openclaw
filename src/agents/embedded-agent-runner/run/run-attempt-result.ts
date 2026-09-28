@@ -71,19 +71,10 @@ export function buildTraceToolSummary(params: {
 export function resolveSuccessfulToolNames(
   attempt: Pick<EmbeddedRunAttemptWithReceiptEvidence, "toolMetas" | "successfulNestedToolNames">,
 ): string[] {
-  const successfulToolNames = [
-    ...new Set(
-      attempt.toolMetas
-        .filter((entry) => entry.isError === false)
-        .map((entry) => entry.toolName.trim())
-        .filter(Boolean),
-    ),
-  ];
-  const missingNestedToolNames = [
-    ...new Set(
-      (attempt.successfulNestedToolNames ?? []).map((name) => name.trim()).filter(Boolean),
-    ),
-  ]
+  const successfulToolNames = normalizeUniqueTrimmedStringList(
+    attempt.toolMetas.filter((entry) => entry.isError === false).map((entry) => entry.toolName),
+  );
+  const missingNestedToolNames = normalizeUniqueTrimmedStringList(attempt.successfulNestedToolNames)
     .filter((name) => !successfulToolNames.includes(name))
     .toSorted();
   successfulToolNames.push(...missingNestedToolNames);

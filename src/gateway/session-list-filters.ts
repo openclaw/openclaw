@@ -3,7 +3,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionOwnerSessionCount,
+  SessionsListParams,
+} from "../../packages/gateway-protocol/src/index.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -48,6 +51,7 @@ export type SessionListFilteredEntries = {
   entries: SessionEntryPair[];
   ownerEntries: SessionEntryPair[];
   ownerFacet: SessionOwnerFacetIdentity[];
+  ownerSessionCounts?: SessionOwnerSessionCount[];
   people?: SessionsListResult["people"];
   peopleIncomplete?: boolean;
   peopleSessionCount?: number;
@@ -248,6 +252,9 @@ export function* filterSessionEntries(
   const entries: SessionEntryPair[] = [];
   const ownerEntries: SessionEntryPair[] = [];
   const ownerFacet = new Map<string, SessionOwnerFacetIdentity>();
+  const ownerSessionCounts = opts.includeOwnerSessionCounts
+    ? new Map<string, SessionOwnerSessionCount>()
+    : undefined;
   const people = new Map<string, NonNullable<SessionsListResult["people"]>[number]>();
   let peopleSessionCount = 0;
   let peopleIncomplete = false;
@@ -443,6 +450,19 @@ export function* filterSessionEntries(
         }
       }
     }
+    if (
+      ownerSessionCounts &&
+      entry.archivedAt === undefined &&
+      effectiveOwner?.identity?.type === "profile"
+    ) {
+      const profileId = effectiveOwner.identity.id;
+      const counts = ownerSessionCounts.get(profileId) ?? { profileId, open: 0, running: 0 };
+      const agentId = expectDefined(params.getTarget(key), "counted row owner").agentId;
+      const active = params.projectActiveRun?.(key, entry, agentId);
+      counts.open += 1;
+      counts.running += Number(active?.active === true && active.status !== "queued");
+      ownerSessionCounts.set(profileId, counts);
+    }
     if (activityPulse) {
       // "Running now" is present tense: a run that started before midnight still counts.
       const agentId = expectDefined(params.getTarget(key), "pulse row owner").agentId;
@@ -479,6 +499,13 @@ export function* filterSessionEntries(
     entries,
     ownerEntries,
     ownerFacet: sortSessionOwnerFacet(ownerFacet),
+    ...(ownerSessionCounts
+      ? {
+          ownerSessionCounts: [...ownerSessionCounts.values()].toSorted((a, b) =>
+            a.profileId.localeCompare(b.profileId),
+          ),
+        }
+      : {}),
     // Empty time/search windows do not invalidate a resolved person link.
     involvingProfileId: selectedProfileId,
     ...(activityPulse ? { activityPulse } : {}),

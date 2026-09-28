@@ -6,6 +6,7 @@ import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   getSessionMcpRuntimeManagerForTesting,
   peekSessionMcpRuntime,
+  setSessionMcpRuntimeScheduler,
 } from "../../agents/agent-bundle-mcp-manager-api.js";
 import { waitForSessionMaintenance } from "../../agents/session-maintenance/coordinator.js";
 import { createSessionMaintenanceFollowup } from "../../agents/session-maintenance/run.js";
@@ -31,6 +32,7 @@ import {
 import { clearMemoryPluginState } from "../../plugins/memory-state.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
 import { runReplyAgent } from "./agent-runner.js";
@@ -222,7 +224,9 @@ it.each(["completed", "interrupted"] as const)(
       };
       let flush: ReturnType<typeof runMemoryFlushIfNeeded> | undefined;
       let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+      const scheduler = createTestGatewayScheduler();
       try {
+        await setSessionMcpRuntimeScheduler(scheduler);
         await state.writeConfig(cfg);
         setRuntimeConfigSnapshot(cfg);
         await replaceSessionEntry(scope, {
@@ -433,6 +437,7 @@ it.each(["completed", "interrupted"] as const)(
             await mcpManager.disposeSession(sessionId);
           }
         }
+        await scheduler.stop();
         clearMemoryPluginState();
         clearRuntimeConfigSnapshot();
         stopDiagnostics();

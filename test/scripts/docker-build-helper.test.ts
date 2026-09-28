@@ -566,6 +566,22 @@ function extractUpgradeSurvivorSupervisor(script: string): string {
   return source;
 }
 
+// These process tests isolate supervision from unit parsing (covered by the
+// systemd fixture suite), while exercising its real stop-policy subprocess call.
+function writeUpgradeSurvivorStopPolicy(workDir: string, timeoutMs = 330_000): string {
+  const policyPath = join(workDir, "stop-policy-" + timeoutMs + ".mjs");
+  writeFileSync(
+    policyPath,
+    [
+      'if (process.argv.length !== 3 || process.argv[2] !== "stop-timeout-ms") {',
+      '  throw new Error("Unexpected supervisor policy request");',
+      "}",
+      "process.stdout.write(" + JSON.stringify(String(timeoutMs)) + ");",
+    ].join("\n"),
+  );
+  return policyPath;
+}
+
 function installUpgradeSurvivorSystemctlShim(
   prefix: string,
   env: NodeJS.ProcessEnv,
@@ -645,7 +661,7 @@ async function forEachUpgradeSurvivorSystemctlShim(
   callback: (fixture: {
     pid: number;
     pidPath: string;
-    run: (procStat?: string) => number | null;
+    run: (procStat?: string, settled?: boolean) => number | null;
     readLog: () => string[];
     scriptPath: string;
   }) => void | Promise<void>,
@@ -665,15 +681,22 @@ async function forEachUpgradeSurvivorSystemctlShim(
       }
       const pid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
       writeFileSync(pidPath, `${pid}\n`);
+      const daemonLog = join(workDir, "gateway.log");
       const fixtureEnv = {
+        HOME: workDir,
         OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG: join(workDir, "systemctl.log"),
         OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE: pidPath,
+        OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG: daemonLog,
       };
-      const shimPath = installUpgradeSurvivorSystemctlShim(
-        workDir,
-        { HOME: workDir, ...fixtureEnv },
-        scriptPath,
+      const unitDir = join(workDir, ".config/systemd/user");
+      mkdirSync(unitDir, { recursive: true });
+      writeFileSync(
+        join(unitDir, "openclaw-gateway.service"),
+        buildSystemdUnit({
+          programArguments: [process.execPath, "gateway"],
+        }),
       );
+      const shimPath = installUpgradeSurvivorSystemctlShim(workDir, fixtureEnv, scriptPath);
       writeExecutables(binDir, {
         cat: `#!/usr/bin/env bash
 case "\${1:-}" in
@@ -690,7 +713,17 @@ printf 'wait\\n' >>"$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG"
 exit 97
 `,
       });
-      const run = (procStat?: string) => {
+      const run = (procStat?: string, settled = false) => {
+        // The synthetic /proc observation and manager custody describe the same
+        // state: a zombie has retired; unreadable/malformed state stays owned.
+        writeFileSync(
+          `${daemonLog}.runtime.json`,
+          JSON.stringify({
+            pid: 0,
+            supervisorPid: settled ? 0 : pid,
+            groupPid: 0,
+          }),
+        );
         writeFileSync(fixtureEnv.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG, "");
         return spawnSync("bash", [shimPath, "--user", "stop", "openclaw-gateway.service"], {
           encoding: "utf8",
@@ -3266,8 +3299,9 @@ outer
       "send $'\\r'",
       'wait_for_log "How should I set things up?"',
       "send $'\\r'",
-      'wait_for_log "Model/auth provider"',
+      'model_auth_prompt="$(wait_for_model_auth_prompt 120)"',
       "send $'\\r'",
+      'if [ "$model_auth_prompt" = "provider-picker" ]',
       'wait_for_log "Use which detected AI?"',
       "send $'\\r'",
     ]);
@@ -4130,7 +4164,8 @@ printf '%s\n' "$status" >"$TMPDIR/status"
         'if (key.startsWith("OPENCLAW_UPDATE_")) {',
         "delete childEnv.OPENCLAW_COMPATIBILITY_HOST_VERSION;",
         'process.on("SIGTERM", stop);',
-        "const stopTimeoutMs = 30_000;",
+        'OPENCLAW_SYSTEMCTL_SHIM_MANAGER_SCRIPT="$manager_script"',
+        '[managerScript, "stop-timeout-ms"]',
         "process.kill(-pid, signal);",
         'signalProcessGroup(pid, "SIGTERM");',
         'signalProcessGroup(pid, "SIGKILL");',
@@ -4142,7 +4177,9 @@ printf '%s\n' "$status" >"$TMPDIR/status"
         "const restartBurst = 5;",
         "if (starts.length >= restartBurst) {",
         "setTimeout(start, restartDelayMs);",
-        "for _ in $(seq 1 350)",
+        'stop_timeout_ms="$(node "$manager_script" stop-timeout-ms)"',
+        "stop_timeout_ms + 5000 + 99",
+        'node "$manager_script" check-stopped',
       ]);
     }
     for (const script of [runner, publishedRunner]) {
@@ -4155,8 +4192,13 @@ printf '%s\n' "$status" >"$TMPDIR/status"
     async () => {
       await forEachUpgradeSurvivorSystemctlShim(({ pid, run, readLog, scriptPath }) => {
         const procTail = Array.from({ length: 49 }, (_, field) => field + 1).join(" ");
-        expect(run(`${pid} (gateway (old) worker) Z ${procTail}`), scriptPath).toBe(0);
-        expect(readLog()).toEqual(["--user stop openclaw-gateway.service", "proc-stat-read"]);
+        expect(run(`${pid} (gateway (old) worker) Z ${procTail}`, true), scriptPath).toBe(0);
+        expect(readLog()).toEqual([
+          "--user stop openclaw-gateway.service",
+          "proc-stat-read",
+          "proc-stat-read",
+        ]);
+        expect(isProcessRunning(pid)).toBe(true);
       });
     },
   );
@@ -4180,13 +4222,77 @@ printf '%s\n' "$status" >"$TMPDIR/status"
     },
   );
 
+  it("records delegated post-core systemd callers only with the environment marker", () => {
+    const workDir = tempDirs.make("openclaw-survivor-systemd-caller-");
+    const preload = join(workDir, "proc-fixture.mjs");
+    const output = join(workDir, "callers.jsonl");
+    writeFileSync(
+      preload,
+      `import fs from "node:fs";
+const readFileSync = fs.readFileSync;
+fs.readFileSync = (file, ...args) => {
+  if (file === "/proc/123/cmdline") return process.env.CALLER_ARGV.split("|").join("\\0");
+  if (file === "/proc/123/environ") {
+    if (process.env.CALLER_ENV === "EACCES") throw Object.assign(new Error("unreadable"), { code: "EACCES" });
+    return process.env.CALLER_ENV;
+  }
+  if (file === "/proc/123/stat") return "123 (fixture) S 124";
+  if (file === "/proc/124/cmdline") return "openclaw-doctor\\0";
+  if (file === "/proc/124/stat") return "124 (fixture) S 1";
+  return readFileSync(file, ...args);
+};
+`,
+    );
+    for (const [argv, marker, expected] of [
+      [["openclaw-update"], "", ["update", "doctor"]],
+      [
+        ["node", "/package/dist/infra/update-migrated-finalize.worker.js", "--post-core"],
+        "OPENCLAW_UPDATE_POST_CORE=1",
+        ["update", "doctor"],
+      ],
+      [
+        ["node", "/package/dist/infra/update-migrated-finalize.worker.js", "--post-core"],
+        "",
+        ["doctor"],
+      ],
+      [
+        ["node", "/package/dist/infra/update-migrated-finalize.worker.js", "--post-core"],
+        "EACCES",
+        ["doctor"],
+      ],
+    ] as const) {
+      const child = spawnSync(
+        testNodeExecPath,
+        [
+          "--import",
+          preload,
+          "scripts/e2e/lib/upgrade-survivor/systemd-fixture.mjs",
+          "record-caller",
+          output,
+          "123",
+          "restart",
+        ],
+        {
+          env: { ...process.env, CALLER_ARGV: argv.join("|"), CALLER_ENV: marker },
+          encoding: "utf8",
+        },
+      );
+      expect(child.status, child.stderr).toBe(0);
+      expect(JSON.parse(readFileSync(output, "utf8").trim().split("\n").at(-1)!)).toEqual({
+        action: "restart",
+        roles: expected,
+      });
+    }
+  });
+
   it.each([
-    ["warning", 0],
-    ["error", 0],
-    ["error", 78],
+    ["warning", 0, "update"],
+    ["error", 0, "update"],
+    ["error", 78, "update"],
+    ["warning", 0, "--post-core"],
   ] as const)(
-    "retains the original post-core %s result separately from exit %i",
-    (status, code) => {
+    "retains the original post-core %s result separately from exit %i via %s",
+    (status, code, command) => {
       const { workDir, artifacts, resultDir, env, preloadOptions } = survivorPostCoreFixture();
       const result = {
         status,
@@ -4221,7 +4327,14 @@ printf '%s\n' "$status" >"$TMPDIR/status"
         integrityDrifts: [],
         credentials: "PRIVATE_RESULT_EXTRA",
       };
-      const childPath = join(workDir, "cli.mjs");
+      writeFileSync(
+        join(workDir, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "2026.9.7", type: "module" }),
+      );
+      const childPath = join(
+        workDir,
+        command === "--post-core" ? "update-migrated-finalize.worker.js" : "cli.mjs",
+      );
       writeFileSync(
         childPath,
         `import fs from "node:fs";
@@ -4230,12 +4343,17 @@ process.stdout.write("original stdout\\n");
 process.exit(${code});
 `,
       );
-      const child = spawnSync(testNodeExecPath, [childPath, "update", "--json"], {
+      const child = spawnSync(testNodeExecPath, [childPath, command, "--json"], {
         env: { ...env, NODE_OPTIONS: preloadOptions },
         encoding: "utf8",
       });
       expect(child.status, child.stderr).toBe(code);
       expect(child.stdout).toBe("original stdout\n");
+      expect(
+        JSON.parse(
+          readFileSync(join(artifacts, "diagnostics", `process-${child.pid}-started.json`), "utf8"),
+        ),
+      ).toMatchObject({ role: "post-core", event: "started", packageVersion: "2026.9.7" });
       // The historical parent removes the handoff directory before attempting restart.
       rmSync(resultDir, { recursive: true });
       expect(existsSync(join(artifacts, "diagnostics", "post-core.json"))).toBe(true);
@@ -4267,6 +4385,7 @@ process.exit(${code});
     "doctor",
     "worker",
     "missing-context",
+    "delegated-missing-context",
     "missing",
     "invalid",
     "wrong-file",
@@ -4304,7 +4423,7 @@ process.exit(${code});
       if (scenario === "missing") {
         rmSync(resultPath);
       }
-      if (scenario === "missing-context") {
+      if (scenario === "missing-context" || scenario === "delegated-missing-context") {
         env.OPENCLAW_UPDATE_POST_CORE = "";
       }
       if (scenario === "wrong-file") {
@@ -4322,7 +4441,12 @@ process.exit(${code});
       if (scenario === "blocked-output") {
         symlinkSync(workDir, join(artifacts, "diagnostics"));
       }
-      const childPath = join(workDir, "child.mjs");
+      const childPath = join(
+        workDir,
+        scenario === "delegated-missing-context"
+          ? "update-migrated-finalize.worker.js"
+          : "child.mjs",
+      );
       writeFileSync(
         childPath,
         scenario === "worker"
@@ -4337,7 +4461,14 @@ process.exit(78);
       );
       const child = spawnSync(
         testNodeExecPath,
-        [childPath, ["doctor", "worker"].includes(scenario) ? "doctor" : "update"],
+        [
+          childPath,
+          scenario === "delegated-missing-context"
+            ? "--post-core"
+            : ["doctor", "worker"].includes(scenario)
+              ? "doctor"
+              : "update",
+        ],
         { env: { ...env, NODE_OPTIONS: preloadOptions }, encoding: "utf8" },
       );
       expect(child.status, child.stderr).toBe(scenario === "sigterm" ? null : 78);
@@ -4861,6 +4992,7 @@ ${storage === "wal" ? 'process.kill(process.pid, "SIGKILL");' : ""}`,
           ...process.env,
           OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
           OPENCLAW_SYSTEMCTL_SHIM_MANAGER_ENV: "{}",
+          OPENCLAW_SYSTEMCTL_SHIM_MANAGER_SCRIPT: writeUpgradeSurvivorStopPolicy(workDir),
           OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: `${shellQuote(process.execPath)} ${shellQuote(childPath)}`,
         },
         stdio: "ignore",
@@ -5399,6 +5531,7 @@ exit 0
           COUNT_FILE: countPath,
           OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
           OPENCLAW_SYSTEMCTL_SHIM_MANAGER_ENV: "{}",
+          OPENCLAW_SYSTEMCTL_SHIM_MANAGER_SCRIPT: writeUpgradeSurvivorStopPolicy(workDir),
           OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: command,
         },
         stdio: "ignore",
@@ -5421,10 +5554,7 @@ exit 0
       const supervisorPath = join(workDir, `graceful-supervisor-${index}.mjs`);
       const statePath = join(workDir, `graceful-state-${index}`);
       const logPath = join(workDir, `graceful-daemon-${index}.log`);
-      const source = extractUpgradeSurvivorSupervisor(script).replace(
-        "const stopTimeoutMs = 30_000;",
-        "const stopTimeoutMs = 200;",
-      );
+      const source = extractUpgradeSurvivorSupervisor(script);
       writeFileSync(supervisorPath, source);
 
       const command =
@@ -5434,6 +5564,7 @@ exit 0
           ...process.env,
           OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
           OPENCLAW_SYSTEMCTL_SHIM_MANAGER_ENV: "{}",
+          OPENCLAW_SYSTEMCTL_SHIM_MANAGER_SCRIPT: writeUpgradeSurvivorStopPolicy(workDir, 200),
           OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: command,
           STATE_FILE: statePath,
         },
@@ -5486,6 +5617,7 @@ process.exit(starts === 1 ? 1 : 78);
           OPENCLAW_CLAWHUB_URL: "http://127.0.0.1:43123",
           OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
           OPENCLAW_SYSTEMCTL_SHIM_MANAGER_ENV: "{}",
+          OPENCLAW_SYSTEMCTL_SHIM_MANAGER_SCRIPT: writeUpgradeSurvivorStopPolicy(workDir),
           OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: `${shellQuote(process.execPath)} ${shellQuote(gatewayPath)}`,
           URLS_FILE: urlsPath,
         },
@@ -5538,10 +5670,7 @@ setInterval(() => {}, 1_000);
         const statePath = join(workDir, `process-group-state-${index}`);
         const descendantPidPath = join(workDir, `process-group-descendant-${index}.pid`);
         const logPath = join(workDir, `process-group-daemon-${index}.log`);
-        const source = extractUpgradeSurvivorSupervisor(script).replace(
-          "const stopTimeoutMs = 30_000;",
-          "const stopTimeoutMs = 200;",
-        );
+        const source = extractUpgradeSurvivorSupervisor(script);
         writeFileSync(supervisorPath, source);
 
         const supervisor = spawn(process.execPath, [supervisorPath], {
@@ -5551,6 +5680,7 @@ setInterval(() => {}, 1_000);
             DESCENDANT_SCRIPT: descendantPath,
             OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
             OPENCLAW_SYSTEMCTL_SHIM_MANAGER_ENV: "{}",
+            OPENCLAW_SYSTEMCTL_SHIM_MANAGER_SCRIPT: writeUpgradeSurvivorStopPolicy(workDir, 200),
             OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: `${shellQuote(process.execPath)} ${shellQuote(gatewayPath)}`,
             STATE_FILE: statePath,
           },
@@ -5624,9 +5754,10 @@ if (starts === 1) {
         const descendantPidPath = join(workDir, `restart-group-descendant-${index}.pid`);
         const replacementPath = join(workDir, `restart-group-replacement-${index}`);
         const logPath = join(workDir, `restart-group-daemon-${index}.log`);
-        const source = extractUpgradeSurvivorSupervisor(script)
-          .replace("const restartDelayMs = 5_000;", "const restartDelayMs = 5;")
-          .replace("const stopTimeoutMs = 30_000;", "const stopTimeoutMs = 200;");
+        const source = extractUpgradeSurvivorSupervisor(script).replace(
+          "const restartDelayMs = 5_000;",
+          "const restartDelayMs = 5;",
+        );
         writeFileSync(supervisorPath, source);
 
         const supervisor = spawn(process.execPath, [supervisorPath], {
@@ -5636,6 +5767,7 @@ if (starts === 1) {
             DESCENDANT_SCRIPT: descendantPath,
             OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
             OPENCLAW_SYSTEMCTL_SHIM_MANAGER_ENV: "{}",
+            OPENCLAW_SYSTEMCTL_SHIM_MANAGER_SCRIPT: writeUpgradeSurvivorStopPolicy(workDir, 200),
             OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: `${shellQuote(process.execPath)} ${shellQuote(gatewayPath)}`,
             REPLACEMENT_FILE: replacementPath,
             STARTS_FILE: startsPath,
@@ -6640,6 +6772,7 @@ export async function sha256File(file) {
       HELPER_PATH,
       "scripts/lib/docker-e2e-logs.sh",
       "scripts/lib/docker-e2e-container.sh",
+      "scripts/lib/docker-e2e-watchdog.mjs",
       "scripts/lib/docker-e2e-resource-diagnostics.sh",
       PREPUBLISH_PLUGIN_REGISTRY_HELPER_PATH,
     ]) {

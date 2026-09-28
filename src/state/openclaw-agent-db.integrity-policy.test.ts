@@ -137,7 +137,9 @@ it.each([
                 ? "revoked"
                 : runtimeProof === "foreign"
                   ? "lease-class"
-                  : "no-proof",
+                  : mode === "unclean"
+                    ? "dirty-receipt"
+                    : "no-proof",
           }),
         );
       }

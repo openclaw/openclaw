@@ -487,7 +487,7 @@ describe("check-workflows", () => {
       default: "",
       type: "string",
     });
-    expect(workflow.on.workflow_dispatch.inputs.startup_node_version?.default).toBe("26.8.2");
+    expect(workflow.on.workflow_dispatch.inputs.startup_node_version?.default).toBe("26.9.0");
     expect(workflow.on.workflow_dispatch.inputs.installed_startup_cpu_diagnostic).toMatchObject({
       default: false,
       type: "boolean",

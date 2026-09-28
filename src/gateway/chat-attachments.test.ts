@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 
 const saveMediaBufferMock = vi.hoisted(() =>
   vi.fn(async (_buffer: Buffer, mime?: string, _subdir?: string) => ({
@@ -228,6 +229,8 @@ describe("composer attachment origin", () => {
         "inbound",
         expect.any(Number),
         fileName,
+        undefined,
+        { assertCommitAllowed: undefined },
       );
       expect(parsed.message).toBe(
         `Read this\n[media attached: ${parsed.offloadedRefs[0]?.mediaRef}]`,
@@ -269,6 +272,26 @@ describe("composer attachment origin", () => {
 });
 
 describe("persistInboundImagesForTranscript", () => {
+  it("does not turn a rejected upload commit into a best-effort omission after policy re-enables", async () => {
+    const denied = new SessionMutationAuthorizationChangedError({
+      code: "FORBIDDEN",
+      message: "File and image uploads are disabled",
+      details: { code: "UPLOADS_DISABLED" },
+    });
+    saveMediaBufferMock.mockRejectedValueOnce(denied);
+    const warn = vi.fn();
+    await expect(
+      persistInboundImagesForTranscript({
+        images: [{ type: "image", data: PNG_1x1, mimeType: "image/png", sourceIndex: 0 }],
+        offloadedRefs: [],
+        log: { warn },
+        logContext: "policy-test",
+        assertCurrent: () => {},
+      }),
+    ).rejects.toBe(denied);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("preserves original mixed-media order in claim-only transcript facts", async () => {
     const fileName = "bands café 雪 🦞.png";
     saveMediaBufferMock.mockResolvedValueOnce({
@@ -322,6 +345,8 @@ describe("persistInboundImagesForTranscript", () => {
       "inbound",
       undefined,
       fileName,
+      undefined,
+      { assertCommitAllowed: undefined },
     );
     const persisted = buildPersistedUserTurnMessage({
       text: parsed.message,

@@ -356,6 +356,20 @@ class MainViewModel private constructor(
   private val chatDraftState = MutableStateFlow<ChatDraft?>(null)
   internal val chatDraft: StateFlow<ChatDraft?> = chatDraftState
   private val chatDraftLock = Any()
+  private val chatBrowserDismissalsState = MutableStateFlow<Map<ChatComposerOwner, List<String>>>(emptyMap())
+  internal val chatBrowserDismissals = chatBrowserDismissalsState.asStateFlow()
+
+  internal fun dismissChatBrowser(
+    owner: ChatComposerOwner,
+    presentation: List<String>,
+  ) {
+    chatBrowserDismissalsState.update { it + (owner to presentation) }
+  }
+
+  internal fun reopenChatBrowser(owner: ChatComposerOwner) {
+    chatBrowserDismissalsState.update { it - owner }
+  }
+
   private var attachedComposerRuntime: NodeRuntime? = null
   private var removeChatSessionDeletionListener: (() -> Unit)? = null
 
@@ -824,6 +838,7 @@ class MainViewModel private constructor(
     // Repeat after suspending share cleanup. Any callback that raced the first tombstone is
     // serialized with this final token-and-attachment purge before cleanup returns.
     chatComposerState.removeMediaOwners(matches)
+    chatBrowserDismissalsState.update { dismissals -> dismissals.filterKeys { !matches(it) } }
   }
 
   internal fun saveGatewayConfigAndConnect(

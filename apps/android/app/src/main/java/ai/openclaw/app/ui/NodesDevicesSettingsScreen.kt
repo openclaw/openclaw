@@ -29,8 +29,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -74,7 +72,7 @@ internal fun NodesDevicesSettingsScreen(
       nativeString(
         "Nodes are devices such as phones (including iPhone and Android), watches, and computers that offer capabilities, not agents or chat contacts. Known nodes stay listed when offline. Paired devices show Gateway access; the same device can appear in both groups. Notifications and push output are not agent conversations.",
       ),
-    icon = Icons.Default.Cloud,
+    icon = SettingsRoute.NodesDevices.icon,
     onBack = onBack,
   ) {
     SettingsMetricPanel(

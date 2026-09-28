@@ -39,6 +39,21 @@ export type AgentFilesViewState = Pick<
   agentFileActive: string | null;
 };
 
+/** Retire the selected agent's file cache and drafts with its request generation. */
+export function resetAgentFiles(state: AgentFilesState & AgentFilesViewState): void {
+  state.agentFilesList = null;
+  state.agentFilesError = null;
+  state.agentFileActive = null;
+  state.agentFileContents = {};
+  state.agentFileBaseVersions = {};
+  state.agentFileVersions = {};
+  state.agentFileConflict = null;
+  state.agentFileDrafts = {};
+  state.agentFileWriteRevisions.clear();
+  state.agentFilesLoading = false;
+  state.agentFileSaving = false;
+}
+
 export function hasAgentFileContent(
   state: Pick<AgentFilesState, "agentFileContents" | "agentFileDrafts">,
   name: string,

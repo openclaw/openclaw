@@ -28,6 +28,19 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
 });
 
+// Plugin state keeps cause text out of its public message; the maintenance refusal is the cause.
+async function expectOfflineMaintenance(operation: Promise<unknown>) {
+  const error = await operation.then(
+    () => undefined,
+    (caught: unknown) => caught,
+  );
+  const messages: string[] = [];
+  for (let current: unknown = error; current instanceof Error; current = current.cause) {
+    messages.push(current.message);
+  }
+  expect(messages.join("\n")).toContain("offline maintenance");
+}
+
 function createSharedWorkerClient(env: NodeJS.ProcessEnv) {
   const namespace = { env, pluginId: "maintenance-resources-fixture", namespace: "shared" };
   return {
@@ -68,9 +81,7 @@ it("releases its native borrow without retiring an independent shared client", a
       return { database, reference };
     });
     try {
-      await expect(store.register("blocked", { value: "blocked" })).rejects.toThrow(
-        "offline maintenance",
-      );
+      await expectOfflineMaintenance(store.register("blocked", { value: "blocked" }));
       owned.reference.release();
       expect(owned.database.db.isOpen).toBe(false);
       await lock.release();
@@ -253,9 +264,7 @@ it.each([false, true])(
       }
       try {
         await lock.run(() => store.register("owned", { value: "owned" }));
-        await expect(store.register("later", { value: "later" })).rejects.toThrow(
-          "offline maintenance",
-        );
+        await expectOfflineMaintenance(store.register("later", { value: "later" }));
         await lock.release();
         await store.register("later", { value: "later" });
         await store.register("after", { value: "after" });

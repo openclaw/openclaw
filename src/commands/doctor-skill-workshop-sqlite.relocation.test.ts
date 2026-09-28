@@ -79,7 +79,7 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
       `skill-workshop/proposals/${update.id}/${update.draftFile}`,
       updatedContent,
     );
-    seedLegacyV15ProposalRows(testState.env, [
+    await seedLegacyV15ProposalRows(testState.env, [
       { record: create, workspaceDir, claimReleasedTime: null },
       { record: update, workspaceDir, claimReleasedTime: null },
     ]);
@@ -129,7 +129,7 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
     });
     await fs.mkdir(legacySkillDir, { recursive: true });
     await fs.writeFile(record.target.skillFile, skillContent, "utf8");
-    seedLegacyV15ProposalRows(testState.env, [
+    await seedLegacyV15ProposalRows(testState.env, [
       { record, workspaceDir, claimReleasedTime: null, ownerAgentId: null },
     ]);
 
@@ -179,7 +179,7 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
     });
     await fs.mkdir(legacySkillDir, { recursive: true });
     await fs.writeFile(record.target.skillFile, skillContent, "utf8");
-    seedLegacyV15ProposalRows(testState.env, [
+    await seedLegacyV15ProposalRows(testState.env, [
       { record, workspaceDir, claimReleasedTime: null, ownerAgentId: "retired" },
     ]);
 
@@ -238,7 +238,7 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
       await fs.writeFile(record.target.skillFile, content, "utf8");
     }
 
-    seedLegacyV15ProposalRows(
+    await seedLegacyV15ProposalRows(
       testState.env,
       records.map((record) => ({ record: record.record, workspaceDir, claimReleasedTime: null })),
     );
@@ -323,7 +323,7 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
       await fs.writeFile(record.target.skillFile, content, "utf8");
     }
     // Build the shipped v15 row shape, then let the store upgrade it on next open.
-    seedLegacyV15ProposalRows(testState.env, [
+    await seedLegacyV15ProposalRows(testState.env, [
       { record: released, workspaceDir, claimReleasedTime: 1_756_684_800_000 },
       { record: active, workspaceDir, claimReleasedTime: null },
     ]);

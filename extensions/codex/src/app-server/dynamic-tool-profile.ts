@@ -16,7 +16,6 @@ const CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES = [
   "tool_call",
   "tool_describe",
   "tool_search",
-  "tool_search_code",
 ] as const;
 const CODEX_NATIVE_GOAL_TOOL_EXCLUDES = ["get_goal", "create_goal", "update_goal"] as const;
 const CODEX_APP_SERVER_OWNED_REPLACEABLE_TOOL_EXCLUDES = new Set([

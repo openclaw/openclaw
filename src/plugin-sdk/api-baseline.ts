@@ -5,7 +5,7 @@ import * as ts from "typescript/unstable/ast";
 import {
   SymbolFlags,
   type Checker,
-  type Emitter,
+  type Printer,
   type Program,
   type Symbol as CompilerSymbol,
 } from "typescript/unstable/sync";
@@ -182,11 +182,12 @@ async function createCompilerContext(
       assertValid: view.assertValid,
       declarationClosure: createDeclarationClosureRenderer({
         project: declarations.project,
+        printer: declarations.api.printer,
         sourceProgram: source.project.program,
         emittedSources: new Set(emitted.declarations.keys()),
         repoRoot,
       }),
-      printer: source.project.emitter,
+      printer: source.api.printer,
       program: source.project.program,
       close() {
         declarations?.close();
@@ -301,7 +302,7 @@ function compareDeclarations(
 function buildExportSurface(params: {
   checker: Checker;
   declarationClosure: DeclarationClosureRenderer;
-  printer: Emitter;
+  printer: Printer;
   repoRoot: string;
   symbol: CompilerSymbol;
 }): RenderedPluginSdkApiExport {
@@ -361,7 +362,7 @@ function sortExports(left: RenderedPluginSdkApiExport, right: RenderedPluginSdkA
 function buildModuleSurface(params: {
   checker: Checker;
   declarationClosure: DeclarationClosureRenderer;
-  printer: Emitter;
+  printer: Printer;
   program: Program;
   repoRoot: string;
   entrypoint: string;

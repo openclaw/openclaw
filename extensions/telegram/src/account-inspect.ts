@@ -1,5 +1,5 @@
 import { resolveAccountWithDefaultFallback } from "openclaw/plugin-sdk/account-core";
-import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import {
@@ -14,6 +14,7 @@ import {
   mergeTelegramAccountConfig,
   resolveDefaultTelegramAccountId,
   resolveTelegramAccountConfig,
+  type ResolvedTelegramAccount,
 } from "./accounts.js";
 
 type CredentialUnavailableDiagnostic = Extract<
@@ -21,19 +22,11 @@ type CredentialUnavailableDiagnostic = Extract<
   { status: "configured_unavailable" }
 >["diagnostic"];
 
-export type TelegramCredentialStatus = "available" | "configured_unavailable" | "missing";
+export type TelegramCredentialStatus = ResolvedTelegramAccount["tokenStatus"];
 
-type TelegramAccountInspection = {
-  accountId: string;
-  enabled: boolean;
-  name?: string;
-  token: string;
-  tokenSource: "env" | "tokenFile" | "config" | "none";
-  tokenStatus: TelegramCredentialStatus;
-  credentialDiagnostics?: CredentialUnavailableDiagnostic[];
+type TelegramAccountInspection = ResolvedTelegramAccount & {
   configured: boolean;
   stateReason?: string;
-  config: TelegramAccountConfig;
 };
 
 export type InspectedTelegramAccount = TelegramAccountInspection & {

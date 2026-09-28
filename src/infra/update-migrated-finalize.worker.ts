@@ -8,9 +8,11 @@ import {
 } from "../cli/update-cli/update-command-executor.js";
 import type {
   UpdateDoctorInput,
+  UpdatePostCoreInput,
   MigratedUpdateFinalizationInput,
   MigratedUpdateFinalizationResult,
 } from "../cli/update-cli/update-command-migrated-types.js";
+import { writePostCoreUpdateFailureFile } from "../cli/update-cli/update-command-post-core.js";
 import { finishUpdate } from "../cli/update-cli/update-command-post-update.js";
 import {
   formatUpdateFinalizationError,
@@ -20,17 +22,20 @@ import { createWindowsTaskAutoStartGuard } from "../cli/update-cli/update-comman
 import { withUpdateCommandTerminalResult } from "../cli/update-cli/update-command-terminal.js";
 import { createWindowsTaskAutoStartRecovery } from "../cli/update-cli/update-command-windows-task.js";
 import { routeLogsToStderr } from "../logging/console.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { finalizeActiveDebugProxyCaptures } from "../proxy-capture/runtime-cleanup.js";
 import { defaultRuntime } from "../runtime.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { resolveEnvironmentValue } from "./process-env.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import {
   adoptCandidateManagedServiceStop,
   stopSupervisedPredecessorGateway,
 } from "./update-candidate-predecessor-stop.js";
+import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
 import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   recordUpdateDoctorConfigWriteRefusal,
@@ -38,6 +43,14 @@ import {
 } from "./update-doctor-result.js";
 import { resolveUpdateFinalizationTimeoutMs } from "./update-finalization-budget.js";
 import { resolveUpdateInstallRoot } from "./update-install-root.js";
+import {
+  POST_CORE_EXECUTOR_CAPABILITY,
+  POST_CORE_MUTATION_PROTOCOL,
+} from "./update-post-core-capability.js";
+import {
+  POST_CORE_UPDATE_ENV,
+  POST_CORE_UPDATE_RESULT_PATH_ENV,
+} from "./update-post-core-context.js";
 import {
   createManagedUpdateRequesterAuthority,
   createManagedUpdateRequesterContinuationAuthority,
@@ -60,6 +73,8 @@ async function finalizeMigratedUpdate(): Promise<void> {
     process.stdout.write(
       JSON.stringify({
         executorDelegation: "pid-start-v1",
+        postCoreExecutor: POST_CORE_EXECUTOR_CAPABILITY,
+        mutationProtocol: POST_CORE_MUTATION_PROTOCOL,
         retainedOwnerBinding: true,
         doctorConfigWrites: "pid-start-v1",
         gatewayRestartCompletion: true,
@@ -78,6 +93,10 @@ async function finalizeMigratedUpdate(): Promise<void> {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
   const text = Buffer.concat(chunks).toString("utf8");
+  if (process.argv[2] === "--post-core") {
+    // SAFETY: The parent binds this receiver before releasing its private input.
+    return await runDelegatedPostCore(JSON.parse(text) as UpdatePostCoreInput);
+  }
   if (process.argv[2] === "--doctor") {
     // SAFETY: The typed parent sends this private input only after binding this child.
     return await runDelegatedDoctor(JSON.parse(text) as UpdateDoctorInput);
@@ -202,6 +221,64 @@ async function finalizeMigratedUpdate(): Promise<void> {
   await fs.writeFile(input.resultPath, JSON.stringify(response), { mode: 0o600 });
 }
 
+async function runDelegatedPostCore(input: UpdatePostCoreInput): Promise<void> {
+  const resultPath = process.env[POST_CORE_UPDATE_RESULT_PATH_ENV]?.trim();
+  const executingRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
+  if (
+    !resultPath ||
+    !input.executor ||
+    process.env[POST_CORE_UPDATE_ENV] !== "1" ||
+    process.env[UPDATE_RUN_ID_ENV] !== input.runId ||
+    !executingRoot ||
+    resolveUpdateInstallRoot(executingRoot) !== resolveUpdateInstallRoot(input.root)
+  ) {
+    throw new Error("Post-core update does not match its delegated run and installed runtime.");
+  }
+  if (input.opts.json) {
+    routeLogsToStderr();
+  }
+  // Keep the existing handoff directory/metadata, but do not expose completion
+  // to the waiting parent until this executor and every descendant have settled.
+  process.env[POST_CORE_UPDATE_RESULT_PATH_ENV] = `${resultPath}.pending`;
+  try {
+    await withDelegatedUpdateCommandExecutor(
+      input.executor,
+      input.runId,
+      input.root,
+      async (fence) => {
+        const requesterAuthority = input.requester?.authorizationSource?.startsWith("profile:")
+          ? await createManagedUpdateRequesterContinuationAuthority(input.requester, {
+              runId: input.runId,
+              executor: fence,
+            })
+          : input.requester
+            ? await createManagedUpdateRequesterAuthority(input.requester)
+            : undefined;
+        const { updateCommand } = await import("../cli/update-cli/update-command.js");
+        fence.assertCurrent();
+        if (requesterAuthority?.isCurrent() === false) {
+          throw new UpdateRequesterRevokedError();
+        }
+        await updateCommand({
+          ...input.opts,
+          run: {
+            runId: input.runId,
+            env: { ...process.env },
+            executorFence: fence,
+            ...(requesterAuthority ? { requesterAuthority } : {}),
+          },
+        });
+      },
+    );
+    await fs.rename(`${resultPath}.pending`, resultPath);
+  } catch (error) {
+    if (!hasCommandProcessCleanupError(error)) {
+      await writePostCoreUpdateFailureFile(resultPath, error);
+    }
+    throw error;
+  }
+}
+
 async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
   const resultPath = process.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]?.trim();
   if (!resultPath || !input.executor) {
@@ -305,13 +382,13 @@ async function finalizeInput(
     throw new Error("Update finalization requires its migrated update run.");
   }
   const { requesterAuthority: descriptor, ...runIdentity } = transferredRun;
-  executorFence?.assertCurrent();
+  executorFence.assertCurrent();
   adoptUpdateRun(runIdentity.runId, { env: runIdentity.env });
   // Parent closures cannot cross JSON. The fresh runtime retains identity checks
   // under its validated original native update lineage.
   const run: NonNullable<UpdateCommandOptions["run"]> = {
     ...runIdentity,
-    ...(executorFence ? { executorFence } : {}),
+    executorFence,
     ...(descriptor
       ? {
           requesterAuthority: descriptor.requester.authorizationSource?.startsWith("profile:")
@@ -327,7 +404,7 @@ async function finalizeInput(
   executorFence.assertCurrent();
   registerRun(run);
   for (const step of input.bufferedSteps) {
-    executorFence?.assertCurrent();
+    executorFence.assertCurrent();
     recordUpdateRunStep(run.runId, step, { env: run.env });
   }
   const { stopped, restartRequired } = await adoptCandidateManagedServiceStop({
